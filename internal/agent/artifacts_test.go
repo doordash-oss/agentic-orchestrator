@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"gopkg.in/yaml.v3"
 )
 
 func TestArtifactManagerCreateDir(t *testing.T) {
@@ -364,6 +365,62 @@ func TestArtifactManagerReadMeta(t *testing.T) {
 	_, err = am.ReadMeta(filepath.Join(dir, "no-such-dir"))
 	if err == nil {
 		t.Error("expected error for non-existent dir")
+	}
+}
+
+func TestWriteImplementationHandoffReceipt(t *testing.T) {
+	dir := t.TempDir()
+	am := NewArtifactManager(dir)
+	iterDir, err := am.CreateIterationDir(2)
+	if err != nil {
+		t.Fatalf("create iteration dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "progress.md"), []byte("resume here\n"), 0o644); err != nil {
+		t.Fatalf("write progress: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatalf("write verification report: %v", err)
+	}
+
+	wantTime := time.Date(2026, 7, 13, 23, 0, 0, 0, time.UTC)
+	err = am.WriteImplementationHandoffReceipt(iterDir, ImplementationHandoffReceipt{
+		Version:              1,
+		FeatureID:            "feat-1",
+		Phase:                "implement",
+		FromIterationID:      "iteration-02",
+		ToIterationID:        "iteration-03",
+		SessionID:            "feat-1-impl-02",
+		Provider:             "claude",
+		Trigger:              "context_threshold",
+		ObservedPct:          61,
+		ThresholdPct:         60,
+		IntentionallyDropped: []string{"prior interactive transcript"},
+		NextSafeAction:       "Resume from progress.md.",
+		CreatedAt:            wantTime,
+	})
+	if err != nil {
+		t.Fatalf("write handoff receipt: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(iterDir, "handoff-receipt.yaml"))
+	if err != nil {
+		t.Fatalf("read handoff receipt: %v", err)
+	}
+	var got ImplementationHandoffReceipt
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse handoff receipt: %v", err)
+	}
+	if got.FromIterationID != "iteration-02" || got.ToIterationID != "iteration-03" {
+		t.Errorf("iteration link mismatch: %+v", got)
+	}
+	if got.CanonicalArtifact.Path != "progress.md" || got.CanonicalArtifact.SHA256 == "" {
+		t.Errorf("canonical artifact missing fingerprint: %+v", got.CanonicalArtifact)
+	}
+	if got.VerificationArtifact.Path != "iteration-02/verification-report.yaml" || got.VerificationArtifact.SHA256 == "" {
+		t.Errorf("verification artifact missing fingerprint: %+v", got.VerificationArtifact)
+	}
+	if !got.CreatedAt.Equal(wantTime) {
+		t.Errorf("created_at = %s, want %s", got.CreatedAt, wantTime)
 	}
 }
 

@@ -140,6 +140,40 @@ type ContextMeta struct {
 	HandoffTotalTokens int    `yaml:"handoff_total_tokens,omitempty"`
 }
 
+// HandoffArtifact identifies a handoff input without embedding its contents.
+// Paths are relative to the implementation artifact root so receipts remain
+// portable when a state directory is moved or attached to an issue.
+type HandoffArtifact struct {
+	Path   string `yaml:"path"`
+	SHA256 string `yaml:"sha256"`
+}
+
+// ImplementationHandoffReceipt is the privacy-safe, machine-readable join
+// between an implementation iteration that hit the context threshold and the
+// fresh iteration that resumes from its durable artifacts.
+type ImplementationHandoffReceipt struct {
+	Version               int             `yaml:"version"`
+	FeatureID             string          `yaml:"feature_id"`
+	Phase                 string          `yaml:"phase"`
+	RoadmapPhase          int             `yaml:"roadmap_phase,omitempty"`
+	Repo                  string          `yaml:"repo,omitempty"`
+	FromIterationID       string          `yaml:"from_iteration_id"`
+	ToIterationID         string          `yaml:"to_iteration_id"`
+	SessionID             string          `yaml:"session_id"`
+	Provider              string          `yaml:"provider,omitempty"`
+	Trigger               string          `yaml:"trigger"`
+	ObservedPct           int             `yaml:"observed_pct"`
+	ThresholdPct          int             `yaml:"threshold_pct"`
+	ObservedTotalTokens   int             `yaml:"observed_total_tokens,omitempty"`
+	ContextWindowTokens   int             `yaml:"context_window_tokens,omitempty"`
+	ContextBaselineTokens int             `yaml:"context_baseline_tokens,omitempty"`
+	CanonicalArtifact     HandoffArtifact `yaml:"canonical_artifact"`
+	VerificationArtifact  HandoffArtifact `yaml:"verification_artifact"`
+	IntentionallyDropped  []string        `yaml:"intentionally_dropped"`
+	NextSafeAction        string          `yaml:"next_safe_action"`
+	CreatedAt             time.Time       `yaml:"created_at"`
+}
+
 // ArtifactManager handles iteration directory creation and file writing.
 type ArtifactManager struct {
 	BaseDir string
@@ -167,6 +201,34 @@ func (am *ArtifactManager) WriteMeta(iterDir string, meta IterationMeta) error {
 		return fmt.Errorf("marshaling meta: %w", err)
 	}
 	return os.WriteFile(filepath.Join(iterDir, "meta.yaml"), data, 0o644)
+}
+
+// WriteImplementationHandoffReceipt writes a compact receipt into the source
+// iteration. It fingerprints the durable inputs the next iteration will use,
+// but never copies prompts, transcripts, or artifact contents into the receipt.
+func (am *ArtifactManager) WriteImplementationHandoffReceipt(iterDir string, receipt ImplementationHandoffReceipt) error {
+	progressPath := filepath.Join(am.BaseDir, "progress.md")
+	verificationPath := filepath.Join(iterDir, "verification-report.yaml")
+
+	progressHash, err := Fingerprint(progressPath)
+	if err != nil {
+		return fmt.Errorf("fingerprinting progress artifact: %w", err)
+	}
+	verificationHash, err := Fingerprint(verificationPath)
+	if err != nil {
+		return fmt.Errorf("fingerprinting verification artifact: %w", err)
+	}
+
+	receipt.CanonicalArtifact = HandoffArtifact{Path: "progress.md", SHA256: progressHash}
+	receipt.VerificationArtifact = HandoffArtifact{
+		Path:   filepath.ToSlash(filepath.Join(filepath.Base(iterDir), "verification-report.yaml")),
+		SHA256: verificationHash,
+	}
+	data, err := yaml.Marshal(receipt)
+	if err != nil {
+		return fmt.Errorf("marshaling implementation handoff receipt: %w", err)
+	}
+	return os.WriteFile(filepath.Join(iterDir, "handoff-receipt.yaml"), data, 0o644)
 }
 
 // WriteDebugPrompts writes the system and user prompts to files for debugging.

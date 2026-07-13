@@ -1,112 +1,55 @@
 ---
 name: frontend-design
-description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, or applications. Generates creative, polished code that avoids generic AI aesthetics.
-topics: UI, UX, TUI, frontend, design, components, widgets, layout, styling, dashboard, visual, Bubbletea, lipgloss, CSS, React
+description: Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.
+license: Complete terms in LICENSE.txt
 ---
 
-This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
+# Frontend Design
 
-The user provides frontend requirements: a component, page, application, or interface to build. They may include context about the purpose, audience, or technical constraints.
+Approach this as the design lead at a small studio known for giving every client a visual identity that could not be mistaken for anyone else's. This client has already rejected proposals that felt templated, and is paying for a distinctive point of view: make deliberate, opinionated choices about palette, typography, and layout that are specific to this brief, and take one real aesthetic risk you can justify.
 
-## Playbook (Research-Grounded Reference)
+## Ground it in the subject
 
-Before designing, **consult the playbook in [playbook/index.md](playbook/index.md)**. It is the authoritative, research-backed foundation for this skill — grounded in official design systems and usability/accessibility research, not framework taste. Creative boldness (below) must rest on these fundamentals; they are complements, not alternatives.
+If the brief does not pin down what the product or subject is, pin it yourself before designing: name one concrete subject, its audience, and the page's single job, and state your choice. If there's any information in your memory about the human's preferences, context about what they're building, or designs you've made before – use that as a hint. The subject's own world, its materials, instruments, artifacts, and vernacular, is where distinctive choices come from. Build with the brief's real content and subject matter throughout.
 
-Start with [playbook/index.md](playbook/index.md) to pick files by surface and phase. Minimum reads per phase:
+## Design principles
 
-| Phase | Read |
-|-------|------|
-| Design / Research | `foundations.md`, `interaction-and-trust.md`, `platforms-and-adaptation.md`, `accessibility-and-inclusion.md` |
-| Plan | `foundations.md`, `accessibility-and-inclusion.md`, plus the surface-specific file (`platforms-and-adaptation.md` or `terminal-and-tui.md`) |
-| Implement | `foundations.md`, `accessibility-and-inclusion.md`, plus `interaction-and-trust.md` or `terminal-and-tui.md` as the surface demands |
-| Review | `review-rubric.md` plus every file relevant to the implemented surface |
+For web designs, the hero is a thesis. Open with the most characteristic thing in the subject's world, in whatever form makes sense for it: a headline, an image, an animation, a live demo, an interactive moment. Be deliberate with your choice: a big number with a small label, supporting stats, and a gradient accent is the template answer, only use if that's truly the best option.
 
-Always read `accessibility-and-inclusion.md` — contrast, focus, semantics, targets, reduced motion, and multimodal feedback are non-negotiable. For terminal/TUI work (e.g. Bubbletea, lipgloss), `terminal-and-tui.md` is required. Cite `sources.md` when the user asks for rationale or references.
+Typography carries the personality of the page. Pair the display and body faces deliberately, not the same families you would reach for on any other project, and set a clear type scale with intentional weights, widths, and spacing. Make the type treatment itself a memorable part of the design, not a neutral delivery vehicle for the content.
 
-## Design Thinking
+Structure is information. Structural devices, numbering, eyebrows, dividers, labels, should encode something true about the content, not decorate it. Many generic designs use numbered markers (01 / 02 / 03), but that's only appropriate if the content actually is a sequence - like a real process or a typed timeline where order carries information the reader needs. Question if choices like numbered markers actually make sense before incorporating them.
 
-Before coding, understand the context and commit to a BOLD aesthetic direction:
-- **Purpose**: What problem does this interface solve? Who uses it?
-- **Tone**: Pick an extreme: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
-- **Constraints**: Technical requirements (framework, performance, accessibility).
-- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+Leverage motion deliberately. Think about where and if animation can serve the subject: a page-load sequence, a scroll-triggered reveal, hover micro-interactions, ambient atmosphere. An orchestrated moment usually lands harder than scattered effects; choose what the direction calls for. However, sometimes less is more, and extra animation contributes to the feeling that the design is AI-generated.
 
-**CRITICAL**: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work - the key is intentionality, not intensity.
+Match complexity to the vision. Maximalist directions need elaborate execution; minimal directions need precision in spacing, type, and detail. Elegance is executing the chosen vision well.
 
-Then implement working code (HTML/CSS/JS, React, Vue, etc.) that is:
-- Production-grade and functional
-- Visually striking and memorable
-- Cohesive with a clear aesthetic point-of-view
-- Meticulously refined in every detail
+Consider written content carefully. Often a design brief may not contain real content, and it's up to you to come up with copy. Copy can make a design feel as templated as the design itself. See the below section on writing for more guidance.
 
-## Frontend Aesthetics Guidelines
+## Process: brainstorm, explore, plan, critique, build, critique again
 
-Focus on:
-- **Typography**: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial and Inter; opt instead for distinctive choices that elevate the frontend's aesthetics; unexpected, characterful font choices. Pair a distinctive display font with a refined body font.
-- **Color & Theme**: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes.
-- **Motion**: Use animations for effects and micro-interactions. Prioritize CSS-only solutions for HTML. Use Motion library for React when available. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (animation-delay) creates more delight than scattered micro-interactions. Use scroll-triggering and hover states that surprise.
-- **Spatial Composition**: Unexpected layouts. Asymmetry. Overlap. Diagonal flow. Grid-breaking elements. Generous negative space OR controlled density.
-- **Backgrounds & Visual Details**: Create atmosphere and depth rather than defaulting to solid colors. Add contextual effects and textures that match the overall aesthetic. Apply creative forms like gradient meshes, noise textures, geometric patterns, layered transparencies, dramatic shadows, decorative borders, custom cursors, and grain overlays.
+For calibration: AI-generated design right now clusters around three looks: (1) a warm cream background (near #F4F1EA) with a high-contrast serif display and a terracotta accent; (2) a near-black background with a single bright acid-green or vermilion accent; (3) a broadsheet-style layout with hairline rules, zero border-radius, and dense newspaper-like columns. All three are legitimate for some briefs, but they are defaults rather than choices, and they appear regardless of subject. Where the brief pins down a visual direction, follow it exactly — the brief's own words always win, including when it asks for one of these looks. Where it leaves an axis free, don't spend that freedom on one of these defaults. Just like a human designer who's hired, there's often a careful balance between doing what you're good at and taking each project as a chance to experiment and learn.
 
-NEVER use generic AI-generated aesthetics like overused font families (Inter, Roboto, Arial, system fonts), cliched color schemes (particularly purple gradients on white backgrounds), predictable layouts and component patterns, and cookie-cutter design that lacks context-specific character.
+Work in two passes. First, brainstorm a short design plan based on the human's design brief: create a compact token system with color, type, layout, and signature. Color: describe the palette as 4–6 named hex values. Type: the typefaces for 2+ roles (a characterful display face that's used with restraint, a complementary body face, and a utility face for captions or data if needed). Layout: a layout concept, using one-sentence prose descriptions and ASCII wireframes to ideate and compare. Signature: the single unique element this page will be remembered by that embodies the brief in an appropriate way.
 
-Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. NEVER converge on common choices (Space Grotesk, for example) across generations.
+Then review that plan against the brief before building: if any part of it reads like the generic default you would produce for any similar page (work through a similar prompt to see if you arrive somewhere similar) rather than a choice made for this specific brief — revise that part, say what you changed and why. Only after you've confirmed the relative uniqueness of your design plan should you start to write the code, following the revised plan exactly and deriving every color and type decision from it.
 
-**IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
+When writing the code, be careful of structuring your CSS selector specificities. It's easy to generate CSS classes that cancel each other out (especially with a type-based selector like .section and a element-based selector like .cta). This can happen often with paddings/margins between sections.
 
-## Functional Inventory
+Try to do a lot of this planning and iteration in your thinking, and only show ideas to the user when you have higher confidence it'll delight them.
 
-For every screen this skill produces or modifies, list each interactive control, the backend handler it invokes, and the test that exercises that handler without a mock. A screen can pass diff review, type-check, lint, and screenshot review while shipping `onClick` handlers that do nothing — the inventory is what makes that visible at design time.
+## Restraint and self-critique
 
-- **Interactive control** — anything whose user-activation should cause an observable on-disk or backend effect: buttons, form submits, menu items, command-palette entries, keyboard shortcuts, drag targets, modal confirms. Pure-navigation routing isn't a control unless the destination auto-fires a mutation.
-- **Handler** — the function that actually performs the user-task (IPC bridge call, HTTP request, orchestrator method, file-system mutation). Not the local state setter, not the navigation call, not a debounce wrapper.
-- **Non-mock test** — drives the rendered control as a user would *and* exercises the real handler. A bridge mock that records arguments isn't sufficient: the bridge could be missing the method entirely and the mock test would still pass.
+Spend your boldness in one place. Let the signature element be the one memorable thing, keep everything around it quiet and disciplined, and cut any decoration that does not serve the brief. Not taking a risk can be a risk itself! Build to a quality floor without announcing it: responsive down to mobile, visible keyboard focus, reduced motion respected. Critique your own work as you build, taking screenshots if your environment supports it – a picture is worth 1000 tokens. Consider Chanel's advice: before leaving the house, take a look in the mirror and remove one accessory. Human creators have memory and always try to do something new, so if you have a space to quickly jot down notes about what you've tried, it can help you in future passes.
 
-Reject inventory entries whose handler resolves to `undefined`, `() => {}`, `// TODO`, `panic("TODO")`, a stub returning canned data, a chain ending in client-side state, or a navigation onto a screen whose own controls are unwired.
+## More on writing in design
 
-In a phase plan, the inventory lives in the relevant task's `#### What to build` / `#### Acceptance criteria` and is reflected in `## Success Criteria`.
+Words appear in a design for one reason: to make it easier to understand, and therefore easier to use. They are design material, not decoration. Bring the same intentionality to copy that you would bring to spacing and color. Before writing anything, ask what the design needs to say, and how it can best be said to help the person navigate the experience.
 
-## Before Shipping
+Write from the end user's side of the screen. Name things by what people control and recognize, never by how the system is built. A person manages notifications, not webhook config. Describe what something does in plain terms rather than selling it. Being specific is always better than being clever.
 
-Run the output through [playbook/review-rubric.md](playbook/review-rubric.md). Beautiful and bold is not enough — the rubric verifies the primary task is obvious, the scan path is intentional, feedback is proportional, and accessibility/platform fit are built in, not bolted on.
+Use active voice as default. A control should say exactly what happens when it's used: "Save changes," not "Submit." An action keeps the same name through the whole flow, so the button that says "Publish" produces a toast that says "Published." The vocabulary of an interface is the signposting for someone navigating the product. Cohesion and consistency are how people learn their way around.
 
-Remember: Claude is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision — grounded in the playbook's fundamentals.
+Treat failure and emptiness as moments for direction, not mood. Explain what went wrong and how to fix it, in the interface's voice rather than a person's. Errors don't apologize, and they are never vague about what happened. An empty screen is an invitation to act.
 
-## Visual Evidence Loop (implementation ↔ review)
-
-Text-only diffs cannot answer "does this look right" — that's why features in this skill's domain routinely ship as generic-looking output: the reviewer has nothing to judge against. Close the loop by producing visual evidence in the implementation phase and consuming it in the review phase.
-
-### When implementing UI changes
-
-If the current iteration adds or modifies user-facing UI — React/Vue/Svelte/Solid/Angular components, HTML/CSS, native-window views (Wails/Tauri/Electron/SwiftUI/Qt), TUI screens (Bubbletea, lipgloss, ink), generated dashboards, slide decks, emailers, anything where layout and style matter — capture the rendered state into the `screenshots/` subdirectory that the iteration's user prompt identifies.
-
-- **Scope**: one full-viewport PNG per top-level screen or meaningfully distinct state (loading / loaded / error / empty / interactive variant). Don't boil the ocean; the reviewer needs judgment material, not regression coverage.
-- **Tooling**: use whatever the repo already has. Playwright's `toHaveScreenshot()` / `page.screenshot()` is the common case for web apps; Puppeteer, Storybook snapshots, `wails dev` + OS-level capture (`screencapture` on macOS, `import` on Linux/X, `xvfb-run` under headless CI), Percy, Chromatic, a hand-rolled helper — all fine if that's what the repo uses. If the repo has no rendering tooling, document that in `progress.md` with the plan for introducing it; don't silently skip.
-- **Naming**: name files after the screen/state they depict (`dashboard.png`, `wizard-step2-error.png`, `settings-dark.png`), not the iteration number — the iteration directory already carries that context.
-- **Storage**: commit the PNGs only if the repo's convention keeps visual baselines in git (Percy/Chromatic users typically don't; visual-regression-only users sometimes do). Default: leave untracked — they exist for review-time judgment, not long-term storage.
-
-### When reviewing UI changes
-
-The implementer deposits screenshots into `<iterDir>/screenshots/`. As the reviewer, your obligation is to consume them.
-
-1. **Diff touches UI code** (any of `.tsx`, `.jsx`, `.vue`, `.svelte`, `.css`, `.scss`, `.sass`, `.html`, Bubbletea/lipgloss/ink Go modules, UI-generating Rust/Python if the repo uses those for rendering, etc.):
-   - **Screenshots present**: Read each image via tool-use. Judge whether the rendered state matches the design commitments — colors, typography, layout, spacing, contrast, state variants, overall aesthetic — against the design direction, any user-attached mockups (the "Visual References" section of the prompt), and the phase plan's UI exit criteria. Cite what you saw in your feedback: *"the primary button in `dashboard.png` renders as `#7c3aed` but the design committed to an OKLCH accent in the `0.68 0.12 280` neighborhood"* is feedback a diff-only reviewer cannot produce.
-   - **Screenshots absent or empty directory**: emit `## Verdict\nCHANGES_REQUESTED` in your `review-feedback.md` with a Critical finding — *"no visual evidence for a UI-touching iteration."* You cannot approve UI work you cannot see. Ask specifically for screenshots of each affected screen into `<iterDir>/screenshots/` on the next iteration, naming which harness the repo has available.
-
-2. **Diff does not touch UI code**: the directory's absence is expected. Do not raise a finding.
-
-Apply the dimensions from [playbook/review-rubric.md](playbook/review-rubric.md) when judging: primary task obvious, scan path intentional, feedback proportional, accessibility and platform fit built in not bolted on. If the design committed to a distinctive aesthetic direction, the rubric is the yardstick for whether the implementation actually landed on that direction or drifted toward generic defaults.
-
-The goal is not exhaustive visual regression — one screenshot per meaningfully distinct screen/state is enough for a judgment call. The failure mode this closes: features that pass code review, tests, and lint, and ship a UI the user hates.
-
-## Behavioral Evidence Loop (implementation ↔ review)
-
-Visual evidence answers *does it look right*. It does not answer *does it actually work*. Compile + screenshots + unit tests can all pass on a binary whose Create button has no handler. Close that gap by capturing one driven execution per primary user journey.
-
-### When implementing
-
-If this iteration adds or modifies a primary user journey (any user action expecting an observable on-disk or backend effect — create, start, save, publish, delete, attach, approve, cancel, etc.), capture one driven execution per journey into `<iterDir>/behaviors/`. Use whatever driver the repo has (Playwright trace, AppleScript log, headless harness output, HTTP smoke transcript, CLI session capture with the resulting filesystem diff). Each artifact must show both the input the test drove and the observable effect that followed — launch or render alone is not evidence. Name files after the journey, not the iteration. If no user-mutation surface is touched, the directory's absence is expected.
-
-### When reviewing
-
-Read what's under `<iterDir>/behaviors/` and confirm each artifact shows the journey *completing* (input + effect), not just launching. If the diff touches a user-mutation surface (entrypoints, wizards, submit handlers, top-level commands, IPC bridge methods that front a mutation) and the directory is missing, empty, or only captures launch/render, emit `## Verdict\nCHANGES_REQUESTED` with a Critical finding. Compile + screenshots + unit tests are not a substitute for an observed user-task.
+Keep the register conversational and tuned: plain verbs, sentence case, no filler, with tone matched to the brand and the audience. Let each element do exactly one job. A label labels, an example demonstrates, and nothing quietly does double duty.

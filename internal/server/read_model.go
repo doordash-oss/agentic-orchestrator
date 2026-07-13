@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -136,7 +137,8 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		}
 	}
 	if f.PendingNeedUserInputPath != "" {
-		detail.NeedUserInput = &NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: entityFeature, Iteration: f.CurrentIteration}
+		gate := needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.PendingNeedUserInputPath)
+		detail.NeedUserInput = &gate
 	}
 	return detail
 }
@@ -868,10 +870,22 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 		}
 		if f.PendingNeedUserInputPath != "" {
 			gates = append(gates, orderedNeedInputGate{
-				dto:       NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: entityFeature, Iteration: f.CurrentIteration},
+				dto:       needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.PendingNeedUserInputPath),
 				featureID: f.ID,
 				created:   f.Created,
 				gateTime:  gateFileTime(f.PendingNeedUserInputPath),
+			})
+		}
+		for _, cycle := range f.PendingUserInputCycles() {
+			iteration := 0
+			if rc := f.RepoCycles[cycle.RepoName]; rc != nil {
+				iteration = rc.Iteration
+			}
+			gates = append(gates, orderedNeedInputGate{
+				dto:       needUserInputGateDTO(f.ID, entityFeature, cycle.RepoName, cycle.CycleType, iteration, cycle.GatePath),
+				featureID: f.ID,
+				created:   f.Created,
+				gateTime:  gateFileTime(cycle.GatePath),
 			})
 		}
 	}
@@ -908,6 +922,38 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 		}
 	}
 	return false
+}
+
+func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.RepoCycleType, iteration int, gatePath string) NeedInputGateDTO {
+	dto := NeedInputGateDTO{
+		FeatureID: featureID,
+		Open:      true,
+		Scope:     scope,
+		RepoName:  repoName,
+		CycleType: string(cycleType),
+		Iteration: iteration,
+	}
+	rec, err := agent.ReadNeedUserInputRecord(gatePath)
+	if err != nil {
+		return dto
+	}
+	if dto.Iteration == 0 {
+		dto.Iteration = rec.Iteration
+	}
+	dto.Summary = strings.TrimSpace(rec.Summary)
+	dto.Questions = make([]NeedUserInputQuestionDTO, 0, len(rec.Questions))
+	for _, q := range rec.Questions {
+		prompt := strings.TrimSpace(q.Prompt)
+		if prompt == "" {
+			continue
+		}
+		dto.Questions = append(dto.Questions, NeedUserInputQuestionDTO{
+			Index:  q.Index,
+			Prompt: prompt,
+			Answer: strings.TrimSpace(q.Answer),
+		})
+	}
+	return dto
 }
 
 type orderedControlRequest struct {

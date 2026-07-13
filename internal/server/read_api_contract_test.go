@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -426,6 +427,78 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	detailGate := detail[entityFeature].(map[string]any)["need_user_input"].(map[string]any)
 	if detailGate["feature_id"] != f.ID {
 		t.Fatalf("detail need user input feature_id = %v; want %s", detailGate["feature_id"], f.ID)
+	}
+}
+
+func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+
+	featureGatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "iteration-03", "need-user-input.yaml")
+	if err := agent.WriteNeedUserInputRecord(featureGatePath, agent.NeedUserInputRecord{
+		Summary:   "Choose a persistence backend before implementation continues.",
+		Iteration: 3,
+		Questions: []agent.NeedUserInputQuestion{
+			{Index: 1, Prompt: "Which database should implementation use?", Answer: "Postgres"},
+			{Index: 2, Prompt: "Should we migrate existing data?", Answer: ""},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord(feature gate) error = %v", err)
+	}
+	f.PendingNeedUserInputPath = featureGatePath
+	f.CurrentIteration = 3
+
+	cycleGatePath := filepath.Join(store.RunDir(f.ID, 1), "cycles", repoNameSelf, "iteration-02", "need-user-input.yaml")
+	if err := agent.WriteNeedUserInputRecord(cycleGatePath, agent.NeedUserInputRecord{
+		Summary:   "Resolve rebase conflict policy.",
+		Iteration: 2,
+		Questions: []agent.NeedUserInputQuestion{
+			{Index: 1, Prompt: "Keep branch behavior or target behavior?", Answer: "Keep branch behavior"},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord(cycle gate) error = %v", err)
+	}
+	f.RepoCycles = map[string]*feature.RepoCycleState{
+		repoNameSelf: {
+			Type:                     feature.CycleRebase,
+			Status:                   feature.RepoCycleNeedUserInput,
+			Iteration:                2,
+			PendingNeedUserInputPath: cycleGatePath,
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	detailGate := detail[entityFeature].(map[string]any)["need_user_input"].(map[string]any)
+	if detailGate["summary"] != "Choose a persistence backend before implementation continues." {
+		t.Fatalf("detail gate summary = %v", detailGate["summary"])
+	}
+	detailQuestions := detailGate["questions"].([]any)
+	if len(detailQuestions) != 2 {
+		t.Fatalf("detail gate questions length = %d; want 2", len(detailQuestions))
+	}
+	firstDetailQuestion := detailQuestions[0].(map[string]any)
+	if firstDetailQuestion["index"] != float64(1) ||
+		firstDetailQuestion["prompt"] != "Which database should implementation use?" ||
+		firstDetailQuestion["answer"] != "Postgres" {
+		t.Fatalf("detail gate first question = %+v", firstDetailQuestion)
+	}
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	gates := prompts["need_user_inputs"].([]any)
+	if len(gates) != 2 {
+		t.Fatalf("need_user_inputs length = %d; want feature and cycle gates", len(gates))
+	}
+	cycleGate := gates[1].(map[string]any)
+	if cycleGate["repo_name"] != repoNameSelf || cycleGate["cycle_type"] != string(feature.CycleRebase) {
+		t.Fatalf("cycle gate routing = %+v; want repo/cycle routing", cycleGate)
+	}
+	cycleQuestions := cycleGate["questions"].([]any)
+	if len(cycleQuestions) != 1 || cycleQuestions[0].(map[string]any)["answer"] != "Keep branch behavior" {
+		t.Fatalf("cycle gate questions = %+v", cycleQuestions)
 	}
 }
 

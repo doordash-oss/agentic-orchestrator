@@ -4946,7 +4946,16 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 		}},
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDBlocked, Name: testFeatureNameBlockedWork, Slug: "blocked-work", Status: testStatusNeedUserInput, CurrentPhase: testPhaseNameImplement}, server.FeatureDetailDTO{
 
-			NeedUserInput: &server.NeedInputGateDTO{FeatureID: testFeatureIDBlocked, Open: true, Scope: testActionScopeFeature, Iteration: 3},
+			NeedUserInput: &server.NeedInputGateDTO{
+				FeatureID: testFeatureIDBlocked,
+				Open:      true,
+				Scope:     testActionScopeFeature,
+				Iteration: 3,
+				Summary:   "Choose a persistence backend before implementation continues.",
+				Questions: []server.NeedUserInputQuestionDTO{
+					{Index: 1, Prompt: testQuestionWhichDatabase, Answer: testDBOptionPostgres},
+				},
+			},
 		})},
 		needUserInputAccepted: apiTestActionResponse{},
 	}
@@ -4961,7 +4970,7 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 		t.Fatal("Update(i) did not show need-user-input decision prompt")
 	}
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"Need user input", testFeatureNameBlockedWork, "[r] Resume", "[a] Abort"} {
+	for _, want := range []string{"Implementation needs user input", testFeatureNameBlockedWork, testQuestionWhichDatabase, testDBOptionPostgres, "Ctrl+D menu"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4970,9 +4979,14 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 		t.Fatalf("NeedUserInputDecision calls = %v before decision, want none", client.needUserInputFeatureIDs)
 	}
 
-	model, cmd = prompting.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	model, cmd = prompting.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("Ctrl+D returned command before need-user-input decision")
+	}
+	menuOpen := model.(APIAppModel)
+	model, cmd = menuOpen.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("Update(r) returned nil command, want need-user-input decision mutation")
+		t.Fatal("Enter returned nil command, want need-user-input decision mutation")
 	}
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
@@ -4992,6 +5006,109 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestAPIAppModelNeedUserInputQuestionnaireDraftsAnswersBeforeResume(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: testFeatureIDBlocked, Name: testFeatureNameBlockedWork, Slug: "blocked-work", Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now()},
+		}},
+		prompts: server.PromptSnapshotResponse{NeedUserInputs: []server.NeedInputGateDTO{
+			{
+				FeatureID: testFeatureIDBlocked,
+				Open:      true,
+				Scope:     testActionScopeFeature,
+				RepoName:  testRepoNameAPI,
+				CycleType: testCycleTypeRebase,
+				Iteration: 4,
+				Summary:   "Resolve the rebase conflict before implementation continues.",
+				Questions: []server.NeedUserInputQuestionDTO{
+					{Index: 1, Prompt: "Keep branch behavior or target behavior?"},
+				},
+			},
+		}},
+		detail:                     server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDBlocked, Name: testFeatureNameBlockedWork, Slug: "blocked-work", Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish}, server.FeatureDetailDTO{})},
+		needUserInputAccepted:      apiTestActionResponse{},
+		needUserInputDraftAccepted: apiTestActionResponse{},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if cmd != nil {
+		t.Fatal("Update(i) returned command before need-user-input edit")
+	}
+	prompting := model.(APIAppModel)
+	view := stripANSI(prompting.View().Content)
+	for _, want := range []string{
+		"Implementation needs user input",
+		"Resolve the rebase conflict before implementation",
+		"continues.",
+		"Keep branch behavior or target behavior?",
+		"Repo: " + testRepoNameAPI,
+		"Cycle: " + testCycleTypeRebase,
+		"Ctrl+D menu",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API app View() missing %q in:\n%s", want, view)
+		}
+	}
+
+	model, cmd = prompting.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("Ctrl+D returned command before menu decision")
+	}
+	menuOpen := model.(APIAppModel)
+	model, cmd = menuOpen.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Enter on incomplete resume returned command, want local block")
+	}
+	blocked := model.(APIAppModel)
+	if len(client.needUserInputFeatureIDs) != 0 {
+		t.Fatalf("NeedUserInputDecision calls = %v before all answers, want none", client.needUserInputFeatureIDs)
+	}
+	if view := stripANSI(blocked.View().Content); !strings.Contains(view, "Answer every question before resuming.") {
+		t.Fatalf("blocked need-user-input view missing validation message:\n%s", view)
+	}
+
+	const answer = "Keep branch behavior"
+	model, cmd = blocked.Update(tea.KeyPressMsg{Code: 'K', Text: answer})
+	if cmd == nil {
+		t.Fatal("typing answer returned nil command, want draft mutation")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	drafted := model.(APIAppModel)
+	if got := client.needUserInputDraftFeatureIDs; len(got) != 1 || got[0] != testFeatureIDBlocked {
+		t.Fatalf("DraftNeedUserInputAnswers feature IDs = %v, want blocked", got)
+	}
+	if got := client.needUserInputDraftRequests; len(got) != 1 ||
+		got[0].RepoName != testRepoNameAPI ||
+		got[0].CycleType != testCycleTypeRebase ||
+		got[0].Answers["1"] != answer {
+		t.Fatalf("DraftNeedUserInputAnswers requests = %+v, want routed answer draft", got)
+	}
+
+	model, cmd = drafted.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("Ctrl+D returned command before final menu decision")
+	}
+	menuOpen = model.(APIAppModel)
+	model, cmd = menuOpen.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on answered resume returned nil command, want need-user-input decision mutation")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	decided := model.(APIAppModel)
+	if got := client.needUserInputRequests; len(got) != 1 ||
+		got[0].Decision != recoveryActionResume ||
+		got[0].RepoName != testRepoNameAPI ||
+		got[0].CycleType != testCycleTypeRebase {
+		t.Fatalf("NeedUserInputDecision requests = %+v, want routed resume", got)
+	}
+	if decided.needInputPromptActive {
+		t.Fatal("need-user-input prompt remained open after accepted decision")
 	}
 }
 

@@ -1194,10 +1194,21 @@ type NeedUserInputDraftResponse struct {
 
 // NeedUserInputGate defines model for NeedUserInputGate.
 type NeedUserInputGate struct {
-	FeatureID string `json:"feature_id,omitempty"`
-	Iteration int    `json:"iteration,omitempty"`
-	Open      bool   `json:"open"`
-	Scope     string `json:"scope,omitempty"`
+	CycleType string                  `json:"cycle_type,omitempty"`
+	FeatureID string                  `json:"feature_id,omitempty"`
+	Iteration int                     `json:"iteration,omitempty"`
+	Open      bool                    `json:"open"`
+	Questions []NeedUserInputQuestion `json:"questions,omitempty"`
+	RepoName  string                  `json:"repo_name,omitempty"`
+	Scope     string                  `json:"scope,omitempty"`
+	Summary   string                  `json:"summary,omitempty"`
+}
+
+// NeedUserInputQuestion defines model for NeedUserInputQuestion.
+type NeedUserInputQuestion struct {
+	Answer string `json:"answer,omitempty"`
+	Index  int    `json:"index,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // NotificationConfig defines model for NotificationConfig.

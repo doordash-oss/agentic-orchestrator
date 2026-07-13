@@ -2437,8 +2437,27 @@ components:
           type: boolean
         scope:
           type: string
+        repo_name:
+          type: string
+        cycle_type:
+          type: string
         iteration:
           type: integer
+        summary:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/NeedUserInputQuestion"
+    NeedUserInputQuestion:
+      type: object
+      properties:
+        index:
+          type: integer
+        prompt:
+          type: string
+        answer:
+          type: string
     RepoStatus:
       type: object
       required: [name, touched, publishable]

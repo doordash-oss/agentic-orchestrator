@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -167,6 +168,7 @@ const (
 	mutationKindRecoveryExecute              = "recovery.execute"
 	mutationKindRuntimeConfigUpdate          = "runtime.config.update"
 	mutationKindFeatureNeedUserInputDecision = "feature.need_user_input.decision"
+	mutationKindFeatureNeedUserInputDraft    = "feature.need_user_input.draft"
 	mutationKindPermissionAnswer             = "permission.answer"
 	mutationKindHelpSend                     = "help.send"
 	mutationKindFeatureReviewComments        = "feature.review_comments"
@@ -479,6 +481,11 @@ type APIAppModel struct {
 	needInputFeatureID         string
 	needInputFeatureName       string
 	needInputGate              server.NeedInputGateDTO
+	needInputAnswers           map[int]string
+	needInputCursor            int
+	needInputMenuActive        bool
+	needInputMenuChoice        int
+	needInputError             string
 	permissionPromptActive     bool
 	permissionFeatureID        string
 	permissionFeatureName      string
@@ -1114,6 +1121,11 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case apiMutationResultMsg:
 		if msg.err != nil {
+			if msg.kind == mutationKindFeatureNeedUserInputDecision || msg.kind == mutationKindFeatureNeedUserInputDraft {
+				m.needInputError = firstLine(msg.err.Error())
+				m.needInputMenuActive = false
+				return m, nil
+			}
 			if msg.kind == mutationKindFeaturePublish {
 				m.publish = nil
 			}
@@ -1335,16 +1347,7 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleAPIRefactorPromptKey(msg)
 	}
 	if m.needInputPromptActive {
-		switch strings.ToLower(msg.Text) {
-		case "r":
-			return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "resume")
-		case "a":
-			return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "abort")
-		}
-		if msg.Code == tea.KeyEscape {
-			m.clearNeedInputPrompt()
-		}
-		return m, nil
+		return m.handleAPINeedInputPromptKey(msg)
 	}
 	if m.permissionPromptActive {
 		switch strings.ToLower(msg.Text) {
@@ -4515,6 +4518,11 @@ func (m *APIAppModel) clearNeedInputPrompt() {
 	m.needInputFeatureID = ""
 	m.needInputFeatureName = ""
 	m.needInputGate = server.NeedInputGateDTO{}
+	m.needInputAnswers = nil
+	m.needInputCursor = 0
+	m.needInputMenuActive = false
+	m.needInputMenuChoice = 0
+	m.needInputError = ""
 }
 
 func (m *APIAppModel) clearPermissionPrompt() {
@@ -4796,8 +4804,128 @@ func (m APIAppModel) openNeedInputPrompt() APIAppModel {
 	m.needInputFeatureID = m.selectedFeature
 	m.needInputFeatureName = m.selectedFeatureName()
 	m.needInputGate = gate
+	m.needInputAnswers = make(map[int]string, len(gate.Questions))
+	m.needInputCursor = 0
+	foundEmpty := false
+	for i, q := range gate.Questions {
+		m.needInputAnswers[i] = strings.TrimSpace(q.Answer)
+		if strings.TrimSpace(q.Answer) == "" && !foundEmpty {
+			m.needInputCursor = i
+			foundEmpty = true
+		}
+	}
+	if m.needInputCursor >= len(gate.Questions) {
+		m.needInputCursor = 0
+	}
+	m.needInputMenuActive = false
+	m.needInputMenuChoice = 0
+	m.needInputError = ""
 	m.statusMessage = ""
 	return m
+}
+
+func (m APIAppModel) handleAPINeedInputPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.needInputMenuActive {
+		switch msg.Code {
+		case tea.KeyUp:
+			if m.needInputMenuChoice > 0 {
+				m.needInputMenuChoice--
+			}
+			return m, nil
+		case tea.KeyDown:
+			if m.needInputMenuChoice < 1 {
+				m.needInputMenuChoice++
+			}
+			return m, nil
+		case tea.KeyEnter:
+			if m.needInputMenuChoice == 1 {
+				return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "abort")
+			}
+			if !m.needInputAllAnswered() {
+				m.needInputMenuActive = false
+				m.needInputError = "Answer every question before resuming."
+				return m, nil
+			}
+			return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "resume")
+		case tea.KeyEscape:
+			m.needInputMenuActive = false
+			return m, nil
+		}
+		return m, nil
+	}
+
+	if msg.Code == 'd' && msg.Mod.Contains(tea.ModCtrl) {
+		m.needInputMenuActive = true
+		m.needInputMenuChoice = 0
+		m.needInputError = ""
+		return m, nil
+	}
+	if msg.Code == tea.KeyEscape {
+		m.clearNeedInputPrompt()
+		return m, nil
+	}
+	if len(m.needInputGate.Questions) == 0 {
+		switch strings.ToLower(msg.Text) {
+		case "r":
+			return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "resume")
+		case "a":
+			return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "abort")
+		}
+		return m, nil
+	}
+
+	switch msg.Code {
+	case tea.KeyTab, tea.KeyDown:
+		m.moveNeedInputCursor(1)
+		return m, nil
+	case tea.KeyUp:
+		m.moveNeedInputCursor(-1)
+		return m, nil
+	case tea.KeyBackspace:
+		if m.needInputCursor < 0 || m.needInputCursor >= len(m.needInputGate.Questions) {
+			return m, nil
+		}
+		current := m.needInputAnswers[m.needInputCursor]
+		if current == "" {
+			return m, nil
+		}
+		runes := []rune(current)
+		m.needInputAnswers[m.needInputCursor] = string(runes[:len(runes)-1])
+		m.needInputGate.Questions[m.needInputCursor].Answer = m.needInputAnswers[m.needInputCursor]
+		m.needInputError = ""
+		return m, m.needUserInputDraftCmd(m.needInputFeatureID, m.needInputGate, m.needInputCursor)
+	}
+	if msg.Text == "" || msg.Mod.Contains(tea.ModCtrl) {
+		return m, nil
+	}
+	if m.needInputCursor < 0 || m.needInputCursor >= len(m.needInputGate.Questions) {
+		return m, nil
+	}
+	m.needInputAnswers[m.needInputCursor] += msg.Text
+	m.needInputGate.Questions[m.needInputCursor].Answer = m.needInputAnswers[m.needInputCursor]
+	m.needInputError = ""
+	return m, m.needUserInputDraftCmd(m.needInputFeatureID, m.needInputGate, m.needInputCursor)
+}
+
+func (m *APIAppModel) moveNeedInputCursor(delta int) {
+	count := len(m.needInputGate.Questions)
+	if count == 0 {
+		m.needInputCursor = 0
+		return
+	}
+	m.needInputCursor = (m.needInputCursor + delta + count) % count
+}
+
+func (m APIAppModel) needInputAllAnswered() bool {
+	if len(m.needInputGate.Questions) == 0 {
+		return false
+	}
+	for i := range m.needInputGate.Questions {
+		if strings.TrimSpace(m.needInputAnswers[i]) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (m APIAppModel) openPermissionPrompt() APIAppModel {
@@ -6537,23 +6665,81 @@ func (m APIAppModel) renderNeedInputPrompt() string {
 		name = m.needInputFeatureID
 	}
 	var b strings.Builder
-	b.WriteString("Need user input\n\n")
+	b.WriteString("Implementation needs user input\n\n")
 	b.WriteString("  " + name + "\n\n")
+	if strings.TrimSpace(m.needInputGate.Summary) != "" {
+		b.WriteString("  " + strings.TrimSpace(m.needInputGate.Summary) + "\n\n")
+	}
 	if m.needInputGate.Scope != "" {
 		b.WriteString("  Scope: " + m.needInputGate.Scope + "\n")
+	}
+	if m.needInputGate.RepoName != "" {
+		b.WriteString("  Repo: " + m.needInputGate.RepoName + "\n")
+	}
+	if m.needInputGate.CycleType != "" {
+		b.WriteString("  Cycle: " + m.needInputGate.CycleType + "\n")
 	}
 	if m.needInputGate.Iteration > 0 {
 		fmt.Fprintf(&b, "  Iteration: %d\n", m.needInputGate.Iteration)
 	}
-	if m.needInputGate.Scope != "" || m.needInputGate.Iteration > 0 {
+	if m.needInputGate.Scope != "" || m.needInputGate.RepoName != "" || m.needInputGate.CycleType != "" || m.needInputGate.Iteration > 0 {
 		b.WriteByte('\n')
 	}
-	b.WriteString(WarningStyle.Render("  Resume continues from the saved answers."))
-	b.WriteString("\n")
-	b.WriteString(WarningStyle.Render("  Abort marks the paused gate as failed."))
-	b.WriteString("\n\n")
-	b.WriteString(KeyHelpStyle.Render(" [r] Resume   [a] Abort   [esc] Cancel"))
+	if m.needInputError != "" {
+		b.WriteString(WarningStyle.Render("  " + m.needInputError))
+		b.WriteString("\n\n")
+	}
+	if len(m.needInputGate.Questions) == 0 {
+		b.WriteString(WarningStyle.Render("  No structured questions were provided."))
+		b.WriteString("\n\n")
+	} else {
+		for i, q := range m.needInputGate.Questions {
+			prefix := "  "
+			if i == m.needInputCursor && !m.needInputMenuActive {
+				prefix = "> "
+			}
+			index := q.Index
+			if index <= 0 {
+				index = i + 1
+			}
+			b.WriteString(fmt.Sprintf("%s%d. %s\n", prefix, index, strings.TrimSpace(q.Prompt)))
+			answer := m.needInputAnswers[i]
+			if strings.TrimSpace(answer) == "" {
+				answer = MutedStyle.Render("Answer...")
+			}
+			b.WriteString("     " + answer + "\n\n")
+		}
+	}
+	b.WriteString(KeyHelpStyle.Render(" [tab] Next question   Ctrl+D menu   [esc] Cancel"))
+	if m.needInputMenuActive {
+		b.WriteString("\n\n")
+		b.WriteString(m.renderNeedInputMenu())
+	}
 	return renderBoxPanel(58, colorWarning, b.String())
+}
+
+func (m APIAppModel) renderNeedInputMenu() string {
+	labels := []string{"Resume implementation", "Abort implementation"}
+	if !m.needInputAllAnswered() {
+		labels[0] += " (answer all questions to enable)"
+	}
+	var b strings.Builder
+	b.WriteString("Choose an action:\n")
+	for i, label := range labels {
+		prefix := "  "
+		if i == m.needInputMenuChoice {
+			prefix = "> "
+		}
+		line := prefix + label
+		if i == 0 && !m.needInputAllAnswered() {
+			line = MutedStyle.Render(line)
+		} else if i == m.needInputMenuChoice {
+			line = TitleStyle.Render(line)
+		}
+		b.WriteString(line + "\n")
+	}
+	b.WriteString(KeyHelpStyle.Render(" Enter select   Esc close menu"))
+	return b.String()
 }
 
 func (m APIAppModel) renderPermissionPrompt() string {
@@ -7907,13 +8093,48 @@ func (m APIAppModel) startRefactorCmd(panel apiRefactorPipelinePanel) tea.Cmd {
 func (m APIAppModel) needUserInputDecisionCmd(featureID, decision string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := m.apiCtx()
-		_, err := m.client.NeedUserInputDecision(ctx, featureID, server.NeedUserInputDecisionRequest{Decision: decision})
+		_, err := m.client.NeedUserInputDecision(ctx, featureID, server.NeedUserInputDecisionRequest{
+			Decision:  decision,
+			RepoName:  m.needInputGate.RepoName,
+			CycleType: m.needInputGate.CycleType,
+		})
 		return apiMutationResultMsg{
 			kind:      mutationKindFeatureNeedUserInputDecision,
 			featureID: featureID,
 			err:       err,
 		}
 	}
+}
+
+func (m APIAppModel) needUserInputDraftCmd(featureID string, gate server.NeedInputGateDTO, questionOffset int) tea.Cmd {
+	return func() tea.Msg {
+		answerKey := needUserInputQuestionAnswerKey(gate, questionOffset)
+		if answerKey == "" {
+			answerKey = strconv.Itoa(questionOffset + 1)
+		}
+		ctx := m.apiCtx()
+		_, err := m.client.DraftNeedUserInputAnswers(ctx, featureID, server.NeedUserInputDraftRequest{
+			RepoName:  gate.RepoName,
+			CycleType: gate.CycleType,
+			Answers:   map[string]string{answerKey: gate.Questions[questionOffset].Answer},
+		})
+		return apiMutationResultMsg{
+			kind:      mutationKindFeatureNeedUserInputDraft,
+			featureID: featureID,
+			err:       err,
+		}
+	}
+}
+
+func needUserInputQuestionAnswerKey(gate server.NeedInputGateDTO, questionOffset int) string {
+	if questionOffset < 0 || questionOffset >= len(gate.Questions) {
+		return ""
+	}
+	q := gate.Questions[questionOffset]
+	if q.Index > 0 {
+		return strconv.Itoa(q.Index)
+	}
+	return strings.TrimSpace(q.Prompt)
 }
 
 func (m APIAppModel) reviewDecisionCmd(featureID string, req server.ReviewDecisionRequest) tea.Cmd {
@@ -9198,6 +9419,8 @@ func apiMutationKindLabel(kind string) string {
 		return "Restart Refactor"
 	case mutationKindFeatureNeedUserInputDecision:
 		return "Need Input Decision"
+	case mutationKindFeatureNeedUserInputDraft:
+		return "Need Input Draft"
 	case "feature.input_notifications.toggle":
 		return "Input Alerts"
 	case "feature.review_decision":

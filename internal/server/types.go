@@ -153,6 +153,8 @@ type FailureDTO = serverapi.Failure
 
 type NeedInputGateDTO = serverapi.NeedUserInputGate
 
+type NeedUserInputQuestionDTO = serverapi.NeedUserInputQuestion
+
 type RecoverySnapshotResponse = serverapi.RecoverySnapshotResponse
 
 type RecoveryItemDTO = serverapi.RecoveryItem

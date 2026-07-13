@@ -259,6 +259,20 @@ type ProtocolOpts struct {
 	// normal new session, so providers that do not resume leave their behavior
 	// unchanged.
 	ResumeSessionID string
+	// Interactive marks a session where a human answers every turn in real time
+	// (e.g. AMA chat), as opposed to an unattended autonomous phase whose
+	// pending questions may be auto-picked by confidence/"(Recommended)"
+	// markers. Providers whose AskUserQuestion support is text-parsed rather
+	// than native (OpenCode, Codex) use this to skip that entire pipeline: it
+	// exists only to imitate Claude's native AskUserQuestion tool-call UX for a
+	// provider that can otherwise only express a question as plain text, and a
+	// human already reading every reply gets no benefit from that imitation —
+	// they can just read the model's question (in whatever shape it naturally
+	// comes) and answer with an ordinary chat message. This also avoids
+	// steering the model into a rigid confidence/exact-3-options template it
+	// would otherwise keep reusing as its default style for the rest of the
+	// conversation.
+	Interactive bool
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider

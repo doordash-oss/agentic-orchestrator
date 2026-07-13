@@ -542,6 +542,9 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	if build.Model != "cheap-chat" || build.WorkDir != testWorkspaceDir || build.Phase != utilskill.PhaseAll || build.TurnMode != ports.TurnModeInteractive {
 		t.Fatalf("BuildSession opts = %+v, want utility interactive chat in workspace", build)
 	}
+	if !build.Interactive {
+		t.Fatalf("BuildSession Interactive = false, want true so text-parsed AskUserQuestion providers skip the whole picker-synthesis pipeline for AMA")
+	}
 	if build.EffortLevel != llm.EffortLow {
 		t.Fatalf("BuildSession EffortLevel = %q, want low for AMA utility chat", build.EffortLevel)
 	}
@@ -550,6 +553,15 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	}
 	if _, ok := build.PermHandler.(*session.AMAHandler); !ok {
 		t.Fatalf("BuildSession PermHandler = %T, want *session.AMAHandler", build.PermHandler)
+	}
+	for _, want := range []string{
+		"Agentic Orchestrator Expert Assistant",
+		"Answer directly whenever the user's request is clear enough",
+		filepath.Join(skillsDir, chatName, "SKILL.md"),
+	} {
+		if !strings.Contains(build.SystemPrompt, want) {
+			t.Fatalf("BuildSession SystemPrompt missing %q:\n%s", want, build.SystemPrompt)
+		}
 	}
 	if !strings.Contains(build.Prompt, "What is running?") || !strings.Contains(build.Prompt, filepath.Join(skillsDir, chatName, "SKILL.md")) {
 		t.Fatalf("BuildSession prompt = %q, want chat skill instruction and user message", build.Prompt)

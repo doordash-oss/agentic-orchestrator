@@ -117,6 +117,49 @@ func TestChatModelPendingQuestionTrimsStreamedQuestionDraft(t *testing.T) {
 	}
 }
 
+// TestChatModelPendingQuestionNeverDeletesWholeTurn guards against the
+// disappearing-response bug: when the streamed text has no separate intro (the
+// question stem is a prefix of the entire in-progress turn, as happens for a
+// synthesized AskUserQuestion whose stem leads straight into its options), the
+// turn must still be visible in the transcript once the picker activates rather
+// than being wiped out entirely.
+func TestChatModelPendingQuestionNeverDeletesWholeTurn(t *testing.T) {
+	t.Parallel()
+
+	const question = "Which database should I target?"
+	const text = question + "\n\n1. Postgres (Recommended): Mature. [confidence: 0.88]\n2. MySQL: Familiar. [confidence: 0.40]\n3. SQLite: Simplest. [confidence: 0.20]"
+	raw := []byte(`{"questions":[{"question":"Which database should I target?","options":[{"label":"Postgres (Recommended)"},{"label":"MySQL"},{"label":"SQLite"}]}]}`)
+	m := NewChatModel(120, 24, nil, "/tmp", "test", nil, "", "")
+	m.responding = true
+
+	m = m.ApplyEvents([]chatEvent{
+		{Kind: chatEventAssistantText, Text: text},
+		{
+			Kind:      chatEventPendingQuestion,
+			RequestID: testAskRequestID,
+			Raw:       raw,
+			Questions: []askUserQuestion{{
+				Question: question,
+				Options: []askUserOption{
+					{Label: "Postgres (Recommended)"},
+					{Label: "MySQL"},
+					{Label: "SQLite"},
+				},
+			}},
+		},
+	})
+
+	if !m.hasActiveQuestion() {
+		t.Fatal("pending question was not activated")
+	}
+	if len(m.turns) != 1 {
+		t.Fatalf("turn count = %d, want the assistant turn preserved: %+v", len(m.turns), m.turns)
+	}
+	if strings.TrimSpace(m.turns[0].Text) == "" {
+		t.Fatal("assistant turn text was wiped when the question activated, want the original response kept")
+	}
+}
+
 func TestChatModelPendingPermissionAnswerUsesSessionPermissionDecision(t *testing.T) {
 	t.Parallel()
 

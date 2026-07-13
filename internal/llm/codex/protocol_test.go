@@ -1349,6 +1349,80 @@ func TestTurnCompleted_LooseQuestionAfterToolUse_WithMarker_EmitsSuccess(t *test
 	}
 }
 
+// TestTurnCompleted_InformationalNumberedListIsCleanSuccess proves a final text
+// that merely summarizes findings as a numbered list — with a non-question stem
+// — completes as a success result rather than being treated as an AskUserQuestion
+// just because it enumerates items.
+func TestTurnCompleted_InformationalNumberedListIsCleanSuccess(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = "Here is what I found:\n" +
+		"1. The config loader ignores env overrides.\n" +
+		"2. The default timeout is 30s.\n" +
+		"3. Logs are written to /tmp/agentico.log."
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "result" || msg.Subtype != "success" {
+		t.Fatalf("got Type=%q Subtype=%q ControlRequest=%v, want result/success", msg.Type, msg.Subtype, msg.ControlRequest)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
+	}
+}
+
+// TestTurnCompleted_InteractiveNeverSynthesizesQuestion proves an Interactive
+// session (AMA chat, where a human answers every turn directly) never
+// synthesizes an AskUserQuestion picker, no matter how question-shaped the
+// final text is: the text-parsing pipeline exists only to imitate Claude's
+// native tool-call UX for a provider that can otherwise only express a
+// question as plain text, and a human reading the chat gets no benefit from
+// that imitation — they can just read whatever the model asked and reply with
+// an ordinary follow-up message.
+func TestTurnCompleted_InteractiveNeverSynthesizesQuestion(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"numbered options", "Which audience should the README target?\n" +
+			"1. Internal engineers (Recommended): Focus on practical value.\n" +
+			"2. Existing users: Focus on usage reference.\n" +
+			"3. External readers: Focus on positioning."},
+		{"bare question", "Should I proceed with the destructive migration?"},
+		{"FREE_FORM sentinel", "FREE_FORM: What exact version string should we pin?"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex", Interactive: true})
+			p.SetStdin(&buf)
+			p.SetThreadIDForTest("thread-1")
+
+			p.mu.Lock()
+			p.lastAssistantText = c.text
+			p.mu.Unlock()
+
+			msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+			if !ok {
+				t.Fatal("parseNotification ok = false, want true")
+			}
+			if msg.Type != "result" || msg.Subtype != "success" {
+				t.Fatalf("got Type=%q Subtype=%q ControlRequest=%v, want result/success", msg.Type, msg.Subtype, msg.ControlRequest)
+			}
+			if buf.Len() != 0 {
+				t.Errorf("sent a reformat reminder, want none: %s", buf.String())
+			}
+		})
+	}
+}
+
 // TestBuildAskUserAnswerEnvelope_AppendsAskingFormatReminder verifies that
 // every answer envelope re-anchors Codex on the question-format contract.
 // The reminder is intentionally a short pointer back to the system prompt

@@ -683,6 +683,24 @@ func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 	}
 }
 
+func TestChatSystemPromptDefinesAMASpecificProtocol(t *testing.T) {
+	got := ChatSystemPrompt(ChatSystemInput{
+		SkillPath:       "/state/skills/chat/SKILL.md",
+		CurrentFeatures: "- **2d-retro-game-maker** (ID: feat-1): Build a game maker - Status: Implementing",
+	})
+
+	for _, want := range []string{
+		"Agentic Orchestrator Expert Assistant",
+		"Answer directly whenever the user's request is clear enough",
+		"/state/skills/chat/SKILL.md",
+		"2d-retro-game-maker",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ChatSystemPrompt() missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestLegacyPromptSurfacesAreRemoved(t *testing.T) {
 	removedPaths := []string{
 		filepath.Join("templates", "system_completion_protocol.tmpl"),

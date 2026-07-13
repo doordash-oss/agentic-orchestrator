@@ -792,7 +792,15 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			}
 			p.mu.Unlock()
 
-			if !textContainsVerdictSentinel(lastText) {
+			// The entire text-parsed AskUserQuestion pipeline below exists only to
+			// imitate Claude's native AskUserQuestion tool call for a provider whose
+			// questions are otherwise just plain text. Interactive sessions (a human
+			// answers every turn directly, e.g. AMA chat) get no benefit from that
+			// imitation — the human can read the model's question and reply with an
+			// ordinary chat message exactly as they would with bare Codex — so they
+			// always fall through to a normal completion below and never synthesize
+			// a picker.
+			if !p.opts.Interactive && !textContainsVerdictSentinel(lastText) {
 				if stripped, ok := trimFreeFormSentinel(lastText); ok {
 					p.mu.Lock()
 					p.formatRetryCount = 0
@@ -800,7 +808,14 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					return p.synthesizeAskUser(stripped, nil), true
 				}
 
-				if stem, options, ok := parseNumberedOptions(lastText); ok {
+				// A numbered list is only a candidate AskUserQuestion when its stem
+				// actually reads like a question (checked on the stem, not the raw
+				// text, since the stem may lead the options and end well before the
+				// text's final character). An informational list ("Here's what I
+				// found: 1. ... 2. ...") has a non-question stem and is a normal
+				// completion; it must not be forced through the question pipeline
+				// just because it enumerates items.
+				if stem, options, ok := parseNumberedOptions(lastText); ok && textLooksLikeQuestion(stem) {
 					p.mu.Lock()
 					p.formatRetryCount = 0
 					p.mu.Unlock()
@@ -1302,14 +1317,16 @@ func countDiffPatchLines(patch string) (added, removed int) {
 	return added, removed
 }
 
+// textLooksLikeQuestion reports whether text's final utterance is a question.
+// It checks the trailing character rather than scanning for '?' anywhere, so a
+// completion that merely mentions a "?" mid-answer (or a follow-up offer tacked
+// onto an otherwise-finished answer) is not misread as a blocking question.
 func textLooksLikeQuestion(text string) bool {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return false
 	}
-	return strings.HasSuffix(text, "?") ||
-		strings.HasSuffix(text, "?\n") ||
-		strings.Contains(text, "?")
+	return strings.HasSuffix(text, "?")
 }
 
 // verdictSentinelRe matches the structured `## Verdict` section the

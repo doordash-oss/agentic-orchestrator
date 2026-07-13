@@ -1220,6 +1220,11 @@ type BuildSessionOpts struct {
 	// identity rather than start a fresh one. It is forwarded to both command and
 	// protocol setup so each provider resumes via its own supported path.
 	ResumeSessionID string
+	// Interactive marks a session where a human answers every AskUserQuestion
+	// turn in real time (e.g. AMA chat). Forwarded to llm.ProtocolOpts.Interactive;
+	// see its doc comment for why this changes text-parsed AskUserQuestion
+	// providers' behavior.
+	Interactive bool
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1396,6 +1401,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		StateDir:        pr.StateDir,
 		MarkerPath:      opts.MarkerPath,
 		ResumeSessionID: opts.ResumeSessionID,
+		Interactive:     opts.Interactive,
 	})
 
 	sessOpts = &ports.SessionOpts{

@@ -36,6 +36,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	agentprompts "github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -1191,6 +1192,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		return serverruntime.ChatStartResponse{}, errors.New("phase runner is not available")
 	}
 
+	chatSkillPath := serverChatSkillPath(t.phaseRunner.SkillsDir)
 	prompt := message
 	if instruction := serverChatSkillInstruction(t.phaseRunner.SkillsDir); instruction != "" {
 		prompt = instruction + "\n\n" + prompt
@@ -1211,7 +1213,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	cmd, env, sessOpts, err := t.phaseRunner.BuildSession(agent.BuildSessionOpts{
 		Model:           model,
 		Prompt:          prompt,
-		SystemPrompt:    t.buildChatContext(),
+		SystemPrompt:    t.buildChatSystemPrompt(chatSkillPath),
 		DisallowedTools: []string{"Task"},
 		WorkDir:         workDir,
 		PIDDir:          chatDir,
@@ -1219,6 +1221,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		Phase:           utilskill.PhaseAll,
 		TurnMode:        ports.TurnModeInteractive,
 		EffortLevel:     llm.EffortLow,
+		Interactive:     true,
 	})
 	if err != nil {
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("build chat session: %w", err)
@@ -1240,10 +1243,25 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 }
 
 func serverChatSkillInstruction(skillsDir string) string {
+	skillPath := serverChatSkillPath(skillsDir)
+	if skillPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", skillPath)
+}
+
+func serverChatSkillPath(skillsDir string) string {
 	if strings.TrimSpace(skillsDir) == "" {
 		return ""
 	}
-	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", filepath.Join(skillsDir, chatName, "SKILL.md"))
+	return filepath.Join(skillsDir, chatName, "SKILL.md")
+}
+
+func (t *serverMutationTarget) buildChatSystemPrompt(skillPath string) string {
+	return agentprompts.ChatSystemPrompt(agentprompts.ChatSystemInput{
+		SkillPath:       skillPath,
+		CurrentFeatures: strings.TrimSpace(t.buildChatContext()),
+	})
 }
 
 func (t *serverMutationTarget) buildChatContext() string {

@@ -41,6 +41,11 @@ func RoleSystemPrompt(in RoleSystemInput) string {
 	return MustRender("system", in)
 }
 
+// ChatSystemPrompt renders the persistent AMA chat system prompt.
+func ChatSystemPrompt(in ChatSystemInput) string {
+	return MustRender("chat.system", in)
+}
+
 // VisualReferences renders the visual_references partial. Returns "" when
 // Images is empty so callers can drop the result into a prompt
 // unconditionally.

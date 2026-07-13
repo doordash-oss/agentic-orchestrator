@@ -157,13 +157,15 @@ func (m *ChatModel) finalizeInProgressTurnBeforeQuestion(questions []askUserQues
 	if n == 0 || m.turns[n-1].Role != chatTurnAgent || !m.turns[n-1].InProgress {
 		return
 	}
+	// A match at (or near) the very start of the turn means the question stem
+	// leads the whole message with no separate intro (e.g. a synthesized
+	// AskUserQuestion whose stem runs straight into its options). Trimming would
+	// wipe the turn instead of just the trailing draft duplicate, so keep the
+	// original text and let the picker render alongside it rather than in place
+	// of it.
 	trimmed, ok := trimStreamedAskUserDraft(m.turns[n-1].Text, questions)
-	if !ok {
+	if !ok || strings.TrimSpace(trimmed) == "" {
 		m.finalizeInProgressTurn()
-		return
-	}
-	if strings.TrimSpace(trimmed) == "" {
-		m.turns = m.turns[:n-1]
 		return
 	}
 	m.turns[n-1].Text = trimmed

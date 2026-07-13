@@ -15,8 +15,6 @@
 package tui
 
 import (
-	"strings"
-
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -54,21 +52,6 @@ func isRunningFeature(f *feature.Feature) bool {
 	return false
 }
 
-func hasTweakCycle(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	if f.ActiveCycle != nil && f.ActiveCycle.Type == feature.CycleTweak {
-		return true
-	}
-	for _, rc := range f.RepoCycles {
-		if rc != nil && rc.Type == feature.CycleTweak {
-			return true
-		}
-	}
-	return false
-}
-
 func hasActiveRepoCycles(f *feature.Feature) bool {
 	return f != nil && f.HasActiveRepoCycles()
 }
@@ -85,9 +68,4 @@ func featureConfigChangesDeferred(f *feature.Feature) bool {
 		return false
 	}
 	return f.Status.IsRunning() || f.HasActiveRepoCycles()
-}
-
-func isTweakSessionID(sessionID string) bool {
-	return strings.HasSuffix(sessionID, "-impl-tweak") ||
-		(strings.Contains(sessionID, "-impl-") && strings.HasSuffix(sessionID, "-tweak"))
 }

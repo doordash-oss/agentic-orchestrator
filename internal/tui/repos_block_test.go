@@ -165,12 +165,6 @@ func TestRenderReposBlockCycleSuffix(t *testing.T) {
 			want:      []string{"⟳", "rebasing"},
 		},
 		{
-			name:      "tweak running",
-			cycleType: feature.CycleTweak,
-			status:    feature.RepoCycleRunning,
-			want:      []string{"⟳", "tweaking"},
-		},
-		{
 			name:      "refactor running",
 			cycleType: feature.CycleRefactor,
 			status:    feature.RepoCycleRunning,
@@ -188,12 +182,6 @@ func TestRenderReposBlockCycleSuffix(t *testing.T) {
 			status:    feature.RepoCycleFailed,
 			lastErr:   "merge conflict",
 			want:      []string{"✗", "rebase failed", "merge conflict"},
-		},
-		{
-			name:      "tweak needs input",
-			cycleType: feature.CycleTweak,
-			status:    feature.RepoCycleNeedUserInput,
-			want:      []string{"⚠", "tweak needs input"},
 		},
 		{
 			name:      "refactor needs input",

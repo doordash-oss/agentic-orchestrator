@@ -156,11 +156,7 @@ func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm
 				_ = RemovePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
 			}
 			if item.Feature != nil && fm != nil {
-				if IsRecoveryTweakSession(item) && item.RepoName != "" && item.Feature.RepoCycles != nil {
-					_ = fm.FailRepoCycle(item.Feature.ID, item.RepoName, "killed during recovery")
-				} else {
-					_ = fm.Transition(item.Feature.ID, feature.StatusInterrupted)
-				}
+				_ = fm.Transition(item.Feature.ID, feature.StatusInterrupted)
 			}
 
 		case RecoveryResume:
@@ -186,11 +182,6 @@ func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm
 				isReviewPhase = false // Allow resume
 			}
 
-			// Tweak sessions are interactive and cannot be resumed autonomously.
-			// Even if a stale RecoveryResume action reaches here, do not write
-			// resume metadata — treat it as a kill.
-			isTweakSession := IsRecoveryTweakSession(item)
-
 			// The unified phase-implement loop re-runs the interrupted unit
 			// (iteration N's implement, or iteration N's review) from scratch
 			// with a fresh Claude session. The durable on-disk state
@@ -198,18 +189,6 @@ func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm
 			// feedback) is the resume scaffolding. The recovery flow no
 			// longer writes resume hints.
 			_ = isReviewPhase
-
-			// For tweak sessions that reach here via stale action, transition
-			// to Interrupted (same as RecoveryKill behavior).
-			if isTweakSession && item.Feature != nil && fm != nil {
-				// Multi-repo tweak: fail the specific repo cycle instead of
-				// transitioning the entire feature to Interrupted.
-				if item.RepoName != "" && item.Feature.RepoCycles != nil {
-					_ = fm.FailRepoCycle(item.Feature.ID, item.RepoName, "killed during recovery")
-				} else {
-					_ = fm.Transition(item.Feature.ID, feature.StatusInterrupted)
-				}
-			}
 
 		case RecoverySkip:
 			// Clean up PID file if process is dead
@@ -220,11 +199,6 @@ func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm
 	}
 
 	return nil
-}
-
-// IsRecoveryTweakSession forwards to the canonical helper in ports.
-func IsRecoveryTweakSession(item RecoveryItem) bool {
-	return ports.IsRecoveryTweakSession(item)
 }
 
 // cleanupStalePIDFiles removes PID files for processes that are no longer running.

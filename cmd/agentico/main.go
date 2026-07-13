@@ -1610,67 +1610,6 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 	return resp, nil
 }
 
-func (t *serverMutationTarget) StartTweak(featureID string, req serverruntime.TweakActionRequest) (serverruntime.TweakStartResponse, error) {
-	resp := serverruntime.TweakStartResponse{FeatureID: featureID, CycleType: string(feature.CycleTweak)}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
-	sessionID, err := t.orch.StartTweak(featureID)
-	if sessionID != "" {
-		resp.SessionID = sessionID
-	}
-	if err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	resp.Result = resultStarted
-	return resp, nil
-}
-
-func (t *serverMutationTarget) FinishTweak(featureID string, req serverruntime.TweakFinishRequest) (serverruntime.TweakFinishResponse, error) {
-	resp := serverruntime.TweakFinishResponse{
-		FeatureID: featureID,
-		Decision:  strings.ToLower(strings.TrimSpace(req.Decision)),
-	}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
-	var err error
-	switch resp.Decision {
-	case "commit":
-		hadChanges, commitErr := t.orch.CompleteTweakCommit(featureID)
-		resp.HadChanges = hadChanges
-		err = commitErr
-	case "skip-review":
-		resp.HadChanges = req.HadChanges
-		err = t.orch.CompleteTweakFinish(featureID, req.HadChanges)
-	case "restore-from-review":
-		err = t.orch.RestoreTweakFromReview(featureID)
-	case "fail":
-		err = t.orch.FailTweakSession(featureID)
-	case phaseNameFinalReview:
-		resp.HadChanges = req.HadChanges
-		err = t.orch.StartCycleFinalReview(featureID)
-		if err == nil {
-			resp.Result = "review_started"
-		}
-	default:
-		err = fmt.Errorf("unknown tweak finish decision %q", req.Decision)
-	}
-	if err != nil {
-		if conflict := actionConflictError(err); conflict != nil {
-			resp.Result = resultConflict
-			return resp, conflict
-		}
-		resp.Result = resultFailed
-		return resp, err
-	}
-	if resp.Result == "" {
-		resp.Result = "finished"
-	}
-	return resp, nil
-}
-
 func (t *serverMutationTarget) StartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.RefactorStartResponse, error) {
 	return t.startRefactorAction(featureID, req, false)
 }

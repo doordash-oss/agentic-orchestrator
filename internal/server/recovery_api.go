@@ -109,15 +109,9 @@ func recoveryItemDTO(item ports.RecoveryItem) RecoveryItemDTO {
 		Iteration:    item.PIDFile.Iteration,
 		PID:          item.PIDFile.PID,
 		ProcessAlive: item.ProcessAlive,
-		Tweak:        ports.IsRecoveryTweakSession(item),
 	}
 	if item.Feature != nil {
 		dto.FeatureName = item.Feature.Name
-	}
-	if dto.Tweak {
-		dto.DefaultAction = recoveryActionKill
-		dto.AllowedActions = []string{recoveryActionKill}
-		return dto
 	}
 	dto.DefaultAction = recoveryActionSkip
 	dto.AllowedActions = []string{actionResume, recoveryActionKill, recoveryActionSkip}
@@ -153,10 +147,10 @@ func decodeRecoveryActions(items []ports.RecoveryItem, raw map[string]string) (m
 	allowed := make(map[string]map[string]ports.RecoveryAction, len(items))
 	for _, item := range items {
 		key := ports.RecoveryActionKey(item.PIDFile.FeatureID, item.RepoName)
-		itemAllowed := map[string]ports.RecoveryAction{recoveryActionKill: ports.RecoveryKill}
-		if !ports.IsRecoveryTweakSession(item) {
-			itemAllowed[actionResume] = ports.RecoveryResume
-			itemAllowed[recoveryActionSkip] = ports.RecoverySkip
+		itemAllowed := map[string]ports.RecoveryAction{
+			recoveryActionKill: ports.RecoveryKill,
+			actionResume:       ports.RecoveryResume,
+			recoveryActionSkip: ports.RecoverySkip,
 		}
 		allowed[key] = itemAllowed
 	}

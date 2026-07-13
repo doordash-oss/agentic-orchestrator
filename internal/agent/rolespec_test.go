@@ -514,13 +514,6 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 				"verification_report": "/state/feat/run-001/review/iteration-02/verification-report.yaml",
 			},
 		},
-		{
-			name:     "interactive pty",
-			phase:    feature.PhaseImplement,
-			role:     RoleInteractivePTY,
-			iterDir:  "/state/feat/run-001/tweak-1",
-			wantNoOp: true,
-		},
 	}
 
 	for _, tt := range tests {

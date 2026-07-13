@@ -652,11 +652,9 @@ func TestDetailViewShowsCycleTiming(t *testing.T) {
 			"plan":      8 * time.Minute,
 			"implement": 45 * time.Minute,
 			"rebase-1":  15 * time.Minute,
-			"tweak-1":   10 * time.Minute,
 		},
 	}
 	f.SetRebaseCount(1)
-	f.SetTweakCount(1)
 
 	m := NewDetailModel(f, "")
 	view := m.ViewCompact(80)
@@ -664,14 +662,11 @@ func TestDetailViewShowsCycleTiming(t *testing.T) {
 	if !strings.Contains(view, "Rebase #1") {
 		t.Error("expected Rebase #1 sub-item in view")
 	}
-	if !strings.Contains(view, "Tweak #1") {
-		t.Error("expected Tweak #1 sub-item in view")
-	}
 }
 
 // TestDetailViewShowsInFlightRebase covers the case where a rebase is mid-flight
 // (ActiveCycle.Status == running) but PhaseTimings does not yet have a rebase-N
-// entry and ActiveTimingKey is stale (e.g. still pointing at the previous tweak).
+// entry and ActiveTimingKey is stale (e.g. still pointing at the previous refactor).
 // The right-panel Phase Progress must still surface the running rebase row so it
 // matches the left-panel "Rebasing" status.
 func TestDetailViewShowsInFlightRebase(t *testing.T) {
@@ -683,11 +678,11 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 		CurrentPhase: feature.PhasePublish,
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		PhaseTimings: map[string]time.Duration{
-			"implement": 45 * time.Minute,
-			"rebase-1":  15 * time.Minute,
-			"tweak-1":   10 * time.Second,
+			"implement":  45 * time.Minute,
+			"rebase-1":   15 * time.Minute,
+			"refactor-1": 10 * time.Second,
 		},
-		ActiveTimingKey: "tweak-1",
+		ActiveTimingKey: "refactor-1",
 		ActiveCycle: &feature.CycleState{
 			Type:   feature.CycleRebase,
 			Status: feature.RepoCycleRunning,
@@ -695,7 +690,7 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 		},
 	}
 	f.SetRebaseCount(3)
-	f.SetTweakCount(1)
+	f.SetRefactorCount(1)
 	f.SetActiveCycleType(feature.CycleRebase)
 
 	m := NewDetailModel(f, "")
@@ -732,25 +727,25 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 	if !strings.Contains(rebaseLine, testContextPct42) {
 		t.Errorf("expected in-flight rebase row to render context percentage; got: %q", rebaseLine)
 	}
-	if !strings.Contains(view, "Tweak #1") {
-		t.Error("expected completed Tweak #1 sub-item in view")
+	if !strings.Contains(view, "Refactor #1") {
+		t.Error("expected completed Refactor #1 sub-item in view")
 	}
 
 	// Regression: with a fresh rebase running, the stale ActiveTimingKey
-	// pointing at the previous tweak must not make the Tweak row render
-	// as "in progress". Strip the rebase line to isolate the tweak line.
-	tweakLine := ""
+	// pointing at the previous refactor must not make the Refactor row render
+	// as "in progress". Strip the rebase line to isolate the refactor line.
+	refactorLine := ""
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, "Tweak #1") {
-			tweakLine = line
+		if strings.Contains(line, "Refactor #1") {
+			refactorLine = line
 			break
 		}
 	}
-	if tweakLine == "" {
-		t.Fatalf("could not locate Tweak #1 line in view:\n%s", view)
+	if refactorLine == "" {
+		t.Fatalf("could not locate Refactor #1 line in view:\n%s", view)
 	}
-	if strings.Contains(tweakLine, "in progress") {
-		t.Errorf("Tweak #1 row must NOT render as in progress while a rebase is running; got: %q", tweakLine)
+	if strings.Contains(refactorLine, "in progress") {
+		t.Errorf("Refactor #1 row must NOT render as in progress while a rebase is running; got: %q", refactorLine)
 	}
 }
 
@@ -1060,7 +1055,7 @@ func TestDetailViewNoCycleTimingWhenNone(t *testing.T) {
 	m := NewDetailModel(f, "")
 	view := m.ViewCompact(80)
 
-	if strings.Contains(view, "Rebase") || strings.Contains(view, "Tweak") {
+	if strings.Contains(view, "Rebase") {
 		t.Error("should not show cycle sub-items when none exist")
 	}
 }
@@ -1149,10 +1144,7 @@ func TestDetailFormatStatusHidesPublishHintsForUnpublished(t *testing.T) {
 	if strings.Contains(result, "[m]") {
 		t.Error("expected [m] to be hidden in formatDetailStatus for unpublished feature")
 	}
-	// [t] and [F] should still be present
-	if !strings.Contains(result, "[t]") {
-		t.Error("expected [t] to still be present for unpublished feature")
-	}
+	// [Shift+F] should still be present
 	if !strings.Contains(result, "[Shift+F]") {
 		t.Error("expected [Shift+F] to still be present for unpublished feature")
 	}

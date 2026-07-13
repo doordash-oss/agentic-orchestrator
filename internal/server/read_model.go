@@ -88,7 +88,6 @@ const (
 	actionRestart        = "restart"
 	actionResume         = "resume"
 	actionStart          = "start"
-	actionTweak          = "tweak"
 	actionRetry          = "retry"
 	actionReviewComments = "review-comments"
 	actionRewind         = "rewind"
@@ -225,10 +224,6 @@ func activeCycleCount(f *feature.Feature, cycle *feature.RepoCycleState) int {
 		if f.RebaseCount() > count {
 			count = f.RebaseCount()
 		}
-	case feature.CycleTweak:
-		if f.TweakCount() > count {
-			count = f.TweakCount()
-		}
 	case feature.CycleRefactor:
 		if f.RefactorCount() > count {
 			count = f.RefactorCount()
@@ -315,7 +310,6 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 			{Name: "repo", Kind: actionInputKindString, Required: true},
 			{Name: "mode", Kind: actionInputKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
 		}, postPublishCycleDisabledReason(f, actionReviewComments)),
-		action(actionTweak, canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, actionTweak)),
 		action(actionRefactor, canRefactor, repoOptional, []ActionInputDTO{
 			{Name: "repo", Kind: actionInputKindString, Required: false},
 			{Name: "prompt", Kind: actionInputKindString, Required: true, MaxLength: MaxActionTextBytes},

@@ -784,7 +784,6 @@ components:
           - retry
           - rebase
           - review-comments
-          - tweak
           - refactor
           - mark-done
           - cleanup
@@ -1551,10 +1550,6 @@ components:
               $ref: "#/components/schemas/ReviewCommentsFetchResponse"
             review_comments_start_response:
               $ref: "#/components/schemas/ReviewCommentsStartResponse"
-            tweak_start_response:
-              $ref: "#/components/schemas/TweakStartResponse"
-            tweak_finish_response:
-              $ref: "#/components/schemas/TweakFinishResponse"
             refactor_start_response:
               $ref: "#/components/schemas/RefactorStartResponse"
             refactor_restart_response:
@@ -1806,28 +1801,6 @@ components:
               type: string
             source:
               type: string
-    TweakStartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [cycle_type]
-          properties:
-            cycle_type:
-              type: string
-            session_id:
-              type: string
-    TweakFinishResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [decision]
-          properties:
-            decision:
-              type: string
-            had_changes:
-              type: boolean
     RefactorStartResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2094,8 +2067,6 @@ components:
           type: integer
           x-go-name: PID
         process_alive:
-          type: boolean
-        tweak:
           type: boolean
         default_action:
           type: string

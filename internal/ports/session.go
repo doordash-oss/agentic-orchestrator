@@ -77,8 +77,6 @@ const (
 	KindValidator
 	// KindReviewHelper is a read-only code-review helper session.
 	KindReviewHelper
-	// KindTweak is an interactive tweak/revise session spawned from the TUI.
-	KindTweak
 	// KindChat is the interactive AMA utility session.
 	KindChat
 )
@@ -107,8 +105,6 @@ func (k SessionKind) String() string {
 		return "validator"
 	case KindReviewHelper:
 		return "review-helper"
-	case KindTweak:
-		return "tweak"
 	case KindChat:
 		return "chat"
 	default:
@@ -147,7 +143,6 @@ const (
 	AskUserAutoPickPurposeReview           AskUserAutoPickPurpose = "review"
 	AskUserAutoPickPurposeKBBuild          AskUserAutoPickPurpose = "kb_build"
 	AskUserAutoPickPurposeChat             AskUserAutoPickPurpose = "chat"
-	AskUserAutoPickPurposeTweak            AskUserAutoPickPurpose = "tweak"
 	AskUserAutoPickPurposeFinalReview      AskUserAutoPickPurpose = "final_review"
 	AskUserAutoPickPurposeValidator        AskUserAutoPickPurpose = "validator"
 	AskUserAutoPickPurposeRoadmapReviser   AskUserAutoPickPurpose = "roadmap_reviser"

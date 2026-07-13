@@ -48,7 +48,6 @@ func TestBuildPostPublishReviewContext(t *testing.T) {
 		RepoCycles: map[string]*feature.RepoCycleState{},
 	}
 	f.SetRebaseCount(2)
-	f.SetTweakCount(3)
 
 	tests := []struct {
 		name         string
@@ -63,14 +62,6 @@ func TestBuildPostPublishReviewContext(t *testing.T) {
 			repoName:     testRepoNameWeb,
 			cycleType:    feature.CycleRebase,
 			wantArtifact: filepath.Join(stateDir, "feat-review", "runs", "run-001", "rebase-4", testRepoNameWeb, "review"),
-			wantDiffBase: testBaseBranchRelease,
-			wantFocus:    `repo "web"`,
-		},
-		{
-			name:         "per_repo_tweak",
-			repoName:     testRepoNameWeb,
-			cycleType:    feature.CycleTweak,
-			wantArtifact: filepath.Join(stateDir, "feat-review", "runs", "run-001", "tweak-5", testRepoNameWeb, "review"),
 			wantDiffBase: testBaseBranchRelease,
 			wantFocus:    `repo "web"`,
 		},
@@ -91,8 +82,6 @@ func TestBuildPostPublishReviewContext(t *testing.T) {
 				switch tt.cycleType {
 				case feature.CycleRebase:
 					rc.Count = 4
-				case feature.CycleTweak:
-					rc.Count = 5
 				}
 				f.RepoCycles[tt.repoName] = rc
 			}

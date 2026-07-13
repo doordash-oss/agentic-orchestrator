@@ -138,75 +138,6 @@ func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T)
 	}
 }
 
-// TestOrchestrator_ResetToPublishedFromTweak_PublishedBranch
-// ---------------------------------------------------------------------------
-// ResetToPublishedFromTweak restores a feature's pre-tweak state. For a
-// feature with a PR URL, Status flips to Published; for one without, it flips
-// to CodeReady. ActiveCycleType + failure fields are cleared unconditionally.
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_ResetToPublishedFromTweak_PublishedBranch(t *testing.T) {
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusFailed,
-		Repos:  []feature.FeatureRepo{{Name: repoName}},
-		RepoStates: map[string]*feature.RepoState{
-			repoName: {Touched: true, PRURL: "https://example.com/pr/1"},
-		},
-		LastError:    "boom",
-		FailureType:  feature.FailureInfrastructure,
-		CurrentPhase: feature.PhaseImplement,
-	}
-	f.SetActiveCycleType(feature.CycleTweak)
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	if err := o.ResetToPublishedFromTweak("feat-1"); err != nil {
-		t.Fatalf("ResetToPublishedFromTweak: %v", err)
-	}
-
-	if f.Status != feature.StatusPublished {
-		t.Errorf("Status = %v, want StatusPublished (feature has PRURL)", f.Status)
-	}
-	if f.CurrentPhase != feature.PhasePublish {
-		t.Errorf("CurrentPhase = %v, want PhasePublish", f.CurrentPhase)
-	}
-	if f.ActiveCycleType() != "" {
-		t.Errorf("ActiveCycleType = %v, want empty", f.ActiveCycleType())
-	}
-	if f.LastError != "" || f.FailureType != "" {
-		t.Errorf("failure fields not cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
-	}
-}
-
-func TestOrchestrator_ResetToPublishedFromTweak_CodeReadyBranch(t *testing.T) {
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusInterrupted,
-	}
-	f.SetActiveCycleType(feature.CycleTweak)
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	if err := o.ResetToPublishedFromTweak("feat-1"); err != nil {
-		t.Fatalf("ResetToPublishedFromTweak: %v", err)
-	}
-
-	if f.Status != feature.StatusCodeReady {
-		t.Errorf("Status = %v, want StatusCodeReady (no PRURL)", f.Status)
-	}
-}
-
 // TestOrchestrator_ExtendFailedPhaseBudget_BumpsAndClears
 // ---------------------------------------------------------------------------
 // ExtendFailedPhaseBudget extends MaxIterations when the failure type is
@@ -365,84 +296,9 @@ func TestOrchestrator_CollectAndClearRepoCycleRestarts_UsesPersistedRefactorProm
 	}
 }
 
-func TestOrchestrator_CollectAndClearRepoCycleRestarts_SkipsTweakCycles(t *testing.T) {
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusPublished,
-		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleTweak, PlanPath: ""},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	restarts, refactor, err := o.CollectAndClearRepoCycleRestarts("feat-1")
-	if err != nil {
-		t.Fatalf("CollectAndClearRepoCycleRestarts: %v", err)
-	}
-	assertLifecycleCall(t, lc, "ClearRepoCycles")
-	if len(restarts) != 0 {
-		t.Errorf("tweak cycles must not produce restart descriptors; got %d", len(restarts))
-	}
-	if refactor != nil {
-		t.Errorf("tweak cycles must not produce a refactor descriptor; got %+v", refactor)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Iteration 13 additions: RestartPhase + ResolveGateReviewContext
 // ---------------------------------------------------------------------------
-
-// TestOrchestrator_RestartPhase_TweakCycle_ResetsWithoutDispatch
-// ---------------------------------------------------------------------------
-// When a feature has an active tweak cycle, RestartPhase routes through
-// ResetToPublishedFromTweak (force-set pre-tweak state) and returns
-// RestartNoOp so the TUI just refreshes — no StartPhaseMsg is emitted.
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_RestartPhase_TweakCycle_ResetsWithoutDispatch(t *testing.T) {
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Status:       feature.StatusImplementing,
-		CurrentPhase: feature.PhaseImplement,
-		Repos:        []feature.FeatureRepo{{Name: repoName}},
-		RepoStates: map[string]*feature.RepoState{
-			repoName: {Touched: true, PRURL: "https://example.com/pr/1"},
-		},
-		LastError:   "boom",
-		FailureType: feature.FailureInfrastructure,
-	}
-	f.SetActiveCycleType(feature.CycleTweak)
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	outcome, err := o.RestartPhase("feat-1", 10, 2)
-	if err != nil {
-		t.Fatalf("RestartPhase: %v", err)
-	}
-	if outcome.Action != orchestrator.RestartNoOp {
-		t.Errorf("Action = %v, want RestartNoOp", outcome.Action)
-	}
-	if f.ActiveCycleType() != "" {
-		t.Errorf("ActiveCycleType should be cleared, got %q", f.ActiveCycleType())
-	}
-	if f.Status != feature.StatusPublished {
-		t.Errorf("Status = %v, want Published (PRURL set)", f.Status)
-	}
-	if f.LastError != "" || f.FailureType != "" {
-		t.Errorf("failure fields should be cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
-	}
-}
 
 // TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches
 // ---------------------------------------------------------------------------

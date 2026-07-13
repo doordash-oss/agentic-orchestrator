@@ -300,11 +300,12 @@ func TestExecuteRecovery_PortError_NoEventsNoRelaunch(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteRecovery_EmitsOneEventPerItemWithAction(t *testing.T) {
-	// feat-a uses CycleTweak so the resume action emits an event but does
-	// not fire the relaunch spy — keeps the test focused on per-item
-	// observations. Relaunch behavior is exercised by T9/T10/T11.
+	// feat-a's relaunch fails via lifecycle.Get returning DefaultError, so
+	// the resume action emits an event but does not fire the relaunch spy —
+	// keeps the test focused on per-item observations. Relaunch behavior is
+	// exercised by T9.
 	items := fakeRecoveryItems(
-		itemSpec{FeatureID: "feat-a", CurrentPhase: feature.PhaseImplement, Status: feature.StatusImplementing, CycleType: feature.CycleTweak},
+		itemSpec{FeatureID: "feat-a", CurrentPhase: feature.PhaseImplement, Status: feature.StatusImplementing},
 		itemSpec{FeatureID: "feat-b", RepoName: "repo-x"},
 		itemSpec{FeatureID: "feat-c"},
 	)
@@ -316,6 +317,7 @@ func TestExecuteRecovery_EmitsOneEventPerItemWithAction(t *testing.T) {
 
 	fake := &fakeRecoveryOp{}
 	lifecycle := mocks.NewMockFeatureLifecycle()
+	lifecycle.DefaultError = errors.New("feature not found")
 	hookLog := &recoveryHookLog{}
 	spy := &fakeRunMultiRepoImpl{}
 
@@ -472,62 +474,6 @@ func TestExecuteRecovery_ResumeActionRelaunchesPhase(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// T10. ExecuteRecovery_TweakCycle_SkipsRelaunch
-// ---------------------------------------------------------------------------
-
-func TestExecuteRecovery_TweakCycle_SkipsRelaunch(t *testing.T) {
-	f := &feature.Feature{
-		ID:           "feat-a",
-		CurrentPhase: feature.PhaseImplement,
-		Status:       feature.StatusImplementing,
-		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
-		Artifacts:    map[string]string{"plan": "/tmp/plan.md"},
-	}
-	f.SetActiveCycleType(feature.CycleTweak)
-	items := []ports.RecoveryItem{{
-		PIDFile:  (fakeRecoveryItems(itemSpec{FeatureID: "feat-a"})[0]).PIDFile,
-		Feature:  f,
-		RepoName: "",
-	}}
-	actions := map[string]ports.RecoveryAction{
-		ports.RecoveryActionKey("feat-a", ""): ports.RecoveryResume,
-	}
-
-	fake := &fakeRecoveryOp{}
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
-	spy := &fakeRunMultiRepoImpl{}
-	hookLog := &recoveryHookLog{}
-
-	o := orchestrator.New(
-		orchestrator.Deps{Recovery: fake, Lifecycle: lc, Store: store},
-		orchestrator.Hooks{OnRecoveryAction: hookLog.recordAction},
-	)
-	o.SetRunMultiRepoImplFn(spy.Fn())
-
-	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
-		t.Fatalf("ExecuteRecovery: %v", err)
-	}
-	if spy.numCalls() != 0 {
-		t.Errorf("relaunch spy called %d times; want 0 for tweak cycle", spy.numCalls())
-	}
-	// Event + hook still fire for the tweak item.
-	events := drainEvents(o)
-	var executedCount int
-	for _, ev := range events {
-		if ev.Type == ports.RecoveryExecuted {
-			executedCount++
-		}
-	}
-	if executedCount != 1 {
-		t.Errorf("RecoveryExecuted events = %d, want 1", executedCount)
-	}
-	if hookLog.actionCount() != 1 {
-		t.Errorf("hook invocations = %d, want 1", hookLog.actionCount())
-	}
-}
-
 func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real Store/Manager recovery transition regression in short mode; extended orchestrator run owns the transition-rule check")
@@ -595,81 +541,6 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 	}
 	if loaded.CurrentPhase != feature.PhaseInquire {
 		t.Errorf("feature phase = %s, want PhaseInquire", loaded.CurrentPhase)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// T14. ExecuteRecovery_RepoScopedTweak_SkipsRelaunch
-//
-// Regression for the multi-repo tweak filter: a feature whose
-// ActiveCycleType is NOT CycleTweak (e.g., empty for a non-refactor feature,
-// or a different cycle type) but whose RepoCycles[repoName].Type IS
-// CycleTweak must still be excluded from relaunch. The session recovery
-// layer already filters these via IsRecoveryTweakSession (session/recovery.go:206);
-// the orchestrator layer must reuse the same predicate instead of only
-// checking ActiveCycleType.
-// ---------------------------------------------------------------------------
-
-func TestExecuteRecovery_RepoScopedTweak_SkipsRelaunch(t *testing.T) {
-	// Feature has no ActiveCycleType but one repo is mid-tweak via the
-	// per-repo cycle map (multi-repo tweak scenario).
-	f := &feature.Feature{
-		ID:           "feat-repo-tweak",
-		CurrentPhase: feature.PhaseImplement,
-		Status:       feature.StatusImplementing,
-		// ActiveCycleType deliberately left zero — narrow predicate
-		// (ActiveCycleType == CycleTweak) would miss this case.
-		Repos:     []feature.FeatureRepo{{Name: repoName, Path: repoAPath}, {Name: repoNameB, Path: repoBPath}},
-		Artifacts: map[string]string{"plan": "/tmp/plan.md"},
-		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
-		},
-	}
-
-	items := []ports.RecoveryItem{{
-		PIDFile:  session.PIDFile{PID: 12345, FeatureID: "feat-repo-tweak", RepoName: repoName},
-		Feature:  f,
-		RepoName: repoName,
-	}}
-	actions := map[string]ports.RecoveryAction{
-		ports.RecoveryActionKey("feat-repo-tweak", repoName): ports.RecoveryResume,
-	}
-
-	fake := &fakeRecoveryOp{}
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
-	spy := &fakeRunMultiRepoImpl{}
-	hookLog := &recoveryHookLog{}
-
-	o := orchestrator.New(
-		orchestrator.Deps{Recovery: fake, Lifecycle: lc, Store: store},
-		orchestrator.Hooks{OnRecoveryAction: hookLog.recordAction},
-	)
-	o.SetRunMultiRepoImplFn(spy.Fn())
-
-	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
-		t.Fatalf("ExecuteRecovery: %v", err)
-	}
-	// Critical assertion: the orchestrator must NOT enqueue the relaunch for
-	// a repo-scoped tweak cycle. Before the fix, the narrow check
-	// `ActiveCycleType == CycleTweak` was false (empty) and the spy fired.
-	if spy.numCalls() != 0 {
-		t.Errorf("relaunch spy called %d times; want 0 for repo-scoped tweak cycle", spy.numCalls())
-	}
-	// Event + hook still fire for the item — skipping relaunch must not
-	// suppress per-item observation.
-	events := drainEvents(o)
-	var executedCount int
-	for _, ev := range events {
-		if ev.Type == ports.RecoveryExecuted {
-			executedCount++
-		}
-	}
-	if executedCount != 1 {
-		t.Errorf("RecoveryExecuted events = %d, want 1", executedCount)
-	}
-	if hookLog.actionCount() != 1 {
-		t.Errorf("hook invocations = %d, want 1", hookLog.actionCount())
 	}
 }
 

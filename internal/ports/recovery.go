@@ -70,25 +70,6 @@ func RecoveryActionKey(featureID, repoName string) string {
 	return featureID + ":" + repoName
 }
 
-// IsRecoveryTweakSession reports whether a recovery item belongs to an
-// interactive tweak session — either single-repo (ActiveCycleType) or
-// multi-repo (RepoCycles entry). Defined on the port so the orchestrator
-// does not reach into internal/session to classify recovery items.
-func IsRecoveryTweakSession(item RecoveryItem) bool {
-	if item.Feature == nil {
-		return false
-	}
-	if item.Feature.ActiveCycleType() == feature.CycleTweak {
-		return true
-	}
-	if item.RepoName != "" && item.Feature.RepoCycles != nil {
-		if rc, ok := item.Feature.RepoCycles[item.RepoName]; ok && rc.Type == feature.CycleTweak {
-			return true
-		}
-	}
-	return false
-}
-
 // RecoveryOperator abstracts orphan-session discovery and dispatch. The
 // interface is intentionally narrow: domain code never imports internal/session
 // to obtain recovery context.

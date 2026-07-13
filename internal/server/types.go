@@ -298,10 +298,6 @@ type RebaseStartResponse = serverapi.RebaseStartResponse
 
 type ReviewCommentsStartResponse = serverapi.ReviewCommentsStartResponse
 
-type TweakStartResponse = serverapi.TweakStartResponse
-
-type TweakFinishResponse = serverapi.TweakFinishResponse
-
 type RefactorStartResponse = serverapi.RefactorStartResponse
 
 type RefactorRestartResponse = serverapi.RefactorRestartResponse

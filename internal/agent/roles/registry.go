@@ -30,7 +30,6 @@ var roleSpecs = append([]RoleSpec{
 	iterationReviewerRoleSpec,
 	finalReviewerRoleSpec,
 	finalReviewFixerRoleSpec,
-	interactivePTYRoleSpec,
 }, planValidatorRoleSpecs...)
 
 // All returns every canonical RoleSpec declaration.

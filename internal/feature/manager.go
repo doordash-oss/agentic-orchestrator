@@ -641,7 +641,7 @@ func (m *Manager) StartImplementation(featureID string) error {
 		}
 		f.CurrentPhase = PhaseImplement
 		f.CurrentIteration = 1
-		// Use existing cycle key (rebase-N, tweak-N, review-comments) if set,
+		// Use existing cycle key (rebase-N, review-comments) if set,
 		// or default to "implement" (or "phase-N-impl" for roadmap phases).
 		// This preserves cycle keys across interrupt/fail → resume transitions.
 		// Accumulate any in-flight time under the old key before switching.
@@ -905,7 +905,7 @@ func activeNonRebaseCycleType(f *Feature) RepoCycleType {
 	return f.ActiveCycleType()
 }
 
-// StartRepoCycle starts a per-repo post-publish cycle (rebase/tweak/review-comments).
+// StartRepoCycle starts a per-repo post-publish cycle (rebase/review-comments).
 // The feature stays StatusPublished; only the per-repo cycle state is set.
 func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycleType) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
@@ -922,12 +922,6 @@ func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycle
 			// Count existing rebase cycles for this repo
 			for _, rc := range f.RepoCycles {
 				if rc.Type == CycleRebase {
-					count++
-				}
-			}
-		case CycleTweak:
-			for _, rc := range f.RepoCycles {
-				if rc.Type == CycleTweak {
 					count++
 				}
 			}
@@ -954,8 +948,7 @@ func (m *Manager) CompleteRepoCycle(featureID, repoName string) error {
 }
 
 // RemoveRepoCycle removes a per-repo cycle entry without recording failure.
-// Used when cleaning up stale interactive tweak entries that cannot be
-// restarted.
+// Used when cleaning up stale cycle entries that cannot be restarted.
 func (m *Manager) RemoveRepoCycle(featureID, repoName string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		delete(f.RepoCycles, repoName)
@@ -1069,7 +1062,7 @@ func (m *Manager) AdvanceRoadmapPhase(featureID string) error {
 		f.ValidatingPlan = false
 		f.ValidatorStatuses = nil
 		// Clear the active plan artifact so startImplementationCmd re-resolves
-		// for the new phase instead of reusing a stale tweak/rebase plan.
+		// for the new phase instead of reusing a stale rebase plan.
 		delete(f.Artifacts, "plan")
 		// RepoStates persists across phases. Touched is monotonic — once
 		// any phase touches a repo, the flag stays true for the lifetime

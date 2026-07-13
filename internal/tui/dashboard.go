@@ -519,7 +519,6 @@ func (m DashboardModel) renderFooter() string {
 				hints = append(hints, "[p] Publish")
 			}
 			if (!activePublishedCycle && f.Status == feature.StatusPublished) || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
-				hints = append(hints, "[t] Tweak")
 				hints = append(hints, "[Shift+F] Refactor")
 				hints = append(hints, "[b] Rebase")
 			}
@@ -1285,8 +1284,6 @@ func repoCycleFinalReviewLabel(t feature.RepoCycleType) string {
 		return "Final Review (Review Comments)"
 	case feature.CycleRebase:
 		return "Final Review (Rebase)"
-	case feature.CycleTweak:
-		return "Final Review (Tweak)"
 	case feature.CycleRefactor:
 		return "Final Review (Refactor)"
 	default:
@@ -1302,8 +1299,6 @@ func repoCycleRunningLabel(t feature.RepoCycleType) string {
 		return "Addressing Review Comments"
 	case feature.CycleRebase:
 		return "Rebasing"
-	case feature.CycleTweak:
-		return "Tweaking"
 	case feature.CycleRefactor:
 		return "Refactoring"
 	default:
@@ -1353,13 +1348,6 @@ func formatStatus(f *feature.Feature) string {
 		normalizedPath := filepath.ToSlash(planPath)
 		if f.AddressingReviews() && f.CurrentPhase == feature.PhaseImplement {
 			base := fmt.Sprintf("Addressing reviews [%d]", f.CurrentIteration)
-			if needsInput {
-				return WarningStyle.Render(base+" | waiting input") + elapsed
-			}
-			return base + elapsed
-		}
-		if f.ActiveCycleType() == feature.CycleTweak && f.CurrentPhase == feature.PhaseImplement {
-			base := fmt.Sprintf("Tweaking [%d]", f.CurrentIteration)
 			if needsInput {
 				return WarningStyle.Render(base+" | waiting input") + elapsed
 			}

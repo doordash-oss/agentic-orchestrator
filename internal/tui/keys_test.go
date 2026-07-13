@@ -176,7 +176,7 @@ func TestDetailPanelContextBindings(t *testing.T) {
 	if publish == nil {
 		t.Fatal("missing PUBLISH section")
 	}
-	for _, k := range []string{"p", "m", "t", "b", "Shift+D", "g", "c"} {
+	for _, k := range []string{"p", "m", "b", "Shift+D", "g", "c"} {
 		if !sectionContainsKey(publish, k) {
 			t.Errorf("PUBLISH missing key %q", k)
 		}
@@ -334,7 +334,7 @@ func TestDetailViewContextBindings(t *testing.T) {
 	if publish == nil {
 		t.Fatal("missing PUBLISH section")
 	}
-	for _, k := range []string{"p", "m", "t", "b", "Shift+D", "g", "c"} {
+	for _, k := range []string{"p", "m", "b", "Shift+D", "g", "c"} {
 		if !sectionContainsKey(publish, k) {
 			t.Errorf("PUBLISH missing key %q", k)
 		}

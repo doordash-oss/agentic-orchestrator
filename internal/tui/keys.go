@@ -108,7 +108,6 @@ type keyMap struct {
 	MergeLocal        key.Binding
 	MarkDone          key.Binding
 	ReviewComments    key.Binding
-	Tweak             key.Binding
 	Refactor          key.Binding
 	EditConfig        key.Binding
 	ViewLogs          key.Binding
@@ -175,7 +174,6 @@ var keys = keyMap{
 	MergeLocal:        key.NewBinding(key.WithKeys("M"), key.WithHelp("Shift+M", "merge to base branch")),
 	MarkDone:          key.NewBinding(key.WithKeys("D"), key.WithHelp("Shift+D", "mark as done")),
 	ReviewComments:    key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "review comments")),
-	Tweak:             key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tweak implementation")),
 	Refactor:          key.NewBinding(key.WithKeys("F"), key.WithHelp("Shift+F", "refactor")),
 	EditConfig:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
 	ViewLogs:          key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "view logs")),

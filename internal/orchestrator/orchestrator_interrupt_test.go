@@ -309,8 +309,8 @@ func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
 		KBStatus: kb,
 		RepoCycles: map[string]*feature.RepoCycleState{
 			"r1": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
-			"r2": {Type: feature.CycleTweak, Status: feature.RepoCycleReviewing},
-			"r3": {Type: feature.CycleTweak, Status: kbStatusCompleted},
+			"r2": {Type: feature.CycleReviewComments, Status: feature.RepoCycleReviewing},
+			"r3": {Type: feature.CycleReviewComments, Status: kbStatusCompleted},
 		},
 	}
 
@@ -354,76 +354,6 @@ func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
 	// KBStatus preserved.
 	if published.KBStatus == nil {
 		t.Error("KBStatus should be preserved for published features with cycles")
-	}
-}
-
-// TestOrchestrator_InterruptAllRunning_CodeReadyWithCycles reproduces the
-// shutdown scenario where the user has manual_publish=true so the feature
-// stays at StatusCodeReady while a tweak/rebase cycle runs. Before the fix,
-// the InterruptAllRunning sweep had no branch matching CodeReady — the
-// feature's cycle and pending help banner survived the quit and reappeared
-// stale on the next launch.
-func TestOrchestrator_InterruptAllRunning_CodeReadyWithCycles(t *testing.T) {
-	kb := map[string]string{agenticRepoName: kbStatusCompleted}
-	codeReady := &feature.Feature{
-		ID:       "cr-cyc",
-		Status:   feature.StatusCodeReady,
-		KBStatus: kb,
-		RepoCycles: map[string]*feature.RepoCycleState{
-			agenticRepoName: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
-		},
-		ActiveCycle: &feature.CycleState{
-			Type:   feature.CycleTweak,
-			Status: feature.RepoCycleRunning,
-			Count:  2,
-		},
-		HelpQueue: []feature.HelpRequest{
-			{Question: "Agent has a question — attach with 'a' to respond", Pending: true},
-			{Question: "earlier-resolved", Pending: false},
-		},
-		PermissionsQueue: []feature.PermissionRequest{
-			{Tool: "Bash", Pending: true},
-		},
-	}
-
-	fs := newFeatureStore(codeReady)
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) { return codeReady, nil }
-	sm := mocks.NewMockSessionManager()
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		Sessions:  sm,
-	}, orchestrator.Hooks{})
-
-	if err := o.InterruptAllRunning(); err != nil {
-		t.Fatalf("InterruptAllRunning: %v", err)
-	}
-
-	if codeReady.RepoCycles[agenticRepoName].Status != feature.RepoCycleInterrupted {
-		t.Errorf("RepoCycles[agentic].Status = %q, want interrupted", codeReady.RepoCycles[agenticRepoName].Status)
-	}
-	if codeReady.ActiveCycle == nil || codeReady.ActiveCycle.Status != feature.RepoCycleInterrupted {
-		t.Errorf("ActiveCycle.Status = %v, want interrupted", codeReady.ActiveCycle)
-	}
-	if codeReady.ActiveCycle.LastError != "" {
-		t.Errorf("ActiveCycle.LastError = %q, want empty after interrupt sweep", codeReady.ActiveCycle.LastError)
-	}
-	if codeReady.HelpQueue[0].Pending {
-		t.Error("Pending question should be cleared after shutdown sweep")
-	}
-	if codeReady.HelpQueue[1].Pending {
-		t.Error("Already-resolved help entry should remain non-pending")
-	}
-	if codeReady.PermissionsQueue[0].Pending {
-		t.Error("Pending permission request should be cleared after shutdown sweep")
-	}
-	if codeReady.Status != feature.StatusCodeReady {
-		t.Errorf("Status = %v, should remain CodeReady", codeReady.Status)
-	}
-	if codeReady.KBStatus == nil {
-		t.Error("KBStatus should be preserved for CodeReady features with cycles")
 	}
 }
 

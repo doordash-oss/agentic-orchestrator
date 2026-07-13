@@ -24,7 +24,7 @@
 //     feature-level FR session — one Claude session reads the cumulative
 //     diff across every Feature.Repos worktree.
 //
-// Cycle paths (rebase / review-comments / refactor / tweak) still consult
+// Cycle paths (rebase / review-comments / refactor) still consult
 // some of this package's helpers. They will migrate to their own unified
 // loop functions in slices 4-7.
 package agent

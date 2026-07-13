@@ -15,7 +15,7 @@
 // Package agent — final_review_helpers.go owns the shared helpers used by
 // the unified feature-level Final Review loop (final_review_loop.go) and
 // the post-cycle Final Review entry (also in final_review_loop.go for
-// post-publish tweak/rebase/review-comments cycles).
+// post-publish rebase/review-comments cycles).
 //
 // The prompt builders, verification-context resolver, and seed-source helpers
 // stay here because both the feature-level Final Review and the feature-level
@@ -163,7 +163,7 @@ func guidelineAdditionalDirs(dir string) []string {
 
 // writeAggregateVerificationStub preserves the legacy non-contract final
 // review behavior used by post-publish review flows that lack a phase or
-// cycle testing-contract.yaml (e.g., post-tweak FR for a feature with no
+// cycle testing-contract.yaml (e.g., a post-cycle FR for a feature with no
 // active roadmap phase).
 func writeAggregateVerificationStub(path string) {
 	content := `# Verification Report — Final Review Placeholder

@@ -268,7 +268,7 @@ func (o *Orchestrator) CommitRoadmapPhase(featureID string, phase int) error {
 }
 
 // RemoveRepoCycle removes a repo cycle entry without firing failure events.
-// Used by the TUI's restartRepoCycleMsg flow when the user aborts a tweak
+// Used by the TUI's restartRepoCycleMsg flow when the user aborts a cycle
 // restart and wants the stale cycle cleared so the cycle selector re-opens.
 func (o *Orchestrator) RemoveRepoCycle(featureID, repoName string) error {
 	return o.deps.Lifecycle.RemoveRepoCycle(featureID, repoName)
@@ -656,40 +656,6 @@ func clearPendingFeatureAttention(f *feature.Feature) {
 	}
 }
 
-// ResetToPublishedFromTweak force-resets a feature that is in an active tweak
-// cycle back to its pre-tweak published/code-ready state. This is the restart
-// path when the user aborts an in-flight tweak — Transition chains aren't
-// always valid from Failed/Interrupted so Store.Modify is used to force the
-// target state. Clears ActiveCycleType and any failure bookkeeping.
-//
-// Re-entrancy / crash recovery:
-//
-//	(a) Idempotent on retry. The mutation force-assigns a deterministic state
-//	    derived only from f.PRURLs() (Published when any PR URL is recorded,
-//	    CodeReady otherwise) and clears ActiveCycleType / LastError /
-//	    FailureType to fixed empty values. A second call against an already
-//	    reset feature observes the same f.PRURLs() snapshot and writes the
-//	    same fields — no divergence.
-//	(b) On crash before Store.Modify returns: feature.yaml is written
-//	    atomically (temp + rename), so persisted state is either the
-//	    pre-call snapshot (still tweaking) or the fully reset snapshot.
-//	    Recovery is the normal startup load; if the crash landed in the
-//	    pre-write window the user can simply re-issue the abort.
-func (o *Orchestrator) ResetToPublishedFromTweak(featureID string) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		if len(f.PRURLs()) > 0 {
-			f.Status = feature.StatusPublished
-		} else {
-			f.Status = feature.StatusCodeReady
-		}
-		f.CurrentPhase = feature.PhasePublish
-		f.SetActiveCycleType("")
-		f.LastError = ""
-		f.FailureType = ""
-		return nil
-	})
-}
-
 // ExtendFailedPhaseBudget clears failure bookkeeping on a failed feature and
 // bumps iteration budgets by the caller-supplied deltas. The TUI reads the
 // configured defaults from feature.Manager.Config (read-only) and passes them
@@ -733,9 +699,8 @@ type RefactorRestart struct {
 
 // CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
 // reads each cycle's plan file from disk, clears the cycle state, and returns
-// per-cycle restart descriptors the TUI must dispatch. Tweak cycles are
-// skipped (they cannot be restarted autonomously — cleared but not re-queued).
-// At most one refactor cycle is returned (only one refactor runs at a time).
+// per-cycle restart descriptors the TUI must dispatch. At most one refactor
+// cycle is returned (only one refactor runs at a time).
 func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, *RefactorRestart, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -760,10 +725,6 @@ func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]Rep
 	var refactor *RefactorRestart
 	for _, c := range cycles {
 		switch c.cycleType {
-		case feature.CycleTweak:
-			// Interactive tweak sessions have no plan file — cannot restart
-			// autonomously. Cycle already cleared; nothing to re-dispatch.
-			continue
 		case feature.CycleRefactor:
 			if refactor != nil {
 				// Only restart one refactor per feature — one at a time.
@@ -999,8 +960,6 @@ type RestartOutcome struct {
 // restarts. Iteration 13 consolidated the decision tree that previously lived
 // in the TUI's restartPhaseCmd:
 //   - Stops any active sessions (delegates to StopFeatureSessions).
-//   - If the feature has an active tweak cycle, forces back to the pre-tweak
-//     state (ResetToPublishedFromTweak) and returns RestartNoOp.
 //   - On Failed features, clears the failure bookkeeping and extends the
 //     iteration budget by the caller-supplied deltas (the orchestrator's port
 //     surface does not carry config so the TUI reads Defaults and passes them).
@@ -1038,17 +997,6 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// Stop any active sessions before mutating state so orphaned agents do not
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
-
-	// Guard: active tweak cycle — restore to pre-tweak state instead of
-	// restarting. ResetToPublishedFromTweak force-sets the target state
-	// because restart may be invoked from Failed / Interrupted where
-	// Transition chains are invalid.
-	if f.ActiveCycleType() == feature.CycleTweak {
-		if err := o.ResetToPublishedFromTweak(featureID); err != nil {
-			return RestartOutcome{}, fmt.Errorf("reset tweak: %w", err)
-		}
-		return RestartOutcome{Action: RestartNoOp}, nil
-	}
 
 	// Clear failure context on restart; extend iteration caps if exhausted.
 	// ExtendFailedPhaseBudget is a no-op on non-Failed features so this is

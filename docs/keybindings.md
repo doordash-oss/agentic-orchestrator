@@ -40,7 +40,6 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `v` | View diff |
 | `p` | Publish (when code ready) |
 | `m` | Manual publish |
-| `t` | Tweak implementation (code ready or published) |
 | `b` | Rebase on main (code ready or published) |
 | `e` | Edit config |
 | `Shift+E` | Edit workspace config |

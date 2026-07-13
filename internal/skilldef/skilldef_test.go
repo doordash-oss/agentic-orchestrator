@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-const expectedEmbeddedSkillCount = 28
+const expectedEmbeddedSkillCount = 27
 
 func TestParseSkillFile(t *testing.T) {
 	tests := []struct {
@@ -381,7 +381,7 @@ func TestReconcileSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading chat/user-guide/post-publish.md: %v", err)
 	}
-	if !strings.Contains(string(ppData), "Tweak") {
+	if !strings.Contains(string(ppData), "Rebase") {
 		t.Error("chat/user-guide/post-publish.md missing expected content")
 	}
 
@@ -561,7 +561,7 @@ func TestReconcileSkills_NonSkillMdFiles(t *testing.T) {
 		{
 			name:    "post-publish topic",
 			path:    filepath.Join(skillsDir, "chat", "user-guide", "post-publish.md"),
-			wantSub: "Tweak",
+			wantSub: "Rebase",
 		},
 		{
 			name:    "permissions topic",
@@ -653,7 +653,7 @@ func TestReconcileSkills_SubdirectoryStructure(t *testing.T) {
 		{"feature-lifecycle.md", "Pipeline Profiles"},
 		{"tui-navigation.md", "Dashboard"},
 		{"configuration.md", "config.yaml"},
-		{"post-publish.md", "Tweak"},
+		{"post-publish.md", "Rebase"},
 		{"permissions.md", "Allow & Remember"},
 	} {
 		data, err := os.ReadFile(filepath.Join(skillsDir, "chat", "user-guide", tc.file))

@@ -366,18 +366,6 @@ func (c *Client) StartReviewComments(ctx context.Context, featureID string, req 
 	return out, err
 }
 
-func (c *Client) StartTweak(ctx context.Context, featureID string, req TweakActionRequest) (TweakStartResponse, error) {
-	var out TweakStartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionTweak), nil, req, &out, true)
-	return out, err
-}
-
-func (c *Client) FinishTweak(ctx context.Context, featureID string, req TweakFinishRequest) (TweakFinishResponse, error) {
-	var out TweakFinishResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionTweak)+"/finish", nil, req, &out, true)
-	return out, err
-}
-
 func (c *Client) StartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorStartResponse, error) {
 	var out RefactorStartResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor), nil, req, &out, true)

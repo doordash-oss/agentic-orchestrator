@@ -1781,7 +1781,7 @@ func (s *Session) Wait() {
 // be torn down after a Result message. Single-shot autonomous sessions need
 // wrapper cleanup (stdin close + SIGTERM/SIGKILL watchdog) to unstick a
 // process.Wait() that would otherwise hang on the wrapper's `cat`.
-// Multi-turn server CLIs (Codex `app-server`) and interactive Tweak sessions
+// Multi-turn server CLIs (Codex `app-server`) and interactive sessions
 // stay alive after a Result and must not be torn down here; Stop() or user EOF
 // is the explicit cleanup path for them. Loop-managed Claude sessions also
 // keep stdin open for truncated turns so the waiter can send its auto-resume
@@ -1789,11 +1789,10 @@ func (s *Session) Wait() {
 func (s *Session) shouldShutdownOnResult(result *llm.ResultMessage) bool {
 	s.mu.Lock()
 	name := s.providerName
-	kind := s.kind
 	turnMode := s.turnMode
 	keepAliveOnTruncatedResult := s.keepAliveOnTruncatedResult
 	s.mu.Unlock()
-	if turnMode == ports.TurnModeInteractive || kind == ports.KindTweak {
+	if turnMode == ports.TurnModeInteractive {
 		return false
 	}
 	if keepAliveOnTruncatedResult && result.IsTurnTruncated() {

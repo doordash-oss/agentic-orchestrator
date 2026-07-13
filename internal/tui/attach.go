@@ -48,17 +48,6 @@ type attachDoneMsg struct {
 	generation int
 }
 
-// agentInterruptedMsg is the result of a Stop action in the tweak-session
-// finish prompt. err is nil on success; non-nil when the interrupt could
-// not be delivered.
-type agentInterruptedMsg struct {
-	err error
-}
-
-// agentToastClearMsg is dispatched after interruptToastDuration to clear
-// the transient toast shown after an interrupt.
-type agentToastClearMsg struct{}
-
 // skillsLoadedMsg carries the loaded skills from async discovery.
 type skillsLoadedMsg struct {
 	items   []AutocompleteItem
@@ -84,8 +73,6 @@ const (
 	questionPanelBaseMaxLines           = 20 // default AskUser panel cap for normal/small terminals
 	questionPanelTallMaxLines           = 32 // upper bound so the transcript remains visible
 	expandedQuestionPromptReservedLines = 4  // room for scroll indicators and the return hint
-
-	interruptToastDuration = 10 * time.Second
 )
 
 // thinkingLineText is the transient status line shown while the agent is
@@ -336,7 +323,7 @@ func abbreviateRepoName(name string) string {
 // repoTab represents one tab in the multi-session attach tab bar.
 // Originally used exclusively for per-repo implementation sessions, it now
 // backs any attach view that cycles across multiple live sessions for a
-// feature (phase sessions, validator critics, review helpers, tweak sessions).
+// feature (phase sessions, validator critics, review helpers).
 //
 // Identity fields:
 //   - repoName: the tab's identity key. For repo-impl tabs this is the repo
@@ -476,15 +463,8 @@ type AttachModel struct {
 	featureSpanID string
 	activeRun     int // mirrors f.ActiveRun at attach time
 
-	// Tweak session state
-	isTweakSession   bool // true when attached to a tweak session
-	tweakFinishing   bool // set by Ctrl+D or finish prompt, read by the parent model during detach
-	showFinishPrompt bool // true when Esc finish/detach prompt is visible
-
-	// Transient toast shown after the Stop option in the finish prompt.
-	// Cleared by agentToastClearMsg after interruptToastDuration.
-	interruptToast   string
-	interruptToastAt time.Time
+	// Transient toast shown after a permission-answer failure.
+	interruptToast string
 
 	// Tool spinner state (single-line animated indicator, like chat model)
 	thinkingLine   string    // current tool name/progress (overwritten on each update)
@@ -769,10 +749,6 @@ func (m AttachModel) expandedQuestionPromptLineBudget() int {
 
 // chatPanelHeight returns the height needed for the chat panel.
 func (m AttachModel) chatPanelHeight() int {
-	if m.showFinishPrompt {
-		// title (1) + blank (1) + options (2) + blank (1) + hint (1) = 6
-		return 6
-	}
 	if m.showPermMenu {
 		contentW := m.questionContentWidth()
 		detail := formatPermissionDetail(m.pendingPermToolName, m.pendingPermToolInput)
@@ -1291,7 +1267,6 @@ func (m *AttachModel) sendChatInput() tea.Cmd {
 	// Sending a new message is the user's answer to the interrupt toast —
 	// clear it so it doesn't linger after they've moved on.
 	m.interruptToast = ""
-	m.interruptToastAt = time.Time{}
 	m.sess.MessageLog().Append(llm.SDKMessage{
 		Type:            "user",
 		LocallyAppended: true,
@@ -1329,19 +1304,6 @@ func isInterruptResult(r *llm.ResultMessage) bool {
 		return true
 	}
 	return false
-}
-
-// interruptAgentCmd returns a command that asks the session to cancel the
-// current agent turn. Used by the tweak finish prompt's Stop option; the
-// result is delivered as an agentInterruptedMsg which sets the toast.
-func (m *AttachModel) interruptAgentCmd() tea.Cmd {
-	sess := m.sess
-	return func() tea.Msg {
-		if sess == nil {
-			return agentInterruptedMsg{err: fmt.Errorf("no active session")}
-		}
-		return agentInterruptedMsg{err: sess.Interrupt()}
-	}
 }
 
 // skillPlaceholder returns the human-readable placeholder inserted into the
@@ -1650,7 +1612,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 		m.showPermMenu = true
 		if msg.err != nil {
 			m.interruptToast = "Permission answer failed: " + firstLine(msg.err.Error())
-			m.interruptToastAt = time.Now()
 		}
 		m.updateViewport()
 		return m, nil
@@ -1759,13 +1720,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 		// Handle Ctrl+D for rewind review mode
 		if m.rewindReviewMode && key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d"))) {
 			m.showRewindReviewMenu = true
-			return m, nil
-		}
-
-		// Handle Ctrl+D for tweak session: explicit finish (bypasses Esc prompt)
-		if m.isTweakSession && key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d"))) {
-			m.tweakFinishing = true
-			m.detached = true
 			return m, nil
 		}
 
@@ -2053,30 +2007,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			}
 		}
 
-		// Handle tweak finish prompt navigation
-		if m.showFinishPrompt {
-			switch msg.String() {
-			case "f", "enter":
-				m.tweakFinishing = true
-				m.detached = true
-				m.showFinishPrompt = false
-				return m, nil
-			case "s":
-				m.showFinishPrompt = false
-				return m, m.interruptAgentCmd()
-			case "d":
-				m.detached = true
-				m.showFinishPrompt = false
-				return m, nil
-			case "esc":
-				m.showFinishPrompt = false
-				return m, nil
-			default:
-				m.showFinishPrompt = false
-				return m, nil
-			}
-		}
-
 		// Autocomplete navigation — intercepts specific keys when dropdown is active.
 		// Non-navigation keys are NOT intercepted; they fall through to the existing
 		// cascade below so that detach, filter toggle, send, paste, and all other
@@ -2103,11 +2033,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, keys.Detach):
-			// In tweak sessions, Esc shows the finish prompt; Ctrl+] detaches directly
-			if m.isTweakSession && msg.String() == "esc" {
-				m.showFinishPrompt = true
-				return m, nil
-			}
 			m.detached = true
 			return m, nil
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+f"))):
@@ -2309,24 +2234,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
-	case agentInterruptedMsg:
-		if msg.err != nil {
-			m.interruptToast = "✗ Interrupt failed: " + msg.err.Error()
-		} else {
-			m.interruptToast = "✓ Agent interrupted: what should I do instead?"
-		}
-		m.interruptToastAt = time.Now()
-		return m, tea.Tick(interruptToastDuration, func(time.Time) tea.Msg {
-			return agentToastClearMsg{}
-		})
-
-	case agentToastClearMsg:
-		if !m.interruptToastAt.IsZero() && time.Since(m.interruptToastAt) >= interruptToastDuration {
-			m.interruptToast = ""
-			m.interruptToastAt = time.Time{}
-		}
-		return m, nil
-
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -2436,11 +2343,7 @@ func (m AttachModel) View() string {
 		var chatContent string
 		var chatTitle string
 		var chatTitleStyle lipgloss.Style
-		if m.showFinishPrompt {
-			chatContent = m.renderFinishPromptInline()
-			chatTitle = "Tweak Session"
-			chatTitleStyle = lipgloss.NewStyle().Foreground(colorBrand)
-		} else if m.showPermMenu {
+		if m.showPermMenu {
 			chatContent = m.renderPermMenu()
 			chatTitle = "Permission"
 			chatTitleStyle = lipgloss.NewStyle().Foreground(colorWarning)
@@ -2503,10 +2406,6 @@ func (m AttachModel) View() string {
 		hints = tabHint + " [Enter] Proceed   [Esc] Cancel"
 	} else if m.rewindReviewMode {
 		hints = tabHint + " " + stopWatchingHint + "   [Ctrl+D] Done reviewing   [Ctrl+S] Send   [Ctrl+f] Filter: " + m.filter.String()
-	} else if m.isTweakSession && m.showFinishPrompt {
-		hints = tabHint + " [f/Enter] Finish   [s] Stop   [d] Stop watching   [Esc] Cancel"
-	} else if m.isTweakSession {
-		hints = tabHint + " [Esc] Finish/Stop/Stop watching   [Ctrl+D] Finish   [Enter] Send   [Shift+Enter] Newline   [Ctrl+f] Filter: " + m.filter.String()
 	} else {
 		hints = tabHint + " " + stopWatchingHint + "   [Enter] Send   [Shift+Enter] Newline   [Ctrl+f] Filter: " + m.filter.String()
 	}
@@ -2902,26 +2801,6 @@ func (m AttachModel) renderRewindReviewMenu(panelW int) string {
 	return lipgloss.PlaceHorizontal(panelW, lipgloss.Center, menuBox)
 }
 
-// renderFinishPromptInline renders the finish/detach prompt as plain text for the chat panel.
-func (m AttachModel) renderFinishPromptInline() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBrand)
-	normalStyle := lipgloss.NewStyle()
-	hintStyle := MutedStyle
-
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Finish, Stop, or Stop watching?"))
-	b.WriteString("\n\n")
-	b.WriteString(normalStyle.Render("  [f/Enter] Finish — commit changes and complete"))
-	b.WriteByte('\n')
-	b.WriteString(normalStyle.Render("  [s]       Stop   — interrupt the agent's current task"))
-	b.WriteByte('\n')
-	b.WriteString(normalStyle.Render("  [d]       Stop watching — leave session running"))
-	b.WriteByte('\n')
-	b.WriteByte('\n')
-	b.WriteString(hintStyle.Render("Esc to cancel"))
-	return b.String()
-}
-
 // renderAttachHeader renders the AGENTICO brand header for the attach view.
 func (m AttachModel) renderAttachHeader(w int) string {
 	artLines := []string{
@@ -3008,11 +2887,6 @@ func (m AttachModel) renderTabBar(w int) string {
 // Detached returns true if the user chose to detach.
 func (m AttachModel) Detached() bool {
 	return m.detached
-}
-
-// TweakFinishing returns true when the user pressed Ctrl+D to finish a tweak session.
-func (m AttachModel) TweakFinishing() bool {
-	return m.tweakFinishing
 }
 
 // Done returns true if the session has exited.

@@ -66,7 +66,6 @@ import (
 //   - simpletextarea_test.go
 //   - styles_test.go
 //   - test_helpers_test.go
-//   - tweak_removal_test.go
 //   - vocabulary_test.go
 
 var tuiParallelIneligibleTestFiles = []string{
@@ -119,7 +118,6 @@ var tuiParallelCandidateTestFiles = []string{
 	"simpletextarea_test.go",
 	"styles_test.go",
 	"test_helpers_test.go",
-	"tweak_removal_test.go",
 	"vocabulary_test.go",
 }
 

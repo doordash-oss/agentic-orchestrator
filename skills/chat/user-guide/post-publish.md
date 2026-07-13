@@ -2,44 +2,6 @@
 
 After a feature reaches **CodeReady** or **Published** state, several actions are available for iterating on the code. These workflows let you make manual adjustments, rebase onto the latest main, address PR review feedback, or re-run the full pipeline.
 
-## Tweak (`t`)
-
-Tweak launches an **interactive session** where you directly converse with the AI agent to make changes. Unlike the automated implementation phase, you control the session — type messages, give directions, and watch the agent work in real time.
-
-### Starting a Tweak
-
-Press `t` from the detail panel on a CodeReady or Published feature. When the feature spans 2+ repos, a cycle selector opens to choose which repo to tweak; for a single-repo feature the tweak dispatches directly without the selector.
-
-If the worktree was previously cleaned, Agentic Orchestrator recreates it automatically before starting.
-
-### Interacting
-
-The watch view opens with the tweak session active. You can:
-- Type messages and press `Enter` to send them to the agent
-- Watch the agent's responses and tool use in real time
-- Use message filtering (`Ctrl+F`) to reduce noise
-
-### Finishing
-
-Two ways to finish a tweak session:
-
-- **`Ctrl+D`** — finishes immediately (commits and completes)
-- **`Esc`** — opens an inline prompt with two options:
-  - `f` or `Enter` — **Finish**: commit changes and complete
-  - `d` — **Stop watching**: leave the session running without finishing
-
-### After Finishing
-
-When you finish a tweak session, Agentic Orchestrator runs this sequence:
-
-1. **Auto-commit** — if there are uncommitted changes, they are committed with the message "Apply tweak changes"
-2. **Push** — for Published features with changes, pull-rebases to sync with remote, then pushes. Conflicts open the rebase resolution flow.
-3. **Transition** — feature returns to CodeReady (no PR) or Published (with PR)
-
-### Recovery
-
-Tweak sessions are interactive and cannot be automatically resumed after a crash. On recovery, tweak sessions can only be **killed** (not resumed or skipped). The feature remains in an interrupted state until you start a new tweak or take another action.
-
 ## Rebase (`b`)
 
 Rebase updates the feature branch to incorporate the latest changes from the base branch.
@@ -126,7 +88,7 @@ Merge is available only for **non-publishable features** (local repos with no re
 
 Marks a feature as completed. Available from Published state, or from CodeReady state for non-publishable features.
 
-Not available while post-publish cycles (tweak, rebase, review comments, refactor) are still active.
+Not available while post-publish cycles (rebase, review comments, refactor) are still active.
 
 ### What Happens
 
@@ -139,4 +101,4 @@ Removes the git worktree directory for a completed feature, freeing disk space. 
 
 ### Worktree Recreation
 
-If you later need to perform a post-publish action (tweak, rebase, review comments) on a feature whose worktree was cleaned, Agentic Orchestrator automatically recreates the worktree from the feature branch before starting the workflow.
+If you later need to perform a post-publish action (rebase, review comments) on a feature whose worktree was cleaned, Agentic Orchestrator automatically recreates the worktree from the feature branch before starting the workflow.

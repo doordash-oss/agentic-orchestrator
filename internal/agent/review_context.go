@@ -33,7 +33,7 @@ type FinalReviewContext struct {
 }
 
 // BuildPostPublishReviewContext resolves review inputs for post-publish
-// tweak/rebase/review-comment cycles. Per-repo only — the single-repo
+// rebase/review-comment cycles. Per-repo only — the single-repo
 // cycle path is no longer available.
 func BuildPostPublishReviewContext(
 	stateDir string,
@@ -178,8 +178,6 @@ func resolveSingleRepoCycleType(f *feature.Feature) feature.RepoCycleType {
 			switch {
 			case strings.Contains(np, "/rebase"):
 				return feature.CycleRebase
-			case strings.Contains(np, "/tweak"):
-				return feature.CycleTweak
 			case strings.Contains(np, "/review-comments"):
 				return feature.CycleReviewComments
 			}
@@ -229,10 +227,6 @@ func cycleArtifactDirName(f *feature.Feature, repoName string, cycleType feature
 			if f.RebaseCount() > 0 {
 				return feature.RepoCycleDirName(cycleType, f.RebaseCount())
 			}
-		case feature.CycleTweak:
-			if f.TweakCount() > 0 {
-				return feature.RepoCycleDirName(cycleType, f.TweakCount())
-			}
 		case feature.CycleReviewComments:
 			if f.ReviewCommentsCount() > 0 {
 				return feature.RepoCycleDirName(cycleType, f.ReviewCommentsCount())
@@ -259,8 +253,6 @@ func buildCycleFocus(repoName string, cycleType feature.RepoCycleType) string {
 
 	var lead string
 	switch cycleType {
-	case feature.CycleTweak:
-		lead = fmt.Sprintf("Focus on the new post-publish tweak edits in %s. Review the current change set rather than the original implementation thread.", repoScope)
 	case feature.CycleRebase:
 		lead = fmt.Sprintf("Focus on the new post-publish rebase resolution changes in %s. Verify the current diff cleanly resolves the rebase without regressions.", repoScope)
 	case feature.CycleReviewComments:

@@ -194,15 +194,15 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 }
 
 // RunFeatureCycleFinalReviewLoop runs one feature-level Final Review session
-// per iteration for a post-publish cycle (e.g., post-tweak "review changes?
-// y/n" modal "y" path). Unlike RunFeatureFinalReviewLoop, this entry:
+// per iteration for a post-publish cycle. Unlike RunFeatureFinalReviewLoop,
+// this entry:
 //
 //   - Reviews every Feature.Repos worktree (the feature's full repo set)
 //     rather than the touched-only staged subset, because post-publish
 //     cycles operate on already-shipped repos.
 //   - Skips the AtomicPhaseStamp on success/failure: post-publish repo
-//     state is unchanged by the FR's verdict; the surrounding cycle
-//     (e.g., tweak commit/push chain) owns the post-FR transitions.
+//     state is unchanged by the FR's verdict; the surrounding cycle owns
+//     the post-FR transitions.
 //   - Resolves the cycle artifact dir under f.CyclePrefix() so artifacts
 //     live at runs/run-N/<cycle>-N/review/iteration-NN/.
 //
@@ -212,8 +212,8 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 // purely to elide the atomic-stamp wrapper for post-publish cycles.
 //
 // Cumulative-diff review semantics align with the unification principle:
-// the post-tweak FR reviews every Feature.Repos cumulative diff, not just
-// the repos the tweak modified. If the tweak only touched one repo, this
+// the post-cycle FR reviews every Feature.Repos cumulative diff, not just
+// the repos the cycle modified. If the cycle only touched one repo, this
 // is the degenerate len(Feature.Repos) == 1 case.
 func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*FeatureFinalReviewResult, error) {
 	if cfg.Feature == nil {
@@ -269,9 +269,8 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 	result, runErr := loopState.run()
 
 	// Post-cycle FR does NOT call AtomicPhaseStamp. The surrounding cycle
-	// (CompleteTweakFinish for tweak; rebase / review-comments for those
-	// cycles) owns the post-FR transitions on success; on failure the
-	// cycle entry's FailRepoCycle path handles state cleanup.
+	// (rebase / review-comments) owns the post-FR transitions on success;
+	// on failure the cycle entry's FailRepoCycle path handles state cleanup.
 	if runErr != nil {
 		return &FeatureFinalReviewResult{
 			FinalStatus: "failed",

@@ -91,8 +91,6 @@ type APIClient interface {
 	CancelReviewSession(context.Context, string, string) (server.ReviewSessionDecisionResponse, error)
 	FetchReviewComments(context.Context, string, server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error)
 	StartReviewComments(context.Context, string, server.ReviewCommentsActionRequest) (server.ReviewCommentsStartResponse, error)
-	StartTweak(context.Context, string, server.TweakActionRequest) (server.TweakStartResponse, error)
-	FinishTweak(context.Context, string, server.TweakFinishRequest) (server.TweakFinishResponse, error)
 	StartRefactor(context.Context, string, server.RefactorActionRequest) (server.RefactorStartResponse, error)
 	RestartRefactor(context.Context, string, server.RefactorActionRequest) (server.RefactorRestartResponse, error)
 	AnswerPermission(context.Context, server.PermissionAnswerRequest) (server.PermissionAnswerResponse, error)
@@ -178,14 +176,12 @@ const (
 	mutationKindFeatureRetry                 = "feature.retry"
 	mutationKindFeatureRefactorStart         = "feature.refactor.start"
 	mutationKindFeatureRefactorRestart       = "feature.refactor.restart"
-	mutationKindFeatureTweakFinish           = "feature.tweak.finish"
 	mutationKindFeatureStart                 = "feature.start"
 	mutationKindFeatureMerge                 = "feature.merge"
 	mutationKindFeatureRestart               = "feature.restart"
 	mutationKindFeatureMarkDone              = "feature.mark-done"
 	mutationKindFeatureRebase                = "feature.rebase"
 	mutationKindFeatureCleanup               = "feature.cleanup"
-	mutationKindFeatureTweakStart            = "feature.tweak.start"
 	mutationKindFeatureStop                  = "feature.stop"
 )
 
@@ -201,7 +197,6 @@ const (
 	actionIDMarkDone       = "mark-done"
 	actionIDCleanup        = "cleanup"
 	actionIDReviewComments = "review-comments"
-	actionIDTweak          = "tweak"
 	actionIDRefactor       = "refactor"
 	actionIDRewind         = "rewind"
 	actionIDStop           = "stop"
@@ -474,9 +469,6 @@ type APIAppModel struct {
 	repoActionPanel            *apiRepoActionPanel
 	rewindPanel                *apiRewindPanel
 	rewindPhasePicker          *apiRoadmapRewindPanel
-	tweakReviewModalActive     bool
-	tweakReviewFeatureID       string
-	tweakReviewFeatureName     string
 	needInputPromptActive      bool
 	needInputFeatureID         string
 	needInputFeatureName       string
@@ -1377,22 +1369,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.textPanelContent = ""
 		return m, nil
 	}
-	if m.tweakReviewModalActive {
-		featureID := m.tweakReviewFeatureID
-		switch strings.ToLower(msg.Text) {
-		case "y":
-			m.clearTweakReviewModal()
-			return m, m.finishTweakDecisionCmd(featureID, "final-review", true)
-		case "n":
-			m.clearTweakReviewModal()
-			return m, m.finishTweakDecisionCmd(featureID, "skip-review", true)
-		}
-		if msg.Code == tea.KeyEscape {
-			m.clearTweakReviewModal()
-			return m, m.finishTweakDecisionCmd(featureID, "restore-from-review", false)
-		}
-		return m, nil
-	}
 	if m.actionConfirmActive {
 		kind := m.actionConfirmKind
 		featureID := m.actionConfirmFeatureID
@@ -1468,8 +1444,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.confirmSelectedFeatureAction(mutationKindFeatureMarkDone), nil
 	case "F":
 		return m.openRefactorPrompt(), nil
-	case "T":
-		return m.openTweakReviewModal(), nil
 	}
 	switch strings.ToLower(msg.Text) {
 	case "q":
@@ -1515,8 +1489,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.cycleSelectedLog()
 	case "g":
 		return m.openReviewCommentsPreview()
-	case "t":
-		return m.openRepoCycleAction(mutationKindFeatureTweakStart), nil
 	case "b":
 		return m.confirmSelectedFeatureAction(mutationKindFeatureRebase), nil
 	case "i":
@@ -1835,9 +1807,6 @@ func (m APIAppModel) View() tea.View {
 	if m.resumeAllConfirmActive {
 		view = overlayModal(view, m.renderAPIResumeAllConfirm(), w, h)
 	}
-	if m.tweakReviewModalActive {
-		view = overlayModal(view, m.renderTweakReviewModal(), w, h)
-	}
 	if m.needInputPromptActive {
 		view = overlayModal(view, m.renderNeedInputPrompt(), w, h)
 	}
@@ -2058,7 +2027,6 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	}
 	activeCycleType := feature.RepoCycleType("")
 	rebaseCount := 0
-	tweakCount := 0
 	refactorCount := 0
 	reviewCommentsCount := 0
 	if summary.Cycle != nil && (summary.Cycle.Type != "" || summary.Cycle.Status != "") {
@@ -2077,8 +2045,6 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		switch cycleType {
 		case feature.CycleRebase:
 			rebaseCount = cycleCount
-		case feature.CycleTweak:
-			tweakCount = cycleCount
 		case feature.CycleRefactor:
 			refactorCount = cycleCount
 		case feature.CycleReviewComments:
@@ -2168,7 +2134,6 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		IsRewind:                        f.IsRewind,
 		ActiveCycleType:                 activeCycleType,
 		RebaseCount:                     rebaseCount,
-		TweakCount:                      tweakCount,
 		RefactorCount:                   refactorCount,
 		ReviewCommentsCount:             reviewCommentsCount,
 		RepoStates:                      f.RepoStates,
@@ -3066,8 +3031,6 @@ func apiSessionKind(kind string) ports.SessionKind {
 		return ports.KindValidator
 	case "review_helper":
 		return ports.KindReviewHelper
-	case ports.KindTweak.String():
-		return ports.KindTweak
 	case ports.KindChat.String():
 		return ports.KindChat
 	default:
@@ -4082,19 +4045,12 @@ func newAPIRecoveryPanel(snapshot server.RecoverySnapshotResponse) *apiRecoveryP
 	items := append([]server.RecoveryItemDTO(nil), snapshot.Items...)
 	for i, item := range items {
 		if len(item.AllowedActions) == 0 {
-			if item.Tweak {
-				item.AllowedActions = []string{recoveryActionKill}
-			} else {
-				item.AllowedActions = []string{recoveryActionResume, recoveryActionKill, recoveryActionSkip}
-			}
+			item.AllowedActions = []string{recoveryActionResume, recoveryActionKill, recoveryActionSkip}
 			items[i] = item
 		}
 		action := item.DefaultAction
 		if action == "" {
 			action = recoveryActionSkip
-			if item.Tweak {
-				action = recoveryActionKill
-			}
 		}
 		actions[item.Key] = action
 	}
@@ -4208,9 +4164,6 @@ func (m APIAppModel) renderAPIRecovery() string {
 		content := fmt.Sprintf("%s%d. %s (%s, iter %d)%s\n", cursor, i+1, name, item.Phase, item.Iteration, repoSuffix)
 		content += fmt.Sprintf("   PID %d: %s\n", item.PID, alive)
 		content += fmt.Sprintf("   Action: %s", action)
-		if item.Tweak {
-			content += "\n   " + MutedStyle.Render("(interactive tweak - kill only)")
-		}
 		b.WriteString(panelStyle(i == m.recoveryPanel.cursor).Render(content))
 		b.WriteString("\n")
 	}
@@ -4357,9 +4310,6 @@ func (m *APIAppModel) removeFeatureState(featureID string) {
 	if m.actionConfirmFeatureID == featureID {
 		m.clearActionConfirm()
 	}
-	if m.tweakReviewFeatureID == featureID {
-		m.clearTweakReviewModal()
-	}
 }
 
 func (m *APIAppModel) upsertSessionSummary(summary server.SessionSummaryDTO) {
@@ -4491,26 +4441,6 @@ func (m *APIAppModel) clearActionConfirm() {
 	m.actionConfirmFeatureID = ""
 	m.actionConfirmFeatureName = ""
 	m.actionConfirmArgs = apiFeatureActionArgs{}
-}
-
-func (m APIAppModel) openTweakReviewModal() APIAppModel {
-	if m.selectedFeature == "" {
-		return m
-	}
-	if !m.selectedActionReady(mutationKindFeatureTweakFinish) {
-		m.statusMessage = apiMutationKindLabel(mutationKindFeatureTweakFinish) + " is unavailable"
-		return m
-	}
-	m.tweakReviewModalActive = true
-	m.tweakReviewFeatureID = m.selectedFeature
-	m.tweakReviewFeatureName = m.selectedFeatureName()
-	return m
-}
-
-func (m *APIAppModel) clearTweakReviewModal() {
-	m.tweakReviewModalActive = false
-	m.tweakReviewFeatureID = ""
-	m.tweakReviewFeatureName = ""
 }
 
 func (m *APIAppModel) clearNeedInputPrompt() {
@@ -6032,9 +5962,6 @@ func (m APIAppModel) featureNameByID(featureID string) string {
 }
 
 func (m APIAppModel) selectedActionReady(kind string) bool {
-	if kind == mutationKindFeatureTweakFinish {
-		return m.selectedFeatureHasTweakCycle(m.selectedFeature)
-	}
 	if m.snapshot.Detail != nil {
 		for _, action := range m.snapshot.Detail.Actions {
 			if apiActionMatchesMutationKind(action.ID, kind) {
@@ -6051,7 +5978,7 @@ func (m APIAppModel) selectedActionReady(kind string) bool {
 		return ok && (status == feature.StatusInterrupted || status == feature.StatusNeedUserInput)
 	case mutationKindFeaturePublish, mutationKindFeatureMerge, mutationKindFeatureRestart,
 		mutationKindFeatureMarkDone, mutationKindFeatureRebase, mutationKindFeatureCleanup,
-		mutationKindFeatureTweakStart, mutationKindFeatureRefactorStart, mutationKindFeatureRefactorRestart,
+		mutationKindFeatureRefactorStart, mutationKindFeatureRefactorRestart,
 		mutationKindFeatureDelete:
 		return m.selectedFeature != ""
 	case mutationKindFeatureRetry:
@@ -6089,25 +6016,6 @@ func (m APIAppModel) selectedFeatureActionLocallyBlocked(kind string) (bool, str
 	}
 }
 
-func (m APIAppModel) selectedFeatureHasTweakCycle(featureID string) bool {
-	if featureID == "" {
-		return false
-	}
-	detail, ok := m.featureDetails[featureID]
-	if !ok {
-		return false
-	}
-	if detail.Feature.Cycle != nil && strings.EqualFold(detail.Feature.Cycle.Type, "tweak") {
-		return true
-	}
-	for _, repo := range detail.Feature.RepoStatus {
-		if strings.EqualFold(repo.CycleType, "tweak") {
-			return true
-		}
-	}
-	return false
-}
-
 func apiActionMatchesMutationKind(actionID, kind string) bool {
 	if actionID == kind {
 		return true
@@ -6133,10 +6041,6 @@ func apiActionMatchesMutationKind(actionID, kind string) bool {
 		return actionID == actionIDCleanup
 	case mutationKindFeatureReviewComments:
 		return actionID == actionIDReviewComments
-	case mutationKindFeatureTweakStart:
-		return actionID == actionIDTweak
-	case mutationKindFeatureTweakFinish:
-		return actionID == actionIDTweak
 	case mutationKindFeatureRefactorStart:
 		return actionID == actionIDRefactor
 	case mutationKindFeatureRefactorRestart:
@@ -6300,16 +6204,15 @@ func (m APIAppModel) renderFeatureActionConfirm() string {
 }
 
 var apiFeatureActionConfirmWarnings = map[string][2]string{
-	mutationKindFeaturePublish:    {"This will publish the selected feature.", "Review the server result before continuing."},
-	mutationKindFeatureMerge:      {"This will merge the selected feature to the base branch.", "Review the server result before continuing."},
-	mutationKindFeatureRestart:    {"This will restart the selected feature phase.", "Any active work for that phase will be replaced."},
-	mutationKindFeatureRetry:      {"This will retry the failed feature phase.", "Existing failure state will be replaced by the retry."},
-	mutationKindFeatureMarkDone:   {"This will mark the selected feature as done.", "Review the feature status before continuing."},
-	mutationKindFeatureCleanup:    {"This will clean the selected feature worktrees.", "Feature state and repo-cycle history will be preserved."},
-	mutationKindFeatureRebase:     {"This will start a rebase cycle for the selected feature.", "Conflict handling and push results will be reported by the server."},
-	mutationKindFeatureTweakStart: {"This will start an interactive tweak session for the selected feature.", "Finish and review decisions will be handled by the server."},
-	mutationKindFeatureStop:       {"This will interrupt the current phase.", "You can restart it later."},
-	mutationKindFeatureDelete:     {"This will remove all artifacts and worktrees.", "This cannot be undone."},
+	mutationKindFeaturePublish:  {"This will publish the selected feature.", "Review the server result before continuing."},
+	mutationKindFeatureMerge:    {"This will merge the selected feature to the base branch.", "Review the server result before continuing."},
+	mutationKindFeatureRestart:  {"This will restart the selected feature phase.", "Any active work for that phase will be replaced."},
+	mutationKindFeatureRetry:    {"This will retry the failed feature phase.", "Existing failure state will be replaced by the retry."},
+	mutationKindFeatureMarkDone: {"This will mark the selected feature as done.", "Review the feature status before continuing."},
+	mutationKindFeatureCleanup:  {"This will clean the selected feature worktrees.", "Feature state and repo-cycle history will be preserved."},
+	mutationKindFeatureRebase:   {"This will start a rebase cycle for the selected feature.", "Conflict handling and push results will be reported by the server."},
+	mutationKindFeatureStop:     {"This will interrupt the current phase.", "You can restart it later."},
+	mutationKindFeatureDelete:   {"This will remove all artifacts and worktrees.", "This cannot be undone."},
 }
 
 func (m APIAppModel) renderAPIRewindConfirm() string {
@@ -6403,28 +6306,6 @@ func (m APIAppModel) renderAPIResumeAllConfirm() string {
 	contentBox := renderBoxPanel(panelWidth, colorInfo, b.String())
 	contentBox = renderBorderTitle(contentBox, "Resume All", lipgloss.NewStyle().Foreground(colorInfo))
 	return contentBox + "\n" + KeyHelpStyle.Render(" [y] Confirm   [any key] Cancel")
-}
-
-func (m APIAppModel) renderTweakReviewModal() string {
-	name := m.tweakReviewFeatureName
-	if name == "" {
-		name = m.tweakReviewFeatureID
-	}
-	var b strings.Builder
-	b.WriteString(TitleStyle.Render("Final Review"))
-	b.WriteString("\n\n")
-	if name != "" {
-		b.WriteString("  " + name + "\n\n")
-	}
-	b.WriteString("Changes have been committed. Run a Final Review?")
-	b.WriteString("\n\n")
-	b.WriteString("  [y] Yes - review and fix issues")
-	b.WriteByte('\n')
-	b.WriteString("  [n] No  - skip review and complete")
-	b.WriteByte('\n')
-	b.WriteByte('\n')
-	b.WriteString(KeyHelpStyle.Render("y to review | n to skip | Esc to cancel"))
-	return renderBoxPanel(58, colorBrand, b.String())
 }
 
 func (m APIAppModel) renderAPIReviewCommentsPanel(width int) string {
@@ -7444,8 +7325,6 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 				RoadmapPhase:    args.RoadmapPhase,
 				UpgradePipeline: args.UpgradePipeline,
 			})
-		case mutationKindFeatureTweakStart:
-			_, err = m.client.StartTweak(ctx, featureID, server.TweakActionRequest{})
 		case mutationKindFeatureStop:
 			_, err = m.client.StopFeature(ctx, featureID)
 		case mutationKindFeatureDelete:
@@ -7455,21 +7334,6 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 		}
 		return apiMutationResultMsg{
 			kind:      kind,
-			featureID: featureID,
-			err:       err,
-		}
-	}
-}
-
-func (m APIAppModel) finishTweakDecisionCmd(featureID, decision string, hadChanges bool) tea.Cmd {
-	return func() tea.Msg {
-		ctx := m.apiCtx()
-		_, err := m.client.FinishTweak(ctx, featureID, server.TweakFinishRequest{
-			Decision:   decision,
-			HadChanges: hadChanges,
-		})
-		return apiMutationResultMsg{
-			kind:      mutationKindFeatureTweakFinish,
 			featureID: featureID,
 			err:       err,
 		}
@@ -7554,9 +7418,6 @@ func (m APIAppModel) acceptAPIRepoAction(panel apiRepoActionPanel) (tea.Model, t
 		mode, modes := m.selectedReviewCommentsModeDefaults()
 		m.statusMessage = "Fetching review comments..."
 		return m, m.fetchReviewCommentsCmd(panel.featureID, panel.featureName, repo, mode, modes)
-	case mutationKindFeatureTweakStart:
-		m.selectedFeature = panel.featureID
-		return m.confirmSelectedFeatureActionWithArgs(panel.kind, apiFeatureActionArgs{Repo: repo}), nil
 	case mutationKindFeatureRefactorStart:
 		m.selectedFeature = panel.featureID
 		return m.openRefactorPromptForRepo(panel.kind, repo, false), nil
@@ -9407,10 +9268,6 @@ func apiMutationKindLabel(kind string) string {
 		return "Cleanup"
 	case mutationKindFeatureRewind:
 		return "Rewind" //nolint:goconst // action-verb label, unrelated to other domains sharing this word
-	case mutationKindFeatureTweakStart:
-		return "Tweak"
-	case mutationKindFeatureTweakFinish:
-		return "Finish Tweak"
 	case mutationKindFeatureReviewComments:
 		return helpContextReviewComments
 	case mutationKindFeatureRefactorStart:
@@ -9446,7 +9303,7 @@ func apiMutationSuccessMessage(kind string) string {
 	switch kind {
 	case mutationKindFeatureRefactorRestart:
 		return "Restarted Refactor"
-	case mutationKindFeatureRebase, mutationKindFeatureTweakStart, mutationKindFeatureReviewComments, mutationKindFeatureRefactorStart:
+	case mutationKindFeatureRebase, mutationKindFeatureReviewComments, mutationKindFeatureRefactorStart:
 		return "Started " + apiMutationKindLabel(kind)
 	default:
 		return "Completed " + apiMutationKindLabel(kind)
@@ -9456,7 +9313,6 @@ func apiMutationSuccessMessage(kind string) string {
 func apiMutationRefreshesFeatureDetail(kind string) bool {
 	switch kind {
 	case mutationKindFeatureRebase,
-		mutationKindFeatureTweakStart,
 		mutationKindFeatureReviewComments,
 		mutationKindFeatureRefactorStart,
 		mutationKindFeatureRefactorRestart:

@@ -804,7 +804,6 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		actionRewind,
 		actionRebase,
 		actionReviewComments,
-		actionTweak,
 		actionRefactor,
 		actionRetry,
 		actionMarkDone,
@@ -958,7 +957,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		{
 			name: "published active cycle",
 			f: actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
-				repoNameSelf: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+				repoNameSelf: {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 			}),
 			want: map[string]struct {
 				enabled      bool
@@ -966,7 +965,6 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			}{
 				actionRebase:         {disabledCode: disabledCycleActive},
 				actionReviewComments: {disabledCode: disabledCycleActive},
-				actionTweak:          {disabledCode: disabledCycleActive},
 				actionRefactor:       {disabledCode: disabledCycleActive},
 			},
 		},

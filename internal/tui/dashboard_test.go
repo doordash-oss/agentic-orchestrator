@@ -513,7 +513,7 @@ func TestDashboardAttentionOnlyCountsPending(t *testing.T) {
 			Status: feature.StatusPublished, Created: time.Now().Add(-5 * time.Hour),
 			RepoCycles: map[string]*feature.RepoCycleState{
 				"api": {
-					Type:                     feature.CycleTweak,
+					Type:                     feature.CycleRebase,
 					Status:                   feature.RepoCycleNeedUserInput,
 					PendingNeedUserInputPath: "/tmp/api/need-user-input.yaml",
 				},
@@ -572,7 +572,7 @@ func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
 			f: &feature.Feature{
 				ID: "cycle", Name: "cycle", Slug: "cycle", Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleNeedUserInput, PendingNeedUserInputPath: "/tmp/gate.yaml"},
+					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleNeedUserInput, PendingNeedUserInputPath: "/tmp/gate.yaml"},
 				},
 			},
 			wantAwait: true,
@@ -587,7 +587,7 @@ func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
 			f: &feature.Feature{
 				ID: "active-cycle", Name: "active-cycle", Slug: "active-cycle", Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 				},
 			},
 			wantSpinner: true,
@@ -1371,7 +1371,7 @@ func TestDashboardFooterHidesPublishedHintsForActivePublishedCycle(t *testing.T)
 	if !strings.Contains(footer, "[a] Watch") {
 		t.Fatal("expected [a] Watch hint for active published cycle")
 	}
-	for _, unwanted := range []string{"[t] Tweak", "[Shift+F] Refactor", "[b] Rebase", "[g] Reviews", "[Shift+D] Mark done", "[c] Clean worktree"} {
+	for _, unwanted := range []string{"[Shift+F] Refactor", "[b] Rebase", "[g] Reviews", "[Shift+D] Mark done", "[c] Clean worktree"} {
 		if strings.Contains(footer, unwanted) {
 			t.Fatalf("did not expect %s while a published repo cycle is active", unwanted)
 		}
@@ -1416,59 +1416,6 @@ func TestBuildVisibleItems_ActivePublishedCycleInProgressSection(t *testing.T) {
 	}
 	if got := m.sectionFeatureCount("published"); got != 1 {
 		t.Fatalf("published count = %d, want 1", got)
-	}
-}
-
-func TestFormatStatus_Tweak_ActiveCycleType(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name       string
-		feature    *feature.Feature
-		wantSubstr string
-	}{
-		{
-			name: "active tweak cycle shows tweaking label",
-			feature: func() *feature.Feature {
-				f := &feature.Feature{
-					Status:           feature.StatusImplementing,
-					CurrentPhase:     feature.PhaseImplement,
-					CurrentIteration: 1,
-				}
-				f.SetActiveCycleType(feature.CycleTweak)
-				return f
-			}(),
-			wantSubstr: "Tweaking [1]",
-		},
-		{
-			name: "no plan path still shows tweaking with ActiveCycleType",
-			feature: func() *feature.Feature {
-				f := &feature.Feature{
-					Status:           feature.StatusImplementing,
-					CurrentPhase:     feature.PhaseImplement,
-					CurrentIteration: 2,
-				}
-				f.SetActiveCycleType(feature.CycleTweak)
-				return f
-			}(),
-			wantSubstr: "Tweaking [2]",
-		},
-		{
-			name: "non-tweak cycle does not show tweaking",
-			feature: &feature.Feature{
-				Status:           feature.StatusImplementing,
-				CurrentPhase:     feature.PhaseImplement,
-				CurrentIteration: 1,
-			},
-			wantSubstr: "Implementing",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatStatus(tt.feature)
-			if !strings.Contains(got, tt.wantSubstr) {
-				t.Errorf("formatStatus() = %q, want substring %q", got, tt.wantSubstr)
-			}
-		})
 	}
 }
 

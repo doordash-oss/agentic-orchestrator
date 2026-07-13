@@ -127,7 +127,7 @@ func phaseMatchesCurrentForDisplay(row, current feature.Phase) bool {
 	return row == current || (row == feature.PhaseReview && current == feature.PhaseFinalReview)
 }
 
-// cycleGroup is a display-aggregated view of one cycle type (rebase, tweak,
+// cycleGroup is a display-aggregated view of one cycle type (rebase,
 // refactor, review-comments) under the Implement phase. It collapses all
 // individual cycles of the same type into a single line showing the latest
 // index, total count, cumulative duration, and cumulative cost.
@@ -140,7 +140,7 @@ type cycleGroup struct {
 }
 
 // phaseTimingKeys returns grouped cycle entries for the implement phase. Each
-// group collapses multiple cycles of the same type (rebase/tweak/refactor)
+// group collapses multiple cycles of the same type (rebase/refactor)
 // into a single row so the panel doesn't grow unboundedly.
 func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 	if f.PhaseTimings == nil {
@@ -148,7 +148,7 @@ func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 	}
 	var groups []cycleGroup
 	// activeCycle surfaces an in-flight cycle even before its timing/cost have
-	// been persisted. The rebase/tweak loops do not overwrite ActiveTimingKey
+	// been persisted. The rebase loops do not overwrite ActiveTimingKey
 	// when they bump the counter, so a running rebase-N can leave PhaseTimings
 	// without an entry while ActiveTimingKey is still pointing at the previous
 	// cycle key — without consulting ActiveCycle, the right panel would silently
@@ -179,7 +179,7 @@ func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 			g.totalCost += f.PhaseCost(k)
 			// ActiveCycle is the source of truth for what's running now.
 			// ActiveTimingKey is preserved across cycle transitions, so a
-			// finished tweak-N can still equal it after a fresh rebase
+			// finished cycle-N can still equal it after a fresh rebase
 			// starts — only cycleInFlight is safe to drive "active".
 			if cycleInFlight {
 				g.active = true
@@ -199,7 +199,6 @@ func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 		groups = append(groups, g)
 	}
 	collect("rebase", "Rebase", f.RebaseCount())
-	collect("tweak", "Tweak", f.TweakCount())
 	collect("refactor", "Refactor", f.RefactorCount())
 	k := "review-comments"
 	rcInFlight := activeCycle != nil &&
@@ -643,7 +642,7 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 				if g.active {
 					cycleTiming += formatContextUsage(m.contextPct)
 				}
-				// Post-publish cycles (rebase/tweak/refactor/review-comments) keep
+				// Post-publish cycles (rebase/refactor/review-comments) keep
 				// the feature at StatusPublished/StatusCodeReady while the cycle
 				// loop is mid-flight, so isRunningStatus(f.Status) is false even
 				// when the cycle is actively running. Trust the cycle's own
@@ -720,10 +719,9 @@ func renderRoadmapPlanSubItemsCompact(b *strings.Builder, f *feature.Feature) {
 }
 
 // isCycleKey returns true if the timing key represents a post-implementation cycle
-// (rebase, tweak, or review-comments) rather than a roadmap phase implementation.
+// (rebase, or review-comments) rather than a roadmap phase implementation.
 func isCycleKey(key string) bool {
 	return strings.HasPrefix(key, "rebase-") ||
-		strings.HasPrefix(key, "tweak-") ||
 		strings.HasPrefix(key, "refactor-") ||
 		key == "review-comments"
 }
@@ -731,7 +729,7 @@ func isCycleKey(key string) bool {
 // renderRoadmapImplSubItems renders "Phase N" sub-items under the Implement phase row.
 // sep is "\n" for full-screen (each item on its own line) or "" for compact (inline).
 func renderRoadmapImplSubItems(b *strings.Builder, f *feature.Feature, sep string) {
-	// When a cycle (rebase/tweak/review-comments) is active, all roadmap phases are complete.
+	// When a cycle (rebase/review-comments) is active, all roadmap phases are complete.
 	cycleActive := f.CurrentPhase == feature.PhaseImplement && isCycleKey(f.ActiveTimingKey)
 
 	for i := 1; i <= f.TotalRoadmapPhases; i++ {
@@ -904,8 +902,6 @@ func formatDetailStatus(f *feature.Feature) string {
 		switch f.ActiveCycleType() {
 		case feature.CycleRebase:
 			label = fmt.Sprintf("Rebasing (Iteration %d)", f.CurrentIteration)
-		case feature.CycleTweak:
-			label = fmt.Sprintf("Tweaking (Iteration %d)", f.CurrentIteration)
 		case feature.CycleRefactor:
 			label = fmt.Sprintf("Refactoring (Iteration %d)", f.CurrentIteration)
 		case feature.CycleReviewComments:
@@ -938,7 +934,7 @@ func formatDetailStatus(f *feature.Feature) string {
 			}
 			return lipgloss.NewStyle().Foreground(colorInfo).Render(label)
 		}
-		hint := "\u2713 Published \u2014 [t] tweak  [Shift+F] refactor"
+		hint := "\u2713 Published \u2014 [Shift+F] refactor"
 		if f.IsPublishable() {
 			hint += "  [b] rebase"
 		}
@@ -967,7 +963,7 @@ func formatDetailStatus(f *feature.Feature) string {
 		if f.IsPublishable() {
 			hints += " [p] publish  [m] manual publish "
 		}
-		hints += " [t] tweak  [Shift+F] refactor  [b] rebase"
+		hints += " [Shift+F] refactor  [b] rebase"
 		if !f.IsPublishable() {
 			hints += "  [Shift+M] merge  [Shift+D] done"
 		}

@@ -279,7 +279,7 @@ func scanFile(t *testing.T, path string) []string {
 		}
 		// Condition 3: every later arg MUST be a feature-root-safe expression.
 		// A single non-safe arg flags the whole call. This catches literal
-		// phase names, phase-/refactor-/rebase-/tweak- prefixes, AND
+		// phase names, phase-/refactor-/rebase- prefixes, AND
 		// variable-based joins (cyclePrefix, refPrefix, cycleDirName,
 		// phaseKey, phase.DirName(), f.RefactorPrefix(), …) — the whole
 		// family the reviewer flagged as false negatives in iteration 1.

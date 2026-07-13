@@ -1635,31 +1635,6 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	}
 }
 
-func TestServerMutationTargetFinishTweakFinalReviewStartsCycleReview(t *testing.T) {
-	target, orch, publisher, f := newTweakFinishActionTarget(t, true)
-
-	result, err := target.FinishTweak(f.ID, serverruntime.TweakFinishRequest{Decision: phaseNameFinalReview, HadChanges: true})
-	if err != nil {
-		t.Fatalf("FinishTweak(final-review) error = %v", err)
-	}
-	if result.FeatureID != f.ID || result.Decision != phaseNameFinalReview || !result.HadChanges || result.Result != "review_started" {
-		t.Fatalf("FinishTweak() result = %+v; want review_started final-review", result)
-	}
-	if got := countMockCalls(publisher.Calls, "CommitAll"); got != 0 {
-		t.Fatalf("CommitAll calls = %d; want 0 because final-review follows the commit decision", got)
-	}
-
-	orch.WaitForCycles()
-	select {
-	case ev := <-orch.Events():
-		if ev.Type != ports.TweakReviewApproved || ev.FeatureID != f.ID {
-			t.Fatalf("event = %+v; want TweakReviewApproved for %s", ev, f.ID)
-		}
-	default:
-		t.Fatalf("orchestrator emitted no tweak review approval event")
-	}
-}
-
 func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testing.T) {
 	t.Run("cleanup cycles", func(t *testing.T) {
 		target, store, f, _ := newCleanupActionTarget(t)
@@ -1816,52 +1791,6 @@ func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature
 	}}
 	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
 	return serverMutationTarget{orch: orch, store: store, reviewer: reviewer}, store, loaded
-}
-
-func newTweakFinishActionTarget(t *testing.T, dirty bool) (serverMutationTarget, *orchestrator.Orchestrator, *mocks.MockPublisher, *feature.Feature) {
-	t.Helper()
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("tweak finish via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusPublished
-		ff.CurrentPhase = feature.PhasePublish
-		ff.Repos[0].WorktreePath = filepath.Join(runtimeDir, "repo-a-worktree")
-		ff.Repos[0].Branch = "feature/tweak-finish"
-		ff.ActiveCycle = &feature.CycleState{Type: feature.CycleTweak, Status: feature.RepoCycleRunning, Count: 1}
-		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			testRepoAName: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning, Count: 1},
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
-	loaded, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load prepared feature: %v", err)
-	}
-	publisher := mocks.NewMockPublisher()
-	publisher.HasUncommittedChangesFn = func(string) (bool, error) { return dirty, nil }
-	pr := &agent.PhaseRunner{
-		FeatureStore: store,
-		StateDir:     store.BaseDir,
-		RunFinalReviewFn: func(agent.OrchestratorConfig, ports.SessionManager) (*agent.FeatureFinalReviewResult, error) {
-			return &agent.FeatureFinalReviewResult{FinalStatus: "review_passed"}, nil
-		},
-	}
-	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   manager,
-		Store:       store,
-		Publisher:   publisher,
-		PhaseRunner: pr,
-	}, orchestrator.Hooks{})
-	return serverMutationTarget{orch: orch, store: store}, orch, publisher, loaded
 }
 
 func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *fakeWorktreeOperator) {

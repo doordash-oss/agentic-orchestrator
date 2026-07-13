@@ -689,61 +689,6 @@ func TestSessionSendUserMessage(t *testing.T) {
 	}
 }
 
-func TestTweakSessionDoesNotCloseStdinOnClaudeResult(t *testing.T) {
-	if testing.Short() {
-		t.Skip("subprocess-backed tweak continuation extended regression")
-	}
-
-	dir := t.TempDir()
-	seenPath := filepath.Join(dir, "seen-input.txt")
-	script := filepath.Join(dir, "tweak.sh")
-	os.WriteFile(script, []byte(`#!/bin/bash
-echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
-echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}'
-if read line; then
-  printf '%s' "$line" > "`+seenPath+`"
-  echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"second turn received"}]}}'
-  echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}'
-else
-  printf 'read failed' > "`+seenPath+`"
-fi
-`), 0o755)
-
-	s := NewSession("tweak-stdin-test", "feat-1", feature.PhaseImplement)
-	s.providerName = "claude"
-	s.kind = ports.KindTweak
-	if err := s.Start([]string{"bash", script}, dir, nil, func(msg llm.SDKMessage) {}); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-
-	select {
-	case status := <-s.StatusCh():
-		if status != "SUCCESS" {
-			t.Fatalf("first status = %q, want SUCCESS", status)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for first result")
-	}
-
-	if err := s.SendUserMessage("keep going"); err != nil {
-		t.Fatalf("SendUserMessage after tweak Result: %v", err)
-	}
-
-	select {
-	case <-s.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("session did not complete within timeout")
-	}
-
-	data, err := os.ReadFile(seenPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q): %v", seenPath, err)
-	}
-	if got := string(data); !strings.Contains(got, "keep going") {
-		t.Fatalf("script read %q, want follow-up user message", got)
-	}
-}
-
 func TestSessionWriteJSON(t *testing.T) {
 	resp := llm.NewAllowResponse("req_1")
 	data, err := json.Marshal(resp)

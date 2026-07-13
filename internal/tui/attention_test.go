@@ -142,7 +142,7 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 			f: &feature.Feature{
 				Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 				},
 			},
 			wantKind: attentionWatch,

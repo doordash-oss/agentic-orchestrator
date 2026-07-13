@@ -187,7 +187,6 @@ type RepoCycleType string
 
 const (
 	CycleRebase         RepoCycleType = "rebase"
-	CycleTweak          RepoCycleType = "tweak"
 	CycleReviewComments RepoCycleType = "review-comments"
 	CycleRefactor       RepoCycleType = "refactor"
 )
@@ -202,12 +201,12 @@ const (
 	RepoCycleInterrupted = "interrupted"
 )
 
-// RepoCycleState tracks a post-publish cycle (rebase/tweak/review-comments) for a single repo.
+// RepoCycleState tracks a post-publish cycle (rebase/review-comments) for a single repo.
 // The feature stays StatusPublished while per-repo cycles run independently.
 type RepoCycleState struct {
 	Type      RepoCycleType `yaml:"type"`
 	Status    string        `yaml:"status"`          // RepoCycle* constants
-	Count     int           `yaml:"count,omitempty"` // Nth rebase/tweak for this repo
+	Count     int           `yaml:"count,omitempty"` // Nth rebase for this repo
 	PlanPath  string        `yaml:"plan_path,omitempty"`
 	LastError string        `yaml:"last_error,omitempty"`
 	// Iteration is the iteration number that emitted the active gate. Set
@@ -233,7 +232,7 @@ type PendingUserInputCycle struct {
 const SchemaVersionCurrent = 6
 
 // CycleState tracks the feature-level active post-publish cycle (rebase,
-// review-comments, refactor, tweak). One cycle is active at a time per
+// review-comments, refactor). One cycle is active at a time per
 // feature regardless of how many repos it touches.
 // Run.RepoCycles persists alongside CycleState as the per-repo TUI rendering
 // surface; the unified cycle loops mirror their per-repo entries there so
@@ -243,7 +242,7 @@ type CycleState struct {
 	Status string        `yaml:"status"` // RepoCycle* constants
 	Count  int           `yaml:"count,omitempty"`
 	// PlanPath is the cycle's plan artifact (refactor/review-comments) when
-	// applicable. Empty for plan-less cycles (rebase/tweak).
+	// applicable. Empty for plan-less cycles (rebase).
 	PlanPath string `yaml:"plan_path,omitempty"`
 	// LastError is populated when Status == RepoCycleFailed.
 	LastError string `yaml:"last_error,omitempty"`
@@ -895,7 +894,7 @@ var validTransitions = map[Status][]Status{
 
 // accumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.
-// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N, tweak-N,
+// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N,
 // review-comments) survive interrupt/fail transitions and are available when
 // the phase is resumed.
 func (f *Feature) accumulateActiveTime() {
@@ -942,12 +941,6 @@ func (f *Feature) RebaseCount() int { return f.Run().RebaseCount }
 // SetRebaseCount sets the run-level rebase counter.
 func (f *Feature) SetRebaseCount(n int) { f.Run().RebaseCount = n }
 
-// TweakCount returns the run-level tweak counter.
-func (f *Feature) TweakCount() int { return f.Run().TweakCount }
-
-// SetTweakCount sets the run-level tweak counter.
-func (f *Feature) SetTweakCount(n int) { f.Run().TweakCount = n }
-
 // RefactorCount returns the run-level refactor counter.
 func (f *Feature) RefactorCount() int { return f.Run().RefactorCount }
 
@@ -992,7 +985,7 @@ func (f *Feature) RefactorPrefix() string {
 }
 
 // CyclePrefix returns the artifact directory prefix for the current
-// post-publish cycle (rebase, tweak, or review-comments).
+// post-publish cycle (rebase, or review-comments).
 // Returns empty string when no cycle is active.
 func (f *Feature) CyclePrefix() string {
 	switch f.ActiveCycleType() {
@@ -1001,11 +994,6 @@ func (f *Feature) CyclePrefix() string {
 			return fmt.Sprintf("rebase-%d", f.RebaseCount())
 		}
 		return "rebase"
-	case CycleTweak:
-		if f.TweakCount() > 0 {
-			return fmt.Sprintf("tweak-%d", f.TweakCount())
-		}
-		return "tweak"
 	case CycleReviewComments:
 		if f.ReviewCommentsCount() > 0 {
 			return fmt.Sprintf("review-comments-%d", f.ReviewCommentsCount())
@@ -1016,17 +1004,13 @@ func (f *Feature) CyclePrefix() string {
 }
 
 // RepoCycleDirName returns the enumerated directory name for a per-repo cycle.
-// e.g., "rebase-1", "tweak-2", "review-comments-3", or the unenumerated
+// e.g., "rebase-1", "review-comments-3", or the unenumerated
 // fallback when count <= 0.
 func RepoCycleDirName(cycleType RepoCycleType, count int) string {
 	switch cycleType {
 	case CycleRebase:
 		if count > 0 {
 			return fmt.Sprintf("rebase-%d", count)
-		}
-	case CycleTweak:
-		if count > 0 {
-			return fmt.Sprintf("tweak-%d", count)
 		}
 	case CycleReviewComments:
 		if count > 0 {
@@ -1113,7 +1097,6 @@ func isCycleTimingKey(key string) bool {
 func isImplementTimingKey(key string) bool {
 	return key == "implement" ||
 		strings.HasPrefix(key, "rebase-") ||
-		strings.HasPrefix(key, "tweak-") ||
 		strings.HasPrefix(key, "refactor-") ||
 		strings.HasSuffix(key, "-impl") ||
 		key == "review-comments" ||

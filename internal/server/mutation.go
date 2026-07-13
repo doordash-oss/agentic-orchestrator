@@ -115,8 +115,6 @@ type MutationTarget interface {
 	StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error)
 	FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error)
 	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error)
-	StartTweak(featureID string, req TweakActionRequest) (TweakStartResponse, error)
-	FinishTweak(featureID string, req TweakFinishRequest) (TweakFinishResponse, error)
 	StartRefactor(featureID string, req RefactorActionRequest) (RefactorStartResponse, error)
 	RestartRefactor(featureID string, req RefactorActionRequest) (RefactorRestartResponse, error)
 	MarkDone(featureID string) (MarkDoneResponse, error)
@@ -263,13 +261,6 @@ type ReviewCommentsActionRequest struct {
 	Repo     string             `json:"repo"`
 	Mode     string             `json:"mode"`
 	Comments []ReviewCommentDTO `json:"comments,omitempty"`
-}
-
-type TweakActionRequest struct{}
-
-type TweakFinishRequest struct {
-	Decision   string `json:"decision"`
-	HadChanges bool   `json:"had_changes,omitempty"`
 }
 
 type RefactorActionRequest struct {
@@ -422,13 +413,12 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionTweak, actionRefactor, actionRetry, actionMarkDone, actionCleanup, actionDelete:
+		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionRefactor, actionRetry, actionMarkDone, actionCleanup, actionDelete:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
 			if (parts[2] == actionPublish && parts[3] == phaseNameDescription) ||
 				(parts[2] == actionReviewComments && parts[3] == "fetch") ||
-				(parts[2] == actionTweak && parts[3] == "finish") ||
 				(parts[2] == actionRefactor && parts[3] == actionRestart) {
 				return []string{http.MethodPost}, true
 			}
@@ -719,8 +709,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionReviewComments:
 		return h.handleReviewCommentsAction(w, r, featureID, subaction)
-	case actionTweak:
-		return h.handleTweakAction(w, r, featureID, subaction)
 	case actionRefactor:
 		return h.handleRefactorAction(w, r, featureID, subaction)
 	case actionCleanup:
@@ -1014,38 +1002,6 @@ func (h *apiHandler) handleReviewCommentsFetch(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *apiHandler) handleTweakAction(w http.ResponseWriter, r *http.Request, featureID, subaction string) bool {
-	if subaction == "finish" {
-		var req TweakFinishRequest
-		if !decodeMutationJSON(w, r, &req) || !validateTweakDecision(w, req.Decision) {
-			return true
-		}
-		resp, err := h.mutations.FinishTweak(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "finished")
-		writeActionJSON(w, http.StatusOK, &resp)
-		return true
-	}
-	if subaction != "" {
-		return false
-	}
-	var req TweakActionRequest
-	if !decodeMutationJSON(w, r, &req) {
-		return true
-	}
-	resp, err := h.mutations.StartTweak(featureID, req)
-	if err != nil {
-		writeMutationError(w, err)
-		return true
-	}
-	defaultActionFields(&resp, featureID, resultStarted)
-	writeActionJSON(w, http.StatusOK, &resp)
-	return true
-}
-
 func (h *apiHandler) handleRefactorAction(w http.ResponseWriter, r *http.Request, featureID, subaction string) bool {
 	var req RefactorActionRequest
 	if !decodeMutationJSON(w, r, &req) || !validateRefactorRequest(w, req) {
@@ -1149,16 +1105,6 @@ func validateReviewCommentsMode(w http.ResponseWriter, mode string) bool {
 		return true
 	default:
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "mode must be auto or address_all", nil)
-		return false
-	}
-}
-
-func validateTweakDecision(w http.ResponseWriter, decision string) bool {
-	switch strings.ToLower(strings.TrimSpace(decision)) {
-	case "commit", "final-review", "skip-review", "restore-from-review", "fail":
-		return true
-	default:
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "decision is invalid", nil)
 		return false
 	}
 }

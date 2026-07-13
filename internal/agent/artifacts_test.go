@@ -438,11 +438,11 @@ func TestCycleTestingContractPath_PerRepo(t *testing.T) {
 		ID:        "feat1",
 		ActiveRun: 1,
 		RepoCycles: map[string]*feature.RepoCycleState{
-			testRepoNameWeb: {Type: feature.CycleTweak, Count: 3},
+			testRepoNameWeb: {Type: feature.CycleReviewComments, Count: 3},
 		},
 	}
-	got := CycleTestingContractPath("/tmp/state", f, testRepoNameWeb, feature.CycleTweak)
-	want := "/tmp/state/feat1/runs/run-001/tweak-3/web/testing-contract.yaml"
+	got := CycleTestingContractPath("/tmp/state", f, testRepoNameWeb, feature.CycleReviewComments)
+	want := "/tmp/state/feat1/runs/run-001/review-comments-3/web/testing-contract.yaml"
 	if got != want {
 		t.Errorf("CycleTestingContractPath = %q, want %q", got, want)
 	}

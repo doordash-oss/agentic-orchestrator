@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator owns post-publish tweak/rebase/review-comments/refactor
+// Package orchestrator owns post-publish rebase/review-comments/refactor
 // cycle lifecycle methods for multi-repo features.
 package orchestrator
 
@@ -34,7 +34,7 @@ import (
 const finalStatusLoopError = "error"
 
 // RepoCycleLoopResultInput carries the result of an agent implementation loop
-// for a per-repo cycle (tweak / rebase / review-comments / refactor).
+// for a per-repo cycle (rebase / review-comments / refactor).
 type RepoCycleLoopResultInput struct {
 	RepoName string
 	Result   *agent.LoopResult
@@ -42,10 +42,10 @@ type RepoCycleLoopResultInput struct {
 }
 
 // StartRepoCycleImplement launches an implementation loop for a per-repo
-// post-publish cycle (rebase / tweak / review-comments). The feature stays
+// post-publish cycle (rebase / review-comments). The feature stays
 // StatusPublished; cycle state is tracked in RepoCycles. planContent is the
-// pre-computed plan body: for CycleRebase/CycleTweak it is the "extra" text
-// merged into BuildRebasePlan/BuildTweakPlan templates; for
+// pre-computed plan body: for CycleRebase it is the "extra" text
+// merged into the BuildRebasePlan template; for
 // CycleReviewComments it is the final plan markdown written verbatim. For
 // CycleRebase, conflictFiles (when non-empty) selects the
 // "rebase-already-in-progress" template in BuildRebasePlan so the agent
@@ -120,18 +120,12 @@ func (o *Orchestrator) StartRepoCycleImplement(
 	cycleDirName := feature.RepoCycleDirName(cycleType, cycleCount)
 	cycleBaseDir := filepath.Join(agent.ActiveRunDir(baseDir, f), cycleDirName, repoName)
 
-	// Build plan in the enumerated cycle directory (e.g. tweak-1/<repoName>/).
+	// Build plan in the enumerated cycle directory (e.g. review-comments-1/<repoName>/).
 	// Note: CycleRebase is intercepted at the top of this method and routed
-	// to the unified feature-level loop; only Tweak and ReviewComments still
-	// use the per-repo cycle subdir under slices 5-7.
+	// to the unified feature-level loop; only ReviewComments still
+	// uses the per-repo cycle subdir under slices 5-7.
 	var planDir, planPath string
 	switch cycleType {
-	case feature.CycleTweak:
-		planDir = cycleBaseDir
-		_ = os.MkdirAll(planDir, 0o755)
-		planPath = filepath.Join(planDir, "tweak-plan.md")
-		body := fmt.Sprintf("# Tweak: %s\n\n%s\n", repoName, planContent)
-		_ = os.WriteFile(planPath, []byte(body), 0o644)
 	case feature.CycleReviewComments:
 		planDir = cycleBaseDir
 		_ = os.MkdirAll(planDir, 0o755)
@@ -260,9 +254,7 @@ func cycleTypeForRepo(o *Orchestrator, featureID, repoName string) feature.RepoC
 // re-enters through restartRefactorRepoCycle (the gate-only sibling of
 // RestartRefactorCycle that bypasses the concurrent-refactor guard and the
 // StartRepoCycle re-init so the existing entry is reused in place). Cycle
-// Count and PlanPath survive the round-trip on every type. Tweak cycles
-// cannot enter this path: tweak is fully interactive and never emits a
-// NEED_USER_INPUT gate, so a paused tweak entry is a programming error.
+// Count and PlanPath survive the round-trip on every type.
 func (o *Orchestrator) restartPausedRepoCycle(featureID, repoName string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -490,9 +482,9 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 // (mirroring the legacy per-repo Final Review's success path). On failure:
 // calls FailRepoCycle for every Feature.Repos with an active cycle entry.
 //
-// Used by the post-tweak modal "y" path. Other callers (legacy
-// HandleRepoCycleLoopDone fallthrough for non-rebase/non-review-comments
-// cycles) are dead post-slices-4-7 but preserved for safety.
+// Other callers (legacy HandleRepoCycleLoopDone fallthrough for
+// non-rebase/non-review-comments cycles) are dead post-slices-4-7 but
+// preserved for safety.
 func (o *Orchestrator) StartCycleFinalReview(featureID string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -529,13 +521,10 @@ func (o *Orchestrator) StartCycleFinalReview(featureID string) error {
 // handleCycleFinalReviewDone processes the completion of a feature-level
 // post-cycle Final Review.
 //
-// On review_passed: routes by the cycle's type. For CycleTweak the handler
-// emits a SINGLE TweakReviewApproved event so the TUI dispatches one
-// feature-level completeTweakFinishCmd (commit + pull-rebase + push across
-// every Feature.Repos). Other cycle types iterate per-repo CompleteRepoCycle
-// for backward compatibility with the legacy fallthrough path (rebase /
-// review-comments / refactor are routed via their unified loops post
-// slices-4-7, so this branch is rarely exercised in production).
+// On review_passed: iterates per-repo CompleteRepoCycle for backward
+// compatibility with the legacy fallthrough path (rebase / review-comments /
+// refactor are routed via their unified loops post slices-4-7, so this
+// branch is rarely exercised in production).
 //
 // On failure: marks every active cycle entry failed.
 func (o *Orchestrator) handleCycleFinalReviewDone(
@@ -550,30 +539,16 @@ func (o *Orchestrator) handleCycleFinalReviewDone(
 		return o.failCycleAcrossRepos(featureID, errMsg)
 	}
 
-	// Review approved — route by the active cycle type. Tweak emits a
-	// single feature-level TweakReviewApproved event; the legacy
-	// per-repo-cycle path (rebase / review-comments / refactor) iterates
-	// CompleteRepoCycle for backward compatibility, but the unified
-	// loops own those paths post slices-4-7.
+	// Review approved — the legacy per-repo-cycle path (rebase /
+	// review-comments / refactor) iterates CompleteRepoCycle for backward
+	// compatibility, but the unified loops own those paths post slices-4-7.
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature post-cycle FR: %w", err)
 	}
 
-	cycleType := dominantCycleTypeForFeature(f)
-	if cycleType == feature.CycleTweak {
-		// Single event — TUI's OrchTweakReviewApprovedMsg handler dispatches
-		// a single feature-level completeTweakFinishCmd that commits +
-		// pull-rebases + pushes every Feature.Repos atomically.
-		o.emitEvent(ports.Event{
-			Type:      ports.TweakReviewApproved,
-			FeatureID: featureID,
-		})
-		return nil
-	}
-
-	// Compatibility branch for legacy callers that still complete non-tweak
-	// cycles through HandleRepoCycleLoopDone.
+	// Compatibility branch for legacy callers that still complete cycles
+	// through HandleRepoCycleLoopDone.
 	for _, repo := range f.Repos {
 		rc, ok := f.RepoCycles[repo.Name]
 		if !ok || rc == nil {
@@ -584,24 +559,6 @@ func (o *Orchestrator) handleCycleFinalReviewDone(
 		}
 	}
 	return nil
-}
-
-// dominantCycleTypeForFeature returns the cycle type the feature is
-// currently in, sourced from Feature.ActiveCycleType when set, else from
-// the first per-repo cycle entry. Returns "" when no cycle is active.
-func dominantCycleTypeForFeature(f *feature.Feature) feature.RepoCycleType {
-	if f == nil {
-		return ""
-	}
-	if t := f.ActiveCycleType(); t != "" {
-		return t
-	}
-	for _, rc := range f.RepoCycles {
-		if rc != nil && rc.Type != "" {
-			return rc.Type
-		}
-	}
-	return ""
 }
 
 // failCycleAcrossRepos marks every Feature.Repos cycle entry failed with
@@ -625,8 +582,7 @@ func (o *Orchestrator) failCycleAcrossRepos(featureID, errMsg string) error {
 // to the cycle-type-specific finalization (commit + push/force-push +
 // CompleteRepoCycle/CompleteRefactor). All failures call FailRepoCycle.
 //
-// Ports completeRebaseRepoCycleCmd (app.go:6870-6901),
-// completeTweakRepoCycleCmd (app.go:6904-6941), and
+// Ports completeRebaseRepoCycleCmd (app.go:6870-6901) and
 // completeReviewCommentsRepoCycleCmd (app.go:6944-6982).
 func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -723,22 +679,6 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 		}
 		return nil
 
-	case feature.CycleTweak:
-		// FR approved for a tweak cycle. The TUI's tweak-finish command
-		// owns the commit + pull-rebase + push + state-transition chain
-		// (with proper rebase-conflict UX via PublishConflictError →
-		// RebaseResultMsg). Calling that chain inline here would surface
-		// PublishConflictError through surfaceDispatchCompletionError and
-		// mark the feature Failed, regressing the conflict-resolution UX.
-		// Emit TweakReviewApproved with the per-repo name so the TUI's
-		// OrchTweakReviewApprovedMsg handler can route to the right repo.
-		o.emitEvent(ports.Event{
-			Type:      ports.TweakReviewApproved,
-			FeatureID: featureID,
-			Message:   repoName,
-		})
-		return nil
-
 	case feature.CycleRefactor:
 		return o.CompleteRefactorRepoCycle(featureID, repoName)
 	}
@@ -751,9 +691,8 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 }
 
 // DispatchRepoCycle is the top-level entry point for launching any per-repo
-// post-publish cycle. It routes tweak cycles to StartTweak (which
-// handles the interactive Bubble Tea attach path) and all other cycle types
-// to StartRepoCycleImplement (which runs an autonomous implementation loop).
+// post-publish cycle. It routes to StartRepoCycleImplement (which runs an
+// autonomous implementation loop) or StartRefactorCycle.
 //
 // Callers (including the TUI) should use this method rather than dispatching
 // directly so cycle-type routing stays in one place.
@@ -763,13 +702,6 @@ func (o *Orchestrator) DispatchRepoCycle(
 	planContent string,
 ) (string, error) {
 	switch cycleType {
-	case feature.CycleTweak:
-		// Tweak is feature-level. The repoName argument is preserved on the
-		// DispatchRepoCycle signature for backward compatibility with legacy
-		// callers but is not threaded into StartTweak — the session mounts every
-		// Feature.Repos worktree.
-		_ = repoName
-		return o.StartTweak(featureID)
 	case feature.CycleRebase, feature.CycleReviewComments:
 		return o.StartRepoCycleImplement(featureID, repoName, cycleType, planContent)
 	case feature.CycleRefactor:

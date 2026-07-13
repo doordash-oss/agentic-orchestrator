@@ -72,7 +72,7 @@ func TestLivePreviewEligible(t *testing.T) {
 			f: &feature.Feature{
 				Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 				},
 			},
 			want: true,
@@ -331,19 +331,6 @@ func TestLivePreviewActivityLine(t *testing.T) {
 			name: "created startup",
 			f:    &feature.Feature{Status: feature.StatusCreated, CurrentPhase: feature.PhasePlan},
 			want: "Starting Plan...",
-		},
-		{
-			name: "tweak awaiting input",
-			f: &feature.Feature{
-				Status:       feature.StatusPublished,
-				CurrentPhase: feature.PhaseImplement,
-				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
-				},
-			},
-			sess: tweakLivePreviewSession("tweak-input",
-				llm.SDKMessage{Type: "result", Result: &llm.ResultMessage{Subtype: "success"}}),
-			want: "Waiting for tweak input...",
 		},
 	}
 
@@ -789,13 +776,13 @@ func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
 			"repo-b": {Touched: true, PRURL: "https://github.com/org/repo-b/pull/43"},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+			"repo-a": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 		},
 	}
 	raw := newLivePreviewModel(f).withHeight(24).ViewCompact(100)
 	view := stripANSI(raw)
 
-	for _, want := range []string{labelFeatureID, "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Tweaking", "Phase Model", "agent-model", "Elapsed", labelCost} { //nolint:goconst // "Elapsed" is a generic UI-label assertion, not a reusable test concept
+	for _, want := range []string{labelFeatureID, "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Rebasing", "Phase Model", "agent-model", "Elapsed", labelCost} { //nolint:goconst // "Elapsed" is a generic UI-label assertion, not a reusable test concept
 		if !strings.Contains(view, want) {
 			t.Fatalf("live preview metadata missing %q in:\n%s", want, view)
 		}
@@ -1351,16 +1338,6 @@ func newLivePreviewSessionWithIteration(id string, phase feature.Phase, iteratio
 func streamingLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMessage) session.SessionView {
 	sess := session.NewSession(id, "feat-live", phase)
 	sess.SetProviderName("streaming")
-	sess.SetStatus(session.SessionRunning)
-	for _, msg := range messages {
-		sess.MessageLog().Append(msg)
-	}
-	return sess
-}
-
-func tweakLivePreviewSession(id string, messages ...llm.SDKMessage) session.SessionView {
-	sess := session.NewSession(id, "feat-live", feature.PhaseImplement)
-	sess.SetKind(ports.KindTweak)
 	sess.SetStatus(session.SessionRunning)
 	for _, msg := range messages {
 		sess.MessageLog().Append(msg)

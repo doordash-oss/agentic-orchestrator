@@ -156,7 +156,6 @@ func dashboardRightHelp() ViewHelpContext {
 				Bindings: []HelpBinding{
 					{"p", "Publish PR"},
 					{"m", "Mark manually published"},
-					{"t", "Tweak implementation"},
 					{"b", "Rebase on main"},
 					{"Shift+D", "Mark as done"},
 					{"g", "Review comments"},
@@ -207,7 +206,6 @@ func detailHelp() ViewHelpContext {
 				Bindings: []HelpBinding{
 					{"p", "Publish PR"},
 					{"m", "Mark manually published"},
-					{"t", "Tweak implementation"},
 					{"b", "Rebase on main"},
 					{"Shift+D", "Mark as done"},
 					{"g", "Review comments"},

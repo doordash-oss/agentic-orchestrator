@@ -190,7 +190,6 @@ Once a feature reaches code-ready or published state:
 | Key | Action |
 |-----|--------|
 | `p` | Publish as PR (diff review → commit log → PR description → confirm) |
-| `t` | Tweak — make a targeted change without re-running the full pipeline |
 | `Shift+F` | Refactor — apply a refactoring prompt to the implementation |
 | `b` | Rebase on main |
 | `g` | View and resolve PR review comments |

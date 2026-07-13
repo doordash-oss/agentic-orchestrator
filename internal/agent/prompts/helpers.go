@@ -97,12 +97,6 @@ func KBBuildUserPrompt(in any) string {
 	return MustRender("kb_build.user", in)
 }
 
-// TweakUserPrompt renders the Tweak-session seed user prompt
-// (tweak.user.tmpl).
-func TweakUserPrompt(in any) string {
-	return MustRender("tweak.user", in)
-}
-
 // DesignUserPrompt renders the canonical Design-phase user prompt
 // (design.user.tmpl).
 func DesignUserPrompt(in any) string {

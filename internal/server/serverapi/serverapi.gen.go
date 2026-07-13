@@ -67,7 +67,6 @@ const (
 	FeatureActionReviewComments FeatureAction = "review-comments"
 	FeatureActionRewind         FeatureAction = "rewind"
 	FeatureActionStart          FeatureAction = "start"
-	FeatureActionTweak          FeatureAction = "tweak"
 )
 
 // Valid indicates whether the value is a known member of the FeatureAction enum.
@@ -100,8 +99,6 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionRewind:
 		return true
 	case FeatureActionStart:
-		return true
-	case FeatureActionTweak:
 		return true
 	default:
 		return false
@@ -223,7 +220,6 @@ const (
 	RunFeatureActionParamsActionReviewComments RunFeatureActionParamsAction = "review-comments"
 	RunFeatureActionParamsActionRewind         RunFeatureActionParamsAction = "rewind"
 	RunFeatureActionParamsActionStart          RunFeatureActionParamsAction = "start"
-	RunFeatureActionParamsActionTweak          RunFeatureActionParamsAction = "tweak"
 )
 
 // Valid indicates whether the value is a known member of the RunFeatureActionParamsAction enum.
@@ -256,8 +252,6 @@ func (e RunFeatureActionParamsAction) Valid() bool {
 	case RunFeatureActionParamsActionRewind:
 		return true
 	case RunFeatureActionParamsActionStart:
-		return true
-	case RunFeatureActionParamsActionTweak:
 		return true
 	default:
 		return false
@@ -295,7 +289,6 @@ const (
 	RunFeatureSubactionParamsActionReviewComments RunFeatureSubactionParamsAction = "review-comments"
 	RunFeatureSubactionParamsActionRewind         RunFeatureSubactionParamsAction = "rewind"
 	RunFeatureSubactionParamsActionStart          RunFeatureSubactionParamsAction = "start"
-	RunFeatureSubactionParamsActionTweak          RunFeatureSubactionParamsAction = "tweak"
 )
 
 // Valid indicates whether the value is a known member of the RunFeatureSubactionParamsAction enum.
@@ -328,8 +321,6 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 	case RunFeatureSubactionParamsActionRewind:
 		return true
 	case RunFeatureSubactionParamsActionStart:
-		return true
-	case RunFeatureSubactionParamsActionTweak:
 		return true
 	default:
 		return false
@@ -720,8 +711,6 @@ type ActionResponse struct {
 	RewindFeatureResponse            RewindFeatureResponse            `json:"rewind_feature_response,omitempty"`
 	RuntimeConfigUpdateResponse      RuntimeConfigUpdateResponse      `json:"runtime_config_update_response,omitempty"`
 	ShutdownResponse                 ShutdownResponse                 `json:"shutdown_response,omitempty"`
-	TweakFinishResponse              TweakFinishResponse              `json:"tweak_finish_response,omitempty"`
-	TweakStartResponse               TweakStartResponse               `json:"tweak_start_response,omitempty"`
 	AdditionalProperties             map[string]interface{}           `json:"-"`
 }
 
@@ -1340,7 +1329,6 @@ type RecoveryItem struct {
 	PID            int      `json:"pid,omitempty"`
 	ProcessAlive   bool     `json:"process_alive"`
 	RepoName       string   `json:"repo_name,omitempty"`
-	Tweak          bool     `json:"tweak,omitempty"`
 }
 
 // RecoverySnapshotResponse defines model for RecoverySnapshotResponse.
@@ -1771,28 +1759,6 @@ type TranscriptResponse struct {
 	Cursor               Cursor                 `json:"cursor"`
 	Messages             []TranscriptMessage    `json:"messages"`
 	Meta                 ResponseMeta           `json:"meta,omitempty"`
-	AdditionalProperties map[string]interface{} `json:"-"`
-}
-
-// TweakFinishResponse defines model for TweakFinishResponse.
-type TweakFinishResponse struct {
-	APIVersion           string                 `json:"api_version"`
-	Decision             string                 `json:"decision"`
-	FeatureID            string                 `json:"feature_id"`
-	HadChanges           bool                   `json:"had_changes,omitempty"`
-	Meta                 ResponseMeta           `json:"meta,omitempty"`
-	Result               string                 `json:"result"`
-	AdditionalProperties map[string]interface{} `json:"-"`
-}
-
-// TweakStartResponse defines model for TweakStartResponse.
-type TweakStartResponse struct {
-	APIVersion           string                 `json:"api_version"`
-	CycleType            string                 `json:"cycle_type"`
-	FeatureID            string                 `json:"feature_id"`
-	Meta                 ResponseMeta           `json:"meta,omitempty"`
-	Result               string                 `json:"result"`
-	SessionID            string                 `json:"session_id,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -2564,22 +2530,6 @@ func (a *ActionResponse) UnmarshalJSON(b []byte) error {
 		delete(object, "shutdown_response")
 	}
 
-	if raw, found := object["tweak_finish_response"]; found {
-		err = json.Unmarshal(raw, &a.TweakFinishResponse)
-		if err != nil {
-			return fmt.Errorf("error reading 'tweak_finish_response': %w", err)
-		}
-		delete(object, "tweak_finish_response")
-	}
-
-	if raw, found := object["tweak_start_response"]; found {
-		err = json.Unmarshal(raw, &a.TweakStartResponse)
-		if err != nil {
-			return fmt.Errorf("error reading 'tweak_start_response': %w", err)
-		}
-		delete(object, "tweak_start_response")
-	}
-
 	if len(object) != 0 {
 		a.AdditionalProperties = make(map[string]interface{})
 		for fieldName, fieldBuf := range object {
@@ -2752,16 +2702,6 @@ func (a ActionResponse) MarshalJSON() ([]byte, error) {
 	object["shutdown_response"], err = json.Marshal(a.ShutdownResponse)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'shutdown_response': %w", err)
-	}
-
-	object["tweak_finish_response"], err = json.Marshal(a.TweakFinishResponse)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'tweak_finish_response': %w", err)
-	}
-
-	object["tweak_start_response"], err = json.Marshal(a.TweakStartResponse)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'tweak_start_response': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {
@@ -8625,268 +8565,6 @@ func (a TranscriptResponse) MarshalJSON() ([]byte, error) {
 	object["meta"], err = json.Marshal(a.Meta)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
-	}
-
-	for fieldName, field := range a.AdditionalProperties {
-		object[fieldName], err = json.Marshal(field)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
-		}
-	}
-	return json.Marshal(object)
-}
-
-// Getter for additional properties for TweakFinishResponse. Returns the specified
-// element and whether it was found
-func (a TweakFinishResponse) Get(fieldName string) (value interface{}, found bool) {
-	if a.AdditionalProperties != nil {
-		value, found = a.AdditionalProperties[fieldName]
-	}
-	return
-}
-
-// Setter for additional properties for TweakFinishResponse
-func (a *TweakFinishResponse) Set(fieldName string, value interface{}) {
-	if a.AdditionalProperties == nil {
-		a.AdditionalProperties = make(map[string]interface{})
-	}
-	a.AdditionalProperties[fieldName] = value
-}
-
-// Override default JSON handling for TweakFinishResponse to handle AdditionalProperties
-func (a *TweakFinishResponse) UnmarshalJSON(b []byte) error {
-	object := make(map[string]json.RawMessage)
-	err := json.Unmarshal(b, &object)
-	if err != nil {
-		return err
-	}
-
-	if raw, found := object["api_version"]; found {
-		err = json.Unmarshal(raw, &a.APIVersion)
-		if err != nil {
-			return fmt.Errorf("error reading 'api_version': %w", err)
-		}
-		delete(object, "api_version")
-	}
-
-	if raw, found := object["decision"]; found {
-		err = json.Unmarshal(raw, &a.Decision)
-		if err != nil {
-			return fmt.Errorf("error reading 'decision': %w", err)
-		}
-		delete(object, "decision")
-	}
-
-	if raw, found := object["feature_id"]; found {
-		err = json.Unmarshal(raw, &a.FeatureID)
-		if err != nil {
-			return fmt.Errorf("error reading 'feature_id': %w", err)
-		}
-		delete(object, "feature_id")
-	}
-
-	if raw, found := object["had_changes"]; found {
-		err = json.Unmarshal(raw, &a.HadChanges)
-		if err != nil {
-			return fmt.Errorf("error reading 'had_changes': %w", err)
-		}
-		delete(object, "had_changes")
-	}
-
-	if raw, found := object["meta"]; found {
-		err = json.Unmarshal(raw, &a.Meta)
-		if err != nil {
-			return fmt.Errorf("error reading 'meta': %w", err)
-		}
-		delete(object, "meta")
-	}
-
-	if raw, found := object["result"]; found {
-		err = json.Unmarshal(raw, &a.Result)
-		if err != nil {
-			return fmt.Errorf("error reading 'result': %w", err)
-		}
-		delete(object, "result")
-	}
-
-	if len(object) != 0 {
-		a.AdditionalProperties = make(map[string]interface{})
-		for fieldName, fieldBuf := range object {
-			var fieldVal interface{}
-			err := json.Unmarshal(fieldBuf, &fieldVal)
-			if err != nil {
-				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
-			}
-			a.AdditionalProperties[fieldName] = fieldVal
-		}
-	}
-	return nil
-}
-
-// Override default JSON handling for TweakFinishResponse to handle AdditionalProperties
-func (a TweakFinishResponse) MarshalJSON() ([]byte, error) {
-	var err error
-	object := make(map[string]json.RawMessage)
-
-	object["api_version"], err = json.Marshal(a.APIVersion)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
-	}
-
-	object["decision"], err = json.Marshal(a.Decision)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'decision': %w", err)
-	}
-
-	object["feature_id"], err = json.Marshal(a.FeatureID)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
-	}
-
-	object["had_changes"], err = json.Marshal(a.HadChanges)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'had_changes': %w", err)
-	}
-
-	object["meta"], err = json.Marshal(a.Meta)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
-	}
-
-	object["result"], err = json.Marshal(a.Result)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'result': %w", err)
-	}
-
-	for fieldName, field := range a.AdditionalProperties {
-		object[fieldName], err = json.Marshal(field)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
-		}
-	}
-	return json.Marshal(object)
-}
-
-// Getter for additional properties for TweakStartResponse. Returns the specified
-// element and whether it was found
-func (a TweakStartResponse) Get(fieldName string) (value interface{}, found bool) {
-	if a.AdditionalProperties != nil {
-		value, found = a.AdditionalProperties[fieldName]
-	}
-	return
-}
-
-// Setter for additional properties for TweakStartResponse
-func (a *TweakStartResponse) Set(fieldName string, value interface{}) {
-	if a.AdditionalProperties == nil {
-		a.AdditionalProperties = make(map[string]interface{})
-	}
-	a.AdditionalProperties[fieldName] = value
-}
-
-// Override default JSON handling for TweakStartResponse to handle AdditionalProperties
-func (a *TweakStartResponse) UnmarshalJSON(b []byte) error {
-	object := make(map[string]json.RawMessage)
-	err := json.Unmarshal(b, &object)
-	if err != nil {
-		return err
-	}
-
-	if raw, found := object["api_version"]; found {
-		err = json.Unmarshal(raw, &a.APIVersion)
-		if err != nil {
-			return fmt.Errorf("error reading 'api_version': %w", err)
-		}
-		delete(object, "api_version")
-	}
-
-	if raw, found := object["cycle_type"]; found {
-		err = json.Unmarshal(raw, &a.CycleType)
-		if err != nil {
-			return fmt.Errorf("error reading 'cycle_type': %w", err)
-		}
-		delete(object, "cycle_type")
-	}
-
-	if raw, found := object["feature_id"]; found {
-		err = json.Unmarshal(raw, &a.FeatureID)
-		if err != nil {
-			return fmt.Errorf("error reading 'feature_id': %w", err)
-		}
-		delete(object, "feature_id")
-	}
-
-	if raw, found := object["meta"]; found {
-		err = json.Unmarshal(raw, &a.Meta)
-		if err != nil {
-			return fmt.Errorf("error reading 'meta': %w", err)
-		}
-		delete(object, "meta")
-	}
-
-	if raw, found := object["result"]; found {
-		err = json.Unmarshal(raw, &a.Result)
-		if err != nil {
-			return fmt.Errorf("error reading 'result': %w", err)
-		}
-		delete(object, "result")
-	}
-
-	if raw, found := object["session_id"]; found {
-		err = json.Unmarshal(raw, &a.SessionID)
-		if err != nil {
-			return fmt.Errorf("error reading 'session_id': %w", err)
-		}
-		delete(object, "session_id")
-	}
-
-	if len(object) != 0 {
-		a.AdditionalProperties = make(map[string]interface{})
-		for fieldName, fieldBuf := range object {
-			var fieldVal interface{}
-			err := json.Unmarshal(fieldBuf, &fieldVal)
-			if err != nil {
-				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
-			}
-			a.AdditionalProperties[fieldName] = fieldVal
-		}
-	}
-	return nil
-}
-
-// Override default JSON handling for TweakStartResponse to handle AdditionalProperties
-func (a TweakStartResponse) MarshalJSON() ([]byte, error) {
-	var err error
-	object := make(map[string]json.RawMessage)
-
-	object["api_version"], err = json.Marshal(a.APIVersion)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
-	}
-
-	object["cycle_type"], err = json.Marshal(a.CycleType)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'cycle_type': %w", err)
-	}
-
-	object["feature_id"], err = json.Marshal(a.FeatureID)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
-	}
-
-	object["meta"], err = json.Marshal(a.Meta)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
-	}
-
-	object["result"], err = json.Marshal(a.Result)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'result': %w", err)
-	}
-
-	object["session_id"], err = json.Marshal(a.SessionID)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {

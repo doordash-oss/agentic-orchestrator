@@ -1235,9 +1235,8 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 }
 
 // InterruptFeature stops all sessions for a feature and clears pending help
-// and permission queue flags. Normal phase work and non-interactive
-// post-publish repo cycles transition the feature to StatusInterrupted; tweak-
-// only post-publish cycles keep their published/code-ready feature status.
+// and permission queue flags. Normal phase work and post-publish repo
+// cycles transition the feature to StatusInterrupted.
 // Does NOT clear KBStatus — preserve per-repo KB tracking for resume.
 //
 // Ordering matters: the Interrupted transition is committed BEFORE sessions
@@ -1310,14 +1309,12 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 // InterruptAllRunning iterates all features; running ones are interrupted
 // (stopping sessions, clearing pending flags, transitioning to interrupted)
 // AND additionally have KBStatus cleared to match the startup sweep.
-// Non-running features (Published, CodeReady) with active non-interactive
-// repo cycles (rebase/review-comments/refactor) are interrupted at the
-// feature level so the dashboard keeps them in the active bucket. Interactive
-// tweak-only cycles keep the pre-existing published/code-ready status and
-// just have their cycle state marked interrupted. KBStatus is preserved for
+// Non-running features (Published, CodeReady) with active repo cycles
+// (rebase/review-comments/refactor) are interrupted at the feature level so
+// the dashboard keeps them in the active bucket. KBStatus is preserved for
 // every post-publish cycle shape. CodeReady is the manual_publish=true shape
-// where a tweak/rebase cycle can be in flight while the feature waits for the
-// user to publish.
+// where a rebase cycle can be in flight while the feature waits for the user
+// to publish.
 func (o *Orchestrator) InterruptAllRunning() error {
 	features, listErr := o.deps.Store.List()
 	if listErr != nil {

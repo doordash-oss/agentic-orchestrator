@@ -1277,7 +1277,7 @@ func TestManagerCreateWithImages(t *testing.T) {
 }
 
 // TestManagerStartRebaseFromReviewPassed verifies that StartRebase works when the
-// feature is in ReviewPassed status (e.g., pull-rebase conflict during tweak/review-comments
+// feature is in ReviewPassed status (e.g., pull-rebase conflict during review-comments
 // after CompleteImplementation has already marked the feature ReviewPassed).
 func TestManagerReturnToPublished(t *testing.T) {
 	t.Parallel()
@@ -2265,7 +2265,6 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 		f.ValidatingPlan = true
 		f.ReviewingGate = true
 		f.SetRebaseCount(2)
-		f.SetTweakCount(1)
 		f.LastError = "some error"
 		f.FailureType = "test"
 		f.ActivePhaseStart = &now
@@ -2292,9 +2291,6 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 	}
 	if got.RebaseCount() != 0 {
 		t.Errorf("RebaseCount = %d, want 0", got.RebaseCount())
-	}
-	if got.TweakCount() != 0 {
-		t.Errorf("TweakCount = %d, want 0", got.TweakCount())
 	}
 	if got.LastError != "" {
 		t.Errorf("LastError = %q, want empty", got.LastError)
@@ -3563,7 +3559,7 @@ func TestRepoCycleMethods(t *testing.T) {
 	})
 
 	t.Run("StartRepoCycle_DuplicateBlocked", func(t *testing.T) {
-		err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleTweak)
+		err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments)
 		if err == nil {
 			t.Error("expected error for duplicate cycle start")
 		}
@@ -3594,15 +3590,15 @@ func TestRepoCycleMethods(t *testing.T) {
 	})
 
 	t.Run("StartRepoCycle_DifferentRepo", func(t *testing.T) {
-		if err := mgr.StartRepoCycle(f.ID, "repo-b", feature.CycleTweak); err != nil {
+		if err := mgr.StartRepoCycle(f.ID, "repo-b", feature.CycleReviewComments); err != nil {
 			t.Fatal(err)
 		}
 		got, _ := mgr.Get(f.ID)
 		if len(got.RepoCycles) != 2 {
 			t.Errorf("len(RepoCycles) = %d, want 2", len(got.RepoCycles))
 		}
-		if got.RepoCycles["repo-b"].Type != feature.CycleTweak {
-			t.Errorf("repo-b cycle type = %v, want tweak", got.RepoCycles["repo-b"].Type)
+		if got.RepoCycles["repo-b"].Type != feature.CycleReviewComments {
+			t.Errorf("repo-b cycle type = %v, want review-comments", got.RepoCycles["repo-b"].Type)
 		}
 	})
 
@@ -3733,7 +3729,7 @@ func TestManagerFeatureRebaseOperationDoesNotClobberOtherCycles(t *testing.T) {
 			{Name: apiRepoName},
 		},
 		ActiveCycle: &feature.CycleState{
-			Type:   feature.CycleTweak,
+			Type:   feature.CycleReviewComments,
 			Status: feature.RepoCycleRunning,
 			Count:  2,
 		},
@@ -3744,7 +3740,7 @@ func TestManagerFeatureRebaseOperationDoesNotClobberOtherCycles(t *testing.T) {
 			},
 		},
 	}
-	f.SetActiveCycleType(feature.CycleTweak)
+	f.SetActiveCycleType(feature.CycleReviewComments)
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
@@ -3752,12 +3748,12 @@ func TestManagerFeatureRebaseOperationDoesNotClobberOtherCycles(t *testing.T) {
 	if err := m.StartFeatureRebaseOperation(f.ID); err == nil {
 		t.Fatal("StartFeatureRebaseOperation error = nil, want non-rebase cycle guard")
 	}
-	assertTweakCycleIntact(t, store, f.ID)
+	assertReviewCommentsCycleIntact(t, store, f.ID)
 
 	if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageFinalReview); err == nil {
 		t.Fatal("MarkFeatureRebaseStage error = nil, want non-rebase cycle guard")
 	}
-	assertTweakCycleIntact(t, store, f.ID)
+	assertReviewCommentsCycleIntact(t, store, f.ID)
 
 	if err := m.ClearFeatureRebaseOperation(f.ID); err != nil {
 		t.Fatalf("ClearFeatureRebaseOperation: %v", err)
@@ -3769,11 +3765,11 @@ func TestManagerFeatureRebaseOperationDoesNotClobberOtherCycles(t *testing.T) {
 	if got.RebaseOperation != nil {
 		t.Fatalf("RebaseOperation = %+v, want nil", got.RebaseOperation)
 	}
-	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleTweak || got.ActiveCycle.Status != feature.RepoCycleRunning || got.ActiveCycle.Count != 2 {
-		t.Fatalf("ActiveCycle = %+v, want original tweak cycle", got.ActiveCycle)
+	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleReviewComments || got.ActiveCycle.Status != feature.RepoCycleRunning || got.ActiveCycle.Count != 2 {
+		t.Fatalf("ActiveCycle = %+v, want original review-comments cycle", got.ActiveCycle)
 	}
-	if got.ActiveCycleType() != feature.CycleTweak {
-		t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleTweak)
+	if got.ActiveCycleType() != feature.CycleReviewComments {
+		t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleReviewComments)
 	}
 }
 
@@ -3951,7 +3947,7 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 				{Name: apiRepoName},
 			},
 			ActiveCycle: &feature.CycleState{
-				Type:   feature.CycleTweak,
+				Type:   feature.CycleReviewComments,
 				Status: feature.RepoCycleRunning,
 				Count:  4,
 			},
@@ -3962,7 +3958,7 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 				},
 			},
 		}
-		f.SetActiveCycleType(feature.CycleTweak)
+		f.SetActiveCycleType(feature.CycleReviewComments)
 		if err := store.Save(f); err != nil {
 			t.Fatalf("save feature: %v", err)
 		}
@@ -3975,11 +3971,11 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load feature: %v", err)
 		}
-		if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleTweak || got.ActiveCycle.Count != 4 {
-			t.Fatalf("ActiveCycle = %+v, want original tweak cycle", got.ActiveCycle)
+		if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleReviewComments || got.ActiveCycle.Count != 4 {
+			t.Fatalf("ActiveCycle = %+v, want original review-comments cycle", got.ActiveCycle)
 		}
-		if got.ActiveCycleType() != feature.CycleTweak {
-			t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleTweak)
+		if got.ActiveCycleType() != feature.CycleReviewComments {
+			t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleReviewComments)
 		}
 		if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
 			t.Fatalf("RebaseOperation = %+v, want stale operation preserved", got.RebaseOperation)
@@ -4023,17 +4019,17 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 	})
 }
 
-func assertTweakCycleIntact(t *testing.T, store *feature.Store, featureID string) {
+func assertReviewCommentsCycleIntact(t *testing.T, store *feature.Store, featureID string) {
 	t.Helper()
 	got, err := store.Load(featureID)
 	if err != nil {
 		t.Fatalf("load feature: %v", err)
 	}
-	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleTweak || got.ActiveCycle.Status != feature.RepoCycleRunning || got.ActiveCycle.Count != 2 {
-		t.Fatalf("ActiveCycle = %+v, want original tweak cycle", got.ActiveCycle)
+	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleReviewComments || got.ActiveCycle.Status != feature.RepoCycleRunning || got.ActiveCycle.Count != 2 {
+		t.Fatalf("ActiveCycle = %+v, want original review-comments cycle", got.ActiveCycle)
 	}
-	if got.ActiveCycleType() != feature.CycleTweak {
-		t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleTweak)
+	if got.ActiveCycleType() != feature.CycleReviewComments {
+		t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleReviewComments)
 	}
 	if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
 		t.Fatalf("RebaseOperation = %+v, want stale harness state preserved before clear", got.RebaseOperation)
@@ -5454,7 +5450,7 @@ func TestRemoveRepoCycle(t *testing.T) {
 	// Seed two repo cycle entries via Store.Modify
 	if err := mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
 		f.RepoCycles = map[string]*feature.RepoCycleState{
-			apiRepoName: {Type: feature.CycleTweak, Status: "running"},
+			apiRepoName: {Type: feature.CycleReviewComments, Status: "running"},
 			"backend":   {Type: feature.CycleRebase, Status: "running"},
 		}
 		return nil

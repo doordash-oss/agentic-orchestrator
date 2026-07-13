@@ -224,7 +224,6 @@ const (
 	testFeatureNameFailedWork            = "Failed work"
 	testSessionStatusWaitingHelp         = "WaitingHelp"
 	testFeatureIDFeatCreated             = "feat-created"
-	testActionIDTweak                    = "tweak"
 	testModelCodexGPT54                  = "codex:gpt-5.4"
 	testModelCodexGPT55                  = "codex:gpt-5.5"
 	testPipelineSizeLarge                = "large"
@@ -1409,56 +1408,6 @@ func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 	}
 	if !strings.Contains(submitted.statusMessage, "Completed Recovery") {
 		t.Fatalf("statusMessage = %q, want completed recovery status", submitted.statusMessage)
-	}
-}
-
-func TestAPIAppModelRecoveryTweakShowsKillOnlyAffordance(t *testing.T) {
-	t.Parallel()
-
-	client := &fakeTUIAPIClient{
-		recovery: server.RecoverySnapshotResponse{
-			SnapshotID: "recovery-snapshot-tweak",
-			Items: []server.RecoveryItemDTO{{
-				Key:            "feat-tweak:api",
-				FeatureID:      "feat-tweak",
-				FeatureName:    "Tweak me",
-				RepoName:       testRepoNameAPI,
-				Phase:          testPhaseNameImplement,
-				Iteration:      2,
-				PID:            23456,
-				ProcessAlive:   true,
-				Tweak:          true,
-				DefaultAction:  testActionKill,
-				AllowedActions: []string{testActionKill},
-			}},
-		},
-		executeRecoveryAccepted: apiTestActionResponse{Result: "executed"},
-	}
-	app := newTestAPIAppModel(t, client)
-	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Tweak me", "[K]ill", "interactive tweak - kill only", "[k] Kill", "[enter] Continue"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("API recovery view missing %q in:\n%s", want, view)
-		}
-	}
-	for _, notWant := range []string{"[r] Resume", "[s] Skip"} {
-		if strings.Contains(view, notWant) {
-			t.Fatalf("API recovery view unexpectedly advertised %q in:\n%s", notWant, view)
-		}
-	}
-
-	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
-	if cmd != nil {
-		t.Fatal("Update(r) returned command before recovery submit")
-	}
-	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want recovery execute")
-	}
-	msg := cmd()
-	_, _ = model.(APIAppModel).Update(msg)
-	if got := client.executeRecoveryRequests; len(got) != 1 || got[0].Actions["feat-tweak:api"] != testActionKill {
-		t.Fatalf("ExecuteRecovery requests = %+v, want kill action", got)
 	}
 }
 
@@ -4287,26 +4236,6 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			},
 		},
 		{
-			name:     "tweak start",
-			key:      tea.KeyPressMsg{Code: 't', Text: "t"},
-			actionID: testActionIDTweak,
-			wantKind: mutationKindFeatureTweakStart,
-			accepted: apiTestActionResponse{},
-			refresh: struct {
-				cycleType string
-				wantLabel string
-			}{cycleType: testActionIDTweak, wantLabel: "Tweaking"},
-			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
-				t.Helper()
-				if got := strings.Join(client.startTweakFeatureIDs, ","); got != testFeatureIDActive {
-					t.Fatalf("StartTweak calls = %q, want active", got)
-				}
-				if got := client.startTweakRequests; len(got) != 1 {
-					t.Fatalf("StartTweak requests = %+v, want one empty request", got)
-				}
-			},
-		},
-		{
 			name:     reviewModeRewind,
 			key:      tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl},
 			actionID: reviewModeRewind,
@@ -4388,8 +4317,6 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 				retryAccepted:       tt.accepted,
 				markDoneAccepted:    tt.accepted,
 				cleanupAccepted:     tt.accepted,
-				startTweakAccepted:  tt.accepted,
-				finishTweakAccepted: tt.accepted,
 				rewindAccepted:      tt.accepted,
 				startRebaseAccepted: tt.accepted,
 			}
@@ -4407,8 +4334,8 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			if view := stripANSI(confirming.View().Content); !strings.Contains(view, wantTitle) {
 				t.Fatalf("View() missing %q confirmation in:\n%s", wantTitle, view)
 			}
-			if len(client.mergeFeatureIDs)+len(client.retryFeatureIDs)+len(client.markDoneFeatureIDs)+len(client.cleanupFeatureIDs)+len(client.startTweakFeatureIDs)+len(client.finishTweakFeatureIDs)+len(client.rewindFeatureIDs)+len(client.startRebaseFeatureIDs)+len(client.restartFeatureIDs)+len(client.stopFeatureIDs)+len(client.deleteFeatureIDs) != 0 {
-				t.Fatalf("API action was sent before confirmation: merge=%v retry=%v markDone=%v cleanup=%v tweak=%v finishTweak=%v restart=%v stop=%v delete=%v rewind=%v rebase=%v", client.mergeFeatureIDs, client.retryFeatureIDs, client.markDoneFeatureIDs, client.cleanupFeatureIDs, client.startTweakFeatureIDs, client.finishTweakFeatureIDs, client.restartFeatureIDs, client.stopFeatureIDs, client.deleteFeatureIDs, client.rewindFeatureIDs, client.startRebaseFeatureIDs)
+			if len(client.mergeFeatureIDs)+len(client.retryFeatureIDs)+len(client.markDoneFeatureIDs)+len(client.cleanupFeatureIDs)+len(client.rewindFeatureIDs)+len(client.startRebaseFeatureIDs)+len(client.restartFeatureIDs)+len(client.stopFeatureIDs)+len(client.deleteFeatureIDs) != 0 {
+				t.Fatalf("API action was sent before confirmation: merge=%v retry=%v markDone=%v cleanup=%v restart=%v stop=%v delete=%v rewind=%v rebase=%v", client.mergeFeatureIDs, client.retryFeatureIDs, client.markDoneFeatureIDs, client.cleanupFeatureIDs, client.restartFeatureIDs, client.stopFeatureIDs, client.deleteFeatureIDs, client.rewindFeatureIDs, client.startRebaseFeatureIDs)
 			}
 
 			model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
@@ -4455,96 +4382,6 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 				}
 			} else if !strings.Contains(view, testFeatureIDActive) {
 				t.Fatalf("API app View() missing %q in:\n%s", testFeatureIDActive, view)
-			}
-		})
-	}
-}
-
-func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name           string
-		key            tea.KeyPressMsg
-		wantDecision   string
-		wantHadChanges bool
-	}{
-		{
-			name:           reviewCommentTypeReview,
-			key:            tea.KeyPressMsg{Code: 'y', Text: "y"},
-			wantDecision:   phaseAliasFinalReview,
-			wantHadChanges: true,
-		},
-		{
-			name:           "skip_review",
-			key:            tea.KeyPressMsg{Code: 'n', Text: "n"},
-			wantDecision:   "skip-review",
-			wantHadChanges: true,
-		},
-		{
-			name:         "restore",
-			key:          tea.KeyPressMsg{Code: tea.KeyEscape},
-			wantDecision: "restore-from-review",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cycle := &server.CycleDTO{Type: testActionIDTweak, Status: featureStatusTokenRunning}
-			client := &fakeTUIAPIClient{
-				features: server.FeatureListResponse{Features: []server.FeatureSummary{
-					{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, Cycle: cycle, Repos: []string{testRepoNameOrchestrator}, CreatedAt: time.Now()},
-				}},
-				detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, Cycle: cycle}, server.FeatureDetailDTO{
-
-					Cycle: cycle,
-					RepoStatus: []server.RepoStatusDTO{
-						{Name: testRepoNameOrchestrator, CycleType: testActionIDTweak, CycleStatus: featureStatusTokenRunning},
-					},
-					Actions: []server.ActionDTO{
-						{ID: testActionIDTweak, Enabled: false, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
-					},
-				})},
-				finishTweakAccepted: apiTestActionResponse{Result: "finished"},
-			}
-			app := newTestAPIAppModel(t, client)
-
-			model, cmd := app.Update(tea.KeyPressMsg{Code: 'T', Text: "T"})
-			if cmd != nil {
-				t.Fatal("Update(T) returned command before final review decision")
-			}
-			deciding := model.(APIAppModel)
-			view := stripANSI(deciding.View().Content)
-			for _, want := range []string{testPhaseNameFinalReview, "Changes have been committed. Run a Final Review?", "[y] Yes", "[n] No", "Esc to cancel"} {
-				if !strings.Contains(view, want) {
-					t.Fatalf("View() missing %q in:\n%s", want, view)
-				}
-			}
-			if strings.Contains(view, "Confirm feature.tweak.finish") {
-				t.Fatalf("View() showed generic tweak finish confirmation, want final review decision modal:\n%s", view)
-			}
-			if len(client.finishTweakFeatureIDs) != 0 {
-				t.Fatalf("FinishTweak calls before modal decision = %v, want none", client.finishTweakFeatureIDs)
-			}
-
-			model, cmd = deciding.Update(tt.key)
-			if cmd == nil {
-				t.Fatalf("Update(%s) returned nil command, want REST mutation command", tt.name)
-			}
-			msg := cmd()
-			model, _ = model.(APIAppModel).Update(msg)
-			accepted := model.(APIAppModel)
-
-			if got := strings.Join(client.finishTweakFeatureIDs, ","); got != testFeatureIDActive {
-				t.Fatalf("FinishTweak calls = %q, want active", got)
-			}
-			if got := client.finishTweakRequests; len(got) != 1 || got[0].Decision != tt.wantDecision || got[0].HadChanges != tt.wantHadChanges {
-				t.Fatalf("FinishTweak requests = %+v, want decision %q had_changes %v", got, tt.wantDecision, tt.wantHadChanges)
-			}
-			if !strings.Contains(accepted.statusMessage, "Completed Finish Tweak") {
-				t.Fatalf("statusMessage = %q, want tweak finish completed status", accepted.statusMessage)
 			}
 		})
 	}
@@ -7454,46 +7291,6 @@ func TestAPIAppModelRebaseDoesNotOpenRepoSelector(t *testing.T) {
 func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) {
 	t.Parallel()
 
-	t.Run(testActionIDTweak, func(t *testing.T) {
-		t.Parallel()
-
-		client := apiRepoSelectorClient(testActionIDTweak)
-		app := newTestAPIAppModel(t, client)
-
-		model, cmd := app.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
-		if cmd != nil {
-			t.Fatal("action key returned command before repo selection")
-		}
-		selecting := model.(APIAppModel)
-		if view := stripANSI(selecting.View().Content); !strings.Contains(view, "Select repo") || !strings.Contains(view, testRepoNameAPI) || !strings.Contains(view, testRepoNameWeb) {
-			t.Fatalf("repo selector not shown:\n%s", view)
-		}
-
-		model, _ = selecting.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-		selecting = model.(APIAppModel)
-		model, cmd = selecting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		if cmd != nil {
-			t.Fatal("repo selection returned command before confirmation")
-		}
-		confirming := model.(APIAppModel)
-		view := stripANSI(confirming.View().Content)
-		for _, want := range []string{"Confirm Tweak", "Repo: web"} {
-			if !strings.Contains(view, want) {
-				t.Fatalf("confirmation missing %q in:\n%s", want, view)
-			}
-		}
-
-		model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-		if cmd == nil {
-			t.Fatal("confirmation returned nil command")
-		}
-		msg := cmd()
-		_, _ = model.(APIAppModel).Update(msg)
-		if got := len(client.startTweakRequests); got != 1 {
-			t.Fatalf("StartTweak request count = %d, want 1", got)
-		}
-	})
-
 	t.Run("review comments", func(t *testing.T) {
 		t.Parallel()
 
@@ -8164,7 +7961,6 @@ func apiRepoSelectorClient(actionID string) *fakeTUIAPIClient {
 			Actions: []server.ActionDTO{action},
 		})},
 		startRebaseAccepted:         accepted,
-		startTweakAccepted:          accepted,
 		startReviewCommentsAccepted: accepted,
 		startRefactorAccepted:       accepted,
 	}
@@ -8291,14 +8087,6 @@ type fakeTUIAPIClient struct {
 	cleanupErr                     error
 	cleanupFeatureIDs              []string
 	cleanupRequests                []server.CleanupActionRequest
-	startTweakAccepted             apiTestActionResponse
-	startTweakErr                  error
-	startTweakFeatureIDs           []string
-	startTweakRequests             []server.TweakActionRequest
-	finishTweakAccepted            apiTestActionResponse
-	finishTweakErr                 error
-	finishTweakFeatureIDs          []string
-	finishTweakRequests            []server.TweakFinishRequest
 	startRebaseAccepted            apiTestActionResponse
 	startRebaseErr                 error
 	startRebaseFeatureIDs          []string
@@ -8606,20 +8394,6 @@ func (f *fakeTUIAPIClient) CleanupFeature(_ context.Context, featureID string, r
 	f.cleanupFeatureIDs = append(f.cleanupFeatureIDs, featureID)
 	f.cleanupRequests = append(f.cleanupRequests, req)
 	return server.CleanupFeatureResponse{FeatureID: f.cleanupAccepted.featureID(featureID), Result: f.cleanupAccepted.result("cleaned"), Target: req.Target}, f.cleanupErr
-}
-
-func (f *fakeTUIAPIClient) StartTweak(_ context.Context, featureID string, req server.TweakActionRequest) (server.TweakStartResponse, error) {
-	f.calls = append(f.calls, "StartTweak")
-	f.startTweakFeatureIDs = append(f.startTweakFeatureIDs, featureID)
-	f.startTweakRequests = append(f.startTweakRequests, req)
-	return server.TweakStartResponse{FeatureID: f.startTweakAccepted.featureID(featureID), Result: f.startTweakAccepted.result("started"), CycleType: f.startTweakAccepted.CycleType}, f.startTweakErr
-}
-
-func (f *fakeTUIAPIClient) FinishTweak(_ context.Context, featureID string, req server.TweakFinishRequest) (server.TweakFinishResponse, error) {
-	f.calls = append(f.calls, "FinishTweak")
-	f.finishTweakFeatureIDs = append(f.finishTweakFeatureIDs, featureID)
-	f.finishTweakRequests = append(f.finishTweakRequests, req)
-	return server.TweakFinishResponse{FeatureID: f.finishTweakAccepted.featureID(featureID), Result: f.finishTweakAccepted.result("finished"), Decision: req.Decision, HadChanges: req.HadChanges}, f.finishTweakErr
 }
 
 func (f *fakeTUIAPIClient) StartRebase(_ context.Context, featureID string, req server.RebaseActionRequest) (server.RebaseStartResponse, error) {

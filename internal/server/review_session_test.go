@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -122,6 +123,65 @@ func TestReviewSessionServiceCreateDoesNotExposeSourcePath(t *testing.T) {
 	}
 	if strings.Contains(mustMarshalJSON(t, resp), planPath) {
 		t.Fatalf("review session response leaked source path %q: %+v", planPath, resp)
+	}
+}
+
+func TestReviewSessionServiceCreateSuppressesIterateForApprovedPlanAttempt(t *testing.T) {
+	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
+	if err := agent.WritePlanAttemptMeta(filepath.Dir(planPath), agent.PlanAttemptMeta{
+		Attempt:      1,
+		AgentStatus:  "SUCCESS",
+		ReviewStatus: agent.ReviewApproved.String(),
+	}); err != nil {
+		t.Fatalf("write plan attempt meta: %v", err)
+	}
+	service := newReviewSessionService(store, nil)
+
+	resp, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if resp.CanIterate {
+		t.Fatalf("CanIterate = true, want false for approved plan checkpoint review")
+	}
+}
+
+func TestReviewSessionServiceCreateRefreshesExistingDraftCanIterate(t *testing.T) {
+	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
+	service := newReviewSessionService(store, nil)
+	initial, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create initial: %v", err)
+	}
+	if !initial.CanIterate {
+		t.Fatalf("initial CanIterate = false, want true before approved attempt metadata exists")
+	}
+	if err := agent.WritePlanAttemptMeta(filepath.Dir(planPath), agent.PlanAttemptMeta{
+		Attempt:      1,
+		AgentStatus:  "SUCCESS",
+		ReviewStatus: agent.ReviewApproved.String(),
+	}); err != nil {
+		t.Fatalf("write plan attempt meta: %v", err)
+	}
+
+	reopened, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create reopened: %v", err)
+	}
+
+	if reopened.ReviewID != initial.ReviewID {
+		t.Fatalf("ReviewID = %q, want existing deterministic review %q", reopened.ReviewID, initial.ReviewID)
+	}
+	if reopened.CanIterate {
+		t.Fatalf("CanIterate = true, want false after approved plan metadata appears")
+	}
+	got, err := service.Get(f.ID, reopened.ReviewID)
+	if err != nil {
+		t.Fatalf("Get reopened: %v", err)
+	}
+	if got.CanIterate {
+		t.Fatalf("persisted CanIterate = true, want false after reopening approved plan review")
 	}
 }
 

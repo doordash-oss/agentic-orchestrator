@@ -113,13 +113,6 @@ type KBBuildUserInput struct {
 	LastCommit     string
 }
 
-type TweakUserInput struct {
-	SkillPath string
-	Name      string
-	PlanPath  string
-	PRURL     string
-}
-
 type DesignUserInput struct {
 	Name        string
 	Description string
@@ -354,17 +347,6 @@ func TestGoldenSnapshots(t *testing.T) {
 						{Name: "api", Path: "/repos/api"},
 						{Name: "web", Path: "/repos/web"},
 					},
-				})
-			},
-		},
-		{
-			name: "tweak_user",
-			render: func() string {
-				return TweakUserPrompt(TweakUserInput{
-					SkillPath: "/skills/tweak-session/SKILL.md",
-					Name:      "Color tweak",
-					PlanPath:  "/state/feat-x/run-1/roadmap/plan.md",
-					PRURL:     "https://github.com/x/y/pull/123",
 				})
 			},
 		},

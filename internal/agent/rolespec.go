@@ -49,7 +49,6 @@ const (
 	RoleInquirer                    = roles.RoleInquirer
 	RoleResearcher                  = roles.RoleResearcher
 	RoleDesigner                    = roles.RoleDesigner
-	RoleInteractivePTY              = roles.RoleInteractivePTY
 )
 
 type ArtifactPresence = roles.ArtifactPresence
@@ -134,11 +133,6 @@ func FinalReviewerRoleSpec() RoleSpec {
 // FinalReviewFixerRoleSpec returns the RoleSpec-backed final-review fix role.
 func FinalReviewFixerRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.FinalReviewFixerRoleSpec())
-}
-
-// InteractivePTYRoleSpec returns Tweak's no-op RoleSpec carve-out.
-func InteractivePTYRoleSpec() RoleSpec {
-	return wrapRoleSpec(roles.InteractivePTYRoleSpec())
 }
 
 // PlanValidatorRoleSpecs returns the RoleSpec-backed per-axis validator roles.

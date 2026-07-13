@@ -1128,16 +1128,6 @@ func TestContractRegistryIterationReviewerRequiresReviewFeedback(t *testing.T) {
 	}
 }
 
-func TestContractRegistryTweakCarveOut(t *testing.T) {
-	out, violations, err := Validate(feature.PhaseImplement, RoleInteractivePTY, t.TempDir())
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !out.OK || len(violations) != 0 {
-		t.Fatalf("Validate() = (%+v, %v), want OK empty contract", out, violations)
-	}
-}
-
 func writeReviewFeedbackFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {

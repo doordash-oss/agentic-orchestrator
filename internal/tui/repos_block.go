@@ -40,7 +40,7 @@ const rebaseFailedLabel = "rebase failed"
 // `unpublished`, `skipped`, a published PR URL, or a `✗ failed` marker
 // followed by an indented continuation line carrying the truncated error.
 //
-// When a per-repo cycle is active (rebase / tweak / refactor / review-comments)
+// When a per-repo cycle is active (rebase / refactor / review-comments)
 // a suffix is appended to the row — the PR URL stays visible.
 //
 // Pure: no I/O, no terminal coupling. The caller owns line joining and
@@ -89,7 +89,7 @@ func renderReposBlock(f *feature.Feature) []string {
 		}
 
 		// Cycle suffix is appended (not a replacement) so a published PR URL
-		// stays visible while a rebase/tweak/refactor/review-comments runs.
+		// stays visible while a rebase/refactor/review-comments runs.
 		rebaseSuffix := ""
 		if !preImpl {
 			if suffix := rebaseOperationSuffix(f, name); suffix != "" {
@@ -199,8 +199,6 @@ func cycleRunningLabel(t feature.RepoCycleType) string {
 	switch t {
 	case feature.CycleRebase:
 		return "rebasing"
-	case feature.CycleTweak:
-		return "tweaking"
 	case feature.CycleRefactor:
 		return "refactoring"
 	case feature.CycleReviewComments:

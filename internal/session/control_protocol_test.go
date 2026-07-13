@@ -765,19 +765,6 @@ func TestManagerOnMessage_InteractiveTurnMode_ResultSetsWaitingHelp(t *testing.T
 	}
 }
 
-func TestManagerOnMessage_KindTweakDoesNotControlResultLifecycle(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: direct manager routing with per-test session state.
-	mgr := NewManager(make(chan interface{}, 100))
-	sess := NewSession("tweak-kind-oneshot-test", "feat-1", feature.PhaseImplement)
-	sess.kind = ports.KindTweak
-	mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), successResultMessage("s1"))
-
-	if status := sess.Status(); status == SessionWaitingHelp {
-		t.Errorf("KindTweak alone set waiting-help; lifecycle should be controlled by TurnMode")
-	}
-}
-
 func TestManagerOnMessage_BashToolPermission_SetsWaitingPermission(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: direct manager routing with per-test session state.

@@ -11,5 +11,5 @@ Quick-reference index for Agentic Orchestrator users (the TUI binary is `agentic
 | TUI Navigation | [tui-navigation.md](tui-navigation.md) | Keybindings, views, navigation |
 | Configuration | [configuration.md](configuration.md) | Config file, model selection, settings |
 | Verification | [verification.md](verification.md) | Fast suite, extended gates, and timing baseline |
-| Post-Publish | [post-publish.md](post-publish.md) | Tweaks, rebase, review comments |
+| Post-Publish | [post-publish.md](post-publish.md) | Rebase, review comments, refactor |
 | Permissions | [permissions.md](permissions.md) | Permission rules, caching, defaults |

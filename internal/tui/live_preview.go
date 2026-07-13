@@ -585,9 +585,6 @@ func livePreviewActivityLine(f *feature.Feature, sess session.SessionView) strin
 func activityLineFromMessage(f *feature.Feature, sess session.SessionView, msg llm.SDKMessage) (string, bool) {
 	switch {
 	case msg.Result != nil:
-		if isTweakLivePreview(f, sess) {
-			return "Waiting for tweak input...", true
-		}
 		return workingOnPhaseLine(f, sess), true
 	case msg.ToolProgress != nil && msg.ToolProgress.ToolName != "":
 		return "Using " + msg.ToolProgress.ToolName + "...", true
@@ -632,21 +629,6 @@ func livePreviewPhaseName(f *feature.Feature, sess session.SessionView) string {
 		return phase.String()
 	}
 	return "feature"
-}
-
-func isTweakLivePreview(f *feature.Feature, sess session.SessionView) bool {
-	if sess != nil {
-		if sess.Kind() == ports.KindTweak || isTweakSessionID(sess.ID()) {
-			return true
-		}
-	}
-	if f == nil {
-		return false
-	}
-	if hasPendingHelpRequestMessage(f, waitingInputHelpMessage) {
-		return true
-	}
-	return hasTweakCycle(f)
 }
 
 type livePreviewTranscriptKind int

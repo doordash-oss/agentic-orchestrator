@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"gopkg.in/yaml.v3"
 )
@@ -227,6 +228,11 @@ func (s *reviewSessionService) loadExistingDraft(metaPath, draftPath string, ctx
 	if err != nil {
 		return reviewSessionMeta{}, nil, false
 	}
+	if meta.CanIterate != ctx.canIterate {
+		meta.CanIterate = ctx.canIterate
+		meta.UpdatedAt = s.now()
+		_ = writeReviewSessionMeta(metaPath, meta)
+	}
 	return meta, draft, true
 }
 
@@ -289,9 +295,17 @@ func (s *reviewSessionService) resolveContext(featureID string) (reviewSessionCo
 	}
 	ctx.sourcePath = path
 	ctx.sourceRevision = textRevision(data)
-	ctx.canIterate = ctx.reviewMode == reviewModePlan
+	ctx.canIterate = planReviewCanIterate(ctx)
 	ctx.reviewID = deterministicReviewID(featureID, run.RunNumber, ctx.reviewMode, ctx.targetPhase.DirName(), ctx.artifactID)
 	return ctx, nil
+}
+
+func planReviewCanIterate(ctx reviewSessionContext) bool {
+	if ctx.reviewMode != reviewModePlan {
+		return false
+	}
+	status := strings.TrimSpace(agent.LastAttemptReviewStatus(filepath.Dir(ctx.sourcePath)))
+	return status != agent.ReviewApproved.String()
 }
 
 func reviewSessionTarget(f *feature.Feature) (string, feature.Phase) {

@@ -2475,6 +2475,86 @@ fi
 	}
 }
 
+func TestPhasePlanLoopStallEscalationPersistsReviewArtifact(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := tmpDir
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	phasePlanDir := filepath.Join(stateDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, d := range []string{workDir, phasePlanDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WritePhasePlanSuccessArtifacts(phasePlanDir, validPhasePlanText())+"\n"+
+			testutil.JSONLSuccess+"\n")
+	structuralScript := testutil.WriteScript(t, scriptsDir, "critic-structural.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteSpecificAxisChangesRequested(tmpDir, "structural", "- **High**: structural section still invalid")+"\n"+
+			testutil.JSONLSuccess+"\n")
+	scopeScript := testutil.WriteScript(t, scriptsDir, "critic-scope.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteSpecificAxisApproved(tmpDir, "scope", nil)+"\n"+
+			testutil.JSONLSuccess+"\n")
+
+	buildSession := mockBuildSessionPerDomain(planScript, map[string]string{
+		"structural": structuralScript,
+		"scope":      scopeScript,
+	})
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	f.RiskLevel = feature.RiskLow
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	cfg := PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:                    f,
+			FeatureStore:               store,
+			StateDir:                   stateDir,
+			WorkDir:                    workDir,
+			MaxAttempts:                axisStallLimit + 2,
+			DangerouslySkipPermissions: true,
+			BuildSession:               buildSession,
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Tracer",
+			Type:   "tracer-bullet",
+			Goal:   "Exercise stalled human-review escalation",
+		},
+	}
+
+	result, err := RunPhasePlanningLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop error: %v", err)
+	}
+	if result.FinalStatus != "needs_human_review" {
+		t.Fatalf("FinalStatus = %s, want needs_human_review", result.FinalStatus)
+	}
+	if result.Iterations != axisStallLimit {
+		t.Fatalf("Iterations = %d, want %d", result.Iterations, axisStallLimit)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	wantPath := filepath.Join(phasePlanDir, "plan.md")
+	if got := loaded.Artifacts["phase-1-plan"]; got != wantPath {
+		t.Fatalf("Artifacts[phase-1-plan] = %q, want %q", got, wantPath)
+	}
+}
+
 // TestBuildSpecializedValidationPrompt_GroundingIncludesPriorPhaseContext verifies
 // that when PriorPhasePlanPaths is populated, the Grounding axis prompt
 // contains a "Prior Phase Context" block listing each plan path so the

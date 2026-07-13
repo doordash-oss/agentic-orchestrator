@@ -2139,6 +2139,16 @@ phasePlanAttemptLoop:
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback), 0o644)
 
 			if stalled {
+				if cfg.FeatureStore != nil && planArtifactPath != "" {
+					artifactKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
+					_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+						if f.Artifacts == nil {
+							f.Artifacts = make(map[string]string)
+						}
+						f.Artifacts[artifactKey] = planArtifactPath
+						return nil
+					})
+				}
 				return &PlanLoopResult{
 					FinalStatus: "needs_human_review",
 					Iterations:  attempt,

@@ -280,7 +280,14 @@ func questionPromptVisualLines(question string, width int) []string {
 		return strings.Split(question, "\n")
 	}
 	rendered := lipgloss.NewStyle().Width(width).Render(question)
-	return strings.Split(rendered, "\n")
+	lines := strings.Split(rendered, "\n")
+	// lipgloss.Width right-pads every line to width; strip that padding so
+	// callers measuring the text's natural width (e.g. side-by-side preview
+	// placement) don't see it as always exactly width wide.
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	return lines
 }
 
 func questionPromptIsTruncated(question string, width int) bool {

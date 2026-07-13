@@ -53,8 +53,8 @@ func (p *Protocol) handleRequestPermission(rawID json.RawMessage, params json.Ra
 	}
 
 	if p.terminalEmitted() {
-		// The session already has its outcome; release OpenCode without surfacing
-		// a new prompt the completed session would never answer.
+		// This turn already has its outcome; release OpenCode without surfacing
+		// a new prompt the completed turn would never answer.
 		_ = p.writePermissionOutcome(id, OutcomeCancelled, "")
 		return llm.SDKMessage{}, false
 	}

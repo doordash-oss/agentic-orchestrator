@@ -303,6 +303,7 @@ func (m *ChatModel) submitAllQuestionAnswers() tea.Cmd {
 	if sess == nil || requestID == "" {
 		return nil
 	}
+	m.turnCostBaseline = sess.Cost()
 	sendCmd := func() tea.Msg {
 		if err := sess.RespondToAskUser(requestID, raw, answers, nil); err != nil {
 			return chatSendErrorMsg{err: err}
@@ -310,9 +311,13 @@ func (m *ChatModel) submitAllQuestionAnswers() tea.Cmd {
 		return nil
 	}
 	if !m.pollSession {
-		return sendCmd
+		return func() tea.Msg {
+			if msg := sendCmd(); msg != nil {
+				return msg
+			}
+			return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
+		}
 	}
-	m.turnCostBaseline = sess.Cost()
 	return tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
 }
 

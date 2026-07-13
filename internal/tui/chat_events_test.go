@@ -188,7 +188,7 @@ func TestChatModelPendingPermissionAnswerUsesSessionPermissionDecision(t *testin
 	if cmd == nil {
 		t.Fatal("Update(y) returned nil command, want permission answer command")
 	}
-	_ = cmd()
+	msg := cmd()
 
 	if updated.hasActivePermission() {
 		t.Fatal("pending permission remained active after answer")
@@ -198,5 +198,9 @@ func TestChatModelPendingPermissionAnswerUsesSessionPermissionDecision(t *testin
 	}
 	if got := client.permissionAnswers; len(got) != 1 || got[0].RequestID != testPermissionRequestIDPerm1 || got[0].SessionID != chatSessionID || got[0].Decision != "allow_once" {
 		t.Fatalf("permission answers = %+v, want allow_once for chat permission", got)
+	}
+	tick, ok := msg.(chatRecoveryTickMsg)
+	if !ok || tick.sess != sess {
+		t.Fatalf("permission answer command returned %#v, want chatRecoveryTickMsg for chat session", msg)
 	}
 }

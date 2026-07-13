@@ -442,6 +442,7 @@ func TestParseAskUserQuestions_PreservesStructuredConfidence(t *testing.T) {
 
 func TestRenderQuestion_ShowsConfidencePerOption(t *testing.T) {
 	m := AttachModel{
+		width: 120,
 		pendingQuestions: []askUserQuestion{{
 			Question: "Pick one",
 			Options: []askUserOption{

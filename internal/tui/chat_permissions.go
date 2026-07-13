@@ -68,6 +68,7 @@ func (m ChatModel) submitPermissionDecision(decision string) (ChatModel, tea.Cmd
 	if requestID == "" || sess == nil {
 		return m, nil
 	}
+	m.turnCostBaseline = sess.Cost()
 	if m.answeredPermRequestIDs == nil {
 		m.answeredPermRequestIDs = make(map[string]struct{})
 	}
@@ -91,9 +92,13 @@ func (m ChatModel) submitPermissionDecision(decision string) (ChatModel, tea.Cmd
 		return nil
 	}
 	if !m.pollSession {
-		return m, sendCmd
+		return m, func() tea.Msg {
+			if msg := sendCmd(); msg != nil {
+				return msg
+			}
+			return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
+		}
 	}
-	m.turnCostBaseline = sess.Cost()
 	return m, tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
 }
 

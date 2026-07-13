@@ -616,6 +616,32 @@ func TestPromptEndTurn_NonQuestionIsCleanSuccess(t *testing.T) {
 	}
 }
 
+// TestPromptEndTurn_SecondTurnAlsoEmitsSuccess proves a session's SECOND clean
+// completion also reaches the caller as a success result — not just the
+// first. markTerminal's one-shot latch is meant to seal a session's FINAL
+// outcome (so a late duplicate can't overturn it), but a multi-turn session
+// (e.g. AMA chat, where one Protocol instance serves many user messages) must
+// still get a fresh terminal result for every turn, or the caller's UI is left
+// waiting forever after the first reply.
+func TestPromptEndTurn_SecondTurnAlsoEmitsSuccess(t *testing.T) {
+	p, _, promptID1 := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, "First answer.")
+	msgs1 := endTurn(t, p, promptID1)
+	if len(msgs1) != 1 || msgs1[0].Result == nil || !msgs1[0].Result.IsSuccess() {
+		t.Fatalf("first turn produced %+v, want a success result", msgs1)
+	}
+
+	if err := p.SendUserMessage("second question"); err != nil {
+		t.Fatalf("SendUserMessage: %v", err)
+	}
+	promptID2 := p.promptIDForTest()
+	streamAssistantText(t, p, "Second answer.")
+	msgs2 := endTurn(t, p, promptID2)
+	if len(msgs2) != 1 || msgs2[0].Result == nil || !msgs2[0].Result.IsSuccess() {
+		t.Fatalf("second turn produced %+v, want a success result", msgs2)
+	}
+}
+
 // TestPromptEndTurn_InformationalNumberedListIsCleanSuccess proves a final text
 // that merely summarizes findings as a numbered list — with no question mark
 // anywhere — completes as a success result rather than being hijacked into a

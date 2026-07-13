@@ -135,8 +135,12 @@ func (m ChatModel) minimumQuestionBodyHeight(contentWidth int) int {
 func (m ChatModel) activeQuestionBodyHeight(contentWidth int) int {
 	bodyHeight := m.minimumQuestionBodyHeight(contentWidth)
 	maxBodyHeight := min(chatActivePromptMaxBodyLines, m.maxQuestionBodyHeightWithTranscriptReserve())
-	if maxBodyHeight < 1 {
-		return 1
+	// minimumQuestionPanelHeight already sized the panel to fit bodyHeight
+	// (assuming only chatMinViewportHeight rows for the transcript); never
+	// shrink below that just because the transcript reserve here is
+	// stricter — the panel has the room, the transcript gets less instead.
+	if maxBodyHeight < bodyHeight {
+		maxBodyHeight = bodyHeight
 	}
 	bodyHeight = max(bodyHeight, min(chatActivePromptPreferredBodyLines, maxBodyHeight))
 	if bodyHeight > maxBodyHeight {

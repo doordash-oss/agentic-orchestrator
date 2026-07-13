@@ -793,6 +793,33 @@ func TestChatModelSubmitQuestionAnswersAddsPromptAndAnswerToHistory(t *testing.T
 	}
 }
 
+func TestAPIChatModelSubmitQuestionAnswerSchedulesRecoveryTick(t *testing.T) {
+	client := &fakeTUIAPIClient{}
+	sess := newAPIChatSession(client, chatSessionID)
+	m := NewAPIChatModel(80, 20, client)
+	m.sess = sess
+	m.activateQuestions([]askUserQuestion{
+		{Question: testQuestionPickDirection, Options: []askUserOption{{Label: testOptionLabelAlpha}, {Label: testOptionLabelBeta}}},
+	}, testAskRequestID, nil)
+	m.selectedOption = 1
+	m.commitAnswer(testOptionLabelBeta)
+	m.advanceQuestionOpts(1, false)
+
+	cmd := m.submitAllQuestionAnswers()
+	if cmd == nil {
+		t.Fatal("submitAllQuestionAnswers() returned nil command, want API answer command")
+	}
+	msg := cmd()
+
+	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != testAskRequestID || got[0].SessionID != chatSessionID || got[0].Answers[testQuestionPickDirection] != testOptionLabelBeta {
+		t.Fatalf("AskUser answers = %+v, want chat question answer", got)
+	}
+	tick, ok := msg.(chatRecoveryTickMsg)
+	if !ok || tick.sess != sess {
+		t.Fatalf("question answer command returned %#v, want chatRecoveryTickMsg for chat session", msg)
+	}
+}
+
 func TestChatModelMultiSelectToggle(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{

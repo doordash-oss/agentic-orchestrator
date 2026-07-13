@@ -241,8 +241,8 @@ func pathWithinRoots(path string, roots []string) bool {
 // when h is one of the general accept-edits handlers permHandlerFor builds
 // (AutoApproveHandler, AcceptEditsHandler, or CachingHandler over one of
 // those — optionally already wrapped in a SizeGuardHandler via Guarded).
-// Any other handler shape — bounded helpers, plan/rewind/review-feedback
-// sessions, restricted read-only sessions — is returned unchanged, since those exist
+// Any other handler shape — bounded helpers, review-feedback sessions, and
+// restricted read-only sessions — is returned unchanged, since those exist
 // specifically to restrict writes below the general writable-root policy and
 // must not be loosened by this exception.
 func WrapGeneralPhaseHandlerWithSafeCreate(h ports.PermissionHandler, roots []string) ports.PermissionHandler {
@@ -264,54 +264,6 @@ func isGeneralPhaseHandler(h ports.PermissionHandler) bool {
 	default:
 		return false
 	}
-}
-
-// singlePathWriteDecision implements the shared shape behind PlanReviewHandler
-// and RewindReviewHandler: auto-approve read-only tools
-// and Agent spawning, auto-approve Edit/Write/NotebookEdit only for
-// allowedPath, deny with denyReason otherwise. Everything else (Bash, etc.) is
-// denied with fallbackReason, or deferred to the TUI when fallbackReason is
-// empty.
-func singlePathWriteDecision(req ports.ToolPermissionRequest, allowedPath, denyReason, fallbackReason string) ports.PermissionDecision {
-	if isReadOnlyTool(req.ToolName) {
-		return ports.PermissionDecision{Behavior: DecisionAllow}
-	}
-	switch req.ToolName {
-	// Agent spawning — auto-approve (subagents are sandboxed)
-	case "Agent":
-		return ports.PermissionDecision{Behavior: DecisionAllow}
-
-	// File modification tools — only auto-approve for the allowed path
-	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
-		if allowedPath != "" && toolInputContainsPath(req.Input, allowedPath) {
-			return ports.PermissionDecision{Behavior: DecisionAllow}
-		}
-		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: denyReason}
-	}
-
-	if fallbackReason != "" {
-		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: fallbackReason}
-	}
-	// Everything else (Bash, etc.) — defer to TUI
-	return ports.PermissionDecision{}
-}
-
-// PlanReviewHandler auto-approves read-only tools and file edits ONLY to the
-// specified plan file path. All other write operations are hard-denied.
-type PlanReviewHandler struct {
-	AllowedPath string // absolute path to the plan file that may be edited
-}
-
-// CanUseTool approves reads and edits to the plan file; defers everything else.
-func (h *PlanReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return singlePathWriteDecision(req, h.AllowedPath, "only the plan file may be modified during plan review", ""), nil
-}
-
-// toolInputContainsPath checks if the JSON-encoded tool input references the given file path.
-func toolInputContainsPath(input, allowedPath string) bool {
-	// The input is JSON with a "file_path" field for Edit/Write/NotebookEdit.
-	// Simple substring check is sufficient since paths are absolute.
-	return strings.Contains(input, allowedPath)
 }
 
 // ReadOnlyHandler auto-approves read-only tools and Agent spawning, but
@@ -539,18 +491,6 @@ func gitReadOnlySubcommandAllowed(fields []string) bool {
 	default:
 		return false
 	}
-}
-
-// RewindReviewHandler auto-approves read-only tools and file edits ONLY to the
-// specified artifact file path. All other write operations are hard-denied.
-// Used during rewind review sessions to let the user modify the previous phase's output.
-type RewindReviewHandler struct {
-	AllowedPath string // absolute path to the artifact file that may be edited
-}
-
-// CanUseTool approves reads and edits to the artifact file; defers everything else.
-func (h *RewindReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return singlePathWriteDecision(req, h.AllowedPath, "only the artifact file may be modified during rewind review", ""), nil
 }
 
 // DenyAllHandler denies all tool use requests.

@@ -402,6 +402,21 @@ func mutationRouteMethods(path string) ([]string, bool) {
 	switch parts[1] {
 	case actionStart, actionResume, "stop", "interrupt", actionRestart, "review-decision", routeSegmentConfig, "need-user-input", "need-user-input-draft", "input-notifications":
 		return []string{http.MethodPost}, true
+	case "reviews":
+		if len(parts) == 2 {
+			return []string{http.MethodPost}, true
+		}
+		if len(parts) == 3 && validEntityID(parts[2]) {
+			return []string{http.MethodDelete}, true
+		}
+		if len(parts) == 4 && validEntityID(parts[2]) {
+			switch parts[3] {
+			case "draft":
+				return []string{http.MethodPut}, true
+			case "decision":
+				return []string{http.MethodPost}, true
+			}
+		}
 	case "actions":
 		if len(parts) < 3 || len(parts) > 4 {
 			return nil, false

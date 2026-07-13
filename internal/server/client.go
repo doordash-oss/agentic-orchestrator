@@ -234,6 +234,36 @@ func (c *Client) ReviewDecision(ctx context.Context, featureID string, req Revie
 	return out, err
 }
 
+func (c *Client) CreateReviewSession(ctx context.Context, featureID string) (ReviewSessionResponse, error) {
+	var out ReviewSessionResponse
+	err := c.doJSON(ctx, http.MethodPost, reviewSessionRootPath(featureID), nil, map[string]any{}, &out, true)
+	return out, err
+}
+
+func (c *Client) ReviewSession(ctx context.Context, featureID, reviewID string) (ReviewSessionResponse, error) {
+	var out ReviewSessionResponse
+	err := c.getJSON(ctx, reviewSessionPath(featureID, reviewID), nil, &out)
+	return out, err
+}
+
+func (c *Client) SaveReviewDraft(ctx context.Context, featureID, reviewID string, req ReviewDraftUpdateRequest) (ReviewSessionResponse, error) {
+	var out ReviewSessionResponse
+	err := c.doJSON(ctx, http.MethodPut, reviewSessionPath(featureID, reviewID)+"/draft", nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) SubmitReviewSessionDecision(ctx context.Context, featureID, reviewID string, req ReviewSessionDecisionRequest) (ReviewSessionDecisionResponse, error) {
+	var out ReviewSessionDecisionResponse
+	err := c.doJSON(ctx, http.MethodPost, reviewSessionPath(featureID, reviewID)+"/decision", nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) CancelReviewSession(ctx context.Context, featureID, reviewID string) (ReviewSessionDecisionResponse, error) {
+	var out ReviewSessionDecisionResponse
+	err := c.doJSON(ctx, http.MethodDelete, reviewSessionPath(featureID, reviewID), nil, map[string]any{}, &out, true)
+	return out, err
+}
+
 func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error) {
 	var out FeatureConfigUpdateResponse
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/config", nil, req, &out, true)
@@ -482,6 +512,14 @@ func textValues(query TextQuery) url.Values {
 
 func runContentPath(featureID string, runNumber int, kind string) string {
 	return "/api/v1/features/" + pathSegment(featureID) + "/runs/" + strconv.Itoa(runNumber) + "/" + kind
+}
+
+func reviewSessionRootPath(featureID string) string {
+	return "/api/v1/features/" + pathSegment(featureID) + "/reviews"
+}
+
+func reviewSessionPath(featureID, reviewID string) string {
+	return reviewSessionRootPath(featureID) + "/" + pathSegment(reviewID)
 }
 
 func featureActionPath(featureID, action string) string {

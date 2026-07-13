@@ -83,6 +83,11 @@ type APIClient interface {
 	DraftNeedUserInputAnswers(context.Context, string, server.NeedUserInputDraftRequest) (server.NeedUserInputDraftResponse, error)
 	ToggleInputNotifications(context.Context, string) (server.InputNotificationsToggleResponse, error)
 	ReviewDecision(context.Context, string, server.ReviewDecisionRequest) (server.ReviewDecisionResponse, error)
+	CreateReviewSession(context.Context, string) (server.ReviewSessionResponse, error)
+	ReviewSession(context.Context, string, string) (server.ReviewSessionResponse, error)
+	SaveReviewDraft(context.Context, string, string, server.ReviewDraftUpdateRequest) (server.ReviewSessionResponse, error)
+	SubmitReviewSessionDecision(context.Context, string, string, server.ReviewSessionDecisionRequest) (server.ReviewSessionDecisionResponse, error)
+	CancelReviewSession(context.Context, string, string) (server.ReviewSessionDecisionResponse, error)
 	FetchReviewComments(context.Context, string, server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error)
 	StartReviewComments(context.Context, string, server.ReviewCommentsActionRequest) (server.ReviewCommentsStartResponse, error)
 	StartTweak(context.Context, string, server.TweakActionRequest) (server.TweakStartResponse, error)
@@ -273,9 +278,8 @@ const (
 )
 
 // artifactIDDescriptionReview, artifactIDPrompt and artifactIDRoadmap are
-// reviewArtifactIDs()/apiPublishPlanText() artifact IDs that have no
-// corresponding feature.Phase (unlike the phase-named artifacts, which reuse
-// feature.PhaseX.DirName()).
+// artifact IDs that have no corresponding feature.Phase (unlike the
+// phase-named artifacts, which reuse feature.PhaseX.DirName()).
 const (
 	artifactIDDescriptionReview = "description-review"
 	artifactIDPrompt            = "prompt"
@@ -591,10 +595,16 @@ type apiFeatureDetailMsg struct {
 	err         error
 }
 
-type apiReviewArtifactMsg struct {
+type apiReviewSessionMsg struct {
 	featureID string
-	detail    server.FeatureDetailResponse
-	artifact  server.ArtifactDTO
+	session   server.ReviewSessionResponse
+	err       error
+}
+
+type apiReviewDraftSavedMsg struct {
+	featureID string
+	reviewID  string
+	session   server.ReviewSessionResponse
 	err       error
 }
 
@@ -1026,20 +1036,27 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rebuildPresentation(msg.featureID)
 		return m, nil
-	case apiReviewArtifactMsg:
+	case apiReviewSessionMsg:
 		if msg.featureID != "" && msg.featureID != m.selectedFeature {
 			return m, nil
 		}
 		if msg.err != nil {
-			m.statusMessage = "Review artifact load failed: " + firstLine(msg.err.Error())
+			m.statusMessage = "Review session failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
-		m.storeFeatureDetail(msg.detail)
-		summary := apiFeatureDetailSummary(msg.detail.Feature)
-		m.upsertFeatureSummary(summary)
-		f := m.apiDashboardFeature(summary, msg.detail.Feature, true)
-		m.rebuildPresentation(msg.featureID)
-		return m.openAPIReviewModel(f, msg.artifact)
+		return m.openAPIReviewSessionModel(msg.session)
+	case apiReviewDraftSavedMsg:
+		if msg.err != nil {
+			m.statusMessage = "Review draft save failed: " + firstLine(msg.err.Error())
+			return m, nil
+		}
+		if m.artifactReview != nil &&
+			m.artifactReview.FeatureID() == msg.featureID &&
+			m.artifactReview.ReviewID() == msg.reviewID {
+			m.artifactReview.MarkDraftSaved(msg.session)
+		}
+		m.statusMessage = "Review draft saved"
+		return m, nil
 	case apiFeatureConfigMsg:
 		if msg.err != nil {
 			m.statusMessage = "Config load failed: " + firstLine(msg.err.Error())
@@ -1188,6 +1205,10 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMessage = fmt.Sprintf("Completed %s", apiMutationKindLabel(msg.kind))
 		m.rebuildPresentation(m.selectedFeature)
 		return m, nil
+	case ArtifactReviewDraftSaveMsg:
+		return m, m.saveReviewDraftCmd(msg)
+	case ArtifactReviewSessionDecisionMsg:
+		return m, m.reviewSessionDecisionCmd(msg)
 	case PlanReviewDecisionMsg:
 		return m, m.reviewDecisionCmd(msg.FeatureID, m.planReviewDecisionRequest(msg.FeatureID, msg.Decision))
 	case RoadmapReviewDecisionMsg:
@@ -1609,12 +1630,7 @@ func apiArtifactReviewOwnsMsg(msg tea.Msg) bool {
 	switch msg.(type) {
 	case tea.KeyPressMsg,
 		tea.WindowSizeMsg,
-		tea.PasteMsg,
-		artifactReviewSessionStartedMsg,
-		artifactReviewMsgsMsg,
-		artifactReviewDoneMsg,
-		artifactReviewStartErrorMsg,
-		artifactReviewSendErrorMsg:
+		tea.PasteMsg:
 		return true
 	default:
 		return false
@@ -1626,27 +1642,11 @@ func (m APIAppModel) updateAPIArtifactReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-	case artifactReviewSessionStartedMsg:
-		if m.artifactReview != nil && msg.sess != nil &&
-			msg.generation == m.artifactReview.sessionGeneration &&
-			!m.artifactReview.sessionStarted {
-			updated, cmd := m.artifactReview.handleSessionStarted(msg.sess)
-			m.artifactReview = &updated
-			return m, cmd
-		}
-		if msg.sess != nil {
-			_ = msg.sess.Stop()
-		}
-		return m, nil
 	}
 
 	updated, cmd := m.artifactReview.Update(msg)
 	m.artifactReview = &updated
-	if updated.Detached() {
-		if updated.Decided() {
-			updated.StopSession()
-			m.artifactReview = &updated
-		}
+	if updated.Detached() || updated.Decided() {
 		return m, cmd
 	}
 	return m, cmd
@@ -5439,24 +5439,15 @@ func (m APIAppModel) openAPIReviewAttention(f *feature.Feature) (tea.Model, tea.
 		}
 		m.artifactReview = nil
 	}
-	artifact, ok, reason := m.reviewArtifactForFeature(f)
-	if !ok {
-		m.statusMessage = statusMsgLoadingReviewArtifact
-		if reason != "" && reason != statusMsgReviewArtifactLoading {
-			m.statusMessage = reason
-		}
-		return m, m.fetchReviewArtifactCmd(f.ID)
-	}
-	return m.openAPIReviewModel(f, artifact)
+	m.statusMessage = statusMsgLoadingReviewArtifact
+	return m, m.createReviewSessionCmd(f.ID)
 }
 
-func (m APIAppModel) openAPIReviewModel(f *feature.Feature, artifact server.ArtifactDTO) (tea.Model, tea.Cmd) {
-	if f == nil {
+func (m APIAppModel) openAPIReviewSessionModel(session server.ReviewSessionResponse) (tea.Model, tea.Cmd) {
+	if session.FeatureID == "" || session.ReviewID == "" {
 		return m, nil
 	}
-	reviewMode, rewindPhase := apiReviewTarget(f)
-	model := NewArtifactReviewModel(artifact.Path, f.ID, reviewMode, rewindPhase, m.width, m.height, nil, "", nil)
-	model.utilityModel = m.apiUtilityModelForFeature(f.ID)
+	model := NewArtifactReviewModel(session, apiReviewSessionPhase(session.TargetPhase), m.width, m.height)
 	m.artifactReview = &model
 	m.statusMessage = ""
 	return m, model.editor.Focus()
@@ -5486,94 +5477,21 @@ func apiReviewTarget(f *feature.Feature) (string, feature.Phase) {
 	return reviewMode, rewindPhase
 }
 
-func (m APIAppModel) reviewArtifactForFeature(f *feature.Feature) (server.ArtifactDTO, bool, string) {
-	content, ok := m.selectedContentSnapshot()
-	if !ok || len(content.Artifacts.Artifacts) == 0 {
-		return server.ArtifactDTO{}, false, statusMsgReviewArtifactLoading
-	}
-	return selectReviewArtifact(f, content.Artifacts)
-}
-
-func selectReviewArtifact(f *feature.Feature, resp server.ArtifactListResponse) (server.ArtifactDTO, bool, string) {
-	if len(resp.Artifacts) == 0 {
-		return server.ArtifactDTO{}, false, "Review artifact is unavailable"
-	}
-	preferred := reviewArtifactIDs(f)
-	artifacts := availableTextArtifacts(resp)
-	for _, id := range preferred {
-		for _, artifact := range artifacts {
-			if artifact.ID == id && strings.TrimSpace(artifact.Path) != "" {
-				return artifact, true, ""
-			}
-		}
-	}
-	if reviewRequiresPreferredArtifact(f) {
-		return server.ArtifactDTO{}, false, statusMsgReviewArtifactLoading
-	}
-	for _, artifact := range artifacts {
-		if strings.TrimSpace(artifact.Path) != "" {
-			return artifact, true, ""
-		}
-	}
-	return server.ArtifactDTO{}, false, "Review artifact path is unavailable"
-}
-
-func reviewRequiresPreferredArtifact(f *feature.Feature) bool {
-	return f != nil && f.Status.IsNeedsReview() && len(reviewArtifactIDs(f)) > 0
-}
-
-func reviewArtifactIDs(f *feature.Feature) []string {
-	if f == nil {
-		return nil
-	}
-	if f.IsRewind && f.PendingReviewPhase != nil {
-		switch *f.PendingReviewPhase {
-		case feature.PhaseInquire:
-			return []string{artifactIDDescriptionReview, artifactIDPrompt}
-		case feature.PhasePlan:
-			if f.EffectivePipeline() == feature.PipelineMedium {
-				return []string{artifactIDDescriptionReview, artifactIDPrompt}
-			}
-			return []string{feature.PhaseDesign.DirName(), feature.PhaseResearch.DirName()}
-		case feature.PhaseResearch:
-			return []string{feature.PhaseInquire.DirName()}
-		case feature.PhaseDesign:
-			return []string{feature.PhaseResearch.DirName()}
-		case feature.PhaseImplement:
-			if f.PendingRewindReviewRoadmapPhase != nil && *f.PendingRewindReviewRoadmapPhase > 0 {
-				return []string{fmt.Sprintf("phase-%d-plan", *f.PendingRewindReviewRoadmapPhase), feature.PhasePlan.DirName()}
-			}
-			return []string{feature.PhasePlan.DirName(), artifactIDRoadmap}
-		}
-	}
-	switch f.Status {
-	case feature.StatusPlanNeedsReview:
-		ids := make([]string, 0, 3)
-		switch {
-		case f.CurrentRoadmapPhase == 0:
-			ids = append(ids, artifactIDRoadmap)
-		case f.CurrentRoadmapPhase > 0:
-			ids = append(ids, fmt.Sprintf("phase-%d-plan", f.CurrentRoadmapPhase))
-		}
-		return append(ids, feature.PhasePlan.DirName())
-	case feature.StatusInquiryNeedsReview:
-		return []string{feature.PhaseInquire.DirName()}
-	case feature.StatusResearchNeedsReview:
-		return []string{feature.PhaseResearch.DirName()}
-	case feature.StatusDesignNeedsReview:
-		return []string{feature.PhaseDesign.DirName()}
-	case feature.StatusPromptNeedsReview:
-		return []string{artifactIDPrompt}
+func apiReviewSessionPhase(phase string) feature.Phase {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case feature.PhaseInquire.DirName():
+		return feature.PhaseInquire
+	case feature.PhaseResearch.DirName():
+		return feature.PhaseResearch
+	case feature.PhaseDesign.DirName():
+		return feature.PhaseDesign
+	case feature.PhasePlan.DirName():
+		return feature.PhasePlan
+	case feature.PhaseImplement.DirName():
+		return feature.PhaseImplement
 	default:
-		return []string{feature.PhasePlan.DirName(), artifactIDRoadmap}
+		return feature.PhasePlan
 	}
-}
-
-func (m APIAppModel) apiUtilityModelForFeature(featureID string) string {
-	if detail, ok := m.featureDetails[featureID]; ok && strings.TrimSpace(detail.Feature.Models.Utilities) != "" {
-		return detail.Feature.Models.Utilities
-	}
-	return m.runtimeConfig.Defaults.Utilities
 }
 
 func (m APIAppModel) showAPIOverview() APIAppModel {
@@ -7040,30 +6958,11 @@ func (m APIAppModel) fetchFeatureDetailCmd(featureID string) tea.Cmd {
 	}
 }
 
-func (m APIAppModel) fetchReviewArtifactCmd(featureID string) tea.Cmd {
+func (m APIAppModel) createReviewSessionCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := m.apiCtx()
-		detail, err := m.client.FeatureDetail(ctx, featureID)
-		if err != nil {
-			return apiReviewArtifactMsg{featureID: featureID, err: err}
-		}
-		runNumber := apiActiveRunNumber(detail.Feature)
-		if runNumber <= 0 {
-			return apiReviewArtifactMsg{featureID: featureID, err: fmt.Errorf("active run is unavailable")}
-		}
-		artifacts, err := m.client.ArtifactList(ctx, featureID, runNumber)
-		if err != nil {
-			return apiReviewArtifactMsg{featureID: featureID, err: err}
-		}
-		f := m.apiDashboardFeature(apiFeatureDetailSummary(detail.Feature), detail.Feature, true)
-		artifact, ok, reason := selectReviewArtifact(f, artifacts)
-		if !ok {
-			if reason == "" {
-				reason = "Review artifact is unavailable"
-			}
-			return apiReviewArtifactMsg{featureID: featureID, err: errors.New(reason)}
-		}
-		return apiReviewArtifactMsg{featureID: featureID, detail: detail, artifact: artifact}
+		session, err := m.client.CreateReviewSession(ctx, featureID)
+		return apiReviewSessionMsg{featureID: featureID, session: session, err: err}
 	}
 }
 
@@ -8024,6 +7923,43 @@ func (m APIAppModel) reviewDecisionCmd(featureID string, req server.ReviewDecisi
 		return apiMutationResultMsg{
 			kind:      "feature.review_decision",
 			featureID: featureID,
+			err:       err,
+		}
+	}
+}
+
+func (m APIAppModel) saveReviewDraftCmd(msg ArtifactReviewDraftSaveMsg) tea.Cmd {
+	return func() tea.Msg {
+		ctx := m.apiCtx()
+		session, err := m.client.SaveReviewDraft(ctx, msg.FeatureID, msg.ReviewID, server.ReviewDraftUpdateRequest{
+			BaseRevision: msg.BaseRevision,
+			Text:         msg.Text,
+		})
+		return apiReviewDraftSavedMsg{
+			featureID: msg.FeatureID,
+			reviewID:  msg.ReviewID,
+			session:   session,
+			err:       err,
+		}
+	}
+}
+
+func (m APIAppModel) reviewSessionDecisionCmd(msg ArtifactReviewSessionDecisionMsg) tea.Cmd {
+	return func() tea.Msg {
+		ctx := m.apiCtx()
+		session, err := m.client.SaveReviewDraft(ctx, msg.FeatureID, msg.ReviewID, server.ReviewDraftUpdateRequest{
+			BaseRevision: msg.BaseRevision,
+			Text:         msg.Text,
+		})
+		if err == nil {
+			_, err = m.client.SubmitReviewSessionDecision(ctx, msg.FeatureID, msg.ReviewID, server.ReviewSessionDecisionRequest{
+				Decision:     msg.Decision,
+				BaseRevision: session.DraftRevision,
+			})
+		}
+		return apiMutationResultMsg{
+			kind:      "feature.review_decision",
+			featureID: msg.FeatureID,
 			err:       err,
 		}
 	}

@@ -480,6 +480,66 @@ func (e SubmitReviewDecisionLegacyParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for CreateReviewSessionParamsXAgenticoClient.
+const (
+	CreateReviewSessionParamsXAgenticoClientLocal CreateReviewSessionParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CreateReviewSessionParamsXAgenticoClient enum.
+func (e CreateReviewSessionParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CreateReviewSessionParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CancelReviewSessionParamsXAgenticoClient.
+const (
+	CancelReviewSessionParamsXAgenticoClientLocal CancelReviewSessionParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CancelReviewSessionParamsXAgenticoClient enum.
+func (e CancelReviewSessionParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CancelReviewSessionParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SubmitReviewSessionDecisionParamsXAgenticoClient.
+const (
+	SubmitReviewSessionDecisionParamsXAgenticoClientLocal SubmitReviewSessionDecisionParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the SubmitReviewSessionDecisionParamsXAgenticoClient enum.
+func (e SubmitReviewSessionDecisionParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case SubmitReviewSessionDecisionParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SaveReviewDraftParamsXAgenticoClient.
+const (
+	SaveReviewDraftParamsXAgenticoClientLocal SaveReviewDraftParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the SaveReviewDraftParamsXAgenticoClient enum.
+func (e SaveReviewDraftParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case SaveReviewDraftParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for StartFeatureLegacyParamsXAgenticoClient.
 const (
 	StartFeatureLegacyParamsXAgenticoClientLocal StartFeatureLegacyParamsXAgenticoClient = "local"
@@ -1386,12 +1446,52 @@ type ReviewDecisionResponse struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
+// ReviewDraftUpdateRequest defines model for ReviewDraftUpdateRequest.
+type ReviewDraftUpdateRequest struct {
+	BaseRevision string `json:"base_revision"`
+	Text         string `json:"text"`
+}
+
 // ReviewGate defines model for ReviewGate.
 type ReviewGate struct {
 	ReviewFixing      bool              `json:"review_fixing"`
 	ReviewingGate     bool              `json:"reviewing_gate"`
 	ValidatingPlan    bool              `json:"validating_plan"`
 	ValidatorStatuses map[string]string `json:"validator_statuses,omitempty"`
+}
+
+// ReviewSessionDecisionRequest defines model for ReviewSessionDecisionRequest.
+type ReviewSessionDecisionRequest struct {
+	BaseRevision string `json:"base_revision"`
+	Decision     string `json:"decision"`
+}
+
+// ReviewSessionDecisionResponse defines model for ReviewSessionDecisionResponse.
+type ReviewSessionDecisionResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Decision             string                 `json:"decision,omitempty"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	ReviewID             string                 `json:"review_id"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ReviewSessionResponse defines model for ReviewSessionResponse.
+type ReviewSessionResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	ArtifactID           string                 `json:"artifact_id"`
+	CanIterate           bool                   `json:"can_iterate"`
+	DraftRevision        string                 `json:"draft_revision"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	ReviewID             string                 `json:"review_id"`
+	ReviewMode           string                 `json:"review_mode"`
+	RunNumber            int                    `json:"run_number"`
+	SourceRevision       string                 `json:"source_revision"`
+	TargetPhase          string                 `json:"target_phase"`
+	Text                 string                 `json:"text"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // RewindFeatureResponse defines model for RewindFeatureResponse.
@@ -1739,6 +1839,9 @@ type LogID = string
 // Offset defines model for Offset.
 type Offset = int64
 
+// ReviewID defines model for ReviewID.
+type ReviewID = string
+
 // RunNumber defines model for RunNumber.
 type RunNumber = int
 
@@ -1932,6 +2035,48 @@ type SubmitReviewDecisionLegacyParams struct {
 // SubmitReviewDecisionLegacyParamsXAgenticoClient defines parameters for SubmitReviewDecisionLegacy.
 type SubmitReviewDecisionLegacyParamsXAgenticoClient string
 
+// CreateReviewSessionJSONBody defines parameters for CreateReviewSession.
+type CreateReviewSessionJSONBody map[string]interface{}
+
+// CreateReviewSessionParams defines parameters for CreateReviewSession.
+type CreateReviewSessionParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CreateReviewSessionParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CreateReviewSessionParamsXAgenticoClient defines parameters for CreateReviewSession.
+type CreateReviewSessionParamsXAgenticoClient string
+
+// CancelReviewSessionJSONBody defines parameters for CancelReviewSession.
+type CancelReviewSessionJSONBody map[string]interface{}
+
+// CancelReviewSessionParams defines parameters for CancelReviewSession.
+type CancelReviewSessionParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CancelReviewSessionParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CancelReviewSessionParamsXAgenticoClient defines parameters for CancelReviewSession.
+type CancelReviewSessionParamsXAgenticoClient string
+
+// SubmitReviewSessionDecisionParams defines parameters for SubmitReviewSessionDecision.
+type SubmitReviewSessionDecisionParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient SubmitReviewSessionDecisionParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// SubmitReviewSessionDecisionParamsXAgenticoClient defines parameters for SubmitReviewSessionDecision.
+type SubmitReviewSessionDecisionParamsXAgenticoClient string
+
+// SaveReviewDraftParams defines parameters for SaveReviewDraft.
+type SaveReviewDraftParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient SaveReviewDraftParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// SaveReviewDraftParamsXAgenticoClient defines parameters for SaveReviewDraft.
+type SaveReviewDraftParamsXAgenticoClient string
+
 // GetArtifactContentParams defines parameters for GetArtifactContent.
 type GetArtifactContentParams struct {
 	Offset Offset `form:"offset,omitempty" json:"offset,omitempty"`
@@ -2098,6 +2243,18 @@ type ResumeFeatureLegacyJSONRequestBody ResumeFeatureLegacyJSONBody
 
 // SubmitReviewDecisionLegacyJSONRequestBody defines body for SubmitReviewDecisionLegacy for application/json ContentType.
 type SubmitReviewDecisionLegacyJSONRequestBody SubmitReviewDecisionLegacyJSONBody
+
+// CreateReviewSessionJSONRequestBody defines body for CreateReviewSession for application/json ContentType.
+type CreateReviewSessionJSONRequestBody CreateReviewSessionJSONBody
+
+// CancelReviewSessionJSONRequestBody defines body for CancelReviewSession for application/json ContentType.
+type CancelReviewSessionJSONRequestBody CancelReviewSessionJSONBody
+
+// SubmitReviewSessionDecisionJSONRequestBody defines body for SubmitReviewSessionDecision for application/json ContentType.
+type SubmitReviewSessionDecisionJSONRequestBody = ReviewSessionDecisionRequest
+
+// SaveReviewDraftJSONRequestBody defines body for SaveReviewDraft for application/json ContentType.
+type SaveReviewDraftJSONRequestBody = ReviewDraftUpdateRequest
 
 // StartFeatureLegacyJSONRequestBody defines body for StartFeatureLegacy for application/json ContentType.
 type StartFeatureLegacyJSONRequestBody StartFeatureLegacyJSONBody
@@ -6941,6 +7098,346 @@ func (a ReviewDecisionResponse) MarshalJSON() ([]byte, error) {
 	object["result"], err = json.Marshal(a.Result)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ReviewSessionDecisionResponse. Returns the specified
+// element and whether it was found
+func (a ReviewSessionDecisionResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ReviewSessionDecisionResponse
+func (a *ReviewSessionDecisionResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ReviewSessionDecisionResponse to handle AdditionalProperties
+func (a *ReviewSessionDecisionResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["decision"]; found {
+		err = json.Unmarshal(raw, &a.Decision)
+		if err != nil {
+			return fmt.Errorf("error reading 'decision': %w", err)
+		}
+		delete(object, "decision")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["review_id"]; found {
+		err = json.Unmarshal(raw, &a.ReviewID)
+		if err != nil {
+			return fmt.Errorf("error reading 'review_id': %w", err)
+		}
+		delete(object, "review_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ReviewSessionDecisionResponse to handle AdditionalProperties
+func (a ReviewSessionDecisionResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["decision"], err = json.Marshal(a.Decision)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'decision': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["review_id"], err = json.Marshal(a.ReviewID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'review_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ReviewSessionResponse. Returns the specified
+// element and whether it was found
+func (a ReviewSessionResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ReviewSessionResponse
+func (a *ReviewSessionResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ReviewSessionResponse to handle AdditionalProperties
+func (a *ReviewSessionResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["artifact_id"]; found {
+		err = json.Unmarshal(raw, &a.ArtifactID)
+		if err != nil {
+			return fmt.Errorf("error reading 'artifact_id': %w", err)
+		}
+		delete(object, "artifact_id")
+	}
+
+	if raw, found := object["can_iterate"]; found {
+		err = json.Unmarshal(raw, &a.CanIterate)
+		if err != nil {
+			return fmt.Errorf("error reading 'can_iterate': %w", err)
+		}
+		delete(object, "can_iterate")
+	}
+
+	if raw, found := object["draft_revision"]; found {
+		err = json.Unmarshal(raw, &a.DraftRevision)
+		if err != nil {
+			return fmt.Errorf("error reading 'draft_revision': %w", err)
+		}
+		delete(object, "draft_revision")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["review_id"]; found {
+		err = json.Unmarshal(raw, &a.ReviewID)
+		if err != nil {
+			return fmt.Errorf("error reading 'review_id': %w", err)
+		}
+		delete(object, "review_id")
+	}
+
+	if raw, found := object["review_mode"]; found {
+		err = json.Unmarshal(raw, &a.ReviewMode)
+		if err != nil {
+			return fmt.Errorf("error reading 'review_mode': %w", err)
+		}
+		delete(object, "review_mode")
+	}
+
+	if raw, found := object["run_number"]; found {
+		err = json.Unmarshal(raw, &a.RunNumber)
+		if err != nil {
+			return fmt.Errorf("error reading 'run_number': %w", err)
+		}
+		delete(object, "run_number")
+	}
+
+	if raw, found := object["source_revision"]; found {
+		err = json.Unmarshal(raw, &a.SourceRevision)
+		if err != nil {
+			return fmt.Errorf("error reading 'source_revision': %w", err)
+		}
+		delete(object, "source_revision")
+	}
+
+	if raw, found := object["target_phase"]; found {
+		err = json.Unmarshal(raw, &a.TargetPhase)
+		if err != nil {
+			return fmt.Errorf("error reading 'target_phase': %w", err)
+		}
+		delete(object, "target_phase")
+	}
+
+	if raw, found := object["text"]; found {
+		err = json.Unmarshal(raw, &a.Text)
+		if err != nil {
+			return fmt.Errorf("error reading 'text': %w", err)
+		}
+		delete(object, "text")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ReviewSessionResponse to handle AdditionalProperties
+func (a ReviewSessionResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["artifact_id"], err = json.Marshal(a.ArtifactID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'artifact_id': %w", err)
+	}
+
+	object["can_iterate"], err = json.Marshal(a.CanIterate)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'can_iterate': %w", err)
+	}
+
+	object["draft_revision"], err = json.Marshal(a.DraftRevision)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'draft_revision': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["review_id"], err = json.Marshal(a.ReviewID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'review_id': %w", err)
+	}
+
+	object["review_mode"], err = json.Marshal(a.ReviewMode)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'review_mode': %w", err)
+	}
+
+	object["run_number"], err = json.Marshal(a.RunNumber)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'run_number': %w", err)
+	}
+
+	object["source_revision"], err = json.Marshal(a.SourceRevision)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'source_revision': %w", err)
+	}
+
+	object["target_phase"], err = json.Marshal(a.TargetPhase)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'target_phase': %w", err)
+	}
+
+	object["text"], err = json.Marshal(a.Text)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'text': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {

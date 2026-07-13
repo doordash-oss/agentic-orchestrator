@@ -198,6 +198,98 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/features/{feature_id}/reviews:
+    post:
+      operationId: createReviewSession
+      summary: Create or reopen the active artifact review draft session.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/features/{feature_id}/reviews/{review_id}:
+    get:
+      operationId: getReviewSession
+      summary: Read one artifact review draft session.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/ReviewID"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      operationId: cancelReviewSession
+      summary: Cancel an artifact review draft session without committing it.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/ReviewID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewSessionDecisionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/features/{feature_id}/reviews/{review_id}/draft:
+    put:
+      operationId: saveReviewDraft
+      summary: Replace the draft text for one artifact review session.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/ReviewID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewDraftUpdateRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/features/{feature_id}/reviews/{review_id}/decision:
+    post:
+      operationId: submitReviewSessionDecision
+      summary: Commit a review draft and submit its review decision.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/ReviewID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewSessionDecisionRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewSessionDecisionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/features/{feature_id}/need-user-input:
     post:
       operationId: answerNeedUserInputLegacy
@@ -657,6 +749,12 @@ components:
       required: true
       schema:
         type: string
+    ReviewID:
+      name: review_id
+      in: path
+      required: true
+      schema:
+        type: string
     LogID:
       name: log_id
       in: path
@@ -816,6 +914,18 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/TextContentResponse"
+    ReviewSessionResponse:
+      description: Artifact review draft session.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ReviewSessionResponse"
+    ReviewSessionDecisionResponse:
+      description: Artifact review draft decision result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ReviewSessionDecisionResponse"
     LivePreviewResponse:
       description: Live preview.
       content:
@@ -1255,6 +1365,72 @@ components:
               type: string
             truncated:
               type: boolean
+    ReviewSessionResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required:
+            - feature_id
+            - review_id
+            - review_mode
+            - target_phase
+            - run_number
+            - artifact_id
+            - text
+            - draft_revision
+            - source_revision
+            - can_iterate
+          properties:
+            feature_id:
+              type: string
+            review_id:
+              type: string
+            review_mode:
+              type: string
+            target_phase:
+              type: string
+            run_number:
+              type: integer
+            artifact_id:
+              type: string
+            text:
+              type: string
+            draft_revision:
+              type: string
+            source_revision:
+              type: string
+            can_iterate:
+              type: boolean
+    ReviewDraftUpdateRequest:
+      type: object
+      required: [base_revision, text]
+      properties:
+        base_revision:
+          type: string
+        text:
+          type: string
+    ReviewSessionDecisionRequest:
+      type: object
+      required: [decision, base_revision]
+      properties:
+        decision:
+          type: string
+        base_revision:
+          type: string
+    ReviewSessionDecisionResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [feature_id, review_id, result]
+          properties:
+            feature_id:
+              type: string
+            review_id:
+              type: string
+            decision:
+              type: string
+            result:
+              type: string
     LivePreviewResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

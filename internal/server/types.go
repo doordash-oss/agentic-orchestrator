@@ -256,6 +256,14 @@ type FeatureRestartResponse = serverapi.FeatureRestartResponse
 
 type ReviewDecisionResponse = serverapi.ReviewDecisionResponse
 
+type ReviewSessionResponse = serverapi.ReviewSessionResponse
+
+type ReviewDraftUpdateRequest = serverapi.ReviewDraftUpdateRequest
+
+type ReviewSessionDecisionRequest = serverapi.ReviewSessionDecisionRequest
+
+type ReviewSessionDecisionResponse = serverapi.ReviewSessionDecisionResponse
+
 type FeatureConfigUpdateResponse = serverapi.FeatureConfigUpdateResponse
 
 type NeedUserInputDecisionResponse = serverapi.NeedUserInputDecisionResponse

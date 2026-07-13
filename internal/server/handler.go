@@ -227,6 +227,10 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	featureID := parts[0]
+	if len(parts) > 1 && parts[1] == "reviews" {
+		h.handleReviewSessionRoute(w, r, featureID, parts[2:])
+		return
+	}
 	if h.handleFeatureMutationRoute(w, r, featureID, parts[1:]) {
 		return
 	}

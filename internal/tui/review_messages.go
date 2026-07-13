@@ -43,3 +43,18 @@ type GateReviewDecisionMsg struct {
 	Phase     feature.Phase
 	Decision  string
 }
+
+type ArtifactReviewDraftSaveMsg struct {
+	FeatureID    string
+	ReviewID     string
+	BaseRevision string
+	Text         string
+}
+
+type ArtifactReviewSessionDecisionMsg struct {
+	FeatureID    string
+	ReviewID     string
+	Decision     string
+	BaseRevision string
+	Text         string
+}

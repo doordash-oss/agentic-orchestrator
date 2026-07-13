@@ -6062,16 +6062,13 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 		buildClient    func(t *testing.T, tmp string) (*fakeTUIAPIClient, string)
 		wantReviewHint string
 		wantReviewMode string
+		wantArtifactID string
 		extraDownKey   bool
-		wantReq        server.ReviewDecisionRequest
+		wantDecision   string
 	}{
 		{
 			name: "small pipeline plan roadmap review",
 			buildClient: func(t *testing.T, tmp string) (*fakeTUIAPIClient, string) {
-				roadmapPath := filepath.Join(tmp, "roadmap.md")
-				if err := os.WriteFile(roadmapPath, []byte("# Roadmap\n\nTranslate README.\n"), 0o644); err != nil {
-					t.Fatalf("write roadmap: %v", err)
-				}
 				client := &fakeTUIAPIClient{
 					features: server.FeatureListResponse{Features: []server.FeatureSummary{
 						{
@@ -6110,24 +6107,30 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 						},
 						Models: config.ModelConfig{Utilities: testUtilityModelID},
 					})},
-					artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-						{ID: testPipelineRoadmap, RunNumber: 1, Phase: testArtifactIDPlan, Path: roadmapPath, Size: 28, ContentAvailable: true},
-					}},
+					reviewSession: server.ReviewSessionResponse{
+						FeatureID:      testFeatureIDActive,
+						ReviewID:       "review-roadmap",
+						ReviewMode:     testArtifactIDPlan,
+						TargetPhase:    feature.PhaseImplement.DirName(),
+						RunNumber:      1,
+						ArtifactID:     testPipelineRoadmap,
+						Text:           "# Roadmap\n\nTranslate README.\n",
+						DraftRevision:  "rev-1",
+						SourceRevision: "source-rev-1",
+						CanIterate:     true,
+					},
 				}
-				return client, roadmapPath
+				return client, testPipelineRoadmap
 			},
 			wantReviewHint: "Roadmap needs review",
 			wantReviewMode: testArtifactIDPlan,
+			wantArtifactID: testPipelineRoadmap,
 			extraDownKey:   true,
-			wantReq:        server.ReviewDecisionRequest{Decision: reviewDecisionProceed, Roadmap: true},
+			wantDecision:   reviewDecisionProceed,
 		},
 		{
 			name: "medium pipeline rewind description review",
 			buildClient: func(t *testing.T, tmp string) (*fakeTUIAPIClient, string) {
-				descPath := filepath.Join(tmp, "description-review.md")
-				if err := os.WriteFile(descPath, []byte("translate readme in Sicilian"), 0o644); err != nil {
-					t.Fatalf("write description review: %v", err)
-				}
 				client := &fakeTUIAPIClient{
 					features: server.FeatureListResponse{Features: []server.FeatureSummary{
 						{
@@ -6161,36 +6164,52 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 						},
 						Models: config.ModelConfig{Utilities: testUtilityModelID},
 					})},
-					artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-						{ID: testPipelineRoadmap, RunNumber: 2, Phase: testArtifactIDPlan, Path: filepath.Join(tmp, "roadmap.md"), Size: 1, ContentAvailable: true},
-						{ID: artifactIDDescriptionReview, RunNumber: 2, Phase: testArtifactPhaseDescription, Path: descPath, Size: 27, ContentAvailable: true},
-					}},
+					reviewSession: server.ReviewSessionResponse{
+						FeatureID:      testFeatureIDActive,
+						ReviewID:       "review-description",
+						ReviewMode:     reviewModeRewind,
+						TargetPhase:    feature.PhasePlan.DirName(),
+						RunNumber:      2,
+						ArtifactID:     artifactIDDescriptionReview,
+						Text:           "translate readme in Sicilian",
+						DraftRevision:  "rev-1",
+						SourceRevision: "source-rev-1",
+						CanIterate:     false,
+					},
 					reviewAccepted: apiTestActionResponse{},
 				}
-				return client, descPath
+				return client, artifactIDDescriptionReview
 			},
 			wantReviewHint: "Rewind to Plan needs review",
 			wantReviewMode: reviewModeRewind,
+			wantArtifactID: artifactIDDescriptionReview,
 			extraDownKey:   false,
-			wantReq:        server.ReviewDecisionRequest{Decision: reviewDecisionProceed, Phase: testArtifactIDPlan, IsRewind: true},
+			wantDecision:   reviewDecisionProceed,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmp := t.TempDir()
-			client, wantPath := tt.buildClient(t, tmp)
+			client, _ := tt.buildClient(t, tmp)
 			app := newTestAPIAppModel(t, client)
 
 			if view := stripANSI(app.View().Content); !strings.Contains(view, tt.wantReviewHint) {
 				t.Fatalf("API app View() missing review hint before action:\n%s", view)
 			}
 
-			model, _ := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+			model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+			if cmd == nil {
+				t.Fatal("pressing a returned nil command, want review session create")
+			}
+			model, _ = model.(APIAppModel).Update(cmd())
 			updated := model.(APIAppModel)
 
 			if updated.artifactReview == nil {
 				t.Fatalf("pressing a did not open artifact review; statusMessage=%q", updated.statusMessage)
+			}
+			if len(client.reviewSessionFeatureIDs) == 0 || client.reviewSessionFeatureIDs[len(client.reviewSessionFeatureIDs)-1] != testFeatureIDActive {
+				t.Fatalf("CreateReviewSession feature IDs = %+v, want active feature", client.reviewSessionFeatureIDs)
 			}
 			if got := updated.artifactReview.FeatureID(); got != testFeatureIDActive {
 				t.Fatalf("artifactReview.FeatureID() = %q, want active", got)
@@ -6198,8 +6217,8 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 			if got := updated.artifactReview.ReviewMode(); got != tt.wantReviewMode {
 				t.Fatalf("artifactReview.ReviewMode() = %q, want %q", got, tt.wantReviewMode)
 			}
-			if got := updated.artifactReview.ArtifactPath(); got != wantPath {
-				t.Fatalf("artifactReview.ArtifactPath() = %q, want %q", got, wantPath)
+			if got := updated.artifactReview.ArtifactID(); got != tt.wantArtifactID {
+				t.Fatalf("artifactReview.ArtifactID() = %q, want %q", got, tt.wantArtifactID)
 			}
 			if strings.Contains(updated.statusMessage, "No contextual action") {
 				t.Fatalf("statusMessage = %q, want artifact review opened", updated.statusMessage)
@@ -6209,7 +6228,7 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 			if tt.extraDownKey {
 				model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
 			}
-			model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 			if cmd == nil {
 				t.Fatal("artifact review proceed returned nil command")
 			}
@@ -6220,8 +6239,14 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 			}
 			_, _ = model.(APIAppModel).Update(cmd())
 
-			if len(client.reviewRequests) != 1 || client.reviewRequests[0] != tt.wantReq {
-				t.Fatalf("reviewRequests = %+v, want %+v", client.reviewRequests, tt.wantReq)
+			if len(client.saveReviewDraftRequests) != 1 {
+				t.Fatalf("SaveReviewDraft requests = %+v, want one", client.saveReviewDraftRequests)
+			}
+			if len(client.submitReviewDecisionRequests) != 1 {
+				t.Fatalf("SubmitReviewSessionDecision requests = %+v, want one", client.submitReviewDecisionRequests)
+			}
+			if got := client.submitReviewDecisionRequests[0].Decision; got != tt.wantDecision {
+				t.Fatalf("review session decision = %q, want %q", got, tt.wantDecision)
 			}
 		})
 	}
@@ -6292,10 +6317,10 @@ func TestAPIAppModelContextualActionRejectsStaleRewindReviewArtifact(t *testing.
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	updated := model.(APIAppModel)
 	if updated.artifactReview != nil {
-		t.Fatalf("pressing a opened stale artifact review for %q; want fetch for rewind prompt artifact", updated.artifactReview.ArtifactPath())
+		t.Fatal("pressing a opened review synchronously; want review session create command")
 	}
 	if cmd == nil {
-		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
+		t.Fatalf("pressing a returned nil command; want review session create, statusMessage=%q", updated.statusMessage)
 	}
 	if updated.statusMessage != statusMsgLoadingReviewArtifact {
 		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
@@ -6356,10 +6381,10 @@ func TestAPIAppModelContextualActionRejectsStaleNonRewindGateArtifact(t *testing
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	updated := model.(APIAppModel)
 	if updated.artifactReview != nil {
-		t.Fatalf("pressing a opened stale artifact review for %q; want fetch for research artifact", updated.artifactReview.ArtifactPath())
+		t.Fatal("pressing a opened review synchronously; want review session create command")
 	}
 	if cmd == nil {
-		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
+		t.Fatalf("pressing a returned nil command; want review session create, statusMessage=%q", updated.statusMessage)
 	}
 	if updated.statusMessage != statusMsgLoadingReviewArtifact {
 		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
@@ -6369,18 +6394,28 @@ func TestAPIAppModelContextualActionRejectsStaleNonRewindGateArtifact(t *testing
 func TestAPIAppModelContextualActionRejectsDetachedStaleReviewAfterRewind(t *testing.T) {
 	t.Parallel()
 
-	app, roadmapPath := newStaleRewindReviewApp(t)
-	stale := NewArtifactReviewModel(roadmapPath, testFeatureIDActive, testArtifactIDPlan, feature.PhasePlan, app.width, app.height, nil, "", nil)
+	app, _ := newStaleRewindReviewApp(t)
+	stale := NewArtifactReviewModel(server.ReviewSessionResponse{
+		FeatureID:      testFeatureIDActive,
+		ReviewID:       "stale-review",
+		ReviewMode:     testArtifactIDPlan,
+		TargetPhase:    feature.PhasePlan.DirName(),
+		ArtifactID:     testPipelineRoadmap,
+		Text:           "# Old Roadmap\n",
+		DraftRevision:  "stale-rev",
+		SourceRevision: "stale-source",
+		CanIterate:     true,
+	}, feature.PhasePlan, app.width, app.height)
 	stale.detached = true
 	app.artifactReview = &stale
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	updated := model.(APIAppModel)
 	if updated.artifactReview != nil && !updated.artifactReview.Detached() {
-		t.Fatalf("pressing a reattached stale %s review for %q", updated.artifactReview.ReviewMode(), updated.artifactReview.ArtifactPath())
+		t.Fatalf("pressing a reattached stale %s review", updated.artifactReview.ReviewMode())
 	}
 	if cmd == nil {
-		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
+		t.Fatalf("pressing a returned nil command; want review session create, statusMessage=%q", updated.statusMessage)
 	}
 	if updated.statusMessage != statusMsgLoadingReviewArtifact {
 		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
@@ -6398,6 +6433,17 @@ func TestAPIAppModelContextualActionLoadsReviewArtifactWhenContentCacheEmpty(t *
 
 	client := newStaleRewindReviewClient(testFeatureStatusDesignNeedsReview, testArtifactIDDesign, testPipelineSizeMedium, testArtifactIDPlan,
 		server.ArtifactDTO{ID: artifactIDDescriptionReview, RunNumber: 2, Phase: testArtifactPhaseDescription, Path: descPath, Size: 27, ContentAvailable: true})
+	client.reviewSession = server.ReviewSessionResponse{
+		FeatureID:      testFeatureIDActive,
+		ReviewID:       "review-description",
+		ReviewMode:     reviewModeRewind,
+		TargetPhase:    feature.PhasePlan.DirName(),
+		RunNumber:      2,
+		ArtifactID:     artifactIDDescriptionReview,
+		Text:           "translate readme in Sicilian",
+		DraftRevision:  "rev-1",
+		SourceRevision: "source-rev-1",
+	}
 	app := newTestAPIAppModel(t, client)
 	delete(app.contents, testFeatureIDActive)
 	app.rebuildPresentation(testFeatureIDActive)
@@ -6417,11 +6463,11 @@ func TestAPIAppModelContextualActionLoadsReviewArtifactWhenContentCacheEmpty(t *
 	if got := updated.artifactReview.ReviewMode(); got != reviewModeRewind {
 		t.Fatalf("artifactReview.ReviewMode() = %q, want rewind", got)
 	}
-	if got := updated.artifactReview.ArtifactPath(); got != descPath {
-		t.Fatalf("artifactReview.ArtifactPath() = %q, want %q", got, descPath)
+	if got := updated.artifactReview.ArtifactID(); got != artifactIDDescriptionReview {
+		t.Fatalf("artifactReview.ArtifactID() = %q, want %q", got, artifactIDDescriptionReview)
 	}
-	if got := len(client.artifactListFeatureIDs); got <= initialArtifactListCalls {
-		t.Fatalf("ArtifactList calls = %d, want more than initial %d", got, initialArtifactListCalls)
+	if got := len(client.artifactListFeatureIDs); got != initialArtifactListCalls {
+		t.Fatalf("ArtifactList calls = %d, want unchanged from initial %d", got, initialArtifactListCalls)
 	}
 }
 
@@ -7586,7 +7632,17 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 	if got := app.snapshot.Content; got == nil || got.RunNumber != 1 || got.Artifact == nil || got.Artifact.ID != testArtifactIDOldPlan {
 		t.Fatalf("initial content = %+v, want run 1 old-plan", got)
 	}
-	staleReview := NewArtifactReviewModel("/tmp/old-plan.md", testFeatureIDActive, testArtifactIDPlan, feature.PhasePlan, app.width, app.height, nil, "", nil)
+	staleReview := NewArtifactReviewModel(server.ReviewSessionResponse{
+		FeatureID:      testFeatureIDActive,
+		ReviewID:       "stale-review",
+		ReviewMode:     testArtifactIDPlan,
+		TargetPhase:    feature.PhasePlan.DirName(),
+		ArtifactID:     testArtifactIDOldPlan,
+		Text:           "old run plan artifact",
+		DraftRevision:  "stale-rev",
+		SourceRevision: "stale-source",
+		CanIterate:     true,
+	}, feature.PhasePlan, app.width, app.height)
 	staleReview.detached = true
 	app.artifactReview = &staleReview
 
@@ -7600,7 +7656,7 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 		t.Fatalf("rewind mutation retained stale content = %+v, want content cleared until run 2 loads", got)
 	}
 	if afterRewind.artifactReview != nil {
-		t.Fatalf("rewind mutation retained stale artifact review for %q", afterRewind.artifactReview.ArtifactPath())
+		t.Fatal("rewind mutation retained stale artifact review")
 	}
 
 	msg := cmd()
@@ -8060,165 +8116,180 @@ func (r apiTestActionResponse) featureID(defaultFeatureID string) string {
 }
 
 type fakeTUIAPIClient struct {
-	calls                         []string
-	features                      server.FeatureListResponse
-	runtime                       server.RuntimeConfigResponse
-	allowEmptyWorkspaceRoots      bool
-	catalog                       server.ModelCatalogResponse
-	prompts                       server.PromptSnapshotResponse
-	permissions                   server.PermissionSnapshotResponse
-	sessions                      server.SessionListResponse
-	recovery                      server.RecoverySnapshotResponse
-	livePreview                   server.LivePreviewResponse
-	livePreviewsByID              map[string]server.LivePreviewResponse
-	livePreviewFeatureIDs         []string
-	executeRecoveryAccepted       apiTestActionResponse
-	executeRecoveryErr            error
-	executeRecoverySnapshotIDs    []string
-	executeRecoveryRequests       []server.RecoveryActionRequest
-	refreshSnapshot               server.RefreshSnapshot
-	refreshSignals                []server.RefreshSignal
-	startAccepted                 apiTestActionResponse
-	startErr                      error
-	startFeatureIDs               []string
-	createAccepted                apiTestActionResponse
-	createErr                     error
-	createRequests                []server.CreateFeatureRequest
-	resumeAccepted                apiTestActionResponse
-	resumeErr                     error
-	resumeFeatureIDs              []string
-	restartAccepted               apiTestActionResponse
-	restartErr                    error
-	restartFeatureIDs             []string
-	stopAccepted                  apiTestActionResponse
-	stopErr                       error
-	stopFeatureIDs                []string
-	deleteAccepted                apiTestActionResponse
-	deleteErr                     error
-	deleteFeatureIDs              []string
-	publishAccepted               apiTestActionResponse
-	publishErr                    error
-	publishFeatureIDs             []string
-	publishRequests               []server.PublishFeatureRequest
-	publishDescriptionFeatureIDs  []string
-	publishDescriptionRequests    []server.PublishDescriptionRequest
-	publishDescriptionTitle       string
-	publishDescriptionBody        string
-	publishDescriptionErr         error
-	mergeAccepted                 apiTestActionResponse
-	mergeErr                      error
-	mergeFeatureIDs               []string
-	retryAccepted                 apiTestActionResponse
-	retryErr                      error
-	retryFeatureIDs               []string
-	markDoneAccepted              apiTestActionResponse
-	markDoneErr                   error
-	markDoneFeatureIDs            []string
-	cleanupAccepted               apiTestActionResponse
-	cleanupErr                    error
-	cleanupFeatureIDs             []string
-	cleanupRequests               []server.CleanupActionRequest
-	startTweakAccepted            apiTestActionResponse
-	startTweakErr                 error
-	startTweakFeatureIDs          []string
-	startTweakRequests            []server.TweakActionRequest
-	finishTweakAccepted           apiTestActionResponse
-	finishTweakErr                error
-	finishTweakFeatureIDs         []string
-	finishTweakRequests           []server.TweakFinishRequest
-	startRebaseAccepted           apiTestActionResponse
-	startRebaseErr                error
-	startRebaseFeatureIDs         []string
-	startRebaseRequests           []server.RebaseActionRequest
-	startRefactorAccepted         apiTestActionResponse
-	startRefactorErr              error
-	startRefactorFeatureIDs       []string
-	startRefactorRequests         []server.RefactorActionRequest
-	restartRefactorAccepted       apiTestActionResponse
-	restartRefactorErr            error
-	restartRefactorFeatureIDs     []string
-	restartRefactorRequests       []server.RefactorActionRequest
-	rewindAccepted                apiTestActionResponse
-	rewindErr                     error
-	rewindFeatureIDs              []string
-	rewindRequests                []server.RewindFeatureRequest
-	featureConfig                 server.FeatureConfigResponse
-	featureConfigErr              error
-	featureConfigIDs              []string
-	updateFeatureConfigAccepted   apiTestActionResponse
-	updateFeatureConfigErr        error
-	updateFeatureConfigIDs        []string
-	updateFeatureConfigRequests   []server.FeatureConfigMutationRequest
-	updateRuntimeConfigAccepted   apiTestActionResponse
-	updateRuntimeConfigErr        error
-	updateRuntimeConfigRequests   []server.RuntimeConfigMutationRequest
-	needUserInputAccepted         apiTestActionResponse
-	needUserInputErr              error
-	needUserInputFeatureIDs       []string
-	needUserInputRequests         []server.NeedUserInputDecisionRequest
-	needUserInputDraftAccepted    apiTestActionResponse
-	needUserInputDraftErr         error
-	needUserInputDraftFeatureIDs  []string
-	needUserInputDraftRequests    []server.NeedUserInputDraftRequest
-	toggleInputAccepted           apiTestActionResponse
-	toggleInputErr                error
-	toggleInputFeatureIDs         []string
-	reviewAccepted                apiTestActionResponse
-	reviewErr                     error
-	reviewFeatureIDs              []string
-	reviewRequests                []server.ReviewDecisionRequest
-	reviewCommentsResponse        server.ReviewCommentsFetchResponse
-	reviewCommentsErr             error
-	reviewCommentsFeatureIDs      []string
-	reviewCommentsFetchRequests   []server.ReviewCommentsFetchRequest
-	startReviewCommentsAccepted   apiTestActionResponse
-	startReviewCommentsErr        error
-	startReviewCommentsFeatureIDs []string
-	startReviewCommentsRequests   []server.ReviewCommentsActionRequest
-	permissionAccepted            apiTestActionResponse
-	permissionErr                 error
-	permissionAnswers             []server.PermissionAnswerRequest
-	helpAccepted                  apiTestActionResponse
-	helpErr                       error
-	helpRequests                  []server.HelpAnswerRequest
-	startChatAccepted             apiTestActionResponse
-	startChatErr                  error
-	startChatRequests             []server.ChatStartRequest
-	askUserAccepted               apiTestActionResponse
-	askUserErr                    error
-	askUserAnswers                []server.AskUserAnswerRequest
-	shutdownAccepted              apiTestActionResponse
-	shutdownErr                   error
-	shutdownCalls                 int
-	detail                        server.FeatureDetailResponse
-	detailsByID                   map[string]server.FeatureDetailResponse
-	detailFeatureIDs              []string
-	sessionDetail                 server.SessionDetailResponse
-	sessionDetailsByID            map[string]server.SessionDetailResponse
-	sessionDetailIDs              []string
-	transcript                    server.TranscriptResponse
-	transcriptsByID               map[string]server.TranscriptResponse
-	transcriptSessionIDs          []string
-	transcriptQueries             []server.CursorQuery
-	subscribeSessionOutputRecords []server.SessionOutputRecord
-	artifactList                  server.ArtifactListResponse
-	artifactListByRun             map[int]server.ArtifactListResponse
-	artifactListFeatureIDs        []string
-	artifactListRunNumbers        []int
-	artifactContent               server.TextContentResponse
-	artifactContentByID           map[string]server.TextContentResponse
-	artifactContentFeatureIDs     []string
-	artifactContentRunNumbers     []int
-	artifactContentIDs            []string
-	artifactContentQueries        []server.TextQuery
-	logContent                    server.TextContentResponse
-	logContentByID                map[string]server.TextContentResponse
-	logContentErrByID             map[string]error
-	logContentErr                 error
-	logContentFeatureIDs          []string
-	logContentRunNumbers          []int
-	logContentIDs                 []string
-	logContentQueries             []server.TextQuery
+	calls                          []string
+	features                       server.FeatureListResponse
+	runtime                        server.RuntimeConfigResponse
+	allowEmptyWorkspaceRoots       bool
+	catalog                        server.ModelCatalogResponse
+	prompts                        server.PromptSnapshotResponse
+	permissions                    server.PermissionSnapshotResponse
+	sessions                       server.SessionListResponse
+	recovery                       server.RecoverySnapshotResponse
+	livePreview                    server.LivePreviewResponse
+	livePreviewsByID               map[string]server.LivePreviewResponse
+	livePreviewFeatureIDs          []string
+	executeRecoveryAccepted        apiTestActionResponse
+	executeRecoveryErr             error
+	executeRecoverySnapshotIDs     []string
+	executeRecoveryRequests        []server.RecoveryActionRequest
+	refreshSnapshot                server.RefreshSnapshot
+	refreshSignals                 []server.RefreshSignal
+	startAccepted                  apiTestActionResponse
+	startErr                       error
+	startFeatureIDs                []string
+	createAccepted                 apiTestActionResponse
+	createErr                      error
+	createRequests                 []server.CreateFeatureRequest
+	resumeAccepted                 apiTestActionResponse
+	resumeErr                      error
+	resumeFeatureIDs               []string
+	restartAccepted                apiTestActionResponse
+	restartErr                     error
+	restartFeatureIDs              []string
+	stopAccepted                   apiTestActionResponse
+	stopErr                        error
+	stopFeatureIDs                 []string
+	deleteAccepted                 apiTestActionResponse
+	deleteErr                      error
+	deleteFeatureIDs               []string
+	publishAccepted                apiTestActionResponse
+	publishErr                     error
+	publishFeatureIDs              []string
+	publishRequests                []server.PublishFeatureRequest
+	publishDescriptionFeatureIDs   []string
+	publishDescriptionRequests     []server.PublishDescriptionRequest
+	publishDescriptionTitle        string
+	publishDescriptionBody         string
+	publishDescriptionErr          error
+	mergeAccepted                  apiTestActionResponse
+	mergeErr                       error
+	mergeFeatureIDs                []string
+	retryAccepted                  apiTestActionResponse
+	retryErr                       error
+	retryFeatureIDs                []string
+	markDoneAccepted               apiTestActionResponse
+	markDoneErr                    error
+	markDoneFeatureIDs             []string
+	cleanupAccepted                apiTestActionResponse
+	cleanupErr                     error
+	cleanupFeatureIDs              []string
+	cleanupRequests                []server.CleanupActionRequest
+	startTweakAccepted             apiTestActionResponse
+	startTweakErr                  error
+	startTweakFeatureIDs           []string
+	startTweakRequests             []server.TweakActionRequest
+	finishTweakAccepted            apiTestActionResponse
+	finishTweakErr                 error
+	finishTweakFeatureIDs          []string
+	finishTweakRequests            []server.TweakFinishRequest
+	startRebaseAccepted            apiTestActionResponse
+	startRebaseErr                 error
+	startRebaseFeatureIDs          []string
+	startRebaseRequests            []server.RebaseActionRequest
+	startRefactorAccepted          apiTestActionResponse
+	startRefactorErr               error
+	startRefactorFeatureIDs        []string
+	startRefactorRequests          []server.RefactorActionRequest
+	restartRefactorAccepted        apiTestActionResponse
+	restartRefactorErr             error
+	restartRefactorFeatureIDs      []string
+	restartRefactorRequests        []server.RefactorActionRequest
+	rewindAccepted                 apiTestActionResponse
+	rewindErr                      error
+	rewindFeatureIDs               []string
+	rewindRequests                 []server.RewindFeatureRequest
+	featureConfig                  server.FeatureConfigResponse
+	featureConfigErr               error
+	featureConfigIDs               []string
+	updateFeatureConfigAccepted    apiTestActionResponse
+	updateFeatureConfigErr         error
+	updateFeatureConfigIDs         []string
+	updateFeatureConfigRequests    []server.FeatureConfigMutationRequest
+	updateRuntimeConfigAccepted    apiTestActionResponse
+	updateRuntimeConfigErr         error
+	updateRuntimeConfigRequests    []server.RuntimeConfigMutationRequest
+	needUserInputAccepted          apiTestActionResponse
+	needUserInputErr               error
+	needUserInputFeatureIDs        []string
+	needUserInputRequests          []server.NeedUserInputDecisionRequest
+	needUserInputDraftAccepted     apiTestActionResponse
+	needUserInputDraftErr          error
+	needUserInputDraftFeatureIDs   []string
+	needUserInputDraftRequests     []server.NeedUserInputDraftRequest
+	toggleInputAccepted            apiTestActionResponse
+	toggleInputErr                 error
+	toggleInputFeatureIDs          []string
+	reviewAccepted                 apiTestActionResponse
+	reviewErr                      error
+	reviewFeatureIDs               []string
+	reviewRequests                 []server.ReviewDecisionRequest
+	reviewSession                  server.ReviewSessionResponse
+	reviewSessionErr               error
+	reviewSessionFeatureIDs        []string
+	reviewSessionIDs               []string
+	saveReviewDraftErr             error
+	saveReviewDraftFeatureIDs      []string
+	saveReviewDraftReviewIDs       []string
+	saveReviewDraftRequests        []server.ReviewDraftUpdateRequest
+	submitReviewDecisionErr        error
+	submitReviewDecisionFeatureIDs []string
+	submitReviewDecisionReviewIDs  []string
+	submitReviewDecisionRequests   []server.ReviewSessionDecisionRequest
+	cancelReviewSessionErr         error
+	cancelReviewSessionFeatureIDs  []string
+	cancelReviewSessionIDs         []string
+	reviewCommentsResponse         server.ReviewCommentsFetchResponse
+	reviewCommentsErr              error
+	reviewCommentsFeatureIDs       []string
+	reviewCommentsFetchRequests    []server.ReviewCommentsFetchRequest
+	startReviewCommentsAccepted    apiTestActionResponse
+	startReviewCommentsErr         error
+	startReviewCommentsFeatureIDs  []string
+	startReviewCommentsRequests    []server.ReviewCommentsActionRequest
+	permissionAccepted             apiTestActionResponse
+	permissionErr                  error
+	permissionAnswers              []server.PermissionAnswerRequest
+	helpAccepted                   apiTestActionResponse
+	helpErr                        error
+	helpRequests                   []server.HelpAnswerRequest
+	startChatAccepted              apiTestActionResponse
+	startChatErr                   error
+	startChatRequests              []server.ChatStartRequest
+	askUserAccepted                apiTestActionResponse
+	askUserErr                     error
+	askUserAnswers                 []server.AskUserAnswerRequest
+	shutdownAccepted               apiTestActionResponse
+	shutdownErr                    error
+	shutdownCalls                  int
+	detail                         server.FeatureDetailResponse
+	detailsByID                    map[string]server.FeatureDetailResponse
+	detailFeatureIDs               []string
+	sessionDetail                  server.SessionDetailResponse
+	sessionDetailsByID             map[string]server.SessionDetailResponse
+	sessionDetailIDs               []string
+	transcript                     server.TranscriptResponse
+	transcriptsByID                map[string]server.TranscriptResponse
+	transcriptSessionIDs           []string
+	transcriptQueries              []server.CursorQuery
+	subscribeSessionOutputRecords  []server.SessionOutputRecord
+	artifactList                   server.ArtifactListResponse
+	artifactListByRun              map[int]server.ArtifactListResponse
+	artifactListFeatureIDs         []string
+	artifactListRunNumbers         []int
+	artifactContent                server.TextContentResponse
+	artifactContentByID            map[string]server.TextContentResponse
+	artifactContentFeatureIDs      []string
+	artifactContentRunNumbers      []int
+	artifactContentIDs             []string
+	artifactContentQueries         []server.TextQuery
+	logContent                     server.TextContentResponse
+	logContentByID                 map[string]server.TextContentResponse
+	logContentErrByID              map[string]error
+	logContentErr                  error
+	logContentFeatureIDs           []string
+	logContentRunNumbers           []int
+	logContentIDs                  []string
+	logContentQueries              []server.TextQuery
 }
 
 func (f *fakeTUIAPIClient) Features(context.Context) (server.FeatureListResponse, error) {
@@ -8562,6 +8633,75 @@ func (f *fakeTUIAPIClient) ReviewDecision(_ context.Context, featureID string, r
 	f.reviewFeatureIDs = append(f.reviewFeatureIDs, featureID)
 	f.reviewRequests = append(f.reviewRequests, req)
 	return server.ReviewDecisionResponse{FeatureID: f.reviewAccepted.featureID(featureID), Decision: req.Decision, Result: f.reviewAccepted.result("submitted")}, f.reviewErr
+}
+
+func (f *fakeTUIAPIClient) CreateReviewSession(_ context.Context, featureID string) (server.ReviewSessionResponse, error) {
+	f.calls = append(f.calls, "CreateReviewSession")
+	f.reviewSessionFeatureIDs = append(f.reviewSessionFeatureIDs, featureID)
+	session := f.reviewSession
+	if session.FeatureID == "" {
+		session.FeatureID = featureID
+	}
+	if session.ReviewID == "" {
+		session.ReviewID = "review-1"
+	}
+	if session.ReviewMode == "" {
+		session.ReviewMode = "plan"
+	}
+	if session.TargetPhase == "" {
+		session.TargetPhase = feature.PhaseImplement.DirName()
+	}
+	if session.ArtifactID == "" {
+		session.ArtifactID = "plan"
+	}
+	if session.DraftRevision == "" {
+		session.DraftRevision = "rev-1"
+	}
+	return session, f.reviewSessionErr
+}
+
+func (f *fakeTUIAPIClient) ReviewSession(_ context.Context, featureID, reviewID string) (server.ReviewSessionResponse, error) {
+	f.calls = append(f.calls, "ReviewSession")
+	f.reviewSessionFeatureIDs = append(f.reviewSessionFeatureIDs, featureID)
+	f.reviewSessionIDs = append(f.reviewSessionIDs, reviewID)
+	session := f.reviewSession
+	if session.FeatureID == "" {
+		session.FeatureID = featureID
+	}
+	if session.ReviewID == "" {
+		session.ReviewID = reviewID
+	}
+	return session, f.reviewSessionErr
+}
+
+func (f *fakeTUIAPIClient) SaveReviewDraft(_ context.Context, featureID, reviewID string, req server.ReviewDraftUpdateRequest) (server.ReviewSessionResponse, error) {
+	f.calls = append(f.calls, "SaveReviewDraft")
+	f.saveReviewDraftFeatureIDs = append(f.saveReviewDraftFeatureIDs, featureID)
+	f.saveReviewDraftReviewIDs = append(f.saveReviewDraftReviewIDs, reviewID)
+	f.saveReviewDraftRequests = append(f.saveReviewDraftRequests, req)
+	session := f.reviewSession
+	session.FeatureID = featureID
+	session.ReviewID = reviewID
+	session.Text = req.Text
+	if session.DraftRevision == "" || session.DraftRevision == req.BaseRevision {
+		session.DraftRevision = req.BaseRevision + "-saved"
+	}
+	return session, f.saveReviewDraftErr
+}
+
+func (f *fakeTUIAPIClient) SubmitReviewSessionDecision(_ context.Context, featureID, reviewID string, req server.ReviewSessionDecisionRequest) (server.ReviewSessionDecisionResponse, error) {
+	f.calls = append(f.calls, "SubmitReviewSessionDecision")
+	f.submitReviewDecisionFeatureIDs = append(f.submitReviewDecisionFeatureIDs, featureID)
+	f.submitReviewDecisionReviewIDs = append(f.submitReviewDecisionReviewIDs, reviewID)
+	f.submitReviewDecisionRequests = append(f.submitReviewDecisionRequests, req)
+	return server.ReviewSessionDecisionResponse{FeatureID: featureID, ReviewID: reviewID, Decision: req.Decision, Result: "submitted"}, f.submitReviewDecisionErr
+}
+
+func (f *fakeTUIAPIClient) CancelReviewSession(_ context.Context, featureID, reviewID string) (server.ReviewSessionDecisionResponse, error) {
+	f.calls = append(f.calls, "CancelReviewSession")
+	f.cancelReviewSessionFeatureIDs = append(f.cancelReviewSessionFeatureIDs, featureID)
+	f.cancelReviewSessionIDs = append(f.cancelReviewSessionIDs, reviewID)
+	return server.ReviewSessionDecisionResponse{FeatureID: featureID, ReviewID: reviewID, Result: "cancelled"}, f.cancelReviewSessionErr
 }
 
 func (f *fakeTUIAPIClient) FetchReviewComments(_ context.Context, featureID string, req server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error) {

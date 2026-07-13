@@ -68,6 +68,10 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	var sawRecoveryTrustedHeader bool
 	var sawChatTrustedHeader bool
 	var sawPublishDescriptionTrustedHeader bool
+	var sawReviewCreateTrustedHeader bool
+	var sawReviewSaveTrustedHeader bool
+	var sawReviewDecisionTrustedHeader bool
+	var sawReviewCancelTrustedHeader bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case routeGetHealth:
@@ -104,6 +108,34 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			writeJSON(w, http.StatusOK, TextContentResponse{APIVersion: APIVersion, ID: targetPhasePlan, Text: "phase"})
 		case "GET /api/v1/features/feat-1/runs/1/logs/session":
 			writeJSON(w, http.StatusOK, TextContentResponse{APIVersion: APIVersion, ID: logIDSession, Text: "log"})
+		case "POST /api/v1/features/feat-1/reviews":
+			sawReviewCreateTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+			writeJSON(w, http.StatusOK, ReviewSessionResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, ReviewID: "review-1", Text: "draft", DraftRevision: "rev-1"})
+		case "GET /api/v1/features/feat-1/reviews/review-1":
+			writeJSON(w, http.StatusOK, ReviewSessionResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, ReviewID: "review-1", Text: "draft", DraftRevision: "rev-1"})
+		case "PUT /api/v1/features/feat-1/reviews/review-1/draft":
+			sawReviewSaveTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+			var req ReviewDraftUpdateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode review draft request: %v", err)
+			}
+			if req.BaseRevision != "rev-1" || req.Text != "edited" {
+				t.Errorf("review draft request = %+v, want rev-1 edited", req)
+			}
+			writeJSON(w, http.StatusOK, ReviewSessionResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, ReviewID: "review-1", Text: "edited", DraftRevision: "rev-2"})
+		case "POST /api/v1/features/feat-1/reviews/review-1/decision":
+			sawReviewDecisionTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+			var req ReviewSessionDecisionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode review session decision request: %v", err)
+			}
+			if req.Decision != reviewDecisionProceed || req.BaseRevision != "rev-2" {
+				t.Errorf("review session decision request = %+v, want proceed rev-2", req)
+			}
+			writeJSON(w, http.StatusOK, ReviewSessionDecisionResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, ReviewID: "review-1", Decision: reviewDecisionProceed, Result: "submitted"})
+		case "DELETE /api/v1/features/feat-1/reviews/review-1":
+			sawReviewCancelTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+			writeJSON(w, http.StatusOK, ReviewSessionDecisionResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, ReviewID: "review-1", Result: "cancelled"})
 		case routeGetLivePreview:
 			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: fixtureFeatureID}})
 		case "GET /api/v1/recovery":
@@ -222,6 +254,37 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	}
 	if _, err := client.LogContent(ctx, fixtureFeatureID, 1, logIDSession, TextQuery{}); err != nil {
 		t.Fatalf("LogContent() error = %v", err)
+	}
+	review, err := client.CreateReviewSession(ctx, fixtureFeatureID)
+	if err != nil {
+		t.Fatalf("CreateReviewSession() error = %v", err)
+	}
+	if review.ReviewID != "review-1" || !sawReviewCreateTrustedHeader {
+		t.Fatalf("CreateReviewSession() = %+v trusted=%v, want review-1 trusted", review, sawReviewCreateTrustedHeader)
+	}
+	if _, err := client.ReviewSession(ctx, fixtureFeatureID, "review-1"); err != nil {
+		t.Fatalf("ReviewSession() error = %v", err)
+	}
+	saved, err := client.SaveReviewDraft(ctx, fixtureFeatureID, "review-1", ReviewDraftUpdateRequest{BaseRevision: "rev-1", Text: "edited"})
+	if err != nil {
+		t.Fatalf("SaveReviewDraft() error = %v", err)
+	}
+	if saved.DraftRevision != "rev-2" || !sawReviewSaveTrustedHeader {
+		t.Fatalf("SaveReviewDraft() = %+v trusted=%v, want rev-2 trusted", saved, sawReviewSaveTrustedHeader)
+	}
+	decided, err := client.SubmitReviewSessionDecision(ctx, fixtureFeatureID, "review-1", ReviewSessionDecisionRequest{Decision: reviewDecisionProceed, BaseRevision: "rev-2"})
+	if err != nil {
+		t.Fatalf("SubmitReviewSessionDecision() error = %v", err)
+	}
+	if decided.Result != "submitted" || !sawReviewDecisionTrustedHeader {
+		t.Fatalf("SubmitReviewSessionDecision() = %+v trusted=%v, want submitted trusted", decided, sawReviewDecisionTrustedHeader)
+	}
+	cancelled, err := client.CancelReviewSession(ctx, fixtureFeatureID, "review-1")
+	if err != nil {
+		t.Fatalf("CancelReviewSession() error = %v", err)
+	}
+	if cancelled.Result != "cancelled" || !sawReviewCancelTrustedHeader {
+		t.Fatalf("CancelReviewSession() = %+v trusted=%v, want cancelled trusted", cancelled, sawReviewCancelTrustedHeader)
 	}
 	if _, err := client.LivePreview(ctx, fixtureFeatureID); err != nil {
 		t.Fatalf("LivePreview() error = %v", err)

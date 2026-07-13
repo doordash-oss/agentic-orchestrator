@@ -61,7 +61,6 @@ func TestPermissionHandlerInterface(t *testing.T) {
 	// Verify all handlers satisfy the interface.
 	var _ PermissionHandler = &AutoApproveHandler{}
 	var _ PermissionHandler = &DenyAllHandler{}
-	var _ PermissionHandler = &PlanReviewHandler{}
 	var _ PermissionHandler = &ReadOnlyHandler{}
 	var _ PermissionHandler = &AMAHandler{}
 }
@@ -143,57 +142,6 @@ func TestAMAHandler(t *testing.T) {
 				ToolName:  tt.tool,
 				Input:     tt.input,
 			})
-			if err != nil {
-				t.Fatalf("CanUseTool: %v", err)
-			}
-			if decision.Behavior != tt.wantBeh {
-				t.Errorf("behavior = %q, want %q", decision.Behavior, tt.wantBeh)
-			}
-		})
-	}
-}
-
-func TestPlanReviewHandler(t *testing.T) {
-	planPath := "/tmp/features/feat-1/plan.md"
-	handler := &PlanReviewHandler{AllowedPath: planPath}
-
-	tests := []struct {
-		name    string
-		tool    string
-		input   string
-		wantBeh string // "allow", "deny", or "" (defer)
-	}{
-		// Read-only tools: always allowed
-		{"read allowed", "Read", `{"file_path":"/some/file.go"}`, "allow"},
-		{"glob allowed", "Glob", `{"pattern":"**/*.go"}`, "allow"},
-		{"grep allowed", "Grep", `{"pattern":"foo"}`, "allow"},
-		{"ls allowed", "LS", `{}`, "allow"},
-		{"lsp allowed", "LSP", `{}`, "allow"},
-		{"websearch allowed", "WebSearch", `{"query":"test"}`, "allow"},
-		{"webfetch allowed", "WebFetch", `{"url":"https://example.com"}`, "allow"},
-		{"agent allowed", "Agent", `{"prompt":"research"}`, "allow"},
-
-		// Edit to plan file: allowed
-		{"edit plan file", "Edit", `{"file_path":"` + planPath + `","old_string":"a","new_string":"b"}`, "allow"},
-		{"write plan file", "Write", `{"file_path":"` + planPath + `","content":"new plan"}`, "allow"},
-
-		// Edit to other files: denied
-		{"edit other file", "Edit", `{"file_path":"/some/other/file.go","old_string":"a","new_string":"b"}`, "deny"},
-		{"write other file", "Write", `{"file_path":"/some/other/file.go","content":"hack"}`, "deny"},
-		{"notebookedit other", "NotebookEdit", `{"notebook_path":"/tmp/nb.ipynb"}`, "deny"},
-
-		// Bash: defer to TUI
-		{"bash deferred", "Bash", `{"command":"ls"}`, ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := ToolPermissionRequest{
-				RequestID: "req_1",
-				ToolName:  tt.tool,
-				Input:     tt.input,
-			}
-			decision, err := handler.CanUseTool(req)
 			if err != nil {
 				t.Fatalf("CanUseTool: %v", err)
 			}

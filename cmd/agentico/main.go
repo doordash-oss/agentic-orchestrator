@@ -1259,8 +1259,20 @@ func serverChatSkillPath(skillsDir string) string {
 }
 
 func (t *serverMutationTarget) buildChatSystemPrompt(skillPath string) string {
+	runtimeRoot := ""
+	stateDir := ""
+	if t.phaseRunner != nil {
+		stateDir = t.phaseRunner.StateDir
+		if stateDir != "" {
+			runtimeRoot = filepath.Dir(stateDir)
+		}
+	}
 	return agentprompts.ChatSystemPrompt(agentprompts.ChatSystemInput{
 		SkillPath:       skillPath,
+		RuntimeRoot:     runtimeRoot,
+		StateDir:        stateDir,
+		ConfigPath:      t.configPath,
+		WorkspaceDir:    t.workspaceDir,
 		CurrentFeatures: strings.TrimSpace(t.buildChatContext()),
 	})
 }

@@ -506,8 +506,10 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 }
 
 func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSubagents(t *testing.T) {
-	stateDir := t.TempDir()
-	skillsDir := filepath.Join(stateDir, "skills")
+	runtimeRoot := t.TempDir()
+	stateDir := filepath.Join(runtimeRoot, "features")
+	skillsDir := filepath.Join(runtimeRoot, "skills")
+	configPath := filepath.Join(runtimeRoot, "config.yaml")
 	var captured []agent.BuildSessionOpts
 	phaseRunner := &agent.PhaseRunner{
 		StateDir:  stateDir,
@@ -522,6 +524,7 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	sessions := &mutationTargetSessionManager{}
 	target := serverMutationTarget{
 		cfg:          cfg,
+		configPath:   configPath,
 		sessions:     sessions,
 		phaseRunner:  phaseRunner,
 		workspaceDir: testWorkspaceDir,
@@ -558,6 +561,11 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 		"Agentic Orchestrator Expert Assistant",
 		"Answer directly whenever the user's request is clear enough",
 		filepath.Join(skillsDir, chatName, "SKILL.md"),
+		"Runtime root: `" + runtimeRoot + "`",
+		"Feature state directory: `" + stateDir + "`",
+		"Config file: `" + configPath + "`",
+		"Workspace: `" + testWorkspaceDir + "`",
+		"Do not substitute the default paths from the user guide",
 	} {
 		if !strings.Contains(build.SystemPrompt, want) {
 			t.Fatalf("BuildSession SystemPrompt missing %q:\n%s", want, build.SystemPrompt)

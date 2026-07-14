@@ -88,6 +88,10 @@ type RoleSystemInput struct {
 // AMA chat session.
 type ChatSystemInput struct {
 	SkillPath       string
+	RuntimeRoot     string
+	StateDir        string
+	ConfigPath      string
+	WorkspaceDir    string
 	CurrentFeatures string
 }
 

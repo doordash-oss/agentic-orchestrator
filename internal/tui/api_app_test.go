@@ -4591,7 +4591,7 @@ func TestAPIAppModelFeatureConfigEditorSavesInputAlertOverride(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want feature config save")
 	}
-	model, _ = model.(APIAppModel).Update(cmd())
+	_, _ = model.(APIAppModel).Update(cmd())
 
 	if got := client.updateFeatureConfigRequests; len(got) != 1 ||
 		got[0].InputNotifications != string(feature.InputNotificationsEnabled) {
@@ -5053,7 +5053,7 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 	if _, ok := decided.selectedNeedInputGate(testFeatureIDBlocked); ok {
 		t.Fatal("resolved need-user-input gate remained selectable from cached feature detail")
 	}
-	model, cmd = decided.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	model, _ = decided.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	afterAttach := model.(APIAppModel)
 	if afterAttach.artifactReview != nil {
 		t.Fatal("Update(a) after resolved need-user-input reopened NUI artifact review")
@@ -5237,7 +5237,7 @@ func TestAPIAppModelNeedUserInputQuestionnaireDraftsAnswersBeforeResume(t *testi
 	if _, ok := decided.selectedNeedInputGate(testFeatureIDBlocked); ok {
 		t.Fatal("resolved need-user-input gate remained selectable from prompt snapshot")
 	}
-	model, cmd = decided.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	model, _ = decided.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	afterAttach := model.(APIAppModel)
 	if afterAttach.artifactReview != nil {
 		t.Fatal("Update(a) after resolved need-user-input reopened NUI artifact review")

@@ -242,7 +242,7 @@ func pipelineConfigKeys(profile feature.PipelineProfile) []string {
 	return []string{profile.ConfigKey()}
 }
 
-func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfigs map[string]config.RepoConfig, defaults config.DefaultsConfig, workspaceDir string, providerModels map[string][]string, providerOrder []string, phaseDefaults map[string]string, phaseModels map[string]map[string][]string, existingSlugs map[string]string, workspaceRoots []string) WizardModel {
+func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfigs map[string]config.RepoConfig, defaults config.DefaultsConfig, _ string, providerModels map[string][]string, providerOrder []string, phaseDefaults map[string]string, phaseModels map[string]map[string][]string, existingSlugs map[string]string, workspaceRoots []string) WizardModel {
 	ni := textinput.New()
 	ni.Placeholder = "Feature name"
 
@@ -259,10 +259,6 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	ei := NewSimpleTextarea()
 	ei.Placeholder = "Exit criteria (leave empty for default)"
 	ei.SetHeight(4)
-
-	if workspaceDir == "" {
-		workspaceDir, _ = os.Getwd()
-	}
 
 	var allModels []string
 	for _, prov := range providerOrder {

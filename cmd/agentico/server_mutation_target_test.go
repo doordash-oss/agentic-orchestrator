@@ -321,8 +321,8 @@ func TestServerMutationTargetAnswerPermissionAllowRememberDuplicateReturnsAlread
 	if err != nil {
 		t.Fatalf("AnswerPermission() error = %v", err)
 	}
-	if got, ok := result.Get("already_existed"); !ok || got != true {
-		t.Fatalf("already_existed = %v (found %t), want true", got, ok)
+	if !result.AlreadyExisted {
+		t.Fatal("AlreadyExisted = false, want true")
 	}
 	if _, err := os.Stat(filepath.Join(permDir, "remember-audit.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("audit stat error = %v, want duplicate to skip audit", err)
@@ -1835,16 +1835,6 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 	}
 	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
 	return serverMutationTarget{orch: orch, store: store}, store, loaded, worktrees
-}
-
-func countMockCalls(calls []mocks.MockCall, method string) int {
-	count := 0
-	for _, call := range calls {
-		if call.Method == method {
-			count++
-		}
-	}
-	return count
 }
 
 type fakeReviewCommentOperator struct {

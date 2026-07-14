@@ -586,22 +586,3 @@ func deferralIDsEqual(a, b []string) bool {
 	}
 	return true
 }
-
-func TestOpenDeferrals_SortedByDueByPhaseThenID(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	ledger := []Deferral{
-		{ID: "D-c", DueByPhase: 3, Status: DeferralOpen},
-		{ID: "D-a", DueByPhase: 5, Status: DeferralOpen},
-		{ID: "D-b", DueByPhase: 3, Status: DeferralOpen},
-		{ID: "D-x", DueByPhase: 4, Status: DeferralClosed}, // excluded
-	}
-	got := OpenDeferrals(ledger)
-	if len(got) != 3 {
-		t.Fatalf("expected 3 open entries, got %d", len(got))
-	}
-	// Phase 3 entries come first; within phase 3, D-b before D-c (ID-sorted).
-	if got[0].ID != "D-b" || got[1].ID != "D-c" || got[2].ID != "D-a" {
-		t.Errorf("unexpected sort order: %+v", got)
-	}
-}

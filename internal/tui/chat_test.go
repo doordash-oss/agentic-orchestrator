@@ -431,26 +431,6 @@ func TestChatSendErrorMsgResetsState(t *testing.T) {
 	}
 }
 
-func TestIsChatSession(t *testing.T) {
-	tests := []struct {
-		id   string
-		want bool
-	}{
-		{"__chat__", true},
-		{"abc123-research", false},
-		{"abc123-plan", false},
-		{"", false},
-		{"__chat__0", false}, // old format no longer matches
-	}
-	for _, tt := range tests {
-		t.Run(tt.id, func(t *testing.T) {
-			if got := isChatSession(tt.id); got != tt.want {
-				t.Errorf("isChatSession(%q) = %v, want %v", tt.id, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestChatStartSessionUsesCallback(t *testing.T) {
 	var capturedOpts agent.BuildSessionOpts
 	var called bool

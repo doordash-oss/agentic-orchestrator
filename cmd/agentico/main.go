@@ -1052,14 +1052,14 @@ func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnsw
 	if err != nil {
 		return serverruntime.PermissionAnswerResponse{}, err
 	}
-	resp := serverruntime.PermissionAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Decision: result.Decision, Result: resultAnswered}
-	if result.AlreadyExisted {
-		resp.Set("already_existed", true)
-	}
-	if result.AuditWarning != "" {
-		resp.Set("audit_warning", result.AuditWarning)
-	}
-	return resp, nil
+	return serverruntime.PermissionAnswerResponse{
+		SessionID:      sess.ID(),
+		RequestID:      pending.RequestID,
+		Decision:       result.Decision,
+		Result:         resultAnswered,
+		AlreadyExisted: result.AlreadyExisted,
+		AuditWarning:   result.AuditWarning,
+	}, nil
 }
 
 func (t *serverMutationTarget) permissionAnswerService() *permission.AnswerService {

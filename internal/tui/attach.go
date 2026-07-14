@@ -258,8 +258,6 @@ func copyAskUserQuestionConfidence(questions, source []askUserQuestion) []askUse
 // drive tab spinners and active-state coloring.
 type presentationStatus string
 
-// Durable values are derived from RepoState (Touched + PRURL + LastError)
-// via repoStateToPresentationStatus.
 const (
 	statusPending             presentationStatus = "pending"
 	statusReviewPassed        presentationStatus = "review_passed"
@@ -269,22 +267,6 @@ const (
 	statusNeedUserInput       presentationStatus = "need_user_input"
 	statusSkipped             presentationStatus = "skipped"
 )
-
-func repoStateToPresentationStatus(s *feature.RepoState) presentationStatus {
-	if s == nil {
-		return statusPending
-	}
-	switch {
-	case s.LastError != "":
-		return statusFailed
-	case s.PRURL != "":
-		return statusCodeReady
-	case s.Touched:
-		return statusAwaitingFinalReview
-	default:
-		return statusPending
-	}
-}
 
 // Mid-flight presentation-only tokens. The TUI sets these on its own
 // repoTab values to drive spinner / coloring; they are never persisted

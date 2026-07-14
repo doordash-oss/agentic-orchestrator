@@ -4921,27 +4921,6 @@ func (m APIAppModel) runAPIPublishDescription(ctx context.Context, featureID, mo
 	return title, body, err
 }
 
-func (m APIAppModel) openRepoCycleAction(kind string) APIAppModel {
-	if !m.requireSelectedFeature() {
-		return m
-	}
-	if !m.selectedActionReady(kind) {
-		m.statusMessage = apiMutationKindLabel(kind) + " is unavailable"
-		return m
-	}
-	repos := m.selectedRepoActionOptions(kind)
-	if len(repos) > 1 {
-		m.repoActionPanel = newAPIRepoActionPanel(m.selectedFeature, m.selectedFeatureName(), kind, repos, false)
-		m.statusMessage = ""
-		return m
-	}
-	args := apiFeatureActionArgs{}
-	if len(repos) == 1 {
-		args.Repo = repos[0].Name
-	}
-	return m.confirmSelectedFeatureActionWithArgs(kind, args)
-}
-
 func (m APIAppModel) openRewindPanel() APIAppModel {
 	if !m.requireSelectedFeature() {
 		return m

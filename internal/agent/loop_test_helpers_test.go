@@ -49,10 +49,6 @@ const testStopReasonEndTurn = "end_turn"
 // testRepoNameAPI repo wherever the specific path doesn't matter.
 const testRepoPathAPI = "/tmp/api"
 
-// testRepoWorktreePathAPI is the fixture worktree path (distinct from
-// testRepoPathAPI) tests use for the testRepoNameAPI repo's WorktreePath.
-const testRepoWorktreePathAPI = "/tmp/api-wt"
-
 // testRebaseTargetMaster is the fixture rebase-target branch name tests use
 // wherever the specific branch doesn't matter (distinct from
 // defaultTestBranch so tests can exercise a non-default target).

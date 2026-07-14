@@ -1133,7 +1133,7 @@ func TestAttachMultiSelect_EnterWithoutTicksSubmitsFocused(t *testing.T) {
 	// Move to option B (index 1), commit (→ recap), then confirm on recap.
 	m, _ = m.Update(down)
 	m, _ = m.Update(enter)
-	m, _ = m.Update(enter)
+	_, _ = m.Update(enter)
 
 	got := lastUserMessageText(sess)
 	if got != "B" {

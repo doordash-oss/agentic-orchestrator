@@ -914,8 +914,3 @@ func pollChatChCmd(sess session.SessionView) tea.Cmd {
 		}
 	}
 }
-
-// isChatSession returns true for chat session IDs.
-func isChatSession(sessionID string) bool {
-	return sessionID == chatSessionID
-}

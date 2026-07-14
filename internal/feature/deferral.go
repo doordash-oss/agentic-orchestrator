@@ -209,25 +209,6 @@ func sameScope(a, b []string) bool {
 	return true
 }
 
-// OpenDeferrals returns every deferral whose status is open or
-// open_redeferred, sorted by DueByPhase then ID. Used by the TUI surface.
-func OpenDeferrals(deferrals []Deferral) []Deferral {
-	var out []Deferral
-	for _, d := range deferrals {
-		if d.Status == DeferralClosed {
-			continue
-		}
-		out = append(out, d)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].DueByPhase != out[j].DueByPhase {
-			return out[i].DueByPhase < out[j].DueByPhase
-		}
-		return out[i].ID < out[j].ID
-	})
-	return out
-}
-
 // RedeferralCount reports how many times a deferral has been re-deferred
 // (DeferralEventRedeferred entries in History). A count ≥ 2 is a signal
 // the deferral keeps slipping and may need human attention; phase-plan

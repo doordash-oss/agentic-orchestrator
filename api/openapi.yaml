@@ -1146,7 +1146,6 @@ components:
           type: string
         meta:
           $ref: "#/components/schemas/ResponseMeta"
-      additionalProperties: true
     HealthResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1626,6 +1625,10 @@ components:
             decision:
               type: string
             result:
+              type: string
+            already_existed:
+              type: boolean
+            audit_warning:
               type: string
     AskUserAnswerResponse:
       allOf:

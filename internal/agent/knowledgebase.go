@@ -313,29 +313,6 @@ func HasKBChanges(ctx context.Context, runner ports.CommandRunner, kbDir, repoPa
 	return false, nil
 }
 
-// CountKBCommitsBehind returns the number of commits between the stored KB HEAD
-// and the repo's current HEAD. Returns -1 if no KB exists (no state.json or no
-// index.md), 0 if up-to-date, or the positive commit count if behind.
-// On git errors it returns -1 (treat as no KB).
-func CountKBCommitsBehind(ctx context.Context, runner ports.CommandRunner, kbDir, repoPath string) int {
-	state, err := LoadKBState(kbDir)
-	if err != nil || state == nil || state.HeadCommit == "" {
-		return -1 // no state — KB never built
-	}
-	if _, err := os.Stat(KBPath(kbDir)); err != nil {
-		return -1 // no index.md — KB never built successfully
-	}
-	out, err := runner.Run(ctx, "git", []string{"rev-list", "--count", state.HeadCommit + "..HEAD"}, ports.CommandOpts{Dir: repoPath})
-	if err != nil {
-		return -1
-	}
-	var count int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &count); err != nil {
-		return -1
-	}
-	return count
-}
-
 // BuildKBPrompt constructs the user prompt for the KB agent.
 // For full builds (no existing KB), it instructs the agent to analyze the entire repo.
 // For incremental updates (existing KB + last commit), it provides context for a targeted update.

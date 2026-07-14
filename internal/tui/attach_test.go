@@ -1116,7 +1116,7 @@ func TestStaleMessagesIgnored(t *testing.T) {
 		}},
 	}}
 	var cmd tea.Cmd
-	m, cmd = m.Update(staleMsg)
+	_, cmd = m.Update(staleMsg)
 	if cmd != nil {
 		t.Error("expected nil cmd for stale message")
 	}

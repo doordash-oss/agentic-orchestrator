@@ -20,52 +20,6 @@ import (
 	"testing"
 )
 
-func TestGeneratedDTOResponsesExposeConcreteFields(t *testing.T) {
-	health := HealthResponse{}
-	health.Status = "ok"
-	health.Runtime.RuntimeDir = "/tmp/runtime"
-	health.Owner.PID = 123
-
-	runtime := RuntimeConfigResponse{}
-	runtime.Runtime.StateDir = "/tmp/state"
-	runtime.FeatureDefaults.Pipeline = "research"
-	runtime.Notifications.MuteFeatureInput = true
-
-	featureConfig := FeatureConfigResponse{}
-	featureConfig.Current.Inquireness = "low"
-	featureConfig.Publish.Repos = map[string]bool{"repo": true}
-
-	recovery := RecoverySnapshotResponse{}
-	recovery.SnapshotID = "snapshot"
-	recovery.Items = []RecoveryItem{{Key: "item"}}
-
-	workspace := WorkspaceBrowseResponse{}
-	workspace.Entries = []WorkspaceBrowseEntry{{Name: "repo"}}
-
-	models := ModelCatalogResponse{}
-	models.ProviderModels = map[string][]Model{"codex": {{ID: "gpt-5"}}}
-
-	prompts := PromptSnapshotResponse{}
-	prompts.HelpQueue = []HelpQueue{{Question: "question"}}
-
-	permissions := PermissionSnapshotResponse{}
-	permissions.Requests = []ControlRequest{{RequestID: "req"}}
-
-	artifacts := ArtifactListResponse{}
-	artifacts.Artifacts = []Artifact{{ID: "artifact"}}
-
-	text := TextContentResponse{}
-	text.Text = "content"
-	text.Offset = 1
-
-	live := LivePreviewResponse{}
-	live.Activity = "running"
-	live.Context.Percentage = 10
-
-	transcript := TranscriptResponse{}
-	transcript.Messages = []TranscriptMessage{{Index: 1}}
-}
-
 func TestGeneratedPermissionAnswerRequestPreservesEmptyRememberScope(t *testing.T) {
 	scope := ""
 	body, err := json.Marshal(PermissionAnswerRequest{

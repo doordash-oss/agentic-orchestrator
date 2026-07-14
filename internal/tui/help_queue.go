@@ -16,8 +16,6 @@ package tui
 
 import (
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 const (
@@ -42,20 +40,4 @@ func normalizeManagedHelpQuestion(question string) string {
 		}
 		return question
 	}
-}
-
-func sameManagedHelpMessage(got, want string) bool {
-	return normalizeManagedHelpQuestion(got) == normalizeManagedHelpQuestion(want)
-}
-
-func hasPendingHelpRequestMessage(f *feature.Feature, question string) bool {
-	if f == nil {
-		return false
-	}
-	for _, h := range f.HelpQueue {
-		if sameManagedHelpMessage(h.Question, question) && h.Pending {
-			return true
-		}
-	}
-	return false
 }

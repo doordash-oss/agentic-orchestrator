@@ -47,11 +47,19 @@ type readOnlyRepoSnapshot struct {
 }
 
 type readOnlyUntrackedFile struct {
-	Path    string `json:"path"`
-	Mode    uint32 `json:"mode"`
-	SHA256  string `json:"sha256"`
-	Content []byte `json:"content"`
+	Path       string `json:"path"`
+	Kind       string `json:"kind,omitempty"`
+	Mode       uint32 `json:"mode"`
+	SHA256     string `json:"sha256,omitempty"`
+	Content    []byte `json:"content,omitempty"`
+	LinkTarget string `json:"link_target,omitempty"`
 }
+
+const (
+	readOnlyUntrackedRegular = "regular"
+	readOnlyUntrackedSymlink = "symlink"
+	readOnlyUntrackedOther   = "other"
+)
 
 // RecordReadOnlyRepoBaseline snapshots managed repo worktrees before a
 // read-only role runs so mutations can be detected and restored later.
@@ -218,20 +226,36 @@ func captureReadOnlyUntrackedFiles(ctx context.Context, runner ports.CommandRunn
 		}
 		path := filepath.Join(worktreePath, rel)
 		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() {
+		if err != nil {
 			continue
 		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
+		file := readOnlyUntrackedFile{
+			Path: filepath.ToSlash(rel),
+			Mode: uint32(info.Mode()),
 		}
-		sum := sha256.Sum256(content)
-		files = append(files, readOnlyUntrackedFile{
-			Path:    filepath.ToSlash(rel),
-			Mode:    uint32(info.Mode().Perm()),
-			SHA256:  hex.EncodeToString(sum[:]),
-			Content: content,
-		})
+		switch {
+		case info.Mode().IsRegular():
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(content)
+			file.Kind = readOnlyUntrackedRegular
+			file.SHA256 = hex.EncodeToString(sum[:])
+			file.Content = content
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return nil, err
+			}
+			file.Kind = readOnlyUntrackedSymlink
+			file.LinkTarget = target
+		default:
+			// Special entries are recorded so cleanup never removes a baseline
+			// path that cannot be reconstructed safely (for example, a socket).
+			file.Kind = readOnlyUntrackedOther
+		}
+		files = append(files, file)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
@@ -242,8 +266,21 @@ func restoreReadOnlyRepoBaseline(ctx context.Context, runner ports.CommandRunner
 	if _, err := gitOutput(ctx, runner, worktreePath, "reset", "--hard", "HEAD"); err != nil {
 		return fmt.Errorf("reset read-only repo %s: %w", current.Name, err)
 	}
-	if _, err := gitOutput(ctx, runner, worktreePath, "clean", "-fd"); err != nil {
-		return fmt.Errorf("clean read-only repo %s: %w", current.Name, err)
+	baselinePaths := make(map[string]struct{}, len(baseline.Untracked))
+	for _, file := range baseline.Untracked {
+		baselinePaths[file.Path] = struct{}{}
+	}
+	// Remove only entries introduced during the read-only phase. A broad
+	// `git clean` cannot distinguish those from pre-existing untracked
+	// symlinks, sockets, or empty directories and can destroy user data that
+	// the baseline does not know how to recreate.
+	for _, file := range current.Untracked {
+		if _, existed := baselinePaths[file.Path]; existed {
+			continue
+		}
+		if err := removeIntroducedUntrackedPath(worktreePath, file.Path); err != nil {
+			return fmt.Errorf("remove introduced untracked path %s: %w", file.Path, err)
+		}
 	}
 	if strings.TrimSpace(baseline.Diff) != "" {
 		if _, err := gitOutputWithStdin(ctx, runner, worktreePath, strings.NewReader(baseline.Diff), "apply", "--binary", "--whitespace=nowarn"); err != nil {
@@ -256,18 +293,73 @@ func restoreReadOnlyRepoBaseline(ctx context.Context, runner ports.CommandRunner
 			continue
 		}
 		path := filepath.Join(worktreePath, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return fmt.Errorf("restore untracked parent for %s: %w", file.Path, err)
+		kind := file.Kind
+		if kind == "" { // Version 1 baselines contained regular files only.
+			kind = readOnlyUntrackedRegular
 		}
-		mode := os.FileMode(file.Mode)
-		if mode == 0 {
-			mode = 0o644
-		}
-		if err := os.WriteFile(path, file.Content, mode); err != nil {
-			return fmt.Errorf("restore untracked file %s: %w", file.Path, err)
+		switch kind {
+		case readOnlyUntrackedRegular:
+			if err := replaceWithRegularFile(path, file.Content, os.FileMode(file.Mode).Perm()); err != nil {
+				return fmt.Errorf("restore untracked file %s: %w", file.Path, err)
+			}
+		case readOnlyUntrackedSymlink:
+			if err := replaceWithSymlink(path, file.LinkTarget); err != nil {
+				return fmt.Errorf("restore untracked symlink %s: %w", file.Path, err)
+			}
+		case readOnlyUntrackedOther:
+			info, err := os.Lstat(path)
+			if err != nil || uint32(info.Mode()) != file.Mode {
+				return fmt.Errorf("cannot safely recreate special untracked entry %s", file.Path)
+			}
+		default:
+			return fmt.Errorf("unknown baseline entry kind %q for %s", kind, file.Path)
 		}
 	}
 	return nil
+}
+
+func removeIntroducedUntrackedPath(worktreePath, slashPath string) error {
+	rel := filepath.Clean(filepath.FromSlash(slashPath))
+	if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("unsafe relative path")
+	}
+	path := filepath.Join(worktreePath, rel)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for parent := filepath.Dir(path); parent != worktreePath && parent != filepath.Dir(parent); parent = filepath.Dir(parent) {
+		if err := os.Remove(parent); err != nil {
+			break // Non-empty or pre-existing parent directories are preserved.
+		}
+	}
+	return nil
+}
+
+func replaceWithRegularFile(path string, content []byte, mode os.FileMode) error {
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if mode == 0 {
+		mode = 0o644
+	}
+	return os.WriteFile(path, content, mode)
+}
+
+func replaceWithSymlink(path, target string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.Symlink(target, path)
 }
 
 func writeReadOnlyRepoMutationPatch(phaseDir string, phase feature.Phase, baseline, current readOnlyRepoSnapshot) (string, error) {

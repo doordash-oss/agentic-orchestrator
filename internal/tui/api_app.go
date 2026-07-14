@@ -7698,11 +7698,12 @@ func (m APIAppModel) saveWorkspaceConfigCmd(editor EditConfigModel) tea.Cmd {
 	return func() tea.Msg {
 		ctx := m.apiCtx()
 		snap := editor.editor.Snapshot()
+		checkpoints := feature.FeatureCheckpointsToConfig(snap.Checkpoints)
 		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
-			Defaults: config.DefaultsConfig{
+			Defaults: server.RuntimeDefaultsMutation{
 				Models:      snap.Models,
 				Inquireness: string(snap.Inquireness),
-				Checkpoints: feature.FeatureCheckpointsToConfig(snap.Checkpoints),
+				Checkpoints: &checkpoints,
 				Pipeline:    string(editor.pipeline),
 			},
 			Notifications: &server.NotificationConfigDTO{

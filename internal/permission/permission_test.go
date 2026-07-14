@@ -62,6 +62,44 @@ func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) 
 	requirePermissionAllowed(t, handler, "Agent", `{"prompt":"explore the implementation"}`)
 }
 
+func TestBoundedHelperArtifactHandler_DeniesWriteCapableReadCommands(t *testing.T) {
+	handler := &BoundedHelperArtifactHandler{}
+
+	for _, command := range []string{
+		"sort -o /tmp/overwritten input.txt",
+		"sort --output=/tmp/overwritten input.txt",
+		"sort --compress-program=/tmp/mutator input.txt",
+		"sort $FLAGS input.txt",
+		"sort {-o,/tmp/overwritten} input.txt",
+		"uniq input.txt /tmp/overwritten",
+		"find . -fprint /tmp/overwritten",
+		"sed --in-place=.bak s/a/b/ file.txt",
+		"sed -ni s/a/b/ file.txt",
+		"sed 'w /tmp/overwritten' input.txt",
+		"rg --pre=/tmp/mutator pattern .",
+		"git diff --output=/tmp/overwritten",
+		"git diff --ext-diff",
+		"git branch new-branch",
+		"git branch $ARGS",
+		"echo harmless 2>/dev/null/../../tmp/overwritten",
+	} {
+		t.Run(command, func(t *testing.T) {
+			requirePermissionDenied(t, handler, toolNameBash, `{"command":"`+command+`"}`)
+		})
+	}
+
+	for _, command := range []string{
+		"sort input.txt",
+		"uniq -c input.txt",
+		"git branch --show-current",
+		"git diff --stat",
+	} {
+		t.Run("allows "+command, func(t *testing.T) {
+			requirePermissionAllowed(t, handler, toolNameBash, `{"command":"`+command+`"}`)
+		})
+	}
+}
+
 // TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell confirms that when the
 // helper process runs under an OS read-only-worktree sandbox (Sandboxed=true),
 // shell is unrestricted — the read-only-analysis constructs the allowlist rejects
@@ -130,6 +168,10 @@ func TestCreateWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testin
 	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+` && rm -rf /"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+`; echo done"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch $(echo `+marker+`)"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+root+`/{marker,../../outside}"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+root+`/*.md"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch $MARKER"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch ~/marker"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+` > /dev/null"}`)
 	requirePermissionDeferred(t, handler, `{"command":"nottouch `+marker+`"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch"}`)

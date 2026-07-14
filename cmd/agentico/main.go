@@ -1932,7 +1932,7 @@ func applyNeedUserInputDraftAnswers(rec *agent.NeedUserInputRecord, answers map[
 	return nil
 }
 
-func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch config.DefaultsConfig) bool {
+func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntime.RuntimeDefaultsMutation) bool {
 	if dst == nil {
 		return false
 	}
@@ -1965,7 +1965,7 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch config.Defau
 	if patch.MaxPhasePlanIterations > 0 && setIfChanged(&dst.MaxPhasePlanIterations, patch.MaxPhasePlanIterations) {
 		changed = true
 	}
-	if patch.Checkpoints != (config.Checkpoints{}) && setIfChanged(&dst.Checkpoints, patch.Checkpoints) {
+	if patch.Checkpoints != nil && setCheckpointsIfChanged(&dst.Checkpoints, *patch.Checkpoints) {
 		changed = true
 	}
 	if len(patch.PipelinePreferences) > 0 {
@@ -1973,6 +1973,20 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch config.Defau
 		changed = true
 	}
 	return changed
+}
+
+func setCheckpointsIfChanged(dst *config.Checkpoints, val config.Checkpoints) bool {
+	if dst.InquiryReview == val.InquiryReview &&
+		dst.ResearchReview == val.ResearchReview &&
+		dst.DesignReview == val.DesignReview &&
+		dst.RoadmapReview == val.RoadmapReview &&
+		dst.PhasePlanReview == val.PhasePlanReview &&
+		dst.ManualPublish == val.ManualPublish &&
+		dst.DraftPublish == val.DraftPublish {
+		return false
+	}
+	*dst = val
+	return true
 }
 
 // setIfChanged assigns val to *dst and reports true if that changed dst's value.

@@ -54,8 +54,9 @@ type apiHandler struct {
 	requestShutdown       func()
 	disableHostValidation bool
 
-	recoveryMu        sync.Mutex
-	recoverySnapshots map[string][]ports.RecoveryItem
+	recoveryMu         sync.Mutex
+	recoverySnapshots  map[string][]ports.RecoveryItem
+	reviewSessionLocks *reviewSessionLockSet
 }
 
 func newAPIHandler(opts HandlerOptions) *apiHandler {
@@ -89,6 +90,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		mutations:             opts.Mutations,
 		requestShutdown:       opts.RequestShutdown,
 		disableHostValidation: opts.DisableHostValidation,
+		reviewSessionLocks:    newReviewSessionLockSet(),
 	}
 	return handler
 }

@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -506,6 +507,34 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 	}
 	if updated.Result != resultUpdated || !sawTrustedHeader {
 		t.Fatalf("UpdateRuntimeConfig() = %+v trusted=%v, want updated trusted result", updated, sawTrustedHeader)
+	}
+}
+
+func TestClientRuntimeConfigUpdatePreservesAllFalseCheckpoints(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req RuntimeConfigMutationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode update request: %v", err)
+		}
+		if req.Defaults.Checkpoints == nil {
+			t.Fatal("decoded checkpoints = nil, want explicit all-false update")
+		}
+		if *req.Defaults.Checkpoints != (config.Checkpoints{}) {
+			t.Fatalf("decoded checkpoints = %+v, want all false", *req.Defaults.Checkpoints)
+		}
+		writeJSON(w, http.StatusOK, RuntimeConfigUpdateResponse{APIVersion: APIVersion, Result: resultUpdated})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	disabled := config.Checkpoints{}
+	if _, err := client.UpdateRuntimeConfig(context.Background(), RuntimeConfigMutationRequest{
+		Defaults: RuntimeDefaultsMutation{Checkpoints: &disabled},
+	}); err != nil {
+		t.Fatalf("UpdateRuntimeConfig() error = %v", err)
 	}
 }
 
@@ -1012,7 +1041,7 @@ func TestClientFetchRefreshSnapshotHydratesLivePreviewSessionForFeatureScopedSes
 	}
 }
 
-func TestClientFetchRefreshSnapshotResnapshotsPromptsOnConnected(t *testing.T) {
+func TestClientFetchRefreshSnapshotResnapshotsAfterControlEvent(t *testing.T) {
 	var sawFeatures, sawPrompts, sawPermissions, sawSessions bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
@@ -1047,29 +1076,33 @@ func TestClientFetchRefreshSnapshotResnapshotsPromptsOnConnected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	// The `connected` event (and snapshot_required heartbeats) signal the client
-	// to re-snapshot. A session sitting idle in WaitingHelp emits no further
-	// events, so this (re)connect is the only chance to pull the pending
-	// question into the prompt snapshot that drives the dashboard help badge.
-	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:            SSEEventDTO{Kind: sseEventConnected, Resource: ResourceDTO{Type: resourceTypeRuntime}, SnapshotRequired: true},
-		Resource:         ResourceDTO{Type: resourceTypeRuntime},
-		SnapshotRequired: true,
-	})
-	if err != nil {
-		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
-	}
-	if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.AskUserQuestions) != 1 {
-		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want re-snapshotted prompts on snapshot_required", snapshot.Prompts, sawPrompts)
-	}
-	if !sawFeatures || snapshot.Features == nil || len(snapshot.Features.Features) != 1 {
-		t.Fatalf("FetchRefreshSnapshot() features = %+v, sawFeatures=%v; want re-snapshotted features", snapshot.Features, sawFeatures)
-	}
-	if !sawPermissions || snapshot.Permissions == nil {
-		t.Fatalf("FetchRefreshSnapshot() permissions = %+v, sawPermissions=%v; want re-snapshotted permissions", snapshot.Permissions, sawPermissions)
-	}
-	if !sawSessions || snapshot.Sessions == nil || len(snapshot.Sessions.Sessions) != 1 {
-		t.Fatalf("FetchRefreshSnapshot() sessions = %+v, sawSessions=%v; want re-snapshotted sessions", snapshot.Sessions, sawSessions)
+	// Connected and stream.reset events both mean the cursor may have missed
+	// state. A session sitting idle in WaitingHelp emits no further events, so
+	// either control event must pull the pending question into the snapshot.
+	for _, kind := range []string{sseEventConnected, sseEventStreamReset} {
+		t.Run(kind, func(t *testing.T) {
+			sawFeatures, sawPrompts, sawPermissions, sawSessions = false, false, false, false
+			snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+				Event:            SSEEventDTO{Kind: kind, Resource: ResourceDTO{Type: resourceTypeRuntime}, SnapshotRequired: true},
+				Resource:         ResourceDTO{Type: resourceTypeRuntime},
+				SnapshotRequired: true,
+			})
+			if err != nil {
+				t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+			}
+			if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.AskUserQuestions) != 1 {
+				t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want re-snapshotted prompts on snapshot_required", snapshot.Prompts, sawPrompts)
+			}
+			if !sawFeatures || snapshot.Features == nil || len(snapshot.Features.Features) != 1 {
+				t.Fatalf("FetchRefreshSnapshot() features = %+v, sawFeatures=%v; want re-snapshotted features", snapshot.Features, sawFeatures)
+			}
+			if !sawPermissions || snapshot.Permissions == nil {
+				t.Fatalf("FetchRefreshSnapshot() permissions = %+v, sawPermissions=%v; want re-snapshotted permissions", snapshot.Permissions, sawPermissions)
+			}
+			if !sawSessions || snapshot.Sessions == nil || len(snapshot.Sessions.Sessions) != 1 {
+				t.Fatalf("FetchRefreshSnapshot() sessions = %+v, sawSessions=%v; want re-snapshotted sessions", snapshot.Sessions, sawSessions)
+			}
+		})
 	}
 }
 

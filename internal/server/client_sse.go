@@ -238,8 +238,9 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	if resource.Type == "" {
 		resource = evt.Resource
 	}
-	// `connected` (and any forced-resync heartbeat) is a pure resync signal: it
-	// carries no resource of its own, so the client must re-pull read-model
+	// `connected`, `stream.reset`, and any forced-resync heartbeat are pure
+	// resync signals: they carry no resource of their own, so the client must
+	// re-pull read-model
 	// state because it may have missed events while disconnected. (Re)connect
 	// is the only refresh trigger for a session sitting idle in WaitingHelp —
 	// it emits no further events — so without a full re-snapshot here the
@@ -247,7 +248,9 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	// dashboard help badge and the attach question panel. Note: ordinary events
 	// also set snapshot_required, but they carry a specific kind/resource that
 	// the switch below uses to fetch only what changed.
-	if evt.Kind == sseEventConnected || (evt.Kind == sseEventHeartbeat && signal.SnapshotRequired) {
+	if evt.Kind == sseEventConnected ||
+		(evt.Kind == sseEventStreamReset && signal.SnapshotRequired) ||
+		(evt.Kind == sseEventHeartbeat && signal.SnapshotRequired) {
 		return c.fetchFullSnapshot(ctx)
 	}
 	if evt.Kind == sseEventSessionOutputActivity {

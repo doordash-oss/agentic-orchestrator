@@ -4703,6 +4703,7 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	if got := client.updateRuntimeConfigRequests; len(got) != 1 ||
 		got[0].Defaults.Models.Inquiry != testModelCodexGPT55 ||
 		got[0].Defaults.Inquireness != "high" ||
+		got[0].Defaults.Checkpoints == nil ||
 		!got[0].Defaults.Checkpoints.RoadmapReview ||
 		got[0].Notifications == nil ||
 		!got[0].Notifications.MuteFeatureInput {
@@ -8803,8 +8804,8 @@ func (f *fakeTUIAPIClient) UpdateRuntimeConfig(_ context.Context, req server.Run
 	if req.Defaults.Pipeline != "" {
 		f.runtime.FeatureDefaults.Pipeline = req.Defaults.Pipeline
 	}
-	if req.Defaults.Checkpoints != (config.Checkpoints{}) {
-		f.runtime.FeatureDefaults.Checkpoints = req.Defaults.Checkpoints
+	if req.Defaults.Checkpoints != nil {
+		f.runtime.FeatureDefaults.Checkpoints = *req.Defaults.Checkpoints
 	}
 	if req.WorkspaceRoots != nil {
 		f.runtime.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)

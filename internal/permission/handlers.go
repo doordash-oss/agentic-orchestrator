@@ -182,7 +182,10 @@ func simpleCommandTargets(input, name string, allowedFlags ...string) ([]string,
 	if command == "" {
 		return nil, false
 	}
-	if strings.ContainsAny(command, "\n\r;`<>|&") || strings.Contains(command, "$(") {
+	// This parser deliberately accepts literal paths only. Expansion happens
+	// after lexical root validation, so allowing any of these shell constructs
+	// would let one apparently in-root token expand to an out-of-root target.
+	if strings.ContainsAny(command, "\n\r;`<>|&$*?[]{}~") {
 		return nil, false
 	}
 	fields := strings.Fields(command)
@@ -394,8 +397,15 @@ func boundedHelperReadOnlyBashAllowed(input string) bool {
 	if command == "" {
 		return false
 	}
-	command = stripReadOnlyShellRedirections(command)
-	if strings.ContainsAny(command, "\n\r;`<>") || strings.Contains(command, "$(") {
+	var ok bool
+	command, ok = stripReadOnlyShellRedirections(command)
+	if !ok {
+		return false
+	}
+	// Only literal arguments reach the command-specific flag checks below.
+	// Otherwise a variable, glob, or brace expansion could turn an apparently
+	// harmless argument into a denied output/exec flag after approval.
+	if strings.ContainsAny(command, "\n\r;`<>$*?[]{}~") {
 		return false
 	}
 	parts := splitReadOnlyShellSegments(command)
@@ -437,14 +447,21 @@ func readOnlySimpleCommandAllowed(command string) bool {
 	}
 	name := filepath.Base(fields[0])
 	switch name {
-	case "cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "rg", "echo", "true", "false", "sort", "uniq", "cut", "tr":
+	case "cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "echo", "true", "false", "cut", "tr":
 		return true
+	case "rg":
+		return !hasShellOption(fields[1:], "--pre")
+	case "sort":
+		return !hasShellOption(fields[1:], "-o", "--output", "--compress-program")
+	case "uniq":
+		return readOnlyUniqAllowed(fields[1:])
 	case "test", "[":
 		return true
 	case "find":
-		return !hasAnyShellToken(fields[1:], "-delete", "-exec", "-execdir", "-ok", "-okdir")
-	case "sed":
-		return !hasSedInPlaceFlag(fields[1:])
+		return !hasAnyShellToken(fields[1:],
+			"-delete", "-exec", "-execdir", "-ok", "-okdir",
+			"-fprint", "-fprint0", "-fprintf", "-fls",
+		)
 	case "git":
 		return gitReadOnlySubcommandAllowed(fields[1:])
 	default:
@@ -452,13 +469,24 @@ func readOnlySimpleCommandAllowed(command string) bool {
 	}
 }
 
-func stripReadOnlyShellRedirections(command string) string {
-	replacer := strings.NewReplacer(
-		"2>/dev/null", "",
-		"2> /dev/null", "",
-		"2>&1", "",
-	)
-	return replacer.Replace(command)
+func stripReadOnlyShellRedirections(command string) (string, bool) {
+	fields := strings.Fields(command)
+	kept := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		switch fields[i] {
+		case "2>/dev/null", "2>&1":
+			continue
+		case "2>":
+			if i+1 >= len(fields) || fields[i+1] != "/dev/null" {
+				return "", false
+			}
+			i++
+			continue
+		default:
+			kept = append(kept, fields[i])
+		}
+	}
+	return strings.Join(kept, " "), true
 }
 
 func hasAnyShellToken(fields []string, denied ...string) bool {
@@ -472,13 +500,36 @@ func hasAnyShellToken(fields []string, denied ...string) bool {
 	return false
 }
 
-func hasSedInPlaceFlag(fields []string) bool {
+// hasShellOption rejects both a standalone option (whose value may be the
+// following field) and attached forms such as -oFILE or --output=FILE.
+func hasShellOption(fields []string, denied ...string) bool {
 	for _, field := range fields {
-		if field == "-i" || strings.HasPrefix(field, "-i.") || strings.HasPrefix(field, "-i'") || strings.HasPrefix(field, `-i"`) {
-			return true
+		for _, option := range denied {
+			if field == option || strings.HasPrefix(field, option+"=") ||
+				(strings.HasPrefix(option, "-") && !strings.HasPrefix(option, "--") && strings.HasPrefix(field, option) && len(field) > len(option)) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// readOnlyUniqAllowed permits the common `uniq [INPUT]` form but not uniq's
+// optional OUTPUT operand. Keeping the accepted flag grammar deliberately
+// narrow avoids mistaking an option value for the input file.
+func readOnlyUniqAllowed(fields []string) bool {
+	positional := 0
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-") {
+			if field == "-" || field == "-c" || field == "-d" || field == "-D" || field == "-i" || field == "-u" || field == "-z" ||
+				field == "--count" || field == "--repeated" || field == "--all-repeated" || field == "--ignore-case" || field == "--unique" || field == "--zero-terminated" {
+				continue
+			}
+			return false
+		}
+		positional++
+	}
+	return positional <= 1
 }
 
 func gitReadOnlySubcommandAllowed(fields []string) bool {
@@ -486,11 +537,29 @@ func gitReadOnlySubcommandAllowed(fields []string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "status", "diff", "log", "show", "ls-files", "rev-parse", "branch":
+	case "status", "ls-files", "rev-parse":
 		return true
+	case "diff", "log", "show":
+		return !hasShellOption(fields[1:], "-o", "--output", "--ext-diff", "--textconv")
+	case "branch":
+		return gitReadOnlyBranchAllowed(fields[1:])
 	default:
 		return false
 	}
+}
+
+func gitReadOnlyBranchAllowed(fields []string) bool {
+	for _, field := range fields {
+		switch field {
+		case "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "--show-current", "--no-color":
+			continue
+		default:
+			// Patterns and branch names are ambiguous here: `git branch foo`
+			// creates a branch, so only known listing flags are accepted.
+			return false
+		}
+	}
+	return true
 }
 
 // DenyAllHandler denies all tool use requests.

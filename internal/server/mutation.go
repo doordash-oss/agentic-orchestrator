@@ -224,10 +224,26 @@ type ChatStartRequest struct {
 }
 
 type RuntimeConfigMutationRequest struct {
-	Defaults       config.DefaultsConfig  `json:"defaults,omitempty"`
-	WorkspaceRoots *[]string              `json:"workspace_roots,omitempty"`
-	UI             *config.UIConfig       `json:"ui,omitempty"`
-	Notifications  *NotificationConfigDTO `json:"notifications,omitempty"`
+	Defaults       RuntimeDefaultsMutation `json:"defaults,omitempty"`
+	WorkspaceRoots *[]string               `json:"workspace_roots,omitempty"`
+	UI             *config.UIConfig        `json:"ui,omitempty"`
+	Notifications  *NotificationConfigDTO  `json:"notifications,omitempty"`
+}
+
+// RuntimeDefaultsMutation is the patch representation of DefaultsConfig.
+// Checkpoints is a pointer because its all-false value is a valid update and
+// must remain distinguishable from an omitted field.
+type RuntimeDefaultsMutation struct {
+	Models                   config.ModelConfig                   `json:"models,omitempty"`
+	PipelinePreferences      map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
+	ExitCriteria             string                               `json:"exit_criteria,omitempty"`
+	Inquireness              string                               `json:"inquireness,omitempty"`
+	Pipeline                 string                               `json:"pipeline,omitempty"`
+	MaxIterations            int                                  `json:"max_iterations,omitempty"`
+	MaxConsecutiveFailures   int                                  `json:"max_consecutive_failures,omitempty"`
+	MaxConsecutiveNoProgress int                                  `json:"max_consecutive_no_progress,omitempty"`
+	MaxPhasePlanIterations   int                                  `json:"max_phase_plan_iterations,omitempty"`
+	Checkpoints              *config.Checkpoints                  `json:"checkpoints,omitempty"`
 }
 
 type PublishFeatureRequest struct {

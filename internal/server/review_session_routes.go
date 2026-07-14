@@ -114,7 +114,7 @@ func (h *apiHandler) reviewSessionService() *reviewSessionService {
 	if h == nil {
 		return newReviewSessionService(nil, decider)
 	}
-	return newReviewSessionService(h.store, decider)
+	return newReviewSessionService(h.store, decider, h.reviewSessionLocks)
 }
 
 func (h *apiHandler) requireTrustedJSONMutation(w http.ResponseWriter, r *http.Request) bool {

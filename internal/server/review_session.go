@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -45,6 +46,25 @@ type reviewSessionService struct {
 	store   FeatureReader
 	decider reviewDecisionFunc
 	now     func() time.Time
+	locks   *reviewSessionLockSet
+}
+
+type reviewSessionLockSet struct {
+	locks sync.Map
+}
+
+func newReviewSessionLockSet() *reviewSessionLockSet {
+	return &reviewSessionLockSet{}
+}
+
+func (s *reviewSessionLockSet) lock(featureID, reviewID string) func() {
+	if s == nil {
+		return func() {}
+	}
+	value, _ := s.locks.LoadOrStore(featureID+"\x00"+reviewID, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 type reviewSessionContext struct {
@@ -79,10 +99,15 @@ type reviewSessionMeta struct {
 	UpdatedAt      time.Time `yaml:"updated_at"`
 }
 
-func newReviewSessionService(store FeatureReader, decider reviewDecisionFunc) *reviewSessionService {
+func newReviewSessionService(store FeatureReader, decider reviewDecisionFunc, lockSets ...*reviewSessionLockSet) *reviewSessionService {
+	locks := newReviewSessionLockSet()
+	if len(lockSets) > 0 && lockSets[0] != nil {
+		locks = lockSets[0]
+	}
 	return &reviewSessionService{
 		store:   store,
 		decider: decider,
+		locks:   locks,
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -94,6 +119,8 @@ func (s *reviewSessionService) Create(featureID string) (ReviewSessionResponse, 
 	if err != nil {
 		return ReviewSessionResponse{}, err
 	}
+	unlock := s.locks.lock(featureID, ctx.reviewID)
+	defer unlock()
 	source, err := os.ReadFile(ctx.sourcePath)
 	if err != nil {
 		return ReviewSessionResponse{}, fmt.Errorf("read review artifact: %w", err)
@@ -134,6 +161,8 @@ func (s *reviewSessionService) Create(featureID string) (ReviewSessionResponse, 
 }
 
 func (s *reviewSessionService) SaveDraft(featureID, reviewID string, req ReviewDraftUpdateRequest) (ReviewSessionResponse, error) {
+	unlock := s.locks.lock(featureID, reviewID)
+	defer unlock()
 	meta, draftPath, metaPath, err := s.loadMetaForFeature(featureID, reviewID)
 	if err != nil {
 		return ReviewSessionResponse{}, err
@@ -156,6 +185,8 @@ func (s *reviewSessionService) SubmitDecision(featureID, reviewID string, req Re
 	if req.Decision != reviewDecisionProceed && req.Decision != reviewDecisionIterate {
 		return ReviewSessionDecisionResponse{}, fmt.Errorf("decision must be proceed or iterate")
 	}
+	unlock := s.locks.lock(featureID, reviewID)
+	defer unlock()
 	meta, draftPath, _, err := s.loadMetaForFeature(featureID, reviewID)
 	if err != nil {
 		return ReviewSessionDecisionResponse{}, err

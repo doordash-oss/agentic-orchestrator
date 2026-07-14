@@ -18,12 +18,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -219,6 +222,78 @@ func TestReviewSessionServiceSaveDraftRejectsStaleRevision(t *testing.T) {
 	var conflict *ActionConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("SaveDraft stale err = %T %v, want ActionConflictError", err, err)
+	}
+}
+
+func TestReviewSessionServiceSaveDraftSerializesRevisionCheckAndWrite(t *testing.T) {
+	store, f, _ := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
+	locks := newReviewSessionLockSet()
+	service := newReviewSessionService(store, nil, locks)
+	secondService := newReviewSessionService(store, nil, locks)
+	resp, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Widen the old race window after the revision check. Without the session
+	// lock, concurrent writers can all pass the comparison before any writes.
+	service.now = func() time.Time {
+		time.Sleep(20 * time.Millisecond)
+		return time.Now().UTC()
+	}
+	secondService.now = service.now
+
+	const writers = 12
+	start := make(chan struct{})
+	results := make(chan error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			writer := service
+			if i%2 == 1 {
+				writer = secondService
+			}
+			_, err := writer.SaveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
+				BaseRevision: resp.DraftRevision,
+				Text:         fmt.Sprintf("# Writer %d\n", i),
+			})
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	succeeded := 0
+	conflicted := 0
+	for err := range results {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		var conflict *ActionConflictError
+		if errors.As(err, &conflict) {
+			conflicted++
+			continue
+		}
+		t.Fatalf("SaveDraft concurrent error = %T %v", err, err)
+	}
+	if succeeded != 1 || conflicted != writers-1 {
+		t.Fatalf("concurrent results = %d success, %d conflicts; want 1 and %d", succeeded, conflicted, writers-1)
+	}
+
+	meta, draftPath, _, err := service.loadMetaForFeature(f.ID, resp.ReviewID)
+	if err != nil {
+		t.Fatalf("load final review metadata: %v", err)
+	}
+	draft, err := os.ReadFile(draftPath)
+	if err != nil {
+		t.Fatalf("read final draft: %v", err)
+	}
+	if meta.DraftRevision != textRevision(draft) {
+		t.Fatalf("metadata revision = %q, draft revision = %q", meta.DraftRevision, textRevision(draft))
 	}
 }
 

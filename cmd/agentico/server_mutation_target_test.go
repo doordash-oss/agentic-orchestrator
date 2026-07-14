@@ -668,18 +668,19 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	}
 	target := serverMutationTarget{cfg: cfg, configPath: configPath}
 
+	checkpoints := config.Checkpoints{
+		RoadmapReview:   true,
+		PhasePlanReview: true,
+	}
 	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
-		Defaults: config.DefaultsConfig{
+		Defaults: serverruntime.RuntimeDefaultsMutation{
 			Models: config.ModelConfig{
 				Research:       testResearchModelNew,
 				Implementation: testImplementationModelNew,
 			},
 			Inquireness:   testInquirenessHigh,
 			MaxIterations: 8,
-			Checkpoints: config.Checkpoints{
-				RoadmapReview:   true,
-				PhasePlanReview: true,
-			},
+			Checkpoints:   &checkpoints,
 		},
 	})
 	if err != nil {
@@ -711,6 +712,55 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	if result.Result != resultUpdated {
 		t.Fatalf("RuntimeConfig() result = %+v; want updated", result)
 	}
+}
+
+func TestServerMutationTargetRuntimeConfigCanDisableAllCheckpoints(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Defaults.Checkpoints = config.Checkpoints{
+		InquiryReview:   true,
+		ResearchReview:  true,
+		DesignReview:    true,
+		RoadmapReview:   true,
+		PhasePlanReview: true,
+		ManualPublish:   true,
+	}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	disabled := config.Checkpoints{}
+
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Defaults: serverruntime.RuntimeDefaultsMutation{Checkpoints: &disabled},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() error = %v", err)
+	}
+	if cfg.Defaults.Checkpoints != disabled {
+		t.Fatalf("in-memory checkpoints = %+v, want all disabled", cfg.Defaults.Checkpoints)
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load config error = %v", err)
+	}
+	if checkpointsEnabled(loaded.Defaults.Checkpoints) {
+		t.Fatalf("persisted checkpoints = %+v, want all disabled", loaded.Defaults.Checkpoints)
+	}
+	if result.Result != resultUpdated {
+		t.Fatalf("RuntimeConfig() result = %+v; want updated", result)
+	}
+}
+
+func checkpointsEnabled(checkpoints config.Checkpoints) bool {
+	return checkpoints.InquiryReview ||
+		checkpoints.ResearchReview ||
+		checkpoints.DesignReview ||
+		checkpoints.RoadmapReview ||
+		checkpoints.PhasePlanReview ||
+		checkpoints.ManualPublish ||
+		checkpoints.DraftPublish
 }
 
 func TestServerMutationTargetRuntimeConfigPersistsWorkspaceRootsAndDiscoversRepos(t *testing.T) {

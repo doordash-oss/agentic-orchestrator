@@ -198,6 +198,8 @@ The `pipeline_gates` map is keyed by pipeline profile name and overrides the def
 
 ## Notifications
 
+The workspace input-alert default can be changed from the TUI with `Shift+E` → Behavior → Input Alerts. A specific feature can override that default with `e` → Behavior → Input Alerts (`default`, `enabled`, or `muted`).
+
 | Field | Description |
 |-------|-------------|
 | `notifications.terminal_bundle_id` | Overrides auto-detected terminal app bundle ID for macOS notifications |
@@ -231,7 +233,7 @@ observability:
 
 ## Launch Flags
 
-Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agentico [flags]`. Feature name, description, repos, checkpoint selection, and publish gating are selected inside the feature creation wizard.
+Launch flags configure how the terminal UI or foreground server starts. `agentico [flags]` starts a local loopback REST runtime and connects the terminal UI through the API-backed client. `agentico server [flags]` starts the foreground loopback HTTP server. Feature name, description, repos, checkpoint selection, and publish gating are selected inside the feature creation wizard.
 
 | Flag | Description | Default |
 |------|-------------|---------|
@@ -242,6 +244,8 @@ Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agen
 | `--dangerously-skip-permissions` | Skip all permission prompts | `false` |
 | `--help`, `-h` | Print usage | - |
 | `--version`, `-v` | Print version | - |
+
+The same launch flags are accepted by `agentico server`.
 
 ## Updating
 

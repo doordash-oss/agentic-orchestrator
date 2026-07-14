@@ -18,10 +18,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+// providerNameClaude identifies the Claude CLI provider in ports.ToolPermissionRequest.ProviderName.
+const providerNameClaude = "claude"
+
+// readOnlyToolNames lists the tools every general-purpose handler treats as
+// always safe to auto-approve: read-only inspection plus todo/task bookkeeping.
+var readOnlyToolNames = map[string]bool{
+	"Read": true, "Glob": true, "Grep": true, "LS": true, "LSP": true, "ExternalDirectory": true,
+	"WebSearch": true, "WebFetch": true,
+	"TodoWrite": true, "TaskCreate": true, "TaskGet": true, "TaskList": true, "TaskUpdate": true,
+}
+
+// isReadOnlyTool reports whether name is one of readOnlyToolNames.
+func isReadOnlyTool(name string) bool {
+	return readOnlyToolNames[name]
+}
 
 // DefaultWriteGuardBytes is the byte threshold above which the SizeGuardHandler
 // denies Claude `Write` tool calls. Large Writes (observed at ~50KB, sometimes
@@ -47,10 +64,10 @@ type SizeGuardHandler struct {
 
 // CanUseTool enforces the Write payload limit for Claude, then delegates.
 func (h *SizeGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	if h.MaxBytes > 0 && req.ProviderName == "claude" && req.ToolName == "Write" {
+	if h.MaxBytes > 0 && req.ProviderName == providerNameClaude && req.ToolName == toolNameWrite {
 		if n, ok := writeContentSize(req.Input); ok && n > h.MaxBytes {
 			return ports.PermissionDecision{
-				Behavior: "deny",
+				Behavior: DecisionDeny,
 				Reason: fmt.Sprintf(
 					"Write blocked: content payload %d bytes exceeds %d-byte limit. "+
 						"Large Writes have repeatedly hung the Claude tool-call stream and dropped the turn with nothing written. "+
@@ -89,7 +106,7 @@ type AutoApproveHandler struct{}
 
 // CanUseTool always returns allow.
 func (h *AutoApproveHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return ports.PermissionDecision{Behavior: "allow"}, nil
+	return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 }
 
 // AcceptEditsHandler auto-approves read-only tools and file edit/write tools,
@@ -100,125 +117,198 @@ type AcceptEditsHandler struct{}
 
 // CanUseTool approves reads and file edits; defers everything else.
 func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if isReadOnlyTool(req.ToolName) {
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+	}
 	switch req.ToolName {
-	// Read-only tools — always safe
-	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
-		"WebSearch", "WebFetch",
-		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
-
 	// File modification tools — auto-approve (matches Claude Code acceptEdits)
-	case "Edit", "Write", "NotebookEdit":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// Agent spawning — auto-approve (subagents are sandboxed)
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 	}
 
 	// Everything else (Bash, etc.) — defer to TUI
 	return ports.PermissionDecision{}, nil
 }
 
-// PlanReviewHandler auto-approves read-only tools and file edits ONLY to the
-// specified plan file path. All other write operations are hard-denied.
-type PlanReviewHandler struct {
-	AllowedPath string // absolute path to the plan file that may be edited
+// CreateWithinRootsHandler auto-approves a plain, conservatively-flagged
+// `touch <path>...` or `mkdir [-p] <path>...` Bash command when every target
+// path falls within Roots, deferring to Inner for everything else. Both
+// commands can only bring an empty file or directory into existence (or, for
+// touch, bump an existing file's mtime) — the same effect Edit/Write already
+// have when AcceptEditsHandler approves them unconditionally — so this closes
+// a gap where the harness prompts for something like a `phase_complete`
+// marker or a `mkdir -p` the harness itself already ran via os.MkdirAll
+// before the session started (see resolvePhaseArtifactDir/runInteractivePhase
+// and RunKnowledgeBaseForRepo), while the equivalent Write/directory-already-
+// exists case would go through silently.
+//
+// Unlike Edit/Write, OpenCode has no per-path scoping for Bash to fall back
+// on: its declarative permission map treats "bash" as a single ask/allow/deny
+// decision, never a per-path glob (see internal/llm/opencode/config.go). So
+// Roots here is the only boundary standing between an approval and letting a
+// shell command anywhere on disk through — a touch/mkdir outside it always
+// defers to Inner rather than being approved by default.
+type CreateWithinRootsHandler struct {
+	Inner ports.PermissionHandler
+	Roots []string
 }
 
-// CanUseTool approves reads and edits to the plan file; defers everything else.
-func (h *PlanReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	switch req.ToolName {
-	// Read-only tools — always safe
-	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
-		"WebSearch", "WebFetch",
-		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
-
-	// Agent spawning — auto-approve (subagents are sandboxed)
-	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
-
-	// File modification tools — only auto-approve for the plan file
-	case "Edit", "Write", "NotebookEdit":
-		if h.AllowedPath != "" && toolInputContainsPath(req.Input, h.AllowedPath) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+// CanUseTool approves an in-root touch/mkdir; everything else defers to Inner.
+func (h *CreateWithinRootsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if req.ToolName == toolNameBash {
+		if targets, ok := simpleCommandTargets(req.Input, "touch"); ok && allPathsWithinRoots(targets, h.Roots) {
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
-		return ports.PermissionDecision{Behavior: "deny", Reason: "only the plan file may be modified during plan review"}, nil
+		if targets, ok := simpleCommandTargets(req.Input, "mkdir", "-p"); ok && allPathsWithinRoots(targets, h.Roots) {
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+		}
 	}
-
-	// Everything else (Bash, etc.) — defer to TUI
-	return ports.PermissionDecision{}, nil
+	return h.Inner.CanUseTool(req)
 }
 
-// toolInputContainsPath checks if the JSON-encoded tool input references the given file path.
-func toolInputContainsPath(input, allowedPath string) bool {
-	// The input is JSON with a "file_path" field for Edit/Write/NotebookEdit.
-	// Simple substring check is sufficient since paths are absolute.
-	return strings.Contains(input, allowedPath)
+// simpleCommandTargets parses a Bash command as a plain `<name> [flag]... <path>...`
+// invocation with no chaining, redirection, or substitution, returning its
+// literal path arguments. Only flags listed in allowedFlags are recognized and
+// skipped; any other `-`-prefixed argument (e.g. touch's -r/-t or mkdir's -m)
+// rejects the whole command, since such flags change what the command does to
+// files outside its argument list — outside what this narrow exception is
+// meant to cover.
+func simpleCommandTargets(input, name string, allowedFlags ...string) ([]string, bool) {
+	command := strings.TrimSpace(extractBashCommand(input))
+	if command == "" {
+		return nil, false
+	}
+	// This parser deliberately accepts literal paths only. Expansion happens
+	// after lexical root validation, so allowing any of these shell constructs
+	// would let one apparently in-root token expand to an out-of-root target.
+	if strings.ContainsAny(command, "\n\r;`<>|&$*?[]{}~") {
+		return nil, false
+	}
+	fields := strings.Fields(command)
+	if len(fields) < 2 || filepath.Base(fields[0]) != name {
+		return nil, false
+	}
+	var targets []string
+	for _, f := range fields[1:] {
+		if strings.HasPrefix(f, "-") {
+			if !slices.Contains(allowedFlags, f) {
+				return nil, false
+			}
+			continue
+		}
+		targets = append(targets, f)
+	}
+	return targets, len(targets) > 0
 }
 
-// ReadOnlyHandler auto-approves read-only tools and Agent spawning,
-// but hard-denies all file modification tools. Used by the "Ask me Anything" chat.
+// allPathsWithinRoots reports whether every path is exactly one of roots or a
+// descendant of one. Returns false for an empty paths list so a touch with no
+// targets never matches.
+func allPathsWithinRoots(paths, roots []string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	for _, p := range paths {
+		if !pathWithinRoots(p, roots) {
+			return false
+		}
+	}
+	return true
+}
+
+// pathWithinRoots reports whether path is exactly one of roots or a
+// descendant of one, comparing absolute forms so a root supplied as a
+// relative path still matches consistently.
+func pathWithinRoots(path string, roots []string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	for _, root := range roots {
+		rootAbs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		if abs == rootAbs || strings.HasPrefix(abs, rootAbs+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// WrapGeneralPhaseHandlerWithSafeCreate wraps h in a CreateWithinRootsHandler
+// when h is one of the general accept-edits handlers permHandlerFor builds
+// (AutoApproveHandler, AcceptEditsHandler, or CachingHandler over one of
+// those — optionally already wrapped in a SizeGuardHandler via Guarded).
+// Any other handler shape — bounded helpers, review-feedback sessions, and
+// restricted read-only sessions — is returned unchanged, since those exist
+// specifically to restrict writes below the general writable-root policy and
+// must not be loosened by this exception.
+func WrapGeneralPhaseHandlerWithSafeCreate(h ports.PermissionHandler, roots []string) ports.PermissionHandler {
+	if len(roots) == 0 || !isGeneralPhaseHandler(h) {
+		return h
+	}
+	return &CreateWithinRootsHandler{Inner: h, Roots: roots}
+}
+
+// isGeneralPhaseHandler reports whether h is, optionally through a
+// SizeGuardHandler, one of the handler types permHandlerFor builds.
+func isGeneralPhaseHandler(h ports.PermissionHandler) bool {
+	if guard, ok := h.(*SizeGuardHandler); ok {
+		h = guard.Inner
+	}
+	switch h.(type) {
+	case *AutoApproveHandler, *AcceptEditsHandler, *CachingHandler:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReadOnlyHandler auto-approves read-only tools and Agent spawning, but
+// hard-denies all file modification tools.
 type ReadOnlyHandler struct{}
 
 // CanUseTool approves reads; denies all writes.
 func (h *ReadOnlyHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if isReadOnlyTool(req.ToolName) {
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+	}
 	switch req.ToolName {
-	// Read-only tools — always safe
-	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
-		"WebSearch", "WebFetch",
-		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
-
 	// Agent spawning — auto-approve (subagents are sandboxed)
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// File modification tools — hard deny
-	case "Edit", "Write", "NotebookEdit":
-		return ports.PermissionDecision{Behavior: "deny", Reason: "chat is read-only"}, nil
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
+		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
 	}
 
 	// Everything else (Bash, etc.) — hard deny for safety
-	return ports.PermissionDecision{Behavior: "deny", Reason: "chat is read-only"}, nil
+	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
 }
 
-// ReviewFeedbackHandler auto-approves read-only tools and file edits ONLY to
-// the specified review-feedback.md path. All other write operations are
-// hard-denied. Used by the bounded review/validation helper so the reviewer
-// can produce its structured handoff file (the harness then parses the file
-// deterministically) while still being prevented from touching the rest of
-// the worktree.
-//
-// Structurally identical to PlanReviewHandler / RewindReviewHandler; the type
-// is kept distinct so the deny-reason text and the wiring site stay
-// self-documenting (a stack trace through ReviewFeedbackHandler.CanUseTool
-// makes the call site obvious).
-type ReviewFeedbackHandler struct {
-	AllowedPath string // absolute path to the review-feedback.md file the reviewer must produce
-}
+// AMAHandler is used by the Ask Me Anything chat. It auto-approves read-only
+// inspection, disables delegation, and leaves other top-level tools for the
+// user-facing permission UI.
+type AMAHandler struct{}
 
-// CanUseTool approves reads and edits to the review-feedback file; denies
-// every other write or shell tool so the reviewer cannot mutate the worktree.
-func (h *ReviewFeedbackHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	switch req.ToolName {
-	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
-		"WebSearch", "WebFetch",
-		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
-
-	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
-
-	case "Edit", "Write", "NotebookEdit":
-		if h.AllowedPath != "" && toolInputContainsPath(req.Input, h.AllowedPath) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
-		}
-		return ports.PermissionDecision{Behavior: "deny", Reason: "review helper may only write the review-feedback.md handoff file"}, nil
+// CanUseTool approves safe reads, denies subagent delegation, and defers
+// diagnostics or mutations such as Bash/Edit/Write to the caller.
+func (h *AMAHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if isReadOnlyTool(req.ToolName) {
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 	}
-
-	return ports.PermissionDecision{Behavior: "deny", Reason: "review helper is read-only except for review-feedback.md"}, nil
+	switch req.ToolName {
+	case "Agent", "Task":
+		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "AMA chat does not support sub-agents"}, nil
+	default:
+		return ports.PermissionDecision{}, nil
+	}
 }
 
 // BoundedHelperArtifactHandler auto-approves read-only inspection tools,
@@ -240,36 +330,36 @@ type BoundedHelperArtifactHandler struct {
 func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory", "WebSearch", "WebFetch":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// Sub-agent spawning — auto-approve. Spawned sub-agents inherit the
 	// provider's depth-1 profile (no sub-sub-agents) and cannot mutate the
 	// worktree, matching the research-phase treatment.
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
-	case "Bash":
+	case toolNameBash:
 		if h.Sandboxed || boundedHelperReadOnlyBashAllowed(req.Input) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
 		return ports.PermissionDecision{
-			Behavior: "deny",
+			Behavior: DecisionDeny,
 			Reason:   "bounded helper shell access is limited to read-only inspection commands",
 		}, nil
 
-	case "Edit", "Write", "NotebookEdit":
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
 		path, ok := toolInputFilePath(req.Input)
 		if ok && h.pathAllowed(path) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
 		return ports.PermissionDecision{
-			Behavior: "deny",
+			Behavior: DecisionDeny,
 			Reason:   "bounded helper may write only declared artifacts in its helper directory",
 		}, nil
 	}
 
 	return ports.PermissionDecision{
-		Behavior: "deny",
+		Behavior: DecisionDeny,
 		Reason:   "bounded helper may not mutate undeclared files",
 	}, nil
 }
@@ -307,8 +397,15 @@ func boundedHelperReadOnlyBashAllowed(input string) bool {
 	if command == "" {
 		return false
 	}
-	command = stripReadOnlyShellRedirections(command)
-	if strings.ContainsAny(command, "\n\r;`<>") || strings.Contains(command, "$(") {
+	var ok bool
+	command, ok = stripReadOnlyShellRedirections(command)
+	if !ok {
+		return false
+	}
+	// Only literal arguments reach the command-specific flag checks below.
+	// Otherwise a variable, glob, or brace expansion could turn an apparently
+	// harmless argument into a denied output/exec flag after approval.
+	if strings.ContainsAny(command, "\n\r;`<>$*?[]{}~") {
 		return false
 	}
 	parts := splitReadOnlyShellSegments(command)
@@ -350,14 +447,21 @@ func readOnlySimpleCommandAllowed(command string) bool {
 	}
 	name := filepath.Base(fields[0])
 	switch name {
-	case "cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "rg", "echo", "true", "false", "sort", "uniq", "cut", "tr":
+	case "cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "echo", "true", "false", "cut", "tr":
 		return true
+	case "rg":
+		return !hasShellOption(fields[1:], "--pre")
+	case "sort":
+		return !hasShellOption(fields[1:], "-o", "--output", "--compress-program")
+	case "uniq":
+		return readOnlyUniqAllowed(fields[1:])
 	case "test", "[":
 		return true
 	case "find":
-		return !hasAnyShellToken(fields[1:], "-delete", "-exec", "-execdir", "-ok", "-okdir")
-	case "sed":
-		return !hasSedInPlaceFlag(fields[1:])
+		return !hasAnyShellToken(fields[1:],
+			"-delete", "-exec", "-execdir", "-ok", "-okdir",
+			"-fprint", "-fprint0", "-fprintf", "-fls",
+		)
 	case "git":
 		return gitReadOnlySubcommandAllowed(fields[1:])
 	default:
@@ -365,13 +469,24 @@ func readOnlySimpleCommandAllowed(command string) bool {
 	}
 }
 
-func stripReadOnlyShellRedirections(command string) string {
-	replacer := strings.NewReplacer(
-		"2>/dev/null", "",
-		"2> /dev/null", "",
-		"2>&1", "",
-	)
-	return replacer.Replace(command)
+func stripReadOnlyShellRedirections(command string) (string, bool) {
+	fields := strings.Fields(command)
+	kept := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		switch fields[i] {
+		case "2>/dev/null", "2>&1":
+			continue
+		case "2>":
+			if i+1 >= len(fields) || fields[i+1] != "/dev/null" {
+				return "", false
+			}
+			i++
+			continue
+		default:
+			kept = append(kept, fields[i])
+		}
+	}
+	return strings.Join(kept, " "), true
 }
 
 func hasAnyShellToken(fields []string, denied ...string) bool {
@@ -385,13 +500,36 @@ func hasAnyShellToken(fields []string, denied ...string) bool {
 	return false
 }
 
-func hasSedInPlaceFlag(fields []string) bool {
+// hasShellOption rejects both a standalone option (whose value may be the
+// following field) and attached forms such as -oFILE or --output=FILE.
+func hasShellOption(fields []string, denied ...string) bool {
 	for _, field := range fields {
-		if field == "-i" || strings.HasPrefix(field, "-i.") || strings.HasPrefix(field, "-i'") || strings.HasPrefix(field, `-i"`) {
-			return true
+		for _, option := range denied {
+			if field == option || strings.HasPrefix(field, option+"=") ||
+				(strings.HasPrefix(option, "-") && !strings.HasPrefix(option, "--") && strings.HasPrefix(field, option) && len(field) > len(option)) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// readOnlyUniqAllowed permits the common `uniq [INPUT]` form but not uniq's
+// optional OUTPUT operand. Keeping the accepted flag grammar deliberately
+// narrow avoids mistaking an option value for the input file.
+func readOnlyUniqAllowed(fields []string) bool {
+	positional := 0
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-") {
+			if field == "-" || field == "-c" || field == "-d" || field == "-D" || field == "-i" || field == "-u" || field == "-z" ||
+				field == "--count" || field == "--repeated" || field == "--all-repeated" || field == "--ignore-case" || field == "--unique" || field == "--zero-terminated" {
+				continue
+			}
+			return false
+		}
+		positional++
+	}
+	return positional <= 1
 }
 
 func gitReadOnlySubcommandAllowed(fields []string) bool {
@@ -399,43 +537,29 @@ func gitReadOnlySubcommandAllowed(fields []string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "status", "diff", "log", "show", "ls-files", "rev-parse", "branch":
+	case "status", "ls-files", "rev-parse":
 		return true
+	case "diff", "log", "show":
+		return !hasShellOption(fields[1:], "-o", "--output", "--ext-diff", "--textconv")
+	case "branch":
+		return gitReadOnlyBranchAllowed(fields[1:])
 	default:
 		return false
 	}
 }
 
-// RewindReviewHandler auto-approves read-only tools and file edits ONLY to the
-// specified artifact file path. All other write operations are hard-denied.
-// Used during rewind review sessions to let the user modify the previous phase's output.
-type RewindReviewHandler struct {
-	AllowedPath string // absolute path to the artifact file that may be edited
-}
-
-// CanUseTool approves reads and edits to the artifact file; defers everything else.
-func (h *RewindReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	switch req.ToolName {
-	// Read-only tools — always safe
-	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
-		"WebSearch", "WebFetch",
-		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
-
-	// Agent spawning — auto-approve (subagents are sandboxed)
-	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
-
-	// File modification tools — only auto-approve for the allowed artifact file
-	case "Edit", "Write", "NotebookEdit":
-		if h.AllowedPath != "" && toolInputContainsPath(req.Input, h.AllowedPath) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+func gitReadOnlyBranchAllowed(fields []string) bool {
+	for _, field := range fields {
+		switch field {
+		case "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "--show-current", "--no-color":
+			continue
+		default:
+			// Patterns and branch names are ambiguous here: `git branch foo`
+			// creates a branch, so only known listing flags are accepted.
+			return false
 		}
-		return ports.PermissionDecision{Behavior: "deny", Reason: "only the artifact file may be modified during rewind review"}, nil
 	}
-
-	// Everything else (Bash, etc.) — defer to TUI
-	return ports.PermissionDecision{}, nil
+	return true
 }
 
 // DenyAllHandler denies all tool use requests.
@@ -443,5 +567,5 @@ type DenyAllHandler struct{}
 
 // CanUseTool always returns deny.
 func (h *DenyAllHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return ports.PermissionDecision{Behavior: "deny", Reason: "all tools denied"}, nil
+	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "all tools denied"}, nil
 }

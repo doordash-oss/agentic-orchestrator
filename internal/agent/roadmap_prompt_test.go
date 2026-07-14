@@ -21,6 +21,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// testWorktreePathA is the sentinel worktree path used across this file's
+// "prefer worktree over base path" test cases.
+const testWorktreePathA = "/worktree/a"
+
 func TestBuildRoadmapPrompt(t *testing.T) {
 	f := &feature.Feature{
 		Name:        "Test Feature",
@@ -265,26 +269,31 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 			t.Error("roadmap prompt should not include an Execution Order section")
 		}
 	})
-	t.Run("single_repo_omits_target_repositories", func(t *testing.T) {
+	t.Run("single_repo_includes_target_repositories", func(t *testing.T) {
 		f := &feature.Feature{
 			Name:  "test-feature",
-			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a"}},
+			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a", WorktreePath: testWorktreePathA}},
 		}
 		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
-		if strings.Contains(prompt, "Target Repositories") {
-			t.Error("single-repo should not have Target Repositories section")
+		for _, want := range []string{"Target Repositories", "repo-a", testWorktreePathA} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("single-repo prompt missing %q:\n%s", want, prompt)
+			}
+		}
+		if strings.Contains(prompt, "/path/a") {
+			t.Error("should use worktree path instead of original path for repo-a")
 		}
 	})
 	t.Run("multi_repo_uses_worktree_path_when_available", func(t *testing.T) {
 		f := &feature.Feature{
 			Name: "test-feature",
 			Repos: []feature.FeatureRepo{
-				{Name: "repo-a", Path: "/path/a", WorktreePath: "/worktree/a"},
+				{Name: "repo-a", Path: "/path/a", WorktreePath: testWorktreePathA},
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
 		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
-		if !strings.Contains(prompt, "/worktree/a") {
+		if !strings.Contains(prompt, testWorktreePathA) {
 			t.Error("expected worktree path for repo-a")
 		}
 		if strings.Contains(prompt, "/path/a") {
@@ -559,7 +568,7 @@ func TestBuildPhasePlanRevisionPromptWithApprovals(t *testing.T) {
 
 	approvals := []AxisApproval{
 		{Axis: "structural", FrozenSections: []string{"Desired End State", "Changes Required"}},
-		{Axis: "grounding", FrozenSections: []string{"## Grounding"}},
+		{Axis: testAxisGrounding, FrozenSections: []string{groundingSectionHeading}},
 	}
 
 	prompt := BuildPhasePlanRevisionPrompt(f, "", "/phase-plan.md", "Scope axis flagged drift", "", phase, 3, approvals)

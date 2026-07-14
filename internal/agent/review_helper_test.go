@@ -56,7 +56,7 @@ touch "`+filepath.Join(helperDir, "phase_complete")+`"
 			return []string{"bash", script}, nil, &ports.SessionOpts{
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
-				ProviderName:      "mock",
+				ProviderName:      testMockIdentifier,
 			}, nil
 		},
 	}
@@ -117,12 +117,12 @@ func TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode(t *testing.T) {
 				}
 			}
 
-			provider := &captureProvider{name: "mock", model: "test-model", finishOrViolate: tc.nudge}
+			provider := &captureProvider{name: testMockIdentifier, model: "test-model", finishOrViolate: tc.nudge}
 			reg := llm.NewRegistry()
 			reg.Register(provider)
 
 			sess := newUtilityTestSession()
-			sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+			sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn}
 
 			var capturedOpts *ports.SessionOpts
 			sm := mocks.NewMockSessionManager()
@@ -136,7 +136,7 @@ func TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(helperDir, PhaseCompleteFile), nil, 0o644); err != nil {
 					t.Errorf("write marker: %v", err)
 				}
-				sess.statusCh <- "SUCCESS"
+				sess.statusCh <- agentStatusSuccess
 				return sess, nil
 			}
 
@@ -149,7 +149,7 @@ func TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode(t *testing.T) {
 					// bounded-helper capability on sessOpts.
 					return []string{"bash", "true"}, nil, &ports.SessionOpts{
 						PermHandler:                  opts.PermHandler,
-						ProviderName:                 "mock",
+						ProviderName:                 testMockIdentifier,
 						SupportsFinishOrViolateNudge: provider.SupportsFinishOrViolateNudge(),
 					}, nil
 				},
@@ -199,7 +199,7 @@ func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *test
 	wantRoots := []string{feedbackPath, markerPath, notesPath}
 
 	script := testutil.WriteScript(t, root, "validator.sh", `cat > "`+feedbackPath+`" << 'REVIEWEOF'
-`+testutil.StructuredReviewFeedback("", "", "APPROVED")+`REVIEWEOF
+`+testutil.StructuredReviewFeedback("", "", agentStatusApproved)+`REVIEWEOF
 touch "`+markerPath+`"
 `+testutil.JSONLInit+`
 `+testutil.JSONLSuccess)
@@ -215,7 +215,7 @@ touch "`+markerPath+`"
 			return []string{"bash", script}, nil, &ports.SessionOpts{
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
-				ProviderName:      "mock",
+				ProviderName:      testMockIdentifier,
 			}, nil
 		},
 	}
@@ -276,7 +276,7 @@ func TestRunReadOnlyReviewHelper_ProtocolViolationOverridesApprovedFeedback(t *t
 			return []string{"bash", script}, nil, &ports.SessionOpts{
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
-				ProviderName:      "mock",
+				ProviderName:      testMockIdentifier,
 			}, nil
 		},
 	}

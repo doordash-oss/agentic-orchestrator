@@ -21,9 +21,47 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
+
+// testPanelHeight mirrors the feature-list panel height formula computed
+// inline by DashboardModel.View(), so scroll tests can seed panelHeight
+// before manually driving cursor movement through Update.
+func testPanelHeight(m DashboardModel) int {
+	w := m.width
+	h := m.height
+	if w < 40 {
+		w = 80
+	}
+	if h < 10 {
+		h = 24
+	}
+	headerH := lipgloss.Height(m.renderHeader(w))
+	footerH := lipgloss.Height(m.renderFooter()) + 2
+	panelHeight := h - headerH - footerH
+	if panelHeight < 6 {
+		panelHeight = 6
+	}
+	return panelHeight
+}
+
+// testRepoNameOrchestrator and testRepoNameWeb are fixture repo-name
+// literals used across this file's repo-list/repo-state tests.
+const (
+	testRepoNameOrchestrator = "agentic-orchestrator"
+	testRepoNameWeb          = "web"
+)
+
+// selectedFeatureID returns the ID of the currently selected feature, or ""
+// if the cursor is not on a feature row.
+func selectedFeatureID(m DashboardModel) string {
+	if f := m.SelectedFeature(); f != nil {
+		return f.ID
+	}
+	return ""
+}
 
 func TestDashboardSelectFeature(t *testing.T) {
 	t.Parallel()
@@ -35,25 +73,55 @@ func TestDashboardSelectFeature(t *testing.T) {
 
 	// Cursor 0 is now the IN PROGRESS section header
 	if m.SelectedSection() != "inProgress" {
-		t.Errorf("expected inProgress section header at cursor 0, got section=%q feature=%s", m.SelectedSection(), m.SelectedFeatureID())
+		t.Errorf("expected inProgress section header at cursor 0, got section=%q feature=%s", m.SelectedSection(), selectedFeatureID(m))
 	}
 
 	// Move down to first feature
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.SelectedFeatureID() != "feat-1" {
-		t.Errorf("expected feat-1 selected after first down, got %s", m.SelectedFeatureID())
+	if selectedFeatureID(m) != "feat-1" {
+		t.Errorf("expected feat-1 selected after first down, got %s", selectedFeatureID(m))
 	}
 
 	// Move down to second feature
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.SelectedFeatureID() != "feat-2" {
-		t.Errorf("expected feat-2 selected after second down, got %s", m.SelectedFeatureID())
+	if selectedFeatureID(m) != "feat-2" {
+		t.Errorf("expected feat-2 selected after second down, got %s", selectedFeatureID(m))
 	}
 
 	// Move up back to first feature
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.SelectedFeatureID() != "feat-1" {
-		t.Errorf("expected feat-1 selected after up, got %s", m.SelectedFeatureID())
+	if selectedFeatureID(m) != "feat-1" {
+		t.Errorf("expected feat-1 selected after up, got %s", selectedFeatureID(m))
+	}
+}
+
+func TestDashboardClipsLongFailureDetailLinesToTerminalWidth(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		ID:           "feat-failed",
+		Name:         "Translate in Sicilian",
+		Slug:         "translate-in-sicilian",
+		Status:       feature.StatusFailed,
+		CurrentPhase: feature.PhaseFinalReview,
+		FailureType:  feature.FailureProtocolViolation,
+		LastError:    "protocol violation: final_review_reviewer @ /Users/ivar.lazzaro/.agentic-workflow/worktrees/agentico-mcp-server/agentic-orchestrator/runs/run-001/final-review/iteration-02: dropped critical SDK message (type=result) after 5s on full attachCh",
+		Repos:        []feature.FeatureRepo{{Name: testRepoNameOrchestrator}},
+		RepoStates: map[string]*feature.RepoState{
+			testRepoNameOrchestrator: {Touched: true, LastError: "dropped critical SDK message (type=result) after 5s on full attachCh"},
+		},
+	}
+	m := dashboardWithSelectedFeature(f)
+	m.width = 120
+	m.height = 18
+	m.focusPanel = 1
+	m.syncPreview()
+
+	view := m.View()
+	for i, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if got := ansi.StringWidth(line); got > m.width {
+			t.Fatalf("dashboard line %d width = %d, want <= %d; line=%q\nview:\n%s", i, got, m.width, ansi.Strip(line), ansi.Strip(view))
+		}
 	}
 }
 
@@ -117,12 +185,12 @@ func TestDashboardViewRenders(t *testing.T) {
 	}
 
 	// Should contain version in header
-	if !containsString(view, GetVersion()) {
+	if !strings.Contains(view, GetVersion()) {
 		t.Error("expected version in header")
 	}
 
 	// Should contain feature slug
-	if !containsString(view, "test-feature") {
+	if !strings.Contains(view, "test-feature") {
 		t.Error("expected feature slug in view")
 	}
 }
@@ -195,10 +263,10 @@ func TestDashboardEmpty(t *testing.T) {
 	view := m.View()
 
 	// Ghost CTA should appear instead of the old "No features yet" text
-	if !containsString(view, "Create your first feature") {
+	if !strings.Contains(view, "Create your first feature") {
 		t.Error("expected ghost CTA text in empty state")
 	}
-	if containsString(view, "No features yet") {
+	if strings.Contains(view, "No features yet") {
 		t.Error("old empty state message should be removed")
 	}
 }
@@ -210,13 +278,13 @@ func TestGhostCTAWelcomePanel(t *testing.T) {
 	m.height = 30
 	view := m.View()
 
-	if !containsString(view, "What does Agentic Orchestrator do?") {
+	if !strings.Contains(view, "What does Agentic Orchestrator do?") {
 		t.Error("expected welcome panel title")
 	}
-	if !containsString(view, "Examples:") {
+	if !strings.Contains(view, "Examples:") {
 		t.Error("expected Examples heading")
 	}
-	if !containsString(view, "Press  n  to start.") {
+	if !strings.Contains(view, "Press  n  to start.") {
 		t.Error("expected hint text")
 	}
 }
@@ -256,19 +324,21 @@ func TestGhostCTADisappearsWithFeatures(t *testing.T) {
 
 	// Verify ghost CTA is present
 	view := m.View()
-	if !containsString(view, "Create your first feature") {
+	if !strings.Contains(view, "Create your first feature") {
 		t.Error("expected ghost CTA in empty state")
 	}
 
 	// Add a feature
-	m.SetFeatures([]*feature.Feature{
+	m = NewDashboardModel([]*feature.Feature{
 		{ID: "feat-1", Name: "test", Slug: "test-feature", Status: feature.StatusImplementing, Created: time.Now()},
-	})
+	}, "")
+	m.width = 120
+	m.height = 30
 	view = m.View()
-	if containsString(view, "Create your first feature") {
+	if strings.Contains(view, "Create your first feature") {
 		t.Error("ghost CTA should disappear when features exist")
 	}
-	if !containsString(view, "test-feature") {
+	if !strings.Contains(view, "test-feature") {
 		t.Error("expected feature slug in view")
 	}
 }
@@ -343,10 +413,10 @@ func TestPersistedSetupFeatureRendersAsSelectableInProgressRow(t *testing.T) {
 	}
 	m := NewDashboardModel([]*feature.Feature{f}, "")
 
-	if !m.SelectFeatureID(f.ID) {
+	if !m.selectFeature(f.ID) {
 		t.Fatalf("setup feature was not selectable")
 	}
-	if got := m.SelectedFeatureID(); got != f.ID {
+	if got := selectedFeatureID(m); got != f.ID {
 		t.Fatalf("selected feature = %q, want %q", got, f.ID)
 	}
 
@@ -373,14 +443,16 @@ func TestGhostCTAReappearsAfterDeletion(t *testing.T) {
 
 	// Verify no ghost CTA with features
 	view := m.View()
-	if containsString(view, "Create your first feature") {
+	if strings.Contains(view, "Create your first feature") {
 		t.Error("ghost CTA should not appear when features exist")
 	}
 
 	// Remove all features
-	m.SetFeatures([]*feature.Feature{})
+	m = NewDashboardModel([]*feature.Feature{}, "")
+	m.width = 120
+	m.height = 30
 	view = m.View()
-	if !containsString(view, "Create your first feature") {
+	if !strings.Contains(view, "Create your first feature") {
 		t.Error("ghost CTA should reappear after all features are deleted")
 	}
 }
@@ -414,7 +486,7 @@ func TestDashboardAttentionOnlyCountsPending(t *testing.T) {
 				{Question: "Old question", Answer: "Answered", Pending: false},
 			},
 			PermissionsQueue: []feature.PermissionRequest{
-				{Tool: "Bash", Args: "go test", Pending: false},
+				{Tool: toolNameBash, Args: "go test", Pending: false},
 			},
 		},
 		{
@@ -441,7 +513,7 @@ func TestDashboardAttentionOnlyCountsPending(t *testing.T) {
 			Status: feature.StatusPublished, Created: time.Now().Add(-5 * time.Hour),
 			RepoCycles: map[string]*feature.RepoCycleState{
 				"api": {
-					Type:                     feature.CycleTweak,
+					Type:                     feature.CycleReviewComments,
 					Status:                   feature.RepoCycleNeedUserInput,
 					PendingNeedUserInputPath: "/tmp/api/need-user-input.yaml",
 				},
@@ -473,7 +545,7 @@ func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
 			name: "pending permission",
 			f: &feature.Feature{
 				ID: "permission", Name: "permission", Slug: "permission", Status: feature.StatusImplementing,
-				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
+				PermissionsQueue: []feature.PermissionRequest{{Tool: toolNameBash, Pending: true}},
 			},
 			wantAwait: true,
 		},
@@ -500,7 +572,7 @@ func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
 			f: &feature.Feature{
 				ID: "cycle", Name: "cycle", Slug: "cycle", Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleNeedUserInput, PendingNeedUserInputPath: "/tmp/gate.yaml"},
+					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleNeedUserInput, PendingNeedUserInputPath: "/tmp/gate.yaml"},
 				},
 			},
 			wantAwait: true,
@@ -515,7 +587,7 @@ func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
 			f: &feature.Feature{
 				ID: "active-cycle", Name: "active-cycle", Slug: "active-cycle", Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 				},
 			},
 			wantSpinner: true,
@@ -557,22 +629,9 @@ func TestDashboardAttentionBadgeNotShownForResolved(t *testing.T) {
 	m := NewDashboardModel(features, "")
 	view := m.View()
 	// Should NOT show attention badge since all help items are resolved
-	if containsString(view, "need attention") {
+	if strings.Contains(view, "need attention") {
 		t.Error("should not show attention badge when all items are resolved")
 	}
-}
-
-func containsString(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestDashboardFooterHintsLeftPanel(t *testing.T) {
@@ -585,13 +644,13 @@ func TestDashboardFooterHintsLeftPanel(t *testing.T) {
 	m.focusPanel = 0 // left panel
 
 	footer := m.renderFooter()
-	if !containsString(footer, "["+ChatKeyHint()+"] Ask") {
+	if !strings.Contains(footer, "["+ChatKeyHint()+"] Ask") {
 		t.Error("expected [/] Ask hint in footer when left panel focused")
 	}
-	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
+	if !strings.Contains(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer when left panel focused")
 	}
-	if !containsString(footer, "[Shift+E] Workspace Config") {
+	if !strings.Contains(footer, "[Shift+E] Workspace Config") {
 		t.Error("expected [Shift+E] Workspace Config hint in footer when left panel focused")
 	}
 }
@@ -606,13 +665,13 @@ func TestDashboardFooterHintsRightPanel(t *testing.T) {
 	m.focusPanel = 1 // right panel
 
 	footer := m.renderFooter()
-	if !containsString(footer, "["+ChatKeyHint()+"] Ask") {
+	if !strings.Contains(footer, "["+ChatKeyHint()+"] Ask") {
 		t.Error("expected [/] Ask hint in footer when right panel focused")
 	}
-	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
+	if !strings.Contains(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer when right panel focused")
 	}
-	if !containsString(footer, "[Shift+E] Workspace Config") {
+	if !strings.Contains(footer, "[Shift+E] Workspace Config") {
 		t.Error("expected [Shift+E] Workspace Config hint in footer when right panel focused")
 	}
 }
@@ -629,7 +688,7 @@ func TestDashboardFooterContextualActionLabels(t *testing.T) {
 			name: "permission",
 			f: &feature.Feature{
 				ID: "permission", Name: "permission", Slug: "permission", Status: feature.StatusImplementing,
-				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
+				PermissionsQueue: []feature.PermissionRequest{{Tool: toolNameBash, Pending: true}},
 			},
 			want: "[a] Approve",
 		},
@@ -684,7 +743,7 @@ func TestDashboardFooterHelpHint(t *testing.T) {
 	m.width = 80
 
 	footer := m.renderFooter()
-	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
+	if !strings.Contains(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer")
 	}
 }
@@ -701,7 +760,7 @@ func TestFormatElapsedUsesTotalRuntime(t *testing.T) {
 	if elapsed == "" {
 		t.Error("expected non-empty elapsed for feature with timing data")
 	}
-	if !containsString(elapsed, "15m") {
+	if !strings.Contains(elapsed, "15m") {
 		t.Errorf("expected 15m in elapsed, got %q", elapsed)
 	}
 }
@@ -717,7 +776,7 @@ func TestFormatElapsedFrozenForDone(t *testing.T) {
 		},
 	}
 	elapsed := formatElapsed(f)
-	if !containsString(elapsed, "45m") {
+	if !strings.Contains(elapsed, "45m") {
 		t.Errorf("expected 45m frozen time, got %q", elapsed)
 	}
 }
@@ -781,10 +840,10 @@ func TestFormatElapsedWithTimeAndCost(t *testing.T) {
 	if elapsed == "" {
 		t.Error("expected non-empty elapsed")
 	}
-	if !containsString(elapsed, "15m") {
+	if !strings.Contains(elapsed, "15m") {
 		t.Errorf("expected time in elapsed, got %q", elapsed)
 	}
-	if !containsString(elapsed, "$1.75") {
+	if !strings.Contains(elapsed, "$1.75") {
 		t.Errorf("expected cost in elapsed, got %q", elapsed)
 	}
 }
@@ -797,7 +856,7 @@ func TestFormatElapsedCostOnlyNoCost(t *testing.T) {
 		},
 	}
 	elapsed := formatElapsed(f)
-	if containsString(elapsed, "$") {
+	if strings.Contains(elapsed, "$") {
 		t.Errorf("expected no cost in elapsed when PhaseCosts is nil, got %q", elapsed)
 	}
 }
@@ -972,7 +1031,7 @@ func TestScrollOffset(t *testing.T) {
 	m.height = 24
 
 	// Set panel height so scroll state is computed during Update
-	m.updateScrollState(m.effectivePanelHeight())
+	m.updateScrollState(testPanelHeight(m))
 
 	// Navigate to the bottom
 	for i := 0; i < len(m.visibleItems)-1; i++ {
@@ -1006,7 +1065,7 @@ func TestScrollIndicatorsDontOverwriteSelectedRow(t *testing.T) {
 	m := NewDashboardModel(features, "")
 	m.width = 100
 	m.height = 24
-	panelHeight := m.effectivePanelHeight()
+	panelHeight := testPanelHeight(m)
 	m.updateScrollState(panelHeight)
 
 	// Navigate down until scroll kicks in
@@ -1065,7 +1124,7 @@ func TestScrollUpKeepsCursorVisible(t *testing.T) {
 	m := NewDashboardModel(features, "")
 	m.width = 100
 	m.height = 24
-	panelHeight := m.effectivePanelHeight()
+	panelHeight := testPanelHeight(m)
 	m.updateScrollState(panelHeight)
 
 	// Navigate down well past the panel height to trigger scrolling
@@ -1312,7 +1371,7 @@ func TestDashboardFooterHidesPublishedHintsForActivePublishedCycle(t *testing.T)
 	if !strings.Contains(footer, "[a] Watch") {
 		t.Fatal("expected [a] Watch hint for active published cycle")
 	}
-	for _, unwanted := range []string{"[t] Tweak", "[Shift+F] Refactor", "[b] Rebase", "[g] Reviews", "[Shift+D] Mark done", "[c] Clean worktree"} {
+	for _, unwanted := range []string{"[Shift+F] Refactor", "[b] Rebase", "[g] Reviews", "[Shift+D] Mark done", "[c] Clean worktree"} {
 		if strings.Contains(footer, unwanted) {
 			t.Fatalf("did not expect %s while a published repo cycle is active", unwanted)
 		}
@@ -1357,59 +1416,6 @@ func TestBuildVisibleItems_ActivePublishedCycleInProgressSection(t *testing.T) {
 	}
 	if got := m.sectionFeatureCount("published"); got != 1 {
 		t.Fatalf("published count = %d, want 1", got)
-	}
-}
-
-func TestFormatStatus_Tweak_ActiveCycleType(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name       string
-		feature    *feature.Feature
-		wantSubstr string
-	}{
-		{
-			name: "active tweak cycle shows tweaking label",
-			feature: func() *feature.Feature {
-				f := &feature.Feature{
-					Status:           feature.StatusImplementing,
-					CurrentPhase:     feature.PhaseImplement,
-					CurrentIteration: 1,
-				}
-				f.SetActiveCycleType(feature.CycleTweak)
-				return f
-			}(),
-			wantSubstr: "Tweaking [1]",
-		},
-		{
-			name: "no plan path still shows tweaking with ActiveCycleType",
-			feature: func() *feature.Feature {
-				f := &feature.Feature{
-					Status:           feature.StatusImplementing,
-					CurrentPhase:     feature.PhaseImplement,
-					CurrentIteration: 2,
-				}
-				f.SetActiveCycleType(feature.CycleTweak)
-				return f
-			}(),
-			wantSubstr: "Tweaking [2]",
-		},
-		{
-			name: "non-tweak cycle does not show tweaking",
-			feature: &feature.Feature{
-				Status:           feature.StatusImplementing,
-				CurrentPhase:     feature.PhaseImplement,
-				CurrentIteration: 1,
-			},
-			wantSubstr: "Implementing",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatStatus(tt.feature)
-			if !strings.Contains(got, tt.wantSubstr) {
-				t.Errorf("formatStatus() = %q, want substring %q", got, tt.wantSubstr)
-			}
-		})
 	}
 }
 
@@ -1669,7 +1675,7 @@ func TestActivePublishedCycleStatus_NoSuffixForSingleRepo(t *testing.T) {
 		Status: feature.StatusPublished,
 		Repos:  []feature.FeatureRepo{{Name: "payments"}},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"payments": {Type: feature.CycleRebase, Status: "running"},
+			"payments": {Type: feature.CycleReviewComments, Status: "running"},
 		},
 	}
 	label, _, ok := activePublishedCycleStatus(f)
@@ -1681,13 +1687,43 @@ func TestActivePublishedCycleStatus_NoSuffixForSingleRepo(t *testing.T) {
 	}
 }
 
+func TestActivePublishedCycleStatus_FeatureRebaseNoRepoSuffix(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status:           feature.StatusCodeReady,
+		CurrentIteration: 2,
+		Repos:            []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
+		ActiveCycle:      &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+	}
+
+	label, _, ok := activePublishedCycleStatus(f)
+	if !ok {
+		t.Fatal("activePublishedCycleStatus() should report feature-level rebase")
+	}
+	if label != "Rebasing [2]" {
+		t.Fatalf("activePublishedCycleStatus() = %q, want feature-level rebase label", label)
+	}
+	if strings.Contains(label, "·") {
+		t.Fatalf("activePublishedCycleStatus() = %q, want no repo suffix for feature-level rebase", label)
+	}
+
+	got := formatStatus(f)
+	if !strings.Contains(got, "Rebasing [2]") || strings.Contains(got, "Code Ready") {
+		t.Fatalf("formatStatus() = %q, want active rebase instead of Code Ready", got)
+	}
+	detail := stripANSI(formatDetailStatus(f))
+	if !strings.Contains(detail, "Rebasing [2]") || strings.Contains(detail, "Code Ready") {
+		t.Fatalf("formatDetailStatus() = %q, want active rebase instead of Code Ready", detail)
+	}
+}
+
 func TestActivePublishedCycleStatus_SuffixForMultiRepo(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		Status: feature.StatusPublished,
 		Repos:  []feature.FeatureRepo{{Name: "payments"}, {Name: "worker"}},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"payments": {Type: feature.CycleRebase, Status: "running"},
+			"payments": {Type: feature.CycleReviewComments, Status: "running"},
 		},
 	}
 	label, _, ok := activePublishedCycleStatus(f)

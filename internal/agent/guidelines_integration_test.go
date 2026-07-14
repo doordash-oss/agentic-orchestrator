@@ -41,7 +41,7 @@ func newGuidelinesTestRunner(t *testing.T) (*PhaseRunner, *mocks.MockProvider) {
 	}
 
 	mockProv := &mocks.MockProvider{
-		ProviderName: "mock",
+		ProviderName: testMockIdentifier,
 		Models:       []string{"test-model"},
 		CLIDetected:  true,
 		CommandArgs:  []string{"echo", "test"},
@@ -161,7 +161,7 @@ func TestBuildSession_GuidelinesEmptyDir(t *testing.T) {
 	os.MkdirAll(stateDir, 0o755)
 
 	mockProv := &mocks.MockProvider{
-		ProviderName: "mock",
+		ProviderName: testMockIdentifier,
 		Models:       []string{"test-model"},
 		CLIDetected:  true,
 		CommandArgs:  []string{"echo", "test"},

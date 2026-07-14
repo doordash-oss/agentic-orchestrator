@@ -35,6 +35,15 @@ const (
 	tabGates
 )
 
+const configTabLabelBehavior = "Behavior"
+
+type behaviorSetting int
+
+const (
+	behaviorSettingInquireness behaviorSetting = iota
+	behaviorSettingInputAlerts
+)
+
 type configFocusZone int
 
 const (
@@ -61,49 +70,56 @@ const (
 // save error for the banner, and the one-shot discard-confirm prompt
 // state.
 type EditConfigModel struct {
-	featureID             string
-	featureName           string
-	repos                 []string
-	pipeline              feature.PipelineProfile
-	publishable           bool
-	deferredEffectWarning bool
-	editor                ConfigEditorModel
-	activeTab             configTab
-	focus                 configFocusZone
-	saving                bool
-	saveErr               string
+	featureID               string
+	featureName             string
+	repos                   []string
+	pipeline                feature.PipelineProfile
+	publishable             bool
+	deferredEffectWarning   bool
+	editor                  ConfigEditorModel
+	activeTab               configTab
+	focus                   configFocusZone
+	saving                  bool
+	saveErr                 string
+	behaviorCursor          int
+	inputAlertsMode         feature.InputNotificationsMode
+	originalInputAlertsMode feature.InputNotificationsMode
 	// discardConfirm is true after esc-with-changes and before y/n resolution.
 	discardConfirm bool
 	// isWorkspace is true when this overlay edits config.Defaults (built via
 	// NewWorkspaceEditConfigModel) rather than a specific feature's config.
-	// Consulted in exactly one place: AppModel.Update's edit-config save
+	// Consulted in APIAppModel.handleAPIConfigEditorKey's edit-config save
 	// dispatch, which branches to saveWorkspaceConfigCmd instead of
-	// saveConfigCmd.
+	// saveFeatureConfigCmd.
 	isWorkspace bool
 }
 
 // NewEditConfigModel constructs the overlay for the given feature. The
-// caller builds the catalog via BuildPhaseModelCatalog at modal-open time;
+// caller builds the catalog from the server's model-catalog response (see
+// apiPhaseModelCatalog/apiFeatureModelCatalog) at modal-open time;
 // provisionalPublishable is derived from f.IsPublishable().
 //
 // Re-entrancy + crash recovery: constructor only, no persisted state. Safe
-// to call repeatedly; state lives in memory until save dispatches through
-// AppModel's saveConfigCmd.
+// to call repeatedly; state lives in memory until the parent model dispatches
+// a save.
 func NewEditConfigModel(f *feature.Feature, cat PhaseModelCatalog, provisionalPublishable bool) EditConfigModel {
 	repos := make([]string, 0, len(f.Repos))
 	for _, repo := range f.Repos {
 		repos = append(repos, repo.Name)
 	}
+	inputAlertsMode := feature.NormalizeInputNotificationsMode(f.InputNotifications)
 	return EditConfigModel{
-		featureID:             f.ID,
-		featureName:           f.Name,
-		repos:                 repos,
-		pipeline:              f.Pipeline,
-		publishable:           provisionalPublishable,
-		deferredEffectWarning: featureConfigChangesDeferred(f),
-		editor:                NewConfigEditorModel(f, cat, provisionalPublishable),
-		activeTab:             tabModels,
-		focus:                 configFocusTabs,
+		featureID:               f.ID,
+		featureName:             f.Name,
+		repos:                   repos,
+		pipeline:                f.Pipeline,
+		publishable:             provisionalPublishable,
+		deferredEffectWarning:   featureConfigChangesDeferred(f),
+		editor:                  NewConfigEditorModel(f, cat, provisionalPublishable),
+		activeTab:               tabModels,
+		focus:                   configFocusTabs,
+		inputAlertsMode:         inputAlertsMode,
+		originalInputAlertsMode: inputAlertsMode,
 	}
 }
 
@@ -118,6 +134,11 @@ func NewEditConfigModel(f *feature.Feature, cat PhaseModelCatalog, provisionalPu
 func NewWorkspaceEditConfigModel(cfg *config.Config, cat PhaseModelCatalog) EditConfigModel {
 	model := NewEditConfigModel(workspaceDefaultsFeature(cfg), cat, true)
 	model.isWorkspace = true
+	if cfg != nil {
+		mode := feature.InputNotificationsModeForMuted(cfg.Notifications.MuteFeatureInput)
+		model.inputAlertsMode = mode
+		model.originalInputAlertsMode = mode
+	}
 	return model
 }
 
@@ -160,7 +181,7 @@ func workspaceDefaultsFeature(cfg *config.Config) *feature.Feature {
 //   - Behavior delegates value changes to the embedded editor.
 //   - Gates owns an explicit gate → on/off focus chain.
 //
-// AppModel.Update owns enter/esc/save dispatch on top of this — those keys
+// The parent model owns enter/esc/save dispatch on top of this — those keys
 // are short-circuited before reaching here.
 func (m EditConfigModel) Update(msg tea.Msg) (EditConfigModel, tea.Cmd) {
 	if m.activeTab == tabModels && m.editor.ModelFilteringActive() {
@@ -208,10 +229,19 @@ func (m EditConfigModel) Update(msg tea.Msg) (EditConfigModel, tea.Cmd) {
 		if m.activeTab == tabBehavior {
 			switch key {
 			case "up", "k":
-				m.editor.inquireness = cycleInquireness(m.editor.inquireness, -1)
+				m.behaviorCursor = clampInRange(m.behaviorCursor-1, 0, len(m.behaviorSettings())-1)
 				return m, nil
 			case "down", "j":
-				m.editor.inquireness = cycleInquireness(m.editor.inquireness, +1)
+				m.behaviorCursor = clampInRange(m.behaviorCursor+1, 0, len(m.behaviorSettings())-1)
+				return m, nil
+			case "right", "l":
+				m.cycleSelectedBehaviorValue(+1)
+				return m, nil
+			case "left", "h":
+				m.cycleSelectedBehaviorValue(-1)
+				return m, nil
+			case " ", "space":
+				m.toggleSelectedBehaviorValue()
 				return m, nil
 			case "enter":
 				m.focus = configFocusTabs
@@ -303,7 +333,7 @@ func (m EditConfigModel) renderTabStrip() string {
 		dirty bool
 	}{
 		{tabModels, "Models", m.editor.ModelsChangeCount() > 0},
-		{tabBehavior, "Behavior", m.editor.InquirenessChanged()},
+		{tabBehavior, configTabLabelBehavior, m.behaviorChanged()},
 		{tabGates, "Gates", m.editor.CheckpointsChangeCount() > 0},
 	}
 
@@ -328,10 +358,6 @@ func (m EditConfigModel) renderTabStrip() string {
 
 func (m EditConfigModel) renderModelsWorkspace() string {
 	return m.editor.renderModelsWorkspaceWithFocus(m.focus)
-}
-
-func truncatePhaseLabel(label string) string {
-	return truncatePhaseLabelForWidth(label, modelPhasePanelWidth)
 }
 
 func truncatePhaseLabelForWidth(label string, panelWidth int) string {
@@ -417,7 +443,7 @@ func visibleWindow(total, focusIdx, size int) (int, int) {
 // shape as Models and Gates so tab changes do not resize the overlay.
 func (m EditConfigModel) renderBehaviorPane() string {
 	return renderConfigWorkspace(
-		"Behavior",
+		configTabLabelBehavior,
 		m.renderBehaviorSettingPanel(),
 		m.renderBehaviorValuesPanel(),
 		m.renderBehaviorDetailsPanel(),
@@ -425,14 +451,24 @@ func (m EditConfigModel) renderBehaviorPane() string {
 }
 
 func (m EditConfigModel) renderBehaviorSettingPanel() string {
-	label := "Inquireness"
-	if m.focus == configFocusBody {
-		label = SummarySelectedValueStyle.Render(label)
+	settings := m.behaviorSettings()
+	lines := make([]string, 0, len(settings))
+	for i, setting := range settings {
+		label := behaviorSettingLabel(setting)
+		prefix := "  "
+		if i == m.behaviorCursor && m.focus == configFocusBody {
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
 	}
-	return titledConfigBox("Settings", "  "+label, modelPhasePanelWidth, modelPanelHeight, false)
+	return titledConfigBox("Settings", strings.Join(lines, "\n"), modelPhasePanelWidth, modelPanelHeight, m.focus == configFocusBody)
 }
 
 func (m EditConfigModel) renderBehaviorValuesPanel() string {
+	if m.selectedBehaviorSetting() == behaviorSettingInputAlerts {
+		return m.renderInputAlertsValuesPanel()
+	}
 	pills := []feature.Inquireness{
 		feature.InquirenessNone,
 		feature.InquirenessMedium,
@@ -457,7 +493,58 @@ func (m EditConfigModel) renderBehaviorValuesPanel() string {
 	return titledConfigBox("Values", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, m.focus == configFocusBody)
 }
 
+func (m EditConfigModel) renderInputAlertsValuesPanel() string {
+	choices := m.inputAlertChoices()
+	lines := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		label := string(choice)
+		prefix := "  "
+		selected := choice == feature.NormalizeInputNotificationsMode(m.inputAlertsMode)
+		focused := selected && m.focus == configFocusBody
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		case selected && m.focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("Values", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, m.focus == configFocusBody)
+}
+
 func (m EditConfigModel) renderBehaviorDetailsPanel() string {
+	if m.selectedBehaviorSetting() == behaviorSettingInputAlerts {
+		mode := feature.NormalizeInputNotificationsMode(m.inputAlertsMode)
+		selected := string(mode)
+		effect := "Feature input notifications can ring the terminal and show desktop alerts"
+		scope := "Applies to this feature"
+		switch mode {
+		case feature.InputNotificationsDefault:
+			effect = "Uses the workspace input alert default"
+		case feature.InputNotificationsMuted:
+			if m.isWorkspace {
+				effect = "Suppresses waiting-for-input alerts for all features"
+			} else {
+				effect = "Suppresses waiting-for-input alerts for this feature"
+			}
+		}
+		if m.isWorkspace {
+			scope = "Applies to this workspace"
+		}
+		lines := []string{
+			MutedStyle.Render("Selected"),
+			"  " + SummarySelectedValueStyle.Render(selected),
+			"",
+			MutedStyle.Render("Effect"),
+			"  " + MutedStyle.Render(effect),
+			"",
+			MutedStyle.Render("Scope"),
+			"  " + MutedStyle.Render(scope),
+		}
+		return titledConfigBox("Details", strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, false)
+	}
 	lines := []string{
 		MutedStyle.Render("Selected"),
 		"  " + SummarySelectedValueStyle.Render(string(m.editor.inquireness)),
@@ -473,6 +560,67 @@ func (m EditConfigModel) renderBehaviorDetailsPanel() string {
 		)
 	}
 	return titledConfigBox("Details", strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, false)
+}
+
+func (m EditConfigModel) behaviorSettings() []behaviorSetting {
+	return []behaviorSetting{behaviorSettingInquireness, behaviorSettingInputAlerts}
+}
+
+func (m EditConfigModel) selectedBehaviorSetting() behaviorSetting {
+	settings := m.behaviorSettings()
+	if len(settings) == 0 {
+		return behaviorSettingInquireness
+	}
+	idx := clampInRange(m.behaviorCursor, 0, len(settings)-1)
+	return settings[idx]
+}
+
+func behaviorSettingLabel(setting behaviorSetting) string {
+	switch setting {
+	case behaviorSettingInputAlerts:
+		return "Input Alerts"
+	default:
+		return "Inquireness"
+	}
+}
+
+func (m *EditConfigModel) cycleSelectedBehaviorValue(delta int) {
+	switch m.selectedBehaviorSetting() {
+	case behaviorSettingInputAlerts:
+		choices := m.inputAlertChoices()
+		if len(choices) == 0 {
+			return
+		}
+		current := feature.NormalizeInputNotificationsMode(m.inputAlertsMode)
+		idx := 0
+		for i, choice := range choices {
+			if choice == current {
+				idx = i
+				break
+			}
+		}
+		next := (idx + delta%len(choices) + len(choices)) % len(choices)
+		m.inputAlertsMode = choices[next]
+	default:
+		m.editor.inquireness = cycleInquireness(m.editor.inquireness, delta)
+	}
+}
+
+func (m *EditConfigModel) toggleSelectedBehaviorValue() {
+	if m.selectedBehaviorSetting() == behaviorSettingInputAlerts {
+		m.cycleSelectedBehaviorValue(+1)
+	}
+}
+
+func (m EditConfigModel) inputAlertChoices() []feature.InputNotificationsMode {
+	if m.isWorkspace {
+		return []feature.InputNotificationsMode{feature.InputNotificationsEnabled, feature.InputNotificationsMuted}
+	}
+	return []feature.InputNotificationsMode{
+		feature.InputNotificationsDefault,
+		feature.InputNotificationsEnabled,
+		feature.InputNotificationsMuted,
+	}
 }
 
 // renderGatesPane renders Gates in the same three-panel workspace shape as
@@ -614,7 +762,7 @@ func (m EditConfigModel) renderHintBar() string {
 			keys = "↑↓ phase   → agents   / search   enter save   esc cancel"
 		}
 	case tabBehavior:
-		keys = "↑↓ choose   enter tabs   tab tabs   esc cancel"
+		keys = "↑↓ setting   ←→ value   space toggle   enter tabs   esc cancel"
 	case tabGates:
 		switch m.focus {
 		case configFocusGateList, configFocusBody:
@@ -631,9 +779,9 @@ func (m EditConfigModel) renderHintBar() string {
 // diffSummary builds the per-axis header summary string. When there are
 // no changes it reads "No changes"; otherwise all three fragments always
 // render (zero-count fragments still print). The string is intentionally
-// stable — AppModel's save/test paths treat it as part of the header.
+// stable — save/test paths treat it as part of the header.
 func (m EditConfigModel) diffSummary() string {
-	if !m.editor.HasChanges() {
+	if !m.HasChanges() {
 		return "No changes"
 	}
 	models := m.editor.ModelsChangeCount()
@@ -642,8 +790,12 @@ func (m EditConfigModel) diffSummary() string {
 	if m.editor.InquirenessChanged() {
 		inq = "changed"
 	}
-	return fmt.Sprintf("Models: %s · Gates: %s · Inquiry: %s",
-		pluralChanges(models), pluralChanges(gates), inq)
+	alerts := "unchanged"
+	if m.inputAlertsChanged() {
+		alerts = "changed"
+	}
+	return fmt.Sprintf("Models: %s · Gates: %s · Inquiry: %s · Input alerts: %s",
+		pluralChanges(models), pluralChanges(gates), inq, alerts)
 }
 
 func pluralChanges(n int) string {
@@ -820,6 +972,18 @@ func (m EditConfigModel) EnterIsLocal() bool {
 		(m.activeTab == tabGates && m.focus == configFocusGateState)
 }
 
+func (m EditConfigModel) HasChanges() bool {
+	return m.editor.HasChanges() || m.inputAlertsChanged()
+}
+
+func (m EditConfigModel) behaviorChanged() bool {
+	return m.editor.InquirenessChanged() || m.inputAlertsChanged()
+}
+
+func (m EditConfigModel) inputAlertsChanged() bool {
+	return feature.NormalizeInputNotificationsMode(m.inputAlertsMode) != feature.NormalizeInputNotificationsMode(m.originalInputAlertsMode)
+}
+
 // tabRowRange returns the inclusive [lo, hi] row-cursor range that maps
 // to the active tab's rows inside the shared flat layout.
 func (m EditConfigModel) tabRowRange() (int, int) {
@@ -846,20 +1010,6 @@ func (m *EditConfigModel) clampToActiveTab() {
 	if m.editor.rowCursor > hi {
 		m.editor.rowCursor = hi
 	}
-}
-
-// wrapInRange wraps idx into the inclusive [lo, hi] range so that
-// moving one past hi lands on lo and one before lo lands on hi.
-func wrapInRange(idx, lo, hi int) int {
-	if hi <= lo {
-		return lo
-	}
-	size := hi - lo + 1
-	mod := (idx - lo) % size
-	if mod < 0 {
-		mod += size
-	}
-	return lo + mod
 }
 
 func clampInRange(idx, lo, hi int) int {

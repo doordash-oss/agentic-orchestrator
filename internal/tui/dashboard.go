@@ -85,6 +85,8 @@ const (
 	dashboardRightPanelOverview
 )
 
+const dashboardFeaturesPanelTitle = "Features"
+
 type DashboardModel struct {
 	features             []*feature.Feature
 	cursor               int
@@ -128,17 +130,13 @@ func NewDashboardModel(features []*feature.Feature, stateDir string) DashboardMo
 }
 
 // ConsumeWantNewFeature returns true once if Enter was pressed on the ghost CTA,
-// then resets the flag. The caller (app.go) uses this to trigger the wizard.
+// then resets the flag. The caller uses this to trigger the wizard.
 func (m *DashboardModel) ConsumeWantNewFeature() bool {
 	if m.wantNewFeature {
 		m.wantNewFeature = false
 		return true
 	}
 	return false
-}
-
-func (m DashboardModel) Init() tea.Cmd {
-	return nil
 }
 
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
@@ -249,22 +247,6 @@ func (m DashboardModel) shouldRenderLivePreview(f *feature.Feature) bool {
 		isLivePreviewEligible(f)
 }
 
-func (m *DashboardModel) ShowOverview() bool {
-	if !isLivePreviewEligible(m.SelectedFeature()) {
-		return false
-	}
-	m.rightPanelMode = dashboardRightPanelOverview
-	return true
-}
-
-func (m *DashboardModel) ShowLivePreview() bool {
-	if !isLivePreviewEligible(m.SelectedFeature()) {
-		return false
-	}
-	m.rightPanelMode = dashboardRightPanelLivePreview
-	return true
-}
-
 func (m DashboardModel) showingOverviewForLiveFeature() bool {
 	return m.rightPanelMode == dashboardRightPanelOverview && isLivePreviewEligible(m.SelectedFeature())
 }
@@ -276,29 +258,6 @@ const (
 	layoutStandard                   // 80-120 cols: split panels 35/65
 	layoutWide                       // > 120 cols: split panels 30/70
 )
-
-// effectivePanelHeight computes the content area height for the feature list panel
-// using the same formula as View(). This allows scroll state to be pre-computed during Update.
-func (m DashboardModel) effectivePanelHeight() int {
-	w := m.width
-	h := m.height
-	if w < 40 {
-		w = 80
-	}
-	if h < 10 {
-		h = 24
-	}
-
-	header := m.renderHeader(w)
-	footer := m.renderFooter()
-	headerH := lipgloss.Height(header)
-	footerH := lipgloss.Height(footer) + 2
-	panelHeight := h - headerH - footerH
-	if panelHeight < 6 {
-		panelHeight = 6
-	}
-	return panelHeight
-}
 
 func (m DashboardModel) getLayoutMode() layoutMode {
 	switch {
@@ -344,8 +303,8 @@ func (m DashboardModel) View() string {
 			Width(w).
 			Height(panelHeight + 2).
 			Render(leftContent)
-		leftBox = renderBorderTitle(leftBox, "Features", lipgloss.NewStyle().Foreground(colorBrand))
-		return header + leftBox + "\n" + footer + "\n"
+		leftBox = renderBorderTitle(leftBox, dashboardFeaturesPanelTitle, lipgloss.NewStyle().Foreground(colorBrand))
+		return truncateRenderedLines(header+leftBox+"\n"+footer+"\n", w)
 	}
 
 	// Split mode: calculate widths based on layout
@@ -378,7 +337,7 @@ func (m DashboardModel) View() string {
 	if m.focusPanel == 1 {
 		leftTitleStyle = lipgloss.NewStyle().Foreground(colorOverlay)
 	}
-	leftBox = renderBorderTitle(leftBox, "Features", leftTitleStyle)
+	leftBox = renderBorderTitle(leftBox, dashboardFeaturesPanelTitle, leftTitleStyle)
 
 	// Build right panel
 	var rightContent string
@@ -423,7 +382,7 @@ func (m DashboardModel) View() string {
 
 	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, rightBox)
 
-	return header + panels + "\n" + footer + "\n"
+	return truncateRenderedLines(header+panels+"\n"+footer+"\n", w)
 }
 
 // renderHeader renders a branded block-element header inspired by K9s.
@@ -560,7 +519,6 @@ func (m DashboardModel) renderFooter() string {
 				hints = append(hints, "[p] Publish")
 			}
 			if (!activePublishedCycle && f.Status == feature.StatusPublished) || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
-				hints = append(hints, "[t] Tweak")
 				hints = append(hints, "[Shift+F] Refactor")
 				hints = append(hints, "[b] Rebase")
 			}
@@ -581,7 +539,6 @@ func (m DashboardModel) renderFooter() string {
 			if canEditFeatureConfig(f) {
 				hints = append(hints, "[e] Edit config")
 			}
-			hints = append(hints, "[Shift+N] Input alerts")
 			hints = append(hints, "[d] Delete")
 		}
 		hints = append(hints, "[Shift+E] Workspace Config")
@@ -605,12 +562,7 @@ func (m DashboardModel) renderFooter() string {
 	brandHint := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	rightHints := MutedStyle.Render("Layout: "+KeyboardLayoutHint()) + "  " + brandHint.Render("["+ChatKeyHint()+"] Ask") + "  " + brandHint.Render("["+HelpKeyHint()+"] Help")
 
-	gap := m.width - lipgloss.Width(leftPart) - lipgloss.Width(rightHints) - 1
-	if gap < 2 {
-		gap = 2
-	}
-
-	footer := leftPart + strings.Repeat(" ", gap) + rightHints
+	footer := renderDashboardFooterLine(leftPart, rightHints, m.width)
 	if m.statusMessage != "" {
 		statusStyle := lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
 		if strings.HasPrefix(m.statusMessage, "\u2717") {
@@ -628,12 +580,43 @@ func (m DashboardModel) renderFooter() string {
 	return footer
 }
 
+func renderDashboardFooterLine(leftPart, rightHints string, width int) string {
+	const minGap = 2
+	prefix := ""
+	leftLine := leftPart
+	if idx := strings.LastIndex(leftPart, "\n"); idx >= 0 {
+		prefix = leftPart[:idx+1]
+		leftLine = leftPart[idx+1:]
+	}
+
+	rightWidth := ansi.StringWidth(rightHints)
+	leftWidth := ansi.StringWidth(leftLine)
+	if leftWidth+minGap+rightWidth > width {
+		if leftWidth > width {
+			leftLine = ansi.Wrap(leftLine, width, " ")
+		}
+		if rightWidth > width {
+			return prefix + leftLine + "\n" + ansi.Truncate(rightHints, width, "")
+		}
+		return prefix + leftLine + "\n" + strings.Repeat(" ", width-rightWidth) + rightHints
+	}
+	gap := width - leftWidth - rightWidth
+	return prefix + leftLine + strings.Repeat(" ", gap) + rightHints
+}
+
 // sectionMeta holds metadata for a feature section during buildVisibleItems.
 type sectionMeta struct {
 	key      string
 	label    string
 	features []*feature.Feature
 }
+
+// dashboardSectionPublished and dashboardSectionCompleted are sectionMeta.key
+// / listItem.section values for the dashboard's feature-list groupings.
+const (
+	dashboardSectionPublished = "published"
+	dashboardSectionCompleted = "completed"
+)
 
 // buildVisibleItems computes the flat list of navigable items (section headers + features).
 // It must be called whenever features or collapsed sections change.
@@ -654,9 +637,9 @@ func (m *DashboardModel) buildVisibleItems() {
 	}
 
 	sections := []sectionMeta{
-		{"inProgress", "IN PROGRESS", inProgress},
-		{"published", "PUBLISHED", published},
-		{"completed", "COMPLETED", completed},
+		{"inProgress", sectionLabel("inProgress"), inProgress},
+		{dashboardSectionPublished, sectionLabel(dashboardSectionPublished), published},
+		{dashboardSectionCompleted, sectionLabel(dashboardSectionCompleted), completed},
 	}
 
 	var items []listItem
@@ -1050,40 +1033,6 @@ func (m DashboardModel) SelectedSection() string {
 	return ""
 }
 
-func (m DashboardModel) SelectedFeatureID() string {
-	f := m.SelectedFeature()
-	if f != nil {
-		return f.ID
-	}
-	return ""
-}
-
-func (m *DashboardModel) SelectFeatureID(featureID string) bool {
-	for i, item := range m.visibleItems {
-		if item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID {
-			m.cursor = i
-			m.computeCursorLine()
-			m.updateScrollState(0)
-			m.syncPreview()
-			return true
-		}
-	}
-	return false
-}
-
-func (m *DashboardModel) SetFeatures(features []*feature.Feature) {
-	sortFeatures(features)
-	m.features = features
-	m.buildVisibleItems()
-	if m.cursor >= len(m.visibleItems) {
-		m.cursor = max(0, len(m.visibleItems)-1)
-	}
-	m.computeCursorLine()
-	m.scrollOffset = 0
-	m.updateScrollState(0)
-	m.syncPreview()
-}
-
 // SetWelcomeSkipped marks that the user skipped the welcome flow, enabling
 // guidance text in the empty-state panel.
 func (m *DashboardModel) SetWelcomeSkipped() {
@@ -1242,7 +1191,7 @@ func formatRiskBadge(risk feature.RiskLevel) string {
 }
 
 func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing bool, ok bool) {
-	if f == nil || len(f.RepoCycles) == 0 {
+	if f == nil {
 		return "", false, false
 	}
 	if f.Status != feature.StatusPublished && f.Status != feature.StatusCodeReady {
@@ -1286,7 +1235,7 @@ func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing boo
 	}
 
 	if len(active) == 0 {
-		return "", false, false
+		return activeFeatureCycleStatus(f)
 	}
 
 	if len(active) > 1 {
@@ -1311,32 +1260,10 @@ func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing boo
 	case feature.RepoCycleNeedUserInput:
 		label = string(cycle.rc.Type) + " needs input"
 	case feature.RepoCycleReviewing:
-		switch cycle.rc.Type {
-		case feature.CycleReviewComments:
-			label = "Final Review (Review Comments)"
-		case feature.CycleRebase:
-			label = "Final Review (Rebase)"
-		case feature.CycleTweak:
-			label = "Final Review (Tweak)"
-		case feature.CycleRefactor:
-			label = "Final Review (Refactor)"
-		default:
-			label = "Final Review (Repo Cycle)"
-		}
+		label = repoCycleFinalReviewLabel(cycle.rc.Type)
 		reviewing = true
 	default:
-		switch cycle.rc.Type {
-		case feature.CycleReviewComments:
-			label = "Addressing Review Comments"
-		case feature.CycleRebase:
-			label = "Rebasing"
-		case feature.CycleTweak:
-			label = "Tweaking"
-		case feature.CycleRefactor:
-			label = "Refactoring"
-		default:
-			label = "Repo Cycle Running"
-		}
+		label = repoCycleRunningLabel(cycle.rc.Type)
 		if f.CurrentIteration > 0 {
 			label = fmt.Sprintf("%s [%d]", label, f.CurrentIteration)
 		}
@@ -1346,6 +1273,63 @@ func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing boo
 		label += " · " + cycle.repoName
 	}
 	return label, reviewing, true
+}
+
+// repoCycleFinalReviewLabel returns the dashboard label for a repo cycle
+// awaiting final review, keyed by cycle type.
+func repoCycleFinalReviewLabel(t feature.RepoCycleType) string {
+	switch t {
+	case feature.CycleReviewComments:
+		return "Final Review (Review Comments)"
+	case feature.CycleRebase:
+		return "Final Review (Rebase)"
+	case feature.CycleRefactor:
+		return "Final Review (Refactor)"
+	default:
+		return "Final Review (Repo Cycle)"
+	}
+}
+
+// repoCycleRunningLabel returns the dashboard label for a repo cycle
+// actively running, keyed by cycle type.
+func repoCycleRunningLabel(t feature.RepoCycleType) string {
+	switch t {
+	case feature.CycleReviewComments:
+		return "Addressing Review Comments"
+	case feature.CycleRebase:
+		return "Rebasing"
+	case feature.CycleRefactor:
+		return "Refactoring"
+	default:
+		return "Repo Cycle Running"
+	}
+}
+
+func activeFeatureCycleStatus(f *feature.Feature) (label string, reviewing bool, ok bool) {
+	if f == nil || f.ActiveCycle == nil {
+		return "", false, false
+	}
+	switch f.ActiveCycle.Status {
+	case feature.RepoCycleNeedUserInput:
+		return string(f.ActiveCycle.Type) + " needs input", false, true
+	case feature.RepoCycleReviewing:
+		return repoCycleFinalReviewLabel(f.ActiveCycle.Type), true, true
+	case feature.RepoCycleRunning:
+		label = repoCycleRunningLabel(f.ActiveCycle.Type)
+		iteration := f.CurrentIteration
+		if iteration == 0 {
+			iteration = f.ActiveCycle.Iteration
+		}
+		if iteration == 0 {
+			iteration = f.ActiveCycle.Count
+		}
+		if iteration > 0 {
+			label = fmt.Sprintf("%s [%d]", label, iteration)
+		}
+		return label, false, true
+	default:
+		return "", false, false
+	}
 }
 
 func formatStatus(f *feature.Feature) string {
@@ -1363,13 +1347,6 @@ func formatStatus(f *feature.Feature) string {
 		normalizedPath := filepath.ToSlash(planPath)
 		if f.AddressingReviews() && f.CurrentPhase == feature.PhaseImplement {
 			base := fmt.Sprintf("Addressing reviews [%d]", f.CurrentIteration)
-			if needsInput {
-				return WarningStyle.Render(base+" | waiting input") + elapsed
-			}
-			return base + elapsed
-		}
-		if f.ActiveCycleType() == feature.CycleTweak && f.CurrentPhase == feature.PhaseImplement {
-			base := fmt.Sprintf("Tweaking [%d]", f.CurrentIteration)
 			if needsInput {
 				return WarningStyle.Render(base+" | waiting input") + elapsed
 			}

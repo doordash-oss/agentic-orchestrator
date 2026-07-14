@@ -64,6 +64,12 @@ The orchestrator's post-cycle finalisation also runs a commit-all + pull-rebase 
 
 Emit `progress.md` and `verification-report.yaml` per the standard handoff contract (see [implement skill](../implement/SKILL.md) for the exact schema). Cycle-specific guidance:
 
+- Standard handoff paths:
+  - `progress.md`: `{phase_dir}/progress.md`
+  - `verification-report.yaml`: `{iteration_dir}/verification-report.yaml`
+  - `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.
+  - `phase_complete`: `{iteration_dir}/phase_complete`
+- Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.
 - `## Iteration Handoff → Completed this iteration` — one bullet per repo touched (e.g., `- api: addressed 3 comments, dismissed 1, force-pushed`).
 - `## Iteration Handoff → Remaining from the plan` — comments not yet decided (empty when every aggregated comment has a resolution entry).
 - `## Verification Report → Summary` — must agree with the YAML tally.
@@ -86,4 +92,4 @@ Emit `progress.md` and `verification-report.yaml` per the standard handoff contr
 - Addressed comments have real code changes in the named repo.
 - Per-repo baseline rows passed in `verification-report.yaml`.
 - Each touched repo's branch is committed and pushed (the orchestrator's finalisation runs a safety push too).
-- One handoff (`progress.md` + `verification-report.yaml`) at the cycle's iteration artifact dir — no per-repo subdir.
+- One standard handoff at the cycle artifact root/iteration pair: `progress.md` at `{phase_dir}/progress.md`, `verification-report.yaml` at `{iteration_dir}/verification-report.yaml` — no per-repo subdir.

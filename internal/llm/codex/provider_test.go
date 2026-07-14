@@ -256,6 +256,7 @@ func TestProviderBuildCommand_ReturnsNilEnvAndInteractiveEffortOverride(t *testi
 		effort  llm.EffortLevel
 		wantArg string
 	}{
+		{"low", llm.EffortLow, "model_reasoning_effort=low"},
 		{"medium", llm.EffortMedium, "model_reasoning_effort=medium"},
 		{"high", llm.EffortHigh, "model_reasoning_effort=high"},
 		{"max maps to xhigh", llm.EffortMax, "model_reasoning_effort=xhigh"},

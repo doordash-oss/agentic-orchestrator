@@ -38,6 +38,7 @@ type MockSessionManager struct {
 	GetSessionFn      func(id string) session.SessionView
 	FeatureSessionsFn func(featureID string) []session.SessionView
 	ActiveSessionsFn  func() []session.SessionView
+	RecentSessionsFn  func(limit int) []session.SessionView
 
 	// Default return value for methods without an override
 	DefaultError error
@@ -46,6 +47,7 @@ type MockSessionManager struct {
 	StartSessionCalls    []MockStartSessionCall
 	StopCalls            []string
 	FeatureSessionsCalls []string
+	RecentSessionsCalls  []int
 
 	// State
 	ShuttingDownVal bool
@@ -92,6 +94,14 @@ func (m *MockSessionManager) GetSession(id string) session.SessionView {
 func (m *MockSessionManager) ActiveSessions() []session.SessionView {
 	if m.ActiveSessionsFn != nil {
 		return m.ActiveSessionsFn()
+	}
+	return nil
+}
+
+func (m *MockSessionManager) RecentSessions(limit int) []session.SessionView {
+	m.RecentSessionsCalls = append(m.RecentSessionsCalls, limit)
+	if m.RecentSessionsFn != nil {
+		return m.RecentSessionsFn(limit)
 	}
 	return nil
 }

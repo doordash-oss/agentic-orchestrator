@@ -21,24 +21,49 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/colorprofile"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	opencode "github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
+	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
-func failingLauncher(t *testing.T) tuiLauncher {
+// Test-fixture literals reused across several cases in this file.
+const (
+	testServerConfigPath            = "/tmp/server-config.yaml"
+	testModelGPT54                  = "gpt-5.4"
+	testReasonMatchingHealthyServer = "matching healthy server"
+	testStateFeaturesDir            = "/tmp/server-features"
+	testReasonStaleDiscovery        = "stale discovery"
+
+	modelNameOpus       = "opus"
+	modelNameSonnet200K = "sonnet[200K]"
+
+	installHintClaude = "install claude"
+	installHintCodex  = "install codex"
+
+	testAnthropicSonnet45ModelID = "anthropic/claude-sonnet-4-5[200K]"
+)
+
+func failingLauncher(t *testing.T) defaultLauncher {
 	t.Helper()
-	return func(string, string, bool, []string, bool) {
+	return func(string, string, bool, []string, bool) int {
 		t.Fatal("TUI launcher invoked unexpectedly")
+		return 1
 	}
 }
 
@@ -548,7 +573,7 @@ func TestSaveProviderCatalogCache_RejectsUncacheableVersionWithoutLeak(t *testin
 	cacheRoot := t.TempDir()
 	models := []llm.ModelInfo{{ID: "m", DisplayName: "M", ContextWindow: 1000, Category: "balanced"}}
 
-	err := saveProviderCatalogCache(cacheRoot, "opencode", hostileVersion, models)
+	err := saveProviderCatalogCache(cacheRoot, providerNameOpencode, hostileVersion, models)
 	if err == nil {
 		t.Fatal("saveProviderCatalogCache() = nil, want refusal for uncacheable version")
 	}
@@ -563,7 +588,7 @@ func TestSaveProviderCatalogCache_RejectsUncacheableVersionWithoutLeak(t *testin
 func TestLoadProviderCatalogCache_RejectsUncacheableVersionWithoutLeak(t *testing.T) {
 	cacheRoot := t.TempDir()
 
-	_, err := loadProviderCatalogCache(cacheRoot, "opencode", hostileVersion)
+	_, err := loadProviderCatalogCache(cacheRoot, providerNameOpencode, hostileVersion)
 	if err == nil {
 		t.Fatal("loadProviderCatalogCache() error = nil, want refusal for uncacheable version")
 	}
@@ -579,7 +604,7 @@ func TestLoadProviderCatalogCache_RejectsUncacheableVersionWithoutLeak(t *testin
 func TestDiscoverProviderCatalogs_RejectsUnparseableVersionWithoutLeak(t *testing.T) {
 	cacheRoot := t.TempDir()
 	p := &stubCatalogDiscoveryProvider{
-		stubProvider: stubProvider{name: "opencode", hasCLI: true},
+		stubProvider: stubProvider{name: providerNameOpencode, hasCLI: true},
 		versionInfo:  unparseableHostileVersion,
 		discovered: []llm.ModelInfo{
 			{ID: "live-model", DisplayName: "Live Model", ContextWindow: 200_000, Category: "capable"},
@@ -671,7 +696,7 @@ func TestDiscoverProviderCatalogs_PrefixedVersionNormalizesToCacheKey(t *testing
 func TestDiscoverProviderCatalogs_NormalizesHostileVersionLineWithoutLeak(t *testing.T) {
 	cacheRoot := t.TempDir()
 	p := &stubCatalogDiscoveryProvider{
-		stubProvider: stubProvider{name: "opencode", hasCLI: true},
+		stubProvider: stubProvider{name: providerNameOpencode, hasCLI: true},
 		versionInfo:  hostileVersion, // "1.17.9 " + credential + OSC escape
 		discovered: []llm.ModelInfo{
 			{ID: "live-model", DisplayName: "Live Model", ContextWindow: 200_000, Category: "capable"},
@@ -686,7 +711,7 @@ func TestDiscoverProviderCatalogs_NormalizesHostileVersionLineWithoutLeak(t *tes
 		t.Fatalf("discovery calls = %d, want 1 on cache miss", p.discoveries)
 	}
 	// Cached under the parsed token "1.17.9", never the raw hostile line.
-	cached, err := loadProviderCatalogCache(cacheRoot, "opencode", "1.17.9")
+	cached, err := loadProviderCatalogCache(cacheRoot, providerNameOpencode, "1.17.9")
 	if err != nil {
 		t.Fatalf("loadProviderCatalogCache(\"1.17.9\") error: %v, want catalog cached under parsed token", err)
 	}
@@ -708,7 +733,7 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 	verbose := "anthropic/claude-sonnet-4-5\n" +
 		`{ "id": "claude-sonnet-4-5", "providerID": "anthropic", "name": "Claude Sonnet 4.5", "status": "active", "limit": { "context": 200000 } }` + "\n"
 	runner := func(_ context.Context, name string, args []string, _ []string) ([]byte, error) {
-		if name != "opencode" {
+		if name != providerNameOpencode {
 			t.Fatalf("ran %q, want opencode", name)
 		}
 		switch strings.Join(args, " ") {
@@ -722,7 +747,7 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 		}
 	}
 
-	const wantID = "anthropic/claude-sonnet-4-5[200K]"
+	const wantID = testAnthropicSonnet45ModelID
 
 	// First startup: cache miss → discovery runs, catalog populated and cached.
 	p1 := opencode.NewWithRunner(runner)
@@ -759,7 +784,7 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 // network.
 func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing.T) {
 	runner := func(_ context.Context, name string, args []string, _ []string) ([]byte, error) {
-		if name != "opencode" {
+		if name != providerNameOpencode {
 			t.Fatalf("ran %q, want opencode", name)
 		}
 		switch strings.Join(args, " ") {
@@ -774,7 +799,7 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 
 	p := opencode.NewWithRunner(runner)
 	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, t.TempDir(), nil, false)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "opencode") || !strings.Contains(warnings[0], "built-in fallback") {
+	if len(warnings) != 1 || !strings.Contains(warnings[0], providerNameOpencode) || !strings.Contains(warnings[0], "built-in fallback") {
 		t.Fatalf("warnings = %v, want one opencode built-in-fallback warning", warnings)
 	}
 
@@ -788,11 +813,63 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 	}
 }
 
-func TestRunArgsLaunchesTUIByDefault(t *testing.T) {
+// TestCanonicalizeStateDir_ResolvesSymlink guards the macOS /var ->
+// /private/var (and /tmp -> /private/tmp) class of bug: every path Agentico
+// derives from stateDir — worktrees, the knowledge-base tree, skills/
+// guidelines mounts — gets handed to providers as a workdir or a writable/
+// read root, and OpenCode's permission engine matches those paths
+// inconsistently against their raw and symlink-resolved forms (upstream
+// opencode#14473, opencode#20045). Resolving stateDir once up front avoids
+// that ambiguity regardless of which form a given provider ends up matching
+// against.
+func TestCanonicalizeStateDir_ResolvesSymlink(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	stateDir := filepath.Join(link, "features")
+	got := canonicalizeStateDir(stateDir)
+
+	want, err := filepath.EvalSymlinks(filepath.Join(realDir, "features"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", filepath.Join(realDir, "features"), err)
+	}
+	if got != want {
+		t.Errorf("canonicalizeStateDir(%q) = %q, want %q", stateDir, got, want)
+	}
+	if info, err := os.Stat(stateDir); err != nil || !info.IsDir() {
+		t.Errorf("canonicalizeStateDir(%q) did not create the directory: %v", stateDir, err)
+	}
+}
+
+// TestCanonicalizeStateDir_FallsBackWhenUnresolvable guards the fail-open
+// contract: a stateDir that can't be created or resolved (e.g. a parent that
+// is itself a file, not a directory) must return unchanged rather than
+// turning a cosmetic path-canonicalization step into a hard launch failure.
+func TestCanonicalizeStateDir_FallsBackWhenUnresolvable(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := filepath.Join(blocker, "features")
+	if got := canonicalizeStateDir(stateDir); got != stateDir {
+		t.Errorf("canonicalizeStateDir(%q) = %q, want unchanged %q", stateDir, got, stateDir)
+	}
+}
+
+func TestRunArgsLaunchesClientServerByDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var launched bool
 	wantParent := pickRuntimeParent(os.Stat)
-	code := runArgs(nil, &stdout, &stderr, func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) {
+	code := runArgs(nil, &stdout, &stderr, func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
 		launched = true
 		if configPath != filepath.Join(wantParent, defaultConfigBasename) {
 			t.Errorf("configPath = %q, want default", configPath)
@@ -806,7 +883,8 @@ func TestRunArgsLaunchesTUIByDefault(t *testing.T) {
 		if enabledProviders != nil {
 			t.Errorf("enabledProviders = %v, want nil", enabledProviders)
 		}
-	}, failingUpdater(t))
+		return 0
+	}, failingServerLauncher(t), failingUpdater(t))
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)
 	}
@@ -827,12 +905,14 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 		[]string{"--config", "/tmp/agentic-config.yaml", "--state-dir", "/tmp/agentic-features", "--providers", "codex, claude", "--dangerously-skip-permissions"},
 		&stdout,
 		&stderr,
-		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) {
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
 			gotConfig = configPath
 			gotState = stateDir
 			gotDangerouslySkipPerms = dangerouslySkipPerms
 			gotProviders = enabledProviders
+			return 0
 		},
+		failingServerLauncher(t),
 		failingUpdater(t),
 	)
 	if code != 0 {
@@ -847,7 +927,7 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 	if !gotDangerouslySkipPerms {
 		t.Error("dangerouslySkipPerms = false, want true")
 	}
-	if !slices.Equal(gotProviders, []string{"codex", " claude"}) {
+	if !slices.Equal(gotProviders, []string{providerNameCodex, " claude"}) {
 		t.Errorf("enabledProviders = %v, want raw CSV split", gotProviders)
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
@@ -862,9 +942,11 @@ func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
 		[]string{"--refresh-models"},
 		&stdout,
 		&stderr,
-		func(_ string, _ string, _ bool, _ []string, refreshModels bool) {
+		func(_ string, _ string, _ bool, _ []string, refreshModels bool) int {
 			gotRefresh = refreshModels
+			return 0
 		},
+		failingServerLauncher(t),
 		failingUpdater(t),
 	)
 	if code != 0 {
@@ -894,13 +976,18 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	var launchedTUI, updateCalled bool
+	var launchedTUI, launchedServer, updateCalled bool
 	code := runArgs(
-		[]string{"validate-artifacts", "--phase", "review", "--role", string(agent.RoleFinalReviewer), "--dir", iterDir},
+		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleFinalReviewer), cliFlagDir, iterDir},
 		&stdout,
 		&stderr,
-		func(string, string, bool, []string, bool) {
+		func(string, string, bool, []string, bool) int {
 			launchedTUI = true
+			return 0
+		},
+		func(string, string, bool, []string, bool) int {
+			launchedServer = true
+			return 0
 		},
 		func(bool, io.Writer, io.Writer) int {
 			updateCalled = true
@@ -910,8 +997,8 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("runArgs() code = %d, want validation failure 1", code)
 	}
-	if launchedTUI || updateCalled {
-		t.Fatalf("validate-artifacts launched unrelated path: tui=%v update=%v", launchedTUI, updateCalled)
+	if launchedTUI || launchedServer || updateCalled {
+		t.Fatalf("validate-artifacts launched unrelated path: tui=%v server=%v update=%v", launchedTUI, launchedServer, updateCalled)
 	}
 	if got := stderr.String(); !strings.Contains(got, "review-feedback.md") || !strings.Contains(got, "LGTM") {
 		t.Fatalf("stderr = %q, want review-feedback.md malformed verdict violation", got)
@@ -927,10 +1014,11 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := runArgs(
-		[]string{"validate-artifacts", "--phase", "review", "--role", string(agent.RoleFinalReviewer), "--dir", iterDir},
+		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleFinalReviewer), cliFlagDir, iterDir},
 		&stdout,
 		&stderr,
 		failingLauncher(t),
+		failingServerLauncher(t),
 		failingUpdater(t),
 	)
 	if code != 0 {
@@ -941,6 +1029,713 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestParseLaunchArgsServerSurface(t *testing.T) {
+	opts, err := parseLaunchArgs([]string{cliSubcommandServer, "--config", testServerConfigPath, "--state-dir", testStateFeaturesDir, "--providers", providerNameCodex, "--dangerously-skip-permissions"})
+	if err != nil {
+		t.Fatalf("parseLaunchArgs(server ...) error = %v", err)
+	}
+	if opts.mode != launchModeServer {
+		t.Fatalf("mode = %v; want launchModeServer", opts.mode)
+	}
+	if opts.configPath != testServerConfigPath {
+		t.Fatalf("configPath = %q; want server config", opts.configPath)
+	}
+	if opts.stateDir != testStateFeaturesDir {
+		t.Fatalf("stateDir = %q; want server state dir", opts.stateDir)
+	}
+	if !opts.dangerouslySkipPerms {
+		t.Fatal("dangerouslySkipPerms = false; want true")
+	}
+	if !slices.Equal(opts.enabledProviders, []string{providerNameCodex}) {
+		t.Fatalf("enabledProviders = %v; want [codex]", opts.enabledProviders)
+	}
+}
+
+func TestRunArgsDispatchesServerToSeam(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	var launchedTUI, launchedServer bool
+	code := runArgs(
+		[]string{cliSubcommandServer, "--config", testServerConfigPath, "--state-dir", testStateFeaturesDir, "--providers", providerNameCodex},
+		&stdout,
+		&stderr,
+		func(string, string, bool, []string, bool) int {
+			launchedTUI = true
+			return 0
+		},
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
+			launchedServer = true
+			if configPath != testServerConfigPath {
+				t.Errorf("configPath = %q; want server config", configPath)
+			}
+			if stateDir != testStateFeaturesDir {
+				t.Errorf("stateDir = %q; want server state dir", stateDir)
+			}
+			if dangerouslySkipPerms {
+				t.Error("dangerouslySkipPerms = true; want false")
+			}
+			if !slices.Equal(enabledProviders, []string{providerNameCodex}) {
+				t.Errorf("enabledProviders = %v; want [codex]", enabledProviders)
+			}
+			if refreshModels {
+				t.Error("refreshModels = true; want false")
+			}
+			return 9
+		},
+		failingUpdater(t),
+	)
+	if launchedTUI {
+		t.Fatal("TUI launcher invoked for server mode")
+	}
+	if !launchedServer {
+		t.Fatal("server launcher was not invoked")
+	}
+	if code != 9 {
+		t.Fatalf("runArgs() code = %d; want server exit code 9", code)
+	}
+}
+
+func TestRuntimeLaunchPolicyUsesActiveDetectedProviders(t *testing.T) {
+	registry := llm.NewRegistry()
+	claude := &stubProvider{name: providerNameClaude, models: []string{modelNameSonnet}, hasCLI: true}
+	codex := &stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: true}
+	missing := &stubProvider{name: "missing", models: []string{"missing-model"}, hasCLI: false}
+	registry.Register(claude)
+	registry.Register(codex)
+	registry.Register(missing)
+	registry.RestrictToProviders([]llm.LLMProvider{codex})
+
+	got := runtimeLaunchPolicy(registry, true)
+	want := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, true)
+	if !slices.Equal(got.Providers, want.Providers) {
+		t.Fatalf("runtimeLaunchPolicy().Providers = %v; want %v", got.Providers, want.Providers)
+	}
+	if got.DangerouslySkipPermissions != want.DangerouslySkipPermissions {
+		t.Fatalf("runtimeLaunchPolicy().DangerouslySkipPermissions = %v; want %v", got.DangerouslySkipPermissions, want.DangerouslySkipPermissions)
+	}
+	if got.Resolved != want.Resolved {
+		t.Fatalf("runtimeLaunchPolicy().Resolved = %v; want %v", got.Resolved, want.Resolved)
+	}
+}
+
+// canonicalTempDir returns a fresh temp directory already resolved via
+// filepath.EvalSymlinks, mirroring what canonicalizeStateDir does to a real
+// stateDir. t.TempDir() itself can traverse a symlink (e.g. macOS's own /var
+// -> /private/var), and launchDefaultClientServer now canonicalizes
+// req.StateDir before computing its RuntimeIdentity, so a test that builds an
+// "expected" identity from the raw t.TempDir() value would otherwise never
+// match.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
+	}
+	return resolved
+}
+
+func TestDefaultLaunchAttachesToHealthyDiscoveredServer(t *testing.T) {
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, true)
+	baseURL := "http://127.0.0.1:7654"
+	var launched defaultClientLaunch
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:                 configPath,
+		StateDir:                   stateDir,
+		DangerouslySkipPermissions: true,
+		EnabledProviders:           []string{providerNameCodex},
+		WaitForReadyPollInterval:   time.Millisecond,
+		WaitForReadyTimeout:        25 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
+			if gotIdentity != identity {
+				t.Fatalf("identity = %+v; want %+v", gotIdentity, identity)
+			}
+			if !slices.Equal(gotPolicy.Providers, policy.Providers) || gotPolicy.DangerouslySkipPermissions != policy.DangerouslySkipPermissions {
+				t.Fatalf("policy = %+v; want %+v", gotPolicy, policy)
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         testReasonMatchingHealthyServer,
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+				},
+			}, nil
+		},
+		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+			t.Fatal("StartServer called for healthy discovery")
+			return nil, nil
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if launched.BaseURL != baseURL {
+		t.Fatalf("client BaseURL = %q; want %q", launched.BaseURL, baseURL)
+	}
+	if launched.OwnedServer {
+		t.Fatal("OwnedServer = true; want false for pre-existing server")
+	}
+}
+
+func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
+	baseURL := "http://127.0.0.1:7655"
+	var terminal bytes.Buffer
+	var started serverStartRequest
+	var launched defaultClientLaunch
+	prepareCalls := 0
+	process := &fakeServerProcess{}
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{providerNameCodex},
+		Stderr:                   &terminal,
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      50 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				return serverruntime.DiscoveryDecision{Replace: true, Reason: testReasonStaleDiscovery}, nil
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         testReasonMatchingHealthyServer,
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+				},
+			}, nil
+		},
+		StartServer: func(ctx context.Context, req serverStartRequest) (serverProcess, error) {
+			started = req
+			if req.Stderr == nil {
+				t.Fatal("server stderr = nil; want runtime log writer")
+			}
+			if _, err := io.WriteString(req.Stderr, "server log line\n"); err != nil {
+				t.Fatalf("write server stderr: %v", err)
+			}
+			return process, nil
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if started.ConfigPath != configPath || started.StateDir != stateDir {
+		t.Fatalf("server start request = %+v; want runtime paths", started)
+	}
+	if !slices.Equal(started.EnabledProviders, []string{providerNameCodex}) {
+		t.Fatalf("server providers = %v; want [codex]", started.EnabledProviders)
+	}
+	if strings.Contains(terminal.String(), "server log line") {
+		t.Fatalf("child server stderr leaked to terminal: %q", terminal.String())
+	}
+	logData, err := os.ReadFile(filepath.Join(runtimeDir, defaultLogBasename))
+	if err != nil {
+		t.Fatalf("read runtime log: %v", err)
+	}
+	if !strings.Contains(string(logData), "server log line") {
+		t.Fatalf("runtime log missing child server stderr: %q", string(logData))
+	}
+	if launched.BaseURL != baseURL || !launched.OwnedServer {
+		t.Fatalf("client launch = %+v; want owned child server at %s", launched, baseURL)
+	}
+	if process.stopCalls != 0 {
+		t.Fatalf("server stop calls = %d; want 0 when client exits normally", process.stopCalls)
+	}
+	if prepareCalls < 2 {
+		t.Fatalf("PrepareDiscovery calls = %d; want initial stale plus readiness", prepareCalls)
+	}
+}
+
+func TestDefaultLaunchReportsServerReadinessTimeout(t *testing.T) {
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
+	process := &fakeServerProcess{}
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{providerNameCodex},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+			return serverruntime.DiscoveryDecision{Replace: true, Reason: testReasonStaleDiscovery}, nil
+		},
+		StartServer: func(ctx context.Context, req serverStartRequest) (serverProcess, error) {
+			return process, nil
+		},
+		LaunchClient: func(context.Context, defaultClientLaunch) error {
+			t.Fatal("LaunchClient called before readiness")
+			return nil
+		},
+	})
+	if err == nil {
+		t.Fatal("launchDefaultClientServer() error = nil; want readiness timeout")
+	}
+	if !strings.Contains(err.Error(), "server readiness timed out") {
+		t.Fatalf("error = %q; want readiness timeout", err.Error())
+	}
+	if process.stopCalls != 1 {
+		t.Fatalf("server stop calls = %d; want child cleanup on readiness failure", process.stopCalls)
+	}
+}
+
+func TestDefaultLaunchReadinessTimeoutCoversCatalogDiscoveryBudget(t *testing.T) {
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
+	var observedBudget time.Duration
+
+	_, err := waitForDefaultLaunchServerReady(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{providerNameCodex},
+		WaitForReadyPollInterval: time.Millisecond,
+	}, defaultLaunchDeps{
+		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("PrepareDiscovery context has no deadline")
+			}
+			observedBudget = time.Until(deadline)
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      "http://127.0.0.1:7777",
+					Runtime:      gotIdentity,
+					LaunchPolicy: gotPolicy,
+				},
+			}, nil
+		},
+	}, runtimeDir, identity, policy, &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("waitForDefaultLaunchServerReady() error = %v", err)
+	}
+	if observedBudget <= providerCatalogDiscoveryTimeout {
+		t.Fatalf("default readiness budget = %v; want greater than catalog discovery budget %v", observedBudget, providerCatalogDiscoveryTimeout)
+	}
+}
+
+func TestDefaultLaunchRetainsOwnershipWhenReadyDiscoveryMatchesChildPID(t *testing.T) {
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
+	baseURL := "http://127.0.0.1:7656"
+	process := &fakeServerProcess{pid: 4242}
+	prepareCalls := 0
+	var launched defaultClientLaunch
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{providerNameCodex},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      50 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				return serverruntime.DiscoveryDecision{Replace: true, Reason: "no discovery record"}, nil
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         testReasonMatchingHealthyServer,
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+					PID:          process.pid,
+				},
+			}, nil
+		},
+		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+			return process, nil
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if launched.BaseURL != baseURL || !launched.OwnedServer || launched.Server != process {
+		t.Fatalf("client launch = %+v; want owned child server pid %d", launched, process.pid)
+	}
+	if process.stopCalls != 0 {
+		t.Fatalf("server stop calls = %d; want owned child retained for TUI quit authority", process.stopCalls)
+	}
+}
+
+func TestDefaultLaunchTreatsReadinessFromDifferentPIDAsAttached(t *testing.T) {
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
+	baseURL := "http://127.0.0.1:7657"
+	process := &fakeServerProcess{pid: 1111}
+	prepareCalls := 0
+	var launched defaultClientLaunch
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{providerNameCodex},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      50 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				return serverruntime.DiscoveryDecision{Replace: true, Reason: testReasonStaleDiscovery}, nil
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         testReasonMatchingHealthyServer,
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+					PID:          2222,
+				},
+			}, nil
+		},
+		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+			return process, nil
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if launched.BaseURL != baseURL || launched.OwnedServer || launched.Server != nil {
+		t.Fatalf("client launch = %+v; want attached pre-existing server", launched)
+	}
+	if process.stopCalls != 1 {
+		t.Fatalf("server stop calls = %d; want losing child cleaned up", process.stopCalls)
+	}
+}
+
+func TestDefaultLaunchConvergesAfterLiveOwnerLockContention(t *testing.T) {
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
+	baseURL := "http://127.0.0.1:7658"
+	owner := instancelock.Owner{PID: 9999, StateDir: stateDir, Config: configPath, Version: "test"}
+	prepareCalls := 0
+	startCalls := 0
+	var launched defaultClientLaunch
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{providerNameCodex},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      50 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				return serverruntime.DiscoveryDecision{Replace: true, Reason: testReasonStaleDiscovery}, nil
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         testReasonMatchingHealthyServer,
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+					PID:          owner.PID,
+					Owner:        serverruntime.OwnerDTOFromInstanceOwner(owner),
+				},
+			}, nil
+		},
+		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+			startCalls++
+			return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if startCalls != 1 {
+		t.Fatalf("StartServer calls = %d; want one losing start attempt", startCalls)
+	}
+	if launched.BaseURL != baseURL || launched.OwnedServer || launched.Server != nil {
+		t.Fatalf("client launch = %+v; want attached live-owner server", launched)
+	}
+}
+
+func TestDefaultLaunchConcurrentStaleRepairStartsOneOwnedServer(t *testing.T) {
+	testDefaultLaunchConcurrentConvergence(t, testReasonStaleDiscovery, "http://127.0.0.1:7659")
+}
+
+func TestDefaultLaunchConcurrentColdStartStartsOneOwnedServer(t *testing.T) {
+	testDefaultLaunchConcurrentConvergence(t, "no discovery record", "http://127.0.0.1:7660")
+}
+
+func testDefaultLaunchConcurrentConvergence(t *testing.T, initialReason, baseURL string) {
+	t.Helper()
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{providerNameCodex}, false)
+	owner := instancelock.Owner{PID: 31337, StateDir: stateDir, Config: configPath, Version: "test"}
+	process := &fakeServerProcess{pid: owner.PID}
+
+	var mu sync.Mutex
+	started := false
+	ready := false
+	var launches []defaultClientLaunch
+	runLaunch := func() error {
+		return launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+			ConfigPath:               configPath,
+			StateDir:                 stateDir,
+			EnabledProviders:         []string{providerNameCodex},
+			WaitForReadyPollInterval: time.Millisecond,
+			WaitForReadyTimeout:      100 * time.Millisecond,
+		}, defaultLaunchDeps{
+			ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+				return policy, nil
+			},
+			PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if !ready {
+					return serverruntime.DiscoveryDecision{Replace: true, Reason: initialReason}, nil
+				}
+				return serverruntime.DiscoveryDecision{
+					AlreadyRunning: true,
+					Reason:         testReasonMatchingHealthyServer,
+					Record: serverruntime.DiscoveryRecord{
+						BaseURL:      baseURL,
+						Runtime:      identity,
+						LaunchPolicy: policy,
+						PID:          owner.PID,
+						Owner:        serverruntime.OwnerDTOFromInstanceOwner(owner),
+					},
+				}, nil
+			},
+			StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if started {
+					return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
+				}
+				started = true
+				ready = true
+				return process, nil
+			},
+			LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+				mu.Lock()
+				defer mu.Unlock()
+				launches = append(launches, launch)
+				return nil
+			},
+		})
+	}
+	errCh := make(chan error, 2)
+	go func() { errCh <- runLaunch() }()
+	go func() { errCh <- runLaunch() }()
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("launch %d error = %v", i+1, err)
+		}
+	}
+	if len(launches) != 2 {
+		t.Fatalf("launches = %d; want 2", len(launches))
+	}
+	owned := 0
+	for _, launch := range launches {
+		if launch.BaseURL != baseURL {
+			t.Fatalf("launch BaseURL = %q; want %q", launch.BaseURL, baseURL)
+		}
+		if launch.OwnedServer {
+			owned++
+		}
+	}
+	if owned != 1 {
+		t.Fatalf("owned launches = %d; want exactly one owner", owned)
+	}
+}
+
+type fakeServerProcess struct {
+	stopCalls int
+	stopErr   error
+	pid       int
+}
+
+func (p *fakeServerProcess) Stop(context.Context) error {
+	p.stopCalls++
+	return p.stopErr
+}
+
+func (p *fakeServerProcess) PID() int {
+	return p.pid
+}
+
+type fakeWaitableServerProcess struct {
+	fakeServerProcess
+	waitCalls int
+	waitErr   error
+}
+
+func (p *fakeWaitableServerProcess) Wait(context.Context) error {
+	p.waitCalls++
+	return p.waitErr
+}
+
+func TestOwnedServerShutdownFallbackWaitsForGracefulExit(t *testing.T) {
+	proc := &fakeWaitableServerProcess{}
+	fallback := waitForOwnedServerShutdownOrStop(proc, time.Second)
+
+	if err := fallback(context.Background()); err != nil {
+		t.Fatalf("waitForOwnedServerShutdownOrStop() error = %v; want nil", err)
+	}
+	if proc.waitCalls != 1 {
+		t.Fatalf("wait calls = %d; want 1", proc.waitCalls)
+	}
+	if proc.stopCalls != 0 {
+		t.Fatalf("stop calls = %d; want 0 after graceful exit", proc.stopCalls)
+	}
+}
+
+func TestOwnedServerShutdownFallbackStopsAfterGraceTimeout(t *testing.T) {
+	proc := &fakeWaitableServerProcess{waitErr: context.DeadlineExceeded}
+	fallback := waitForOwnedServerShutdownOrStop(proc, time.Second)
+
+	if err := fallback(context.Background()); err != nil {
+		t.Fatalf("waitForOwnedServerShutdownOrStop() error = %v; want nil", err)
+	}
+	if proc.waitCalls != 1 {
+		t.Fatalf("wait calls = %d; want 1", proc.waitCalls)
+	}
+	if proc.stopCalls != 1 {
+		t.Fatalf("stop calls = %d; want 1 after grace timeout", proc.stopCalls)
+	}
+}
+
+func TestChildServerProcessStopReturnsNilAfterForcedKill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signal behavior only")
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcessIgnoreInterrupt")
+	cmd.Env = append(os.Environ(), "AGENTICO_TEST_HELPER_IGNORE_INTERRUPT=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	proc := &childServerProcess{cmd: cmd, done: make(chan error, 1)}
+	go func() {
+		proc.done <- cmd.Wait()
+	}()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := proc.Stop(ctx); err != nil {
+		t.Fatalf("Stop() error = %v; want nil after forced kill", err)
+	}
+}
+
+//nolint:unparam // t is required by Go's re-exec test-helper-process convention even though it's unused here
+func TestHelperProcessIgnoreInterrupt(t *testing.T) {
+	if os.Getenv("AGENTICO_TEST_HELPER_IGNORE_INTERRUPT") != "1" {
+		return
+	}
+	signal.Ignore(os.Interrupt)
+	select {}
+}
+
+func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	lock, acquired, _, err := instancelock.Acquire(runtimeDir, stateDir, configPath, "test")
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	if !acquired {
+		t.Fatal("Acquire() acquired = false; want true")
+	}
+	t.Cleanup(func() { _ = lock.Close() })
+
+	var stderr bytes.Buffer
+	boot, err := bootstrapRuntime(context.Background(), configPath, stateDir, false, []string{providerNameCodex}, false, &stderr)
+	if err == nil {
+		if boot != nil {
+			_ = boot.Close(context.Background())
+		}
+		t.Fatal("bootstrapRuntime() error = nil; want held lock error")
+	}
+	if !strings.Contains(err.Error(), "Another Agentic instance is already running") {
+		t.Fatalf("bootstrapRuntime() error = %q; want lock owner message", err.Error())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q; want no provider/startup work after lock rejection", stderr.String())
 	}
 }
 
@@ -976,7 +1771,7 @@ func TestProviderFxModules_NilReturnsDefaultSet(t *testing.T) {
 }
 
 func TestProviderFxModules_SingleProvider(t *testing.T) {
-	for _, name := range []string{"claude", "codex", "opencode"} {
+	for _, name := range []string{providerNameClaude, providerNameCodex, providerNameOpencode} {
 		t.Run(name, func(t *testing.T) {
 			modules := providerFxModules([]string{name})
 			if len(modules) != 1 {
@@ -987,7 +1782,7 @@ func TestProviderFxModules_SingleProvider(t *testing.T) {
 }
 
 func TestProviderFxModules_BothProviders(t *testing.T) {
-	modules := providerFxModules([]string{"claude", "codex"})
+	modules := providerFxModules([]string{providerNameClaude, providerNameCodex})
 	if len(modules) != 2 {
 		t.Errorf("expected 2 modules, got %d", len(modules))
 	}
@@ -1001,7 +1796,7 @@ func TestProviderFxModules_TrimsWhitespace(t *testing.T) {
 }
 
 func TestProviderFxModules_UnknownSkipped(t *testing.T) {
-	modules := providerFxModules([]string{"claude", "bogus"})
+	modules := providerFxModules([]string{providerNameClaude, "bogus"})
 	if len(modules) != 1 {
 		t.Errorf("expected 1 module (bogus skipped), got %d", len(modules))
 	}
@@ -1024,9 +1819,9 @@ func (s *stubCatalogProvider) ModelCatalog() []llm.ModelInfo { return s.catalog 
 func TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&stubCatalogProvider{
-		stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]"}, hasCLI: true},
+		stubProvider: stubProvider{name: providerNameOpencode, models: []string{testAnthropicSonnet45ModelID}, hasCLI: true},
 		catalog: []llm.ModelInfo{
-			{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000, Category: "balanced"},
+			{ID: testAnthropicSonnet45ModelID, Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000, Category: "balanced"},
 		},
 	})
 
@@ -1037,11 +1832,11 @@ func TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs(t 
 		t.Fatal("applyCatalogModelDefaultsToConfig returned false, want changed for a brand-new config")
 	}
 
-	const want = "anthropic/claude-sonnet-4-5[200K]"
+	const want = testAnthropicSonnet45ModelID
 	got := cfg.Defaults.Models
 	for field, val := range map[string]string{
 		"inquiry": got.Inquiry, "research": got.Research, "planning": got.Planning, "implementation": got.Implementation,
-		"review": got.Review, "chat": got.Utilities, "kb_build": got.KBBuild,
+		"review": got.Review, chatName: got.Utilities, "kb_build": got.KBBuild,
 	} {
 		if val != want {
 			t.Errorf("%s = %q, want bare backend id %q (single provider → no opencode: prefix)", field, val, want)
@@ -1073,17 +1868,17 @@ func TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs(t 
 func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&stubCatalogProvider{
-		stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
+		stubProvider: stubProvider{name: providerNameClaude, models: []string{modelNameOpus, modelNameSonnet, "haiku"}, hasCLI: true},
 		catalog: []llm.ModelInfo{
-			{ID: "opus", ContextWindow: 200_000, Category: "capable"},
-			{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"},
+			{ID: modelNameOpus, ContextWindow: 200_000, Category: "capable"},
+			{ID: modelNameSonnet, ContextWindow: 200_000, Category: "balanced"},
 			{ID: "haiku", ContextWindow: 200_000, Category: "cheap"},
 		},
 	})
 	reg.Register(&stubCatalogProvider{
-		stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
+		stubProvider: stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: true},
 		catalog: []llm.ModelInfo{
-			{ID: "gpt-5.4", ContextWindow: 200_000, Category: "balanced"},
+			{ID: testModelGPT54, ContextWindow: 200_000, Category: "balanced"},
 		},
 	})
 
@@ -1091,7 +1886,7 @@ func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t
 	cfg.Defaults.Models = config.ModelConfig{
 		Inquiry:  "claude:SONNET", // explicit prefix + non-canonical case
 		Research: "claude:SONNET", // explicit prefix + non-canonical case
-		Review:   "gpt-5.4",       // bare codex name
+		Review:   testModelGPT54,  // bare codex name
 		// Planning/Implementation/Utilities/KBBuild left empty → filled from defaults.
 	}
 
@@ -1105,7 +1900,7 @@ func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t
 	if got := cfg.Defaults.Models.Research; got != "claude:sonnet" {
 		t.Errorf("research canonicalized = %q, want claude:sonnet (user choice preserved, canonicalized)", got)
 	}
-	if got := cfg.Defaults.Models.Review; got != "gpt-5.4" {
+	if got := cfg.Defaults.Models.Review; got != testModelGPT54 {
 		t.Errorf("review = %q, want gpt-5.4 (bare name preserved, not overwritten)", got)
 	}
 	if cfg.Defaults.Models.Planning == "" {
@@ -1116,15 +1911,15 @@ func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t
 func TestRemapUnresolvableModels(t *testing.T) {
 	t.Run("replaces_unresolvable_with_fallback", func(t *testing.T) {
 		r := llm.NewRegistry()
-		r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true})
+		r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: true})
 
 		cfg := config.NewDefault() // has claude models: opus, sonnet, etc.
 		remapUnresolvableModels(cfg, r)
 
-		// All fields should now be "gpt-5.4" since codex is the only provider
+		// All fields should now be testModelGPT54 since codex is the only provider
 		m := cfg.Defaults.Models
 		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Review, m.Utilities, m.KBBuild} {
-			if field != "gpt-5.4" {
+			if field != testModelGPT54 {
 				t.Errorf("expected gpt-5.4, got %q", field)
 			}
 		}
@@ -1132,19 +1927,19 @@ func TestRemapUnresolvableModels(t *testing.T) {
 
 	t.Run("keeps_resolvable_models", func(t *testing.T) {
 		r := llm.NewRegistry()
-		r.Register(&stubProvider{name: "claude", models: []string{"opus[1M]", "sonnet[200K]"}, hasCLI: true})
+		r.Register(&stubProvider{name: providerNameClaude, models: []string{"opus[1M]", modelNameSonnet200K}, hasCLI: true})
 
 		cfg := config.NewDefault()
 		remapUnresolvableModels(cfg, r)
 
 		// canonical Claude defaults should stay; gpt-5.4[272K] (review) should become opus[1M].
-		if cfg.Defaults.Models.Inquiry != "sonnet[200K]" {
+		if cfg.Defaults.Models.Inquiry != modelNameSonnet200K {
 			t.Errorf("inquiry should stay sonnet[200K], got %q", cfg.Defaults.Models.Inquiry)
 		}
-		if cfg.Defaults.Models.Research != "sonnet[200K]" {
+		if cfg.Defaults.Models.Research != modelNameSonnet200K {
 			t.Errorf("research should stay sonnet[200K], got %q", cfg.Defaults.Models.Research)
 		}
-		if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		if cfg.Defaults.Models.Utilities != modelNameSonnet200K {
 			t.Errorf("utilities should stay sonnet[200K], got %q", cfg.Defaults.Models.Utilities)
 		}
 	})
@@ -1194,9 +1989,9 @@ func TestShouldPersistCatalogDefaults(t *testing.T) {
 func TestReconcileModelDefaults_NewConfigProviderFilteredPersistsDiscoveredDefaults(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&stubCatalogProvider{
-		stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]"}, hasCLI: true},
+		stubProvider: stubProvider{name: providerNameOpencode, models: []string{testAnthropicSonnet45ModelID}, hasCLI: true},
 		catalog: []llm.ModelInfo{
-			{ID: "anthropic/claude-sonnet-4-5[200K]", ContextWindow: 200_000, Category: "balanced"},
+			{ID: testAnthropicSonnet45ModelID, ContextWindow: 200_000, Category: "balanced"},
 		},
 	})
 
@@ -1221,7 +2016,7 @@ func TestReconcileModelDefaults_NewConfigProviderFilteredPersistsDiscoveredDefau
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
 	}
-	const want = "anthropic/claude-sonnet-4-5[200K]"
+	const want = testAnthropicSonnet45ModelID
 	if got := reloaded.Defaults.Models.Implementation; got != want {
 		t.Errorf("persisted implementation = %q, want discovered OpenCode default %q (not bootstrap %q)", got, want, bootstrap)
 	}
@@ -1237,9 +2032,9 @@ func TestReconcileModelDefaults_NewConfigProviderFilteredPersistsDiscoveredDefau
 func TestReconcileModelDefaults_ExistingConfigProviderFilterStaysRuntimeOnly(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&stubCatalogProvider{
-		stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]"}, hasCLI: true},
+		stubProvider: stubProvider{name: providerNameOpencode, models: []string{testAnthropicSonnet45ModelID}, hasCLI: true},
 		catalog: []llm.ModelInfo{
-			{ID: "anthropic/claude-sonnet-4-5[200K]", ContextWindow: 200_000, Category: "balanced"},
+			{ID: testAnthropicSonnet45ModelID, ContextWindow: 200_000, Category: "balanced"},
 		},
 	})
 
@@ -1247,12 +2042,12 @@ func TestReconcileModelDefaults_ExistingConfigProviderFilterStaysRuntimeOnly(t *
 	// registry cannot resolve.
 	cfg := config.NewDefault()
 	cfg.Defaults.Models = config.ModelConfig{
-		Research:       "sonnet[200K]",
-		Planning:       "sonnet[200K]",
-		Implementation: "sonnet[200K]",
+		Research:       modelNameSonnet200K,
+		Planning:       modelNameSonnet200K,
+		Implementation: modelNameSonnet200K,
 		Review:         "gpt-5.4[272K]",
-		Utilities:      "sonnet[200K]",
-		KBBuild:        "sonnet[200K]",
+		Utilities:      modelNameSonnet200K,
+		KBBuild:        modelNameSonnet200K,
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := config.Save(path, cfg); err != nil {
@@ -1273,7 +2068,7 @@ func TestReconcileModelDefaults_ExistingConfigProviderFilterStaysRuntimeOnly(t *
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
 	}
-	if got := reloaded.Defaults.Models.Research; got != "sonnet[200K]" {
+	if got := reloaded.Defaults.Models.Research; got != modelNameSonnet200K {
 		t.Errorf("disk research = %q, want unchanged sonnet[200K] (remap must stay runtime-only)", got)
 	}
 	if got := reloaded.Defaults.Models.Review; got != "gpt-5.4[272K]" {
@@ -1283,8 +2078,8 @@ func TestReconcileModelDefaults_ExistingConfigProviderFilterStaysRuntimeOnly(t *
 
 func TestCheckRequiredProviders_AllDetected(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude"})
-	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true, installHint: "install codex"})
+	r.Register(&stubProvider{name: providerNameClaude, models: []string{modelNameOpus}, hasCLI: true, installHint: installHintClaude})
+	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: true, installHint: installHintCodex})
 
 	detected, warnings, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
@@ -1306,8 +2101,8 @@ func TestCheckRequiredProviders_AllDetected(t *testing.T) {
 
 func TestCheckRequiredProviders_OneDetected(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude"})
-	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: false, installHint: "install codex"})
+	r.Register(&stubProvider{name: providerNameClaude, models: []string{modelNameOpus}, hasCLI: true, installHint: installHintClaude})
+	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: false, installHint: installHintCodex})
 
 	detected, warnings, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
@@ -1395,6 +2190,7 @@ func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	for _, want := range []string{
 		"Agentic Orchestrator",
 		"agentico [flags]",
+		"agentico server [flags]",
 		"~/.agentic-orchestrator/config.yaml",
 		"~/.agentic-orchestrator/features",
 		"~/.agentic-workflow/", // legacy-recovery callout retained
@@ -1421,8 +2217,8 @@ func TestUsageListsRefreshModels(t *testing.T) {
 
 func TestCheckRequiredProviders_NoneDetected(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: false, installHint: "install claude"})
-	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: false, installHint: "install codex"})
+	r.Register(&stubProvider{name: providerNameClaude, models: []string{modelNameOpus}, hasCLI: false, installHint: installHintClaude})
+	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: false, installHint: installHintCodex})
 
 	_, _, _, _, err := checkRequiredProviders(context.Background(), r)
 	if err == nil {
@@ -1432,8 +2228,8 @@ func TestCheckRequiredProviders_NoneDetected(t *testing.T) {
 
 func TestCheckRequiredProviders_UnreadyProviderWarnsAndFiltersRegistry(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude", hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
-	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true, installHint: "install codex", readiness: llm.ProviderReadiness{
+	r.Register(&stubProvider{name: providerNameClaude, models: []string{modelNameOpus}, hasCLI: true, installHint: installHintClaude, hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
+	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: true, installHint: installHintCodex, readiness: llm.ProviderReadiness{
 		Ready:  false,
 		Detail: "not logged in",
 		Remedy: "run 'codex login'",
@@ -1446,7 +2242,7 @@ func TestCheckRequiredProviders_UnreadyProviderWarnsAndFiltersRegistry(t *testin
 	if !filtered {
 		t.Fatal("filtered = false, want true")
 	}
-	if len(detected) != 1 || detected[0].Name() != "claude" {
+	if len(detected) != 1 || detected[0].Name() != providerNameClaude {
 		t.Fatalf("detected = %v, want only claude", providerNames(detected))
 	}
 	if len(warnings) != 0 {
@@ -1458,19 +2254,19 @@ func TestCheckRequiredProviders_UnreadyProviderWarnsAndFiltersRegistry(t *testin
 	if _, _, err := r.ResolveModel("codex:gpt-5.4"); err == nil {
 		t.Fatal("ResolveModel(codex:gpt-5.4) succeeded after codex was filtered")
 	}
-	if got := r.AvailableModels(); !slices.Equal(got, []string{"opus"}) {
+	if got := r.AvailableModels(); !slices.Equal(got, []string{modelNameOpus}) {
 		t.Fatalf("AvailableModels() = %v, want [opus]", got)
 	}
 }
 
 func TestCheckRequiredProviders_NoneReadyReportsProviderSpecificFix(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude", readiness: llm.ProviderReadiness{
+	r.Register(&stubProvider{name: providerNameClaude, models: []string{modelNameOpus}, hasCLI: true, installHint: installHintClaude, readiness: llm.ProviderReadiness{
 		Ready:  false,
 		Detail: "not authenticated",
 		Remedy: "run 'claude auth login'",
 	}, hasReadiness: true})
-	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: false, installHint: "install codex"})
+	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: false, installHint: installHintCodex})
 
 	_, _, _, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err == nil {
@@ -1482,11 +2278,11 @@ func TestCheckRequiredProviders_NoneReadyReportsProviderSpecificFix(t *testing.T
 	msg := err.Error()
 	for _, want := range []string{
 		"No ready AI coding assistant providers detected",
-		"claude",
+		providerNameClaude,
 		"not authenticated",
 		"claude auth login",
 		"Missing provider CLIs",
-		"codex",
+		providerNameCodex,
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error missing %q:\n%s", want, msg)

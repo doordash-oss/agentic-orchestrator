@@ -21,6 +21,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ansiRegex matches ANSI escape sequences for stripping from rendered text.
@@ -59,6 +60,18 @@ var (
 	ReviewStyle   = lipgloss.NewStyle().Foreground(colorBrand)
 	BadgeStyle    = lipgloss.NewStyle().Bold(true).Foreground(colorPeach)
 	MutedStyle    = lipgloss.NewStyle().Foreground(colorOverlay)
+
+	// chatUserTagStyle marks a "[you]" turn tag in the AMA/attach transcripts.
+	chatUserTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorBrand)
+
+	// chatAgentTagStyle marks a "[agent]" turn tag — a distinct accent (Teal)
+	// from colorBrand so the agent's voice reads as a different kind of
+	// surface than chrome/user input, without clashing with colorInfo's
+	// existing "in-progress status" semantics elsewhere in styles.go.
+	chatAgentTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorActive)
+
+	// chatAgentTagErrorStyle is the error-state variant of the agent tag.
+	chatAgentTagErrorStyle = lipgloss.NewStyle().Bold(true).Foreground(colorError)
 )
 
 // Layout styles
@@ -337,6 +350,21 @@ func truncateLines(s string, maxLines int) string {
 		return s
 	}
 	return strings.Join(lines[:maxLines], "\n")
+}
+
+// truncateRenderedLines limits every rendered line to width display cells while
+// preserving ANSI escape sequences.
+func truncateRenderedLines(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if ansi.StringWidth(line) > width {
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // overlayModal renders modal centered on top of a dimmed background.

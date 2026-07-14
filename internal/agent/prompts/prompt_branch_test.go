@@ -131,28 +131,39 @@ func TestReadOnlyOutsideRootsBranch(t *testing.T) {
 
 	on := render(true)
 	requireContains(t, on, "ABSOLUTE: write only inside the output roots above.")
+	requireContains(t, on, "This is a read-only phase for target repositories.")
+	requireContains(t, on, "You may inspect repository files, but you must not create, edit, delete, move, rename, reformat, or otherwise mutate any file outside the output roots.")
+	requireContains(t, on, "If a user answer or artifact requirement sounds like permission to edit repository files, treat it only as a requirement to document in your output artifact.")
+	requireContains(t, on, "Before creating `phase_complete`, ensure every file you changed is inside the output roots.")
 	// The prohibition must sit between the output-roots list and the
 	// completion marker — agents skip ahead to "## Completion", so placing
 	// the rule there keeps it on the path of an attentive reader.
 	requireOrder(t, on, "## Output Roots", "ABSOLUTE: write only inside the output roots above.", "## Completion")
+	requireOrder(t, on, "## Completion", "Before creating `phase_complete`, ensure every file you changed is inside the output roots.", "/phase/phase_complete")
 
 	off := render(false)
 	requireNotContains(t, off, "ABSOLUTE: write only inside the output roots above.")
+	requireNotContains(t, off, "This is a read-only phase for target repositories.")
+	requireNotContains(t, off, "If a user answer or artifact requirement sounds like permission to edit repository files")
 }
 
 func TestMultiRepoPromptBranches(t *testing.T) {
+	const wantRepoAPI = "**api**"
+
 	repos := []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}}
 	tests := []struct {
-		name   string
-		render func() string
-		want   bool
+		name     string
+		render   func() string
+		want     bool
+		wantRepo string
 	}{
 		{
 			name: "design_target_repositories_block_emitted_when_multi_repo_with_multiple_repos",
 			render: func() string {
 				return DesignUserPrompt(DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
 			},
-			want: true,
+			want:     true,
+			wantRepo: wantRepoAPI,
 		},
 		{
 			name: "design_target_repositories_block_omitted_when_multi_repo_flag_false",
@@ -171,19 +182,24 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 			render: func() string {
 				return RoadmapUserPrompt(RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
 			},
-			want: true,
+			want:     true,
+			wantRepo: wantRepoAPI,
 		},
 		{
-			name: "roadmap_target_repositories_block_omitted_when_multi_repo_flag_false",
+			name: "roadmap_target_repositories_block_emitted_even_when_multi_repo_flag_false",
 			render: func() string {
 				return RoadmapUserPrompt(RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: false, Repos: repos})
 			},
+			want:     true,
+			wantRepo: wantRepoAPI,
 		},
 		{
-			name: "roadmap_target_repositories_block_omitted_when_only_one_repo",
+			name: "roadmap_target_repositories_block_emitted_when_only_one_repo",
 			render: func() string {
 				return RoadmapUserPrompt(RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos[:1]})
 			},
+			want:     true,
+			wantRepo: "**web**",
 		},
 	}
 
@@ -192,7 +208,7 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 			got := tt.render()
 			if tt.want {
 				requireContains(t, got, "## Target Repositories")
-				requireContains(t, got, "**api**")
+				requireContains(t, got, tt.wantRepo)
 				return
 			}
 			requireNotContains(t, got, "## Target Repositories")

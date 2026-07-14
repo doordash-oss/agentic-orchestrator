@@ -35,6 +35,17 @@ const (
 	livePreviewToolResultSuffix       = "[...]"
 )
 
+const (
+	labelCost      = "Cost"
+	labelFeatureID = "Feature ID"
+	labelInfo      = "Info"
+)
+
+const (
+	validatorStatusApproved         = "APPROVED"
+	validatorStatusChangesRequested = "CHANGES_REQUESTED"
+)
+
 // LivePreviewModel renders the normal live dashboard right panel. It is a
 // compact status shell, not the full attach transcript.
 type LivePreviewModel struct {
@@ -123,7 +134,7 @@ type livePreviewMetadataItem struct {
 
 func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, contextPct int) []livePreviewMetadataItem {
 	items := []livePreviewMetadataItem{
-		{label: "Feature ID", value: livePreviewFeatureID(f)},
+		{label: labelFeatureID, value: livePreviewFeatureID(f)},
 		{label: "Repos", value: livePreviewReposSummary(f)},
 	}
 	if prLinks := livePreviewPRLinks(f); prLinks != "" {
@@ -142,7 +153,7 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, cont
 	items = append(items,
 		livePreviewMetadataItem{label: "Phase Model", value: livePreviewPhaseModel(f, sess)},
 		livePreviewMetadataItem{label: "Elapsed", value: livePreviewElapsedText(f)},
-		livePreviewMetadataItem{label: "Cost", value: livePreviewCostText(f)},
+		livePreviewMetadataItem{label: labelCost, value: livePreviewCostText(f)},
 	)
 	return items
 }
@@ -169,14 +180,7 @@ func livePreviewContextWindow(f *feature.Feature, sess session.SessionView) int 
 			return window
 		}
 	}
-	var phase feature.Phase
-	if f != nil {
-		phase = f.CurrentPhase
-	}
-	if sess != nil {
-		phase = sess.Phase()
-	}
-	return llm.ParseModelContextWindow(livePreviewConfiguredPhaseModel(f, phase))
+	return llm.ParseModelContextWindow(livePreviewConfiguredPhaseModel(f, livePreviewDisplayPhase(f, sess)))
 }
 
 func livePreviewContextText(contextPct, contextWindow int) string {
@@ -464,24 +468,15 @@ func livePreviewWrapRenderedBody(prefix, body string, render func(...string) str
 }
 
 func livePreviewPhaseLabel(f *feature.Feature, sess session.SessionView) string {
-	if sess != nil {
-		return sess.Phase().String()
-	}
-	if f == nil {
+	phase := livePreviewDisplayPhase(f, sess)
+	if phase == feature.Phase(-1) {
 		return "Unknown"
 	}
-	return f.CurrentPhase.String()
+	return phase.String()
 }
 
 func livePreviewPhaseModel(f *feature.Feature, sess session.SessionView) string {
-	var phase feature.Phase
-	if f != nil {
-		phase = f.CurrentPhase
-	}
-	if sess != nil {
-		phase = sess.Phase()
-	}
-	configuredModel := livePreviewConfiguredPhaseModel(f, phase)
+	configuredModel := livePreviewConfiguredPhaseModel(f, livePreviewDisplayPhase(f, sess))
 	if sess != nil {
 		if model := firstNonEmpty(sess.Model()); model != "" {
 			return livePreviewSessionModelLabel(model, configuredModel)
@@ -590,9 +585,6 @@ func livePreviewActivityLine(f *feature.Feature, sess session.SessionView) strin
 func activityLineFromMessage(f *feature.Feature, sess session.SessionView, msg llm.SDKMessage) (string, bool) {
 	switch {
 	case msg.Result != nil:
-		if isTweakLivePreview(f, sess) {
-			return "Waiting for tweak input...", true
-		}
 		return workingOnPhaseLine(f, sess), true
 	case msg.ToolProgress != nil && msg.ToolProgress.ToolName != "":
 		return "Using " + msg.ToolProgress.ToolName + "...", true
@@ -603,7 +595,7 @@ func activityLineFromMessage(f *feature.Feature, sess session.SessionView, msg l
 			return "Using " + toolName + "...", true
 		}
 		if hasThinkingBlock(msg.Assistant.Message.Content) {
-			return "Thinking...", true
+			return thinkingLineText, true
 		}
 	}
 	return "", false
@@ -632,28 +624,11 @@ func workingOnPhaseLine(f *feature.Feature, sess session.SessionView) string {
 }
 
 func livePreviewPhaseName(f *feature.Feature, sess session.SessionView) string {
-	if sess != nil {
-		return sess.Phase().String()
-	}
-	if f != nil {
-		return f.CurrentPhase.String()
+	phase := livePreviewDisplayPhase(f, sess)
+	if phase != feature.Phase(-1) {
+		return phase.String()
 	}
 	return "feature"
-}
-
-func isTweakLivePreview(f *feature.Feature, sess session.SessionView) bool {
-	if sess != nil {
-		if sess.Kind() == ports.KindTweak || isTweakSessionID(sess.ID()) {
-			return true
-		}
-	}
-	if f == nil {
-		return false
-	}
-	if hasPendingHelpRequestMessage(f, waitingInputHelpMessage) {
-		return true
-	}
-	return hasTweakCycle(f)
 }
 
 type livePreviewTranscriptKind int
@@ -735,7 +710,7 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool)
 	lastKey := ""
 
 	appendRow := func(row livePreviewTranscriptRow) {
-		row.text = singleLine(row.text)
+		row.text = normalizeLivePreviewTranscriptRowText(row)
 		if row.text == "" {
 			return
 		}
@@ -762,7 +737,7 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool)
 				case block.IsText():
 					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptAssistant, text: block.Text})
 				case block.IsThinking():
-					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptTask, text: "Thinking..."})
+					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptTask, text: thinkingLineText})
 				case block.IsToolUse():
 					if block.ID != "" && block.Name != "" {
 						toolNames[block.ID] = block.Name
@@ -798,8 +773,15 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool)
 	return rows
 }
 
+func normalizeLivePreviewTranscriptRowText(row livePreviewTranscriptRow) string {
+	if row.kind == livePreviewTranscriptAssistant && !row.truncate {
+		return strings.TrimSpace(row.text)
+	}
+	return singleLine(row.text)
+}
+
 func livePreviewToolUseRow(block llm.ContentBlock) livePreviewTranscriptRow {
-	if block.Name == "AskUserQuestion" {
+	if block.Name == toolNameAskUserQuestion {
 		return livePreviewTranscriptRow{kind: livePreviewTranscriptQuestion, text: "AskUser: " + livePreviewAskUserSummary(block.Input)}
 	}
 	text := block.Name
@@ -902,10 +884,10 @@ func livePreviewControlRequestRow(req *llm.ControlRequestMessage) livePreviewTra
 	if req.Request.Subtype == "hook_callback" {
 		return livePreviewTranscriptRow{}
 	}
-	if req.Request.ToolName == "AskUserQuestion" {
+	if req.Request.ToolName == toolNameAskUserQuestion {
 		return livePreviewTranscriptRow{kind: livePreviewTranscriptQuestion, text: "AskUser: " + livePreviewAskUserSummary(req.Request.Input)}
 	}
-	if req.Request.Subtype == "can_use_tool" && req.Request.ToolName != "" {
+	if req.Request.Subtype == controlRequestSubtypeCanUseTool && req.Request.ToolName != "" {
 		text := "Permission: " + req.Request.ToolName
 		if detail := livePreviewToolInputSummary(req.Request.ToolName, req.Request.Input); detail != "" {
 			text += ": " + detail
@@ -948,6 +930,10 @@ func livePreviewTaskNotificationRow(msg *llm.TaskNotificationMessage) livePrevie
 }
 
 func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) []string {
+	if row.kind == livePreviewTranscriptAssistant && !row.truncate {
+		return renderLivePreviewAssistantTranscriptRow(row.text, width)
+	}
+
 	glyph := livePreviewTranscriptGlyph(row.kind)
 	style := livePreviewTranscriptStyle(row.kind)
 	if row.truncate {
@@ -958,6 +944,28 @@ func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) []s
 		return []string{line}
 	}
 	return livePreviewWrapRenderedBody("  ", glyph+" "+row.text, style.Render, width, "    ")
+}
+
+func renderLivePreviewAssistantTranscriptRow(text string, width int) []string {
+	prefix := "  "
+	renderWidth := width
+	if width > 0 {
+		renderWidth = max(width-lipgloss.Width(prefix), 1)
+	}
+	rendered := strings.TrimRight(renderMarkdown(text, renderWidth), "\n")
+	if strings.TrimSpace(rendered) == "" {
+		return nil
+	}
+	rawLines := strings.Split(rendered, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		out := prefix + line
+		if width > 0 && lipgloss.Width(out) > width {
+			out = ansi.Truncate(out, width, "…")
+		}
+		lines = append(lines, out)
+	}
+	return lines
 }
 
 func livePreviewTranscriptStyle(kind livePreviewTranscriptKind) lipgloss.Style {
@@ -1006,12 +1014,7 @@ func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) st
 		return "Current: " + validation
 	}
 
-	phase := feature.Phase(-1)
-	if sess != nil {
-		phase = sess.Phase()
-	} else if f != nil {
-		phase = f.CurrentPhase
-	}
+	phase := livePreviewDisplayPhase(f, sess)
 	if phase == feature.Phase(-1) {
 		return "Current: Unknown"
 	}
@@ -1030,6 +1033,19 @@ func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) st
 		}
 	}
 	return "Current: " + strings.Join(parts, " · ")
+}
+
+func livePreviewDisplayPhase(f *feature.Feature, sess session.SessionView) feature.Phase {
+	if f != nil && f.Status == feature.StatusFinalReviewing && f.CurrentPhase == feature.PhaseFinalReview {
+		return feature.PhaseFinalReview
+	}
+	if sess != nil {
+		return sess.Phase()
+	}
+	if f != nil {
+		return f.CurrentPhase
+	}
+	return feature.Phase(-1)
 }
 
 func livePreviewValidationTitle(f *feature.Feature, sess session.SessionView) string {
@@ -1185,9 +1201,9 @@ func livePreviewValidatorStatusStyle(status string) lipgloss.Style {
 
 func livePreviewValidatorStatusKind(status string) string {
 	switch strings.ToUpper(status) {
-	case "APPROVED":
+	case validatorStatusApproved:
 		return "approved"
-	case "CHANGES_REQUESTED", "FAILED", "ERROR":
+	case validatorStatusChangesRequested, "FAILED", "ERROR":
 		return "failed"
 	default:
 		return "running"
@@ -1222,7 +1238,7 @@ func livePreviewToolInputSummary(toolName string, input json.RawMessage) string 
 	if len(input) == 0 {
 		return ""
 	}
-	if toolName == "AskUserQuestion" {
+	if toolName == toolNameAskUserQuestion {
 		return livePreviewAskUserSummary(input)
 	}
 
@@ -1232,19 +1248,19 @@ func livePreviewToolInputSummary(toolName string, input json.RawMessage) string 
 	}
 
 	switch toolName {
-	case "Bash":
+	case toolNameBash:
 		return stringField(parsed, "command")
-	case "Read", "Write", "Edit", "MultiEdit":
+	case toolNameRead, toolNameWrite, toolNameEdit, toolNameMultiEdit:
 		return stringField(parsed, "file_path")
-	case "Glob":
+	case toolNameGlob:
 		return joinNonEmpty(stringField(parsed, "pattern"), stringField(parsed, "path"))
-	case "Grep":
+	case toolNameGrep:
 		return joinNonEmpty(stringField(parsed, "pattern"), stringField(parsed, "path"))
 	case "LS":
 		return stringField(parsed, "path")
 	case "WebFetch":
 		return stringField(parsed, "url")
-	case "Agent", "Task":
+	case toolNameAgent, "Task":
 		return firstNonEmpty(stringField(parsed, "description"), stringField(parsed, "prompt"))
 	}
 	return livePreviewJSONSummary(input)

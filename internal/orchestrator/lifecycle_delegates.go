@@ -197,9 +197,8 @@ func (o *Orchestrator) TryCompletePublish(featureID string) (bool, error) {
 
 // MarkDone transitions the feature to StatusDone and fires
 // OnFeatureSummaryNeeded so the observe summary is refreshed at the
-// terminal transition. Used by TUI manual-publish and mark-done paths
-// where the feature reached Published without the orchestrator's publish
-// pipeline.
+// terminal transition. Used by explicit mark-done paths where the feature
+// reached a terminal state without the orchestrator's publish pipeline.
 func (o *Orchestrator) MarkDone(featureID string) error {
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		return f.Transition(feature.StatusDone)
@@ -268,7 +267,7 @@ func (o *Orchestrator) CommitRoadmapPhase(featureID string, phase int) error {
 }
 
 // RemoveRepoCycle removes a repo cycle entry without firing failure events.
-// Used by the TUI's restartRepoCycleMsg flow when the user aborts a tweak
+// Used by the TUI's restartRepoCycleMsg flow when the user aborts a cycle
 // restart and wants the stale cycle cleared so the cycle selector re-opens.
 func (o *Orchestrator) RemoveRepoCycle(featureID, repoName string) error {
 	return o.deps.Lifecycle.RemoveRepoCycle(featureID, repoName)
@@ -311,6 +310,24 @@ func (o *Orchestrator) RetryPhase(featureID string) error {
 // fail the whole phase).
 func (o *Orchestrator) FailRepoImplementation(featureID, repoName, errMsg string) error {
 	return o.deps.Lifecycle.FailRepoImplementation(featureID, repoName, errMsg)
+}
+
+func (o *Orchestrator) RecordRebasePreflightFailure(featureID, repoName string, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	msg := "rebase preflight: " + cause.Error()
+	if err := o.deps.Lifecycle.FailRepoImplementation(featureID, repoName, msg); err != nil {
+		return fmt.Errorf("record rebase preflight failure: %w", err)
+	}
+	o.emitEvent(ports.Event{
+		Type:      ports.RepoStatusChanged,
+		FeatureID: featureID,
+		RepoName:  repoName,
+		Message:   msg,
+		Error:     cause,
+	})
+	return nil
 }
 
 // phaseDeclaredRepos returns the phase-declared repo subset by running
@@ -377,6 +394,7 @@ func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase
 		return warnings, effectiveTarget, err
 	}
 	o.fireFeatureRewoundHook(featureID, feature.RewindRequest{TargetPhase: targetPhase}, effectiveTarget, sourceRun)
+	o.emitEventBlocking(ports.Event{Type: ports.FeatureRewound, FeatureID: featureID, Phase: effectiveTarget})
 	return warnings, effectiveTarget, nil
 }
 
@@ -389,6 +407,7 @@ func (o *Orchestrator) RewindWithRequest(featureID string, request feature.Rewin
 		return warnings, effectiveTarget, err
 	}
 	o.fireFeatureRewoundHook(featureID, request, effectiveTarget, sourceRun)
+	o.emitEventBlocking(ports.Event{Type: ports.FeatureRewound, FeatureID: featureID, Phase: effectiveTarget})
 	return warnings, effectiveTarget, nil
 }
 
@@ -550,28 +569,16 @@ func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 	return nil
 }
 
-// ApplyRefactorPipeline sets the feature's pipeline profile and resets its
-// checkpoints to the profile's defaults. Unlike UpgradePipeline, this allows
-// any profile (including downgrade) because the refactor flow resets the
-// cycle. Used by applyRefactorPipelineAndStart so the TUI never calls
-// Store.Modify directly to mutate feature Pipeline / Checkpoints.
-func (o *Orchestrator) ApplyRefactorPipeline(featureID string, profile feature.PipelineProfile) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		f.Pipeline = profile
-		f.Checkpoints = feature.DefaultCheckpointsForProfile(profile)
-		return nil
-	})
-}
-
-// UpdateFeatureConfigInput carries the three editable per-feature config
-// axes for Orchestrator.UpdateFeatureConfig. All three fields are always
+// UpdateFeatureConfigInput carries the editable per-feature config axes
+// for Orchestrator.UpdateFeatureConfig. All fields are always
 // populated — callers build the input from the current feature snapshot
 // plus their edits, so a zero-value field is a real "set this to empty"
 // operation, not "leave alone".
 type UpdateFeatureConfigInput struct {
-	Models      config.ModelConfig
-	Inquireness feature.Inquireness
-	Checkpoints feature.Checkpoints
+	Models             config.ModelConfig
+	Inquireness        feature.Inquireness
+	Checkpoints        feature.Checkpoints
+	InputNotifications feature.InputNotificationsMode
 }
 
 // ErrFeatureNotQuiescent is kept for compatibility with older callers that
@@ -580,7 +587,7 @@ type UpdateFeatureConfigInput struct {
 // and active sessions pick them up on the next phase or restart.
 var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 
-// UpdateFeatureConfig atomically writes the three editable config axes. Same
+// UpdateFeatureConfig atomically writes the editable config axes. Same
 // idiom as ApplyRefactorPipeline — Store.Modify handles locking + atomic
 // write. On success, emits ports.Event{Type: FeatureConfigChanged}
 // (non-blocking) and fires hooks.OnFeatureConfigChanged(before, after) so the
@@ -597,11 +604,22 @@ var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeatureConfigInput) error {
 	var before, after feature.ConfigSnapshot
 	err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		before = feature.ConfigSnapshot{Models: f.Models, Inquireness: f.Inquireness, Checkpoints: f.Checkpoints}
+		before = feature.ConfigSnapshot{
+			Models:             f.Models,
+			Inquireness:        f.Inquireness,
+			Checkpoints:        f.Checkpoints,
+			InputNotifications: feature.NormalizeInputNotificationsMode(f.InputNotifications),
+		}
 		f.Models = input.Models
 		f.Inquireness = input.Inquireness
 		f.Checkpoints = f.Pipeline.NormalizeCheckpoints(input.Checkpoints, f.IsPublishable())
-		after = feature.ConfigSnapshot{Models: f.Models, Inquireness: f.Inquireness, Checkpoints: f.Checkpoints}
+		f.InputNotifications = feature.PersistInputNotificationsMode(input.InputNotifications)
+		after = feature.ConfigSnapshot{
+			Models:             f.Models,
+			Inquireness:        f.Inquireness,
+			Checkpoints:        f.Checkpoints,
+			InputNotifications: feature.NormalizeInputNotificationsMode(f.InputNotifications),
+		}
 		return nil
 	})
 	if err != nil {
@@ -649,40 +667,6 @@ func clearPendingFeatureAttention(f *feature.Feature) {
 	}
 }
 
-// ResetToPublishedFromTweak force-resets a feature that is in an active tweak
-// cycle back to its pre-tweak published/code-ready state. This is the restart
-// path when the user aborts an in-flight tweak — Transition chains aren't
-// always valid from Failed/Interrupted so Store.Modify is used to force the
-// target state. Clears ActiveCycleType and any failure bookkeeping.
-//
-// Re-entrancy / crash recovery:
-//
-//	(a) Idempotent on retry. The mutation force-assigns a deterministic state
-//	    derived only from f.PRURLs() (Published when any PR URL is recorded,
-//	    CodeReady otherwise) and clears ActiveCycleType / LastError /
-//	    FailureType to fixed empty values. A second call against an already
-//	    reset feature observes the same f.PRURLs() snapshot and writes the
-//	    same fields — no divergence.
-//	(b) On crash before Store.Modify returns: feature.yaml is written
-//	    atomically (temp + rename), so persisted state is either the
-//	    pre-call snapshot (still tweaking) or the fully reset snapshot.
-//	    Recovery is the normal startup load; if the crash landed in the
-//	    pre-write window the user can simply re-issue the abort.
-func (o *Orchestrator) ResetToPublishedFromTweak(featureID string) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		if len(f.PRURLs()) > 0 {
-			f.Status = feature.StatusPublished
-		} else {
-			f.Status = feature.StatusCodeReady
-		}
-		f.CurrentPhase = feature.PhasePublish
-		f.SetActiveCycleType("")
-		f.LastError = ""
-		f.FailureType = ""
-		return nil
-	})
-}
-
 // ExtendFailedPhaseBudget clears failure bookkeeping on a failed feature and
 // bumps iteration budgets by the caller-supplied deltas. The TUI reads the
 // configured defaults from feature.Manager.Config (read-only) and passes them
@@ -707,7 +691,7 @@ func (o *Orchestrator) ExtendFailedPhaseBudget(featureID string, maxIterationsDe
 	})
 }
 
-// RepoCycleRestart describes one non-refactor repo cycle that needs to be
+// RepoCycleRestart describes one review-comments repo cycle that needs to be
 // re-launched after a restart. The TUI consumes these and dispatches a
 // restartRepoCycleMsg for each.
 type RepoCycleRestart struct {
@@ -725,10 +709,9 @@ type RefactorRestart struct {
 }
 
 // CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
-// reads each cycle's plan file from disk, clears the cycle state, and returns
-// per-cycle restart descriptors the TUI must dispatch. Tweak cycles are
-// skipped (they cannot be restarted autonomously — cleared but not re-queued).
-// At most one refactor cycle is returned (only one refactor runs at a time).
+// reads each review-comments cycle's plan file from disk, clears the cycle
+// state, and returns restart descriptors the TUI must dispatch. At most one
+// refactor cycle is returned (only one refactor runs at a time).
 func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, *RefactorRestart, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -753,21 +736,21 @@ func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]Rep
 	var refactor *RefactorRestart
 	for _, c := range cycles {
 		switch c.cycleType {
-		case feature.CycleTweak:
-			// Interactive tweak sessions have no plan file — cannot restart
-			// autonomously. Cycle already cleared; nothing to re-dispatch.
-			continue
 		case feature.CycleRefactor:
 			if refactor != nil {
 				// Only restart one refactor per feature — one at a time.
 				continue
 			}
-			data, _ := os.ReadFile(c.planPath)
+			prompt := f.RefactorPrompt
+			if prompt == "" && c.planPath != "" {
+				data, _ := os.ReadFile(c.planPath)
+				prompt = extractRefactorPromptFromPlan(string(data))
+			}
 			refactor = &RefactorRestart{
 				RepoName: c.repoName,
-				Prompt:   extractRefactorPromptFromPlan(string(data)),
+				Prompt:   prompt,
 			}
-		default:
+		case feature.CycleReviewComments:
 			data, _ := os.ReadFile(c.planPath)
 			restarts = append(restarts, RepoCycleRestart{
 				RepoName:    c.repoName,
@@ -988,8 +971,6 @@ type RestartOutcome struct {
 // restarts. Iteration 13 consolidated the decision tree that previously lived
 // in the TUI's restartPhaseCmd:
 //   - Stops any active sessions (delegates to StopFeatureSessions).
-//   - If the feature has an active tweak cycle, forces back to the pre-tweak
-//     state (ResetToPublishedFromTweak) and returns RestartNoOp.
 //   - On Failed features, clears the failure bookkeeping and extends the
 //     iteration budget by the caller-supplied deltas (the orchestrator's port
 //     surface does not carry config so the TUI reads Defaults and passes them).
@@ -1027,17 +1008,6 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// Stop any active sessions before mutating state so orphaned agents do not
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
-
-	// Guard: active tweak cycle — restore to pre-tweak state instead of
-	// restarting. ResetToPublishedFromTweak force-sets the target state
-	// because restart may be invoked from Failed / Interrupted where
-	// Transition chains are invalid.
-	if f.ActiveCycleType() == feature.CycleTweak {
-		if err := o.ResetToPublishedFromTweak(featureID); err != nil {
-			return RestartOutcome{}, fmt.Errorf("reset tweak: %w", err)
-		}
-		return RestartOutcome{Action: RestartNoOp}, nil
-	}
 
 	// Clear failure context on restart; extend iteration caps if exhausted.
 	// ExtendFailedPhaseBudget is a no-op on non-Failed features so this is

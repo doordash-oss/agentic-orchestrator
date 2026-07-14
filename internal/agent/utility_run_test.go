@@ -165,7 +165,7 @@ func newUtilityTestPhaseRunner(t *testing.T, sess *utilityTestSession) *utilityT
 	}
 	runner.pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 		runner.capturedOpts = append(runner.capturedOpts, opts)
-		return []string{"mock"}, nil, &ports.SessionOpts{
+		return []string{testMockIdentifier}, nil, &ports.SessionOpts{
 			PIDDir:      opts.PIDDir,
 			RepoName:    opts.RepoName,
 			PermHandler: opts.PermHandler,
@@ -178,13 +178,13 @@ func TestPhaseRunnerRunUtilitySession_Success(t *testing.T) {
 	sess := newUtilityTestSession()
 	sess.msgLog.Append(mocks.AssistantTextMessage("Utility output"))
 	sess.result = &llm.ResultMessage{
-		Type:       "result",
-		Subtype:    "success",
+		Type:       testResultMessageType,
+		Subtype:    testResultSuccessValue,
 		Result:     "done",
-		StopReason: "end_turn",
+		StopReason: testStopReasonEndTurn,
 	}
 	sess.usage = llm.Usage{InputTokens: 9, OutputTokens: 4}
-	sess.statusCh <- "SUCCESS"
+	sess.statusCh <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	result, err := runner.pr.RunUtilitySession(context.Background(), UtilityRunConfig{
@@ -220,6 +220,9 @@ func TestPhaseRunnerRunUtilitySession_Success(t *testing.T) {
 	if opts.Phase != feature.PhaseResearch {
 		t.Errorf("BuildSessionOpts.Phase = %v, want %v", opts.Phase, feature.PhaseResearch)
 	}
+	if opts.EffortLevel != llm.EffortLow {
+		t.Errorf("BuildSessionOpts.EffortLevel = %q, want low for utility session", opts.EffortLevel)
+	}
 }
 
 func TestPhaseRunnerRunUtilitySession_TimesOut(t *testing.T) {
@@ -251,12 +254,12 @@ func TestPhaseRunnerRunUtilitySession_TimesOut(t *testing.T) {
 func TestPhaseRunnerRunUtilitySession_RequiresText(t *testing.T) {
 	sess := newUtilityTestSession()
 	sess.result = &llm.ResultMessage{
-		Type:       "result",
-		Subtype:    "success",
+		Type:       testResultMessageType,
+		Subtype:    testResultSuccessValue,
 		Result:     "done",
-		StopReason: "end_turn",
+		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- "SUCCESS"
+	sess.statusCh <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	result, err := runner.pr.RunUtilitySession(context.Background(), UtilityRunConfig{

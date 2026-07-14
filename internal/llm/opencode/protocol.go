@@ -332,9 +332,15 @@ func (p *Protocol) sendPrompt(text string) error {
 	sessionID := p.acpSessionID
 	// Each prompt is a fresh turn: reset the accumulated assistant text so the
 	// next turn's question detection (and streamed partial) reflects only that
-	// turn, not text carried over from a prior answered question.
+	// turn, not text carried over from a prior answered question. Also reset
+	// the terminal-result latch: markTerminal exists to seal a session's FINAL
+	// outcome against a late duplicate, but a multi-turn session (e.g. AMA
+	// chat, where one Protocol instance serves many user messages over its
+	// lifetime) must still produce a fresh terminal result for every turn, or
+	// the caller is left waiting forever after the first reply.
 	p.assistantBuf.Reset()
 	p.assistantMessageID = ""
+	p.resultEmitted = false
 	p.mu.Unlock()
 
 	req := Request{
@@ -1076,8 +1082,8 @@ func (p *Protocol) estimatedUsageEmitStepLocked() int {
 	if step < 100 {
 		return 100
 	}
-	if step > 5000 {
-		return 5000
+	if step > 1500 {
+		return 1500
 	}
 	return step
 }
@@ -1144,12 +1150,15 @@ func (p *Protocol) resultCost() float64 {
 
 // --- terminal result helpers ---
 
-// markTerminal seals the session's outcome on the first terminal result and
-// reports whether this call is that first result. Once a terminal result has
-// been emitted the outcome is fixed: a later prompt success can never overturn a
-// fail-closed control error or a malformed-stdout failure, and trailing output
-// can never undo a clean completion. Callers that observe false must suppress
-// their terminal message so only the first terminal result reaches the session.
+// markTerminal seals the current turn's outcome on its first terminal result
+// and reports whether this call is that first result. Once a turn's terminal
+// result has been emitted the outcome is fixed for that turn: a fail-closed
+// control error or a malformed-stdout failure can never be overturned by a
+// later duplicate, and trailing output can never undo a clean completion.
+// Callers that observe false must suppress their terminal message so only the
+// first terminal result reaches the session. sendPrompt resets this latch for
+// the next turn, so a multi-turn session (e.g. AMA chat) still gets a fresh
+// terminal result every time the user sends a new message.
 func (p *Protocol) markTerminal() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

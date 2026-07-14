@@ -481,6 +481,7 @@ func TestConfigCheckpointsToFeatureCheckpoints(t *testing.T) {
 				RoadmapReview:   true,
 				PhasePlanReview: true,
 				ManualPublish:   true,
+				DraftPublish:    true,
 			},
 			Checkpoints{
 				InquiryReview:   true,
@@ -489,6 +490,7 @@ func TestConfigCheckpointsToFeatureCheckpoints(t *testing.T) {
 				RoadmapReview:   true,
 				PhasePlanReview: true,
 				ManualPublish:   true,
+				DraftPublish:    true,
 			},
 		},
 		{
@@ -542,6 +544,7 @@ func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 				RoadmapReview:   true,
 				PhasePlanReview: true,
 				ManualPublish:   true,
+				DraftPublish:    true,
 			},
 			config.Checkpoints{
 				InquiryReview:   true,
@@ -550,6 +553,7 @@ func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 				RoadmapReview:   true,
 				PhasePlanReview: true,
 				ManualPublish:   true,
+				DraftPublish:    true,
 			},
 		},
 		{
@@ -577,7 +581,8 @@ func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 				got.DesignReview != tt.want.DesignReview ||
 				got.RoadmapReview != tt.want.RoadmapReview ||
 				got.PhasePlanReview != tt.want.PhasePlanReview ||
-				got.ManualPublish != tt.want.ManualPublish {
+				got.ManualPublish != tt.want.ManualPublish ||
+				got.DraftPublish != tt.want.DraftPublish {
 				t.Errorf("FeatureCheckpointsToConfig(%+v) = %+v, want %+v", tt.input, got, tt.want)
 			}
 		})

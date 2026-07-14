@@ -252,7 +252,6 @@ func TestAskUserAutoPickPurposeCanPickAllowlist(t *testing.T) {
 		{ports.AskUserAutoPickPurposeReview, false},
 		{ports.AskUserAutoPickPurposeKBBuild, false},
 		{ports.AskUserAutoPickPurposeChat, false},
-		{ports.AskUserAutoPickPurposeTweak, false},
 		{ports.AskUserAutoPickPurposeFinalReview, false},
 		{ports.AskUserAutoPickPurposeValidator, false},
 		{ports.AskUserAutoPickPurposeRoadmapReviser, false},

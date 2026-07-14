@@ -69,7 +69,6 @@ type CrossRefOperator interface {
 type ReviewCommentOperator interface {
 	FetchPRComments(repoPath, prURL string) ([]ReviewComment, error)
 	ReplyToPRComment(repoPath, prURL string, commentID int, body string) error
-	ReplyToIssueComment(repoPath, prURL string, body string) error
 	FetchReviewThreadMap(repoPath, prURL string) (map[int]string, error)
 	ResolveReviewThread(repoPath, threadNodeID string) error
 	LatestCommitSHA(worktreePath string) (string, error)

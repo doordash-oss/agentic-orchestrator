@@ -1,0 +1,11 @@
+package: server
+generate:
+  models: true
+output-options:
+  name-normalizer: ToCamelCaseWithInitialisms
+  additional-initialisms:
+    - API
+    - ID
+    - SSE
+  prefer-skip-optional-pointer: true
+  prefer-skip-optional-pointer-on-container-types: true

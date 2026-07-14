@@ -30,15 +30,12 @@ import (
 
 // isReviewHelper reports whether opts.PermHandler indicates a bounded review
 // or validator helper run. New bounded helpers use BoundedHelperArtifactHandler;
-// a few legacy paths still use ReviewFeedbackHandler or ReadOnlyHandler. Tests
-// treat all of them as "review session".
+// a legacy path still uses ReadOnlyHandler. Tests treat both as "review session".
 func isReviewHelper(h interface{}) bool {
 	switch typed := h.(type) {
 	case *permission.SizeGuardHandler:
 		return isReviewHelper(typed.Inner)
 	case *permission.BoundedHelperArtifactHandler:
-		return true
-	case *permission.ReviewFeedbackHandler:
 		return true
 	case *permission.ReadOnlyHandler:
 		return true

@@ -21,8 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/key"
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
@@ -36,33 +34,21 @@ type DetailModel struct {
 	width          int
 	height         int
 
-	// Refactor overlay — set by parent (AppModel) when refactor input is active.
+	// Refactor overlay — set by parent when refactor input is active.
 	// When refactorActive is true, View/ViewCompact render a refactor input panel
 	// instead of the normal detail content.
 	refactorActive      bool
 	refactorInputView   string // pre-rendered textarea.View() output
 	refactorFeatureName string
 
-	// Refactor pipeline selector — set by parent (AppModel) after refactor
+	// Refactor pipeline selector — set by parent after refactor
 	// prompt is submitted. Shows pipeline selection overlay.
 	refactorPipelineActive bool
 	refactorPipelineView   string // pre-rendered pipeline selector output
 }
 
 func NewDetailModel(f *feature.Feature, stateDir string) DetailModel {
-	return DetailModel{feature: f, stateDir: stateDir}
-}
-
-func (m DetailModel) Init() tea.Cmd {
-	return nil
-}
-
-func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
-		_ = msg // handled by parent
-	}
-	return m, nil
+	return DetailModel{feature: f, stateDir: stateDir, contextPct: -1}
 }
 
 // renderRefactorOverlay renders the refactor input panel that replaces normal
@@ -118,20 +104,6 @@ func repoDisplayOrder(f *feature.Feature) []string {
 	return names
 }
 
-// featureHasFailedRepos returns true if the feature has any repos in failed
-// state. Used by the detail view's footer and the retry-phase handler.
-func featureHasFailedRepos(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	for _, state := range f.RepoStates {
-		if state != nil && state.LastError != "" {
-			return true
-		}
-	}
-	return false
-}
-
 func featureHasDisplayFailure(f *feature.Feature) bool {
 	return f != nil && f.HasTerminalFailure()
 }
@@ -155,274 +127,7 @@ func phaseMatchesCurrentForDisplay(row, current feature.Phase) bool {
 	return row == current || (row == feature.PhaseReview && current == feature.PhaseFinalReview)
 }
 
-func (m DetailModel) View() string {
-	if m.feature == nil {
-		return "No feature selected\n"
-	}
-
-	f := m.feature
-	w := m.width
-	if w < 40 {
-		w = 80
-	}
-
-	// When refactor input is active, show the refactor overlay with fill-lines
-	// below content to occupy remaining height.
-	if m.refactorActive {
-		boxWidth := min(w-2, 78)
-		content := m.renderRefactorOverlay(boxWidth)
-
-		// Pin content to top using fill-lines
-		contentLines := strings.Count(content, "\n")
-		fillLines := m.height - contentLines - 2
-		var sb strings.Builder
-		sb.WriteString(content)
-		for i := 0; i < max(fillLines, 0); i++ {
-			sb.WriteString("\n")
-		}
-		return sb.String()
-	}
-
-	// When refactor pipeline selector is active, show the selector overlay.
-	if m.refactorPipelineActive {
-		content := m.refactorPipelineView
-		contentLines := strings.Count(content, "\n")
-		fillLines := m.height - contentLines - 2
-		var sb strings.Builder
-		sb.WriteString(content)
-		for i := 0; i < max(fillLines, 0); i++ {
-			sb.WriteString("\n")
-		}
-		return sb.String()
-	}
-
-	var b strings.Builder
-
-	// Header
-	b.WriteString(TitleStyle.Render(fmt.Sprintf(" %s", f.Slug)))
-
-	pendingHelp := countPendingHelp(f)
-	if pendingHelp > 0 {
-		b.WriteString("  " + WarningStyle.Render("\u26a0 waiting for input"))
-	}
-	b.WriteString("\n\n")
-
-	boxWidth := min(w-2, 78)
-
-	// Metadata box
-	metaContent := m.renderMetadataFull(f)
-	metaBox := panelStyle(false).Width(boxWidth).Render(metaContent)
-	metaBox = renderBorderTitle(metaBox, "Info", MutedStyle)
-	b.WriteString(" " + metaBox + "\n")
-
-	// Phase progress box
-	phaseContent := m.renderPhaseProgressFull(f)
-	phaseBox := panelStyle(false).Width(boxWidth).Render(phaseContent)
-	phaseBox = renderBorderTitle(phaseBox, "Phase Progress", MutedStyle)
-	b.WriteString(" " + phaseBox + "\n")
-
-	// Failure info box.
-	if featureHasDisplayFailure(f) {
-		failureContent := m.renderFailureInfo(f)
-		failureBox := panelStyle(false).
-			BorderForeground(colorError).
-			Width(boxWidth).
-			Render(failureContent)
-		failureBox = renderBorderTitle(failureBox, "Failure Info", ErrorStyle)
-		b.WriteString(" " + failureBox + "\n")
-	}
-
-	if hint := renderLightbulbHint(f, boxWidth); hint != "" {
-		b.WriteString(" " + hint + "\n")
-	}
-
-	// Needs-review banner — prominent call-to-action when an artifact awaits review.
-	if banner := needsReviewBanner(f); banner != "" {
-		reviewBox := panelStyle(false).
-			BorderForeground(colorWarning).
-			Width(boxWidth).
-			Render(banner)
-		reviewBox = renderBorderTitle(reviewBox, "Needs Review", WarningStyle)
-		b.WriteString(" " + reviewBox + "\n")
-	}
-
-	// Help queue
-	if pendingHelp > 0 {
-		attentionContent := m.renderAttention(f)
-		attentionBox := panelStyle(false).
-			BorderForeground(colorWarning).
-			Width(boxWidth).
-			Render(attentionContent)
-		attentionBox = renderBorderTitle(attentionBox, "Attention", WarningStyle)
-		b.WriteString(" " + attentionBox + "\n")
-	}
-
-	// Footer (pinned to bottom)
-	var actionParts []string
-	var leadHint string
-	if isSetupLifecycle(f) {
-		if setup := setupState(f); setup != nil && setup.LatestLogPath != "" {
-			actionParts = append(actionParts, "[l] Logs")
-		}
-		if canRetrySetup(f) {
-			actionParts = append(actionParts, "[r] Retry setup")
-		}
-		actionParts = append(actionParts, "[d] Delete", "[esc] Back")
-	} else {
-		if actionHint, lead := contextualAActionHint(f); actionHint != "" {
-			if lead {
-				leadHint = WarningStyle.Bold(true).Render(actionHint)
-			} else {
-				actionParts = append(actionParts, actionHint)
-			}
-		}
-		// Phase retry action — only when the feature is quiescent (Failed/Interrupted)
-		// so we don't kill unrelated in-flight repo sessions.
-		if (f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted) &&
-			featureHasFailedRepos(f) {
-			actionParts = append(actionParts, "[Shift+R] Retry phase")
-		}
-		if isRunningFeature(f) {
-			actionParts = append(actionParts, "[s] Stop")
-		} else {
-			actionParts = append(actionParts, "[r] Restart")
-		}
-		actionParts = append(actionParts, "[ctrl+r] Rewind")
-		if f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted || featureHasDisplayFailure(f) {
-			actionParts = append(actionParts, "[l] Logs")
-		}
-		if f.Status == feature.StatusCodeReady && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-			actionParts = append(actionParts, "[v] Diff")
-		}
-		if f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish() && f.IsPublishable() {
-			actionParts = append(actionParts, "[p] Publish", "[m] Manual publish")
-		}
-		if f.Status == feature.StatusPublished || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
-			actionParts = append(actionParts, "[t] Tweak", "[Shift+F] Refactor", "[b] Rebase")
-		}
-		if f.Status == feature.StatusCodeReady && !f.IsPublishable() {
-			actionParts = append(actionParts, "[Shift+M] Merge to base", "[Shift+D] Mark done")
-		}
-		if f.Status == feature.StatusPublished {
-			actionParts = append(actionParts, "[Shift+D] Mark done")
-			if len(f.PRURLs()) > 0 && f.IsPublishable() {
-				actionParts = append(actionParts, "[g] Reviews")
-			}
-		}
-		if (f.Status == feature.StatusPublished || f.Status == feature.StatusDone) && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-			actionParts = append(actionParts, "[c] Clean worktree")
-		}
-		if canEditFeatureConfig(f) {
-			actionParts = append(actionParts, "[e] Edit config")
-		}
-		actionParts = append(actionParts, "[Shift+N] Input alerts", "[d] Delete", "[esc] Back")
-	}
-	actions := " " + strings.Join(actionParts, "  ")
-	brandHintStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
-	helpHint := brandHintStyle.Render("[" + HelpKeyHint() + "] Help")
-	footer := KeyHelpStyle.Render(actions) + "  " + helpHint
-	if leadHint != "" {
-		// Render actions without MarginTop so leadHint and actions share one line;
-		// add the margin newline manually so the footer still sits one row down.
-		plainHelpStyle := lipgloss.NewStyle().Foreground(colorOverlay)
-		footer = "\n " + leadHint + plainHelpStyle.Render(actions) + "  " + helpHint
-	}
-
-	// Count content lines and fill to push footer to bottom
-	contentStr := b.String()
-	contentLines := strings.Count(contentStr, "\n")
-	fillLines := m.height - contentLines - 2
-	for i := 0; i < max(fillLines, 1); i++ {
-		b.WriteString("\n")
-	}
-	b.WriteString(footer + "\n")
-
-	return b.String()
-}
-
-func (m DetailModel) renderMetadataFull(f *feature.Feature) string {
-	var b strings.Builder
-	b.WriteString(LabelStyle.Render("Status"))
-	b.WriteString("  " + formatDetailStatus(f) + "\n")
-	if desc := featureDescLine(f); desc != "" {
-		b.WriteString(LabelStyle.Render("Desc"))
-		b.WriteString("  " + MutedStyle.Render(desc) + "\n")
-	}
-	if len(f.Repos) > 0 {
-		b.WriteString(LabelStyle.Render("Repos"))
-		b.WriteString("  " + formatDetailRepos(f.Repos) + "\n")
-	}
-	if rows := renderReposBlock(f); len(rows) > 0 {
-		b.WriteString(LabelStyle.Render("Repo Status") + "\n")
-		for _, row := range rows {
-			b.WriteString("  " + row + "\n")
-		}
-	}
-	b.WriteString(LabelStyle.Render("Models"))
-	b.WriteString("  " + MutedStyle.Render(compactModelSummary(f.Models, "  ")) + "\n")
-	b.WriteString(LabelStyle.Render("Input Alerts"))
-	b.WriteString("  " + MutedStyle.Render(inputAlertModeLabel(f)) + "\n")
-	if f.RiskLevel != "" {
-		b.WriteString(LabelStyle.Render("Risk Level"))
-		b.WriteString("  " + formatRiskBadge(f.RiskLevel) + " " + string(f.RiskLevel) + "\n")
-	}
-
-	if len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-		workDir := f.Repos[0].WorktreePath
-		if len(f.Repos) > 1 {
-			workDir = filepath.Dir(workDir)
-		}
-		b.WriteString(LabelStyle.Render("WorkDir"))
-		b.WriteString("  " + MutedStyle.Render(workDir) + "\n")
-	}
-	if m.stateDir != "" {
-		b.WriteString(LabelStyle.Render("Artifacts"))
-		b.WriteString("  " + MutedStyle.Render(filepath.Join(m.stateDir, f.ID)) + "\n")
-	}
-	if totalCost := f.TotalCost(); totalCost > 0 {
-		b.WriteString(LabelStyle.Render("Cost"))
-		b.WriteString("    " + MutedStyle.Render(formatCost(totalCost)) + "\n")
-	}
-	if line := formatDeferralLine(f); line != "" {
-		b.WriteString(LabelStyle.Render("Deferrals"))
-		b.WriteString("  " + line + "\n")
-	}
-	return b.String()
-}
-
-// formatDeferralLine renders a one-line summary of the run's cross-phase
-// deferral ledger: total open entries, next-due phase, and a chronic-slip
-// flag when any entry has been re-deferred ≥ 2 times. Returns "" when the
-// ledger is empty.
-func formatDeferralLine(f *feature.Feature) string {
-	run := f.Run()
-	if run == nil || len(run.Deferrals) == 0 {
-		return ""
-	}
-	open := feature.OpenDeferrals(run.Deferrals)
-	if len(open) == 0 {
-		return MutedStyle.Render(fmt.Sprintf("0 open (%d closed)", len(run.Deferrals)))
-	}
-	var parts []string
-	parts = append(parts, fmt.Sprintf("%d open", len(open)))
-	// Next due phase — the smallest DueByPhase across open entries.
-	nextDue := open[0].DueByPhase
-	parts = append(parts, fmt.Sprintf("next due: phase %d", nextDue))
-	// Chronic slippage flag.
-	chronic := 0
-	for _, d := range open {
-		if d.RedeferralCount() >= 2 {
-			chronic++
-		}
-	}
-	line := MutedStyle.Render(strings.Join(parts, " • "))
-	if chronic > 0 {
-		line += "  " + WarningStyle.Render(fmt.Sprintf("⚠ %d chronic", chronic))
-	}
-	return line
-}
-
-// cycleGroup is a display-aggregated view of one cycle type (rebase, tweak,
+// cycleGroup is a display-aggregated view of one cycle type (rebase,
 // refactor, review-comments) under the Implement phase. It collapses all
 // individual cycles of the same type into a single line showing the latest
 // index, total count, cumulative duration, and cumulative cost.
@@ -435,7 +140,7 @@ type cycleGroup struct {
 }
 
 // phaseTimingKeys returns grouped cycle entries for the implement phase. Each
-// group collapses multiple cycles of the same type (rebase/tweak/refactor)
+// group collapses multiple cycles of the same type (rebase/refactor)
 // into a single row so the panel doesn't grow unboundedly.
 func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 	if f.PhaseTimings == nil {
@@ -443,7 +148,7 @@ func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 	}
 	var groups []cycleGroup
 	// activeCycle surfaces an in-flight cycle even before its timing/cost have
-	// been persisted. The rebase/tweak loops do not overwrite ActiveTimingKey
+	// been persisted. The rebase loops do not overwrite ActiveTimingKey
 	// when they bump the counter, so a running rebase-N can leave PhaseTimings
 	// without an entry while ActiveTimingKey is still pointing at the previous
 	// cycle key — without consulting ActiveCycle, the right panel would silently
@@ -474,7 +179,7 @@ func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 			g.totalCost += f.PhaseCost(k)
 			// ActiveCycle is the source of truth for what's running now.
 			// ActiveTimingKey is preserved across cycle transitions, so a
-			// finished tweak-N can still equal it after a fresh rebase
+			// finished cycle-N can still equal it after a fresh rebase
 			// starts — only cycleInFlight is safe to drive "active".
 			if cycleInFlight {
 				g.active = true
@@ -494,7 +199,6 @@ func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 		groups = append(groups, g)
 	}
 	collect("rebase", "Rebase", f.RebaseCount())
-	collect("tweak", "Tweak", f.TweakCount())
 	collect("refactor", "Refactor", f.RefactorCount())
 	k := "review-comments"
 	rcInFlight := activeCycle != nil &&
@@ -681,188 +385,6 @@ func formatSetupTime(t time.Time) string {
 	return t.Format("2006-01-02 15:04:05")
 }
 
-func (m DetailModel) renderPhaseProgressFull(f *feature.Feature) string {
-	if setup := setupState(f); setup != nil && isSetupLifecycle(f) {
-		return m.renderSetupProgress(f, setup)
-	}
-
-	var b strings.Builder
-	allPhases := []struct {
-		name     string
-		phase    feature.Phase
-		timerKey string
-	}{
-		{"Building Knowledge Base", feature.PhaseKnowledgeBase, "knowledgebase"},
-		{"Inquire", feature.PhaseInquire, "inquire"},
-		{"Research", feature.PhaseResearch, "research"},
-		{"Design", feature.PhaseDesign, "design"},
-		{"Planning", feature.PhasePlan, "plan"},
-		{"Implement", feature.PhaseImplement, "implement"},
-		{"Final Review", feature.PhaseReview, "review"},
-		{"Publish", feature.PhasePublish, ""},
-	}
-	effectivePhases := f.EffectivePhases()
-	effectiveSet := make(map[feature.Phase]bool, len(effectivePhases))
-	for _, ep := range effectivePhases {
-		effectiveSet[ep] = true
-	}
-	var phases []struct {
-		name     string
-		phase    feature.Phase
-		timerKey string
-	}
-	for _, p := range allPhases {
-		if effectiveSet[p.phase] {
-			phases = append(phases, p)
-		}
-	}
-
-	currentPhase := effectiveCurrentPhaseForDisplay(f)
-	for i, p := range phases {
-		done := p.phase.LogicalOrder() < currentPhase.LogicalOrder()
-		// PhaseReview and PhaseFinalReview share logical order 6 — the row is
-		// labelled "Final Review" with phase enum PhaseReview, but f.CurrentPhase
-		// becomes PhaseFinalReview when the deferred end-of-feature FR pass is
-		// active. Treat them as equivalent here so the row highlights correctly.
-		current := phaseMatchesCurrentForDisplay(p.phase, currentPhase)
-		failed := current && featureHasDisplayFailure(f)
-		if failed {
-			done = false
-		}
-
-		icon := phaseIcon(done, current)
-		if current && isRunningStatus(f.Status) {
-			icon = m.activeProgressIcon()
-		} else if failed {
-			icon = ErrorStyle.Render("✗")
-		}
-
-		status := MutedStyle.Render("pending")
-		if failed {
-			status = ErrorStyle.Render("failed")
-		} else if done {
-			status = SuccessStyle.Render("complete")
-		} else if current {
-			status = formatPhaseStatus(f)
-		}
-
-		// Mirror in-flight post-publish cycle state on the Implement parent row.
-		if p.phase == feature.PhaseImplement {
-			for _, g := range phaseTimingKeys(f) {
-				if g.active {
-					icon = m.activeProgressIcon()
-					status = lipgloss.NewStyle().Foreground(colorInfo).Render("in progress")
-					break
-				}
-			}
-		}
-
-		// Phase duration and cost
-		timing := ""
-		if p.timerKey != "" {
-			d := f.PhaseRuntime(p.timerKey)
-			timing = formatPhaseDuration(d)
-			if c := f.PhaseCost(p.timerKey); c > 0 {
-				timing += MutedStyle.Render(" " + formatCost(c))
-			}
-		}
-
-		// Context usage percentage (active phase only, full-screen view)
-		if current && isRunningStatus(f.Status) {
-			timing += formatContextUsage(m.contextPct)
-		}
-
-		nameStr := p.name
-		dots := MutedStyle.Render(" " + strings.Repeat("\u00b7", 8) + " ")
-
-		connector := MutedStyle.Render("  \u2502")
-		if i == len(phases)-1 {
-			connector = ""
-		}
-
-		// KB stale warning (shown when phase is pending or running). When the
-		// feature is parked behind another feature's kb.lock, the wait note
-		// takes precedence so the user can see why no session is running.
-		kbWarning := ""
-		if p.phase == feature.PhaseKnowledgeBase && !done {
-			if f.Status == feature.StatusBuildingKB && f.KBWaitMessage != "" {
-				kbWarning = "  " + WarningStyle.Render("\u26a0 "+f.KBWaitMessage)
-			} else if m.kbStaleWarning != "" {
-				kbWarning = "  " + WarningStyle.Render("\u26a0 "+m.kbStaleWarning)
-			}
-		}
-
-		b.WriteString(fmt.Sprintf("  %s %s%s%s%s%s\n", icon, nameStr, dots, status, timing, kbWarning))
-
-		// Render per-repo KB sub-items for multi-repo features
-		if p.phase == feature.PhaseKnowledgeBase && (current || done) && len(f.Repos) > 1 && len(f.KBStatus) > 0 {
-			for _, repo := range f.Repos {
-				kbStatus, ok := f.KBStatus[repo.Name]
-				if !ok {
-					kbStatus = "pending"
-				}
-				b.WriteString(fmt.Sprintf("  %s  \u21b3 %s %s\n",
-					MutedStyle.Render(" "),
-					MutedStyle.Render(repo.Name),
-					kbStatusIcon(kbStatus)))
-			}
-		}
-
-		// Render roadmap phase sub-items under Planning
-		if p.phase == feature.PhasePlan && (current || (done && f.TotalRoadmapPhases > 0)) {
-			renderRoadmapPlanSubItems(&b, f)
-		}
-
-		// Render roadmap phase sub-items under Implement
-		if p.phase == feature.PhaseImplement && (done || current) && f.TotalRoadmapPhases > 0 {
-			renderRoadmapImplSubItems(&b, f, "\n")
-		}
-
-		// Render cycle sub-items after Implement phase
-		if p.phase == feature.PhaseImplement && (done || current) {
-			for _, g := range phaseTimingKeys(f) {
-				cycleTiming := formatPhaseDuration(g.totalDur)
-				if g.totalCost > 0 {
-					cycleTiming += MutedStyle.Render(" " + formatCost(g.totalCost))
-				}
-				if g.active {
-					cycleTiming += formatContextUsage(m.contextPct)
-				}
-				// Post-publish cycles (rebase/tweak/refactor/review-comments) keep
-				// the feature at StatusPublished/StatusCodeReady while the cycle
-				// loop is mid-flight, so isRunningStatus(f.Status) is false even
-				// when the cycle is actively running. Trust the cycle's own
-				// running flag (set inside cycleGroup via ActiveTimingKey or
-				// ActiveCycle) so the in-flight row still renders "in progress".
-				switch {
-				case g.active:
-					b.WriteString(fmt.Sprintf("  %s  \u21b3 %s %s%s\n",
-						MutedStyle.Render(" "),
-						m.activeProgressIcon()+" "+MutedStyle.Render(g.label),
-						lipgloss.NewStyle().Foreground(colorInfo).Render("in progress"),
-						cycleTiming))
-				case g.interrupted:
-					b.WriteString(fmt.Sprintf("  %s  \u21b3 %s %s%s\n",
-						MutedStyle.Render(" "),
-						MutedStyle.Render("\u23f8")+" "+MutedStyle.Render(g.label),
-						WarningStyle.Render("interrupted"),
-						cycleTiming))
-				default:
-					b.WriteString(fmt.Sprintf("  %s  \u21b3 %s%s\n",
-						MutedStyle.Render(" "),
-						MutedStyle.Render(g.label),
-						cycleTiming))
-				}
-			}
-		}
-
-		if connector != "" {
-			b.WriteString(connector + "\n")
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
 // ViewCompact renders a condensed version for the dashboard right panel.
 func (m DetailModel) ViewCompact(width int) string {
 	if m.feature == nil {
@@ -887,8 +409,8 @@ func (m DetailModel) ViewCompact(width int) string {
 
 	var b strings.Builder
 
-	pendingHelp := countPendingHelp(f)
-	if pendingHelp > 0 {
+	attention := computeFeatureAttention(f, nil)
+	if detailShowsInputAttention(attention) {
 		b.WriteString(WarningStyle.Render("\u26a0 waiting for input"))
 		b.WriteString("\n")
 	}
@@ -896,7 +418,7 @@ func (m DetailModel) ViewCompact(width int) string {
 	// Metadata
 	metaContent := m.renderMetadataCompact(f)
 	metaBox := panelStyle(false).Width(width - 4).Render(metaContent)
-	metaBox = renderBorderTitle(metaBox, "Info", MutedStyle)
+	metaBox = renderBorderTitle(metaBox, labelInfo, MutedStyle)
 	b.WriteString(metaBox)
 	b.WriteString("\n")
 
@@ -934,14 +456,7 @@ func (m DetailModel) ViewCompact(width int) string {
 		b.WriteString("\n")
 	}
 
-	// Help queue
-	if pendingHelp > 0 {
-		attentionContent := m.renderAttention(f)
-		attentionBox := panelStyle(false).
-			BorderForeground(colorWarning).
-			Width(width - 4).
-			Render(attentionContent)
-		attentionBox = renderBorderTitle(attentionBox, "Attention", WarningStyle)
+	if attentionBox := renderDetailInputAttentionBox(attention, width-4); attentionBox != "" {
 		b.WriteString(attentionBox)
 		b.WriteString("\n")
 	}
@@ -969,8 +484,6 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 	}
 	b.WriteString(LabelStyle.Render("Models"))
 	b.WriteString("  " + MutedStyle.Render(compactModelSummary(f.Models, " ")) + "\n")
-	b.WriteString(LabelStyle.Render("Input Alerts"))
-	b.WriteString("  " + MutedStyle.Render(inputAlertModeLabel(f)) + "\n")
 	if f.RiskLevel != "" {
 		b.WriteString(LabelStyle.Render("Risk"))
 		b.WriteString("  " + formatRiskBadge(f.RiskLevel) + " " + string(f.RiskLevel) + "\n")
@@ -989,7 +502,7 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 		b.WriteString("  " + MutedStyle.Render(filepath.Join(m.stateDir, f.ID)) + "\n")
 	}
 	if totalCost := f.TotalCost(); totalCost > 0 {
-		b.WriteString(LabelStyle.Render("Cost"))
+		b.WriteString(LabelStyle.Render(labelCost))
 		b.WriteString("    " + MutedStyle.Render(formatCost(totalCost)) + "\n")
 	}
 	return b.String()
@@ -1071,15 +584,7 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 			}
 		}
 
-		// Phase duration and cost
-		timing := ""
-		if p.timerKey != "" {
-			d := f.PhaseRuntime(p.timerKey)
-			timing = formatPhaseDuration(d)
-			if c := f.PhaseCost(p.timerKey); c > 0 {
-				timing += MutedStyle.Render(" " + formatCost(c))
-			}
-		}
+		timing := phaseProgressTiming(f, p.phase, p.timerKey)
 
 		// Context usage percentage (active phase only)
 		if current && isRunningStatus(f.Status) {
@@ -1135,7 +640,7 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 				if g.active {
 					cycleTiming += formatContextUsage(m.contextPct)
 				}
-				// Post-publish cycles (rebase/tweak/refactor/review-comments) keep
+				// Post-publish cycles (rebase/refactor/review-comments) keep
 				// the feature at StatusPublished/StatusCodeReady while the cycle
 				// loop is mid-flight, so isRunningStatus(f.Status) is false even
 				// when the cycle is actively running. Trust the cycle's own
@@ -1168,49 +673,6 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 		}
 	}
 	return b.String()
-}
-
-// renderRoadmapPlanSubItems renders "Roadmap" and "Phase N Plan" sub-items
-// under the Planning phase row in the full-screen detail view.
-func renderRoadmapPlanSubItems(b *strings.Builder, f *feature.Feature) {
-	// Roadmap sub-item
-	roadmapDone := f.CurrentRoadmapPhase > 0
-	roadmapIcon := MutedStyle.Render("\u25cb")
-	roadmapStatus := MutedStyle.Render("pending")
-	if roadmapDone {
-		roadmapIcon = SuccessStyle.Render("\u2713")
-		roadmapStatus = SuccessStyle.Render("approved")
-	} else if f.Status == feature.StatusPlanNeedsReview && f.CurrentRoadmapPhase == 0 {
-		roadmapIcon = WarningStyle.Render("\u27F3")
-		roadmapStatus = WarningStyle.Render("needs review")
-	} else if f.CurrentPhase == feature.PhasePlan && f.CurrentRoadmapPhase == 0 {
-		roadmapIcon = MutedStyle.Render("\u27F3")
-		roadmapStatus = lipgloss.NewStyle().Foreground(colorInfo).Render("in progress")
-	}
-	// Roadmap timing from "plan" key (roadmap creation phase)
-	roadmapTiming := roadmapPhaseTiming(f, "plan")
-	b.WriteString(fmt.Sprintf("  %s  \u21b3 %s %s%s\n",
-		MutedStyle.Render(" "), roadmapIcon+" "+MutedStyle.Render("Roadmap"), roadmapStatus, roadmapTiming))
-
-	// Per-phase plan sub-items
-	for i := 1; i <= f.TotalRoadmapPhases; i++ {
-		label := fmt.Sprintf("Phase %d Plan", i)
-		timingKey := fmt.Sprintf("phase-%d-plan", i)
-		timing := roadmapPhaseTiming(f, timingKey)
-		if i < f.CurrentRoadmapPhase {
-			b.WriteString(fmt.Sprintf("  %s  \u21b3 %s %s%s\n",
-				MutedStyle.Render(" "), SuccessStyle.Render("\u2713")+" "+MutedStyle.Render(label), SuccessStyle.Render("complete"), timing))
-		} else if i == f.CurrentRoadmapPhase && f.Status == feature.StatusPlanNeedsReview {
-			b.WriteString(fmt.Sprintf("  %s  \u21b3 %s %s%s\n",
-				MutedStyle.Render(" "), WarningStyle.Render("\u27F3")+" "+MutedStyle.Render(label), WarningStyle.Render("needs review"), timing))
-		} else if i == f.CurrentRoadmapPhase && f.CurrentPhase == feature.PhasePlan {
-			b.WriteString(fmt.Sprintf("  %s  \u21b3 %s %s%s\n",
-				MutedStyle.Render(" "), MutedStyle.Render("\u27F3")+" "+MutedStyle.Render(label), lipgloss.NewStyle().Foreground(colorInfo).Render("in progress"), timing))
-		} else if i == f.CurrentRoadmapPhase {
-			b.WriteString(fmt.Sprintf("  %s  \u21b3 %s %s%s\n",
-				MutedStyle.Render(" "), SuccessStyle.Render("\u2713")+" "+MutedStyle.Render(label), SuccessStyle.Render("complete"), timing))
-		}
-	}
 }
 
 // renderRoadmapPlanSubItemsCompact renders plan sub-items in compact (inline newline) format.
@@ -1255,10 +717,9 @@ func renderRoadmapPlanSubItemsCompact(b *strings.Builder, f *feature.Feature) {
 }
 
 // isCycleKey returns true if the timing key represents a post-implementation cycle
-// (rebase, tweak, or review-comments) rather than a roadmap phase implementation.
+// (rebase, or review-comments) rather than a roadmap phase implementation.
 func isCycleKey(key string) bool {
 	return strings.HasPrefix(key, "rebase-") ||
-		strings.HasPrefix(key, "tweak-") ||
 		strings.HasPrefix(key, "refactor-") ||
 		key == "review-comments"
 }
@@ -1266,7 +727,7 @@ func isCycleKey(key string) bool {
 // renderRoadmapImplSubItems renders "Phase N" sub-items under the Implement phase row.
 // sep is "\n" for full-screen (each item on its own line) or "" for compact (inline).
 func renderRoadmapImplSubItems(b *strings.Builder, f *feature.Feature, sep string) {
-	// When a cycle (rebase/tweak/review-comments) is active, all roadmap phases are complete.
+	// When a cycle (rebase/review-comments) is active, all roadmap phases are complete.
 	cycleActive := f.CurrentPhase == feature.PhaseImplement && isCycleKey(f.ActiveTimingKey)
 
 	for i := 1; i <= f.TotalRoadmapPhases; i++ {
@@ -1297,19 +758,59 @@ func roadmapPhaseTiming(f *feature.Feature, key string) string {
 	return timing
 }
 
-func (m DetailModel) renderAttention(f *feature.Feature) string {
-	if f.Status.IsNeedsReview() {
+func phaseProgressTiming(f *feature.Feature, phase feature.Phase, baseKey string) string {
+	d, c := phaseProgressTotals(f, phase, baseKey)
+	timing := formatPhaseDuration(d)
+	if c > 0 {
+		timing += MutedStyle.Render(" " + formatCost(c))
+	}
+	return timing
+}
+
+func phaseProgressTotals(f *feature.Feature, phase feature.Phase, baseKey string) (time.Duration, float64) {
+	var totalDur time.Duration
+	var totalCost float64
+	add := func(key string) {
+		if key == "" {
+			return
+		}
+		totalDur += f.PhaseRuntime(key)
+		totalCost += f.PhaseCost(key)
+	}
+
+	add(baseKey)
+	if f.TotalRoadmapPhases <= 0 {
+		return totalDur, totalCost
+	}
+
+	var suffix string
+	switch phase {
+	case feature.PhasePlan:
+		suffix = "plan"
+	case feature.PhaseImplement:
+		suffix = "impl"
+	default:
+		return totalDur, totalCost
+	}
+	for i := 1; i <= f.TotalRoadmapPhases; i++ {
+		add(fmt.Sprintf("phase-%d-%s", i, suffix))
+	}
+	return totalDur, totalCost
+}
+
+func detailShowsInputAttention(att featureAttention) bool {
+	return att.RequiresUser() && att.Kind != attentionReview
+}
+
+func renderDetailInputAttentionBox(att featureAttention, boxWidth int) string {
+	if !detailShowsInputAttention(att) {
 		return ""
 	}
-	var b strings.Builder
-	for _, h := range f.HelpQueue {
-		if h.Pending {
-			b.WriteString(WarningStyle.Render("  \u25b8 "))
-			b.WriteString(normalizeManagedHelpQuestion(h.Question))
-			b.WriteString("\n")
-		}
+	if att.Kind == attentionAskUser {
+		att.TypeLabel = "Attention"
 	}
-	return strings.TrimRight(b.String(), "\n")
+	contentWidth := max(boxWidth-4, 1)
+	return livePreviewAttentionSectionBox(att, att.ActivityLine(), boxWidth, contentWidth)
 }
 
 // needsReviewBanner returns a prominent banner describing the pending review
@@ -1325,65 +826,7 @@ func needsReviewBanner(f *feature.Feature) string {
 
 // needsReviewLabel returns a human-readable label for the artifact awaiting review.
 func needsReviewLabel(f *feature.Feature) string {
-	switch f.Status {
-	case feature.StatusPlanNeedsReview:
-		if f.CurrentRoadmapPhase == 0 {
-			return WarningStyle.Bold(true).Render("Roadmap")
-		}
-		if f.TotalRoadmapPhases > 1 {
-			return WarningStyle.Bold(true).Render(fmt.Sprintf("Phase %d plan", f.CurrentRoadmapPhase))
-		}
-		return WarningStyle.Bold(true).Render("Plan")
-	case feature.StatusPromptNeedsReview:
-		return WarningStyle.Bold(true).Render("Prompt")
-	case feature.StatusInquiryNeedsReview:
-		return WarningStyle.Bold(true).Render("Inquiry")
-	case feature.StatusResearchNeedsReview:
-		return WarningStyle.Bold(true).Render("Research")
-	case feature.StatusDesignNeedsReview:
-		return WarningStyle.Bold(true).Render("Design")
-	default:
-		return WarningStyle.Bold(true).Render("Artifact")
-	}
-}
-
-func (m DetailModel) FeatureID() string {
-	if m.feature != nil {
-		return m.feature.ID
-	}
-	return ""
-}
-
-func (m DetailModel) HasAction(msg tea.KeyPressMsg) bool {
-	return key.Matches(msg, keys.Attach) ||
-		key.Matches(msg, keys.Approve) ||
-		key.Matches(msg, keys.Help) ||
-		key.Matches(msg, keys.ToggleInputNotify) ||
-		key.Matches(msg, keys.Publish) ||
-		key.Matches(msg, keys.ManualPublish) ||
-		key.Matches(msg, keys.Rewind) ||
-		key.Matches(msg, keys.Delete) ||
-		key.Matches(msg, keys.ViewDiff) ||
-		key.Matches(msg, keys.CleanWorktree) ||
-		key.Matches(msg, keys.Rebase) ||
-		key.Matches(msg, keys.Tweak) ||
-		key.Matches(msg, keys.Refactor) ||
-		key.Matches(msg, keys.MarkDone) ||
-		key.Matches(msg, keys.ReviewComments) ||
-		key.Matches(msg, keys.ViewLogs) ||
-		key.Matches(msg, keys.RetryPhase) ||
-		key.Matches(msg, keys.Back) ||
-		key.Matches(msg, keys.PanelLeft)
-}
-
-func inputAlertModeLabel(f *feature.Feature) string {
-	if f.MuteInputNotifications == nil {
-		return "default"
-	}
-	if *f.MuteInputNotifications {
-		return "muted"
-	}
-	return "enabled"
+	return WarningStyle.Bold(true).Render(reviewArtifactLabel(f))
 }
 
 func countPendingHelp(f *feature.Feature) int {
@@ -1436,6 +879,9 @@ func formatDetailStatus(f *feature.Feature) string {
 		}
 		return ErrorStyle.Render(msg + " — press [r] to restart, [l] logs")
 	}
+	if f.Status.IsNeedsReview() {
+		return WarningStyle.Render(fmt.Sprintf("%s needs review — [a] Review", reviewArtifactLabel(f)))
+	}
 	switch f.Status {
 	case feature.StatusSettingUpWorktrees:
 		return lipgloss.NewStyle().Foreground(colorInfo).Render("Setting up worktrees")
@@ -1444,8 +890,6 @@ func formatDetailStatus(f *feature.Feature) string {
 		switch f.ActiveCycleType() {
 		case feature.CycleRebase:
 			label = fmt.Sprintf("Rebasing (Iteration %d)", f.CurrentIteration)
-		case feature.CycleTweak:
-			label = fmt.Sprintf("Tweaking (Iteration %d)", f.CurrentIteration)
 		case feature.CycleRefactor:
 			label = fmt.Sprintf("Refactoring (Iteration %d)", f.CurrentIteration)
 		case feature.CycleReviewComments:
@@ -1478,7 +922,7 @@ func formatDetailStatus(f *feature.Feature) string {
 			}
 			return lipgloss.NewStyle().Foreground(colorInfo).Render(label)
 		}
-		hint := "\u2713 Published \u2014 [t] tweak  [Shift+F] refactor"
+		hint := "\u2713 Published \u2014 [Shift+F] refactor"
 		if f.IsPublishable() {
 			hint += "  [b] rebase"
 		}
@@ -1490,14 +934,24 @@ func formatDetailStatus(f *feature.Feature) string {
 	case feature.StatusDone:
 		return SuccessStyle.Render("\u2713 Done")
 	case feature.StatusCodeReady:
+		if label, reviewing, ok := activePublishedCycleStatus(f); ok {
+			label += " \u2014 [a] Watch"
+			if hasPendingPerms(f) || hasPendingHelp(f) {
+				label += " | waiting input"
+			}
+			if reviewing {
+				return ReviewStyle.Render(label)
+			}
+			return lipgloss.NewStyle().Foreground(colorInfo).Render(label)
+		}
 		if f.IsPublishable() && f.Checkpoints.AutoPublish() {
 			return lipgloss.NewStyle().Foreground(colorInfo).Render("Publishing...")
 		}
 		hints := "Code Ready \u2014"
 		if f.IsPublishable() {
-			hints += " [p] publish  [m] manual publish "
+			hints += " [p] publish "
 		}
-		hints += " [t] tweak  [Shift+F] refactor  [b] rebase"
+		hints += " [Shift+F] refactor  [b] rebase"
 		if !f.IsPublishable() {
 			hints += "  [Shift+M] merge  [Shift+D] done"
 		}
@@ -1657,9 +1111,9 @@ func formatValidatorStatuses(statuses map[string]string) string {
 			continue
 		}
 		switch s {
-		case "APPROVED":
+		case validatorStatusApproved:
 			parts = append(parts, SuccessStyle.Render(v.short+" \u2713"))
-		case "CHANGES_REQUESTED":
+		case validatorStatusChangesRequested:
 			parts = append(parts, WarningStyle.Render(v.short+" \u2717"))
 		case "error":
 			parts = append(parts, ErrorStyle.Render(v.short+" !"))

@@ -77,8 +77,8 @@ const (
 	KindValidator
 	// KindReviewHelper is a read-only code-review helper session.
 	KindReviewHelper
-	// KindTweak is an interactive tweak/revise session spawned from the TUI.
-	KindTweak
+	// KindChat is the interactive AMA utility session.
+	KindChat
 )
 
 // SessionTurnMode controls how a session interprets provider Result messages.
@@ -105,8 +105,8 @@ func (k SessionKind) String() string {
 		return "validator"
 	case KindReviewHelper:
 		return "review-helper"
-	case KindTweak:
-		return "tweak"
+	case KindChat:
+		return "chat"
 	default:
 		return "unknown"
 	}
@@ -143,7 +143,6 @@ const (
 	AskUserAutoPickPurposeReview           AskUserAutoPickPurpose = "review"
 	AskUserAutoPickPurposeKBBuild          AskUserAutoPickPurpose = "kb_build"
 	AskUserAutoPickPurposeChat             AskUserAutoPickPurpose = "chat"
-	AskUserAutoPickPurposeTweak            AskUserAutoPickPurpose = "tweak"
 	AskUserAutoPickPurposeFinalReview      AskUserAutoPickPurpose = "final_review"
 	AskUserAutoPickPurposeValidator        AskUserAutoPickPurpose = "validator"
 	AskUserAutoPickPurposeRoadmapReviser   AskUserAutoPickPurpose = "roadmap_reviser"
@@ -161,9 +160,9 @@ type AskUserAutoPickConfig struct {
 }
 
 // SessionWatchdogConfig enables provider-specific lifecycle safety rails for a
-// session. The first watchdog watches for a provider that reports a pending
-// tool call and then goes silent without emitting a permission request, result,
-// or process exit.
+// session. The first watchdog watches for a provider that reports a pending or
+// in-progress tool call and then goes silent without emitting a permission
+// request, result, or process exit.
 type SessionWatchdogConfig struct {
 	PendingToolIdleTimeout time.Duration
 	PollInterval           time.Duration
@@ -352,6 +351,7 @@ type SessionManager interface {
 	StopSession(id string) error
 	GetSession(id string) SessionView
 	ActiveSessions() []SessionView
+	RecentSessions(limit int) []SessionView
 	FeatureSessions(featureID string) []SessionView
 	SendInput(sessionID string, data []byte) error
 	Attach(sessionID string) (SessionView, error)

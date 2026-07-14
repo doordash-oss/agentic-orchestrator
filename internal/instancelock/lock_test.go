@@ -66,6 +66,39 @@ func TestAcquireRejectsConcurrentHolderAndReleasesOnClose(t *testing.T) {
 	}
 }
 
+func TestInstanceLockAllowsDifferentRuntimeParents(t *testing.T) {
+	firstRuntime := t.TempDir()
+	secondRuntime := t.TempDir()
+
+	first, acquired, _, err := Acquire(
+		firstRuntime,
+		filepath.Join(firstRuntime, "features"),
+		filepath.Join(firstRuntime, "config.yaml"),
+		"test-version",
+	)
+	if err != nil {
+		t.Fatalf("Acquire(first) error = %v", err)
+	}
+	if !acquired {
+		t.Fatal("Acquire(first) acquired = false; want true")
+	}
+	t.Cleanup(func() { _ = first.Close() })
+
+	second, acquired, _, err := Acquire(
+		secondRuntime,
+		filepath.Join(secondRuntime, "features"),
+		filepath.Join(secondRuntime, "config.yaml"),
+		"test-version",
+	)
+	if err != nil {
+		t.Fatalf("Acquire(second) error = %v", err)
+	}
+	if !acquired {
+		t.Fatal("Acquire(second) acquired = false; want true for separate runtime parent")
+	}
+	t.Cleanup(func() { _ = second.Close() })
+}
+
 func TestReadOwnerMissingMetadata(t *testing.T) {
 	owner, err := ReadOwner(t.TempDir())
 	if err != nil {

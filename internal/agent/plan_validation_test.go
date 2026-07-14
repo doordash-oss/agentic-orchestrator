@@ -316,7 +316,7 @@ func TestRoadmapPlanningLoopMissingRoadmapAfterPhaseCompleteTripsProtocolViolati
 	if err != nil {
 		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if result.Iterations != 2 {
@@ -442,7 +442,7 @@ func TestRoadmapPlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testin
 	if err != nil {
 		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if result.Iterations != 2 {
@@ -711,7 +711,7 @@ func TestPhasePlanningLoopMissingPlanMarkdownTripsProtocolViolation(t *testing.T
 
 	run := runPhasePlanningLoopWithPlannerArtifacts(t, plannerScriptArtifacts{})
 	result := run.Result
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if result.Iterations != 2 {
@@ -859,7 +859,7 @@ func TestPhasePlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testing.
 	if err != nil {
 		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if result.Iterations != 2 {
@@ -939,7 +939,7 @@ done
 			return []string{"bash", criticScript}, nil, &session.SessionOpts{
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
-				ProviderName:      "mock",
+				ProviderName:      testMockIdentifier,
 			}, nil
 		},
 	}
@@ -1059,7 +1059,7 @@ func TestPlanValidatorMissingPhaseCompleteReturnsProtocolViolation(t *testing.T)
 	if err != nil {
 		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if !strings.Contains(result.LastError, string(RoleValidatePhasePlanStructural)) || !strings.Contains(result.LastError, "phase_complete") {
@@ -1078,7 +1078,7 @@ func TestPlanValidatorMissingPhaseCompleteReturnsProtocolViolation(t *testing.T)
 	if !strings.Contains(string(parentFeedback), "phase_complete") {
 		t.Fatalf("parent validation feedback missing phase_complete violation:\n%s", parentFeedback)
 	}
-	if !strings.Contains(string(parentFeedback), "CHANGES_REQUESTED") || strings.Contains(string(parentFeedback), "\nAPPROVED") {
+	if !strings.Contains(string(parentFeedback), agentStatusChangesRequested) || strings.Contains(string(parentFeedback), "\nAPPROVED") {
 		t.Fatalf("parent validation feedback did not override approved verdict:\n%s", parentFeedback)
 	}
 }
@@ -1137,7 +1137,7 @@ func TestLatestCompletedPlanAttempt(t *testing.T) {
 
 	t.Run("single meta file", func(t *testing.T) {
 		dir := t.TempDir()
-		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 1, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"})
+		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 1, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested})
 		if got := LatestCompletedPlanAttempt(dir); got != 1 {
 			t.Errorf("expected 1, got %d", got)
 		}
@@ -1145,8 +1145,8 @@ func TestLatestCompletedPlanAttempt(t *testing.T) {
 
 	t.Run("multiple meta files returns highest", func(t *testing.T) {
 		dir := t.TempDir()
-		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 1, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"})
-		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"})
+		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 1, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested})
+		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested})
 		if got := LatestCompletedPlanAttempt(dir); got != 2 {
 			t.Errorf("expected 2, got %d", got)
 		}
@@ -1162,7 +1162,7 @@ func TestLatestCompletedPlanAttempt(t *testing.T) {
 
 	t.Run("skips failed returns latest success", func(t *testing.T) {
 		dir := t.TempDir()
-		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 1, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"})
+		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 1, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested})
 		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: "FAILED", ReviewStatus: ""})
 		if got := LatestCompletedPlanAttempt(dir); got != 1 {
 			t.Errorf("expected 1 (attempt 2 failed), got %d", got)
@@ -1187,8 +1187,8 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 	}
 	if err := WritePlanAttemptMeta(phasePlanDir, PlanAttemptMeta{
 		Attempt:      1,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusChangesRequested,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1342,7 +1342,7 @@ func TestPlanRetrySessionAttempt(t *testing.T) {
 	if got := nextPlanSessionAttempt(dir, 2); got != 3 {
 		t.Fatalf("nextPlanSessionAttempt(recorded failed retry) = %d, want 3", got)
 	}
-	if err := WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"}); err != nil {
+	if err := WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested}); err != nil {
 		t.Fatal(err)
 	}
 	if got := nextPlanSessionAttempt(dir, 2); got != 1 {
@@ -1418,16 +1418,16 @@ func TestLoadPriorAxisApprovals(t *testing.T) {
 			[]byte("# AxisApproved: scope\nAttempt: 1\n\n## Frozen Sections\n- Overview\n- Changes Required\n"), 0o644)
 		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{
 			Attempt:      1,
-			AgentStatus:  "SUCCESS",
-			ReviewStatus: "CHANGES_REQUESTED",
-			AxisVerdicts: map[string]string{"scope": "APPROVED", "grounding": "CHANGES_REQUESTED"},
+			AgentStatus:  agentStatusSuccess,
+			ReviewStatus: agentStatusChangesRequested,
+			AxisVerdicts: map[string]string{"scope": agentStatusApproved, testAxisGrounding: agentStatusChangesRequested},
 		})
 		// attempt-2: scope regressed — CHANGES_REQUESTED, no new sticky.
 		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{
 			Attempt:      2,
-			AgentStatus:  "SUCCESS",
-			ReviewStatus: "CHANGES_REQUESTED",
-			AxisVerdicts: map[string]string{"scope": "CHANGES_REQUESTED", "grounding": "CHANGES_REQUESTED"},
+			AgentStatus:  agentStatusSuccess,
+			ReviewStatus: agentStatusChangesRequested,
+			AxisVerdicts: map[string]string{"scope": agentStatusChangesRequested, testAxisGrounding: agentStatusChangesRequested},
 		})
 
 		got := LoadPriorAxisApprovals(dir)
@@ -1446,20 +1446,20 @@ func TestLoadPriorAxisApprovals(t *testing.T) {
 			_ = os.MkdirAll(filepath.Join(dir, fmt.Sprintf("attempt-%02d", a)), 0o755)
 		}
 		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{
-			Attempt: 1, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED",
-			AxisVerdicts: map[string]string{"scope": "CHANGES_REQUESTED"},
+			Attempt: 1, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested,
+			AxisVerdicts: map[string]string{"scope": agentStatusChangesRequested},
 		})
 		// attempt-2: scope rejected again, no sticky.
 		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{
-			Attempt: 2, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED",
-			AxisVerdicts: map[string]string{"scope": "CHANGES_REQUESTED"},
+			Attempt: 2, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested,
+			AxisVerdicts: map[string]string{"scope": agentStatusChangesRequested},
 		})
 		// attempt-3: scope finally approves.
 		_ = os.WriteFile(filepath.Join(dir, "attempt-03", "axis-approved-scope.md"),
 			[]byte("# AxisApproved: scope\nAttempt: 3\n\n## Frozen Sections\n- Deferred Work\n"), 0o644)
 		_ = WritePlanAttemptMeta(dir, PlanAttemptMeta{
-			Attempt: 3, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED",
-			AxisVerdicts: map[string]string{"scope": "APPROVED"},
+			Attempt: 3, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested,
+			AxisVerdicts: map[string]string{"scope": agentStatusApproved},
 		})
 
 		got := LoadPriorAxisApprovals(dir)
@@ -1482,7 +1482,7 @@ func TestComposeValidatorResults(t *testing.T) {
 		{
 			name: "all approved → APPROVED",
 			results: []ValidatorResult{
-				{Domain: "grounding", Status: ReviewApproved},
+				{Domain: testAxisGrounding, Status: ReviewApproved},
 				{Domain: "scope", Status: ReviewApproved},
 				{Domain: "structural", Status: ReviewApproved},
 			},
@@ -1532,7 +1532,7 @@ func TestWriteAxisApprovalArtifactRoundTrip(t *testing.T) {
 			t.Fatalf("write plan: %v", err)
 		}
 
-		markers := ValidatorMarkers{AxisApproved: "grounding", FrozenSections: []string{"## Grounding"}}
+		markers := ValidatorMarkers{AxisApproved: testAxisGrounding, FrozenSections: []string{groundingSectionHeading}}
 		writeAxisApprovalArtifact(attemptDir, 1, markers, planPath)
 
 		data, err := os.ReadFile(filepath.Join(attemptDir, "axis-approved-grounding.md"))
@@ -1540,7 +1540,7 @@ func TestWriteAxisApprovalArtifactRoundTrip(t *testing.T) {
 			t.Fatalf("read artifact: %v", err)
 		}
 		parsed := parseAxisApprovalArtifact(string(data))
-		if parsed.Axis != "grounding" {
+		if parsed.Axis != testAxisGrounding {
 			t.Errorf("Axis = %q, want grounding", parsed.Axis)
 		}
 		if parsed.ApprovedAttempt != 1 {
@@ -1578,8 +1578,8 @@ func TestFrozenSectionsDigest(t *testing.T) {
 	planPath := filepath.Join(dir, "plan.md")
 	_ = os.WriteFile(planPath, []byte("## Grounding\n\nrow a\nrow b\n\n## Changes Required\n\nedit x\n"), 0o644)
 
-	d1 := frozenSectionsDigest(planPath, []string{"## Grounding"})
-	d2 := frozenSectionsDigest(planPath, []string{"## Grounding"})
+	d1 := frozenSectionsDigest(planPath, []string{groundingSectionHeading})
+	d2 := frozenSectionsDigest(planPath, []string{groundingSectionHeading})
 	if d1 == "" || d1 != d2 {
 		t.Errorf("digest not stable: %q vs %q", d1, d2)
 	}
@@ -1587,14 +1587,14 @@ func TestFrozenSectionsDigest(t *testing.T) {
 	// Changing an unrelated section leaves the grounding-only digest unchanged —
 	// this is the property the short-circuit relies on.
 	_ = os.WriteFile(planPath, []byte("## Grounding\n\nrow a\nrow b\n\n## Changes Required\n\nedit y\n"), 0o644)
-	d3 := frozenSectionsDigest(planPath, []string{"## Grounding"})
+	d3 := frozenSectionsDigest(planPath, []string{groundingSectionHeading})
 	if d3 != d1 {
 		t.Errorf("grounding digest changed when only Changes Required changed: %q vs %q", d1, d3)
 	}
 
 	// Editing the frozen section changes the digest.
 	_ = os.WriteFile(planPath, []byte("## Grounding\n\nrow a\n\n## Changes Required\n\nedit y\n"), 0o644)
-	d4 := frozenSectionsDigest(planPath, []string{"## Grounding"})
+	d4 := frozenSectionsDigest(planPath, []string{groundingSectionHeading})
 	if d4 == d1 {
 		t.Errorf("grounding digest did not change after frozen-section edit")
 	}
@@ -1613,8 +1613,8 @@ func TestPlanAttemptMetaRoundTrip(t *testing.T) {
 	meta := PlanAttemptMeta{
 		Attempt:        2,
 		SessionAttempt: 3,
-		AgentStatus:    "SUCCESS",
-		ReviewStatus:   "CHANGES_REQUESTED",
+		AgentStatus:    agentStatusSuccess,
+		ReviewStatus:   agentStatusChangesRequested,
 	}
 	if err := WritePlanAttemptMeta(dir, meta); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -1624,7 +1624,7 @@ func TestPlanAttemptMetaRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read error: %v", err)
 	}
-	if got.Attempt != 2 || got.SessionAttempt != 3 || got.AgentStatus != "SUCCESS" || got.ReviewStatus != "CHANGES_REQUESTED" {
+	if got.Attempt != 2 || got.SessionAttempt != 3 || got.AgentStatus != agentStatusSuccess || got.ReviewStatus != agentStatusChangesRequested {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 }
@@ -2475,6 +2475,86 @@ fi
 	}
 }
 
+func TestPhasePlanLoopStallEscalationPersistsReviewArtifact(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := tmpDir
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	phasePlanDir := filepath.Join(stateDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, d := range []string{workDir, phasePlanDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WritePhasePlanSuccessArtifacts(phasePlanDir, validPhasePlanText())+"\n"+
+			testutil.JSONLSuccess+"\n")
+	structuralScript := testutil.WriteScript(t, scriptsDir, "critic-structural.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteSpecificAxisChangesRequested(tmpDir, "structural", "- **High**: structural section still invalid")+"\n"+
+			testutil.JSONLSuccess+"\n")
+	scopeScript := testutil.WriteScript(t, scriptsDir, "critic-scope.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteSpecificAxisApproved(tmpDir, "scope", nil)+"\n"+
+			testutil.JSONLSuccess+"\n")
+
+	buildSession := mockBuildSessionPerDomain(planScript, map[string]string{
+		"structural": structuralScript,
+		"scope":      scopeScript,
+	})
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	f.RiskLevel = feature.RiskLow
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	cfg := PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:                    f,
+			FeatureStore:               store,
+			StateDir:                   stateDir,
+			WorkDir:                    workDir,
+			MaxAttempts:                axisStallLimit + 2,
+			DangerouslySkipPermissions: true,
+			BuildSession:               buildSession,
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Tracer",
+			Type:   "tracer-bullet",
+			Goal:   "Exercise stalled human-review escalation",
+		},
+	}
+
+	result, err := RunPhasePlanningLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop error: %v", err)
+	}
+	if result.FinalStatus != "needs_human_review" {
+		t.Fatalf("FinalStatus = %s, want needs_human_review", result.FinalStatus)
+	}
+	if result.Iterations != axisStallLimit {
+		t.Fatalf("Iterations = %d, want %d", result.Iterations, axisStallLimit)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	wantPath := filepath.Join(phasePlanDir, "plan.md")
+	if got := loaded.Artifacts["phase-1-plan"]; got != wantPath {
+		t.Fatalf("Artifacts[phase-1-plan] = %q, want %q", got, wantPath)
+	}
+}
+
 // TestBuildSpecializedValidationPrompt_GroundingIncludesPriorPhaseContext verifies
 // that when PriorPhasePlanPaths is populated, the Grounding axis prompt
 // contains a "Prior Phase Context" block listing each plan path so the
@@ -2529,8 +2609,8 @@ func TestRunSpecializedPlanValidation_NoStickyOnChangesRequested(t *testing.T) {
 	// Critic emits CHANGES_REQUESTED but also includes a `## Sticky Approval`
 	// block (the contract violation this test guards against).
 	violationBody := testutil.StructuredReviewFeedbackWithSticky(
-		"- **High**: Grounding FAIL", "", "CHANGES_REQUESTED",
-		"grounding", []string{"## Grounding"},
+		"- **High**: Grounding FAIL", "", agentStatusChangesRequested,
+		testAxisGrounding, []string{groundingSectionHeading},
 	)
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh", fmt.Sprintf(`%s
 for _prompt in $(find %s -name 'validation-grounding-prompt.md' -type f 2>/dev/null); do
@@ -2640,7 +2720,7 @@ func TestExtractPlanSection(t *testing.T) {
 	}
 
 	t.Run("grounding section", func(t *testing.T) {
-		got := string(extractPlanSection(path, "## Grounding"))
+		got := string(extractPlanSection(path, groundingSectionHeading))
 		for _, want := range []string{"| Ref | Status |", "| foo.go | EXISTS |"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("expected %q in grounding section, got:\n%s", want, got)
@@ -2691,10 +2771,10 @@ func TestPlanSectionDigest_StableAndSensitive(t *testing.T) {
 	b := write("b.md", "## Grounding\n- foo.go   \n- bar.go\t\n\n## Next\n")
 	c := write("c.md", "## Grounding\n- foo.go\n- baz.go\n\n## Next\n")
 
-	if planSectionDigest(a, "## Grounding") != planSectionDigest(b, "## Grounding") {
+	if planSectionDigest(a, groundingSectionHeading) != planSectionDigest(b, groundingSectionHeading) {
 		t.Error("digest changed on trailing-whitespace-only diff")
 	}
-	if planSectionDigest(a, "## Grounding") == planSectionDigest(c, "## Grounding") {
+	if planSectionDigest(a, groundingSectionHeading) == planSectionDigest(c, groundingSectionHeading) {
 		t.Error("digest stayed the same after content change")
 	}
 	if planSectionDigest(a, "## Missing") != "" {
@@ -2737,7 +2817,7 @@ func TestAxisStallState_EscalatesAfterLimit(t *testing.T) {
 	if axis != "structural" || count != axisStallLimit {
 		t.Errorf("got stall axis=%q count=%d, want structural/%d", axis, count, axisStallLimit)
 	}
-	if verdicts["structural"] != "CHANGES_REQUESTED" {
+	if verdicts["structural"] != agentStatusChangesRequested {
 		t.Errorf("expected verdicts[structural]=CHANGES_REQUESTED, got %q", verdicts["structural"])
 	}
 	if digests["structural"] == "" {
@@ -2778,9 +2858,9 @@ func TestLoadAxisStallState_ReplaysAcrossRestarts(t *testing.T) {
 	for _, attempt := range []int{1, 2} {
 		if err := WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 			Attempt:      attempt,
-			AgentStatus:  "SUCCESS",
-			ReviewStatus: "CHANGES_REQUESTED",
-			AxisVerdicts: map[string]string{"structural": "CHANGES_REQUESTED"},
+			AgentStatus:  agentStatusSuccess,
+			ReviewStatus: agentStatusChangesRequested,
+			AxisVerdicts: map[string]string{"structural": agentStatusChangesRequested},
 			AxisDigests:  map[string]string{"structural": digest},
 		}); err != nil {
 			t.Fatalf("write meta %d: %v", attempt, err)
@@ -2793,7 +2873,7 @@ func TestLoadAxisStallState_ReplaysAcrossRestarts(t *testing.T) {
 	// Third attempt with the same digest must now trip the cap — the replay
 	// has already counted 2 consecutive identical failures, so one more
 	// observation should hit axisStallLimit.
-	stalled, axis, count := tracker.observeAxis("structural", "CHANGES_REQUESTED", digest)
+	stalled, axis, count := tracker.observeAxis("structural", agentStatusChangesRequested, digest)
 	if !stalled {
 		t.Fatalf("expected stall on attempt 3 after replaying 2 prior failures; got stalled=false count=%d", count)
 	}
@@ -2811,16 +2891,16 @@ func TestLoadAxisStallState_IgnoresApprovedAxes(t *testing.T) {
 
 	_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 		Attempt:      1,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
-		AxisVerdicts: map[string]string{"structural": "CHANGES_REQUESTED"},
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusChangesRequested,
+		AxisVerdicts: map[string]string{"structural": agentStatusChangesRequested},
 		AxisDigests:  map[string]string{"structural": "abc"},
 	})
 	_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 		Attempt:      2,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "APPROVED",
-		AxisVerdicts: map[string]string{"structural": "APPROVED"},
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusApproved,
+		AxisVerdicts: map[string]string{"structural": agentStatusApproved},
 		AxisDigests:  map[string]string{"structural": "abc"},
 	})
 
@@ -2828,7 +2908,7 @@ func TestLoadAxisStallState_IgnoresApprovedAxes(t *testing.T) {
 
 	// A single fresh failure shouldn't trip the cap — the approval in
 	// attempt 2 should have reset grounding's counter during replay.
-	stalled, _, count := tracker.observeAxis("structural", "CHANGES_REQUESTED", "abc")
+	stalled, _, count := tracker.observeAxis("structural", agentStatusChangesRequested, "abc")
 	if stalled {
 		t.Fatalf("unexpected stall: approval should have cleared the counter; count=%d", count)
 	}
@@ -2842,12 +2922,12 @@ func TestLoadAxisStallState_TolerantToMissingFields(t *testing.T) {
 	artifactDir := t.TempDir()
 	_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 		Attempt:      1,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusChangesRequested,
 	})
 
 	tracker := loadAxisStallState(artifactDir)
-	if stalled, _, _ := tracker.observeAxis("structural", "CHANGES_REQUESTED", "newdigest"); stalled {
+	if stalled, _, _ := tracker.observeAxis("structural", agentStatusChangesRequested, "newdigest"); stalled {
 		t.Error("pre-Fix #3 attempts should not contribute to the stall count")
 	}
 }

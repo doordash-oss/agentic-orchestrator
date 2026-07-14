@@ -49,7 +49,6 @@ const (
 	RoleInquirer                    = roles.RoleInquirer
 	RoleResearcher                  = roles.RoleResearcher
 	RoleDesigner                    = roles.RoleDesigner
-	RoleInteractivePTY              = roles.RoleInteractivePTY
 )
 
 type ArtifactPresence = roles.ArtifactPresence
@@ -136,11 +135,6 @@ func FinalReviewFixerRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.FinalReviewFixerRoleSpec())
 }
 
-// InteractivePTYRoleSpec returns Tweak's no-op RoleSpec carve-out.
-func InteractivePTYRoleSpec() RoleSpec {
-	return wrapRoleSpec(roles.InteractivePTYRoleSpec())
-}
-
 // PlanValidatorRoleSpecs returns the RoleSpec-backed per-axis validator roles.
 func PlanValidatorRoleSpecs() []RoleSpec {
 	return wrapRoleSpecs(roles.PlanValidatorRoleSpecs())
@@ -211,10 +205,11 @@ func (s RoleSpec) Contract() RoleContract {
 			contract.Required = append(contract.Required, s.requiredArtifact(artifact))
 		case ArtifactOptional:
 			contract.Optional = append(contract.Optional, OptionalArtifact{
-				Name:        artifact.Name,
-				DisplayPath: artifact.DisplayPath,
-				ResolvePath: s.artifactPathResolver(artifact),
-				Validate:    validatorForRoleArtifact(artifact),
+				Name:          artifact.Name,
+				DisplayPath:   artifact.DisplayPath,
+				HideFromSkill: artifact.HideFromSkill,
+				ResolvePath:   s.artifactPathResolver(artifact),
+				Validate:      validatorForRoleArtifact(artifact),
 			})
 		case ArtifactConditional:
 			contract.Conditional = append(contract.Conditional, ConditionalArtifact{
@@ -229,10 +224,11 @@ func (s RoleSpec) Contract() RoleContract {
 
 func (s RoleSpec) requiredArtifact(artifact RoleArtifactSpec) RequiredArtifact {
 	return RequiredArtifact{
-		Name:        artifact.Name,
-		DisplayPath: artifact.DisplayPath,
-		ResolvePath: s.artifactPathResolver(artifact),
-		Validate:    validatorForRoleArtifact(artifact),
+		Name:          artifact.Name,
+		DisplayPath:   artifact.DisplayPath,
+		HideFromSkill: artifact.HideFromSkill,
+		ResolvePath:   s.artifactPathResolver(artifact),
+		Validate:      validatorForRoleArtifact(artifact),
 	}
 }
 
@@ -306,6 +302,11 @@ func RenderRoleSpecOutputFilesSection(spec RoleSpec) string {
 func validateFinalReviewVerificationReportArtifact(_ string, path string, out *Outcome) ([]ProtocolViolation, error) {
 	report, err := ReadVerificationReport(path)
 	if err != nil {
+		// A blocking final-review verdict is enough to route into the fix leg;
+		// APPROVED still requires a parseable, contract-backed report below.
+		if out != nil && out.ReviewFeedback != nil && out.ReviewFeedback.Verdict == ReviewChangesRequested {
+			return nil, nil
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			return []ProtocolViolation{{Artifact: "verification-report.yaml", Reason: missingArtifactReason("verification-report.yaml", filepath.Dir(path))}}, nil
 		}
@@ -473,7 +474,7 @@ func completedImplementationMeta(meta IterationMeta) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(meta.ReviewStatus)) {
-	case strings.ToLower(ReviewApproved.String()), "skipped":
+	case strings.ToLower(ReviewApproved.String()), reviewStatusSkipped:
 		return true
 	default:
 		return false

@@ -16,7 +16,7 @@ package tui
 
 // DashboardLeftSection defines keybindings shown when the dashboard left panel is focused.
 var DashboardLeftSection = HelpSection{
-	Title: "Dashboard",
+	Title: helpContextDashboard,
 	Bindings: []HelpBinding{
 		{"n", "New feature (launch wizard)"},
 		{"enter", "Focus right panel / expand"},
@@ -29,7 +29,6 @@ var DashboardLeftSection = HelpSection{
 		{"p", "Publish (when code ready)"},
 		{"y", "Approve pending permissions"},
 		{"Shift+A", "Approve & remember permissions"},
-		{"Shift+N", "Toggle input notifications"},
 		{"Shift+E", "Edit workspace config"},
 		{"d", "Delete feature"},
 	},
@@ -44,15 +43,12 @@ var DetailSection = HelpSection{
 		{"y", "Approve pending permissions"},
 		{"Shift+A", "Approve & remember permissions"},
 		{"h", "Answer agent's help question"},
-		{"Shift+N", "Toggle input notifications"},
 		{"r", "Restart current phase"},
 		{"s", "Stop running feature"},
 		{"ctrl+r", "Rewind to phase"},
 		{"l", "Live Preview / View logs"},
 		{"v", "View diff"},
 		{"p", "Publish (when code ready)"},
-		{"m", "Manual publish"},
-		{"t", "Tweak implementation (code ready or published)"},
 		{"b", "Rebase on main (code ready or published)"},
 		{"e", "Edit config"},
 		{"Shift+E", "Edit workspace config"},

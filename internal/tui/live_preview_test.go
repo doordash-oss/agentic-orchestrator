@@ -30,6 +30,26 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
+// testLPToolUseIDBash and testLPToolUseIDRead are fixture tool_use IDs paired
+// with a specific tool name, reused across this file's transcript-summary
+// test table.
+const (
+	testLPToolUseIDBash = "toolu_1"
+	testLPToolUseIDRead = "toolu_2"
+)
+
+// testToolProgressDataDownload30 and testHookCallbackSubtype are shared
+// ToolProgressMessage.Data / ControlRequest.Subtype fixture values used
+// across this file's noise-filtering assertions.
+const (
+	testToolProgressDataDownload30 = "download 30%"
+	testHookCallbackSubtype        = "hook_callback"
+)
+
+// testToolNameWebFetch is a fixture tool name reused across this file's
+// truncation tests.
+const testToolNameWebFetch = "WebFetch"
+
 func TestLivePreviewEligible(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -52,7 +72,7 @@ func TestLivePreviewEligible(t *testing.T) {
 			f: &feature.Feature{
 				Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 				},
 			},
 			want: true,
@@ -62,18 +82,18 @@ func TestLivePreviewEligible(t *testing.T) {
 			f: &feature.Feature{
 				Status: feature.StatusFailed,
 				PermissionsQueue: []feature.PermissionRequest{
-					{Tool: "Bash", Pending: true},
+					{Tool: toolNameBash, Pending: true},
 				},
 			},
 			want: true,
 		},
 		{
-			name: "pending ask user",
+			name: "interrupted stale ask user",
 			f: &feature.Feature{
 				Status:    feature.StatusInterrupted,
-				HelpQueue: []feature.HelpRequest{{Question: "Need input?", Pending: true}},
+				HelpQueue: []feature.HelpRequest{{Question: testQuestionNeedInput, Pending: true}},
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name: "needs review",
@@ -146,7 +166,7 @@ func TestContextualAActionHint(t *testing.T) {
 			f: &feature.Feature{
 				Status: feature.StatusImplementing,
 				PermissionsQueue: []feature.PermissionRequest{
-					{Tool: "Bash", Pending: true},
+					{Tool: toolNameBash, Pending: true},
 				},
 			},
 			wantHint: "[a] Approve",
@@ -161,9 +181,9 @@ func TestContextualAActionHint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotHint, gotLead := contextualAActionHint(tt.f)
+			gotHint, gotLead := contextualAActionHintFor(tt.f, nil)
 			if gotHint != tt.wantHint || gotLead != tt.wantLead {
-				t.Errorf("contextualAActionHint(%s) = (%q, %v), want (%q, %v)", tt.name, gotHint, gotLead, tt.wantHint, tt.wantLead)
+				t.Errorf("contextualAActionHintFor(%s) = (%q, %v), want (%q, %v)", tt.name, gotHint, gotLead, tt.wantHint, tt.wantLead)
 			}
 		})
 	}
@@ -186,12 +206,12 @@ func TestLivePreviewRendersAttentionBlock(t *testing.T) {
 			feature: &feature.Feature{
 				Status: feature.StatusImplementing,
 				PermissionsQueue: []feature.PermissionRequest{
-					{Tool: "Bash", Args: `{"command":"go test ./internal/tui"}`, Pending: true},
+					{Tool: toolNameBash, Args: `{"command":"go test ./internal/tui"}`, Pending: true}, //nolint:goconst // shared raw-JSON test fixture; not constant-ized per raw-string-fixture policy
 				},
 			},
 			width:  96,
 			height: 20,
-			want:   []string{"Permission Request", "Bash: go test ./internal/tui", "[a] Approve", "Waiting for approval"},
+			want:   []string{attentionTypeLabelPermission, "Bash: go test ./internal/tui", "[a] Approve", "Waiting for approval"},
 		},
 		{
 			name: "ask user",
@@ -284,14 +304,14 @@ func TestLivePreviewActivityLine(t *testing.T) {
 			f:    &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement},
 			sess: newLivePreviewSession("thinking", feature.PhaseImplement,
 				assistantMessage(llm.ContentBlock{Type: "thinking", Thinking: "checking"})),
-			want: "Thinking...",
+			want: thinkingLineText,
 		},
 		{
 			name: "active tool use",
 			f:    &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement},
 			sess: newLivePreviewSession("tool", feature.PhaseImplement,
-				assistantMessage(llm.ContentBlock{Type: "tool_use", Name: "Bash"})),
-			want: "Using Bash...",
+				assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, Name: toolNameBash})),
+			want: testUsingBashActivity,
 		},
 		{
 			name: "tool progress",
@@ -311,19 +331,6 @@ func TestLivePreviewActivityLine(t *testing.T) {
 			name: "created startup",
 			f:    &feature.Feature{Status: feature.StatusCreated, CurrentPhase: feature.PhasePlan},
 			want: "Starting Plan...",
-		},
-		{
-			name: "tweak awaiting input",
-			f: &feature.Feature{
-				Status:       feature.StatusPublished,
-				CurrentPhase: feature.PhaseImplement,
-				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
-				},
-			},
-			sess: tweakLivePreviewSession("tweak-input",
-				llm.SDKMessage{Type: "result", Result: &llm.ResultMessage{Subtype: "success"}}),
-			want: "Waiting for tweak input...",
 		},
 	}
 
@@ -349,58 +356,58 @@ func TestLivePreviewTranscriptSummaries(t *testing.T) {
 			messages: []llm.SDKMessage{
 				assistantMessage(llm.ContentBlock{Type: "text", Text: "Finished repo scan\nready for implementation."}),
 			},
-			want: []string{"Finished repo scan ready for implementation."},
+			want: []string{"Finished repo scan", "ready for implementation."},
 		},
 		{
 			name: "tool use with arguments",
 			messages: []llm.SDKMessage{
-				assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: rawJSON(`{"command":"go test ./internal/tui -run LivePreview"}`)}),
+				assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: testLPToolUseIDBash, Name: toolNameBash, Input: rawJSON(`{"command":"go test ./internal/tui -run LivePreview"}`)}),
 			},
 			want: []string{"Bash: go test ./internal/tui -run LivePreview"},
 		},
 		{
 			name: "agent tool use summarizes description",
 			messages: []llm.SDKMessage{
-				assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_agent", Name: "Agent", Input: rawJSON(`{"description":"Explore KB completion handler","prompt":"This long delegated prompt should not render in the dashboard preview tail."}`)}),
+				assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: "toolu_agent", Name: toolNameAgent, Input: rawJSON(`{"description":"Explore KB completion handler","prompt":"This long delegated prompt should not render in the dashboard preview tail."}`)}),
 			},
-			want:    []string{"Agent: Explore KB completion handler"},
+			want:    []string{testAgentToolLabel},
 			notWant: []string{"long delegated prompt", `"prompt"`},
 		},
 		{
 			name: "successful tool result",
 			messages: []llm.SDKMessage{
-				assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_2", Name: "Read", Input: rawJSON(`{"file_path":"internal/tui/live_preview.go"}`)}),
-				userMessage(llm.ContentBlock{Type: "tool_result", ToolUseID: "toolu_2", Content: rawJSON(`"file loaded"`)}),
+				assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: testLPToolUseIDRead, Name: toolNameRead, Input: rawJSON(`{"file_path":"internal/tui/live_preview.go"}`)}),
+				userMessage(llm.ContentBlock{Type: blockTypeToolResult, ToolUseID: testLPToolUseIDRead, Content: rawJSON(`"file loaded"`)}),
 			},
 			want: []string{"Read: internal/tui/live_preview.go", "Read result: file loaded"},
 		},
 		{
 			name: "failed tool result",
 			messages: []llm.SDKMessage{
-				userMessage(llm.ContentBlock{Type: "tool_result", ToolUseID: "toolu_3", Content: rawJSON(`"permission denied"`), IsError: true}),
+				userMessage(llm.ContentBlock{Type: blockTypeToolResult, ToolUseID: "toolu_3", Content: rawJSON(`"permission denied"`), IsError: true}),
 			},
 			want: []string{"Tool failed: permission denied"},
 		},
 		{
 			name: "permission request",
 			messages: []llm.SDKMessage{
-				controlRequest("perm_1", "Bash", rawJSON(`{"command":"rm -rf /tmp/nope"}`)),
+				controlRequest("perm_1", toolNameBash, rawJSON(`{"command":"rm -rf /tmp/nope"}`)),
 			},
 			want: []string{"Permission: Bash: rm -rf /tmp/nope"},
 		},
 		{
 			name: "AskUser control request",
 			messages: []llm.SDKMessage{
-				controlRequest("ask_1", "AskUserQuestion", rawJSON(`{"questions":[{"question":"Which implementation path?"}]}`)),
+				controlRequest("ask_1", toolNameAskUserQuestion, rawJSON(`{"questions":[{"question":"Which implementation path?"}]}`)),
 			},
 			want: []string{"AskUser: Which implementation path?"},
 		},
 		{
 			name: "task lifecycle",
 			messages: []llm.SDKMessage{
-				{Type: "system", Subtype: "task_started", TaskStarted: &llm.TaskStartedMessage{Description: "reading files", TaskType: "local_agent"}},
-				{Type: "system", Subtype: "task_progress", TaskProgress: &llm.TaskProgressMessage{Description: "reading files", LastToolName: "Read"}},
-				{Type: "system", Subtype: "task_notification", TaskNotification: &llm.TaskNotificationMessage{Status: "completed", Summary: "wrote summary"}},
+				{Type: "system", Subtype: taskSubtypeTaskStarted, TaskStarted: &llm.TaskStartedMessage{Description: "reading files", TaskType: taskTypeLocalAgent}},
+				{Type: "system", Subtype: taskSubtypeTaskProgress, TaskProgress: &llm.TaskProgressMessage{Description: "reading files", LastToolName: toolNameRead}},
+				{Type: "system", Subtype: taskSubtypeTaskNotification, TaskNotification: &llm.TaskNotificationMessage{Status: taskNotificationStatusCompleted, Summary: "wrote summary"}},
 			},
 			want: []string{"Task started: reading files", "Task progress: reading files via Read", "Task completed: wrote summary"},
 		},
@@ -428,12 +435,12 @@ func TestLivePreviewTranscriptSummaries(t *testing.T) {
 				{Type: "hook_progress", HookProgress: &llm.HookProgressMessage{HookName: "PreToolUse", Data: "checking"}},
 				{Type: "hook_response", HookResponse: &llm.HookResponseMessage{HookName: "PreToolUse", Result: "ok"}},
 				{Type: "rate_limit", RateLimit: &llm.RateLimitMessage{Message: "slow down"}},
-				{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "download 30%"}},
-				{Type: "control_request", ControlRequest: &llm.ControlRequestMessage{RequestID: "hook_1", Request: llm.ControlRequest{Subtype: "hook_callback", ToolName: "Bash"}}},
+				{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: toolNameBash, Data: testToolProgressDataDownload30}},
+				{Type: msgTypeControlRequest, ControlRequest: &llm.ControlRequestMessage{RequestID: "hook_1", Request: llm.ControlRequest{Subtype: testHookCallbackSubtype, ToolName: toolNameBash}}},
 				assistantMessage(llm.ContentBlock{Type: "text", Text: "visible after noise"}),
 			},
 			want:    []string{"visible after noise"},
-			notWant: []string{"routine status", "PreToolUse", "slow down", "download 30%", "hook_callback", "session=s1"},
+			notWant: []string{"routine status", "PreToolUse", "slow down", testToolProgressDataDownload30, testHookCallbackSubtype, "session=s1"},
 		},
 	}
 
@@ -464,9 +471,9 @@ func TestLivePreviewToolProgressRendersCompactToolRows(t *testing.T) {
 	longResult := strings.Repeat("tool-output-", 20)
 	sess := streamingLivePreviewSession("streaming-tools", feature.PhaseImplement,
 		assistantMessage(llm.ContentBlock{Type: "text", Text: "checking files"}),
-		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "PASS\nok ./..."}},
-		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: longResult}},
-		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Write", Data: "A README.scn.md"}},
+		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: toolNameBash, Data: "PASS\nok ./..."}},
+		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: toolNameBash, Data: longResult}},
+		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: toolNameWrite, Data: "A README.scn.md"}},
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
 
@@ -552,11 +559,24 @@ func TestLivePreviewTailBannerLabel(t *testing.T) {
 				CurrentIteration: 2,
 				Repos:            []feature.FeatureRepo{{Name: "api"}},
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 				},
 			},
 			sess: newLivePreviewSession("cycle", feature.PhaseImplement),
-			want: "Current: Rebasing [2]",
+			want: "Current: Addressing Review Comments [2]",
+		},
+		{
+			name: "feature rebase cycle context",
+			f: &feature.Feature{
+				Status:       feature.StatusCodeReady,
+				CurrentPhase: feature.PhasePublish,
+				ActiveCycle: &feature.CycleState{
+					Type:      feature.CycleRebase,
+					Status:    feature.RepoCycleRunning,
+					Iteration: 3,
+				},
+			},
+			want: "Current: Rebasing [3]",
 		},
 	}
 
@@ -577,20 +597,20 @@ func TestLivePreviewValidationContextShowsAggregateAndSelectedValidator(t *testi
 		ValidatingPlan:      true,
 		CurrentRoadmapPhase: 1,
 		ValidatorStatuses: map[string]string{
-			"Architecture": "APPROVED",
-			"Scope":        "CHANGES_REQUESTED",
+			"Architecture": validatorStatusApproved,         //nolint:goconst // validator category label; matches production's inline literal, not a reusable test-owned constant
+			"Scope":        validatorStatusChangesRequested, //nolint:goconst // validator category label; matches production's inline literal, not a reusable test-owned constant
 			"Testing":      "running",
 		},
 	}
 	sess := validatorLivePreviewSession("scope-validator", "Scope",
-		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_read", Name: "Bash", Input: rawJSON(`{"command":"go test ./..."}`)}),
+		assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: "toolu_read", Name: toolNameBash, Input: rawJSON(`{"command":"go test ./..."}`)}),
 	)
 
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
 	for _, want := range []string{
 		"Status", "Validating Phase 1 plan",
 		"Validators", "Arch ✓", "Test ⟳", "Scope ✗",
-		"Current: Validating Phase 1 plan", "1 ✓", "1 ✗", "1 running", "Showing Scope", "Using Bash...",
+		"Current: Validating Phase 1 plan", "1 ✓", "1 ✗", "1 running", "Showing Scope", testUsingBashActivity,
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("validation live preview missing %q in:\n%s", want, view)
@@ -601,23 +621,48 @@ func TestLivePreviewValidationContextShowsAggregateAndSelectedValidator(t *testi
 func TestLivePreviewValidatorStatusStyles(t *testing.T) {
 	t.Parallel()
 
-	assertForeground(t, livePreviewValidatorStatusStyle("APPROVED"), colorSuccess)
-	assertForeground(t, livePreviewValidatorStatusStyle("CHANGES_REQUESTED"), colorError)
+	assertForeground(t, livePreviewValidatorStatusStyle(validatorStatusApproved), colorSuccess)
+	assertForeground(t, livePreviewValidatorStatusStyle(validatorStatusChangesRequested), colorError)
 	assertForeground(t, livePreviewValidatorStatusStyle("FAILED"), colorError)
 	assertForeground(t, livePreviewValidatorStatusStyle("error"), colorError)
 	assertForeground(t, livePreviewValidatorStatusStyle("running"), colorOverlay)
+}
+
+func TestLivePreviewFinalReviewingUsesLifecyclePhase(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		ID:           "feat-final-review",
+		Status:       feature.StatusFinalReviewing,
+		CurrentPhase: feature.PhaseFinalReview,
+	}
+	sess := newLivePreviewSession("feat-final-review-final-review-01", feature.PhaseReview,
+		assistantMessage(llm.ContentBlock{Type: "text", Text: "reviewing cumulative diff"}),
+	)
+
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
+	for _, want := range []string{"Phase", feature.PhaseFinalReview.String(), "Current: " + feature.PhaseFinalReview.String(), "reviewing cumulative diff"} { //nolint:goconst // "Phase" is a generic UI-label assertion, not a reusable test concept
+		if !strings.Contains(view, want) {
+			t.Fatalf("final review live preview missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"Phase        Review", "Current: Review", "Current: " + feature.PhaseImplement.String()} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("final review live preview should not show %q in:\n%s", notWant, view)
+		}
+	}
 }
 
 func TestLivePreviewTranscriptTailCollapsesWhenConstrained(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
 	sess := newLivePreviewSession("constrained", feature.PhaseImplement,
-		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
+		assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: testLPToolUseIDBash, Name: toolNameBash, Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
 		assistantMessage(llm.ContentBlock{Type: "text", Text: "visible transcript row"}),
 	)
 
 	wide := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
-	if !strings.Contains(wide, "Current: Implement") || !strings.Contains(wide, "visible transcript row") {
+	if !strings.Contains(wide, "Current: "+feature.PhaseImplement.String()) || !strings.Contains(wide, "visible transcript row") {
 		t.Fatalf("wide live preview should show banner and tail, got:\n%s", wide)
 	}
 
@@ -654,7 +699,7 @@ func TestLivePreviewActivityRendersInPhasePreviewTitle(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseDesign}
 	sess := newLivePreviewSession("activity-title", feature.PhaseDesign,
-		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_read", Name: "Read", Input: rawJSON(`{"file_path":"README.md"}`)}),
+		assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: "toolu_read", Name: toolNameRead, Input: rawJSON(`{"file_path":"README.md"}`)}),
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
 
@@ -663,6 +708,40 @@ func TestLivePreviewActivityRendersInPhasePreviewTitle(t *testing.T) {
 	}
 	if strings.Count(view, "Using Read...") != 1 {
 		t.Fatalf("activity should not also render inside the upper metadata box, got:\n%s", view)
+	}
+}
+
+func TestLivePreviewPhaseTitleHandlesStyledLongActivity(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		ID:                  "feat-long-activity",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentIteration:    2,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+	}
+	longStatus := "Running 12:32:37 session ab1d1ed7fe2af11e-final-review-02: dropped critical SDK message (type=result) after 5s on full attachCh"
+	sess := newLivePreviewSession("long-activity", feature.PhaseImplement,
+		llm.SDKMessage{Type: "status", Status: &llm.StatusMessage{Type: "status", Message: longStatus}},
+	)
+	model := newLivePreviewModel(f).
+		withSession(sess).
+		withHeight(24)
+	model.spinnerView = lipgloss.NewStyle().Foreground(colorInfo).Render("⠴")
+	view := model.ViewCompact(100)
+
+	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > 96 {
+			t.Fatalf("live preview line width = %d, want <= 96; line=%q", got, stripANSI(line))
+		}
+	}
+	plain := stripANSI(view)
+	for _, leaked := range []string{"38;2", "38:2", ":::20"} {
+		if strings.Contains(plain, leaked) {
+			t.Fatalf("live preview leaked ANSI fragment %q in:\n%s", leaked, plain)
+		}
 	}
 }
 
@@ -697,13 +776,13 @@ func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
 			"repo-b": {Touched: true, PRURL: "https://github.com/org/repo-b/pull/43"},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+			"repo-a": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 		},
 	}
 	raw := newLivePreviewModel(f).withHeight(24).ViewCompact(100)
 	view := stripANSI(raw)
 
-	for _, want := range []string{"Feature ID", "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Tweaking", "Phase Model", "agent-model", "Elapsed", "Cost"} {
+	for _, want := range []string{labelFeatureID, "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Addressing Review Comments", "Phase Model", "agent-model", "Elapsed", labelCost} { //nolint:goconst // "Elapsed" is a generic UI-label assertion, not a reusable test concept
 		if !strings.Contains(view, want) {
 			t.Fatalf("live preview metadata missing %q in:\n%s", want, view)
 		}
@@ -831,8 +910,8 @@ func TestLivePreviewToolResultsTruncateToSingleLine(t *testing.T) {
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
 	longResult := strings.Repeat("tool-result-body-", 20)
 	sess := newLivePreviewSession("truncate-tool-result", feature.PhaseImplement,
-		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_trunc", Name: "WebFetch", Input: rawJSON(`{"url":"https://example.com/really/long/path"}`)}),
-		userMessage(llm.ContentBlock{Type: "tool_result", ToolUseID: "toolu_trunc", Content: rawJSON(`"` + longResult + `"`)}),
+		assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: "toolu_trunc", Name: testToolNameWebFetch, Input: rawJSON(`{"url":"https://example.com/really/long/path"}`)}),
+		userMessage(llm.ContentBlock{Type: blockTypeToolResult, ToolUseID: "toolu_trunc", Content: rawJSON(`"` + longResult + `"`)}),
 	)
 	view := newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(80)
 	plain := stripANSI(view)
@@ -858,8 +937,8 @@ func TestLivePreviewToolResultsUseFixedCharacterCap(t *testing.T) {
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
 	longResult := strings.Repeat("tool-result-body-", 20)
 	sess := newLivePreviewSession("fixed-tool-result", feature.PhaseImplement,
-		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_fixed", Name: "WebFetch", Input: rawJSON(`{"url":"https://example.com/really/long/path"}`)}),
-		userMessage(llm.ContentBlock{Type: "tool_result", ToolUseID: "toolu_fixed", Content: rawJSON(`"` + longResult + `"`)}),
+		assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: "toolu_fixed", Name: testToolNameWebFetch, Input: rawJSON(`{"url":"https://example.com/really/long/path"}`)}),
+		userMessage(llm.ContentBlock{Type: blockTypeToolResult, ToolUseID: "toolu_fixed", Content: rawJSON(`"` + longResult + `"`)}),
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(180))
 
@@ -902,11 +981,11 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	}
 	sess := newLivePreviewSession("feat-live-impl", feature.PhaseImplement,
 		llm.SDKMessage{Type: "system", Subtype: "init", Init: &llm.SystemInitMessage{SessionID: "s1", Model: "opus"}},
-		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
-		assistantMessage(llm.ContentBlock{Type: "text", Text: "Ready to patch live preview"}),
+		assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: testLPToolUseIDBash, Name: toolNameBash, Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
+		assistantMessage(llm.ContentBlock{Type: "text", Text: testReadyToPatchText}),
 		llm.SDKMessage{Type: "status", Status: &llm.StatusMessage{Message: "routine status"}},
-		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "download 30%"}},
-		controlRequest("ask_1", "AskUserQuestion", rawJSON(`{"questions":[{"question":"Proceed with patch?"}]}`)),
+		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: toolNameBash, Data: testToolProgressDataDownload30}},
+		controlRequest("ask_1", toolNameAskUserQuestion, rawJSON(`{"questions":[{"question":"Proceed with patch?"}]}`)),
 	)
 	m := dashboardWithSelectedFeature(f)
 	m.focusPanel = 1
@@ -915,18 +994,49 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	m.livePreview.session = sess
 
 	view := m.View()
-	for _, want := range []string{"Live Preview", "Feature ID", "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Context", "42% used", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
+	for _, want := range []string{"Live Preview", labelFeatureID, "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Context", "42% used", "Elapsed", "12m", labelCost, "$0.42", testUsingBashActivity, "Current: " + feature.PhaseImplement.String(), testReadyToPatchText, "AskUser: Proceed with patch?", "[a] Watch"} { //nolint:goconst // "Context" is a generic UI-label assertion, not a reusable test concept
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard live preview missing %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{"routine status", "download 30%", "session=s1"} {
+	for _, notWant := range []string{"routine status", testToolProgressDataDownload30, "session=s1"} {
 		if strings.Contains(view, notWant) {
 			t.Fatalf("dashboard live preview contained noisy %q in:\n%s", notWant, view)
 		}
 	}
 	if strings.Contains(view, "Phase Progress") {
 		t.Fatalf("live preview should replace static detail phase progress, got:\n%s", view)
+	}
+}
+
+func TestDashboardRendersLivePreviewForFeatureRebase(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-rebase",
+		Name:         "Feature Rebase",
+		Slug:         "feature-rebase",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Created:      time.Now(),
+		Repos:        []feature.FeatureRepo{{Name: "api"}},
+		ActiveCycle: &feature.CycleState{
+			Type:   feature.CycleRebase,
+			Status: feature.RepoCycleRunning,
+			Count:  1,
+		},
+	}
+	m := dashboardWithSelectedFeature(f)
+	m.focusPanel = 1
+	m.spinnerView = "spin"
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Live Preview", "Status", "Rebasing [1]", "Current: Rebasing [1]", "[a] Watch"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("feature rebase live preview missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Phase Progress") {
+		t.Fatalf("feature rebase should render live preview instead of static detail, got:\n%s", view)
 	}
 }
 
@@ -1012,9 +1122,50 @@ func TestDashboardOverviewModeUsesCompactDetailForEligibleFeature(t *testing.T) 
 			t.Fatalf("overview mode missing %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{"Feature ID", "Current: Implement", "[o] Overview"} {
+	for _, notWant := range []string{labelFeatureID, "Current: " + feature.PhaseImplement.String(), "[o] Overview"} { //nolint:goconst // "[o] Overview" is a generic UI-label assertion, not a reusable test concept
 		if strings.Contains(view, notWant) {
 			t.Fatalf("overview mode contained live-preview copy %q in:\n%s", notWant, view)
+		}
+	}
+}
+
+func TestDashboardOverviewModeShowsRefactorCycleSubphase(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-refactor",
+		Name:         "Refactor Feature",
+		Slug:         "refactor-feature",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Created:      time.Now(),
+		Repos:        []feature.FeatureRepo{{Name: "api"}},
+		RepoCycles: map[string]*feature.RepoCycleState{
+			"api": {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
+		},
+		ActiveCycle: &feature.CycleState{
+			Type:   feature.CycleRefactor,
+			Status: feature.RepoCycleRunning,
+			Count:  1,
+		},
+		PhaseTimings: map[string]time.Duration{
+			"implement": 5 * time.Minute,
+		},
+	}
+	f.SetRefactorCount(1)
+	m := dashboardWithSelectedFeature(f)
+	m.focusPanel = 1
+	m.rightPanelMode = dashboardRightPanelOverview
+	m.spinnerView = "spin"
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Info", "Phase Progress", "Refactor #1", "in progress", "[l] Live Preview"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("refactor cycle overview missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{labelFeatureID, "Current: Refactoring", "[o] Overview"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("refactor cycle overview contained live-preview copy %q in:\n%s", notWant, view)
 		}
 	}
 }
@@ -1030,7 +1181,7 @@ func TestDashboardLivePreviewConstrainedCollapseKeepsFooter(t *testing.T) {
 		Created:      time.Now(),
 	}
 	sess := newLivePreviewSession("feat-narrow-impl", feature.PhaseImplement,
-		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
+		assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: testLPToolUseIDBash, Name: toolNameBash, Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
 		assistantMessage(llm.ContentBlock{Type: "text", Text: "this transcript should collapse"}),
 	)
 	m := dashboardWithSelectedFeature(f)
@@ -1044,7 +1195,7 @@ func TestDashboardLivePreviewConstrainedCollapseKeepsFooter(t *testing.T) {
 	if strings.Contains(view, "this transcript should collapse") {
 		t.Fatalf("constrained dashboard should hide transcript tail, got:\n%s", view)
 	}
-	for _, want := range []string{"Live Preview", "Feature ID", "feat-narrow", "Current: Implement · spin Using Bash...", "[a] Watch"} {
+	for _, want := range []string{"Live Preview", labelFeatureID, "feat-narrow", "Current: Implement · spin Using Bash...", "[a] Watch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("constrained dashboard missing %q in:\n%s", want, view)
 		}
@@ -1127,6 +1278,20 @@ func TestDashboardFeatureRowSpinnerUsesLivePreviewPredicate(t *testing.T) {
 			wantSpin: true,
 		},
 		{
+			name: "active feature cycle",
+			f: &feature.Feature{
+				ID:     "feature-cycle",
+				Slug:   "feature-cycle",
+				Status: feature.StatusCodeReady,
+				ActiveCycle: &feature.CycleState{
+					Type:   feature.CycleRebase,
+					Status: feature.RepoCycleRunning,
+					Count:  1,
+				},
+			},
+			wantSpin: true,
+		},
+		{
 			name:     "failed",
 			f:        &feature.Feature{ID: "failed", Slug: "failed", Status: feature.StatusFailed},
 			wantSpin: false,
@@ -1180,16 +1345,6 @@ func streamingLivePreviewSession(id string, phase feature.Phase, messages ...llm
 	return sess
 }
 
-func tweakLivePreviewSession(id string, messages ...llm.SDKMessage) session.SessionView {
-	sess := session.NewSession(id, "feat-live", feature.PhaseImplement)
-	sess.SetKind(ports.KindTweak)
-	sess.SetStatus(session.SessionRunning)
-	for _, msg := range messages {
-		sess.MessageLog().Append(msg)
-	}
-	return sess
-}
-
 func validatorLivePreviewSession(id, label string, messages ...llm.SDKMessage) session.SessionView {
 	sess := session.NewSession(id, "feat-live", feature.PhasePlan)
 	sess.SetKind(ports.KindValidator)
@@ -1203,10 +1358,10 @@ func validatorLivePreviewSession(id, label string, messages ...llm.SDKMessage) s
 
 func assistantMessage(blocks ...llm.ContentBlock) llm.SDKMessage {
 	return llm.SDKMessage{
-		Type: "assistant",
+		Type: roleAssistant,
 		Assistant: &llm.AssistantMessage{
 			Message: llm.ConversationMsg{
-				Role:    "assistant",
+				Role:    roleAssistant,
 				Content: blocks,
 			},
 		},
@@ -1227,11 +1382,11 @@ func userMessage(blocks ...llm.ContentBlock) llm.SDKMessage {
 
 func controlRequest(requestID, toolName string, input json.RawMessage) llm.SDKMessage {
 	return llm.SDKMessage{
-		Type: "control_request",
+		Type: msgTypeControlRequest,
 		ControlRequest: &llm.ControlRequestMessage{
 			RequestID: requestID,
 			Request: llm.ControlRequest{
-				Subtype:  "can_use_tool",
+				Subtype:  controlRequestSubtypeCanUseTool,
 				ToolName: toolName,
 				Input:    input,
 			},

@@ -42,7 +42,7 @@ func TestUserVisibleLiveSessionVocabulary(t *testing.T) {
 		" Detach —",
 	}
 
-	for _, path := range []string{"help.go", "help_data.go", "keys.go", "attach.go", "detail.go", "app.go"} {
+	for _, path := range []string{"help.go", "help_data.go", "keys.go", "attach.go", "detail.go", "api_app.go"} {
 		t.Run(path, func(t *testing.T) {
 			assertGoStringLiteralsDoNotContain(t, path, retiredGoCopy)
 		})

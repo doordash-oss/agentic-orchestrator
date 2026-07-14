@@ -42,6 +42,55 @@ func (m *shutdownSessionMock) ShutdownCalls() int {
 // idempotent, and unblocks emitters.
 // ---------------------------------------------------------------------------
 
+func TestOrchestrator_Shutdown_EmitsRuntimeShutdownStarted(t *testing.T) {
+	sess := &shutdownSessionMock{MockSessionManager: mocks.NewMockSessionManager()}
+	o := New(Deps{Sessions: sess}, Hooks{})
+
+	if err := o.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	select {
+	case ev := <-o.Events():
+		if ev.Type != ports.RuntimeShutdownStarted {
+			t.Fatalf("shutdown event type = %v; want RuntimeShutdownStarted", ev.Type)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for RuntimeShutdownStarted event")
+	}
+}
+
+func TestOrchestrator_Shutdown_PreservesQueuedLifecycleEventWhenBufferFull(t *testing.T) {
+	sess := &shutdownSessionMock{MockSessionManager: mocks.NewMockSessionManager()}
+	o := New(Deps{Sessions: sess}, Hooks{})
+
+	const sentinelFeatureID = "queued-lifecycle"
+	o.emitEventBlocking(ports.Event{Type: ports.PhaseStarted, FeatureID: sentinelFeatureID})
+	for i := 1; i < eventChBuffer; i++ {
+		o.emitEventBlocking(ports.Event{Type: ports.FeatureStarted, FeatureID: "queued"})
+	}
+
+	if err := o.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	var sawSentinel, sawShutdown bool
+	deadline := time.After(500 * time.Millisecond)
+	for !sawSentinel || !sawShutdown {
+		select {
+		case ev := <-o.Events():
+			if ev.Type == ports.PhaseStarted && ev.FeatureID == sentinelFeatureID {
+				sawSentinel = true
+			}
+			if ev.Type == ports.RuntimeShutdownStarted {
+				sawShutdown = true
+			}
+		case <-deadline:
+			t.Fatalf("events after Shutdown() saw sentinel=%v shutdown=%v; want both", sawSentinel, sawShutdown)
+		}
+	}
+}
+
 func TestOrchestrator_Shutdown_SignalsDoneAndStopsSessions(t *testing.T) {
 	t.Run("basic_contract", func(t *testing.T) {
 		sess := &shutdownSessionMock{MockSessionManager: mocks.NewMockSessionManager()}
@@ -62,12 +111,24 @@ func TestOrchestrator_Shutdown_SignalsDoneAndStopsSessions(t *testing.T) {
 			t.Error("Done() did not close within 100ms")
 		}
 
-		// Events() not closed — must time out on receive (never returns zero).
+		// Shutdown emits one runtime notification, then Events() remains open.
 		select {
-		case <-o.Events():
-			t.Error("Events() closed unexpectedly; Shutdown must not close eventCh")
+		case ev := <-o.Events():
+			if ev.Type != ports.RuntimeShutdownStarted {
+				t.Fatalf("shutdown event type = %v; want RuntimeShutdownStarted", ev.Type)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timed out waiting for RuntimeShutdownStarted event")
+		}
+		select {
+		case ev, ok := <-o.Events():
+			if !ok {
+				t.Error("Events() closed unexpectedly; Shutdown must not close eventCh")
+			} else {
+				t.Errorf("unexpected extra shutdown event: %+v", ev)
+			}
 		case <-time.After(50 * time.Millisecond):
-			// expected — no send pending, channel open → select picks timer.
+			// expected — no send pending, channel open -> select picks timer.
 		}
 
 		// emitEvent after shutdown: must not panic, returns promptly. Whether

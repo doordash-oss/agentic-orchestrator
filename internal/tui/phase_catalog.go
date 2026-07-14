@@ -17,25 +17,19 @@ package tui
 import (
 	"strings"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
 // phaseCatalogFields is the canonical ordered list of phase-role field names
-// consumed by both the wizard's inline catalog block and BuildPhaseModelCatalog.
+// consumed by feature-scoped model editors.
 var phaseCatalogFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"}
 
 // globalModelFields is phaseCatalogFields plus Utilities: the model used for
 // AMA chat and other workspace-wide utility calls. No single feature owns
-// that role, so it is intentionally absent from phaseCatalogFields and only
-// surfaced by BuildWorkspaceModelCatalog.
+// that role, so it is intentionally absent from phaseCatalogFields.
 var globalModelFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
 
-// globalCatalogRoleToField maps llm.PhaseRole to catalog field name,
-// including the Utilities role. BuildPhaseModelCatalog loops over this
-// expanded map so the catalog always carries eligible-model data for
-// Utilities; a caller's Fields list (phaseCatalogFields vs
-// globalModelFields) is what actually decides whether its UI shows that row.
+// globalCatalogRoleToField maps API phase roles to catalog field names.
 var globalCatalogRoleToField = map[llm.PhaseRole]string{
 	llm.PhaseInquiry:        "Clarify",
 	llm.PhaseResearch:       "Research",
@@ -57,9 +51,8 @@ type PhaseModelEntry struct {
 	Aliases       []string
 }
 
-// PhaseModelCatalog bundles the per-phase-role model discovery that both
-// the wizard's Review step and the EditConfig overlay consume. Built once
-// at modal-open time via BuildPhaseModelCatalog and treated as immutable.
+// PhaseModelCatalog bundles API-provided per-phase model discovery shared by
+// the wizard and configuration editors.
 type PhaseModelCatalog struct {
 	// ProviderModels maps provider name → ordered model IDs (all categories).
 	ProviderModels map[string][]string
@@ -68,9 +61,7 @@ type PhaseModelCatalog struct {
 	ProviderModelInfos map[string][]llm.ModelInfo
 	// ProviderOrder is the display order of provider names.
 	ProviderOrder []string
-	// PhaseDefaults maps field name → recommended model ID. For
-	// BuildPhaseModelCatalog, includes all 7 roles (including Utilities); for
-	// BuildWorkspaceModelCatalog, the Fields list is what decides visibility.
+	// PhaseDefaults maps field name → recommended model ID.
 	PhaseDefaults map[string]string
 	// PhaseProviderModels maps field name → provider → eligible model IDs
 	// filtered by role category.
@@ -78,100 +69,28 @@ type PhaseModelCatalog struct {
 	// PhaseProviderModelInfos maps field name → provider → eligible model
 	// metadata entries filtered by role category.
 	PhaseProviderModelInfos map[string]map[string][]llm.ModelInfo
-	// Fields is the canonical ordered list of phase-role field names.
-	// BuildPhaseModelCatalog sets phaseCatalogFields (6 entries, no
-	// Utilities); BuildWorkspaceModelCatalog overrides it to
-	// globalModelFields (7 entries, includes Utilities).
+	// Fields is the ordered list of phase-role field names visible to a caller.
 	Fields []string
 }
 
-// BuildPhaseModelCatalog builds a PhaseModelCatalog from the current
-// registry state. The wizard and edit-config overlay share this immutable
-// view of model availability and per-phase eligibility.
-//
-// The `defaults` parameter is accepted for forward compatibility.
-//
-// Re-entrancy + crash recovery: pure function; no persisted state and no
-// side effects, so reentering with identical registry state yields an equal
-// value. Process crash is irrelevant because there is no mutation to recover.
-func BuildPhaseModelCatalog(reg *llm.Registry, _ config.DefaultsConfig) PhaseModelCatalog {
-	cat := PhaseModelCatalog{
-		Fields:                  append([]string(nil), phaseCatalogFields...),
-		ProviderModels:          map[string][]string{},
-		ProviderModelInfos:      map[string][]llm.ModelInfo{},
-		PhaseDefaults:           map[string]string{},
-		PhaseProviderModels:     map[string]map[string][]string{},
-		PhaseProviderModelInfos: map[string]map[string][]llm.ModelInfo{},
+func normalizeModelCatalogField(field string) string {
+	trimmed := strings.TrimSpace(field)
+	if trimmed == "" {
+		return ""
 	}
-	if reg == nil {
-		return cat
+	if mapped, ok := globalCatalogRoleToField[llm.PhaseRole(strings.ToLower(trimmed))]; ok {
+		return mapped
 	}
-	for _, p := range reg.DetectedProviders() {
-		name := p.Name()
-		models := p.AvailableModels()
-		if len(models) > 0 {
-			cat.ProviderModels[name] = models
-			cat.ProviderOrder = append(cat.ProviderOrder, name)
-		}
-		var catalogInfos []llm.ModelInfo
-		if cp, ok := p.(llm.CatalogProvider); ok {
-			if infos := cp.ModelCatalog(); len(infos) > 0 {
-				catalogInfos = cloneModelInfos(infos)
-			}
-		}
-		for _, id := range models {
-			info := modelInfoFromList(catalogInfos, id)
-			cat.ProviderModelInfos[name] = append(cat.ProviderModelInfos[name], info)
+	for _, candidate := range globalModelFields {
+		if strings.EqualFold(trimmed, candidate) {
+			return candidate
 		}
 	}
-	if len(cat.ProviderModels) == 0 {
-		if all := reg.AvailableModels(); len(all) > 0 {
-			cat.ProviderModels["default"] = all
-			for _, id := range all {
-				cat.ProviderModelInfos["default"] = append(cat.ProviderModelInfos["default"], cloneModelInfo(llm.ModelInfo{ID: id}))
-			}
-			cat.ProviderOrder = []string{"default"}
-		}
-	}
-	catalogDefaults := reg.CatalogDefaultModels()
-	cat.PhaseDefaults["Clarify"] = catalogDefaults.Inquiry
-	cat.PhaseDefaults["Research"] = catalogDefaults.Research
-	cat.PhaseDefaults["Planning"] = catalogDefaults.Planning
-	cat.PhaseDefaults["Implementation"] = catalogDefaults.Implementation
-	cat.PhaseDefaults["Review"] = catalogDefaults.Review
-	cat.PhaseDefaults["Utilities"] = catalogDefaults.Utilities
-	cat.PhaseDefaults["KB Build"] = catalogDefaults.KBBuild
-	for role, field := range globalCatalogRoleToField {
-		phaseEligible := reg.EligibleModelsForPhase(role)
-		if len(phaseEligible) > 0 {
-			cat.PhaseProviderModels[field] = phaseEligible
-			cat.PhaseProviderModelInfos[field] = map[string][]llm.ModelInfo{}
-			for provider, ids := range phaseEligible {
-				for _, id := range ids {
-					cat.PhaseProviderModelInfos[field][provider] = append(
-						cat.PhaseProviderModelInfos[field][provider],
-						cat.modelInfoForProvider(provider, id),
-					)
-				}
-			}
-		}
-	}
-	return cat
-}
-
-// BuildWorkspaceModelCatalog builds a PhaseModelCatalog scoped to the
-// workspace defaults editor: identical provider/model data to
-// BuildPhaseModelCatalog, but Fields includes "Utilities" since the
-// workspace editor (unlike the per-feature editor) owns that model role.
-func BuildWorkspaceModelCatalog(reg *llm.Registry, defaults config.DefaultsConfig) PhaseModelCatalog {
-	cat := BuildPhaseModelCatalog(reg, defaults)
-	cat.Fields = append([]string(nil), globalModelFields...)
-	return cat
+	return trimmed
 }
 
 // ModelOptionsForField returns the provider-flattened model list for a phase
 // field, falling back to all models when the phase-specific list is empty.
-// Same semantics as WizardModel.modelOptionsForField.
 func (c PhaseModelCatalog) ModelOptionsForField(field string) []string {
 	if pm, ok := c.PhaseProviderModels[field]; ok {
 		var opts []string
@@ -188,9 +107,7 @@ func (c PhaseModelCatalog) ModelOptionsForField(field string) []string {
 func (c PhaseModelCatalog) ModelEntriesForField(field string) []PhaseModelEntry {
 	var entries []PhaseModelEntry
 	for _, group := range c.ProviderEntryGroupsForField(field) {
-		for _, entry := range group.Models {
-			entries = append(entries, entry)
-		}
+		entries = append(entries, group.Models...)
 	}
 	return entries
 }
@@ -296,9 +213,8 @@ func (c PhaseModelCatalog) SelectionValue(entry PhaseModelEntry) string {
 	return entry.Agent + ":" + entry.ModelID
 }
 
-// ProviderGroupsForField returns provider-grouped model lists for a phase
-// field; same shape as WizardModel.modelProviderGroups. Falls back to a
-// single "Available" group when no phase-specific groups exist.
+// ProviderGroupsForField returns provider-grouped model lists for a phase,
+// falling back to a single "Available" group when needed.
 func (c PhaseModelCatalog) ProviderGroupsForField(field string) []modelProviderGroup {
 	providerModels := c.providerModelsForField(field)
 	var groups []modelProviderGroup
@@ -317,7 +233,6 @@ func (c PhaseModelCatalog) ProviderGroupsForField(field string) []modelProviderG
 }
 
 // AllModels returns the concatenation of ProviderModels in ProviderOrder.
-// Matches the flattening behavior of WizardModel.allModels.
 func (c PhaseModelCatalog) AllModels() []string {
 	var out []string
 	for _, prov := range c.ProviderOrder {
@@ -402,10 +317,6 @@ func findModelInfo(infos []llm.ModelInfo, id string) (llm.ModelInfo, bool) {
 	return llm.ModelInfo{}, false
 }
 
-func (c PhaseModelCatalog) modelInfoMatches(info llm.ModelInfo, value string) bool {
-	return modelInfoMatches(info, value)
-}
-
 func modelInfoMatches(info llm.ModelInfo, value string) bool {
 	if strings.EqualFold(info.ID, value) {
 		return true
@@ -416,13 +327,6 @@ func modelInfoMatches(info llm.ModelInfo, value string) bool {
 		}
 	}
 	return false
-}
-
-func modelInfoFromList(infos []llm.ModelInfo, id string) llm.ModelInfo {
-	if info, ok := findModelInfo(infos, id); ok {
-		return info
-	}
-	return cloneModelInfo(llm.ModelInfo{ID: id})
 }
 
 func (c PhaseModelCatalog) entryFromInfo(agent string, info llm.ModelInfo) PhaseModelEntry {
@@ -512,17 +416,6 @@ func (c PhaseModelCatalog) providerModelsForField(field string) map[string][]str
 		return pm
 	}
 	return c.ProviderModels
-}
-
-func cloneModelInfos(infos []llm.ModelInfo) []llm.ModelInfo {
-	if len(infos) == 0 {
-		return nil
-	}
-	out := make([]llm.ModelInfo, len(infos))
-	for i, info := range infos {
-		out[i] = cloneModelInfo(info)
-	}
-	return out
 }
 
 func cloneModelInfo(info llm.ModelInfo) llm.ModelInfo {

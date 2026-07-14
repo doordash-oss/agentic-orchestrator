@@ -129,7 +129,7 @@ func TestKBCompletionValidationInfraErrorBubbles(t *testing.T) {
 	})
 
 	stateDir := t.TempDir()
-	kbDir := agent.KBStateDir(stateDir, "repo-a")
+	kbDir := agent.KBStateDir(stateDir, repoAName)
 	if err := os.MkdirAll(kbDir, 0o755); err != nil {
 		t.Fatalf("mkdir kb dir: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestKBCompletionValidationInfraErrorBubbles(t *testing.T) {
 		Pipeline:      feature.PipelineLarge,
 		ActiveRun:     1,
 		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos:         []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Repos:         []feature.FeatureRepo{{Name: repoAName, Path: repoAPath}},
 	}
 	store := feature.NewStore(stateDir)
 	if err := store.Save(f); err != nil {
@@ -219,7 +219,7 @@ func TestKBCompletionRetryPreservesIndexAndState(t *testing.T) {
 	})
 
 	stateDir := t.TempDir()
-	kbDir := agent.KBStateDir(stateDir, "repo-a")
+	kbDir := agent.KBStateDir(stateDir, repoAName)
 	if err := os.MkdirAll(kbDir, 0o755); err != nil {
 		t.Fatalf("mkdir kb dir: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestKBCompletionRetryPreservesIndexAndState(t *testing.T) {
 		Pipeline:      feature.PipelineLarge,
 		ActiveRun:     1,
 		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos:         []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Repos:         []feature.FeatureRepo{{Name: repoAName, Path: repoAPath}},
 	}
 	store := feature.NewStore(stateDir)
 	if err := store.Save(f); err != nil {

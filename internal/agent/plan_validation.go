@@ -124,7 +124,7 @@ func LatestCompletedPlanAttempt(artifactDir string) int {
 			if yaml.Unmarshal(data, &meta) != nil {
 				continue
 			}
-			if meta.AgentStatus != "SUCCESS" {
+			if meta.AgentStatus != agentStatusSuccess {
 				continue
 			}
 			latest = n
@@ -149,7 +149,7 @@ func LatestCompletedPlanAttempt(artifactDir string) int {
 			if yaml.Unmarshal(data, &meta) != nil {
 				continue
 			}
-			if meta.AgentStatus != "SUCCESS" {
+			if meta.AgentStatus != agentStatusSuccess {
 				continue
 			}
 			latest = n
@@ -179,7 +179,7 @@ func latestPlanRevisionFeedbackAttempt(artifactDir string) (int, string) {
 			continue
 		}
 		meta, err := readPlanAttemptMeta(artifactDir, attempt)
-		if err != nil || meta.ReviewStatus != "CHANGES_REQUESTED" {
+		if err != nil || meta.ReviewStatus != agentStatusChangesRequested {
 			continue
 		}
 		best = attempt
@@ -535,6 +535,19 @@ func resolveValidatorModel(cfg PlanLoopConfig) string {
 		model = "sonnet"
 	}
 	return model
+}
+
+// sessionStartFunc matches the SessionStartFunc override field on
+// PlanLoopConfig/ImplementConfig and the ports.SessionManager.StartSession
+// method signature.
+type sessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
+
+// resolveSessionStartFunc returns override when set, otherwise sm.StartSession.
+func resolveSessionStartFunc(override sessionStartFunc, sm ports.SessionManager) sessionStartFunc {
+	if override != nil {
+		return override
+	}
+	return sm.StartSession
 }
 
 func roadmapPlannerRoleForAttempt(attempt int) Role {
@@ -1317,10 +1330,10 @@ func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) 
 	var overall string
 	switch {
 	case hasError || changesCount > 0 || approvedCount < len(results):
-		overall = "CHANGES_REQUESTED"
+		overall = agentStatusChangesRequested
 		overallStatus = ReviewChangesRequested
 	default:
-		overall = "APPROVED"
+		overall = agentStatusApproved
 		overallStatus = ReviewApproved
 	}
 	b.WriteString(fmt.Sprintf("**Overall: %s** (%d/%d validators approved", overall, approvedCount, len(results)))
@@ -1415,13 +1428,13 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 	} else if startAttempt > 0 {
 		meta, err := readPlanAttemptMeta(artifactDir, startAttempt)
 		if err == nil {
-			if meta.ReviewStatus == "APPROVED" {
+			if meta.ReviewStatus == agentStatusApproved {
 				return &PlanLoopResult{FinalStatus: "approved", Iterations: startAttempt}, nil
 			}
 			if meta.ReviewStatus == "VALIDATION_PENDING" {
 				resumeValidation = true
 			}
-			if meta.ReviewStatus == "CHANGES_REQUESTED" {
+			if meta.ReviewStatus == agentStatusChangesRequested {
 				feedbackPath := filepath.Join(artifactDir, fmt.Sprintf("attempt-%02d", startAttempt), "validation-feedback.md")
 				if data, readErr := os.ReadFile(feedbackPath); readErr == nil {
 					criticFeedback = strings.TrimSpace(string(data))
@@ -1534,10 +1547,7 @@ roadmapAttemptLoop:
 						0,
 					)
 				}
-				startSession := cfg.SessionStartFunc
-				if startSession == nil {
-					startSession = sm.StartSession
-				}
+				startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 				sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhasePlan, cmd, cfg.WorkDir, env, sessOpts)
 				if err != nil {
 					if errors.Is(err, ports.ErrSessionShuttingDown) {
@@ -1591,41 +1601,20 @@ roadmapAttemptLoop:
 					})
 				}
 
-				cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
-					toSessionUsage(cost), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
-
-				output := sess.MessageLog().Text()
-				_ = os.WriteFile(logPath, []byte(output), 0o644)
-
-				if agentStatus != "SUCCESS" {
-					// Graceful shutdown: see implement.go:377 for the rationale.
-					if agentStatus == "FAILED" && sm != nil && sm.IsShuttingDown() {
-						return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
-					}
-					if agentStatus == agentStatusMissingMarker {
-						violations := missingPhaseCompleteViolations()
-						lastErr := formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)
-						criticFeedback = formatPlanContractViolationFeedback(plannerSpec.Role, violations)
-						_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
-						_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
-							Attempt:      attempt,
-							AgentStatus:  "SUCCESS",
-							ReviewStatus: "CHANGES_REQUESTED",
-						})
-						if attempt >= maxAttempts {
-							return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: lastErr}, nil
-						}
-						continue roadmapAttemptLoop
-					}
-					_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
-						Attempt:        attempt,
-						SessionAttempt: sessionAttempt,
-						AgentStatus:    "FAILED",
-					})
-					if shouldRetryPlanInfrastructureSession(agentStatus, sess, cost, time.Since(sessionStart), sessionAttempt) {
-						sessionAttempt++
-						continue
-					}
+				outcome, sessionResult, newCriticFeedback, newSessionAttempt := handleCompletedPlanSession(
+					cfg, planSessionCtx, sessionID, sess, cost, sessionStart, agentStatus, sm,
+					attempt, maxAttempts, sessionAttempt, plannerSpec, attemptDir, artifactDir, logPath,
+				)
+				switch outcome {
+				case planOutcomeReturn:
+					return sessionResult, nil
+				case planOutcomeContinueAttempt:
+					criticFeedback = newCriticFeedback
+					continue roadmapAttemptLoop
+				case planOutcomeRetrySession:
+					sessionAttempt = newSessionAttempt
+					continue
+				case planOutcomeFailedNoRetry:
 					return &PlanLoopResult{FinalStatus: "failed", Iterations: attempt, LastError: "roadmap session did not complete successfully"}, nil
 				}
 				if attempt == 1 {
@@ -1638,7 +1627,7 @@ roadmapAttemptLoop:
 				// instead of re-running the planning session.
 				meta := PlanAttemptMeta{
 					Attempt:      attempt,
-					AgentStatus:  "SUCCESS",
+					AgentStatus:  agentStatusSuccess,
 					ReviewStatus: "VALIDATION_PENDING",
 				}
 				if sessionAttempt > 1 {
@@ -1660,11 +1649,11 @@ roadmapAttemptLoop:
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 				Attempt:      attempt,
-				AgentStatus:  "SUCCESS",
-				ReviewStatus: "CHANGES_REQUESTED",
+				AgentStatus:  agentStatusSuccess,
+				ReviewStatus: agentStatusChangesRequested,
 			})
 			if attempt >= maxAttempts {
-				return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: lastErr}, nil
+				return &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: lastErr}, nil
 			}
 			continue
 		}
@@ -1679,7 +1668,7 @@ roadmapAttemptLoop:
 		if cfg.Feature.EffectivePipeline().ShouldSkipPlanValidation() {
 			// Medium: skip critics, auto-approve
 			planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "APPROVED"})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusApproved})
 			if cfg.FeatureStore != nil && planArtifactPath != "" {
 				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
 					if f.Artifacts == nil {
@@ -1711,18 +1700,18 @@ roadmapAttemptLoop:
 
 		if reviewErr != nil {
 			if isProtocolViolationError(reviewErr) {
-				_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"})
+				_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested})
 				criticFeedback = feedback
 				if strings.TrimSpace(criticFeedback) == "" {
 					criticFeedback = fmt.Sprintf("Roadmap validation failed: %v", reviewErr)
 				}
 				_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 				if attempt >= maxAttempts {
-					return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: reviewErr.Error()}, nil
+					return &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: reviewErr.Error()}, nil
 				}
 				continue
 			}
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "FAILED"})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: "FAILED"})
 			criticFeedback = fmt.Sprintf("Roadmap validation failed: %v", reviewErr)
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			continue
@@ -1730,7 +1719,7 @@ roadmapAttemptLoop:
 
 		switch reviewStatus {
 		case ReviewApproved:
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: reviewStatus.String()})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: reviewStatus.String()})
 			if cfg.FeatureStore != nil && planArtifactPath != "" {
 				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
 					if f.Artifacts == nil {
@@ -1742,13 +1731,13 @@ roadmapAttemptLoop:
 			}
 			return &PlanLoopResult{FinalStatus: "approved", Iterations: attempt}, nil
 		case ReviewChangesRequested:
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested})
 			criticFeedback = feedback
 			// Persist combined feedback so it survives resume across restarts.
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback), 0o644)
 			continue
 		default:
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "UNKNOWN"})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: "UNKNOWN"})
 			criticFeedback = "Roadmap validation produced no clear result."
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			continue
@@ -1814,13 +1803,13 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 	} else if startAttempt > 0 {
 		meta, err := readPlanAttemptMeta(artifactDir, startAttempt)
 		if err == nil {
-			if meta.ReviewStatus == "APPROVED" {
+			if meta.ReviewStatus == agentStatusApproved {
 				return &PlanLoopResult{FinalStatus: "approved", Iterations: startAttempt}, nil
 			}
 			if meta.ReviewStatus == "VALIDATION_PENDING" {
 				resumeValidation = true
 			}
-			if meta.ReviewStatus == "CHANGES_REQUESTED" {
+			if meta.ReviewStatus == agentStatusChangesRequested {
 				feedbackPath := filepath.Join(artifactDir, fmt.Sprintf("attempt-%02d", startAttempt), "validation-feedback.md")
 				if data, readErr := os.ReadFile(feedbackPath); readErr == nil {
 					criticFeedback = strings.TrimSpace(string(data))
@@ -1939,10 +1928,7 @@ phasePlanAttemptLoop:
 						0,
 					)
 				}
-				startSession := cfg.SessionStartFunc
-				if startSession == nil {
-					startSession = sm.StartSession
-				}
+				startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 				sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhasePlan, cmd, cfg.WorkDir, env, sessOpts)
 				if err != nil {
 					if errors.Is(err, ports.ErrSessionShuttingDown) {
@@ -1997,41 +1983,20 @@ phasePlanAttemptLoop:
 					})
 				}
 
-				cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
-					toSessionUsage(cost), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
-
-				output := sess.MessageLog().Text()
-				_ = os.WriteFile(logPath, []byte(output), 0o644)
-
-				if agentStatus != "SUCCESS" {
-					// Graceful shutdown: see implement.go:377 for the rationale.
-					if agentStatus == "FAILED" && sm != nil && sm.IsShuttingDown() {
-						return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
-					}
-					if agentStatus == agentStatusMissingMarker {
-						violations := missingPhaseCompleteViolations()
-						lastErr := formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)
-						criticFeedback = formatPlanContractViolationFeedback(plannerSpec.Role, violations)
-						_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
-						_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
-							Attempt:      attempt,
-							AgentStatus:  "SUCCESS",
-							ReviewStatus: "CHANGES_REQUESTED",
-						})
-						if attempt >= maxAttempts {
-							return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: lastErr}, nil
-						}
-						continue phasePlanAttemptLoop
-					}
-					_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
-						Attempt:        attempt,
-						SessionAttempt: sessionAttempt,
-						AgentStatus:    "FAILED",
-					})
-					if shouldRetryPlanInfrastructureSession(agentStatus, sess, cost, time.Since(sessionStart), sessionAttempt) {
-						sessionAttempt++
-						continue
-					}
+				outcome, sessionResult, newCriticFeedback, newSessionAttempt := handleCompletedPlanSession(
+					cfg.PlanLoopConfig, planSessionCtx, sessionID, sess, cost, sessionStart, agentStatus, sm,
+					attempt, maxAttempts, sessionAttempt, plannerSpec, attemptDir, artifactDir, logPath,
+				)
+				switch outcome {
+				case planOutcomeReturn:
+					return sessionResult, nil
+				case planOutcomeContinueAttempt:
+					criticFeedback = newCriticFeedback
+					continue phasePlanAttemptLoop
+				case planOutcomeRetrySession:
+					sessionAttempt = newSessionAttempt
+					continue
+				case planOutcomeFailedNoRetry:
 					return &PlanLoopResult{FinalStatus: "failed", Iterations: attempt, LastError: "phase plan session did not complete"}, nil
 				}
 				if attempt == 1 {
@@ -2044,7 +2009,7 @@ phasePlanAttemptLoop:
 				// instead of re-running the planning session.
 				meta := PlanAttemptMeta{
 					Attempt:      attempt,
-					AgentStatus:  "SUCCESS",
+					AgentStatus:  agentStatusSuccess,
 					ReviewStatus: "VALIDATION_PENDING",
 				}
 				if sessionAttempt > 1 {
@@ -2066,11 +2031,11 @@ phasePlanAttemptLoop:
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 				Attempt:      attempt,
-				AgentStatus:  "SUCCESS",
-				ReviewStatus: "CHANGES_REQUESTED",
+				AgentStatus:  agentStatusSuccess,
+				ReviewStatus: agentStatusChangesRequested,
 			})
 			if attempt >= maxAttempts {
-				return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: lastErr}, nil
+				return &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: lastErr}, nil
 			}
 			continue
 		}
@@ -2085,7 +2050,7 @@ phasePlanAttemptLoop:
 		// Medium features skip plan critics entirely.
 		if cfg.Feature.EffectivePipeline().ShouldSkipPlanValidation() {
 			planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "APPROVED"})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusApproved})
 			if cfg.FeatureStore != nil && planArtifactPath != "" {
 				artifactKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
 				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
@@ -2119,8 +2084,8 @@ phasePlanAttemptLoop:
 				_, _, _, axisVerdicts, axisDigests := axisStallTracker.observe(attempt, planArtifactPath, perAxisResults)
 				_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 					Attempt:      attempt,
-					AgentStatus:  "SUCCESS",
-					ReviewStatus: "CHANGES_REQUESTED",
+					AgentStatus:  agentStatusSuccess,
+					ReviewStatus: agentStatusChangesRequested,
 					AxisVerdicts: axisVerdicts,
 					AxisDigests:  axisDigests,
 				})
@@ -2130,11 +2095,11 @@ phasePlanAttemptLoop:
 				}
 				_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 				if attempt >= maxAttempts {
-					return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: reviewErr.Error()}, nil
+					return &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: reviewErr.Error()}, nil
 				}
 				continue
 			}
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "FAILED"})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: "FAILED"})
 			criticFeedback = fmt.Sprintf("Phase plan validation failed: %v", reviewErr)
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			continue
@@ -2142,7 +2107,7 @@ phasePlanAttemptLoop:
 
 		switch reviewStatus {
 		case ReviewApproved:
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: reviewStatus.String()})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: reviewStatus.String()})
 			if cfg.FeatureStore != nil && planArtifactPath != "" {
 				artifactKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
 				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
@@ -2164,8 +2129,8 @@ phasePlanAttemptLoop:
 			stalled, stallAxis, stallCount, axisVerdicts, axisDigests := axisStallTracker.observe(attempt, planArtifactPath, perAxisResults)
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 				Attempt:      attempt,
-				AgentStatus:  "SUCCESS",
-				ReviewStatus: "CHANGES_REQUESTED",
+				AgentStatus:  agentStatusSuccess,
+				ReviewStatus: agentStatusChangesRequested,
 				AxisVerdicts: axisVerdicts,
 				AxisDigests:  axisDigests,
 			})
@@ -2174,6 +2139,16 @@ phasePlanAttemptLoop:
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback), 0o644)
 
 			if stalled {
+				if cfg.FeatureStore != nil && planArtifactPath != "" {
+					artifactKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
+					_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+						if f.Artifacts == nil {
+							f.Artifacts = make(map[string]string)
+						}
+						f.Artifacts[artifactKey] = planArtifactPath
+						return nil
+					})
+				}
 				return &PlanLoopResult{
 					FinalStatus: "needs_human_review",
 					Iterations:  attempt,
@@ -2183,7 +2158,7 @@ phasePlanAttemptLoop:
 			}
 			continue
 		default:
-			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "UNKNOWN"})
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: "UNKNOWN"})
 			criticFeedback = "Phase plan validation produced no clear result."
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			continue
@@ -2207,6 +2182,87 @@ phasePlanAttemptLoop:
 		Iterations:  maxAttempts,
 		LastError:   fmt.Sprintf("phase plan not approved after %d attempts", maxAttempts),
 	}, nil
+}
+
+// planSessionOutcome tells a planning attempt loop what control-flow action
+// to take after handleCompletedPlanSession processes a just-finished session.
+// Go can't `continue` a caller's labeled loop from inside a called function,
+// so the caller performs the actual continue/return itself based on this value.
+type planSessionOutcome int
+
+const (
+	// planOutcomeProceed means the session succeeded; the caller continues
+	// past the failure-handling branch as normal.
+	planOutcomeProceed planSessionOutcome = iota
+	// planOutcomeReturn means the caller should `return result, nil` immediately.
+	planOutcomeReturn
+	// planOutcomeContinueAttempt means the caller should `continue` its labeled
+	// attempt loop (e.g. `continue roadmapAttemptLoop`), after applying newCriticFeedback.
+	planOutcomeContinueAttempt
+	// planOutcomeRetrySession means the caller should set sessionAttempt to
+	// newSessionAttempt and `continue` its inner session-retry loop.
+	planOutcomeRetrySession
+	// planOutcomeFailedNoRetry means the caller should return its own
+	// "failed" PlanLoopResult, using a caller-specific LastError message.
+	planOutcomeFailedNoRetry
+)
+
+// handleCompletedPlanSession records session-end telemetry and the session
+// log, then decides what a planning attempt loop should do next based on
+// agentStatus. It is shared by RunRoadmapPlanningLoop and RunPhasePlanningLoop,
+// which are otherwise identical in this bit of post-session handling except
+// for which labeled loop they continue and the wording of their final error.
+func handleCompletedPlanSession(
+	cfg PlanLoopConfig,
+	planSessionCtx observe.SpanContext,
+	sessionID string,
+	sess ports.SessionHandle,
+	cost SessionCost,
+	sessionStart time.Time,
+	agentStatus string,
+	sm ports.SessionManager,
+	attempt, maxAttempts, sessionAttempt int,
+	plannerSpec RoleSpec,
+	attemptDir, artifactDir, logPath string,
+) (outcome planSessionOutcome, result *PlanLoopResult, newCriticFeedback string, newSessionAttempt int) {
+	cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
+		toSessionUsage(cost), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
+
+	output := sess.MessageLog().Text()
+	_ = os.WriteFile(logPath, []byte(output), 0o644)
+
+	if agentStatus == agentStatusSuccess {
+		return planOutcomeProceed, nil, "", sessionAttempt
+	}
+
+	// Graceful shutdown: see implement.go:377 for the rationale.
+	if agentStatus == "FAILED" && sm != nil && sm.IsShuttingDown() {
+		return planOutcomeReturn, &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, "", sessionAttempt
+	}
+	if agentStatus == agentStatusMissingMarker {
+		violations := missingPhaseCompleteViolations()
+		lastErr := formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)
+		criticFeedback := formatPlanContractViolationFeedback(plannerSpec.Role, violations)
+		_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
+		_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+			Attempt:      attempt,
+			AgentStatus:  agentStatusSuccess,
+			ReviewStatus: agentStatusChangesRequested,
+		})
+		if attempt >= maxAttempts {
+			return planOutcomeReturn, &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: lastErr}, criticFeedback, sessionAttempt
+		}
+		return planOutcomeContinueAttempt, nil, criticFeedback, sessionAttempt
+	}
+	_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+		Attempt:        attempt,
+		SessionAttempt: sessionAttempt,
+		AgentStatus:    "FAILED",
+	})
+	if shouldRetryPlanInfrastructureSession(agentStatus, sess, cost, time.Since(sessionStart), sessionAttempt) {
+		return planOutcomeRetrySession, nil, "", sessionAttempt + 1
+	}
+	return planOutcomeFailedNoRetry, nil, "", sessionAttempt
 }
 
 // setValidatingPlan persists the ValidatingPlan flag on the feature.
@@ -2323,7 +2379,7 @@ func IsArtifactExcluded(name string) bool {
 
 // sessionErrFromAgentStatus returns an error if the agent status indicates failure.
 func sessionErrFromAgentStatus(agentStatus string) error {
-	if agentStatus != "SUCCESS" {
+	if agentStatus != agentStatusSuccess {
 		return fmt.Errorf("agent status: %s", agentStatus)
 	}
 	return nil

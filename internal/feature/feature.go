@@ -178,6 +178,8 @@ type RepoState struct {
 	Touched   bool   `yaml:"touched,omitempty"`
 	PRURL     string `yaml:"pr_url,omitempty"`
 	LastError string `yaml:"last_error,omitempty"`
+
+	Freshness string `yaml:"-"`
 }
 
 // RepoCycleType identifies the kind of post-publish per-repo cycle.
@@ -185,7 +187,6 @@ type RepoCycleType string
 
 const (
 	CycleRebase         RepoCycleType = "rebase"
-	CycleTweak          RepoCycleType = "tweak"
 	CycleReviewComments RepoCycleType = "review-comments"
 	CycleRefactor       RepoCycleType = "refactor"
 )
@@ -200,12 +201,12 @@ const (
 	RepoCycleInterrupted = "interrupted"
 )
 
-// RepoCycleState tracks a post-publish cycle (rebase/tweak/review-comments) for a single repo.
+// RepoCycleState tracks a post-publish cycle (rebase/review-comments) for a single repo.
 // The feature stays StatusPublished while per-repo cycles run independently.
 type RepoCycleState struct {
 	Type      RepoCycleType `yaml:"type"`
 	Status    string        `yaml:"status"`          // RepoCycle* constants
-	Count     int           `yaml:"count,omitempty"` // Nth rebase/tweak for this repo
+	Count     int           `yaml:"count,omitempty"` // Nth rebase for this repo
 	PlanPath  string        `yaml:"plan_path,omitempty"`
 	LastError string        `yaml:"last_error,omitempty"`
 	// Iteration is the iteration number that emitted the active gate. Set
@@ -231,7 +232,7 @@ type PendingUserInputCycle struct {
 const SchemaVersionCurrent = 6
 
 // CycleState tracks the feature-level active post-publish cycle (rebase,
-// review-comments, refactor, tweak). One cycle is active at a time per
+// review-comments, refactor). One cycle is active at a time per
 // feature regardless of how many repos it touches.
 // Run.RepoCycles persists alongside CycleState as the per-repo TUI rendering
 // surface; the unified cycle loops mirror their per-repo entries there so
@@ -241,7 +242,7 @@ type CycleState struct {
 	Status string        `yaml:"status"` // RepoCycle* constants
 	Count  int           `yaml:"count,omitempty"`
 	// PlanPath is the cycle's plan artifact (refactor/review-comments) when
-	// applicable. Empty for plan-less cycles (rebase/tweak).
+	// applicable. Empty for plan-less cycles (rebase).
 	PlanPath string `yaml:"plan_path,omitempty"`
 	// LastError is populated when Status == RepoCycleFailed.
 	LastError string `yaml:"last_error,omitempty"`
@@ -490,13 +491,13 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 // Checkpoints controls which phase transitions pause for human review.
 type Checkpoints struct {
-	InquiryReview   bool `yaml:"inquiry_review,omitempty"`
-	ResearchReview  bool `yaml:"research_review,omitempty"`
-	DesignReview    bool `yaml:"design_review,omitempty"`
-	RoadmapReview   bool `yaml:"roadmap_review,omitempty"`
-	PhasePlanReview bool `yaml:"phase_plan_review,omitempty"`
-	ManualPublish   bool `yaml:"manual_publish,omitempty"`
-	DraftPublish    bool `yaml:"draft_publish,omitempty"`
+	InquiryReview   bool `yaml:"inquiry_review,omitempty" json:"inquiry_review,omitempty"`
+	ResearchReview  bool `yaml:"research_review,omitempty" json:"research_review,omitempty"`
+	DesignReview    bool `yaml:"design_review,omitempty" json:"design_review,omitempty"`
+	RoadmapReview   bool `yaml:"roadmap_review,omitempty" json:"roadmap_review,omitempty"`
+	PhasePlanReview bool `yaml:"phase_plan_review,omitempty" json:"phase_plan_review,omitempty"`
+	ManualPublish   bool `yaml:"manual_publish,omitempty" json:"manual_publish,omitempty"`
+	DraftPublish    bool `yaml:"draft_publish,omitempty" json:"draft_publish,omitempty"`
 }
 
 // HasGateForPhase returns true if a review gate is enabled for the given target phase.
@@ -518,14 +519,46 @@ func (c Checkpoints) HasGateForPhase(phase Phase) bool {
 // AutoPublish returns true if manual publish is NOT enabled.
 func (c Checkpoints) AutoPublish() bool { return !c.ManualPublish }
 
-// ConfigSnapshot bundles the three editable per-feature config axes for
+// ConfigSnapshot bundles the editable per-feature config axes for
 // audit-diff and hook transport. Passed by value; fields mirror the
-// feature-level fields on Feature so a snapshot is
-// `{f.Models, f.Inquireness, f.Checkpoints}`.
+// feature-level fields on Feature.
 type ConfigSnapshot struct {
-	Models      config.ModelConfig
-	Inquireness Inquireness
-	Checkpoints Checkpoints
+	Models             config.ModelConfig
+	Inquireness        Inquireness
+	Checkpoints        Checkpoints
+	InputNotifications InputNotificationsMode
+}
+
+type InputNotificationsMode string
+
+const (
+	InputNotificationsDefault InputNotificationsMode = "default"
+	InputNotificationsEnabled InputNotificationsMode = "enabled"
+	InputNotificationsMuted   InputNotificationsMode = "muted"
+)
+
+func NormalizeInputNotificationsMode(mode InputNotificationsMode) InputNotificationsMode {
+	switch mode {
+	case InputNotificationsEnabled, InputNotificationsMuted:
+		return mode
+	default:
+		return InputNotificationsDefault
+	}
+}
+
+func PersistInputNotificationsMode(mode InputNotificationsMode) InputNotificationsMode {
+	normalized := NormalizeInputNotificationsMode(mode)
+	if normalized == InputNotificationsDefault {
+		return ""
+	}
+	return normalized
+}
+
+func InputNotificationsModeForMuted(muted bool) InputNotificationsMode {
+	if muted {
+		return InputNotificationsMuted
+	}
+	return InputNotificationsEnabled
 }
 
 type PermissionRequest struct {
@@ -586,9 +619,9 @@ type Feature struct {
 	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to enforce KB restart on rewind
 	Checkpoints          Checkpoints         `yaml:"checkpoints,omitempty"`
 	LastAttachedRepo     string              `yaml:"last_attached_repo,omitempty"` // repo name for attach mode tab restoration
-	// MuteInputNotifications overrides global notification behavior for this
-	// feature's "waiting for input" alerts. Nil means "use global default".
-	MuteInputNotifications *bool `yaml:"mute_input_notifications,omitempty"`
+	// InputNotifications overrides global notification behavior for this
+	// feature's "waiting for input" alerts. Empty means "use global default".
+	InputNotifications InputNotificationsMode `yaml:"input_notifications,omitempty"`
 
 	TraceID       string `yaml:"trace_id,omitempty"`        // observability correlation; derived from ID if absent
 	FeatureSpanID string `yaml:"feature_span_id,omitempty"` // persisted feature-level span ID so all phases share a common parent
@@ -633,6 +666,10 @@ type Feature struct {
 	// ActiveCycle is the feature-level active post-publish cycle under
 	// SchemaVersionCurrent = 4.
 	ActiveCycle *CycleState `yaml:"-"`
+	// RebaseOperation is the feature-level transient operation display state
+	// for the currently active rebase harness / smart rebase / Final Review.
+	// Persisted on Run.RebaseOperation.
+	RebaseOperation *RebaseOperationState `yaml:"-"`
 	// RepoCycles is the per-repo cycle rendering surface kept for the TUI's
 	// existing per-repo badge/spinner paths; the unified cycle loops mirror
 	// their per-repo entries here so legacy renderers keep working.
@@ -663,6 +700,33 @@ type Feature struct {
 
 	// Transient: populated by Store.Load, not serialized. Exposed via Run().
 	run *Run `yaml:"-"`
+}
+
+// WorkspaceSlug is the stable slug used for generated feature branches and
+// worktree directories. It keeps the human-readable slug visible while
+// qualifying it with the persisted feature ID, avoiding local branch
+// collisions across separate state dirs or abandoned setup attempts.
+func (f *Feature) WorkspaceSlug() string {
+	if f == nil {
+		return ""
+	}
+	return WorkspaceSlug(f.Slug, f.ID)
+}
+
+// WorkspaceSlug joins a human-readable slug with the feature ID unless it is
+// already qualified.
+func WorkspaceSlug(slug, id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return slug
+	}
+	if slug == "" {
+		return id
+	}
+	if strings.HasSuffix(slug, "-"+id) {
+		return slug
+	}
+	return slug + "-" + id
 }
 
 // Run returns the feature's active run. Callers should treat the result as
@@ -725,6 +789,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.PhaseCosts = f.PhaseCosts
 	r.SessionCosts = f.SessionCosts
 	r.ActiveCycle = f.ActiveCycle
+	r.RebaseOperation = f.RebaseOperation
 	r.PendingReviewPhase = f.PendingReviewPhase
 	r.PendingRewindReviewRoadmapPhase = f.PendingRewindReviewRoadmapPhase
 	r.IsRewind = f.IsRewind
@@ -767,6 +832,7 @@ func (f *Feature) syncRunToShadows() {
 	f.PhaseCosts = r.PhaseCosts
 	f.SessionCosts = r.SessionCosts
 	f.ActiveCycle = r.ActiveCycle
+	f.RebaseOperation = r.RebaseOperation
 	f.PendingReviewPhase = r.PendingReviewPhase
 	f.PendingRewindReviewRoadmapPhase = r.PendingRewindReviewRoadmapPhase
 	f.IsRewind = r.IsRewind
@@ -860,7 +926,7 @@ var validTransitions = map[Status][]Status{
 
 // accumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.
-// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N, tweak-N,
+// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N,
 // review-comments) survive interrupt/fail transitions and are available when
 // the phase is resumed.
 func (f *Feature) accumulateActiveTime() {
@@ -907,12 +973,6 @@ func (f *Feature) RebaseCount() int { return f.Run().RebaseCount }
 // SetRebaseCount sets the run-level rebase counter.
 func (f *Feature) SetRebaseCount(n int) { f.Run().RebaseCount = n }
 
-// TweakCount returns the run-level tweak counter.
-func (f *Feature) TweakCount() int { return f.Run().TweakCount }
-
-// SetTweakCount sets the run-level tweak counter.
-func (f *Feature) SetTweakCount(n int) { f.Run().TweakCount = n }
-
 // RefactorCount returns the run-level refactor counter.
 func (f *Feature) RefactorCount() int { return f.Run().RefactorCount }
 
@@ -957,7 +1017,7 @@ func (f *Feature) RefactorPrefix() string {
 }
 
 // CyclePrefix returns the artifact directory prefix for the current
-// post-publish cycle (rebase, tweak, or review-comments).
+// post-publish cycle (rebase, or review-comments).
 // Returns empty string when no cycle is active.
 func (f *Feature) CyclePrefix() string {
 	switch f.ActiveCycleType() {
@@ -966,11 +1026,6 @@ func (f *Feature) CyclePrefix() string {
 			return fmt.Sprintf("rebase-%d", f.RebaseCount())
 		}
 		return "rebase"
-	case CycleTweak:
-		if f.TweakCount() > 0 {
-			return fmt.Sprintf("tweak-%d", f.TweakCount())
-		}
-		return "tweak"
 	case CycleReviewComments:
 		if f.ReviewCommentsCount() > 0 {
 			return fmt.Sprintf("review-comments-%d", f.ReviewCommentsCount())
@@ -981,17 +1036,13 @@ func (f *Feature) CyclePrefix() string {
 }
 
 // RepoCycleDirName returns the enumerated directory name for a per-repo cycle.
-// e.g., "rebase-1", "tweak-2", "review-comments-3", or the unenumerated
+// e.g., "rebase-1", "review-comments-3", or the unenumerated
 // fallback when count <= 0.
 func RepoCycleDirName(cycleType RepoCycleType, count int) string {
 	switch cycleType {
 	case CycleRebase:
 		if count > 0 {
 			return fmt.Sprintf("rebase-%d", count)
-		}
-	case CycleTweak:
-		if count > 0 {
-			return fmt.Sprintf("tweak-%d", count)
 		}
 	case CycleReviewComments:
 		if count > 0 {
@@ -1078,7 +1129,6 @@ func isCycleTimingKey(key string) bool {
 func isImplementTimingKey(key string) bool {
 	return key == "implement" ||
 		strings.HasPrefix(key, "rebase-") ||
-		strings.HasPrefix(key, "tweak-") ||
 		strings.HasPrefix(key, "refactor-") ||
 		strings.HasSuffix(key, "-impl") ||
 		key == "review-comments" ||

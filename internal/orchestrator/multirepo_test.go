@@ -113,7 +113,7 @@ func TestStartMultiRepoImplementation_ReturnsSynchronously(t *testing.T) {
 	f := &feature.Feature{
 		ID:        "feat-t20",
 		Status:    feature.StatusImplementing,
-		Repos:     []feature.FeatureRepo{{Name: "repo-a"}},
+		Repos:     []feature.FeatureRepo{{Name: repoName}},
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
@@ -167,7 +167,7 @@ func TestStartMultiRepoImplementation_EngineError_Returns(t *testing.T) {
 	f := &feature.Feature{
 		ID:        "feat-t21",
 		Status:    feature.StatusImplementing,
-		Repos:     []feature.FeatureRepo{{Name: "repo-a"}},
+		Repos:     []feature.FeatureRepo{{Name: repoName}},
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
@@ -219,7 +219,7 @@ func TestStartMultiRepoImplementation_HandlePhaseCompletionError_MarksFeatureFai
 	f := &feature.Feature{
 		ID:        "feat-t24",
 		Status:    feature.StatusImplementing,
-		Repos:     []feature.FeatureRepo{{Name: "repo-a"}, {Name: "repo-b"}},
+		Repos:     []feature.FeatureRepo{{Name: repoName}, {Name: repoNameB}},
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
@@ -245,8 +245,8 @@ func TestStartMultiRepoImplementation_HandlePhaseCompletionError_MarksFeatureFai
 		TerminalResult: &agent.OrchestratorResult{
 			FinalStatus: "all_passed",
 			RepoStatuses: map[string]string{
-				"repo-a": "review_passed",
-				"repo-b": "review_passed",
+				repoName: reviewStatusPassed,
+				repoNameB: reviewStatusPassed,
 			},
 		},
 	}
@@ -319,10 +319,10 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  1,
 		Repos: []feature.FeatureRepo{{
-			Name:       "repo-a",
-			Path:       "/tmp/repo-a",
+			Name:       repoName,
+			Path:       repoAPath,
 			Branch:     "feature/x",
-			BaseBranch: "main",
+			BaseBranch: mainBranch,
 		}},
 		Artifacts: map[string]string{"plan": planPath},
 	}
@@ -352,7 +352,7 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 		TerminalResult: &agent.OrchestratorResult{
 			FinalStatus: "all_passed",
 			RepoStatuses: map[string]string{
-				"repo-a": "review_passed",
+				repoName: reviewStatusPassed,
 			},
 		},
 	}
@@ -369,9 +369,9 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 		default:
 		}
 		return &orchestrator.PublishConflictError{
-			RepoName:     "repo-a",
+			RepoName:     repoName,
 			Branch:       "feature/x",
-			RebaseTarget: "main",
+			RebaseTarget: mainBranch,
 		}
 	})
 
@@ -418,7 +418,7 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 	f := &feature.Feature{
 		ID:        "feat-mr-nui-dispatch",
 		Status:    feature.StatusImplementing,
-		Repos:     []feature.FeatureRepo{{Name: "repo-a"}, {Name: "repo-b"}},
+		Repos:     []feature.FeatureRepo{{Name: repoName}, {Name: repoNameB}},
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
@@ -441,8 +441,8 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 		TerminalResult: &agent.OrchestratorResult{
 			FinalStatus: "need_user_input",
 			RepoStatuses: map[string]string{
-				"repo-a": "need_user_input",
-				"repo-b": "review_passed",
+				repoName: "need_user_input",
+				repoNameB: reviewStatusPassed,
 			},
 			LastError: "waiting for user input: repo-a",
 		},
@@ -470,7 +470,7 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 	if ev.Phase != feature.PhaseImplement {
 		t.Errorf("Phase = %v, want PhaseImplement", ev.Phase)
 	}
-	if !strings.Contains(ev.Message, "repo-a") {
+	if !strings.Contains(ev.Message, repoName) {
 		t.Errorf("Message = %q, want it to contain repo-a", ev.Message)
 	}
 
@@ -506,7 +506,7 @@ func TestDispatchMultiRepoResults_PlanRevisionRequiredRoutesPhasePlanRevision(t 
 		RunCount:            1,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
-		Repos:               []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Repos:               []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 		Artifacts: map[string]string{
 			"plan":    planPath,
 			"roadmap": roadmapPath,
@@ -519,7 +519,7 @@ func TestDispatchMultiRepoResults_PlanRevisionRequiredRoutesPhasePlanRevision(t 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
 			FinalStatus:          "plan_revision_required",
-			RepoStatuses:         map[string]string{"repo-a": "plan_revision_required"},
+			RepoStatuses:         map[string]string{repoName: "plan_revision_required"},
 			PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT behavioral: Exercise Flip board without mutating turn or history.",
 		},
 	}
@@ -556,7 +556,7 @@ func TestOnMultiRepoImplementDoneNeedUserInputDefaultSummary(t *testing.T) {
 	f := &feature.Feature{
 		ID:        "feat-mr-nui-default",
 		Status:    feature.StatusImplementing,
-		Repos:     []feature.FeatureRepo{{Name: "repo-a"}},
+		Repos:     []feature.FeatureRepo{{Name: repoName}},
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
@@ -583,7 +583,7 @@ func TestOnMultiRepoImplementDoneNeedUserInputDefaultSummary(t *testing.T) {
 	if ev == nil {
 		t.Fatal("no NeedUserInputRequired event observed")
 	}
-	if !strings.Contains(ev.Message, "repo-a") {
+	if !strings.Contains(ev.Message, repoName) {
 		t.Errorf("Message = %q, want repo-a", ev.Message)
 	}
 }

@@ -30,52 +30,15 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-// newRefactorTestFeature seeds a multi-repo feature whose RepoImpl entries
-// are at "pr_ready" (post-publish) — the precondition for the
-// unified refactor cycle.
 func newRefactorTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
-	store := feature.NewStore(stateDir)
-	repos := make([]feature.FeatureRepo, 0, len(repoNames))
-	repoPaths := make([]string, 0, len(repoNames))
-	repoImpl := map[string]*feature.RepoState{}
-	for _, name := range repoNames {
-		repoDir := filepath.Join(t.TempDir(), name)
-		if err := os.MkdirAll(repoDir, 0o755); err != nil {
-			t.Fatalf("mkdir repo %q: %v", name, err)
-		}
-		repos = append(repos, feature.FeatureRepo{
-			Name:       name,
-			Path:       repoDir,
-			BaseBranch: "main",
-		})
-		repoPaths = append(repoPaths, repoDir)
-		repoImpl[name] = &feature.RepoState{
-			Touched: true, PRURL: fmt.Sprintf("https://github.com/example/%s/pull/1", name),
-		}
-	}
-	f := &feature.Feature{
-		ID:             featureID,
+	return newLoopTestFeature(t, stateDir, featureID, repoNames, loopTestFeatureOptions{
 		Name:           "Refactor Loop Test",
 		Slug:           "refactor-loop-test",
 		Description:    "Feature-level refactor cycle test fixture",
-		Status:         feature.StatusPublished,
-		ActiveRun:      1,
-		RunCount:       1,
-		SchemaVersion:  feature.SchemaVersionCurrent,
-		Repos:          repos,
-		RepoStates:     repoImpl,
 		ExitCriteria:   "Refactor complete",
 		RefactorPrompt: "extract-shared-config",
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	loaded, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("reload feature: %v", err)
-	}
-	return store, loaded, repoPaths
+	})
 }
 
 // stubRefactorPlanFn writes a synthetic refactor-plan.md with the supplied
@@ -135,7 +98,7 @@ const refactorPlanSingleRepo = "# Refactor: tighten api error handling\n" +
 // repos to "awaiting_final_review".
 func TestRunRefactorFeatureLoop_SuccessAtomicallyStampsStagedRepos(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-success", []string{"api", "web", "infra"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-success", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -145,17 +108,17 @@ func TestRunRefactorFeatureLoop_SuccessAtomicallyStampsStagedRepos(t *testing.T)
 		MaxIterations:     3,
 		MaxConsecFails:    3,
 		RunRefactorPlanFn: stubRefactorPlanFn(refactorPlanCrossRepo),
-		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil),
 	}
 
 	result, err := RunRefactorFeatureLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunRefactorFeatureLoop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
-	if got, want := result.Repos, []string{"api", "web"}; !reflect.DeepEqual(got, want) {
+	if got, want := result.Repos, []string{testRepoNameAPI, testRepoNameWeb}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Repos = %v, want %v", got, want)
 	}
 
@@ -163,14 +126,14 @@ func TestRunRefactorFeatureLoop_SuccessAtomicallyStampsStagedRepos(t *testing.T)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.Touched == false {
 			t.Errorf("repo %s = %+v, want awaiting_final_review", name, st)
 		}
 	}
 	// Repo NOT in the plan-staged subset preserves its prior status.
-	if st := loaded.RepoStates["infra"]; st == nil || st.PRURL == "" {
+	if st := loaded.RepoStates[testRepoNameInfra]; st == nil || st.PRURL == "" {
 		t.Errorf("infra = %+v, want pr_ready (preserved — outside plan)", st)
 	}
 	// ActiveCycle cleared on success.
@@ -189,7 +152,7 @@ func TestRunRefactorFeatureLoop_SuccessAtomicallyStampsStagedRepos(t *testing.T)
 // loop reports those 2 iterations and stamps success.
 func TestRunRefactorFeatureLoop_RetryLandsAfterIteration(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-retry", []string{"api", "web"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-retry", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -199,7 +162,7 @@ func TestRunRefactorFeatureLoop_RetryLandsAfterIteration(t *testing.T) {
 		MaxIterations:     5,
 		MaxConsecFails:    3,
 		RunRefactorPlanFn: stubRefactorPlanFn(refactorPlanCrossRepo),
-		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2}, nil),
+		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 2}, nil),
 	}
 
 	result, err := RunRefactorFeatureLoop(cfg, nil)
@@ -216,7 +179,7 @@ func TestRunRefactorFeatureLoop_RetryLandsAfterIteration(t *testing.T) {
 // staged repo "failed"; ActiveCycle.Status flips to "failed".
 func TestRunRefactorFeatureLoop_MaxIterationsTrip(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-maxiter", []string{"api", "web"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-maxiter", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -242,7 +205,7 @@ func TestRunRefactorFeatureLoop_MaxIterationsTrip(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError == "" {
 			t.Errorf("repo %s = %+v, want failed", name, st)
@@ -263,7 +226,7 @@ func TestRunRefactorFeatureLoop_MaxIterationsTrip(t *testing.T) {
 // rail: inner loop returns safety_rail. Stamps "failed".
 func TestRunRefactorFeatureLoop_SafetyRailTrip(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-safety", []string{"api", "web"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-safety", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -289,7 +252,7 @@ func TestRunRefactorFeatureLoop_SafetyRailTrip(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError == "" {
 			t.Errorf("repo %s = %+v, want failed", name, st)
@@ -302,7 +265,7 @@ func TestRunRefactorFeatureLoop_SafetyRailTrip(t *testing.T) {
 // "failed" and surfaces the error to the caller.
 func TestRunRefactorFeatureLoop_DispatchErrorStampsFailure(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-dispatch-err", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-dispatch-err", []string{testRepoNameAPI})
 
 	dispatchErr := errors.New("session manager: shutting down")
 	cfg := RefactorFeatureLoopConfig{
@@ -327,7 +290,7 @@ func TestRunRefactorFeatureLoop_DispatchErrorStampsFailure(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	if st := loaded.RepoStates["api"]; st == nil || st.LastError == "" {
+	if st := loaded.RepoStates[testRepoNameAPI]; st == nil || st.LastError == "" {
 		t.Errorf("api = %+v, want failed", st)
 	}
 }
@@ -337,7 +300,7 @@ func TestRunRefactorFeatureLoop_DispatchErrorStampsFailure(t *testing.T) {
 // ActiveCycle stays at running so a restart can resume.
 func TestRunRefactorFeatureLoop_InterruptedPreservesState(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-interrupt", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-interrupt", []string{testRepoNameAPI})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -358,7 +321,7 @@ func TestRunRefactorFeatureLoop_InterruptedPreservesState(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	if st := loaded.RepoStates["api"]; st == nil || st.PRURL == "" {
+	if st := loaded.RepoStates[testRepoNameAPI]; st == nil || st.PRURL == "" {
 		t.Errorf("api = %+v, want pr_ready (preserved)", st)
 	}
 	if loaded.ActiveCycle == nil {
@@ -374,7 +337,7 @@ func TestRunRefactorFeatureLoop_InterruptedPreservesState(t *testing.T) {
 // outer loop persists the gate and surfaces it on the result.
 func TestRunRefactorFeatureLoop_NeedUserInputSurfacesGate(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-niu", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-niu", []string{testRepoNameAPI})
 
 	gatePath := filepath.Join(stateDir, "refactor-1", "iteration-01", "need-user-input.md")
 	cfg := RefactorFeatureLoopConfig{
@@ -408,9 +371,9 @@ func TestRunRefactorFeatureLoop_NeedUserInputSurfacesGate(t *testing.T) {
 // ImplementConfig.ArtifactDir.
 func TestRunRefactorFeatureLoop_FlatArtifactDirLayout(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-flat", []string{"api", "web"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-flat", []string{testRepoNameAPI, testRepoNameWeb})
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed"})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -434,7 +397,7 @@ func TestRunRefactorFeatureLoop_FlatArtifactDirLayout(t *testing.T) {
 	if gotDir != wantDir {
 		t.Errorf("ArtifactDir = %q, want %q (flat layout, no per-repo subdir)", gotDir, wantDir)
 	}
-	for _, repo := range []string{"api", "web"} {
+	for _, repo := range []string{testRepoNameAPI, testRepoNameWeb} {
 		legacyPath := filepath.Join(wantDir, repo)
 		if _, statErr := os.Stat(legacyPath); statErr == nil {
 			t.Errorf("legacy per-repo subdir %q exists; flat layout violated", legacyPath)
@@ -447,9 +410,9 @@ func TestRunRefactorFeatureLoop_FlatArtifactDirLayout(t *testing.T) {
 // first-class). Asserts via the captured ImplementConfig.AdditionalDirs.
 func TestRunRefactorFeatureLoop_FullWorkspaceMounted(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, repoPaths := newRefactorTestFeature(t, stateDir, "refactor-workspace", []string{"api", "web", "infra"})
+	store, f, repoPaths := newRefactorTestFeature(t, stateDir, "refactor-workspace", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -483,7 +446,7 @@ func TestRunRefactorFeatureLoop_FullWorkspaceMounted(t *testing.T) {
 // include both per-repo baseline rows AND plan-source rows tagged `repo:`.
 func TestRunRefactorFeatureLoop_PlannedTestingContractEmitted(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-contract", []string{"api", "web"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-contract", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -492,7 +455,7 @@ func TestRunRefactorFeatureLoop_PlannedTestingContractEmitted(t *testing.T) {
 		Prompt:            "extract shared config",
 		MaxIterations:     3,
 		RunRefactorPlanFn: stubRefactorPlanFn(refactorPlanCrossRepo),
-		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil),
 	}
 
 	if _, err := RunRefactorFeatureLoop(cfg, nil); err != nil {
@@ -513,7 +476,7 @@ func TestRunRefactorFeatureLoop_PlannedTestingContractEmitted(t *testing.T) {
 		}
 		gotPerRepo[item.Repo][item.Source]++
 	}
-	for _, repo := range []string{"api", "web"} {
+	for _, repo := range []string{testRepoNameAPI, testRepoNameWeb} {
 		if gotPerRepo[repo]["baseline"] == 0 {
 			t.Errorf("repo %s missing baseline rows; got %v", repo, gotPerRepo[repo])
 		}
@@ -529,7 +492,7 @@ func TestRunRefactorFeatureLoop_PlannedTestingContractEmitted(t *testing.T) {
 // cross-repo edits in one iteration.
 func TestRunRefactorFeatureLoop_CrossRepoTaskDispatch(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-cross-repo", []string{"api", "web", "shared"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-cross-repo", []string{testRepoNameAPI, testRepoNameWeb, "shared"})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -538,7 +501,7 @@ func TestRunRefactorFeatureLoop_CrossRepoTaskDispatch(t *testing.T) {
 		Prompt:            "extract shared config",
 		MaxIterations:     3,
 		RunRefactorPlanFn: stubRefactorPlanFn(refactorPlanCrossRepo),
-		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil),
 	}
 
 	result, err := RunRefactorFeatureLoop(cfg, nil)
@@ -547,14 +510,14 @@ func TestRunRefactorFeatureLoop_CrossRepoTaskDispatch(t *testing.T) {
 	}
 
 	// The staged subset is exactly the two tagged repos — sorted.
-	if got, want := result.Repos, []string{"api", "web"}; !reflect.DeepEqual(got, want) {
+	if got, want := result.Repos, []string{testRepoNameAPI, testRepoNameWeb}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Repos = %v, want %v (cross-repo plan must stage exactly the tagged repos)", got, want)
 	}
 
 	// Both tagged repos transition; the third (shared) preserves its
 	// prior status.
 	loaded, _ := store.Load(f.ID)
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.Touched == false {
 			t.Errorf("repo %s = %+v, want awaiting_final_review", name, st)
@@ -573,7 +536,7 @@ func TestRunRefactorFeatureLoop_CrossRepoTaskDispatch(t *testing.T) {
 // stopped.
 func TestRunRefactorFeatureLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-recover", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-recover", []string{testRepoNameAPI})
 
 	// Bump RefactorCount to 1 + stamp ActiveCycle so the new invocation
 	// adopts that count rather than starting from scratch. Pre-create
@@ -597,7 +560,7 @@ func TestRunRefactorFeatureLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 		t.Fatalf("seed iteration-01: %v", err)
 	}
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 2})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           loaded,
@@ -631,7 +594,7 @@ func TestRunRefactorFeatureLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 // see ActiveCycle = {Type: refactor, Status: running} mid-flight.
 func TestRunRefactorFeatureLoop_ActiveCycleSetAtEntry(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-cycle-entry", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-cycle-entry", []string{testRepoNameAPI})
 
 	var midRunCycle *feature.CycleState
 	cfg := RefactorFeatureLoopConfig{
@@ -647,7 +610,7 @@ func TestRunRefactorFeatureLoop_ActiveCycleSetAtEntry(t *testing.T) {
 				cp := *loaded.ActiveCycle
 				midRunCycle = &cp
 			}
-			return &LoopResult{FinalStatus: "review_passed"}, nil
+			return &LoopResult{FinalStatus: finalStatusReviewPassed}, nil
 		},
 	}
 
@@ -679,7 +642,7 @@ func TestRunRefactorFeatureLoop_NilFeatureReturnsError(t *testing.T) {
 // where neither cfg.Prompt nor Feature.RefactorPrompt is set.
 func TestRunRefactorFeatureLoop_EmptyPromptReturnsError(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-empty-prompt", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-empty-prompt", []string{testRepoNameAPI})
 	// Clear the prompt.
 	_ = store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.RefactorPrompt = ""
@@ -703,7 +666,7 @@ func TestRunRefactorFeatureLoop_EmptyPromptReturnsError(t *testing.T) {
 // surfaces it as FinalStatus=failed and stamps ActiveCycle.Status=failed.
 func TestRunRefactorFeatureLoop_PlanStepFailureSurfaces(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-err", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-err", []string{testRepoNameAPI})
 
 	planErr := errors.New("refactor-plan session crashed")
 	cfg := RefactorFeatureLoopConfig{
@@ -735,7 +698,7 @@ func TestRunRefactorFeatureLoop_PlanStepFailureSurfaces(t *testing.T) {
 
 func TestRunRefactorFeatureLoop_PlanStepProtocolViolationTripsAfterBudget(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-protocol", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-protocol", []string{testRepoNameAPI})
 	calls := 0
 
 	cfg := RefactorFeatureLoopConfig{
@@ -764,7 +727,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationTripsAfterBudget(t *tes
 	if calls != 2 {
 		t.Fatalf("plan calls = %d, want 2", calls)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "refactor_plan_step") ||
@@ -780,7 +743,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationTripsAfterBudget(t *tes
 
 func TestRunRefactorFeatureLoop_PlanStepProtocolViolationPreservesPlanBetweenAttempts(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-stale", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-stale", []string{testRepoNameAPI})
 	calls := 0
 
 	cfg := RefactorFeatureLoopConfig{
@@ -822,7 +785,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationPreservesPlanBetweenAtt
 			}
 		},
 		RunImplementFn: func(ImplementConfig, ports.SessionManager) (*LoopResult, error) {
-			return &LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil
+			return &LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil
 		},
 	}
 
@@ -833,7 +796,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationPreservesPlanBetweenAtt
 	if calls != 2 {
 		t.Fatalf("plan calls = %d, want 2", calls)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if _, err := os.Stat(filepath.Join(result.ArtifactDir, "refactor-plan.md")); err != nil {
@@ -843,7 +806,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationPreservesPlanBetweenAtt
 
 func TestRunRefactorFeatureLoop_PlanStepProtocolViolationCanRecover(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-recover", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-recover", []string{testRepoNameAPI})
 	calls := 0
 
 	cfg := RefactorFeatureLoopConfig{
@@ -862,7 +825,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationCanRecover(t *testing.T
 			}
 			return stubRefactorPlanFn(refactorPlanSingleRepo)(stagedDir)
 		},
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil),
 	}
 
 	result, err := RunRefactorFeatureLoop(cfg, nil)
@@ -872,7 +835,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationCanRecover(t *testing.T
 	if calls != 2 {
 		t.Fatalf("plan calls = %d, want 2", calls)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 }
@@ -880,7 +843,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationCanRecover(t *testing.T
 func TestRunRefactorPlanStep_ProvisionsExplorationSubagents(t *testing.T) {
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-agents", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-agents", []string{testRepoNameAPI})
 	sm := session.NewManager(make(chan interface{}, 10))
 	defer sm.Shutdown()
 
@@ -903,7 +866,7 @@ func TestRunRefactorPlanStep_MissingPlanAfterPhaseCompleteReturnsProtocolViolati
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
 	scriptsDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-missing", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-missing", []string{testRepoNameAPI})
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+
@@ -926,7 +889,7 @@ func TestRunRefactorPlanStep_MissingPhaseCompleteReturnsProtocolViolation(t *tes
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
 	scriptsDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-no-marker", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-no-marker", []string{testRepoNameAPI})
 	planPath := filepath.Join(artifactDir, "refactor-plan.md")
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
@@ -950,7 +913,7 @@ func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsPlan(t *testing.T) {
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
 	scriptsDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-stale-marker", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-stale-marker", []string{testRepoNameAPI})
 	stalePlanPath := filepath.Join(artifactDir, "refactor-plan.md")
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		t.Fatalf("mkdir artifact dir: %v", err)
@@ -990,7 +953,7 @@ func TestRunRefactorPlanStep_FinishOrViolateNudgeRecoversSameSession(t *testing.
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
 	scriptsDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-nudge", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-nudge", []string{testRepoNameAPI})
 	planPath := filepath.Join(artifactDir, "refactor-plan.md")
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh", fmt.Sprintf(`%s
@@ -1053,7 +1016,7 @@ func refactorPlanStepTestInput(t *testing.T, store ports.FeatureStore, f *featur
 // `refactor-2`.
 func TestRunRefactorFeatureLoop_RefactorCountIncrementsPerInvocation(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-count", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-count", []string{testRepoNameAPI})
 
 	cfg := RefactorFeatureLoopConfig{
 		Feature:           f,
@@ -1062,7 +1025,7 @@ func TestRunRefactorFeatureLoop_RefactorCountIncrementsPerInvocation(t *testing.
 		Prompt:            "tighten api error handling",
 		MaxIterations:     3,
 		RunRefactorPlanFn: stubRefactorPlanFn(refactorPlanSingleRepo),
-		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: "review_passed"}, nil),
+		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed}, nil),
 	}
 	if _, err := RunRefactorFeatureLoop(cfg, nil); err != nil {
 		t.Fatalf("first invocation: %v", err)
@@ -1077,7 +1040,7 @@ func TestRunRefactorFeatureLoop_RefactorCountIncrementsPerInvocation(t *testing.
 
 	// Reset for second invocation.
 	_ = store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.RepoStates["api"].LastError = ""
+		ff.RepoStates[testRepoNameAPI].LastError = ""
 		ff.RefactorPrompt = "tighten api error handling"
 		// Bump count to simulate the orchestrator-level pre-bump.
 		ff.SetRefactorCount(2)
@@ -1134,7 +1097,7 @@ Also touch charlie (duplicate tag).
 		Prompt:            "shuffle",
 		MaxIterations:     3,
 		RunRefactorPlanFn: stubRefactorPlanFn(plan),
-		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: "review_passed"}, nil),
+		RunImplementFn:    stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed}, nil),
 	}
 
 	result, err := RunRefactorFeatureLoop(cfg, nil)
@@ -1163,15 +1126,15 @@ func TestBuildRefactorPlanPromptLeavesOutputRulesToSkill(t *testing.T) {
 		Slug:        "test",
 		Description: "test desc",
 		Repos: []feature.FeatureRepo{
-			{Name: "api", Path: "/tmp/api"},
-			{Name: "web", Path: "/tmp/web"},
+			{Name: testRepoNameAPI, Path: testRepoPathAPI},
+			{Name: testRepoNameWeb, Path: "/tmp/web"},
 		},
 	}
 	ws := WorkspaceSetup{
 		Cwd: "/tmp/state",
 		RepoPaths: map[string]string{
-			"api": "/tmp/api",
-			"web": "/tmp/web",
+			testRepoNameAPI: testRepoPathAPI,
+			testRepoNameWeb: "/tmp/web",
 		},
 	}
 	prompt := buildRefactorPlanPrompt(f, ws, "extract config", "/skills", "/guidelines", nil)
@@ -1208,7 +1171,7 @@ func TestBuildRefactorPlanPromptLeavesOutputRulesToSkill(t *testing.T) {
 // same feature record. Asserts via an explicit Load after entry.
 func TestRefactorFeature_PromptStashedAtCycleEntry(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-stash", []string{"api"})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-stash", []string{testRepoNameAPI})
 	// Clear any pre-existing prompt to prove the loop stashes it.
 	_ = store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.RefactorPrompt = ""
@@ -1229,7 +1192,7 @@ func TestRefactorFeature_PromptStashedAtCycleEntry(t *testing.T) {
 			if midRun.RefactorPrompt != prompt {
 				t.Errorf("mid-run RefactorPrompt = %q, want %q", midRun.RefactorPrompt, prompt)
 			}
-			return &LoopResult{FinalStatus: "review_passed"}, nil
+			return &LoopResult{FinalStatus: finalStatusReviewPassed}, nil
 		},
 	}
 

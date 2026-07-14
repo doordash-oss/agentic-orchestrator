@@ -92,12 +92,12 @@ func TestWorkspaceForRepos_FiltersSubset(t *testing.T) {
 	stateDir := t.TempDir()
 	feat := &feature.Feature{
 		Repos: []feature.FeatureRepo{
-			{Name: "api", Path: "/r/api"},
-			{Name: "web", Path: "/r/web"},
-			{Name: "infra", Path: "/r/infra"},
+			{Name: testRepoNameAPI, Path: "/r/api"},
+			{Name: testRepoNameWeb, Path: "/r/web"},
+			{Name: testRepoNameInfra, Path: "/r/infra"},
 		},
 	}
-	ws, err := WorkspaceForRepos(feat, stateDir, []string{"web", "api"})
+	ws, err := WorkspaceForRepos(feat, stateDir, []string{testRepoNameWeb, testRepoNameAPI})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestWorkspaceForRepos_FiltersSubset(t *testing.T) {
 	if !reflect.DeepEqual(ws.AdditionalDirs, want) {
 		t.Errorf("AdditionalDirs = %v, want %v", ws.AdditionalDirs, want)
 	}
-	if _, ok := ws.RepoPaths["infra"]; ok {
+	if _, ok := ws.RepoPaths[testRepoNameInfra]; ok {
 		t.Errorf("expected infra to be filtered out")
 	}
 }
@@ -114,7 +114,7 @@ func TestWorkspaceForRepos_FiltersSubset(t *testing.T) {
 func TestWorkspaceForRepos_EmptyMeansAll(t *testing.T) {
 	stateDir := t.TempDir()
 	feat := &feature.Feature{
-		Repos: []feature.FeatureRepo{{Name: "api", Path: "/r/api"}},
+		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI, Path: "/r/api"}},
 	}
 	ws, err := WorkspaceForRepos(feat, stateDir, nil)
 	if err != nil {

@@ -16,7 +16,6 @@ package agent
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,55 +25,17 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-// newRebaseTestFeature seeds a multi-repo feature whose RepoImpl entries
-// are at "pr_ready" (post-publish) — the precondition for the
-// unified rebase cycle. The store is a real on-disk store so
-// AtomicPhaseStamp's transactional writes round-trip through Modify/Load.
 func newRebaseTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
-	store := feature.NewStore(stateDir)
-	repos := make([]feature.FeatureRepo, 0, len(repoNames))
-	repoPaths := make([]string, 0, len(repoNames))
-	repoImpl := map[string]*feature.RepoState{}
-	for _, name := range repoNames {
-		repoDir := filepath.Join(t.TempDir(), name)
-		if err := os.MkdirAll(repoDir, 0o755); err != nil {
-			t.Fatalf("mkdir repo %q: %v", name, err)
-		}
-		repos = append(repos, feature.FeatureRepo{
-			Name:       name,
-			Path:       repoDir,
-			BaseBranch: "main",
-		})
-		repoPaths = append(repoPaths, repoDir)
-		repoImpl[name] = &feature.RepoState{
-			Touched: true, PRURL: fmt.Sprintf("https://github.com/example/%s/pull/1", name),
-		}
-	}
-	f := &feature.Feature{
-		ID:            featureID,
-		Name:          "Rebase Loop Test",
-		Slug:          "rebase-loop-test",
-		Description:   "Feature-level rebase cycle test fixture",
-		Status:        feature.StatusPublished,
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos:         repos,
-		RepoStates:    repoImpl,
-		ExitCriteria:  "Rebase complete and force-pushed",
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	// Reload so f carries a Run and stable shadows.
-	loaded, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("reload feature: %v", err)
-	}
-	return store, loaded, repoPaths
+	return newLoopTestFeature(t, stateDir, featureID, repoNames, loopTestFeatureOptions{
+		Name:         "Rebase Loop Test",
+		Slug:         "rebase-loop-test",
+		Description:  "Feature-level rebase cycle test fixture",
+		ExitCriteria: "Rebase complete and force-pushed",
+	})
 }
 
 // stubRunImplementFn returns a RunImplementFn that yields the given
@@ -110,29 +71,29 @@ func capturingRunImplementFn(result *LoopResult) (
 // clears Feature.ActiveCycle.
 func TestRunRebaseLoop_SuccessAtomicallyStampsBehindRepos(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-success", []string{"api", "web", "infra"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-success", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
-			{RepoName: "web", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  3,
 		MaxConsecFails: 3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil),
 	}
 
 	result, err := RunRebaseLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunRebaseLoop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
-	if got, want := result.Repos, []string{"api", "web"}; !reflect.DeepEqual(got, want) {
+	if got, want := result.Repos, []string{testRepoNameAPI, testRepoNameWeb}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Repos = %v, want %v", got, want)
 	}
 
@@ -141,14 +102,14 @@ func TestRunRebaseLoop_SuccessAtomicallyStampsBehindRepos(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	// Behind subset stamped AwaitingFinalReview.
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.Touched == false {
 			t.Errorf("repo %s = %+v, want awaiting_final_review", name, st)
 		}
 	}
 	// Repo outside behind subset preserved its prior status.
-	if st := loaded.RepoStates["infra"]; st == nil || st.PRURL == "" {
+	if st := loaded.RepoStates[testRepoNameInfra]; st == nil || st.PRURL == "" {
 		t.Errorf("infra = %+v, want pr_ready (preserved)", st)
 	}
 	// ActiveCycle cleared on success.
@@ -168,7 +129,7 @@ func TestRunRebaseLoop_SuccessAtomicallyStampsBehindRepos(t *testing.T) {
 // iterations and stamps success.
 func TestRunRebaseLoop_RetryLandsAfterConflictResolutionIteration(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-retry", []string{"api", "web"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-retry", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
@@ -176,22 +137,22 @@ func TestRunRebaseLoop_RetryLandsAfterConflictResolutionIteration(t *testing.T) 
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
 			{
-				RepoName:      "api",
-				RebaseTarget:  "main",
+				RepoName:      testRepoNameAPI,
+				RebaseTarget:  defaultTestBranch,
 				ConflictFiles: []string{"internal/api/handler.go"},
 			},
-			{RepoName: "web", RebaseTarget: "main"},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  5,
 		MaxConsecFails: 3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 2}, nil),
 	}
 
 	result, err := RunRebaseLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunRebaseLoop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if result.Iterations != 2 {
@@ -202,7 +163,7 @@ func TestRunRebaseLoop_RetryLandsAfterConflictResolutionIteration(t *testing.T) 
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.Touched == false {
 			t.Errorf("repo %s = %+v, want awaiting_final_review", name, st)
@@ -232,14 +193,14 @@ func TestRunRebaseLoop_RetryLandsAfterConflictResolutionIteration(t *testing.T) 
 // can surface the failure row.
 func TestRunRebaseLoop_MaxIterationsTrip(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-maxiter", []string{"api", "web"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-maxiter", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  2,
 		MaxConsecFails: 5,
@@ -265,14 +226,14 @@ func TestRunRebaseLoop_MaxIterationsTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api"} {
+	for _, name := range []string{testRepoNameAPI} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError == "" {
 			t.Errorf("repo %s = %+v, want failed", name, st)
 		}
 	}
 	// Repo outside behind subset preserved its prior status.
-	if st := loaded.RepoStates["web"]; st == nil || st.PRURL == "" {
+	if st := loaded.RepoStates[testRepoNameWeb]; st == nil || st.PRURL == "" {
 		t.Errorf("web = %+v, want pr_ready (preserved)", st)
 	}
 
@@ -291,15 +252,15 @@ func TestRunRebaseLoop_MaxIterationsTrip(t *testing.T) {
 // inner loop returns safety_rail. The outer loop stamps "failed".
 func TestRunRebaseLoop_SafetyRailTrip(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-safety", []string{"api", "web"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-safety", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
-			{RepoName: "web", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  10,
 		MaxConsecFails: 2,
@@ -322,7 +283,7 @@ func TestRunRebaseLoop_SafetyRailTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError == "" {
 			t.Errorf("repo %s = %+v, want failed", name, st)
@@ -336,7 +297,7 @@ func TestRunRebaseLoop_SafetyRailTrip(t *testing.T) {
 // the error to the caller.
 func TestRunRebaseLoop_DispatchErrorStampsFailure(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-dispatch-err", []string{"api"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-dispatch-err", []string{testRepoNameAPI})
 
 	dispatchErr := errors.New("session manager: ports.ErrSessionShuttingDown")
 	cfg := RebaseLoopConfig{
@@ -344,7 +305,7 @@ func TestRunRebaseLoop_DispatchErrorStampsFailure(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  3,
 		RunImplementFn: stubRunImplementFn(nil, dispatchErr),
@@ -365,7 +326,7 @@ func TestRunRebaseLoop_DispatchErrorStampsFailure(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	if st := loaded.RepoStates["api"]; st == nil || st.LastError == "" {
+	if st := loaded.RepoStates[testRepoNameAPI]; st == nil || st.LastError == "" {
 		t.Errorf("api = %+v, want failed", st)
 	}
 }
@@ -376,14 +337,14 @@ func TestRunRebaseLoop_DispatchErrorStampsFailure(t *testing.T) {
 // can resume.
 func TestRunRebaseLoop_InterruptedPreservesState(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-interrupt", []string{"api"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-interrupt", []string{testRepoNameAPI})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  3,
 		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "interrupted", Iterations: 1}, nil),
@@ -399,7 +360,7 @@ func TestRunRebaseLoop_InterruptedPreservesState(t *testing.T) {
 
 	loaded, _ := store.Load(f.ID)
 	// Interrupted: per-repo state preserved (no atomic stamp).
-	if st := loaded.RepoStates["api"]; st == nil || st.PRURL == "" {
+	if st := loaded.RepoStates[testRepoNameAPI]; st == nil || st.PRURL == "" {
 		t.Errorf("api = %+v, want pr_ready (preserved)", st)
 	}
 	if loaded.ActiveCycle == nil {
@@ -415,7 +376,7 @@ func TestRunRebaseLoop_InterruptedPreservesState(t *testing.T) {
 // staged repos failed.
 func TestRunRebaseLoop_NeedUserInputSurfacesGate(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-nui", []string{"api", "web"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-nui", []string{testRepoNameAPI, testRepoNameWeb})
 	gatePath := filepath.Join(stateDir, "rebase-1", "iteration-01", "need-user-input.yaml")
 
 	cfg := RebaseLoopConfig{
@@ -423,8 +384,8 @@ func TestRunRebaseLoop_NeedUserInputSurfacesGate(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
-			{RepoName: "web", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations: 3,
 		RunImplementFn: stubRunImplementFn(&LoopResult{
@@ -453,7 +414,7 @@ func TestRunRebaseLoop_NeedUserInputSurfacesGate(t *testing.T) {
 	if loaded.PendingNeedUserInputPath != gatePath {
 		t.Errorf("PendingNeedUserInputPath = %q, want %q", loaded.PendingNeedUserInputPath, gatePath)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError != "" {
 			t.Errorf("repo %s = %+v, want prior state without failure", name, st)
@@ -472,7 +433,7 @@ func TestRunRebaseLoop_NeedUserInputSurfacesGate(t *testing.T) {
 // touching any state.
 func TestRunRebaseLoop_NoBehindReposShortCircuits(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-empty", []string{"api"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-empty", []string{testRepoNameAPI})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
@@ -500,24 +461,22 @@ func TestRunRebaseLoop_NoBehindReposShortCircuits(t *testing.T) {
 	}
 }
 
-// TestRunRebaseLoop_BehindSubsetWorkspaceFiltersAddDir verifies the
-// workspace mounts ONLY the behind-subset repos (cycle-specific
-// divergence: phase implement mounts every Feature.Repos worktree;
-// rebase mounts only the subset under repair). Asserts via the
-// captured ImplementConfig.AdditionalDirs.
-func TestRunRebaseLoop_BehindSubsetWorkspaceFiltersAddDir(t *testing.T) {
+// TestRunRebaseLoop_WorkspaceReposEmptyFallsBackToBehindSubset verifies
+// the legacy default: when WorkspaceRepos is empty, the loop mounts only
+// the behind-subset repos. Asserts via captured ImplementConfig.AdditionalDirs.
+func TestRunRebaseLoop_WorkspaceReposEmptyFallsBackToBehindSubset(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, repoPaths := newRebaseTestFeature(t, stateDir, "rebase-subset", []string{"api", "web", "infra"})
+	store, f, repoPaths := newRebaseTestFeature(t, stateDir, "rebase-subset", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
-			{RepoName: "web", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  3,
 		RunImplementFn: captureFn,
@@ -542,7 +501,92 @@ func TestRunRebaseLoop_BehindSubsetWorkspaceFiltersAddDir(t *testing.T) {
 		t.Errorf("AdditionalDirs missing web worktree %q (got %v)", webAbs, dirs)
 	}
 	if sliceContainsAny(dirs, infraAbs) {
-		t.Errorf("AdditionalDirs unexpectedly contains infra (NOT behind) %q", infraAbs)
+		t.Errorf("AdditionalDirs unexpectedly contains infra without explicit WorkspaceRepos %q", infraAbs)
+	}
+}
+
+// TestRunRebaseLoop_WorkspaceReposMountsFullFeatureContext verifies
+// coordinated smart rebase can target a behind subset while mounting all
+// feature repos for validation and cross-repo fixes.
+func TestRunRebaseLoop_WorkspaceReposMountsFullFeatureContext(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, repoPaths := newRebaseTestFeature(t, stateDir, "rebase-workspace-all", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
+
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1})
+
+	cfg := RebaseLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		BehindRepos: []RebaseRepoTarget{
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
+		},
+		WorkspaceRepos: []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra},
+		MaxIterations:  3,
+		RunImplementFn: captureFn,
+	}
+
+	result, err := RunRebaseLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+	if got, want := result.Repos, []string{testRepoNameAPI, testRepoNameWeb}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("result Repos = %v, want stamped behind subset %v", got, want)
+	}
+
+	if len(*captured) != 1 {
+		t.Fatalf("RunImplementFn called %d times, want 1", len(*captured))
+	}
+	dirs := (*captured)[0].AdditionalDirs
+	for _, repoPath := range repoPaths {
+		abs, _ := filepath.Abs(repoPath)
+		if !sliceContainsAny(dirs, abs) {
+			t.Errorf("AdditionalDirs missing workspace repo %q (got %v)", abs, dirs)
+		}
+	}
+}
+
+func TestRunRebaseLoop_SessionStartFuncRejectsInterruptedFeature(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-session-start-interrupted", []string{testRepoNameAPI})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1})
+	sm := mocks.NewMockSessionManager()
+	sm.DefaultError = errors.New("unexpected session start")
+
+	cfg := RebaseLoopConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       stateDir,
+		BehindRepos:    []RebaseRepoTarget{{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch}},
+		MaxIterations:  3,
+		RunImplementFn: captureFn,
+	}
+
+	if _, err := RunRebaseLoop(cfg, sm); err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("RunImplementFn called %d times, want 1", len(*captured))
+	}
+
+	startFn := (*captured)[0].SessionStartFunc
+	if startFn == nil {
+		t.Fatal("SessionStartFunc is nil, want rebase-specific guard")
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusInterrupted
+		return nil
+	}); err != nil {
+		t.Fatalf("mark interrupted: %v", err)
+	}
+
+	_, err := startFn("session-id", f.ID, feature.PhaseImplement, nil, t.TempDir(), nil)
+	if !errors.Is(err, ports.ErrSessionShuttingDown) {
+		t.Fatalf("SessionStartFunc error = %v, want ErrSessionShuttingDown", err)
+	}
+	if len(sm.StartSessionCalls) != 0 {
+		t.Fatalf("StartSession calls = %d, want 0 after interrupted guard", len(sm.StartSessionCalls))
 	}
 }
 
@@ -552,18 +596,18 @@ func TestRunRebaseLoop_BehindSubsetWorkspaceFiltersAddDir(t *testing.T) {
 // the implement loop reads to seed each iteration's verification report.
 func TestRunRebaseLoop_PlanLessTestingContractEmitted(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-contract", []string{"api", "web"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-contract", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
-			{RepoName: "web", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil),
 	}
 
 	if _, err := RunRebaseLoop(cfg, nil); err != nil {
@@ -583,7 +627,7 @@ func TestRunRebaseLoop_PlanLessTestingContractEmitted(t *testing.T) {
 		}
 		gotPerRepo[item.Repo]++
 	}
-	if gotPerRepo["api"] == 0 || gotPerRepo["web"] == 0 {
+	if gotPerRepo[testRepoNameAPI] == 0 || gotPerRepo[testRepoNameWeb] == 0 {
 		t.Errorf("expected per-repo baseline rows for api+web; got %v", gotPerRepo)
 	}
 }
@@ -594,17 +638,17 @@ func TestRunRebaseLoop_PlanLessTestingContractEmitted(t *testing.T) {
 // loop hands to the inner loop.
 func TestRunRebaseLoop_FlatArtifactDirLayout(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-flat", []string{"api", "web"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-flat", []string{testRepoNameAPI, testRepoNameWeb})
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed"})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
-			{RepoName: "web", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  3,
 		RunImplementFn: captureFn,
@@ -623,7 +667,7 @@ func TestRunRebaseLoop_FlatArtifactDirLayout(t *testing.T) {
 		t.Errorf("ArtifactDir = %q, want %q (flat layout, no per-repo subdir)", gotDir, wantDir)
 	}
 	// Repo subdir should NOT exist under the flat layout.
-	for _, repo := range []string{"api", "web"} {
+	for _, repo := range []string{testRepoNameAPI, testRepoNameWeb} {
 		legacyPath := filepath.Join(wantDir, repo)
 		if _, statErr := os.Stat(legacyPath); statErr == nil {
 			t.Errorf("legacy per-repo subdir %q exists; flat layout violated", legacyPath)
@@ -636,7 +680,7 @@ func TestRunRebaseLoop_FlatArtifactDirLayout(t *testing.T) {
 // land at 1 and 2, with artifact dirs `rebase-1` and `rebase-2`.
 func TestRunRebaseLoop_RebaseCountIncrementsPerInvocation(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-count", []string{"api"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-count", []string{testRepoNameAPI})
 
 	// First invocation.
 	cfg := RebaseLoopConfig{
@@ -644,10 +688,10 @@ func TestRunRebaseLoop_RebaseCountIncrementsPerInvocation(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed"}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed}, nil),
 	}
 	if _, err := RunRebaseLoop(cfg, nil); err != nil {
 		t.Fatalf("first RunRebaseLoop: %v", err)
@@ -665,7 +709,7 @@ func TestRunRebaseLoop_RebaseCountIncrementsPerInvocation(t *testing.T) {
 	// behind. (In production, after FR re-promotes the repo to CodeReady
 	// the user can launch another rebase.)
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.RepoStates["api"].LastError = ""
+		ff.RepoStates[testRepoNameAPI].LastError = ""
 		return nil
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
@@ -696,7 +740,7 @@ func TestRunRebaseLoop_RebaseCountIncrementsPerInvocation(t *testing.T) {
 // covers the cross-cutting recovery.
 func TestRunRebaseLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-recover", []string{"api"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-recover", []string{testRepoNameAPI})
 
 	// Bump RebaseCount to 1 so the new invocation should advance to 2 —
 	// this is the realistic crash case (ActiveCycle.Count=1 from prior
@@ -725,14 +769,14 @@ func TestRunRebaseLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 		t.Fatalf("seed iteration-01: %v", err)
 	}
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 2})
 
 	cfg := RebaseLoopConfig{
 		Feature:      loaded,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:  3,
 		RunImplementFn: captureFn,
@@ -760,7 +804,7 @@ func TestRunRebaseLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 
 func TestRunRebaseLoop_ResumeExistingCycleReusesArtifactDir(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-resume", []string{"api"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-resume", []string{testRepoNameAPI})
 
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.SetRebaseCount(1)
@@ -782,13 +826,13 @@ func TestRunRebaseLoop_ResumeExistingCycleReusesArtifactDir(t *testing.T) {
 		t.Fatalf("seed iteration-01: %v", err)
 	}
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 2})
 	cfg := RebaseLoopConfig{
 		Feature:      loaded,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations:       3,
 		ResumeExistingCycle: true,
@@ -825,7 +869,7 @@ func TestRunRebaseLoop_ResumeExistingCycleReusesArtifactDir(t *testing.T) {
 // to assert the stamp.
 func TestRunRebaseLoop_ActiveCycleSetAtEntry(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-cycle-entry", []string{"api"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-cycle-entry", []string{testRepoNameAPI})
 
 	var midRunCycle *feature.CycleState
 	cfg := RebaseLoopConfig{
@@ -833,7 +877,7 @@ func TestRunRebaseLoop_ActiveCycleSetAtEntry(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
 		},
 		MaxIterations: 3,
 		RunImplementFn: func(_ ImplementConfig, _ ports.SessionManager) (*LoopResult, error) {
@@ -842,7 +886,7 @@ func TestRunRebaseLoop_ActiveCycleSetAtEntry(t *testing.T) {
 				cp := *loaded.ActiveCycle
 				midRunCycle = &cp
 			}
-			return &LoopResult{FinalStatus: "review_passed"}, nil
+			return &LoopResult{FinalStatus: finalStatusReviewPassed}, nil
 		},
 	}
 
@@ -874,16 +918,26 @@ func TestRunRebaseLoop_NilFeatureReturnsError(t *testing.T) {
 // repo's rebase target appears, and conflict files surface when present.
 func TestRebasePlanMultiRepoFormatting(t *testing.T) {
 	plan := BuildMultiRepoRebasePlan([]RebaseRepoTarget{
-		{RepoName: "web", RebaseTarget: "master", PRURL: "https://github.com/o/web/pull/1"},
+		{RepoName: testRepoNameWeb, RebaseTarget: testRebaseTargetMaster, PRURL: "https://github.com/o/web/pull/1"},
 		{
-			RepoName:      "api",
-			RebaseTarget:  "main",
+			RepoName:      testRepoNameAPI,
+			RebaseTarget:  defaultTestBranch,
 			PRURL:         "https://github.com/o/api/pull/2",
 			ConflictFiles: []string{"internal/api/handler.go", "internal/api/router.go"},
 		},
 	})
 	// Per-repo headings present.
 	for _, want := range []string{
+		"## Cycle Communication Contract",
+		"This coordinated rebase covers the conflicting repos listed below",
+		"All\nfeature repos are available in the workspace as validation context",
+		"make\ncross-repo edits only when verification proves they are necessary",
+		"do not push",
+		"The orchestrator runs Final\nReview and applies publish policy after approval",
+		wantProgressPathTemplate,
+		wantVerificationReportPathTemplate,
+		wantPhaseCompletePathTemplate,
+		"Do not place `progress.md` under `{iteration_dir}`",
 		"## Repo: `api`",
 		"## Repo: `web`",
 		"`api` — base `main`",
@@ -900,6 +954,72 @@ func TestRebasePlanMultiRepoFormatting(t *testing.T) {
 	if idxAPI, idxWeb := strings.Index(plan, "## Repo: `api`"), strings.Index(plan, "## Repo: `web`"); idxAPI >= 0 && idxWeb >= 0 && idxAPI > idxWeb {
 		t.Errorf("expected api section before web section; api=%d web=%d", idxAPI, idxWeb)
 	}
+	if strings.Contains(plan, "force-push") {
+		t.Fatalf("plan still contains force-push instruction:\n%s", plan)
+	}
+}
+
+func TestRebaseExitCriteriaForbidsPush(t *testing.T) {
+	got := rebaseExitCriteria(nil)
+	for _, want := range []string{
+		"Every conflicted rebase target is resolved onto its base",
+		"feature-level project verification commands pass across all affected repos",
+		"Do not push",
+		"orchestrator runs Final Review and applies publish policy after approval",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rebaseExitCriteria missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "force-pushed") || strings.Contains(got, "force-push") {
+		t.Fatalf("rebaseExitCriteria still contains push language: %q", got)
+	}
+}
+
+func TestRebaseSkillDocumentsStandardImplementHandoff(t *testing.T) {
+	data, err := os.ReadFile(repoRootPath(t, "skills", "rebase", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read rebase skill: %v", err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		wantProgressPathTemplate,
+		wantVerificationReportPathTemplate,
+		wantPhaseCompletePathTemplate,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("skills/rebase/SKILL.md missing %q", want)
+		}
+	}
+	if strings.Contains(content, "at the cycle's iteration artifact dir") {
+		t.Fatalf("skills/rebase/SKILL.md still says the handoff is at the iteration artifact dir")
+	}
+}
+
+func TestRebaseSkillForbidsPush(t *testing.T) {
+	data, err := os.ReadFile(repoRootPath(t, "skills", "rebase", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read rebase skill: %v", err)
+	}
+	content := string(data)
+	for _, forbidden := range []string{
+		"force-push",
+		"force-pushed",
+		"force-with-lease",
+		"git push",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("skills/rebase/SKILL.md still contains push instruction %q", forbidden)
+		}
+	}
+	for _, want := range []string{
+		"Do not push",
+		"The orchestrator runs Final Review and applies publish policy after approval",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("skills/rebase/SKILL.md missing %q", want)
+		}
+	}
 }
 
 // TestRebasePlanMultiRepoEmpty covers the no-behind-repos degenerate
@@ -915,26 +1035,26 @@ func TestRebasePlanMultiRepoEmpty(t *testing.T) {
 // sorts repo names (used as the AtomicPhaseStamp staged subset).
 func TestRebaseRepoNamesDeduplicates(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-dedup", []string{"api", "web"})
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-dedup", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := RebaseLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		BehindRepos: []RebaseRepoTarget{
-			{RepoName: "web", RebaseTarget: "main"},
-			{RepoName: "api", RebaseTarget: "main"},
-			{RepoName: "web", RebaseTarget: "main"}, // duplicate
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+			{RepoName: testRepoNameWeb, RebaseTarget: defaultTestBranch}, // duplicate
 		},
 		MaxIterations:  3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed"}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed}, nil),
 	}
 
 	result, err := RunRebaseLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunRebaseLoop: %v", err)
 	}
-	want := []string{"api", "web"}
+	want := []string{testRepoNameAPI, testRepoNameWeb}
 	got := append([]string(nil), result.Repos...)
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {

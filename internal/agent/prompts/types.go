@@ -84,6 +84,17 @@ type RoleSystemInput struct {
 	AskingClause string
 }
 
+// ChatSystemInput is the data passed to chat.system.tmpl for the persistent
+// AMA chat session.
+type ChatSystemInput struct {
+	SkillPath       string
+	RuntimeRoot     string
+	StateDir        string
+	ConfigPath      string
+	WorkspaceDir    string
+	CurrentFeatures string
+}
+
 // PreflightInput is the data passed to the RoleSpec system template's
 // "Useful Resources" section. It lists every orientation surface
 // (knowledge bases, language guidelines, additional skills) the agent has

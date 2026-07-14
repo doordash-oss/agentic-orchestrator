@@ -253,8 +253,8 @@ func TestParseReviewFeedback(t *testing.T) {
 			body:     "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Sticky Approval\n\naxis: grounding\nfrozen_sections:\n- ## Grounding\n- <any other section whose references you spot-checked>\n- ## Changes Required\n\n## Verdict\nAPPROVED\n",
 			wantStat: ReviewApproved,
 			wantMarkers: ValidatorMarkers{
-				AxisApproved:   "grounding",
-				FrozenSections: []string{"## Grounding", "## Changes Required"},
+				AxisApproved:   testAxisGrounding,
+				FrozenSections: []string{groundingSectionHeading, "## Changes Required"},
 			},
 		},
 	}

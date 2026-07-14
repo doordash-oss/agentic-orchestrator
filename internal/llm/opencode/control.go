@@ -53,8 +53,8 @@ func (p *Protocol) handleRequestPermission(rawID json.RawMessage, params json.Ra
 	}
 
 	if p.terminalEmitted() {
-		// The session already has its outcome; release OpenCode without surfacing
-		// a new prompt the completed session would never answer.
+		// This turn already has its outcome; release OpenCode without surfacing
+		// a new prompt the completed turn would never answer.
 		_ = p.writePermissionOutcome(id, OutcomeCancelled, "")
 		return llm.SDKMessage{}, false
 	}
@@ -397,9 +397,22 @@ const maxQuestionFormatRetries = 2
 // an unformatted question first earns one reformat-reminder turn (returning
 // emit=false with no message) before falling back to a free-form question.
 //
+// This entire text-parsed AskUserQuestion pipeline exists only to imitate
+// Claude's native AskUserQuestion tool call for a provider whose questions are
+// otherwise just plain text. Interactive sessions (a human answers every turn
+// directly, e.g. AMA chat) get no benefit from that imitation — the human can
+// read the model's question and reply with an ordinary chat message exactly as
+// they would with bare OpenCode — so this always reports a clean completion
+// for them and never synthesizes a picker.
+//
 // done=false means the text is a clean completion and the caller should emit the
 // normal success result.
 func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage, emit bool, done bool) {
+	if p.opts.Interactive {
+		p.resetFormatRetry()
+		return llm.SDKMessage{}, false, false
+	}
+
 	if strings.TrimSpace(lastText) == "" {
 		return llm.SDKMessage{}, false, false
 	}
@@ -417,7 +430,13 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 		return p.synthesizeAskUser(stripped, nil), true, true
 	}
 
-	if stem, options, ok := parseNumberedOptions(lastText); ok {
+	// A numbered list is only a candidate AskUserQuestion when its stem actually
+	// reads like a question (checked on the stem, not the raw text — the stem
+	// may lead the options and so end mid-message, well before the text's final
+	// character). An informational list ("Here's what I found: 1. ... 2. ...")
+	// has a non-question stem and is a normal completion; it must not be forced
+	// through the question-reformat pipeline just because it enumerates items.
+	if stem, options, ok := parseNumberedOptions(lastText); ok && textLooksLikeQuestion(stem) {
 		if !parsedOptionsHaveConfidence(options) {
 			if p.sendQuestionFormatReminder(lastText) {
 				return llm.SDKMessage{}, false, true
@@ -519,12 +538,16 @@ func (p *Protocol) synthesizeAskUser(text string, options []parsedOption) llm.SD
 	}
 }
 
+// textLooksLikeQuestion reports whether text's final utterance is a question.
+// It checks the trailing character rather than scanning for '?' anywhere, so a
+// completion that merely mentions a "?" mid-answer (or a follow-up offer tacked
+// onto an otherwise-finished answer) is not misread as a blocking question.
 func textLooksLikeQuestion(text string) bool {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return false
 	}
-	return strings.Contains(text, "?")
+	return strings.HasSuffix(text, "?")
 }
 
 // parsedOption holds one numbered alternative extracted from a plain-text

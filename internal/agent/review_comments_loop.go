@@ -56,6 +56,7 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -328,7 +329,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 	}
 
 	switch loopResult.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     repoNames,
@@ -336,7 +337,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		})
 		_ = clearActiveCycle(cfg.FeatureStore, cfg.Feature.ID)
 		return &ReviewCommentsLoopResult{
-			FinalStatus: "review_passed",
+			FinalStatus: finalStatusReviewPassed,
 			Iterations:  loopResult.Iterations,
 			Repos:       repoNames,
 		}, nil
@@ -431,6 +432,10 @@ func reviewCommentsExitCriteria(resolutionsPath string) string {
 func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resolutionsPath string) string {
 	// Sort targets by repo name for deterministic output.
 	sorted := append([]ReviewCommentsRepoTarget(nil), targets...)
+	for i := range sorted {
+		sorted[i].Comments = append([]ports.ReviewComment(nil), sorted[i].Comments...)
+		git.SortReviewCommentsChronologically(sorted[i].Comments)
+	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].RepoName < sorted[j].RepoName })
 
 	totalComments := 0
@@ -442,6 +447,8 @@ func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resol
 	b.WriteString("# Address Review Comments — Aggregated Plan\n\n")
 	b.WriteString("## Overview\n\n")
 	b.WriteString(fmt.Sprintf("This cycle aggregates %d unaddressed PR review comment(s) across %d repo(s) into one work list. The cross-PR aggregation is intentional: a single Claude session iterates over every comment, whether the fix is in one repo or several. Per-repo file edits should be dispatched via Task sub-agents prompt-scoped to that repo's worktree.\n\n", totalComments, len(sorted)))
+
+	b.WriteString(standardImplementCycleCommunicationContract())
 
 	b.WriteString("## Repos in this cycle\n\n")
 	for _, t := range sorted {
@@ -469,18 +476,11 @@ func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resol
 		for _, c := range t.Comments {
 			commentIdx++
 			b.WriteString(fmt.Sprintf("#### Comment %d (ID: %d) — `repo: %s`\n", commentIdx, c.ID, t.RepoName))
-			switch c.Type {
-			case ports.CommentTypeIssue:
-				b.WriteString("**Location**: PR conversation\n")
-			case ports.CommentTypeReviewBody:
-				b.WriteString("**Location**: PR review\n")
-			default:
-				b.WriteString(fmt.Sprintf("**File**: `%s`", c.Path))
-				if c.Line > 0 {
-					b.WriteString(fmt.Sprintf(":%d", c.Line))
-				}
-				b.WriteString("\n")
+			b.WriteString(fmt.Sprintf("**File**: `%s`", c.Path))
+			if c.Line > 0 {
+				b.WriteString(fmt.Sprintf(":%d", c.Line))
 			}
+			b.WriteString("\n")
 			b.WriteString(fmt.Sprintf("**Author**: @%s\n", c.User.Login))
 			if c.DiffHunk != "" {
 				b.WriteString(fmt.Sprintf("**Context**:\n```diff\n%s\n```\n", c.DiffHunk))

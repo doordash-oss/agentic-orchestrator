@@ -35,6 +35,50 @@ const (
 	attentionWatch
 )
 
+const ctaLabelAnswer = "Answer"
+
+// toolNameAskUserQuestion is the ToolName reported on control requests and
+// tool-use blocks for the built-in AskUserQuestion tool.
+const toolNameAskUserQuestion = "AskUserQuestion"
+
+// toolNameBash is the ToolName reported for shell command execution.
+const toolNameBash = "Bash"
+
+// toolNameAgent is the ToolName reported for sub-agent delegation.
+const toolNameAgent = "Agent"
+
+// toolNameRead is the ToolName reported for file-read operations.
+const toolNameRead = "Read"
+
+// toolNameEdit is the ToolName reported for file-edit operations.
+const toolNameEdit = "Edit"
+
+// toolNameWrite is the ToolName reported for file-write operations.
+const toolNameWrite = "Write"
+
+// toolNameGlob is the ToolName reported for filesystem glob lookups.
+const toolNameGlob = "Glob"
+
+// toolNameGrep is the ToolName reported for content search operations.
+const toolNameGrep = "Grep"
+
+// toolNameMultiEdit is the ToolName reported for multi-region file edits.
+const toolNameMultiEdit = "MultiEdit"
+
+// toolNameTaskCreate is the ToolName reported for sub-task creation.
+const toolNameTaskCreate = "TaskCreate"
+
+// roleAssistant is the message Role/Type reported for assistant-authored
+// SDK messages.
+const roleAssistant = "assistant"
+
+// msgTypeControlRequest is the SDKMessage.Type reported for control-request
+// (permission/AskUser/hook) envelopes.
+const msgTypeControlRequest = "control_request"
+
+const attentionTypeLabelPermission = "Permission Request"
+const attentionTypeLabelQuestion = "Question"
+
 type featureAttention struct {
 	Kind       attentionKind
 	CTALabel   string
@@ -59,26 +103,28 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 			ReviewMode: reviewAttentionMode(f),
 		}
 	}
-	if summary, ok := pendingPermissionSummary(f, sess); ok {
-		return featureAttention{
-			Kind:      attentionPermission,
-			CTALabel:  "Approve",
-			TypeLabel: "Permission Request",
-			Summary:   summary,
+	if featureCanSurfacePromptQueues(f) {
+		if summary, ok := pendingPermissionSummary(f, sess); ok {
+			return featureAttention{
+				Kind:      attentionPermission,
+				CTALabel:  "Approve",
+				TypeLabel: attentionTypeLabelPermission,
+				Summary:   summary,
+			}
 		}
-	}
-	if summary, ok := pendingAskUserSummary(f, sess); ok {
-		return featureAttention{
-			Kind:      attentionAskUser,
-			CTALabel:  "Answer",
-			TypeLabel: "Question",
-			Summary:   summary,
+		if summary, ok := pendingAskUserSummary(f, sess); ok {
+			return featureAttention{
+				Kind:      attentionAskUser,
+				CTALabel:  ctaLabelAnswer,
+				TypeLabel: attentionTypeLabelQuestion,
+				Summary:   summary,
+			}
 		}
 	}
 	if f.Status == feature.StatusNeedUserInput {
 		return featureAttention{
 			Kind:      attentionNeedUserInput,
-			CTALabel:  "Answer",
+			CTALabel:  ctaLabelAnswer,
 			TypeLabel: "Input Required",
 			Summary:   "Feature-level input gate",
 			GatePath:  f.PendingNeedUserInputPath,
@@ -88,7 +134,7 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 		cycle := cycles[0]
 		return featureAttention{
 			Kind:      attentionNeedUserInput,
-			CTALabel:  "Answer",
+			CTALabel:  ctaLabelAnswer,
 			TypeLabel: "Input Required",
 			Summary:   fmt.Sprintf("%s input gate for %s", cycle.CycleType, cycle.RepoName),
 			RepoName:  cycle.RepoName,
@@ -105,6 +151,13 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 		}
 	}
 	return featureAttention{Kind: attentionNone}
+}
+
+func featureCanSurfacePromptQueues(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	return f.Status != feature.StatusInterrupted
 }
 
 func (a featureAttention) HasCTA() bool {
@@ -127,17 +180,6 @@ func (a featureAttention) FooterHint() string {
 	return "[a] " + a.CTALabel
 }
 
-// InBoxCTA returns the prominent in-box call-to-action phrase, e.g.
-// "press [a] to Answer". Footer hints stay terse via FooterHint(); this
-// verbose form is reserved for the Live Preview attention box, where there
-// is room for an inviting phrasing.
-func (a featureAttention) InBoxCTA() string {
-	if !a.HasCTA() || a.CTALabel == "" {
-		return ""
-	}
-	return "press [a] to " + a.CTALabel
-}
-
 // IsQuestionTone reports whether the attention represents a user-input
 // request — a question from the agent or an input gate. These get an
 // info-blue, friendlier presentation rather than the warning-yellow
@@ -157,10 +199,6 @@ func (a featureAttention) ActivityLine() string {
 	default:
 		return ""
 	}
-}
-
-func contextualAActionHint(f *feature.Feature) (hint string, lead bool) {
-	return contextualAActionHintFor(f, nil)
 }
 
 func contextualAActionHintFor(f *feature.Feature, sess session.SessionView) (hint string, lead bool) {
@@ -190,7 +228,7 @@ func isWatchAttentionEligible(f *feature.Feature) bool {
 		return true
 	}
 	if f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady {
-		return f.HasActiveRepoCycles()
+		return featureHasRunningCycle(f)
 	}
 	return false
 }
@@ -232,13 +270,13 @@ func pendingAskUserSummary(f *feature.Feature, sess session.SessionView) (string
 
 func firstPendingPermissionControlRequest(sess session.SessionView) *llm.ControlRequestMessage {
 	return firstPendingControlRequest(sess, func(cr *llm.ControlRequestMessage) bool {
-		return cr.Request.ToolName != "" && cr.Request.ToolName != "AskUserQuestion"
+		return cr.Request.ToolName != "" && cr.Request.ToolName != toolNameAskUserQuestion
 	})
 }
 
 func firstPendingAskUserControlRequest(sess session.SessionView) *llm.ControlRequestMessage {
 	return firstPendingControlRequest(sess, func(cr *llm.ControlRequestMessage) bool {
-		return cr.Request.ToolName == "AskUserQuestion"
+		return cr.Request.ToolName == toolNameAskUserQuestion
 	})
 }
 
@@ -299,35 +337,43 @@ func permissionRequestSummary(p feature.PermissionRequest) string {
 }
 
 func reviewAttentionSummary(f *feature.Feature) string {
+	return reviewArtifactLabel(f) + " needs review"
+}
+
+func reviewArtifactLabel(f *feature.Feature) string {
 	if f == nil {
-		return "Artifact needs review"
+		return "Artifact"
 	}
-	if f.PendingReviewPhase != nil {
-		if f.IsRewind {
-			return fmt.Sprintf("Rewind to %s needs review", f.PendingReviewPhase.String())
-		}
-		return fmt.Sprintf("%s gate needs review", f.PendingReviewPhase.String())
+	if f.IsRewind && f.PendingReviewPhase != nil {
+		return fmt.Sprintf("Rewind to %s", f.PendingReviewPhase.String())
 	}
 	switch f.Status {
 	case feature.StatusPlanNeedsReview:
-		if f.CurrentRoadmapPhase == 0 {
-			return "Roadmap needs review"
-		}
-		if f.TotalRoadmapPhases > 1 {
-			return fmt.Sprintf("Phase %d plan needs review", f.CurrentRoadmapPhase)
-		}
-		return "Plan needs review"
+		return planReviewArtifactLabel(f)
 	case feature.StatusPromptNeedsReview:
-		return "Prompt needs review"
+		return "Prompt"
 	case feature.StatusInquiryNeedsReview:
-		return "Inquiry needs review"
+		return "Inquiry"
 	case feature.StatusResearchNeedsReview:
-		return "Research needs review"
+		return feature.PhaseResearch.String()
 	case feature.StatusDesignNeedsReview:
-		return "Design needs review"
+		return feature.PhaseDesign.String()
 	default:
-		return "Artifact needs review"
+		return "Artifact"
 	}
+}
+
+func planReviewArtifactLabel(f *feature.Feature) string {
+	if f == nil {
+		return "Plan"
+	}
+	if f.CurrentRoadmapPhase == 0 && f.TotalRoadmapPhases > 0 {
+		return "Roadmap"
+	}
+	if f.CurrentRoadmapPhase > 0 && f.TotalRoadmapPhases > 1 {
+		return fmt.Sprintf("Phase %d plan", f.CurrentRoadmapPhase)
+	}
+	return "Plan"
 }
 
 func reviewAttentionMode(f *feature.Feature) string {

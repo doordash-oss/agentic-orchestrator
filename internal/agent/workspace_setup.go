@@ -24,7 +24,7 @@ import (
 
 // WorkspaceSetup is the bootstrap shape for any unified-flow Claude session
 // (phase implement, phase review, Final Review, rebase, review-comments,
-// refactor, tweak). It is the single source of truth for "where should the
+// refactor). It is the single source of truth for "where should the
 // agent run and which directories should it see?" — replacing the ad-hoc
 // resolveUnifiedWorkDir + per-call AdditionalDirs assembly that the per-repo
 // flow scattered across phase.go / refactor.go / final_review.go.

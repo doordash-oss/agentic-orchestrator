@@ -16,25 +16,9 @@ package e2e
 
 import (
 	"os"
-	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 	"testing"
 )
-
-var expectedTUISmokeTests = []string{
-	"TestDashboardRendersEmptyState",
-	"TestDashboardShowsFeature",
-	"TestFreshFeatureSkeletonInvariants",
-	"TestMediumWizardGateProjectionSmoke",
-	"TestNeedUserInputPauseResumeSmoke",
-	"TestTUI_ConcurrentFeatures",
-	"TestTUI_FeatureFailsMidChain",
-	"TestTUI_HelpInputBlocking",
-	"TestTUI_PermissionPromptSurfaced",
-	"TestTUI_SessionCrashInterrupted",
-}
 
 func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
 	body, err := os.ReadFile("smoke.sh")
@@ -53,77 +37,11 @@ func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
 		}
 	}
 
-	targets := e2eSmokeRunTargets(t, script)
 	for _, want := range []string{
-		"TestFreshFeatureSkeletonInvariants",
-		"TestMediumWizardGateProjectionSmoke",
-		"TestNeedUserInputPauseResumeSmoke",
+		"go test ./cmd/agentico -run '^TestRunArgsLaunchesClientServerByDefault$'",
 	} {
-		if !targets[want] {
-			t.Fatalf("smoke.sh must run %s", want)
+		if !strings.Contains(script, want) {
+			t.Fatalf("smoke.sh must run %q", want)
 		}
 	}
-	if !strings.Contains(script, "go test ./internal/tui -run '^TestInquirePhase_GrillMe_AutoPickSmokeEndToEnd$'") {
-		t.Fatal("smoke.sh must run TestInquirePhase_GrillMe_AutoPickSmokeEndToEnd")
-	}
-
-	existing := e2eTestNames(t)
-	for target := range targets {
-		if !existing[target] {
-			t.Fatalf("smoke.sh runs %s, but no such e2e test exists", target)
-		}
-	}
-
-	for _, want := range expectedTUISmokeTests {
-		if !existing[want] {
-			t.Fatalf("TUI smoke inventory missing %s", want)
-		}
-	}
-	var got []string
-	for name := range existing {
-		if name == "TestSmokeScriptDoesNotUseRemovedFeatureCommands" {
-			continue
-		}
-		got = append(got, name)
-	}
-	sort.Strings(got)
-	want := append([]string(nil), expectedTUISmokeTests...)
-	sort.Strings(want)
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("TUI smoke inventory drift\n got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-}
-
-func e2eSmokeRunTargets(t *testing.T, script string) map[string]bool {
-	t.Helper()
-	re := regexp.MustCompile(`go test \./test/e2e -run '\^([A-Za-z0-9_]+)\$'`)
-	matches := re.FindAllStringSubmatch(script, -1)
-	if len(matches) == 0 {
-		t.Fatal("smoke.sh must run at least one exact e2e Go test")
-	}
-	targets := make(map[string]bool, len(matches))
-	for _, match := range matches {
-		targets[match[1]] = true
-	}
-	return targets
-}
-
-func e2eTestNames(t *testing.T) map[string]bool {
-	t.Helper()
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("Glob e2e Go files: %v", err)
-	}
-	re := regexp.MustCompile(`func (Test[A-Za-z0-9_]+)\(`)
-	names := make(map[string]bool)
-	for _, path := range files {
-		body, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s): %v", path, err)
-		}
-		for _, match := range re.FindAllStringSubmatch(string(body), -1) {
-			names[match[1]] = true
-		}
-	}
-	return names
 }

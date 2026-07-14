@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/guidelinedef"
@@ -229,172 +228,6 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 			ObserverPhase: cfg.Phase.String(),
 		})
 		pr.Observer.SessionEnded(sessionCtx, cfg.Phase.String(), sessionID, "", usage, duration, sessionErrFromStatus(sess))
-	})
-
-	// Set up log file
-	logPath := filepath.Join(artifactDir, "output.txt")
-	logFile, err := os.Create(logPath)
-	if err == nil {
-		sess.SetLogFile(logFile)
-	}
-
-	return sessionID, nil
-}
-
-// TweakSessionConfig holds optional overrides for RunTweakSession.
-type TweakSessionConfig struct {
-	WorkDir        string   // working directory override (typically the feature state dir)
-	AdditionalDirs []string // other paths to mount via --add-dir for cross-repo context
-}
-
-// BuildTweakPrompt builds the initial user prompt for an interactive tweak session.
-// It invokes the tweak-session skill and passes only the feature context needed
-// to orient the session before the user provides the first requested change.
-//
-// The prose lives in internal/agent/prompts/templates/tweak.user.tmpl.
-//
-// When repoName is supplied (multi-repo tweak), the PR URL is resolved
-// from the per-repo PRURLs() map so the prompt always shows the PR for
-// the repo the user selected. Falling back to "first map value" would
-// pick an arbitrary PR because Go map iteration order is undefined.
-// When repoName is empty (legacy single-repo tweak), fall back to the
-// feature-level f.PRURL with FirstRepoPRURL() as a deterministic
-// secondary fallback.
-func BuildTweakPrompt(f *feature.Feature, stateDir, skillsDir, repoName string) string {
-	var prURL string
-	if repoName != "" {
-		prURL = f.PRURLs()[repoName]
-	} else {
-		prURL = f.PRURL()
-		if prURL == "" {
-			prURL = f.FirstRepoPRURL()
-		}
-	}
-	return roles.BuildTweakPrompt(roles.TweakUserInput{
-		SkillPath: tweakSkillPath(skillsDir),
-		Name:      f.Name,
-		PlanPath:  resolvePhaseArtifactPath(stateDir, f, "roadmap"),
-		PRURL:     prURL,
-	})
-}
-
-func tweakSkillPath(skillsDir string) string {
-	if skillsDir == "" {
-		return ""
-	}
-	return filepath.Join(skillsDir, "tweak-session", "SKILL.md")
-}
-
-// RunTweakSession starts an interactive tweak session for a feature.
-// Tweak is a fully interactive PTY session: the user drives the agent
-// directly via the attach view and ends the session with Ctrl+D. It does
-// not participate in the autonomous Implement loop's progress.md /
-// NEED_USER_INPUT handoff contract — there is no agent-emitted gate
-// because the user is already on the keyboard. Returns the session ID;
-// the session runs asynchronously.
-func (pr *PhaseRunner) RunTweakSession(f *feature.Feature, cfgs ...TweakSessionConfig) (string, error) {
-	prefix := f.CyclePrefix()
-	if prefix == "" {
-		prefix = "tweak" // fallback for safety
-	}
-	artifactDir := filepath.Join(ActiveRunDir(pr.StateDir, f), prefix)
-	_ = os.MkdirAll(artifactDir, 0o755)
-
-	var cfg TweakSessionConfig
-	if len(cfgs) > 0 {
-		cfg = cfgs[0]
-	}
-
-	implModel := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
-
-	// Tweak is a fully interactive PTY session — the user drives the agent
-	// directly, so no system prompt is injected (no completion protocol, no
-	// AskUserQuestion contract). The session relies entirely on the user
-	// prompt and the user's ongoing input.
-	prompt := BuildTweakPrompt(f, pr.StateDir, pr.SkillsDir, "")
-
-	sessionID := fmt.Sprintf("%s-impl-tweak", f.ID)
-
-	var workDir string
-	var additionalDirs []string
-	if cfg.WorkDir != "" {
-		workDir = cfg.WorkDir
-		additionalDirs = cfg.AdditionalDirs
-	} else {
-		workDir, additionalDirs = resolveUnifiedWorkDir(f, pr.StateDir)
-	}
-
-	pidDir := filepath.Join(pr.StateDir, f.ID)
-
-	featureCtx := observe.SpanContextForFeature(f.ID, f.TraceID, f.Name, f.FeatureSpanID).WithRun(f.ActiveRun)
-	phaseCtx := featureCtx.Child()
-	pr.Observer.PhaseStarted(phaseCtx, feature.PhaseImplement.String())
-
-	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:          implModel,
-		Prompt:         prompt,
-		SystemPrompt:   "",
-		AdditionalDirs: additionalDirs,
-		AgentNames:     []string{},
-		PIDDir:         pidDir,
-		PermHandler:    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, ""),
-		WorkDir:        workDir,
-		EffortLevel:    f.EffectivePipeline().EffortLevel(),
-		TurnMode:       ports.TurnModeInteractive,
-		Phase:          feature.PhaseImplement,
-	})
-	if err != nil {
-		return "", fmt.Errorf("building tweak session: %w", err)
-	}
-	if sessOpts == nil {
-		sessOpts = &ports.SessionOpts{}
-	}
-	WriteDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, prompt)
-	sessOpts.PermCacheScope = ""
-	sessOpts.Kind = ports.KindTweak
-
-	sess, err := pr.SessionManager.StartSession(sessionID, f.ID, feature.PhaseImplement, cmd, workDir, env, sessOpts)
-	if err != nil {
-		return "", fmt.Errorf("starting tweak session: %w", err)
-	}
-
-	sessionCtx := phaseCtx.Child()
-	providerName := ""
-	if sessOpts != nil {
-		providerName = sessOpts.ProviderName
-	}
-	pr.Observer.SessionStarted(sessionCtx, feature.PhaseImplement.String(), sessionID, providerName, f.Models.Implementation, "")
-
-	// Track reads of KB/skill/guideline files for observability.
-	pr.installContextReadTracker(sess, sessionCtx, feature.PhaseImplement.String(), sessionID, pr.StateDir)
-	pr.installSubagentProgressTracker(sess, sessionCtx, feature.PhaseImplement.String(), sessionID)
-
-	costKey := f.ActiveTimingKey
-	featureID := f.ID
-	sessionStart := time.Now()
-	sess.AddCleanupFunc(func() {
-		cost := ExtractSessionCost(sess)
-		usage := toSessionUsage(cost)
-		duration := time.Since(sessionStart)
-		pr.Observer.SessionEnded(sessionCtx, feature.PhaseImplement.String(), sessionID, "", usage, duration, sessionErrFromStatus(sess))
-		if pr.FeatureStore != nil && cost.TotalCostUSD > 0 {
-			_ = pr.FeatureStore.Modify(featureID, func(feat *feature.Feature) error {
-				key := costKey
-				if key == "" {
-					key = feat.ActiveTimingKey
-				}
-				if key == "" {
-					key = "implement"
-				}
-				feat.RecordSessionCost(feature.SessionCostRecord{
-					SessionID:     sessionID,
-					PhaseKey:      key,
-					ObserverPhase: feature.PhaseImplement.String(),
-					CostUSD:       cost.TotalCostUSD,
-				})
-				return nil
-			})
-		}
 	})
 
 	// Set up log file
@@ -833,7 +666,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	implementationModel := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
 
-	// Cycles (rebase, tweak, review-comments) operate on the whole branch,
+	// Cycles (rebase, review-comments) operate on the whole branch,
 	// not a specific roadmap phase — omit roadmap/phase-type context so the
 	// review prompt stays focused on the cycle's objectives.
 	phaseType := f.RoadmapPhaseType
@@ -886,8 +719,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 }
 
 // RunFeatureCycleFinalReview spawns the unified feature-level Final Review
-// loop for a post-publish cycle (e.g., post-tweak "review changes? y/n"
-// modal "y" path). Cwd at the feature state dir; --add-dir for every
+// loop for a post-publish cycle. Cwd at the feature state dir; --add-dir for every
 // Feature.Repos worktree. The reviewer reads the cumulative diff across
 // all repos. Unlike the engine FR, the post-cycle FR does NOT atomic-stamp
 // per-repo state on completion — the surrounding cycle owns the post-FR
@@ -918,6 +750,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		MaxConsecNoProgress:        maxNoProg,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
@@ -979,6 +812,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		KBInfos:                    kbInfos,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
@@ -1031,6 +865,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		KBInfos:                    kbInfos,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
@@ -1133,7 +968,7 @@ func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.P
 func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 	runDir := ActiveRunDir(pr.StateDir, f)
 	// Cycle prefix takes precedence — when an active cycle is running,
-	// artifacts go into the cycle subtree (e.g. rebase-1/, tweak-2/).
+	// artifacts go into the cycle subtree (e.g. rebase-1/).
 	// Cycles operate on the whole branch, so roadmap phase scoping is skipped.
 	if prefix := f.CyclePrefix(); prefix != "" {
 		return filepath.Join(runDir, prefix, "implement")
@@ -1210,13 +1045,18 @@ type BuildSessionOpts struct {
 	// `phase_complete` marker file. Forwarded to llm.ProtocolOpts so providers
 	// that synthesize completion-vs-question signals from end-of-turn text
 	// (Codex) can use marker existence as the authoritative completion signal.
-	// Leave empty for paths that don't have a marker contract (e.g. tweak
-	// PTY sessions); the provider falls back to its legacy heuristic.
+	// Leave empty for paths that don't have a marker contract; the provider
+	// falls back to its legacy heuristic.
 	MarkerPath string
 	// ResumeSessionID, when set, asks the provider to resume that prior session
 	// identity rather than start a fresh one. It is forwarded to both command and
 	// protocol setup so each provider resumes via its own supported path.
 	ResumeSessionID string
+	// Interactive marks a session where a human answers every AskUserQuestion
+	// turn in real time (e.g. AMA chat). Forwarded to llm.ProtocolOpts.Interactive;
+	// see its doc comment for why this changes text-parsed AskUserQuestion
+	// providers' behavior.
+	Interactive bool
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1393,11 +1233,18 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		StateDir:        pr.StateDir,
 		MarkerPath:      opts.MarkerPath,
 		ResumeSessionID: opts.ResumeSessionID,
+		Interactive:     opts.Interactive,
 	})
 
 	sessOpts = &ports.SessionOpts{
-		PIDDir:            opts.PIDDir,
-		PermHandler:       opts.PermHandler,
+		PIDDir: opts.PIDDir,
+		// commandWritableRoots is the same boundary just computed for the
+		// provider's own writable-root config, so a plain `touch` or
+		// `mkdir -p` inside it (e.g. the phase_complete marker, or a run
+		// directory the harness already created) can be trusted the same way
+		// AcceptEditsHandler already trusts an equivalent empty Write —
+		// see permission.WrapGeneralPhaseHandlerWithSafeCreate.
+		PermHandler:       permission.WrapGeneralPhaseHandlerWithSafeCreate(opts.PermHandler, commandWritableRoots),
 		InitialPrompt:     opts.Prompt,
 		ContextWindow:     contextWindow,
 		RepoName:          opts.RepoName,

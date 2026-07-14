@@ -1108,7 +1108,8 @@ func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 			"utilities":      s.Models.Utilities,
 			"kb_build":       s.Models.KBBuild,
 		},
-		"inquireness": string(s.Inquireness),
+		"inquireness":         string(s.Inquireness),
+		"input_notifications": string(feature.NormalizeInputNotificationsMode(s.InputNotifications)),
 		"checkpoints": map[string]any{
 			"inquiry_review":    s.Checkpoints.InquiryReview,
 			"research_review":   s.Checkpoints.ResearchReview,

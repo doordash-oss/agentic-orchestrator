@@ -21,68 +21,39 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
-// reviewModeNeedUserInput is the artifact-review questionnaire-mode tag
-// for the need-user-input gate. The gate questionnaire is hosted inside
-// ArtifactReviewModel rather than as a separate top-level workflow so
-// the existing attach / detach / reattach shell carries it.
 const reviewModeNeedUserInput = "need_user_input"
 
-// NeedUserInputDecisionMsg is emitted when the user picks Resume or Abort
-// from the gate menu. Routed through the artifact-review menu so the
-// shell stays in lockstep with review-gate menus. RepoName is empty for
-// feature-scoped gates; non-empty selects the cycle-scoped gate on
-// RepoCycles[RepoName] (post-publish). CycleType is surfaced for
-// diagnostics; the orchestrator derives the actual restart type from
-// the persisted RepoCycleState.
 type NeedUserInputDecisionMsg struct {
 	FeatureID string
 	RepoName  string
 	CycleType feature.RepoCycleType
-	Decision  string // "resume" | "abort"
+	Decision  string
 }
 
-// openNeedUserInputMsg is the TUI-internal command result that triggers
-// attaching the questionnaire to a paused gate. Used by the tweak session
-// completion path to reattach immediately on a NEED_USER_INPUT exit.
-type openNeedUserInputMsg struct {
-	FeatureID string
-	RepoName  string
-	CycleType feature.RepoCycleType
-	GatePath  string
+type NeedUserInputDraftMsg struct {
+	FeatureID      string
+	RepoName       string
+	CycleType      feature.RepoCycleType
+	Gate           server.NeedInputGateDTO
+	QuestionOffset int
 }
 
-// needUserInputForm is the questionnaire body rendered inside
-// ArtifactReviewModel when reviewMode == reviewModeNeedUserInput. It is
-// intentionally NOT a top-level tea.Model — folding it into the
-// artifact-review shell keeps the attach pattern (Ctrl+D menu, detach,
-// reattach) from review gates without inventing a parallel workflow.
 type needUserInputForm struct {
-	gatePath    string
-	record      agent.NeedUserInputRecord
+	gate        server.NeedInputGateDTO
 	inputs      []textinput.Model
 	cursor      int
 	width       int
-	loadErr     error
 	decisionErr error
 }
 
-// newNeedUserInputForm loads the gate artifact at gatePath and primes
-// per-question text inputs. A read failure is captured in loadErr so
-// the shell can surface it without crashing.
-func newNeedUserInputForm(gatePath string, width int) *needUserInputForm {
-	f := &needUserInputForm{gatePath: gatePath, width: width}
-	rec, err := agent.ReadNeedUserInputRecord(gatePath)
-	if err != nil {
-		f.loadErr = err
-		return f
-	}
-	f.record = rec
-	f.inputs = make([]textinput.Model, len(rec.Questions))
-	for i, q := range rec.Questions {
+func newNeedUserInputForm(gate server.NeedInputGateDTO, width int) *needUserInputForm {
+	f := &needUserInputForm{gate: gate, width: width}
+	f.inputs = make([]textinput.Model, len(gate.Questions))
+	for i, q := range gate.Questions {
 		ti := textinput.New()
 		ti.Placeholder = fmt.Sprintf("Answer for Q%d...", i+1)
 		ti.SetValue(q.Answer)
@@ -92,10 +63,10 @@ func newNeedUserInputForm(gatePath string, width int) *needUserInputForm {
 	if len(f.inputs) > 0 {
 		_ = f.inputs[0].Focus()
 	}
+	f.syncDraftAnswers()
 	return f
 }
 
-// SetWidth resizes every input. Called from ArtifactReviewModel.recalcLayout.
 func (f *needUserInputForm) SetWidth(width int) {
 	f.width = width
 	for i := range f.inputs {
@@ -103,12 +74,6 @@ func (f *needUserInputForm) SetWidth(width int) {
 	}
 }
 
-// HandleKey routes a key press into the questionnaire (typing /
-// navigation). Returns a follow-up cmd; menu / detach keys are handled
-// by the artifact-review shell BEFORE this is called. Every editing
-// keystroke is flushed to disk via Persist so a hard restart while the
-// questionnaire is open recovers the draft from the persisted gate
-// artifact (the design's restart-recovery contract).
 func (f *needUserInputForm) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "tab", "down":
@@ -123,18 +88,14 @@ func (f *needUserInputForm) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 		var cmd tea.Cmd
 		f.inputs[f.cursor], cmd = f.inputs[f.cursor].Update(msg)
 		if f.inputs[f.cursor].Value() != before {
-			_ = f.Persist()
+			f.syncDraftAnswers()
+			return tea.Batch(cmd, f.draftCmd(f.cursor))
 		}
 		return cmd
 	}
 	return nil
 }
 
-// Forward dispatches non-key bubbletea messages to the focused input
-// (cursor blink, paste, etc.). Tolerant: when no input is focused, the
-// message is dropped. When the dispatched message mutates the input
-// value (e.g. a paste), the change is flushed to disk so a hard restart
-// recovers the draft.
 func (f *needUserInputForm) Forward(msg tea.Msg) tea.Cmd {
 	if f.cursor < 0 || f.cursor >= len(f.inputs) {
 		return nil
@@ -143,7 +104,8 @@ func (f *needUserInputForm) Forward(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	f.inputs[f.cursor], cmd = f.inputs[f.cursor].Update(msg)
 	if f.inputs[f.cursor].Value() != before {
-		_ = f.Persist()
+		f.syncDraftAnswers()
+		return tea.Batch(cmd, f.draftCmd(f.cursor))
 	}
 	return cmd
 }
@@ -159,32 +121,32 @@ func (f *needUserInputForm) moveFocus(delta int) {
 	_ = f.inputs[f.cursor].Focus()
 }
 
-// syncDraftAnswers copies input buffer values back into the in-memory
-// record so Persist + AllAnswered reflect the user's typing.
 func (f *needUserInputForm) syncDraftAnswers() {
-	for i := range f.record.Questions {
+	for i := range f.gate.Questions {
 		if i < len(f.inputs) {
-			f.record.Questions[i].Answer = strings.TrimSpace(f.inputs[i].Value())
+			f.gate.Questions[i].Answer = strings.TrimSpace(f.inputs[i].Value())
 		}
 	}
 }
 
-// Persist writes the in-memory record back to disk so detach + restart
-// preserve draft answers.
-func (f *needUserInputForm) Persist() error {
-	if f.gatePath == "" {
-		return nil
+func (f *needUserInputForm) draftCmd(questionOffset int) tea.Cmd {
+	gate := f.gate
+	msg := NeedUserInputDraftMsg{
+		FeatureID:      gate.FeatureID,
+		RepoName:       gate.RepoName,
+		CycleType:      feature.RepoCycleType(gate.CycleType),
+		Gate:           gate,
+		QuestionOffset: questionOffset,
 	}
-	f.syncDraftAnswers()
-	return agent.WriteNeedUserInputRecord(f.gatePath, f.record)
+	return func() tea.Msg { return msg }
 }
 
-// AllAnswered reports whether every question has a non-empty answer.
 func (f *needUserInputForm) AllAnswered() bool {
-	if len(f.record.Questions) == 0 {
+	if len(f.gate.Questions) == 0 {
 		return false
 	}
-	for _, q := range f.record.Questions {
+	f.syncDraftAnswers()
+	for _, q := range f.gate.Questions {
 		if strings.TrimSpace(q.Answer) == "" {
 			return false
 		}
@@ -192,8 +154,6 @@ func (f *needUserInputForm) AllAnswered() bool {
 	return true
 }
 
-// SetAnswer is a test seam that sets the i-th input's value and syncs
-// it into the record so AllAnswered / Persist see the change.
 func (f *needUserInputForm) SetAnswer(i int, answer string) {
 	if i < 0 || i >= len(f.inputs) {
 		return
@@ -202,8 +162,6 @@ func (f *needUserInputForm) SetAnswer(i int, answer string) {
 	f.syncDraftAnswers()
 }
 
-// Focus refocuses the cursor input. Called on Reattach so the user can
-// keep typing where they left off.
 func (f *needUserInputForm) Focus() tea.Cmd {
 	if f.cursor < 0 || f.cursor >= len(f.inputs) {
 		return nil
@@ -211,20 +169,13 @@ func (f *needUserInputForm) Focus() tea.Cmd {
 	return f.inputs[f.cursor].Focus()
 }
 
-// View renders the questionnaire body. The artifact-review shell wraps
-// this output with header/footer/menu chrome.
 func (f *needUserInputForm) View() string {
 	var sb strings.Builder
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBrand)
 	sb.WriteString(titleStyle.Render("Implementation needs user input"))
 	sb.WriteString("\n\n")
-	if f.loadErr != nil {
-		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-		sb.WriteString(errStyle.Render(fmt.Sprintf("Failed to load gate artifact: %v", f.loadErr)))
-		return sb.String()
-	}
-	if strings.TrimSpace(f.record.Summary) != "" {
-		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render(f.record.Summary))
+	if strings.TrimSpace(f.gate.Summary) != "" {
+		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render(f.gate.Summary))
 		sb.WriteString("\n\n")
 	}
 	if f.decisionErr != nil {
@@ -232,12 +183,16 @@ func (f *needUserInputForm) View() string {
 		sb.WriteString(errStyle.Render(fmt.Sprintf("Decision failed: %v", f.decisionErr)))
 		sb.WriteString("\n")
 		sb.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render(
-			"The feature is back on the gate — re-open the menu to retry resume or abort."))
+			"The feature is back on the gate - re-open the menu to retry resume or abort."))
 		sb.WriteString("\n\n")
 	}
-	for i, q := range f.record.Questions {
-		num := lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("%d. ", q.Index))
-		sb.WriteString(num + q.Prompt + "\n")
+	for i, q := range f.gate.Questions {
+		index := q.Index
+		if index <= 0 {
+			index = i + 1
+		}
+		num := lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("%d. ", index))
+		sb.WriteString(num + strings.TrimSpace(q.Prompt) + "\n")
 		if i < len(f.inputs) {
 			sb.WriteString("   " + f.inputs[i].View())
 		}

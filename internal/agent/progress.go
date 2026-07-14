@@ -126,7 +126,7 @@ const (
 func (s IterationState) String() string {
 	switch s {
 	case StateSuccess:
-		return "SUCCESS"
+		return agentStatusSuccess
 	case StateRetry:
 		return "RETRY"
 	case StateNeedUserInput:
@@ -192,9 +192,9 @@ var progressHandoffSubsections = []string{
 // violation — the canonical token must appear on its own line as the first
 // non-blank content of the section.
 var validIterationStateTokens = map[string]IterationState{
-	"SUCCESS":         StateSuccess,
-	"RETRY":           StateRetry,
-	"NEED_USER_INPUT": StateNeedUserInput,
+	agentStatusSuccess: StateSuccess,
+	"RETRY":            StateRetry,
+	"NEED_USER_INPUT":  StateNeedUserInput,
 }
 
 // progressYAMLBlockRE matches a fenced YAML code block; capture group 1 is

@@ -87,6 +87,45 @@ func TestStoreSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestStoreSaveAndLoadInputNotifications(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	f := &Feature{
+		ID:                 "test-input-notifications",
+		Name:               "Test Input Notifications",
+		Slug:               "test-input-notifications",
+		Status:             StatusCreated,
+		SchemaVersion:      SchemaVersionCurrent,
+		InputNotifications: InputNotificationsMuted,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.InputNotifications != InputNotificationsMuted {
+		t.Fatalf("InputNotifications = %q, want %q", loaded.InputNotifications, InputNotificationsMuted)
+	}
+
+	loaded.InputNotifications = PersistInputNotificationsMode(InputNotificationsDefault)
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("save default: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, f.ID, "feature.yaml"))
+	if err != nil {
+		t.Fatalf("read feature.yaml: %v", err)
+	}
+	if strings.Contains(string(raw), "input_notifications") {
+		t.Fatalf("feature.yaml contains input_notifications for default mode:\n%s", string(raw))
+	}
+}
+
 func TestStoreList(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -119,6 +158,93 @@ func TestStoreList(t *testing.T) {
 	}
 	if len(features) != 2 {
 		t.Errorf("expected 2 features, got %d", len(features))
+	}
+}
+
+func TestStoreReadPathsDoNotWaitForInFlightModify(t *testing.T) {
+	const featureNameOriginal = "Original"
+
+	// Not parallel: the test intentionally holds a Store.Modify goroutine open
+	// while asserting read-path responsiveness.
+	dir := t.TempDir()
+	store := NewStore(dir)
+	f := &Feature{
+		ID:            "responsive-read",
+		Name:          featureNameOriginal,
+		Slug:          "responsive-read",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	modifyDone := make(chan error, 1)
+	go func() {
+		modifyDone <- store.Modify(f.ID, func(f *Feature) error {
+			close(started)
+			<-release
+			f.Name = "Updated"
+			return nil
+		})
+	}()
+	<-started
+	t.Cleanup(func() {
+		close(release)
+		if err := <-modifyDone; err != nil {
+			t.Errorf("modify: %v", err)
+		}
+	})
+
+	readDone := make(chan struct {
+		features []*Feature
+		loaded   *Feature
+		err      error
+	}, 1)
+	go func() {
+		features, err := store.List()
+		if err != nil {
+			readDone <- struct {
+				features []*Feature
+				loaded   *Feature
+				err      error
+			}{err: fmt.Errorf("list: %w", err)}
+			return
+		}
+		loaded, err := store.Load(f.ID)
+		if err != nil {
+			readDone <- struct {
+				features []*Feature
+				loaded   *Feature
+				err      error
+			}{err: fmt.Errorf("load: %w", err)}
+			return
+		}
+		readDone <- struct {
+			features []*Feature
+			loaded   *Feature
+			err      error
+		}{features: features, loaded: loaded}
+	}()
+
+	select {
+	case got := <-readDone:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if len(got.features) != 1 {
+			t.Fatalf("features len = %d, want 1", len(got.features))
+		}
+		if got.features[0].Name != featureNameOriginal {
+			t.Fatalf("listed name = %q, want last committed name Original", got.features[0].Name)
+		}
+		if got.loaded.Name != featureNameOriginal {
+			t.Fatalf("loaded name = %q, want last committed name Original", got.loaded.Name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("read paths blocked behind in-flight Modify")
 	}
 }
 
@@ -292,34 +418,6 @@ func TestStoreLoadReconcilesSuccessfulStatusWithTerminalFinalReviewFailure(t *te
 	}
 	if loaded.FailureType != FailureProtocolViolation {
 		t.Fatalf("FailureType = %q, want %q", loaded.FailureType, FailureProtocolViolation)
-	}
-}
-
-func TestStoreMuteInputNotificationsPersistence(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	dir := t.TempDir()
-	store := NewStore(dir)
-	muted := true
-
-	f := &Feature{
-		ID:                     "notify-001",
-		Name:                   "Notification Override",
-		Slug:                   "notification-override",
-		Status:                 StatusCreated,
-		MuteInputNotifications: &muted,
-		SchemaVersion:          SchemaVersionCurrent,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	loaded, err := store.Load("notify-001")
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.MuteInputNotifications == nil || !*loaded.MuteInputNotifications {
-		t.Fatal("expected mute_input_notifications override to round-trip as true")
 	}
 }
 

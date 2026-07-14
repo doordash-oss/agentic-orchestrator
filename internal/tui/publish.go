@@ -17,7 +17,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +24,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -33,6 +31,8 @@ import (
 )
 
 type publishStep int
+
+const diffReviewTitle = "Diff Review"
 
 const (
 	publishStepRepoSelect publishStep = iota // only shown for multi-repo features
@@ -43,17 +43,6 @@ const (
 	publishStepExecute
 	publishStepDone
 )
-
-// publishExecuteResultMsg carries the result of a publish execution.
-type publishExecuteResultMsg struct {
-	prURL            string
-	err              error
-	conflictDetected bool   // true if pull-rebase encountered merge conflicts
-	branch           string // branch name, set when conflictDetected is true
-	rebaseTarget     string // base branch for follow-up rebase conflict resolution
-	featureID        string // feature ID, set when conflictDetected is true
-	repoName         string // for multi-repo per-repo state tracking
-}
 
 // publishRepoEntry represents a repo in the publish repo selector.
 type publishRepoEntry struct {
@@ -91,13 +80,12 @@ type PublishModel struct {
 	errMsg      string
 	worktreeDir string
 	branch      string
-	repoPath    string
 	descModel   string          // model name for description generation
 	baseBranch  string          // for stacked PRs: target branch instead of default
 	prCtx       agent.PRContext // lean context for PR description generation; filled by caller
 	runDesc     publishDescriptionRunner
 	spinnerView string // set by parent from app-level spinner
-	viewport    viewport.Model
+	viewport    reviewViewportModel
 	titleInput  textinput.Model
 	bodyInput   textarea.Model
 	editingBody bool // true when body textarea is focused
@@ -106,28 +94,19 @@ type PublishModel struct {
 	height      int
 
 	// Multi-repo fields
-	repos           []publishRepoEntry  // all repos with their state, for selector
-	selectedRepo    int                 // cursor index in repo selector
-	hasRepoSelect   bool                // true when >1 repo available for publish
-	repoName        string              // name of the selected repo (for cross-ref tracking)
-	featureName     string              // feature name for cross-ref section
-	crossRefEntries []git.CrossRefEntry // built from repos + RepoStates
-	existingPRURL   string              // set when re-publishing an already-published repo
-	publishable     bool                // true if all feature repos have origin remote
-	draft           bool                // true when the feature's checkpoints request a draft PR
+	repos         []publishRepoEntry // all repos with their state, for selector
+	selectedRepo  int                // cursor index in repo selector
+	hasRepoSelect bool               // true when >1 repo available for publish
+	repoName      string             // name of the selected repo (for cross-ref tracking)
+	draft         bool               // true when the feature's checkpoints request a draft PR
 }
 
 // newPublishViewport builds the shared viewport, title input, and body
 // textarea used by every publish model. The trio's dimensions and behavior
 // are identical for single- and multi-repo publish flows; only the gating
 // of the repo-select step (driven by len(f.Repos) > 1) differs across N.
-func newPublishViewport(width, height int, prTitle, prBody, diff string) (viewport.Model, textinput.Model, textarea.Model) {
-	vpW := max(width-6, 40)
-	vpH := max(height-8, 10)
-	vp := viewport.New(viewport.WithWidth(vpW), viewport.WithHeight(vpH))
-	vp.SoftWrap = true
-	vp.SetContent(colorizeDiff(diff))
-
+func newPublishViewport(width, height int, prTitle, prBody, diff string) (reviewViewportModel, textinput.Model, textarea.Model) {
+	vp := newReviewViewportModel(width, height, colorizeDiff(diff))
 	ti := textinput.New()
 	ti.Placeholder = "PR title"
 	ti.CharLimit = 120
@@ -157,10 +136,9 @@ func newPublishViewport(width, height int, prTitle, prBody, diff string) (viewpo
 func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, descModel string, width, height int) PublishModel {
 	vp, ti, ta := newPublishViewport(width, height, "", "", "")
 
-	var featureID, featureName string
+	var featureID string
 	if f != nil {
 		featureID = f.ID
-		featureName = f.Name
 	}
 
 	var draft bool
@@ -169,19 +147,17 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 	}
 
 	m := PublishModel{
-		step:        publishStepDiff,
-		featureID:   featureID,
-		featureName: featureName,
-		repos:       repos,
-		planText:    planText,
-		descModel:   descModel,
-		viewport:    vp,
-		titleInput:  ti,
-		bodyInput:   ta,
-		width:       width,
-		height:      height,
-		publishable: true,
-		draft:       draft,
+		step:       publishStepDiff,
+		featureID:  featureID,
+		repos:      repos,
+		planText:   planText,
+		descModel:  descModel,
+		viewport:   vp,
+		titleInput: ti,
+		bodyInput:  ta,
+		width:      width,
+		height:     height,
+		draft:      draft,
 	}
 
 	if f != nil && len(f.Repos) > 1 {
@@ -193,10 +169,8 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 		r := repos[0]
 		m.worktreeDir = r.WorktreeDir
 		m.branch = r.Branch
-		m.repoPath = r.RepoPath
 		m.repoName = r.Name
 		m.baseBranch = r.BaseBranch
-		m.crossRefEntries = buildCrossRefEntriesFromPublishRepos(repos, featureName)
 		m.diff, m.commitLog = loadPublishRepoContext(r.WorktreeDir, r.BaseBranch)
 		m.viewport.SetContent(colorizeDiff(m.diff))
 		m.step = publishStepDiff
@@ -220,40 +194,12 @@ func loadPublishRepoContext(worktreeDir, baseBranch string) (string, string) {
 	return diff, commitLog
 }
 
-// buildCrossRefEntriesFromPublishRepos converts publish repo entries to cross-ref entries.
-func buildCrossRefEntriesFromPublishRepos(repos []publishRepoEntry, _ string) []git.CrossRefEntry {
-	entries := make([]git.CrossRefEntry, 0, len(repos))
-	for _, r := range repos {
-		entry := git.CrossRefEntry{
-			RepoName: r.Name,
-			Branch:   r.Branch,
-		}
-		switch r.PRStatus {
-		case "published":
-			entry.PRURL = r.PRURL
-		case "failed":
-			entry.PRURL = "(failed)"
-		}
-		entries = append(entries, entry)
-	}
-	return entries
-}
-
 func (m PublishModel) Init() tea.Cmd {
 	return nil
 }
 
 func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 	switch msg := msg.(type) {
-	case publishExecuteResultMsg:
-		if msg.err != nil {
-			m.errMsg = msg.err.Error()
-		} else {
-			m.prURL = msg.prURL
-		}
-		m.step = publishStepDone
-		return m, nil
-
 	case publishDescGeneratedMsg:
 		m.generating = false
 		m.prTitle = msg.title
@@ -343,8 +289,7 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.viewport.SetWidth(max(msg.Width-6, 40))
-		m.viewport.SetHeight(max(msg.Height-8, 10))
+		m.viewport.Resize(msg.Width, msg.Height)
 		m.bodyInput.SetWidth(max(msg.Width-8, 40))
 		m.bodyInput.SetHeight(max(msg.Height-14, 8))
 	}
@@ -358,16 +303,8 @@ func (m PublishModel) advanceStep() (PublishModel, tea.Cmd) {
 			selected := m.repos[m.selectedRepo]
 			m.worktreeDir = selected.WorktreeDir
 			m.branch = selected.Branch
-			m.repoPath = selected.RepoPath
 			m.repoName = selected.Name
 			m.baseBranch = selected.BaseBranch
-			m.crossRefEntries = buildCrossRefEntriesFromPublishRepos(m.repos, m.featureName)
-			// Track existing PR URL for re-publish flow
-			if selected.PRStatus == "published" && selected.PRURL != "" {
-				m.existingPRURL = selected.PRURL
-			} else {
-				m.existingPRURL = ""
-			}
 			// Load diff from selected repo
 			m.diff, m.commitLog = loadPublishRepoContext(selected.WorktreeDir, selected.BaseBranch)
 			m.viewport.SetContent(colorizeDiff(m.diff))
@@ -396,7 +333,7 @@ func (m PublishModel) advanceStep() (PublishModel, tea.Cmd) {
 		m.step = publishStepConfirm
 	case publishStepConfirm:
 		m.step = publishStepExecute
-		return m, m.executePublish()
+		return m, nil
 	case publishStepExecute:
 		m.step = publishStepDone
 	}
@@ -431,148 +368,6 @@ func (m PublishModel) generateDescription() tea.Cmd {
 		}
 		title, body, err := m.runDesc(context.Background(), model, prCtx)
 		return publishDescGeneratedMsg{title: title, body: body, err: err, featureID: featureID}
-	}
-}
-
-// executePublish performs the actual git push and PR creation.
-func (m PublishModel) executePublish() tea.Cmd {
-	worktreeDir := m.worktreeDir
-	branch := m.branch
-	repoPath := m.repoPath
-	baseBranch := m.baseBranch
-	prTitle := m.prTitle
-	prBody := m.prBody
-	repoName := m.repoName
-	featureName := m.featureName
-	crossRefEntries := m.crossRefEntries
-	existingPRURL := m.existingPRURL
-	publishable := m.publishable
-	draft := m.draft
-
-	if worktreeDir == "" || branch == "" {
-		return func() tea.Msg {
-			return publishExecuteResultMsg{
-				err: fmt.Errorf("publish not configured: missing worktree or branch"),
-			}
-		}
-	}
-
-	featureID := m.featureID
-
-	return func() tea.Msg {
-		if !publishable {
-			return publishExecuteResultMsg{
-				featureID: featureID,
-				repoName:  repoName,
-				err:       fmt.Errorf("publish skipped: feature repos are not publishable (no origin remote)"),
-			}
-		}
-
-		// For multi-repo manual publish, commit any uncommitted changes before pushing.
-		// Single-repo manual publish already commits in transitionToPublish; auto-publish
-		// commits in autoPublishRepoCmd. This ensures multi-repo parity.
-		if repoName != "" && git.HasUncommittedChanges(worktreeDir) {
-			if err := git.CommitAll(worktreeDir, featureName); err != nil {
-				return publishExecuteResultMsg{
-					featureID: featureID,
-					repoName:  repoName,
-					err:       fmt.Errorf("commit failed: %w", err),
-				}
-			}
-		}
-
-		// Pull-rebase before push to sync with any remote changes
-		prResult := git.PullRebase(worktreeDir, branch)
-		switch prResult.Outcome {
-		case git.PullRebaseConflict:
-			rebaseTarget := baseBranch
-			if rebaseTarget == "" {
-				defaultRepoPath := repoPath
-				if defaultRepoPath == "" {
-					defaultRepoPath = worktreeDir
-				}
-				rebaseTarget = git.DefaultBranch(defaultRepoPath)
-			}
-			return publishExecuteResultMsg{
-				featureID:        featureID,
-				repoName:         repoName,
-				err:              fmt.Errorf("pull-rebase conflict: %w", prResult.Err),
-				conflictDetected: true,
-				branch:           branch,
-				rebaseTarget:     rebaseTarget,
-			}
-		case git.PullRebaseFailure:
-			return publishExecuteResultMsg{
-				featureID: featureID,
-				repoName:  repoName,
-				err:       fmt.Errorf("pull-rebase failed: %w", prResult.Err),
-			}
-		}
-
-		// Push branch
-		if err := git.Push(worktreeDir, branch); err != nil {
-			return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("push failed: %w", err)}
-		}
-
-		// Create or update PR
-		effectiveRepoPath := repoPath
-		if effectiveRepoPath == "" {
-			effectiveRepoPath = worktreeDir
-		}
-
-		if prTitle == "" {
-			prTitle = "Feature implementation"
-		}
-		if prBody == "" {
-			prBody = "Automated PR from agentic workflow orchestrator."
-		}
-
-		var prURL string
-		if existingPRURL != "" {
-			// Re-publish: push already done above; update existing PR body
-			prURL = existingPRURL
-			updatedBody := git.InjectPRSignature(prBody)
-			if updateErr := git.UpdatePRBody(prURL, updatedBody); updateErr != nil {
-				log.Printf("re-publish: failed to update PR body for %s: %v", prURL, updateErr)
-			}
-		} else {
-			var err error
-			prURL, err = git.CreatePR(effectiveRepoPath, branch, prTitle, prBody, draft, baseBranch)
-			if err != nil {
-				return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("PR creation failed: %w", err)}
-			}
-		}
-
-		// Inject cross-references for multi-repo features
-		if len(crossRefEntries) > 1 {
-			// Update entries with the current PR URL
-			updatedEntries := make([]git.CrossRefEntry, len(crossRefEntries))
-			copy(updatedEntries, crossRefEntries)
-			for i := range updatedEntries {
-				if updatedEntries[i].RepoName == repoName {
-					updatedEntries[i].PRURL = prURL
-					break
-				}
-			}
-			crossRefSection := git.BuildCrossReferenceSection(featureName, updatedEntries)
-			if crossRefSection != "" {
-				currentBody, getErr := git.GetPRBody(prURL)
-				if getErr != nil {
-					log.Printf("cross-ref: failed to get PR body for %s: %v", prURL, getErr)
-				} else {
-					updatedBody := git.InjectCrossReferenceSection(currentBody, crossRefSection)
-					if updateErr := git.UpdatePRBody(prURL, updatedBody); updateErr != nil {
-						log.Printf("cross-ref: failed to update PR body for %s: %v", prURL, updateErr)
-					}
-				}
-				// Retroactively update earlier PRs
-				if retroErr := git.RetroactivelyUpdateCrossRefs(featureName, updatedEntries, repoName); retroErr != nil {
-					log.Printf("cross-ref: failed to retroactively update PRs: %v", retroErr)
-				}
-			}
-		}
-
-		return publishExecuteResultMsg{prURL: prURL, repoName: repoName}
 	}
 }
 
@@ -620,12 +415,10 @@ func (m PublishModel) View() string {
 		content = sel.String()
 
 	case publishStepDiff:
-		title = "Diff Review"
-		content = m.viewport.View()
+		title = diffReviewTitle
 
 	case publishStepCommits:
 		title = "Commit Log"
-		content = m.viewport.View()
 
 	case publishStepPRDesc:
 		title = "PR Description"
@@ -673,15 +466,18 @@ func (m PublishModel) View() string {
 		}
 	}
 
-	box := panelStyle(true).Width(boxWidth).Render(content)
-	box = renderBorderTitle(box, title, TitleStyle)
+	var box string
+	if m.step == publishStepDiff || m.step == publishStepCommits {
+		box = renderReviewViewportBox(boxWidth, title, m.viewport)
+	} else {
+		box = renderBorderTitle(panelStyle(true).Width(boxWidth).Render(content), title, TitleStyle)
+	}
 	b.WriteString(" " + strings.ReplaceAll(box, "\n", "\n "))
 
 	// Scroll indicator for viewport steps
 	if m.step == publishStepDiff || m.step == publishStepCommits {
-		pct := m.viewport.ScrollPercent()
 		b.WriteString("\n")
-		b.WriteString(MutedStyle.Render(fmt.Sprintf("  %3.0f%%", pct*100)))
+		b.WriteString(renderReviewViewportScrollPercent(m.viewport))
 	}
 
 	b.WriteString("\n")

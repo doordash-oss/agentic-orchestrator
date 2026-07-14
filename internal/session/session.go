@@ -1441,6 +1441,7 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 // Claude Agent SDK `annotations` field of `updatedInput`.
 func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
 	s.captureAskUserResponse(requestID, questions, answers, annotations, nil)
+	s.appendAskUserMessages(questions, answers, nil)
 
 	if s.protocol != nil {
 		return s.protocol.RespondToAskUser(requestID, questions, answers, annotations)
@@ -1457,33 +1458,91 @@ func (s *Session) respondToAskUserAutoPicked(requestID string, questions json.Ra
 		return err
 	}
 	s.captureAskUserResponse(requestID, questions, answers, nil, confidenceByQuestion)
-	s.appendAutoPickedAskUserMessages(questions, answers, confidenceByQuestion)
+	s.appendAskUserMessages(questions, answers, confidenceByQuestion)
 	return nil
 }
 
-func (s *Session) appendAutoPickedAskUserMessages(questions json.RawMessage, answers map[string]string, confidenceByQuestion map[string]float64) {
-	if len(answers) == 0 || len(confidenceByQuestion) == 0 {
+// appendAskUserMessages appends locally-recorded AskUserQuestion answers to the
+// message log, in presented order. confidenceByQuestion is non-nil for the
+// auto-picked path (answers get tagged with auto-pick metadata) and nil for
+// the manual path.
+func (s *Session) appendAskUserMessages(questions json.RawMessage, answers map[string]string, confidenceByQuestion map[string]float64) {
+	autoPicked := confidenceByQuestion != nil
+	if autoPicked {
+		if len(answers) == 0 || len(confidenceByQuestion) == 0 {
+			return
+		}
+	} else if len(answers) == 0 || s.messageLog == nil {
 		return
 	}
-	for _, q := range askUserAnswerKeysInPresentedOrder(questions, answers) {
-		confidence, ok := confidenceByQuestion[q]
-		if !ok || answers[q] == "" {
+
+	keys := askUserAnswerKeysInPresentedOrder(questions, answers)
+	if !autoPicked && (len(keys) == 0 || s.hasTrailingManualAskUserMessages(keys, answers)) {
+		return
+	}
+
+	for _, q := range keys {
+		answer := answers[q]
+		var confidence float64
+		if autoPicked {
+			c, ok := confidenceByQuestion[q]
+			if !ok || answer == "" {
+				continue
+			}
+			confidence = c
+		} else if answer == "" {
 			continue
 		}
-		s.messageLog.Append(llm.SDKMessage{
-			Type:               "user",
-			LocallyAppended:    true,
-			AutoPicked:         true,
-			AutoPickQuestion:   q,
-			AutoPickConfidence: confidence,
+
+		msg := llm.SDKMessage{
+			Type:            "user",
+			LocallyAppended: true,
 			User: &llm.UserMessage{
 				Message: llm.ConversationMsg{
 					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: answers[q]}},
+					Content: []llm.ContentBlock{{Type: "text", Text: answer}},
 				},
 			},
-		})
+		}
+		if autoPicked {
+			msg.AutoPicked = true
+			msg.AutoPickQuestion = q
+			msg.AutoPickConfidence = confidence
+		}
+		s.messageLog.Append(msg)
 	}
+}
+
+func (s *Session) hasTrailingManualAskUserMessages(keys []string, answers map[string]string) bool {
+	if s.messageLog == nil {
+		return false
+	}
+	want := make([]string, 0, len(keys))
+	for _, q := range keys {
+		if answer := answers[q]; answer != "" {
+			want = append(want, answer)
+		}
+	}
+	if len(want) == 0 {
+		return true
+	}
+	msgs := s.messageLog.Messages()
+	if len(msgs) < len(want) {
+		return false
+	}
+	msgs = msgs[len(msgs)-len(want):]
+	for i, msg := range msgs {
+		if msg.User == nil || !msg.LocallyAppended || msg.AutoPicked {
+			return false
+		}
+		if len(msg.User.Message.Content) != 1 || !msg.User.Message.Content[0].IsText() {
+			return false
+		}
+		if msg.User.Message.Content[0].Text != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Session) captureAskUserResponse(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation, confidenceByQuestion map[string]float64) {
@@ -1722,7 +1781,7 @@ func (s *Session) Wait() {
 // be torn down after a Result message. Single-shot autonomous sessions need
 // wrapper cleanup (stdin close + SIGTERM/SIGKILL watchdog) to unstick a
 // process.Wait() that would otherwise hang on the wrapper's `cat`.
-// Multi-turn server CLIs (Codex `app-server`) and interactive Tweak sessions
+// Multi-turn server CLIs (Codex `app-server`) and interactive sessions
 // stay alive after a Result and must not be torn down here; Stop() or user EOF
 // is the explicit cleanup path for them. Loop-managed Claude sessions also
 // keep stdin open for truncated turns so the waiter can send its auto-resume
@@ -1730,11 +1789,10 @@ func (s *Session) Wait() {
 func (s *Session) shouldShutdownOnResult(result *llm.ResultMessage) bool {
 	s.mu.Lock()
 	name := s.providerName
-	kind := s.kind
 	turnMode := s.turnMode
 	keepAliveOnTruncatedResult := s.keepAliveOnTruncatedResult
 	s.mu.Unlock()
-	if turnMode == ports.TurnModeInteractive || kind == ports.KindTweak {
+	if turnMode == ports.TurnModeInteractive {
 		return false
 	}
 	if keepAliveOnTruncatedResult && result.IsTurnTruncated() {

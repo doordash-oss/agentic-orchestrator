@@ -564,6 +564,46 @@ func TestPromptEndTurn_MalformedQuestionRemindsThenSynthesizes(t *testing.T) {
 	}
 }
 
+// TestPromptEndTurn_InteractiveNeverSynthesizesQuestion proves an Interactive
+// session (AMA chat, where a human answers every turn directly) never
+// synthesizes an AskUserQuestion picker, no matter how question-shaped the
+// final text is: the text-parsing pipeline exists only to imitate Claude's
+// native tool-call UX for a provider that can otherwise only express a
+// question as plain text, and a human reading the chat gets no benefit from
+// that imitation — they can just read whatever the model asked and reply with
+// an ordinary follow-up message.
+func TestPromptEndTurn_InteractiveNeverSynthesizesQuestion(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"numbered options", strings.Join([]string{
+			"Which database should I target?",
+			"1. Postgres (Recommended): Mature and well-supported.",
+			"2. MySQL: Familiar but fewer features.",
+			"3. SQLite: Simplest but single-writer.",
+		}, "\n")},
+		{"bare question", "Should I proceed with the destructive migration?"},
+		{"FREE_FORM sentinel", "FREE_FORM: What exact version string should I tag the release with?"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p, buf, promptID := newPostHandshakeProtocol(t, llm.ProtocolOpts{
+				Model:       "opencode:anthropic/claude-sonnet-4-5",
+				Interactive: true,
+			})
+			streamAssistantText(t, p, c.text)
+			msgs := endTurn(t, p, promptID)
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+				t.Fatalf("produced %+v, want a success result", msgs)
+			}
+			if buf.String() != "" {
+				t.Fatalf("sent a reformat reminder %q, want none", buf.String())
+			}
+		})
+	}
+}
+
 // TestPromptEndTurn_NonQuestionIsCleanSuccess proves a final text that is not a
 // question still completes as a success result — synthesis must not hijack a
 // normal completion (Task 3 / Task 4).
@@ -573,6 +613,53 @@ func TestPromptEndTurn_NonQuestionIsCleanSuccess(t *testing.T) {
 	msgs := endTurn(t, p, promptID)
 	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
 		t.Fatalf("non-question end_turn produced %+v, want a success result", msgs)
+	}
+}
+
+// TestPromptEndTurn_SecondTurnAlsoEmitsSuccess proves a session's SECOND clean
+// completion also reaches the caller as a success result — not just the
+// first. markTerminal's one-shot latch is meant to seal a session's FINAL
+// outcome (so a late duplicate can't overturn it), but a multi-turn session
+// (e.g. AMA chat, where one Protocol instance serves many user messages) must
+// still get a fresh terminal result for every turn, or the caller's UI is left
+// waiting forever after the first reply.
+func TestPromptEndTurn_SecondTurnAlsoEmitsSuccess(t *testing.T) {
+	p, _, promptID1 := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, "First answer.")
+	msgs1 := endTurn(t, p, promptID1)
+	if len(msgs1) != 1 || msgs1[0].Result == nil || !msgs1[0].Result.IsSuccess() {
+		t.Fatalf("first turn produced %+v, want a success result", msgs1)
+	}
+
+	if err := p.SendUserMessage("second question"); err != nil {
+		t.Fatalf("SendUserMessage: %v", err)
+	}
+	promptID2 := p.promptIDForTest()
+	streamAssistantText(t, p, "Second answer.")
+	msgs2 := endTurn(t, p, promptID2)
+	if len(msgs2) != 1 || msgs2[0].Result == nil || !msgs2[0].Result.IsSuccess() {
+		t.Fatalf("second turn produced %+v, want a success result", msgs2)
+	}
+}
+
+// TestPromptEndTurn_InformationalNumberedListIsCleanSuccess proves a final text
+// that merely summarizes findings as a numbered list — with no question mark
+// anywhere — completes as a success result rather than being hijacked into a
+// reformat-into-a-question loop. AMA answers routinely enumerate findings or
+// steps this way, and parseNumberedOptions must not treat every such list as an
+// unformatted AskUserQuestion (Task 3 regression: "every turn ends with a
+// picker").
+func TestPromptEndTurn_InformationalNumberedListIsCleanSuccess(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, strings.Join([]string{
+		"Here is what I found:",
+		"1. The config loader ignores env overrides.",
+		"2. The default timeout is 30s.",
+		"3. Logs are written to /tmp/agentico.log.",
+	}, "\n"))
+	msgs := endTurn(t, p, promptID)
+	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+		t.Fatalf("informational numbered list produced %+v, want a success result", msgs)
 	}
 }
 

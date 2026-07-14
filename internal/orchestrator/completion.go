@@ -211,6 +211,11 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	if err != nil {
 		return err
 	}
+	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, feature.PhaseKnowledgeBase, kbDir, repoName)
+	if err != nil {
+		return fmt.Errorf("enforce knowledge base read-only repo guard: %w", err)
+	}
+	violations = append(violations, repoMutationViolations...)
 
 	if kbDir == "" && len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
@@ -410,6 +415,9 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	completeFn func(string) error,
 ) error {
 	if !input.Success {
+		if f, _ := o.deps.Lifecycle.Get(featureID); isTerminalForCompletion(f) {
+			return nil
+		}
 		// LastError keeps the "<Phase> phase failed: <detail>" format so
 		// downstream reporters (banners, observe-summary.yaml) can attribute
 		// the failure to a specific phase even when ErrorDetail is a bare
@@ -434,6 +442,11 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	if err != nil {
 		return err
 	}
+	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, input.Phase, phaseDir)
+	if err != nil {
+		return fmt.Errorf("enforce %s read-only repo guard: %w", phaseKey, err)
+	}
+	violations = append(violations, repoMutationViolations...)
 	if phaseDir == "" && len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(artifactPhaseRoleMust(input.Phase), phaseDir, violations)
 		o.emitPhaseCompleted(featureID, input.Phase, errors.New(errMsg))
@@ -611,12 +624,26 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
+	planDir := o.planReadOnlyGuardDir(f)
+	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, feature.PhasePlan, planDir)
+	if err != nil {
+		return fmt.Errorf("enforce plan read-only repo guard: %w", err)
+	}
+	if len(repoMutationViolations) > 0 {
+		role := agent.RolePlanRoadmapPlanner
+		if f.CurrentRoadmapPhase > 0 {
+			role = agent.RolePlanPhasePlanner
+		}
+		errMsg := formatSingleShotProtocolViolationError(role, planDir, repoMutationViolations)
+		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+	}
 
 	switch result.FinalStatus {
 	case "approved":
 		return o.onPlanApproved(featureID, f)
 	case "needs_human_review":
-		return o.onPlanNeedsReview(featureID, f)
+		return o.onPlanNeedsReview(featureID)
 	case "failed":
 		errMsg := result.LastError
 		if errMsg == "" {
@@ -631,7 +658,7 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 		}
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
-	case "interrupted":
+	case finalStatusInterrupted:
 		// Interrupted runs are driven by InterruptFeature; nothing to do.
 		return nil
 	default:
@@ -757,9 +784,7 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 // explicit "I need a human" escalation should be honored. Failing the
 // feature here would discard a working plan over an exception path the
 // user can resolve in a few seconds.
-//
-// f is unused but retained for symmetry with the other completion handlers.
-func (o *Orchestrator) onPlanNeedsReview(featureID string, _ *feature.Feature) error {
+func (o *Orchestrator) onPlanNeedsReview(featureID string) error {
 	if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
 		return fmt.Errorf("mark needs plan review: %w", err)
 	}
@@ -790,7 +815,7 @@ func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseComplet
 	if input.MultiRepoResult != nil {
 		return o.onMultiRepoImplementDone(featureID, input.MultiRepoResult)
 	}
-	if input.ImplementResult != nil && input.ImplementResult.FinalStatus == "need_user_input" {
+	if input.ImplementResult != nil && input.ImplementResult.FinalStatus == finalStatusNeedUserInput {
 		return o.onSingleRepoNeedUserInput(featureID, input.ImplementResult)
 	}
 	errMsg := "implement completion missing multi-repo result"
@@ -811,17 +836,17 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 	}
 
 	switch result.FinalStatus {
-	case "all_passed", "awaiting_final_review":
+	case finalStatusAllPassed, "awaiting_final_review":
 		// "all_passed" is the inline Final Review path. "awaiting_final_review"
 		// means every touched repo is staged for the deferred end-of-feature
 		// Final Review pass. onMultiReposPassed dispatches that review for the
 		// final-or-non-roadmap path before MarkCodeReady.
 		return o.onMultiReposPassed(featureID, f)
-	case "interrupted":
+	case finalStatusInterrupted:
 		// Graceful shutdown — shutdownFeatures will transition the feature to
 		// StatusInterrupted. We must NOT mark the feature Failed here.
 		return nil
-	case "need_user_input":
+	case finalStatusNeedUserInput:
 		// Under SchemaVersionCurrent = 4 the NEED_USER_INPUT gate is
 		// feature-scoped (Feature.PendingNeedUserInputPath). Persist the
 		// gate path and transition the feature into StatusNeedUserInput so
@@ -846,7 +871,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		if summary == "" {
 			var paused []string
 			for repoName, status := range result.RepoStatuses {
-				if status == "need_user_input" {
+				if status == finalStatusNeedUserInput {
 					paused = append(paused, repoName)
 				}
 			}
@@ -870,7 +895,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 			Message:   summary,
 		})
 		return nil
-	case "plan_revision_required":
+	case finalStatusPlanRevisionRequired:
 		return o.routeMissingEvidencePlanRevision(featureID, f, result.PlanRevisionFeedback)
 	case "failed":
 		errMsg := result.LastError
@@ -1024,7 +1049,7 @@ func (o *Orchestrator) moveFeatureToPlanningForEvidenceRevision(featureID string
 //
 // Idempotent: if the feature has already been advanced out of
 // StatusImplementing (e.g. because a sibling completion trigger ran first),
-// return nil so the async dispatchMultiRepoResults path is a safe no-op.
+// return nil so the async phase-supervisor result path is a safe no-op.
 // Without this guard, a double-call would fail CompleteImplementation's
 // invalid transition check, propagate as an error, and cause
 // surfaceDispatchCompletionError to wrongly mark the feature Failed.
@@ -1331,34 +1356,46 @@ func reposNeedFinalReview(f *feature.Feature) bool {
 // remains unchanged). On failure marks the feature failed and returns the
 // error so the caller short-circuits.
 func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
+	resultCh, err := o.startDeferredFinalReview(featureID)
+	if err != nil {
+		return err
+	}
+	res, ok := <-resultCh
+	return o.finishDeferredFinalReviewResult(featureID, res, ok)
+}
+
+func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.OrchestratorResult, error) {
 	if err := o.deps.Lifecycle.MarkFinalReviewReady(featureID); err != nil {
-		return fmt.Errorf("mark final review ready: %w", err)
+		return nil, fmt.Errorf("mark final review ready: %w", err)
 	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		return fmt.Errorf("load feature for final review: %w", err)
+		return nil, fmt.Errorf("load feature for final review: %w", err)
 	}
 
 	runFn := o.runMultiRepoFinalReviewFn
 	if runFn == nil {
 		errMsg := "runMultiRepoFinalReviewFn not configured"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
 	resultCh, err := runFn(f, o.computeKBInfos(f)...)
 	if err != nil {
 		errMsg := fmt.Sprintf("dispatch final review: %v", err)
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
-	res, ok := <-resultCh
+	return resultCh, nil
+}
+
+func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *agent.OrchestratorResult, ok bool) error {
 	if !ok || res == nil {
 		errMsg := "final review returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
 	switch res.FinalStatus {
-	case "all_passed":
+	case finalStatusAllPassed:
 		// Roll status back to ReviewPassed so the trailing MarkCodeReady /
 		// auto-publish path in onMultiReposPassed sees the same precondition
 		// as before the FR detour.
@@ -1369,7 +1406,7 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return nil
-	case "interrupted":
+	case finalStatusInterrupted:
 		// Shutdown handler will land the feature in StatusInterrupted; nothing
 		// to do here beyond surfacing the phase-completed event. Return the
 		// sentinel so onMultiReposPassed and surfaceDispatchCompletionError
@@ -1379,7 +1416,7 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 		// failure_type=infrastructure.
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
-	case "plan_revision_required":
+	case finalStatusPlanRevisionRequired:
 		errMsg := "final review requested unsupported phase-plan revision"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)

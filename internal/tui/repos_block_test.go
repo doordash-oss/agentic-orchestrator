@@ -21,6 +21,19 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// testRepoNameWorker is a fixture repo-name literal reused across this
+// file's freshness-suffix tests.
+const testRepoNameWorker = "worker"
+
+// reposBlockFreshnessLocalChanges, reposBlockFreshnessInSync, and
+// reposBlockFreshnessLocalOnly are fixture RepoState.Freshness values reused
+// across this file's freshness-suffix tests.
+const (
+	reposBlockFreshnessLocalChanges = "local changes"
+	reposBlockFreshnessInSync       = "in sync"
+	reposBlockFreshnessLocalOnly    = "local only"
+)
+
 // stripANSI removes ANSI colour escape sequences so assertions can match the
 // plain text payload of a rendered row.
 func stripANSI(s string) string {
@@ -152,12 +165,6 @@ func TestRenderReposBlockCycleSuffix(t *testing.T) {
 			want:      []string{"⟳", "rebasing"},
 		},
 		{
-			name:      "tweak running",
-			cycleType: feature.CycleTweak,
-			status:    feature.RepoCycleRunning,
-			want:      []string{"⟳", "tweaking"},
-		},
-		{
 			name:      "refactor running",
 			cycleType: feature.CycleRefactor,
 			status:    feature.RepoCycleRunning,
@@ -175,12 +182,6 @@ func TestRenderReposBlockCycleSuffix(t *testing.T) {
 			status:    feature.RepoCycleFailed,
 			lastErr:   "merge conflict",
 			want:      []string{"✗", "rebase failed", "merge conflict"},
-		},
-		{
-			name:      "tweak needs input",
-			cycleType: feature.CycleTweak,
-			status:    feature.RepoCycleNeedUserInput,
-			want:      []string{"⚠", "tweak needs input"},
 		},
 		{
 			name:      "refactor needs input",
@@ -224,6 +225,60 @@ func TestRenderReposBlockCycleSuffix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRenderReposBlockFreshnessSuffix(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status: feature.StatusCodeReady,
+		Repos:  []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}, {Name: testRepoNameWorker}},
+		RepoStates: map[string]*feature.RepoState{
+			testRepoNameAPI:    {Touched: true, Freshness: reposBlockFreshnessLocalChanges},
+			testRepoNameWeb:    {Touched: true, Freshness: reposBlockFreshnessInSync},
+			testRepoNameWorker: {Touched: true, Freshness: reposBlockFreshnessLocalOnly},
+		},
+	}
+
+	rows := renderReposBlock(f)
+	joined := stripANSI(strings.Join(rows, "\n"))
+	for _, want := range []string{testRepoNameAPI, reposBlockFreshnessLocalChanges, testRepoNameWeb, reposBlockFreshnessInSync, testRepoNameWorker, reposBlockFreshnessLocalOnly} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("renderReposBlock() missing %q in:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "unknown") {
+		t.Fatalf("renderReposBlock() should not render unknown freshness:\n%s", joined)
+	}
+}
+
+func TestRenderReposBlockRebaseOperationSuffix(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status: feature.StatusCodeReady,
+		Repos:  []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
+		RepoStates: map[string]*feature.RepoState{
+			testRepoNameAPI: {Touched: true, Freshness: reposBlockFreshnessLocalChanges},
+			testRepoNameWeb: {Touched: true, Freshness: reposBlockFreshnessInSync},
+		},
+		RebaseOperation: &feature.RebaseOperationState{
+			Stage: feature.RebaseStageSmartRebase,
+			Repos: map[string]*feature.RebaseRepoProgress{
+				testRepoNameAPI: {Status: feature.RebaseRepoStatusConflict, ConflictFiles: []string{"service.go"}},
+				testRepoNameWeb: {Status: feature.RebaseRepoStatusUpToDate},
+			},
+		},
+	}
+
+	rows := renderReposBlock(f)
+	joined := stripANSI(strings.Join(rows, "\n"))
+	for _, want := range []string{testRepoNameAPI, "conflict: service.go", reposBlockFreshnessLocalChanges, testRepoNameWeb, reposBlockFreshnessInSync} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("renderReposBlock() missing %q in:\n%s", want, joined)
+		}
+	}
+	if strings.Count(joined, testRepoNameWeb) != 1 || strings.Count(joined, reposBlockFreshnessInSync) != 1 {
+		t.Fatalf("renderReposBlock() should not duplicate up-to-date freshness:\n%s", joined)
 	}
 }
 
@@ -425,19 +480,6 @@ func TestRenderMetadataIncludesReposBlock(t *testing.T) {
 		},
 	}
 	m := NewDetailModel(f, "")
-	m.width = 100
-	m.height = 60
-
-	full := stripANSI(m.renderMetadataFull(f))
-	if !strings.Contains(full, "Repo Status") {
-		t.Error("expected 'Repo Status' label in renderMetadataFull")
-	}
-	if !strings.Contains(full, "https://github.com/org/alpha/pull/9") {
-		t.Error("expected PR URL row in full metadata")
-	}
-	if !strings.Contains(full, "unpublished") {
-		t.Error("expected 'unpublished' row in full metadata")
-	}
 
 	compact := stripANSI(m.renderMetadataCompact(f))
 	if !strings.Contains(compact, "Repo Status") {

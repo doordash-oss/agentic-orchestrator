@@ -21,8 +21,8 @@ import (
 	"testing"
 )
 
-// Guards live docs contract: TUI-only launch guidance across user-facing docs.
-func TestUserFacingDocsDescribeTUIOnlyLaunchSurface(t *testing.T) {
+// Guards live docs contract: API-backed TUI plus foreground server launch guidance.
+func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	docs := []string{"README.md"}
 	userGuideDocs, err := filepath.Glob(filepath.Join(repoRoot, "skills", "chat", "user-guide", "*.md"))
@@ -46,6 +46,8 @@ func TestUserFacingDocsDescribeTUIOnlyLaunchSurface(t *testing.T) {
 		"feature create     Create a new feature",
 		"agentico feature create",
 		"`agentico feature create`",
+		"direct TUI",
+		"starts the direct TUI",
 		"--name <name>",
 		"--repo <path>",
 		"--jira <ticket>",
@@ -92,6 +94,9 @@ func TestUserFacingDocsDescribeTUIOnlyLaunchSurface(t *testing.T) {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing retained launch guidance %q", rel, want)
 			}
+		}
+		if !strings.Contains(text, "agentico server") {
+			t.Fatalf("%s missing server launch guidance", rel)
 		}
 	}
 }

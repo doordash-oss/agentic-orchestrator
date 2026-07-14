@@ -84,38 +84,35 @@ func DetachKeyHint() string {
 }
 
 type keyMap struct {
-	Quit              key.Binding
-	New               key.Binding
-	Enter             key.Binding
-	Back              key.Binding
-	Publish           key.Binding
-	Attach            key.Binding
-	Approve           key.Binding
-	Help              key.Binding
-	Restart           key.Binding
-	Stop              key.Binding
-	Rewind            key.Binding
-	Delete            key.Binding
-	Up                key.Binding
-	Down              key.Binding
-	Advance           key.Binding
-	Tab               key.Binding
-	ViewDiff          key.Binding
-	CleanWorktree     key.Binding
-	ManualPublish     key.Binding
-	ResumeAll         key.Binding
-	Rebase            key.Binding
-	MergeLocal        key.Binding
-	MarkDone          key.Binding
-	ReviewComments    key.Binding
-	Tweak             key.Binding
-	Refactor          key.Binding
-	EditConfig        key.Binding
-	ViewLogs          key.Binding
-	Overview          key.Binding
-	Chat              key.Binding
-	HelpOverlay       key.Binding
-	ToggleInputNotify key.Binding
+	Quit           key.Binding
+	New            key.Binding
+	Enter          key.Binding
+	Back           key.Binding
+	Publish        key.Binding
+	Attach         key.Binding
+	Approve        key.Binding
+	Help           key.Binding
+	Restart        key.Binding
+	Stop           key.Binding
+	Rewind         key.Binding
+	Delete         key.Binding
+	Up             key.Binding
+	Down           key.Binding
+	Advance        key.Binding
+	Tab            key.Binding
+	ViewDiff       key.Binding
+	CleanWorktree  key.Binding
+	ResumeAll      key.Binding
+	Rebase         key.Binding
+	MergeLocal     key.Binding
+	MarkDone       key.Binding
+	ReviewComments key.Binding
+	Refactor       key.Binding
+	EditConfig     key.Binding
+	ViewLogs       key.Binding
+	Overview       key.Binding
+	Chat           key.Binding
+	HelpOverlay    key.Binding
 
 	// Dashboard panel navigation
 	PanelLeft  key.Binding
@@ -151,38 +148,35 @@ type keyMap struct {
 }
 
 var keys = keyMap{
-	Quit:              key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	New:               key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new feature")),
-	Enter:             key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
-	Back:              key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	Publish:           key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "publish")),
-	Attach:            key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "watch")),
-	Approve:           key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "approve permissions")),
-	Help:              key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "answer help")),
-	Restart:           key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart phase")),
-	Stop:              key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stop feature")),
-	Rewind:            key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "rewind")),
-	Delete:            key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete feature")),
-	Up:                key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up", "move up")),
-	Down:              key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down", "move down")),
-	Advance:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "advance phase")),
-	Tab:               key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch panel")),
-	ViewDiff:          key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "view diff")),
-	CleanWorktree:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clean worktree")),
-	ManualPublish:     key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "mark manually published")),
-	ResumeAll:         key.NewBinding(key.WithKeys("R"), key.WithHelp("Shift+R", "resume all")),
-	Rebase:            key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "rebase on main")),
-	MergeLocal:        key.NewBinding(key.WithKeys("M"), key.WithHelp("Shift+M", "merge to base branch")),
-	MarkDone:          key.NewBinding(key.WithKeys("D"), key.WithHelp("Shift+D", "mark as done")),
-	ReviewComments:    key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "review comments")),
-	Tweak:             key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tweak implementation")),
-	Refactor:          key.NewBinding(key.WithKeys("F"), key.WithHelp("Shift+F", "refactor")),
-	EditConfig:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
-	ViewLogs:          key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "view logs")),
-	Overview:          key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "overview")),
-	Chat:              key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "ask anything")),
-	HelpOverlay:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-	ToggleInputNotify: key.NewBinding(key.WithKeys("N"), key.WithHelp("Shift+N", "toggle input alerts")),
+	Quit:           key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	New:            key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new feature")),
+	Enter:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
+	Back:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+	Publish:        key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "publish")),
+	Attach:         key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "watch")),
+	Approve:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "approve permissions")),
+	Help:           key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "answer help")),
+	Restart:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart phase")),
+	Stop:           key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stop feature")),
+	Rewind:         key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "rewind")),
+	Delete:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete feature")),
+	Up:             key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up", "move up")),
+	Down:           key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down", "move down")),
+	Advance:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "advance phase")),
+	Tab:            key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch panel")),
+	ViewDiff:       key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "view diff")),
+	CleanWorktree:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clean worktree")),
+	ResumeAll:      key.NewBinding(key.WithKeys("R"), key.WithHelp("Shift+R", "resume all")),
+	Rebase:         key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "rebase on main")),
+	MergeLocal:     key.NewBinding(key.WithKeys("M"), key.WithHelp("Shift+M", "merge to base branch")),
+	MarkDone:       key.NewBinding(key.WithKeys("D"), key.WithHelp("Shift+D", "mark as done")),
+	ReviewComments: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "review comments")),
+	Refactor:       key.NewBinding(key.WithKeys("F"), key.WithHelp("Shift+F", "refactor")),
+	EditConfig:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
+	ViewLogs:       key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "view logs")),
+	Overview:       key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "overview")),
+	Chat:           key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "ask anything")),
+	HelpOverlay:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 
 	// Dashboard panel navigation
 	PanelLeft:  key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "focus list")),

@@ -128,10 +128,10 @@ func (o *Orchestrator) cleanupOrphanRuns() error {
 
 // ExecuteRecovery dispatches a batch of recovery actions. For each item with
 // an entry in the actions map, emits ports.RecoveryExecuted and fires
-// Hooks.OnRecoveryAction. Items whose action is RecoveryResume (and which are
-// not part of a tweak cycle) trigger a re-dispatch of the feature's current
-// phase via startPhase. Phase re-dispatch errors are collected and returned
-// via errors.Join but do not suppress event emission.
+// Hooks.OnRecoveryAction. Items whose action is RecoveryResume trigger a
+// re-dispatch of the feature's current phase via startPhase. Phase
+// re-dispatch errors are collected and returned via errors.Join but do not
+// suppress event emission.
 func (o *Orchestrator) ExecuteRecovery(
 	ctx context.Context,
 	items []ports.RecoveryItem,
@@ -167,15 +167,6 @@ func (o *Orchestrator) ExecuteRecovery(
 
 	// Build dedup map for relaunch: a multi-repo feature may have several
 	// items, but we want to re-dispatch its current phase at most once.
-	//
-	// Filter out tweak cycles via ports.IsRecoveryTweakSession — the same
-	// predicate the session recovery layer uses (defined in ports for
-	// backend-agnostic classification).
-	// Tweak sessions (single-repo via Feature.ActiveCycleType *or* multi-repo
-	// via Feature.RepoCycles[repo].Type) are interactive and explicitly
-	// non-resumable — the session layer treats them as kill on a stale
-	// RecoveryResume action, so the orchestrator must not enqueue them for
-	// relaunch either.
 	resumedFeatures := make(map[string]feature.Phase)
 	var resumedOrder []string
 	for _, item := range items {
@@ -185,9 +176,6 @@ func (o *Orchestrator) ExecuteRecovery(
 		key := ports.RecoveryActionKey(item.Feature.ID, item.RepoName)
 		action, ok := actions[key]
 		if !ok || action != ports.RecoveryResume {
-			continue
-		}
-		if ports.IsRecoveryTweakSession(item) {
 			continue
 		}
 		if _, exists := resumedFeatures[item.Feature.ID]; !exists {

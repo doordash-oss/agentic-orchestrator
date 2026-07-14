@@ -16,9 +16,6 @@ package tui
 
 import (
 	"testing"
-
-	tea "charm.land/bubbletea/v2"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
 func TestAllHelpContextsNonEmpty(t *testing.T) {
@@ -131,7 +128,7 @@ func TestDashboardContextBindings(t *testing.T) {
 	if features == nil {
 		t.Fatal("missing FEATURES section")
 	}
-	for _, k := range []string{"n", "Shift+N", "d", "v", "p", "Shift+R", "Shift+A"} {
+	for _, k := range []string{"n", "d", "v", "p", "Shift+R", "Shift+A"} {
 		if !sectionContainsKey(features, k) {
 			t.Errorf("FEATURES missing key %q", k)
 		}
@@ -169,7 +166,7 @@ func TestDetailPanelContextBindings(t *testing.T) {
 	if actions == nil {
 		t.Fatal("missing ACTIONS section")
 	}
-	for _, k := range []string{"y", "h", "Shift+N", "r", "ctrl+r", "l", "v", "d"} {
+	for _, k := range []string{"y", "h", "r", "ctrl+r", "l", "v", "d"} {
 		if !sectionContainsKey(actions, k) {
 			t.Errorf("ACTIONS missing key %q", k)
 		}
@@ -179,7 +176,7 @@ func TestDetailPanelContextBindings(t *testing.T) {
 	if publish == nil {
 		t.Fatal("missing PUBLISH section")
 	}
-	for _, k := range []string{"p", "m", "t", "b", "Shift+D", "g", "c"} {
+	for _, k := range []string{"p", "b", "Shift+D", "g", "c"} {
 		if !sectionContainsKey(publish, k) {
 			t.Errorf("PUBLISH missing key %q", k)
 		}
@@ -192,6 +189,19 @@ func TestDetailPanelContextBindings(t *testing.T) {
 	for _, k := range []string{"/", "?"} {
 		if !sectionContainsKey(tools, k) {
 			t.Errorf("TOOLS missing key %q", k)
+		}
+	}
+}
+
+func TestHelpContextsOmitManualPublishShortcut(t *testing.T) {
+	for name, ctx := range AllHelpContexts() {
+		for _, section := range ctx.Sections {
+			if section.Title != "PUBLISH" {
+				continue
+			}
+			if sectionContainsKey(&section, "m") {
+				t.Fatalf("%s PUBLISH section still advertises removed manual publish shortcut", name)
+			}
 		}
 	}
 }
@@ -253,9 +263,13 @@ func TestReviewCommentsContextBindings(t *testing.T) {
 	if actions == nil {
 		t.Fatal("missing ACTIONS section")
 	}
-	for _, k := range []string{"Shift+A", "esc"} {
-		if !sectionContainsKey(actions, k) {
-			t.Errorf("ACTIONS missing key %q", k)
+	navigation := findSectionByTitle(&ctx, "NAVIGATION")
+	if navigation == nil {
+		t.Fatal("missing NAVIGATION section")
+	}
+	for _, k := range []string{"Shift+A", "enter", "space", "/", "←/→", "↑/k", "↓/j", "PgUp/PgDn", "esc"} { //nolint:goconst // "space" is a generic key-name assertion, matching production's inline key-binding literal, not a reusable test concept
+		if !sectionContainsKey(actions, k) && !sectionContainsKey(navigation, k) {
+			t.Errorf("Review Comments help missing key %q", k)
 		}
 	}
 }
@@ -323,7 +337,7 @@ func TestDetailViewContextBindings(t *testing.T) {
 	if actions == nil {
 		t.Fatal("missing ACTIONS section")
 	}
-	for _, k := range []string{"y", "h", "Shift+N", "r", "ctrl+r"} {
+	for _, k := range []string{"y", "h", "r", "ctrl+r"} {
 		if !sectionContainsKey(actions, k) {
 			t.Errorf("ACTIONS missing key %q", k)
 		}
@@ -333,7 +347,7 @@ func TestDetailViewContextBindings(t *testing.T) {
 	if publish == nil {
 		t.Fatal("missing PUBLISH section")
 	}
-	for _, k := range []string{"p", "m", "t", "b", "Shift+D", "g", "c"} {
+	for _, k := range []string{"p", "b", "Shift+D", "g", "c"} {
 		if !sectionContainsKey(publish, k) {
 			t.Errorf("PUBLISH missing key %q", k)
 		}
@@ -472,90 +486,6 @@ func TestApplyKeyboardLayout_Idempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 'ctrl+x' to appear exactly once in Detach keys, found %d times", count)
-	}
-}
-
-func TestRecoveryModelKeyK_TriggersKill(t *testing.T) {
-	// Regression: "k" is in both keys.Up and keys.RecoveryKill.
-	// RecoveryModel must check recovery keys before navigation keys
-	// so that pressing "k" sets RecoveryKill, not cursor movement.
-	items := []session.RecoveryItem{
-		{PIDFile: session.PIDFile{FeatureID: "feat-1", Phase: "implement", Iteration: 1}},
-		{PIDFile: session.PIDFile{FeatureID: "feat-2", Phase: "plan", Iteration: 1}},
-	}
-	m := NewRecoveryModel(items)
-
-	// Cursor starts at 0; default action is Skip for both items.
-	if m.actions["feat-1"] != session.RecoverySkip {
-		t.Fatalf("expected initial action Skip, got %v", m.actions["feat-1"])
-	}
-
-	// Press "k" — should set action to Kill, NOT move cursor up.
-	msg := tea.KeyPressMsg{Code: 'k', Text: "k"}
-	m, _ = m.Update(msg)
-
-	if m.actions["feat-1"] != session.RecoveryKill {
-		t.Errorf("pressing 'k' should set RecoveryKill, got action %v", m.actions["feat-1"])
-	}
-	if m.cursor != 0 {
-		t.Errorf("pressing 'k' should not move cursor, got cursor=%d", m.cursor)
-	}
-}
-
-func TestRecoveryModelArrowUp_StillNavigates(t *testing.T) {
-	// After reordering, arrow-up must still work for navigation.
-	items := []session.RecoveryItem{
-		{PIDFile: session.PIDFile{FeatureID: "feat-1", Phase: "implement", Iteration: 1}},
-		{PIDFile: session.PIDFile{FeatureID: "feat-2", Phase: "plan", Iteration: 1}},
-	}
-	m := NewRecoveryModel(items)
-
-	// Move cursor to item 1 first using down-arrow.
-	downMsg := tea.KeyPressMsg{Code: tea.KeyDown}
-	m, _ = m.Update(downMsg)
-	if m.cursor != 1 {
-		t.Fatalf("expected cursor=1 after down, got %d", m.cursor)
-	}
-
-	// Press up-arrow — should navigate up.
-	upMsg := tea.KeyPressMsg{Code: tea.KeyUp}
-	m, _ = m.Update(upMsg)
-	if m.cursor != 0 {
-		t.Errorf("up-arrow should move cursor to 0, got %d", m.cursor)
-	}
-}
-
-func TestRecoveryModelKeyR_TriggersResume(t *testing.T) {
-	items := []session.RecoveryItem{
-		{PIDFile: session.PIDFile{FeatureID: "feat-1", Phase: "implement", Iteration: 1}},
-	}
-	m := NewRecoveryModel(items)
-
-	msg := tea.KeyPressMsg{Code: 'r', Text: "r"}
-	m, _ = m.Update(msg)
-
-	if m.actions["feat-1"] != session.RecoveryResume {
-		t.Errorf("pressing 'r' should set RecoveryResume, got action %v", m.actions["feat-1"])
-	}
-}
-
-func TestRecoveryModelKeyS_TriggersSkip(t *testing.T) {
-	items := []session.RecoveryItem{
-		{PIDFile: session.PIDFile{FeatureID: "feat-1", Phase: "implement", Iteration: 1}},
-	}
-	m := NewRecoveryModel(items)
-
-	// Change to Kill first, then verify "s" sets Skip.
-	killMsg := tea.KeyPressMsg{Code: 'k', Text: "k"}
-	m, _ = m.Update(killMsg)
-	if m.actions["feat-1"] != session.RecoveryKill {
-		t.Fatalf("expected Kill after 'k', got %v", m.actions["feat-1"])
-	}
-
-	skipMsg := tea.KeyPressMsg{Code: 's', Text: "s"}
-	m, _ = m.Update(skipMsg)
-	if m.actions["feat-1"] != session.RecoverySkip {
-		t.Errorf("pressing 's' should set RecoverySkip, got action %v", m.actions["feat-1"])
 	}
 }
 

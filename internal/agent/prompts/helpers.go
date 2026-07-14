@@ -41,6 +41,11 @@ func RoleSystemPrompt(in RoleSystemInput) string {
 	return MustRender("system", in)
 }
 
+// ChatSystemPrompt renders the persistent AMA chat system prompt.
+func ChatSystemPrompt(in ChatSystemInput) string {
+	return MustRender("chat.system", in)
+}
+
 // VisualReferences renders the visual_references partial. Returns "" when
 // Images is empty so callers can drop the result into a prompt
 // unconditionally.
@@ -90,12 +95,6 @@ func ResearchFromQuestionsUserPrompt(in any) string {
 // (kb_build.user.tmpl).
 func KBBuildUserPrompt(in any) string {
 	return MustRender("kb_build.user", in)
-}
-
-// TweakUserPrompt renders the Tweak-session seed user prompt
-// (tweak.user.tmpl).
-func TweakUserPrompt(in any) string {
-	return MustRender("tweak.user", in)
 }
 
 // DesignUserPrompt renders the canonical Design-phase user prompt

@@ -14,7 +14,11 @@
 
 package opencode
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestEditPermission_EmitsCwdRelativeGlob guards the regression where a writable
 // root outside the session cwd was expressed only as an absolute glob. OpenCode
@@ -120,6 +124,96 @@ func TestRootGlobs_EmitsLeadingSlashStrippedAbsoluteForm(t *testing.T) {
 		if !found {
 			t.Errorf("rootGlobs(%q, %q) = %v; missing leading-slash-stripped pattern %q", workDir, root, got, want)
 		}
+	}
+}
+
+// TestRootGlobs_EmitsSymlinkResolvedAbsoluteForm guards the macOS /var ->
+// /private/var (and /tmp -> /private/tmp) class of bug: a mounted root that
+// still traverses a symlink must also be matchable by its resolved, canonical
+// form, since OpenCode's edit/write permission can resolve tool-call paths
+// through git's (symlink-resolving) worktree detection even when the root was
+// configured with the raw, unresolved path (upstream opencode#14473,
+// opencode#20045).
+func TestRootGlobs_EmitsSymlinkResolvedAbsoluteForm(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(realDir, "kb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	root := filepath.Join(link, "kb")
+	got := rootGlobs("", root)
+
+	// t.TempDir() itself can traverse a symlink (e.g. macOS's own /var ->
+	// /private/var), so the expected resolved form must go through
+	// EvalSymlinks too rather than assuming real/kb is already canonical.
+	resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(realDir, "kb"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", filepath.Join(realDir, "kb"), err)
+	}
+	wantAbs := resolvedRoot
+	wantAbsGlob := resolvedRoot + "/**"
+	var foundAbs, foundGlob bool
+	for _, g := range got {
+		if g == wantAbs {
+			foundAbs = true
+		}
+		if g == wantAbsGlob {
+			foundGlob = true
+		}
+	}
+	if !foundAbs {
+		t.Errorf("rootGlobs(\"\", %q) = %v; missing symlink-resolved absolute pattern %q", root, got, wantAbs)
+	}
+	if !foundGlob {
+		t.Errorf("rootGlobs(\"\", %q) = %v; missing symlink-resolved recursive pattern %q", root, got, wantAbsGlob)
+	}
+}
+
+// TestRootGlobs_EmitsSymlinkResolvedRelativeForm guards the case where only one
+// side of a root/workDir pair has already been resolved (mirroring OpenCode's
+// git-worktree detection, which resolves symlinks, running alongside surfaces
+// that don't). A naive relative computation on the raw strings walks up to
+// their nearest common ancestor and back down — nothing like the short
+// relative path OpenCode actually evaluates against — so the rule silently
+// falls through to the catch-all deny without the resolved-relative variant.
+func TestRootGlobs_EmitsSymlinkResolvedRelativeForm(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(realDir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	// workDir still traverses the symlink; root is already the resolved form —
+	// the asymmetry OpenCode's inconsistent path handling can produce.
+	workDir := filepath.Join(link, "a")
+	root := filepath.Join(realDir, "a", "b")
+
+	rawRel, err := filepath.Rel(workDir, root)
+	if err != nil {
+		t.Fatalf("filepath.Rel(%q, %q): %v", workDir, root, err)
+	}
+	if rawRel == "b" {
+		t.Fatal("test setup invalid: raw relative path should NOT already be the short form")
+	}
+
+	got := rootGlobs(workDir, root)
+	var foundResolvedRel bool
+	for _, g := range got {
+		if g == "b" || g == "b/**" {
+			foundResolvedRel = true
+		}
+	}
+	if !foundResolvedRel {
+		t.Errorf("rootGlobs(%q, %q) = %v; missing symlink-resolved relative pattern %q/%q", workDir, root, got, "b", "b/**")
 	}
 }
 

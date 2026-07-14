@@ -567,7 +567,7 @@ known_caveats:
 	}
 
 	feedback := FormatGateFeedback(result)
-	if !strings.Contains(feedback, "CHANGES_REQUESTED") {
+	if !strings.Contains(feedback, agentStatusChangesRequested) {
 		t.Errorf("feedback missing CHANGES_REQUESTED marker; got:\n%s", feedback)
 	}
 	if !strings.Contains(feedback, "stream_error_mapping") {

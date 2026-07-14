@@ -357,21 +357,6 @@ func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 
 // --- Command building helpers ---
 
-// MapEffortLevel maps a provider-agnostic EffortLevel to Claude CLI's --effort value.
-// Claude CLI accepts: low, medium, high, xhigh, max.
-func MapEffortLevel(level llm.EffortLevel) string {
-	switch level {
-	case llm.EffortMedium:
-		return "medium"
-	case llm.EffortHigh:
-		return "high"
-	case llm.EffortMax:
-		return "xhigh"
-	default:
-		return "high" // safe default
-	}
-}
-
 // InsertAfterBinary inserts flags right after the binary name (args[0]).
 func InsertAfterBinary(cmd []string, flags ...string) []string {
 	if len(cmd) == 0 {
@@ -392,7 +377,7 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 		"--verbose",
 	}
 	if opts.EffortLevel != "" {
-		args = append(args, "--effort", MapEffortLevel(opts.EffortLevel))
+		args = append(args, "--effort", llm.MapStandardEffortLevel(opts.EffortLevel))
 	}
 	args = append(args, "--include-partial-messages")
 	args = applyStreamingOpts(args, opts)

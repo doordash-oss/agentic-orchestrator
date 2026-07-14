@@ -37,19 +37,21 @@ type RoleContract struct {
 
 // RequiredArtifact describes one artifact in a role's completion contract.
 type RequiredArtifact struct {
-	Name        string
-	DisplayPath string
-	ResolvePath func(iterDir string) string
-	Validate    func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error)
+	Name          string
+	DisplayPath   string
+	HideFromSkill bool
+	ResolvePath   func(iterDir string) string
+	Validate      func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error)
 }
 
 // OptionalArtifact describes an artifact that is valid for a role but not
 // required. If present, it must parse cleanly.
 type OptionalArtifact struct {
-	Name        string
-	DisplayPath string
-	ResolvePath func(iterDir string) string
-	Validate    func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error)
+	Name          string
+	DisplayPath   string
+	HideFromSkill bool
+	ResolvePath   func(iterDir string) string
+	Validate      func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error)
 }
 
 // ConditionalArtifact adds a required artifact when When matches the parsed
@@ -102,9 +104,16 @@ func Validate(phase feature.Phase, role Role, iterDir string) (Outcome, []Protoc
 		return Outcome{OK: true}, nil, nil
 	}
 
+	return validateContractArtifacts(contract, iterDir, true)
+}
+
+func validateContractArtifacts(contract RoleContract, iterDir string, includeHidden bool) (Outcome, []ProtocolViolation, error) {
 	out := Outcome{OK: true}
 	var violations []ProtocolViolation
 	for _, artifact := range contract.Required {
+		if artifact.HideFromSkill && !includeHidden {
+			continue
+		}
 		path := artifact.ResolvePath(iterDir)
 		v, err := artifact.Validate(iterDir, path, &out)
 		if err != nil {
@@ -113,6 +122,9 @@ func Validate(phase feature.Phase, role Role, iterDir string) (Outcome, []Protoc
 		violations = append(violations, v...)
 	}
 	for _, artifact := range contract.Optional {
+		if artifact.HideFromSkill && !includeHidden {
+			continue
+		}
 		path := artifact.ResolvePath(iterDir)
 		if path == "" {
 			continue
@@ -134,6 +146,9 @@ func Validate(phase feature.Phase, role Role, iterDir string) (Outcome, []Protoc
 			continue
 		}
 		artifact := conditional.Artifact
+		if artifact.HideFromSkill && !includeHidden {
+			continue
+		}
 		path := artifact.ResolvePath(iterDir)
 		v, err := artifact.Validate(iterDir, path, &out)
 		if err != nil {
@@ -160,17 +175,23 @@ func ValidateArtifactsPreflight(phase feature.Phase, role Role, iterDir string) 
 
 	var violations []ProtocolViolation
 	for _, artifact := range contract.Required {
+		if artifact.HideFromSkill {
+			continue
+		}
 		path := artifact.ResolvePath(iterDir)
 		violations = append(violations, validateYAMLArtifactSyntax(artifact.DisplayPath, path, true)...)
 	}
 	for _, artifact := range contract.Optional {
+		if artifact.HideFromSkill {
+			continue
+		}
 		path := artifact.ResolvePath(iterDir)
 		violations = append(violations, validateYAMLArtifactSyntax(artifact.DisplayPath, path, false)...)
 	}
 	if len(violations) > 0 {
 		return Outcome{OK: false}, violations, nil
 	}
-	return Validate(phase, role, iterDir)
+	return validateContractArtifacts(contract, iterDir, false)
 }
 
 func validateYAMLArtifactSyntax(displayPath, path string, required bool) []ProtocolViolation {

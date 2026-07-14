@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -32,6 +33,19 @@ import (
 var ErrNotImplemented = errors.New("not implemented")
 
 const eventChBuffer = 256
+
+type featureRebaseControl struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	stopping bool
+	active   int
+}
+
+func newFeatureRebaseControl() *featureRebaseControl {
+	c := &featureRebaseControl{}
+	c.cond = sync.NewCond(&c.mu)
+	return c
+}
 
 // Hooks contains optional callbacks fired at lifecycle points.
 // Nil hooks are silently skipped.
@@ -210,6 +224,8 @@ type Orchestrator struct {
 	eventCh chan ports.Event
 	mu      sync.RWMutex
 
+	supervisor *phaseSupervisor
+
 	// doneCh is closed by Shutdown to signal all emitters and consumers to
 	// terminate. eventCh is deliberately NEVER closed — closing it would
 	// race with concurrent emitters and could panic mid-send. Emitters
@@ -226,6 +242,13 @@ type Orchestrator struct {
 	// test returns so the goroutine's writes don't race with TempDir
 	// cleanup.
 	cycleWG sync.WaitGroup
+
+	// featureRebaseControls serialize feature-level rebase continuation checks
+	// with Stop/interrupt per feature. The git operations themselves are not
+	// cancellable through the RebaseOperator port, so a stop request waits for
+	// the currently claimed rebase/push operation on that feature to return
+	// before it lands in feature state.
+	featureRebaseControls sync.Map
 
 	// publishFn is a test hook. When nil the orchestrator calls o.Publish.
 	// Tests can override this to intercept publish dispatch without touching
@@ -275,6 +298,10 @@ type Orchestrator struct {
 	// launches the production unified rebase loop; tests override it to
 	// verify rebase gate routing without booting agent sessions.
 	runRebaseLoopFn func(agent.RebaseLoopConfig, ports.SessionManager) (*agent.RebaseLoopResult, error)
+
+	// worktreeFingerprintFn is a test seam for detecting whether a mounted
+	// smart-rebase context repo changed during the agent loop.
+	worktreeFingerprintFn func(worktreePath string) (string, error)
 }
 
 // SetRunImplementationFn installs a test seam that intercepts
@@ -295,6 +322,11 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		eventCh: make(chan ports.Event, eventChBuffer),
 		doneCh:  make(chan struct{}),
 	}
+	o.supervisor = newPhaseSupervisor(phaseSupervisorConfig{
+		Completion:        o,
+		Sessions:          o.deps.Sessions,
+		OnCompletionError: o.surfaceDispatchCompletionError,
+	})
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,
 		planPath string,
@@ -317,6 +349,7 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f, kbInfos...)
 	}
 	o.runRebaseLoopFn = agent.RunRebaseLoop
+	o.worktreeFingerprintFn = gitWorktreeFingerprint
 	return o
 }
 
@@ -327,6 +360,20 @@ func (o *Orchestrator) Events() <-chan ports.Event { return o.eventCh }
 // Consumers should select on Done alongside Events() to terminate receive
 // loops cleanly. The channel is never sent to — only closed.
 func (o *Orchestrator) Done() <-chan struct{} { return o.doneCh }
+
+func (o *Orchestrator) featureRebaseControl(featureID string) *featureRebaseControl {
+	if v, ok := o.featureRebaseControls.Load(featureID); ok {
+		if control, ok := v.(*featureRebaseControl); ok {
+			return control
+		}
+	}
+	control := newFeatureRebaseControl()
+	actual, _ := o.featureRebaseControls.LoadOrStore(featureID, control)
+	if stored, ok := actual.(*featureRebaseControl); ok {
+		return stored
+	}
+	return control
+}
 
 // WaitForCycles blocks until every background goroutine launched by the
 // per-repo cycle entry points (StartRepoCycleImplement,
@@ -423,6 +470,21 @@ func (o *Orchestrator) emitEventBlocking(ev ports.Event) {
 	}
 }
 
+func (o *Orchestrator) emitShutdownStarted() {
+	ev := ports.Event{Type: ports.RuntimeShutdownStarted}
+	select {
+	case o.eventCh <- ev:
+		return
+	default:
+	}
+	// Do not drain eventCh to make room: queued lifecycle events are part of
+	// the read/SSE contract. eventCh is never closed, so a parked sender is
+	// safe and will publish shutdown as soon as a consumer drains capacity.
+	go func() {
+		o.eventCh <- ev
+	}()
+}
+
 // StartFeature starts a feature's phase pipeline.
 // Determines the correct phase from the feature's state (first phase for
 // StatusCreated, CurrentPhase for resumed features), handles the
@@ -434,7 +496,13 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 		return fmt.Errorf("loading feature: %w", err)
 	}
 	if f.Status == feature.StatusSettingUpWorktrees {
-		return fmt.Errorf("feature %s is still setting up worktrees", featureID)
+		if err := o.runSetupWith(false, featureID); err != nil {
+			return err
+		}
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return fmt.Errorf("loading feature after setup: %w", err)
+		}
 	}
 
 	phase := f.CurrentPhase
@@ -581,7 +649,7 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 	allFresh := true
 	baseDir := o.stateDir()
 	for _, repo := range f.Repos {
-		if activeKBRepos[repo.Name] {
+		if _, active := activeKBRepos[repo.Name]; active {
 			freshness[repo.Name] = false
 			allFresh = false
 			continue
@@ -625,7 +693,8 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 
 	if o.deps.PhaseRunner != nil {
 		for _, repo := range f.Repos {
-			if activeKBRepos[repo.Name] {
+			if sessionID, active := activeKBRepos[repo.Name]; active {
+				o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
 				continue
 			}
 			if freshness[repo.Name] {
@@ -635,13 +704,21 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 				_ = o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repo.Name)
 				continue
 			}
-			if _, err := o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo); err != nil {
+			if baseDir != "" {
+				kbDir := agent.KBStateDir(baseDir, repo.Name)
+				if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, kbDir, repo.Name); err != nil {
+					return PhaseStartResult{}, fmt.Errorf("record KB read-only repo baseline for %s: %w", repo.Name, err)
+				}
+			}
+			sessionID, err := o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo)
+			if err != nil {
 				if errors.Is(err, agent.ErrKBLocked) {
 					o.markKBWaiting(featureID, baseDir, repo.Name)
 					return PhaseStartResult{Outcome: PhaseStarted}, nil
 				}
 				return PhaseStartResult{}, fmt.Errorf("run KB for repo %s: %w", repo.Name, err)
 			}
+			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
 		}
 	}
 
@@ -651,8 +728,8 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
 
-func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]bool {
-	active := make(map[string]bool)
+func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]string {
+	active := make(map[string]string)
 	if o.deps.Sessions == nil {
 		return active
 	}
@@ -665,10 +742,23 @@ func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]bool {
 			repoName = agent.RepoNameFromKBSession(s.ID())
 		}
 		if repoName != "" {
-			active[repoName] = true
+			active[repoName] = s.ID()
 		}
 	}
 	return active
+}
+
+func (o *Orchestrator) activePhaseSessionID(featureID string, phase feature.Phase) string {
+	if o.deps.Sessions == nil {
+		return ""
+	}
+	for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
+		if s == nil || !s.IsActive() || s.Phase() != phase {
+			continue
+		}
+		return s.ID()
+	}
+	return ""
 }
 
 // markKBWaiting records that the feature couldn't acquire the KB lock for the
@@ -784,6 +874,43 @@ func (o *Orchestrator) finalizeKBForSkip(f *feature.Feature) error {
 	return nil
 }
 
+// runSingleShotArtifactPhase implements the shared shape of the single-shot
+// artifact-phase starters (Inquire/Research/Design): supervise an already-
+// active session if present; otherwise run resolve (if non-nil) to
+// validate/derive inputs, record the read-only repo baseline under
+// phaseKey, launch via run, and supervise the resulting session. No-ops
+// when PhaseRunner is nil.
+func (o *Orchestrator) runSingleShotArtifactPhase(
+	featureID string,
+	f *feature.Feature,
+	phase feature.Phase,
+	phaseKey string,
+	resolve func() error,
+	run func() (string, error),
+) (PhaseStartResult, error) {
+	if o.deps.PhaseRunner == nil {
+		return PhaseStartResult{Outcome: PhaseStarted}, nil
+	}
+	if sessionID := o.activePhaseSessionID(featureID, phase); sessionID != "" {
+		o.superviseSingleShotPhaseSession(featureID, sessionID, phase)
+		return PhaseStartResult{Outcome: PhaseStarted}, nil
+	}
+	if resolve != nil {
+		if err := resolve(); err != nil {
+			return PhaseStartResult{}, err
+		}
+	}
+	if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, phaseKey)); err != nil {
+		return PhaseStartResult{}, fmt.Errorf("record %s read-only repo baseline: %w", phaseKey, err)
+	}
+	sessionID, err := run()
+	if err != nil {
+		return PhaseStartResult{}, err
+	}
+	o.superviseSingleShotPhaseSession(featureID, sessionID, phase)
+	return PhaseStartResult{Outcome: PhaseStarted}, nil
+}
+
 // startInquire starts the Inquire phase. Idempotent for recovery resume: when
 // the feature is already StatusInquiring, StartInquire is skipped because the
 // StatusInquiring → StatusInquiring self-transition is invalid
@@ -799,12 +926,13 @@ func (o *Orchestrator) startInquire(featureID string) (PhaseStartResult, error) 
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		if _, err := o.deps.PhaseRunner.RunInquire(f, kbInfos...); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run inquire: %w", err)
+	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseInquire, "inquire", nil, func() (string, error) {
+		sessionID, err := o.deps.PhaseRunner.RunInquire(f, kbInfos...)
+		if err != nil {
+			return "", fmt.Errorf("run inquire: %w", err)
 		}
-	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+		return sessionID, nil
+	})
 }
 
 // startResearch starts the Research phase. Research is always driven by
@@ -827,16 +955,22 @@ func (o *Orchestrator) startResearch(featureID string) (PhaseStartResult, error)
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		questionsPath := o.resolveArtifactPath(f, "inquire")
-		if questionsPath == "" {
-			return PhaseStartResult{}, errors.New("no inquire artifact found; cannot proceed to research")
-		}
-		if _, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run research from questions: %w", err)
-		}
-	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	var questionsPath string
+	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseResearch, "research",
+		func() error {
+			questionsPath = o.resolveArtifactPath(f, "inquire")
+			if questionsPath == "" {
+				return errors.New("no inquire artifact found; cannot proceed to research")
+			}
+			return nil
+		},
+		func() (string, error) {
+			sessionID, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...)
+			if err != nil {
+				return "", fmt.Errorf("run research from questions: %w", err)
+			}
+			return sessionID, nil
+		})
 }
 
 // startDesign starts the Design phase. Fails if the research
@@ -874,12 +1008,13 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		if _, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run design: %w", err)
+	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseDesign, "design", nil, func() (string, error) {
+		sessionID, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...)
+		if err != nil {
+			return "", fmt.Errorf("run design: %w", err)
 		}
-	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+		return sessionID, nil
+	})
 }
 
 // startPlan starts the Plan phase. Delegates to startRoadmapPhasePlan when
@@ -914,32 +1049,16 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 	qaFilePaths := o.collectQAFilePaths(f, f.RefactorPrefix())
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
+		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
+			return PhaseStartResult{}, fmt.Errorf("record plan read-only repo baseline: %w", err)
+		}
 		resultCh, err := o.deps.PhaseRunner.RunPlanningWithValidation(f, inputArtifactPath, qaFilePaths, kbInfos...)
 		if err != nil {
 			return PhaseStartResult{}, fmt.Errorf("run planning: %w", err)
 		}
-		if resultCh != nil {
-			go o.dispatchPlanLoopResult(featureID, resultCh)
-		}
+		o.phaseSupervisor().supervisePlanLoop(featureID, resultCh)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
-}
-
-// dispatchPlanLoopResult consumes the planner's result channel and routes
-// the result through HandlePhaseCompletion. Called from startPlan /
-// startRoadmapPhasePlan in a goroutine so the orchestrator owns the phase
-// result flow end-to-end (the TUI no longer bridges the channel).
-func (o *Orchestrator) dispatchPlanLoopResult(featureID string, resultCh <-chan *agent.PlanLoopResult) {
-	result, ok := <-resultCh
-	if !ok {
-		return
-	}
-	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-		Phase:      feature.PhasePlan,
-		PlanResult: result,
-	}); err != nil {
-		o.surfaceDispatchCompletionError(featureID, err)
-	}
 }
 
 // startRoadmapPhasePlan starts per-phase planning for the current roadmap
@@ -995,13 +1114,14 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
+		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
+			return PhaseStartResult{}, fmt.Errorf("record phase plan read-only repo baseline: %w", err)
+		}
 		resultCh, err := o.deps.PhaseRunner.RunPhasePlanning(f, roadmapPath, currentPhase, qaFilePaths, priorPhasePlanPaths, kbInfos...)
 		if err != nil {
 			return PhaseStartResult{}, fmt.Errorf("run phase planning: %w", err)
 		}
-		if resultCh != nil {
-			go o.dispatchPlanLoopResult(featureID, resultCh)
-		}
+		o.phaseSupervisor().supervisePlanLoop(featureID, resultCh)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
@@ -1115,9 +1235,8 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 }
 
 // InterruptFeature stops all sessions for a feature and clears pending help
-// and permission queue flags. Normal phase work and non-interactive
-// post-publish repo cycles transition the feature to StatusInterrupted; tweak-
-// only post-publish cycles keep their published/code-ready feature status.
+// and permission queue flags. Normal phase work and post-publish repo
+// cycles transition the feature to StatusInterrupted.
 // Does NOT clear KBStatus — preserve per-repo KB tracking for resume.
 //
 // Ordering matters: the Interrupted transition is committed BEFORE sessions
@@ -1126,6 +1245,14 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 // Otherwise the stopped session's last assistant text would surface
 // as failure_type=session_crash and beat FeatureInterrupted to emission.
 func (o *Orchestrator) InterruptFeature(featureID string) error {
+	rebaseControl := o.featureRebaseControl(featureID)
+	rebaseControl.mu.Lock()
+	rebaseControl.stopping = true
+	for rebaseControl.active > 0 {
+		rebaseControl.cond.Wait()
+	}
+	rebaseControl.mu.Unlock()
+
 	featureInterrupted := false
 	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&
 		(f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) &&
@@ -1182,14 +1309,12 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 // InterruptAllRunning iterates all features; running ones are interrupted
 // (stopping sessions, clearing pending flags, transitioning to interrupted)
 // AND additionally have KBStatus cleared to match the startup sweep.
-// Non-running features (Published, CodeReady) with active non-interactive
-// repo cycles (rebase/review-comments/refactor) are interrupted at the
-// feature level so the dashboard keeps them in the active bucket. Interactive
-// tweak-only cycles keep the pre-existing published/code-ready status and
-// just have their cycle state marked interrupted. KBStatus is preserved for
+// Non-running features (Published, CodeReady) with active repo cycles
+// (rebase/review-comments/refactor) are interrupted at the feature level so
+// the dashboard keeps them in the active bucket. KBStatus is preserved for
 // every post-publish cycle shape. CodeReady is the manual_publish=true shape
-// where a tweak/rebase cycle can be in flight while the feature waits for the
-// user to publish.
+// where a rebase cycle can be in flight while the feature waits for the user
+// to publish.
 func (o *Orchestrator) InterruptAllRunning() error {
 	features, listErr := o.deps.Store.List()
 	if listErr != nil {
@@ -1249,8 +1374,12 @@ func (o *Orchestrator) InterruptAllRunning() error {
 }
 
 // hasActiveRepoCycles returns true if the feature has any running/reviewing
-// per-repo cycles. Mirrors app.go:10383-10391.
+// post-publish cycle. Legacy cycles live in RepoCycles; feature-level rebase,
+// review-comment, and refactor flows live only in ActiveCycle.
 func hasActiveRepoCycles(f *feature.Feature) bool {
+	if hasActiveFeatureLevelInterruptibleCycle(f) {
+		return true
+	}
 	for _, rc := range f.RepoCycles {
 		if rc != nil && (rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing) {
 			return true
@@ -1260,6 +1389,9 @@ func hasActiveRepoCycles(f *feature.Feature) bool {
 }
 
 func hasInterruptibleRepoCycles(f *feature.Feature) bool {
+	if hasActiveFeatureLevelInterruptibleCycle(f) {
+		return true
+	}
 	for _, rc := range f.RepoCycles {
 		if rc == nil {
 			continue
@@ -1274,6 +1406,25 @@ func hasInterruptibleRepoCycles(f *feature.Feature) bool {
 		}
 	}
 	return false
+}
+
+func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
+	if f == nil || f.ActiveCycle == nil {
+		return false
+	}
+	if f.ActiveCycle.Status != feature.RepoCycleRunning && f.ActiveCycle.Status != feature.RepoCycleReviewing {
+		return false
+	}
+	cycleType := f.ActiveCycle.Type
+	if cycleType == "" {
+		cycleType = f.ActiveCycleType()
+	}
+	switch cycleType {
+	case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
+		return true
+	default:
+		return false
+	}
 }
 
 func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeature bool) error {
@@ -1352,6 +1503,10 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 	}
 	if f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed {
 		return nil
+	}
+
+	if d.IsRewind && d.Decision == "proceed" {
+		return o.ProceedFromRewindReview(featureID, d.TargetPhase)
 	}
 
 	switch d.Decision {
@@ -1709,10 +1864,10 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 	profile := f.EffectivePipeline()
 	next, hasNext := profile.NextPhase(completedPhase)
 	if !hasNext {
-		// Terminal phase for this profile. Emit nothing; the TUI's
-		// manualPublishCmd owns the StatusDone transition for non-publishable
-		// features, and Publish already owned FeatureCompleted emission for
-		// publishable ones.
+		// Terminal phase for this profile. Emit nothing; explicit mark-done
+		// paths own the StatusDone transition for non-publishable features,
+		// and Publish already owns FeatureCompleted emission for publishable
+		// ones.
 		return nil
 	}
 	if next == feature.PhasePublish {
@@ -1767,8 +1922,8 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 // transitions the feature to StatusPublished.
 //
 // Called from exactly three sites: Publish, onRepoStatusChanged,
-// onMultiRepoImplementDone. The →StatusDone transition is TUI-owned
-// (manualPublishCmd) and is NOT driven by this helper.
+// onMultiRepoImplementDone. The →StatusDone transition is action-owned and is
+// NOT driven by this helper.
 //
 // Source-scan regression Test 73a enforces this invariant.
 func (o *Orchestrator) tryCompleteAndEmit(featureID string) (bool, error) {
@@ -1811,6 +1966,19 @@ func (o *Orchestrator) tryCompleteAndEmit(featureID string) (bool, error) {
 // publishRepo calls, aggregates results, emits PublishStarted/PublishCompleted
 // events, and delegates FeatureCompleted emission to tryCompleteAndEmit.
 func (o *Orchestrator) Publish(featureID string) error {
+	return o.PublishWithOptions(featureID, PublishOptions{})
+}
+
+type PublishOptions struct {
+	Repos []string
+	Title string
+	Body  string
+}
+
+// PublishWithOptions runs the publish pipeline for all repos, or for the
+// selected repos when Repos is non-empty. Title and Body override generated PR
+// metadata for interactive publish flows that already reviewed those fields.
+func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
@@ -1821,21 +1989,25 @@ func (o *Orchestrator) Publish(featureID string) error {
 	if len(f.Repos) == 0 {
 		return fmt.Errorf("publish: no repos configured for feature %s", featureID)
 	}
+	requestedRepos, err := publishRepoSelection(f, opts.Repos)
+	if err != nil {
+		return err
+	}
 
 	o.emitEvent(ports.Event{Type: ports.PublishStarted, FeatureID: featureID})
 	if o.hooks.OnPublishStarted != nil {
 		o.hooks.OnPublishStarted(featureID)
 	}
 
-	publishRepo := o.publishRepoFn
-	if publishRepo == nil {
-		publishRepo = o.publishRepo
-	}
-
 	prURLs := make(map[string]string)
 	var firstErr error
 	var conflictErr *PublishConflictError
+	hasRepoSelection := len(requestedRepos) > 0
+	republishExistingPRs := publishRequiresLeasePush(f)
 	for _, repo := range f.Repos {
+		if hasRepoSelection && !requestedRepos[repo.Name] {
+			continue
+		}
 		// Skip repos already published (sibling goroutines may have updated)
 		// or untouched (no phase ever touched them, no PR to open).
 		freshF, freshErr := o.deps.Lifecycle.Get(featureID)
@@ -1843,7 +2015,9 @@ func (o *Orchestrator) Publish(featureID string) error {
 			if st, ok := freshF.RepoStates[repo.Name]; ok && st != nil {
 				if st.PRURL != "" {
 					prURLs[repo.Name] = st.PRURL
-					continue
+					if !hasRepoSelection && !republishExistingPRs {
+						continue
+					}
 				}
 				if !st.Touched {
 					continue
@@ -1851,7 +2025,13 @@ func (o *Orchestrator) Publish(featureID string) error {
 			}
 		}
 
-		prURL, repoErr := publishRepo(featureID, repo.Name)
+		var prURL string
+		var repoErr error
+		if o.publishRepoFn != nil {
+			prURL, repoErr = o.publishRepoFn(featureID, repo.Name)
+		} else {
+			prURL, repoErr = o.publishRepoWithOptions(featureID, repo.Name, opts)
+		}
 		if repoErr != nil {
 			var ce *PublishConflictError
 			if errors.As(repoErr, &ce) {
@@ -1890,6 +2070,29 @@ func (o *Orchestrator) Publish(featureID string) error {
 	return finalErr
 }
 
+func publishRepoSelection(f *feature.Feature, repos []string) (map[string]bool, error) {
+	requested := map[string]bool{}
+	for _, repo := range repos {
+		repo = strings.TrimSpace(repo)
+		if repo != "" {
+			requested[repo] = true
+		}
+	}
+	if len(requested) == 0 {
+		return nil, nil
+	}
+	known := map[string]bool{}
+	for _, repo := range f.Repos {
+		known[repo.Name] = true
+	}
+	for repo := range requested {
+		if !known[repo] {
+			return nil, fmt.Errorf("publish: repo %q not found in feature %s", repo, f.ID)
+		}
+	}
+	return requested, nil
+}
+
 // ScanRecovery / ExecuteRecovery live in recovery.go
 // StartMultiRepoImplementation lives in multirepo.go
 
@@ -1899,6 +2102,7 @@ func (o *Orchestrator) Publish(featureID string) error {
 // runs exactly once. Never closes eventCh — consumers observe doneCh instead.
 func (o *Orchestrator) Shutdown() error {
 	o.stopOnce.Do(func() {
+		o.emitShutdownStarted()
 		close(o.doneCh)
 		if o.deps.Sessions != nil {
 			o.deps.Sessions.Shutdown()

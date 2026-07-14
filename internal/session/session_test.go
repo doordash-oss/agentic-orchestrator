@@ -201,11 +201,67 @@ sleep 30
 	}
 }
 
+func TestPendingToolWatchdogFailsIdleInProgressTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "in-progress-tool-stall.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"task-1","tool_name":"Task","data":"pending"}'
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"task-1","tool_name":"Task","data":"in_progress"}'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"in-progress-tool-watchdog-stall",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "test-provider",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout: 25 * time.Millisecond,
+				PollInterval:           5 * time.Millisecond,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "FAILED" {
+			t.Fatalf("StatusCh = %q, want FAILED", status)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for watchdog failure status")
+	}
+
+	select {
+	case <-sess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for watchdog to stop session")
+	}
+
+	if got := sess.ErrorDetail(); !strings.Contains(got, "provider watchdog stalled with pending tool Task") {
+		t.Fatalf("ErrorDetail() = %q, want in-progress Task watchdog detail", got)
+	}
+}
+
 func TestPendingToolWatchdogIgnoresCompletedPendingTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")
 	script := `#!/usr/bin/env bash
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"pending"}'
+sleep 0.01
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"in_progress"}'
 sleep 0.01
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"completed"}'
 sleep 0.06
@@ -258,6 +314,8 @@ func TestWatchdogPendingToolDataMatchesStatusLine(t *testing.T) {
 	}{
 		{name: "bare pending status", data: "pending", want: true},
 		{name: "multi-line pending status", data: "File: report.md\nStatus: pending", want: true},
+		{name: "bare in progress status", data: "in_progress", want: true},
+		{name: "multi-line in progress status", data: "File: report.md\nStatus: in_progress", want: true},
 		{name: "completed command mentions pending", data: "grep pending report.md\nStatus: completed", want: false},
 		{name: "path mentions pending", data: "File: pending-report.md\nStatus: completed", want: false},
 		{name: "running is not pending", data: "Status: running", want: false},
@@ -686,61 +744,6 @@ func TestSessionSendUserMessage(t *testing.T) {
 
 	if err := s.SendUserMessage("Hello Claude"); err != nil {
 		t.Errorf("SendUserMessage: %v", err)
-	}
-}
-
-func TestTweakSessionDoesNotCloseStdinOnClaudeResult(t *testing.T) {
-	if testing.Short() {
-		t.Skip("subprocess-backed tweak continuation extended regression")
-	}
-
-	dir := t.TempDir()
-	seenPath := filepath.Join(dir, "seen-input.txt")
-	script := filepath.Join(dir, "tweak.sh")
-	os.WriteFile(script, []byte(`#!/bin/bash
-echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
-echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}'
-if read line; then
-  printf '%s' "$line" > "`+seenPath+`"
-  echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"second turn received"}]}}'
-  echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}'
-else
-  printf 'read failed' > "`+seenPath+`"
-fi
-`), 0o755)
-
-	s := NewSession("tweak-stdin-test", "feat-1", feature.PhaseImplement)
-	s.providerName = "claude"
-	s.kind = ports.KindTweak
-	if err := s.Start([]string{"bash", script}, dir, nil, func(msg llm.SDKMessage) {}); err != nil {
-		t.Fatalf("start: %v", err)
-	}
-
-	select {
-	case status := <-s.StatusCh():
-		if status != "SUCCESS" {
-			t.Fatalf("first status = %q, want SUCCESS", status)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for first result")
-	}
-
-	if err := s.SendUserMessage("keep going"); err != nil {
-		t.Fatalf("SendUserMessage after tweak Result: %v", err)
-	}
-
-	select {
-	case <-s.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("session did not complete within timeout")
-	}
-
-	data, err := os.ReadFile(seenPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q): %v", seenPath, err)
-	}
-	if got := string(data); !strings.Contains(got, "keep going") {
-		t.Fatalf("script read %q, want follow-up user message", got)
 	}
 }
 

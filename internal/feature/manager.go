@@ -108,6 +108,46 @@ func defaultBranchName(slug string) string {
 	return "feature/" + slug
 }
 
+func (m *Manager) branchName(slug string) string {
+	if m.Branches != nil {
+		return m.Branches.BranchName(slug)
+	}
+	return defaultBranchName(slug)
+}
+
+func branchSlug(branch string) string {
+	return strings.TrimPrefix(branch, "feature/")
+}
+
+func repoWorkspaceSlug(f *Feature, repo FeatureRepo) string {
+	if slug := branchSlug(repo.Branch); slug != "" && slug != repo.Branch {
+		return slug
+	}
+	if f == nil {
+		return ""
+	}
+	return f.WorkspaceSlug()
+}
+
+func setupWorkspaceSlug(f *Feature, repo FeatureRepo, task SetupTask) (string, string) {
+	if f == nil {
+		return "", task.Branch
+	}
+	qualified := f.WorkspaceSlug()
+	qualifiedBranch := defaultBranchName(qualified)
+	legacyBranch := defaultBranchName(f.Slug)
+	if task.Branch == "" || task.Branch == legacyBranch {
+		return qualified, qualifiedBranch
+	}
+	if slug := branchSlug(task.Branch); slug != "" && slug != task.Branch {
+		return slug, task.Branch
+	}
+	if slug := branchSlug(repo.Branch); slug != "" && slug != repo.Branch {
+		return slug, repo.Branch
+	}
+	return qualified, qualifiedBranch
+}
+
 // CreateOptions holds optional parameters for feature creation.
 type CreateOptions struct {
 	// UseCurrentBranch, when true, creates worktrees from the repo's current
@@ -150,6 +190,7 @@ type CreateOptions struct {
 func (m *Manager) Create(name, description string, repos []string, models config.ModelConfig, exitCriteria, inquireness string, images []string, opts ...CreateOptions) (*Feature, error) {
 	id := generateID()
 	slug := Slugify(name)
+	workspaceSlug := WorkspaceSlug(slug, id)
 
 	if existingName, err := m.SlugExists(slug); err != nil {
 		return nil, fmt.Errorf("checking for duplicates: %w", err)
@@ -177,12 +218,19 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		}
 	}
 
+	if len(m.Config.WorkspaceRoots) > 0 {
+		config.DiscoverReposFromRoots(m.Config)
+	}
+
 	var featureRepos []FeatureRepo
 	allRepos := config.AllRepos(m.Config)
 	for _, repoName := range repos {
 		rc, ok := allRepos[repoName]
 		if !ok {
 			return nil, fmt.Errorf("repo %q not found in config", repoName)
+		}
+		if strings.TrimSpace(rc.Path) == "" {
+			return nil, fmt.Errorf("repo %q has no path configured; add it under workspace_roots or set repos.%s.path", repoName, repoName)
 		}
 		baseBranch, hasRemote, err := m.resolveRepoBase(rc.Path)
 		if err != nil {
@@ -202,7 +250,8 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	if (opt.QueueSetup || m.Worktrees != nil) && m.Branches != nil {
 		baseSlug := slug
 		for attempt := 0; attempt < 5; attempt++ {
-			branch := m.Branches.BranchName(slug)
+			workspaceSlug = WorkspaceSlug(slug, id)
+			branch := m.Branches.BranchName(workspaceSlug)
 			conflict := false
 			for _, fr := range featureRepos {
 				if fr.Publishable != nil && !*fr.Publishable {
@@ -219,15 +268,12 @@ func (m *Manager) Create(name, description string, repos []string, models config
 			}
 			slug = baseSlug + "-" + randomSuffix()
 		}
+		workspaceSlug = WorkspaceSlug(slug, id)
 	}
 
 	if opt.QueueSetup || m.Worktrees != nil {
 		for i := range featureRepos {
-			if m.Branches != nil {
-				featureRepos[i].Branch = m.Branches.BranchName(slug)
-			} else {
-				featureRepos[i].Branch = defaultBranchName(slug)
-			}
+			featureRepos[i].Branch = m.branchName(workspaceSlug)
 		}
 	}
 
@@ -304,7 +350,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 			if useCurrent {
 				startPoint = "" // empty → HEAD in worktree.Create
 			}
-			wtPath, err := m.Worktrees.Create(fr.Path, slug, fr.Name, startPoint)
+			wtPath, err := m.Worktrees.Create(fr.Path, workspaceSlug, fr.Name, startPoint)
 			if err != nil {
 				return nil, fmt.Errorf("creating worktree for %s: %w", fr.Name, err)
 			}
@@ -595,7 +641,7 @@ func (m *Manager) StartImplementation(featureID string) error {
 		}
 		f.CurrentPhase = PhaseImplement
 		f.CurrentIteration = 1
-		// Use existing cycle key (rebase-N, tweak-N, review-comments) if set,
+		// Use existing cycle key (rebase-N, review-comments) if set,
 		// or default to "implement" (or "phase-N-impl" for roadmap phases).
 		// This preserves cycle keys across interrupt/fail → resume transitions.
 		// Accumulate any in-flight time under the old key before switching.
@@ -754,10 +800,118 @@ func (m *Manager) ClearAddressingReviews(featureID string) error {
 	})
 }
 
-// StartRepoCycle starts a per-repo post-publish cycle (rebase/tweak/review-comments).
+func (m *Manager) StartFeatureRebaseOperation(featureID string) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if hasActiveNonRebaseCycle(f) {
+			return fmt.Errorf("cannot start rebase operation while %s cycle is active", activeNonRebaseCycleType(f))
+		}
+		if hasActiveRebaseOperation(f) {
+			return fmt.Errorf("rebase operation already active")
+		}
+		now := time.Now()
+		f.SetActiveCycleType(CycleRebase)
+		f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount() + 1}
+		f.RebaseOperation = &RebaseOperationState{
+			Stage:     RebaseStageHarness,
+			StartedAt: now,
+			UpdatedAt: now,
+			Repos:     map[string]*RebaseRepoProgress{},
+		}
+		return nil
+	})
+}
+
+func (m *Manager) MarkFeatureRebaseStage(featureID string, stage RebaseStage) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if hasActiveNonRebaseCycle(f) {
+			return fmt.Errorf("cannot mark rebase stage while %s cycle is active", activeNonRebaseCycleType(f))
+		}
+		if !hasActiveRebaseOperation(f) {
+			return fmt.Errorf("no active rebase operation")
+		}
+		now := time.Now()
+		if f.RebaseOperation == nil {
+			f.RebaseOperation = &RebaseOperationState{StartedAt: now, Repos: map[string]*RebaseRepoProgress{}}
+		}
+		f.RebaseOperation.Stage = stage
+		f.RebaseOperation.UpdatedAt = now
+		if f.ActiveCycle == nil {
+			f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount() + 1}
+		} else {
+			f.ActiveCycle.Type = CycleRebase
+		}
+		if stage == RebaseStageFinalReview {
+			f.ActiveCycle.Status = RepoCycleReviewing
+		}
+		f.SetActiveCycleType(CycleRebase)
+		return nil
+	})
+}
+
+func (m *Manager) UpdateFeatureRebaseRepo(featureID, repoName string, status RebaseRepoStatus, progress RebaseRepoProgress) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if hasActiveNonRebaseCycle(f) {
+			return fmt.Errorf("cannot update rebase operation while %s cycle is active", activeNonRebaseCycleType(f))
+		}
+		if f.RebaseOperation == nil {
+			return fmt.Errorf("no active rebase operation")
+		}
+		if f.RebaseOperation.Repos == nil {
+			f.RebaseOperation.Repos = map[string]*RebaseRepoProgress{}
+		}
+		progress.Status = status
+		progress.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
+		f.RebaseOperation.Repos[repoName] = &progress
+		f.RebaseOperation.UpdatedAt = time.Now()
+		return nil
+	})
+}
+
+func (m *Manager) ClearFeatureRebaseOperation(featureID string) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		f.RebaseOperation = nil
+		if f.ActiveCycle != nil && f.ActiveCycle.Type == CycleRebase {
+			f.ActiveCycle = nil
+		}
+		if f.ActiveCycleType() == CycleRebase {
+			f.SetActiveCycleType("")
+		}
+		return nil
+	})
+}
+
+func hasActiveNonRebaseCycle(f *Feature) bool {
+	if f.ActiveCycle != nil && f.ActiveCycle.Type != CycleRebase {
+		return true
+	}
+	activeType := f.ActiveCycleType()
+	return activeType != "" && activeType != CycleRebase
+}
+
+func hasActiveRebaseOperation(f *Feature) bool {
+	if f.RebaseOperation != nil {
+		return true
+	}
+	if f.ActiveCycle != nil && f.ActiveCycle.Type == CycleRebase {
+		return true
+	}
+	return f.ActiveCycleType() == CycleRebase
+}
+
+func activeNonRebaseCycleType(f *Feature) RepoCycleType {
+	if f.ActiveCycle != nil && f.ActiveCycle.Type != CycleRebase {
+		return f.ActiveCycle.Type
+	}
+	return f.ActiveCycleType()
+}
+
+// StartRepoCycle starts a per-repo post-publish cycle.
 // The feature stays StatusPublished; only the per-repo cycle state is set.
 func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycleType) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
+		if cycleType == CycleRebase {
+			return fmt.Errorf("per-repo rebase cycles are not supported; use StartFeatureRebaseOperation")
+		}
 		if f.RepoCycles == nil {
 			f.RepoCycles = make(map[string]*RepoCycleState)
 		}
@@ -765,27 +919,10 @@ func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycle
 			return fmt.Errorf("%s is already running a %s cycle", repoName, existing.Type)
 		}
 
-		count := 1
-		switch cycleType {
-		case CycleRebase:
-			// Count existing rebase cycles for this repo
-			for _, rc := range f.RepoCycles {
-				if rc.Type == CycleRebase {
-					count++
-				}
-			}
-		case CycleTweak:
-			for _, rc := range f.RepoCycles {
-				if rc.Type == CycleTweak {
-					count++
-				}
-			}
-		}
-
 		f.RepoCycles[repoName] = &RepoCycleState{
 			Type:   cycleType,
 			Status: RepoCycleRunning,
-			Count:  count,
+			Count:  1,
 		}
 		return nil
 	})
@@ -803,8 +940,7 @@ func (m *Manager) CompleteRepoCycle(featureID, repoName string) error {
 }
 
 // RemoveRepoCycle removes a per-repo cycle entry without recording failure.
-// Used when cleaning up stale interactive tweak entries that cannot be
-// restarted.
+// Used when cleaning up stale cycle entries that cannot be restarted.
 func (m *Manager) RemoveRepoCycle(featureID, repoName string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		delete(f.RepoCycles, repoName)
@@ -918,7 +1054,7 @@ func (m *Manager) AdvanceRoadmapPhase(featureID string) error {
 		f.ValidatingPlan = false
 		f.ValidatorStatuses = nil
 		// Clear the active plan artifact so startImplementationCmd re-resolves
-		// for the new phase instead of reusing a stale tweak/rebase plan.
+		// for the new phase instead of reusing a stale rebase plan.
 		delete(f.Artifacts, "plan")
 		// RepoStates persists across phases. Touched is monotonic — once
 		// any phase touches a repo, the flag stays true for the lifetime
@@ -1000,7 +1136,7 @@ func (m *Manager) RecreateWorktree(featureID string) error {
 			if repo.Branch == "" {
 				return fmt.Errorf("repo %s has no branch to recreate from", repo.Name)
 			}
-			wtPath, err := m.Worktrees.Create(repo.Path, f.Slug, repo.Name, repo.Branch)
+			wtPath, err := m.Worktrees.Create(repo.Path, repoWorkspaceSlug(f, repo), repo.Name, repo.Branch)
 			if err != nil {
 				return fmt.Errorf("recreating worktree for %s: %w", repo.Name, err)
 			}
@@ -1123,10 +1259,10 @@ func phaseBeforeTarget(target Phase) Phase {
 	}
 }
 
-// RewindablePhases returns the phases a feature can rewind to, based on current status.
-func RewindablePhases(f *Feature) []Phase {
-	// Determine what phases have been completed based on status
-	var completedUpTo Phase
+// completedPhaseFor determines the furthest phase completed by f based on its
+// current status. ok is false when the status has no completed phase (e.g.
+// StatusCreated, StatusBuildingKB).
+func completedPhaseFor(f *Feature) (completedUpTo Phase, ok bool) {
 	switch f.Status {
 	case StatusInquiring, StatusInquireReady, StatusPromptNeedsReview:
 		completedUpTo = PhaseInquire
@@ -1135,9 +1271,9 @@ func RewindablePhases(f *Feature) []Phase {
 	case StatusDesigning, StatusPlanReady, StatusResearchNeedsReview:
 		completedUpTo = PhaseDesign
 	case StatusDesignNeedsReview:
-		completedUpTo = PhasePlan
-	case StatusPlanNeedsReview:
 		completedUpTo = PhaseDesign
+	case StatusPlanNeedsReview:
+		completedUpTo = PhasePlan
 		if f.PendingReviewPhase != nil && f.IsRewind && *f.PendingReviewPhase == PhaseImplement {
 			completedUpTo = PhaseImplement
 		}
@@ -1152,7 +1288,16 @@ func RewindablePhases(f *Feature) []Phase {
 			completedUpTo = PhaseImplement
 		}
 	default:
-		return nil // StatusCreated, StatusBuildingKB, etc.
+		return 0, false // StatusCreated, StatusBuildingKB, etc.
+	}
+	return completedUpTo, true
+}
+
+// RewindablePhases returns the phases a feature can rewind to, based on current status.
+func RewindablePhases(f *Feature) []Phase {
+	completedUpTo, ok := completedPhaseFor(f)
+	if !ok {
+		return nil
 	}
 
 	allPhases := []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement}
@@ -1178,31 +1323,8 @@ type RewindChoice struct {
 // Pipeline upgrades are handled separately via UpgradePipeline.
 func RewindChoicesForFeature(f *Feature) []RewindChoice {
 	// Determine completedUpTo using the same logic as RewindablePhases
-	var completedUpTo Phase
-	switch f.Status {
-	case StatusInquiring, StatusInquireReady, StatusPromptNeedsReview:
-		completedUpTo = PhaseInquire
-	case StatusResearching, StatusDesignReady, StatusInquiryNeedsReview:
-		completedUpTo = PhaseResearch
-	case StatusDesigning, StatusPlanReady, StatusResearchNeedsReview:
-		completedUpTo = PhaseDesign
-	case StatusDesignNeedsReview:
-		completedUpTo = PhasePlan
-	case StatusPlanNeedsReview:
-		completedUpTo = PhaseDesign
-		if f.PendingReviewPhase != nil && f.IsRewind && *f.PendingReviewPhase == PhaseImplement {
-			completedUpTo = PhaseImplement
-		}
-	case StatusPlanning, StatusImplementReady:
-		completedUpTo = PhasePlan
-	case StatusImplementing, StatusReviewPassed, StatusCodeReady, StatusPublished, StatusDone:
-		completedUpTo = PhaseImplement
-	case StatusFailed, StatusInterrupted:
-		completedUpTo = f.CurrentPhase
-		if completedUpTo == PhaseReview {
-			completedUpTo = PhaseImplement
-		}
-	default:
+	completedUpTo, ok := completedPhaseFor(f)
+	if !ok {
 		return nil
 	}
 
@@ -1680,11 +1802,15 @@ func (m *Manager) EnsureWorktree(featureID string) error {
 		if startPoint == "" {
 			startPoint = "HEAD"
 		}
-		wtPath, err := m.Worktrees.Create(repo.Path, f.Slug, repo.Name, startPoint)
+		workspaceSlug := repoWorkspaceSlug(f, repo)
+		wtPath, err := m.Worktrees.Create(repo.Path, workspaceSlug, repo.Name, startPoint)
 		if err != nil {
 			return fmt.Errorf("creating worktree: %w", err)
 		}
 		f.Repos[0].WorktreePath = wtPath
+		if f.Repos[0].Branch == "" {
+			f.Repos[0].Branch = m.branchName(workspaceSlug)
+		}
 		return nil
 	})
 }

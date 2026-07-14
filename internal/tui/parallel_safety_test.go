@@ -29,47 +29,45 @@ import (
 //
 // Serial / parallel-ineligible until their global or external-state ownership
 // is narrowed:
-//   - app_test.go, grill_me_smoke_test.go, qa_persistence_gate_test.go:
-//     exercise real feature stores, session managers, artifact gates, or
-//     background goroutines.
 //   - artifact_review_test.go, attach_test.go, attach_askuser_test.go,
-//     chat_test.go, editconfig_test.go, help_test.go, need_user_input_test.go,
-//     observe_test.go, orchestrator_bridge_test.go, publish_test.go,
-//     recovery_test.go, roadmap_rewind_test.go, welcome_test.go, wizard_test.go,
+//     chat_test.go, editconfig_test.go, help_test.go,
+//     publish_test.go, welcome_test.go, wizard_test.go,
 //     wizard_delegation_test.go: use temp files, session fakes, callback
-//     behavior, real-git coverage, or orchestration fakes that need a Phase 10
-//     audit before parallel execution.
+//     behavior, real-git coverage, or runtime fakes that need a Phase 10 audit
+//     before parallel execution.
 //   - autocomplete_test.go, dirpicker_test.go, fileindex_test.go,
 //     filepicker_test.go, markdown_editor_test.go, skillpicker_test.go,
 //     workspace_manager_test.go: scan or mutate test-scoped filesystem trees
 //     and should stay serial until the filesystem fixtures are narrowed.
+//   - live_preview_markdown_test.go: mutates the package-level Markdown
+//     renderer seam.
 //   - icons_test.go and notify_test.go: mutate terminal-related environment
 //     with t.Setenv.
 //   - clipboard_test.go: probes host clipboard integration.
 //
 // Phase 10 candidates because they are model-layer or source-boundary checks
 // over in-memory state:
-//   - activity_test.go
+//   - api_app_test.go
+//   - api_chat_adapter_test.go
 //   - attention_test.go
 //   - branding_test.go
+//   - chat_events_test.go
 //   - configeditor_test.go
 //   - cycle_dispatch_test.go
 //   - dashboard_test.go
 //   - detail_test.go
 //   - live_preview_test.go
-//   - logs_test.go
+//   - need_user_input_test.go
 //   - observer_fake_test.go
 //   - parallel_safety_test.go
 //   - phase_catalog_test.go
 //   - repos_block_test.go
 //   - simpletextarea_test.go
 //   - styles_test.go
-//   - tui_boundary_test.go
-//   - tweak_removal_test.go
+//   - test_helpers_test.go
 //   - vocabulary_test.go
 
 var tuiParallelIneligibleTestFiles = []string{
-	"app_test.go",
 	"artifact_review_test.go",
 	"attach_test.go",
 	"attach_askuser_test.go",
@@ -80,20 +78,14 @@ var tuiParallelIneligibleTestFiles = []string{
 	"editconfig_test.go",
 	"fileindex_test.go",
 	"filepicker_test.go",
-	"grill_me_smoke_test.go",
 	"help_test.go",
 	"icons_test.go",
 	"keys_test.go",
+	"live_preview_markdown_test.go",
 	"markdown/markdown_test.go",
 	"markdown_editor_test.go",
-	"need_user_input_test.go",
 	"notify_test.go",
-	"observe_test.go",
-	"orchestrator_bridge_test.go",
 	"publish_test.go",
-	"qa_persistence_gate_test.go",
-	"recovery_test.go",
-	"roadmap_rewind_test.go",
 	"skillpicker_test.go",
 	"welcome_test.go",
 	"wizard_delegation_test.go",
@@ -102,25 +94,28 @@ var tuiParallelIneligibleTestFiles = []string{
 }
 
 var tuiParallelCandidateTestFiles = []string{
-	"activity_test.go",
+	"api_app_test.go",
+	"api_chat_adapter_test.go",
 	"attention_test.go",
+	"auto_picked_tag_test.go",
 	"branding_test.go",
+	"chat_events_test.go",
 	"configeditor_test.go",
-	"cycle_dispatch_test.go",
 	"dashboard_test.go",
 	"design_snapshot_test.go",
 	"design_surfaces_test.go",
 	"detail_test.go",
+	"expanding_textarea_test.go",
 	"live_preview_test.go",
-	"logs_test.go",
+	"need_user_input_test.go",
 	"observer_fake_test.go",
 	"parallel_safety_test.go",
 	"phase_catalog_test.go",
+	"question_picker_test.go",
 	"repos_block_test.go",
 	"simpletextarea_test.go",
 	"styles_test.go",
-	"tui_boundary_test.go",
-	"tweak_removal_test.go",
+	"test_helpers_test.go",
 	"vocabulary_test.go",
 }
 

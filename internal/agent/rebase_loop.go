@@ -13,10 +13,9 @@
 // limitations under the License.
 
 // Package agent — rebase_loop.go is the unified feature-level rebase cycle
-// loop under SchemaVersionCurrent = 4. The legacy per-repo rebase entry
-// (Orchestrator.StartRebase + per-repo StartRepoCycleImplement(CycleRebase))
-// is replaced by RunRebaseLoop: a single iterative loop that rebases every
-// `Feature.Repos` branch behind master in one Claude session.
+// loop under SchemaVersionCurrent = 4. RunRebaseLoop is a single iterative
+// loop that rebases every participating `Feature.Repos` branch in one Claude
+// session.
 //
 // Topology:
 //
@@ -31,7 +30,8 @@
 //     verification items live in the rebase plan markdown so the agent
 //     attests them through the standard verification report.
 //   - One Claude session per iteration with `--add-dir` for every
-//     behind-subset repo (and the state dir).
+//     workspace repo (and the state dir). Coordinated conflict repair can
+//     mount the full feature repo set while stamping only the behind subset.
 //   - Iteration loop reuses RunImplementationLoop for the iteration
 //     mechanics (handoff parser, review-feedback walker, retry/safety-rail,
 //     crash recovery), with cycle-specific divergence (plan-less compiler,
@@ -69,9 +69,9 @@ type RebaseLoopConfig struct {
 	StateDir     string
 
 	// BehindRepos is the resolved subset of Feature.Repos whose feature
-	// branch is behind its base. Only these repos are mounted in the
-	// session workspace and stamped on cycle outcome. The orchestrator
-	// computes this via the Rebaser port before invoking the loop.
+	// branch is behind its base. These repos are the target/conflict subset
+	// stamped on cycle outcome. The orchestrator computes this via the
+	// Rebaser port before invoking the loop.
 	//
 	// Each entry carries the rebase target ref (e.g. "master") so the
 	// rebase plan markdown can name it accurately. ConflictFiles, when
@@ -80,6 +80,10 @@ type RebaseLoopConfig struct {
 	// markers); the rebase plan switches to the
 	// "rebase-already-in-progress" template in that case.
 	BehindRepos []RebaseRepoTarget
+
+	// WorkspaceRepos is full feature repos mounted for coordinated smart
+	// rebase; BehindRepos remains target/conflict subset.
+	WorkspaceRepos []string
 
 	Model               string
 	ReviewModel         string
@@ -97,6 +101,10 @@ type RebaseLoopConfig struct {
 	SkillsDir                  string
 	GuidelinesDir              string
 	Observer                   *observe.Observer
+
+	// SessionStartFunc overrides SessionManager.StartSession for callers
+	// that need to synchronize session startup with outer lifecycle state.
+	SessionStartFunc func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
 
 	// ResumeExistingCycle reuses the current ActiveCycle.Count instead of
 	// opening a new rebase-N directory. Used when resuming a rebase
@@ -152,9 +160,10 @@ type RebaseLoopResult struct {
 // RunRebaseLoop drives the unified rebase cycle. Cwd at the feature state
 // dir; --add-dir mounts every behind-subset Feature.Repos worktree (and
 // the state dir). The agent does the actual `git fetch`/`git rebase`/
-// conflict resolution/`git push --force` inside its session — the loop
-// owns iteration mechanics, plan-less contract compilation, ActiveCycle
-// state, RebaseCount increment, and atomic outcome stamping.
+// conflict resolution inside its session. Pushes are intentionally left
+// to the orchestrator's Final Review and publish policy after approval;
+// the loop owns iteration mechanics, plan-less contract compilation,
+// ActiveCycle state, RebaseCount increment, and atomic outcome stamping.
 //
 // The loop sets `Feature.ActiveCycle = {Type: rebase, Status: running}` at
 // entry (via FeatureStore.Modify) and clears it on success. RebaseCount is
@@ -188,13 +197,15 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 	}
 	sort.Strings(repoNames)
 
-	// Build the cycle workspace. State dir is per-feature; the workspace
-	// filter is the behind subset only — every Feature.Repos worktree
-	// outside that subset is intentionally NOT mounted, both to keep the
-	// agent's edit boundary tight and to make the AtomicPhaseStamp
-	// staged-subset unambiguous.
+	// Build the cycle workspace. State dir is per-feature; the stamped
+	// target set remains the behind subset, while the mounted workspace can
+	// include the full feature repo set for coordinated conflict resolution.
 	stateDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
-	workspace, err := WorkspaceForRepos(cfg.Feature, stateDir, repoNames)
+	workspaceRepos := append([]string(nil), cfg.WorkspaceRepos...)
+	if len(workspaceRepos) == 0 {
+		workspaceRepos = repoNames
+	}
+	workspace, err := WorkspaceForRepos(cfg.Feature, stateDir, workspaceRepos)
 	if err != nil {
 		return nil, fmt.Errorf("rebase loop: workspace setup: %w", err)
 	}
@@ -299,6 +310,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		SkillsDir:                  cfg.SkillsDir,
 		GuidelinesDir:              cfg.GuidelinesDir,
 		Observer:                   cfg.Observer,
+		SessionStartFunc:           rebaseSessionStartFunc(cfg, sm),
 		// Rebase cycles always run the per-iteration review gate so the
 		// reviewer can attest the rebase landed cleanly (no conflict
 		// markers, branches up-to-date) before we stamp the staged subset
@@ -346,7 +358,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 	}
 
 	switch loopResult.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		// Cycle success: every behind-subset repo transitions to
 		// Touched (staged for FR) atomically; ActiveCycle clears.
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
@@ -356,7 +368,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		})
 		_ = clearActiveCycle(cfg.FeatureStore, cfg.Feature.ID)
 		return &RebaseLoopResult{
-			FinalStatus: "review_passed",
+			FinalStatus: finalStatusReviewPassed,
 			Iterations:  loopResult.Iterations,
 			Repos:       repoNames,
 		}, nil
@@ -425,18 +437,42 @@ func writeRebaseTestingContract(path string, repos []string, _ *feature.Feature)
 	return nil
 }
 
+func rebaseSessionStartFunc(
+	cfg RebaseLoopConfig,
+	sm ports.SessionManager,
+) func(string, string, feature.Phase, []string, string, []string, ...*ports.SessionOpts) (ports.SessionHandle, error) {
+	if sm == nil {
+		return nil
+	}
+	return func(
+		id, featureID string,
+		phase feature.Phase,
+		command []string,
+		workdir string,
+		env []string,
+		opts ...*ports.SessionOpts,
+	) (ports.SessionHandle, error) {
+		if cfg.SessionStartFunc != nil {
+			return cfg.SessionStartFunc(id, featureID, phase, command, workdir, env, opts...)
+		}
+		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+			return nil, ports.ErrSessionShuttingDown
+		}
+		return sm.StartSession(id, featureID, phase, command, workdir, env, opts...)
+	}
+}
+
 // rebaseExitCriteria returns the rebase cycle's exit criteria. The agent
 // reads this from the implement prompt's `## Exit Criteria` section to
 // know when it can emit SUCCESS. Cycle-specific verification (post-rebase
 // `git status` clean, no rebase in progress, build passes) lives here so
 // the iteration loop can enforce it via the reviewer's audit.
 func rebaseExitCriteria(_ *feature.Feature) string {
-	return "Every behind-subset repo's feature branch is rebased onto its base, " +
+	return "Every conflicted rebase target is resolved onto its base, " +
 		"the worktree has no rebase in progress, no conflict markers remain, " +
-		"the project's build, test, and lint commands pass, and the rebased " +
-		"branch is force-pushed to the remote PR branch (when the feature is " +
-		"publishable). No commit history beyond what was on the branch before " +
-		"the rebase + the upstream commits being incorporated."
+		"and the feature-level project verification commands pass across all " +
+		"affected repos. Do not push; the orchestrator runs Final Review and " +
+		"applies publish policy after approval."
 }
 
 // BuildMultiRepoRebasePlan composes the rebase plan markdown for the
@@ -445,7 +481,9 @@ func rebaseExitCriteria(_ *feature.Feature) string {
 // dispatches per-repo work via the rebase skill prompt.
 func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 	if len(repos) == 0 {
-		return "# Rebase Cycle Plan\n\nNo behind repos detected. This file is empty.\n"
+		return "# Rebase Cycle Plan\n\n" +
+			standardImplementCycleCommunicationContract() +
+			"No behind repos detected. This file is empty.\n"
 	}
 
 	// Sort by repo name for deterministic output.
@@ -453,10 +491,13 @@ func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].RepoName < sorted[j].RepoName })
 
 	out := "# Rebase Cycle Plan\n\n"
-	out += "This rebase cycle covers the following repos. Each repo's branch is\n"
-	out += "behind its base; rebase the branch, resolve any conflicts, run the\n"
-	out += "project verification commands, and (when publishable) force-push the\n"
-	out += "rebased branch to its remote PR branch.\n\n"
+	out += "This coordinated rebase covers the conflicting repos listed below. All\n"
+	out += "feature repos are available in the workspace as validation context; make\n"
+	out += "cross-repo edits only when verification proves they are necessary. Rebase\n"
+	out += "the listed targets, resolve conflicts, run the feature-level project\n"
+	out += "verification commands, and do not push. The orchestrator runs Final\n"
+	out += "Review and applies publish policy after approval.\n\n"
+	out += standardImplementCycleCommunicationContract()
 	out += "## Repos in this cycle\n\n"
 	for _, r := range sorted {
 		out += fmt.Sprintf("- `%s` — base `%s`", r.RepoName, r.RebaseTarget)
@@ -483,6 +524,16 @@ func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 		out += "\n"
 	}
 	return out
+}
+
+func standardImplementCycleCommunicationContract() string {
+	return "## Cycle Communication Contract\n\n" +
+		"This cycle is executed by the generic implementer role. Use the named output roots from the system prompt and the standard implement handoff artifact layout:\n\n" +
+		"- `progress.md`: `{phase_dir}/progress.md`\n" +
+		"- `verification-report.yaml`: `{iteration_dir}/verification-report.yaml`\n" +
+		"- `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.\n" +
+		"- `phase_complete`: `{iteration_dir}/phase_complete`\n\n" +
+		"Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.\n\n"
 }
 
 // stripFirstHeading drops the first H1 ("# ...") heading line from md.

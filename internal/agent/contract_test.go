@@ -110,6 +110,22 @@ func TestContractRegistryPlanRoadmapPlannerReportsMissingMeta(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactsPreflightPlanRoadmapPlannerSkipsHarnessMeta(t *testing.T) {
+	attemptDir := writeRoadmapPlannerAttempt(t, validRoadmapText(), "")
+
+	out, violations, err := ValidateArtifactsPreflight(feature.PhasePlan, RolePlanRoadmapPlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if strings.Contains(got, "meta.yaml") {
+		t.Fatalf("JoinProtocolViolations() = %q, want no meta.yaml violation", got)
+	}
+	if !out.OK || len(violations) != 0 {
+		t.Fatalf("ValidateArtifactsPreflight() = (%+v, %v), want OK without harness meta.yaml", out, violations)
+	}
+}
+
 func TestContractRegistryPlanRoadmapPlannerReportsMalformedMeta(t *testing.T) {
 	attemptDir := writeRoadmapPlannerAttempt(t, validRoadmapText(), ":\n  :")
 
@@ -865,7 +881,7 @@ func TestContractRegistryFinalReviewFixerRejectsNotRunVerificationReport(t *test
 
 func TestContractRegistryFinalReviewerApprovesWithOnlyReviewFeedback(t *testing.T) {
 	iterDir := t.TempDir()
-	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 
 	contract, ok := Lookup(feature.PhaseReview, RoleFinalReviewer)
 	if !ok {
@@ -899,14 +915,14 @@ func TestContractRegistryFinalReviewerDoesNotAuditPriorImplementationEvidenceFil
 		t.Fatalf("mkdir iteration dir: %v", err)
 	}
 
-	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 
 	implRoot := filepath.Join(runDir, "phase-01", "implement")
 	implIterDir := filepath.Join(implRoot, "iteration-01")
 	if err := os.MkdirAll(implIterDir, 0o755); err != nil {
 		t.Fatalf("mkdir implementation iter dir: %v", err)
 	}
-	if err := NewArtifactManager(implRoot).WriteMeta(implIterDir, IterationMeta{Iteration: 1, AgentStatus: "SUCCESS", ReviewStatus: "skipped"}); err != nil {
+	if err := NewArtifactManager(implRoot).WriteMeta(implIterDir, IterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: reviewStatusSkipped}); err != nil {
 		t.Fatalf("WriteMeta() error = %v", err)
 	}
 	implContractPath := filepath.Join(runDir, "phase-01", "testing-contract.yaml")
@@ -931,7 +947,7 @@ func TestContractRegistryFinalReviewerDoesNotAuditPriorImplementationEvidenceFil
 
 func TestContractRegistryFinalReviewerAllowsChangesRequestedWithOnlyReviewFeedback(t *testing.T) {
 	iterDir := t.TempDir()
-	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("- needs work", "", "CHANGES_REQUESTED"))
+	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("- needs work", "", agentStatusChangesRequested))
 
 	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
 	if err != nil {
@@ -942,6 +958,36 @@ func TestContractRegistryFinalReviewerAllowsChangesRequestedWithOnlyReviewFeedba
 	}
 	if out.ReviewFeedback.Verdict != ReviewChangesRequested {
 		t.Fatalf("ReviewFeedback.Verdict = %s, want CHANGES_REQUESTED", out.ReviewFeedback.Verdict)
+	}
+}
+
+func TestContractRegistryFinalReviewerAllowsChangesRequestedWithMalformedVerificationReport(t *testing.T) {
+	iterDir := t.TempDir()
+	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("- needs work", "", agentStatusChangesRequested))
+	report := strings.Join([]string{
+		"version: 2",
+		"additional_checks:",
+		"  - name: Source comparison spot-check",
+		"    command: manual: compare translated README against English source",
+		"    mode: manual",
+		"    status: failed",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(report), 0o644); err != nil {
+		t.Fatalf("write malformed verification report: %v", err)
+	}
+
+	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(violations) != 0 || !out.OK || out.ReviewFeedback == nil {
+		t.Fatalf("Validate() = (%+v, %v), want CHANGES_REQUESTED feedback to route despite malformed verification report", out, violations)
+	}
+	if out.ReviewFeedback.Verdict != ReviewChangesRequested {
+		t.Fatalf("ReviewFeedback.Verdict = %s, want CHANGES_REQUESTED", out.ReviewFeedback.Verdict)
+	}
+	if out.VerificationReport != nil {
+		t.Fatalf("VerificationReport = %+v, want nil when malformed report is tolerated for CHANGES_REQUESTED", out.VerificationReport)
 	}
 }
 
@@ -975,7 +1021,7 @@ func TestContractRegistryFinalReviewerReportsMalformedVerdict(t *testing.T) {
 
 func TestContractRegistryFinalReviewerIgnoresMalformedVerificationReport(t *testing.T) {
 	iterDir := t.TempDir()
-	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(":\n  :"), 0o644); err != nil {
 		t.Fatalf("write malformed verification report: %v", err)
 	}
@@ -994,7 +1040,7 @@ func TestContractRegistryPlanValidatorRequiresAxisFeedback(t *testing.T) {
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	writeReviewFeedbackFile(t, filepath.Join(helperDir, "validation-scope-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	writeReviewFeedbackFile(t, filepath.Join(helperDir, "validation-scope-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 
 	contract, ok := Lookup(feature.PhasePlan, RoleValidateRoadmapScope)
 	if !ok {
@@ -1018,7 +1064,7 @@ func TestContractRegistryPlanValidatorIgnoresHelperAxisApprovalArtifact(t *testi
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	writeReviewFeedbackFile(t, filepath.Join(helperDir, "validation-scope-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	writeReviewFeedbackFile(t, filepath.Join(helperDir, "validation-scope-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 	if err := os.WriteFile(filepath.Join(helperDir, "axis-approved-scope.md"), []byte(`axis: scope
 verdict: APPROVED
 frozen_sections:
@@ -1063,7 +1109,7 @@ func TestContractRegistryIterationReviewerRequiresReviewFeedback(t *testing.T) {
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	writeReviewFeedbackFile(t, filepath.Join(helperDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	writeReviewFeedbackFile(t, filepath.Join(helperDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 
 	contract, ok := Lookup(feature.PhaseReview, RoleIterationReviewer)
 	if !ok {
@@ -1079,16 +1125,6 @@ func TestContractRegistryIterationReviewerRequiresReviewFeedback(t *testing.T) {
 	}
 	if len(violations) != 0 || !out.OK || out.ReviewFeedback == nil {
 		t.Fatalf("Validate() = (%+v, %v), want parsed iteration-reviewer feedback", out, violations)
-	}
-}
-
-func TestContractRegistryTweakCarveOut(t *testing.T) {
-	out, violations, err := Validate(feature.PhaseImplement, RoleInteractivePTY, t.TempDir())
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !out.OK || len(violations) != 0 {
-		t.Fatalf("Validate() = (%+v, %v), want OK empty contract", out, violations)
 	}
 }
 

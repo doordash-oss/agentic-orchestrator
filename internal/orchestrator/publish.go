@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -47,6 +48,10 @@ func readFileSafe(path string) (string, error) {
 // Returns a *PublishConflictError on pull-rebase conflicts so callers can
 // distinguish them with errors.Is(err, ErrPublishConflict) / errors.As.
 func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
+	return o.publishRepoWithOptions(featureID, repoName, PublishOptions{})
+}
+
+func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts PublishOptions) (string, error) {
 	if o.deps.Publisher == nil {
 		return "", fmt.Errorf("publishRepo: Publisher port is nil")
 	}
@@ -61,14 +66,8 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 		return "", fmt.Errorf("repo %q not found in feature %s", repoName, featureID)
 	}
 
-	workDir := repo.WorktreePath
-	if workDir == "" {
-		workDir = repo.Path
-	}
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
+	workDir := repoWorkDir(repo)
+	branch := repoBranch(f, repo)
 
 	// Commit any uncommitted changes.
 	hasChanges, err := o.deps.Publisher.HasUncommittedChanges(workDir)
@@ -83,11 +82,25 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 	// description-generation agent. The raw diff is intentionally excluded —
 	// for large features it overflows the CLI prompt budget.
 	prCtx := o.buildPRContext(f, workDir, repo.BaseBranch)
-	title, body := o.generatePRDescription(f, prCtx)
+	title := strings.TrimSpace(opts.Title)
+	body := strings.TrimSpace(opts.Body)
+	if title == "" || body == "" {
+		generatedTitle, generatedBody := o.generatePRDescription(f, prCtx)
+		if title == "" {
+			title = generatedTitle
+		}
+		if body == "" {
+			body = generatedBody
+		}
+	}
 
-	// Pull-rebase before push. A conflict surfaces as *PublishConflictError
-	// so callers can route to conflict-resolution flows with errors.Is.
-	if o.deps.Rebaser != nil {
+	leasePush := publishRequiresLeasePush(f)
+
+	// Pull-rebase before a regular push. CodeReady publish is the explicit
+	// post-review path and may follow a rebase cycle that rewrote the feature
+	// branch; rebasing that branch back onto origin/<branch> would undo the
+	// intended direction of sync.
+	if !leasePush && o.deps.Rebaser != nil {
 		res := o.deps.Rebaser.PullRebase(workDir, branch)
 		switch res.Outcome {
 		case ports.PullRebaseConflict:
@@ -109,7 +122,17 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 	}
 
 	// Push branch.
-	if err := o.deps.Publisher.Push(workDir, branch); err != nil {
+	if leasePush {
+		if o.deps.Rebaser == nil {
+			err := errors.New("rebase operator not configured for lease push")
+			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
+			return "", err
+		}
+		if err := o.deps.Rebaser.ForcePush(workDir, branch); err != nil {
+			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
+			return "", fmt.Errorf("force push failed: %w", err)
+		}
+	} else if err := o.deps.Publisher.Push(workDir, branch); err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 		return "", fmt.Errorf("push failed: %w", err)
 	}
@@ -138,6 +161,10 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 	return prURL, nil
 }
 
+func publishRequiresLeasePush(f *feature.Feature) bool {
+	return f != nil && f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()
+}
+
 // generatePRDescription produces a PR title/body from a structured PRContext
 // using the description-generation agent. When the agent is unavailable the
 // deterministic fallback is used. Generation errors are logged to the
@@ -152,6 +179,7 @@ func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRC
 	}
 	title, body, err := o.deps.PhaseRunner.RunDescriptionGeneration(
 		context.Background(),
+		f.ID,
 		model,
 		prCtx,
 	)

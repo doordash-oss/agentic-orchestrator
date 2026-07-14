@@ -27,6 +27,17 @@ import (
 // HelpOverlayCloseMsg signals the help overlay should close.
 type HelpOverlayCloseMsg struct{}
 
+const (
+	helpContextDashboard      = "Dashboard"
+	helpContextDetailPanel    = "Detail Panel"
+	helpContextDetail         = "Detail"
+	helpContextLogs           = "Logs"
+	helpContextPublish        = "Publish"
+	helpContextRecovery       = "Recovery"
+	helpContextWizard         = "Wizard"
+	helpContextReviewComments = "Review Comments"
+)
+
 // HelpBinding represents a single keybinding displayed in the help overlay.
 type HelpBinding struct {
 	Key  string
@@ -60,20 +71,20 @@ func contextualAHelpSection() HelpSection {
 // AllHelpContexts returns the registry of help contexts keyed by name.
 func AllHelpContexts() map[string]ViewHelpContext {
 	return map[string]ViewHelpContext{
-		"Dashboard":       dashboardLeftHelp(),
-		"Detail Panel":    dashboardRightHelp(),
-		"Detail":          detailHelp(),
-		"Wizard":          wizardHelp(),
-		"Publish":         publishHelp(),
-		"Recovery":        recoveryHelp(),
-		"Logs":            logsHelp(),
-		"Review Comments": reviewCommentsHelp(),
+		helpContextDashboard:      dashboardLeftHelp(),
+		helpContextDetailPanel:    dashboardRightHelp(),
+		helpContextDetail:         detailHelp(),
+		helpContextWizard:         wizardHelp(),
+		helpContextPublish:        publishHelp(),
+		helpContextRecovery:       recoveryHelp(),
+		helpContextLogs:           logsHelp(),
+		helpContextReviewComments: reviewCommentsHelp(),
 	}
 }
 
 func dashboardLeftHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Dashboard",
+		Name: helpContextDashboard,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -90,7 +101,6 @@ func dashboardLeftHelp() ViewHelpContext {
 				Title: "FEATURES",
 				Bindings: []HelpBinding{
 					{"n", "New feature"},
-					{"Shift+N", "Toggle input notifications"},
 					{"d", "Delete feature"},
 					{"v", "View diff"},
 					{"p", "Publish"},
@@ -114,7 +124,7 @@ func dashboardLeftHelp() ViewHelpContext {
 
 func dashboardRightHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Detail Panel",
+		Name: helpContextDetailPanel,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -131,7 +141,6 @@ func dashboardRightHelp() ViewHelpContext {
 					{"y", "Approve permissions"},
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},
-					{"Shift+N", "Toggle input notifications"},
 					{"s", "Stop running feature"},
 					{"r", "Restart phase"},
 					{"ctrl+r", "Rewind"},
@@ -144,8 +153,6 @@ func dashboardRightHelp() ViewHelpContext {
 				Title: "PUBLISH",
 				Bindings: []HelpBinding{
 					{"p", "Publish PR"},
-					{"m", "Mark manually published"},
-					{"t", "Tweak implementation"},
 					{"b", "Rebase on main"},
 					{"Shift+D", "Mark as done"},
 					{"g", "Review comments"},
@@ -166,7 +173,7 @@ func dashboardRightHelp() ViewHelpContext {
 
 func detailHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Detail",
+		Name: helpContextDetail,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -181,7 +188,6 @@ func detailHelp() ViewHelpContext {
 					{"y", "Approve permissions"},
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},
-					{"Shift+N", "Toggle input notifications"},
 					{"Shift+E", "Edit workspace config"},
 					{"s", "Stop running feature"},
 					{"r", "Restart phase"},
@@ -195,8 +201,6 @@ func detailHelp() ViewHelpContext {
 				Title: "PUBLISH",
 				Bindings: []HelpBinding{
 					{"p", "Publish PR"},
-					{"m", "Mark manually published"},
-					{"t", "Tweak implementation"},
 					{"b", "Rebase on main"},
 					{"Shift+D", "Mark as done"},
 					{"g", "Review comments"},
@@ -207,73 +211,9 @@ func detailHelp() ViewHelpContext {
 	}
 }
 
-func setupDetailPanelHelp(logsAvailable, retryAvailable bool) ViewHelpContext {
-	actions := []HelpBinding{
-		{"o", "Show overview"},
-	}
-	if logsAvailable {
-		actions = append(actions, HelpBinding{"l", "View setup logs"})
-	}
-	if retryAvailable {
-		actions = append(actions, HelpBinding{"r", "Retry setup"})
-	}
-	actions = append(actions, HelpBinding{"d", "Delete feature"})
-
-	return ViewHelpContext{
-		Name: "Setup Detail Panel",
-		Sections: []HelpSection{
-			{
-				Title: "NAVIGATION",
-				Bindings: []HelpBinding{
-					{"←/esc", "Back to list"},
-					{"tab", "Switch panel"},
-				},
-			},
-			{
-				Title:    "ACTIONS",
-				Bindings: actions,
-			},
-			{
-				Title: "TOOLS",
-				Bindings: []HelpBinding{
-					{ChatKeyHint(), "Ask AI"},
-					{"?", "Help"},
-				},
-			},
-		},
-	}
-}
-
-func setupDetailHelp(logsAvailable, retryAvailable bool) ViewHelpContext {
-	var actions []HelpBinding
-	if logsAvailable {
-		actions = append(actions, HelpBinding{"l", "View setup logs"})
-	}
-	if retryAvailable {
-		actions = append(actions, HelpBinding{"r", "Retry setup"})
-	}
-	actions = append(actions, HelpBinding{"d", "Delete feature"})
-
-	return ViewHelpContext{
-		Name: "Setup Detail",
-		Sections: []HelpSection{
-			{
-				Title: "NAVIGATION",
-				Bindings: []HelpBinding{
-					{"esc", "Back to dashboard"},
-				},
-			},
-			{
-				Title:    "ACTIONS",
-				Bindings: actions,
-			},
-		},
-	}
-}
-
 func wizardHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Wizard",
+		Name: helpContextWizard,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -300,7 +240,7 @@ func wizardHelp() ViewHelpContext {
 
 func publishHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Publish",
+		Name: helpContextPublish,
 		Sections: []HelpSection{
 			{
 				Title: "ACTIONS",
@@ -316,7 +256,7 @@ func publishHelp() ViewHelpContext {
 
 func recoveryHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Recovery",
+		Name: helpContextRecovery,
 		Sections: []HelpSection{
 			{
 				Title: "ACTIONS",
@@ -333,7 +273,7 @@ func recoveryHelp() ViewHelpContext {
 
 func logsHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Logs",
+		Name: helpContextLogs,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -355,13 +295,25 @@ func logsHelp() ViewHelpContext {
 
 func reviewCommentsHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Review Comments",
+		Name: helpContextReviewComments,
 		Sections: []HelpSection{
+			{
+				Title: "NAVIGATION",
+				Bindings: []HelpBinding{
+					{"←/→", "Switch queue/detail panel"},
+					{"↑/k", "Previous comment or scroll detail up"},
+					{"↓/j", "Next comment or scroll detail down"},
+					{"PgUp/PgDn", "Scroll detail"},
+					{"/", "Filter comments"},
+					{"esc", "Clear filter / Back"},
+				},
+			},
 			{
 				Title: "ACTIONS",
 				Bindings: []HelpBinding{
-					{"Shift+A", "Auto mode"},
-					{"esc", "Back"},
+					{"Shift+A", "Address all comments"},
+					{"enter", "Address included comments"},
+					{keySpace, "Include / exclude selected comment"},
 				},
 			},
 		},

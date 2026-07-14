@@ -21,6 +21,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// testPRURLAPI is the fixture PR URL tests use for the testRepoNameAPI repo
+// wherever the specific URL doesn't matter.
+const testPRURLAPI = "https://example.com/api/pr/1"
+
 func newTestStoreWithFeature(t *testing.T, repos []feature.FeatureRepo, prior map[string]*feature.RepoState) (*feature.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -49,12 +53,12 @@ func newTestStoreWithFeature(t *testing.T, repos []feature.FeatureRepo, prior ma
 }
 
 func TestAtomicPhaseStamp_AllSuccess(t *testing.T) {
-	repos := []feature.FeatureRepo{{Name: "api"}, {Name: "web"}, {Name: "infra"}}
+	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}, {Name: testRepoNameInfra}}
 	store, id := newTestStoreWithFeature(t, repos, nil)
 
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
-		Repos:     []string{"api", "web", "infra"},
+		Repos:     []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra},
 		Outcome:   PhaseOutcomeReviewPassed,
 	})
 	if err != nil {
@@ -64,7 +68,7 @@ func TestAtomicPhaseStamp_AllSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web", "infra"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra} {
 		ns := got.RepoStates[name]
 		if ns == nil || !ns.Touched || ns.LastError != "" {
 			t.Errorf("repo %s = %+v, want Touched=true LastError=\"\"", name, ns)
@@ -73,12 +77,12 @@ func TestAtomicPhaseStamp_AllSuccess(t *testing.T) {
 }
 
 func TestAtomicPhaseStamp_AllFailed(t *testing.T) {
-	repos := []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}
+	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}}
 	store, id := newTestStoreWithFeature(t, repos, nil)
 
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
-		Repos:     []string{"api", "web"},
+		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
 		Outcome:   PhaseOutcomeFailed,
 		LastError: "max iterations reached",
 	})
@@ -89,7 +93,7 @@ func TestAtomicPhaseStamp_AllFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		ns := got.RepoStates[name]
 		if ns == nil || !ns.Touched {
 			t.Errorf("repo %s = %+v, want Touched=true", name, ns)
@@ -101,16 +105,16 @@ func TestAtomicPhaseStamp_AllFailed(t *testing.T) {
 }
 
 func TestAtomicPhaseStamp_NeedUserInputDoesNotMutateRepoStatus(t *testing.T) {
-	repos := []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}
+	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}}
 	prior := map[string]*feature.RepoState{
-		"api": {},
-		"web": {},
+		testRepoNameAPI: {},
+		testRepoNameWeb: {},
 	}
 	store, id := newTestStoreWithFeature(t, repos, prior)
 
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
-		Repos:     []string{"api", "web"},
+		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
 		Outcome:   PhaseOutcomeNeedUserInput,
 		GatePath:  "/state/runs/run-001/phase-01/implement/iteration-02/need-user-input.yaml",
 	})
@@ -121,7 +125,7 @@ func TestAtomicPhaseStamp_NeedUserInputDoesNotMutateRepoStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		if ns := got.RepoStates[name]; ns != nil && (ns.Touched || ns.LastError != "") {
 			t.Errorf("repo %s = %+v, want untouched (NEED_USER_INPUT is feature-level only)", name, ns)
 		}
@@ -133,17 +137,17 @@ func TestAtomicPhaseStamp_NeedUserInputDoesNotMutateRepoStatus(t *testing.T) {
 
 func TestAtomicPhaseStamp_DoesNotTouchOutsideRepos(t *testing.T) {
 	// 3 feature repos, but only 2 in the phase.
-	repos := []feature.FeatureRepo{{Name: "api"}, {Name: "web"}, {Name: "outside"}}
+	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}, {Name: "outside"}}
 	prior := map[string]*feature.RepoState{
-		"api":     {},
-		"web":     {},
-		"outside": {Touched: true, PRURL: "https://example.com/outside/pr/1"},
+		testRepoNameAPI: {},
+		testRepoNameWeb: {},
+		"outside":       {Touched: true, PRURL: "https://example.com/outside/pr/1"},
 	}
 	store, id := newTestStoreWithFeature(t, repos, prior)
 
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
-		Repos:     []string{"api", "web"},
+		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
 		Outcome:   PhaseOutcomeReviewPassed,
 	})
 	if err != nil {
@@ -156,7 +160,7 @@ func TestAtomicPhaseStamp_DoesNotTouchOutsideRepos(t *testing.T) {
 	if got.RepoStates["outside"].PRURL != "https://example.com/outside/pr/1" {
 		t.Errorf("outside repo was mutated: %+v", got.RepoStates["outside"])
 	}
-	if !got.RepoStates["api"].Touched {
+	if !got.RepoStates[testRepoNameAPI].Touched {
 		t.Errorf("api Touched = false, want true")
 	}
 }
@@ -177,14 +181,14 @@ func TestAtomicPhaseStamp_EmptyFeatureIDErrors(t *testing.T) {
 }
 
 func TestAtomicPhaseStamp_PRURLsApplied(t *testing.T) {
-	repos := []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}
+	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}}
 	store, id := newTestStoreWithFeature(t, repos, nil)
 
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
-		Repos:     []string{"api", "web"},
+		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
 		Outcome:   PhaseOutcomeReviewPassed,
-		PRURLs:    map[string]string{"api": "https://example.com/api/pr/1"},
+		PRURLs:    map[string]string{testRepoNameAPI: testPRURLAPI},
 	})
 	if err != nil {
 		t.Fatalf("stamp: %v", err)
@@ -193,8 +197,8 @@ func TestAtomicPhaseStamp_PRURLsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if got.RepoStates["api"].PRURL != "https://example.com/api/pr/1" {
-		t.Errorf("api PRURL = %q", got.RepoStates["api"].PRURL)
+	if got.RepoStates[testRepoNameAPI].PRURL != testPRURLAPI {
+		t.Errorf("api PRURL = %q", got.RepoStates[testRepoNameAPI].PRURL)
 	}
 }
 
@@ -202,18 +206,18 @@ func TestAtomicPhaseStamp_PRURLsApplied(t *testing.T) {
 // success outcome clears stale per-repo error text left by earlier failed FR
 // attempts while preserving monotonic repo state and PR URL mirroring.
 func TestAtomicPhaseStamp_FinalReviewPassedClearsStaleRepoErrors(t *testing.T) {
-	repos := []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}
+	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}}
 	prior := map[string]*feature.RepoState{
-		"api": {Touched: true, LastError: "protocol violation"},
-		"web": {Touched: true, LastError: "final review failed"},
+		testRepoNameAPI: {Touched: true, LastError: "protocol violation"},
+		testRepoNameWeb: {Touched: true, LastError: "final review failed"},
 	}
 	store, id := newTestStoreWithFeature(t, repos, prior)
 
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
-		Repos:     []string{"api", "web"},
+		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
 		Outcome:   PhaseOutcomeFinalReviewPassed,
-		PRURLs:    map[string]string{"api": "https://example.com/api/pr/1"},
+		PRURLs:    map[string]string{testRepoNameAPI: testPRURLAPI},
 	})
 	if err != nil {
 		t.Fatalf("stamp: %v", err)
@@ -222,7 +226,7 @@ func TestAtomicPhaseStamp_FinalReviewPassedClearsStaleRepoErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		// Touched flag must remain set (monotonic).
 		if !got.RepoStates[name].Touched {
 			t.Errorf("repo %s lost Touched=true after FR pass", name)
@@ -231,27 +235,27 @@ func TestAtomicPhaseStamp_FinalReviewPassedClearsStaleRepoErrors(t *testing.T) {
 			t.Errorf("repo %s LastError = %q, want cleared after FR pass", name, got.RepoStates[name].LastError)
 		}
 	}
-	if got.RepoStates["api"].PRURL != "https://example.com/api/pr/1" {
-		t.Errorf("api PRURL not mirrored: %q", got.RepoStates["api"].PRURL)
+	if got.RepoStates[testRepoNameAPI].PRURL != testPRURLAPI {
+		t.Errorf("api PRURL not mirrored: %q", got.RepoStates[testRepoNameAPI].PRURL)
 	}
 }
 
 // TestAtomicPhaseStamp_TouchedIsMonotonic exercises the contract that
 // Touched is monotonic: once true, repeated stamps never reset it.
 func TestAtomicPhaseStamp_TouchedIsMonotonic(t *testing.T) {
-	repos := []feature.FeatureRepo{{Name: "api"}}
+	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}}
 	store, id := newTestStoreWithFeature(t, repos, nil)
 
 	if err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
-		Repos:     []string{"api"},
+		Repos:     []string{testRepoNameAPI},
 		Outcome:   PhaseOutcomeReviewPassed,
 	}); err != nil {
 		t.Fatalf("stamp 1: %v", err)
 	}
 	if err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
-		Repos:     []string{"api"},
+		Repos:     []string{testRepoNameAPI},
 		Outcome:   PhaseOutcomeFailed,
 		LastError: "boom",
 	}); err != nil {
@@ -261,7 +265,7 @@ func TestAtomicPhaseStamp_TouchedIsMonotonic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	ns := got.RepoStates["api"]
+	ns := got.RepoStates[testRepoNameAPI]
 	if ns == nil || !ns.Touched {
 		t.Fatalf("Touched not monotonic: %+v", ns)
 	}

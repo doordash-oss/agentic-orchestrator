@@ -26,6 +26,10 @@ const (
 	FeatureCompleted
 	FeatureFailed
 	FeatureInterrupted
+	// FeatureRewound fires after a successful rewind forks a fresh active run.
+	// Subscribers should refresh feature detail and run-scoped artifacts because
+	// ActiveRun and carried artifact maps may have changed.
+	FeatureRewound
 	PhaseStarted
 	PhaseCompleted
 	ReviewRequired
@@ -35,14 +39,6 @@ const (
 	RecoveryScanned
 	RecoveryExecuted
 	SessionOutput
-	// TweakReviewApproved fires when the Final Review session for an active
-	// per-repo CycleTweak cycle lands an APPROVED verdict in its
-	// review-feedback.md handoff. The TUI consumes it to invoke
-	// CompleteTweakFinish (commit review fixes, rebase/push,
-	// CompleteRepoCycle / FailRepoCycle on conflict). Emitted from the
-	// per-repo cycle dispatcher — see CompleteRepoCycle's CycleTweak case
-	// in cycles.go for the one caller.
-	TweakReviewApproved
 	// FeatureConfigChanged fires after Orchestrator.UpdateFeatureConfig
 	// atomically writes the three editable per-feature config axes
 	// (Models, Inquireness, Checkpoints). Carries only {Type, FeatureID};
@@ -59,6 +55,10 @@ const (
 	SetupProgress
 	SetupCompleted
 	SetupFailed
+	// RuntimeShutdownStarted fires when the orchestrator/runtime has begun a
+	// graceful shutdown. SSE consumers use it as a metadata-only signal to
+	// refresh authoritative REST snapshots during reconnect.
+	RuntimeShutdownStarted
 )
 
 // Event is a typed domain event emitted by the orchestrator.

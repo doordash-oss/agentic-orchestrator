@@ -66,7 +66,7 @@ func ImportRepoSettings(repoPath, repoName string, store *Store) error {
 	merged := make([]Rule, len(existing))
 	copy(merged, existing)
 	for _, nr := range newRules {
-		if !hasRule(merged, nr) {
+		if !ruleExists(merged, nr.ToolPattern, nr.Effect) {
 			merged = append(merged, nr)
 		}
 	}
@@ -97,28 +97,18 @@ func readSettingsFile(path, repoName string) ([]Rule, error) {
 	for _, pattern := range settings.Permissions.Allow {
 		rules = append(rules, Rule{
 			ToolPattern: normalizePattern(pattern),
-			Effect:      "allow",
+			Effect:      DecisionAllow,
 			RepoName:    repoName,
 		})
 	}
 	for _, pattern := range settings.Permissions.Deny {
 		rules = append(rules, Rule{
 			ToolPattern: normalizePattern(pattern),
-			Effect:      "deny",
+			Effect:      DecisionDeny,
 			RepoName:    repoName,
 		})
 	}
 	return rules, nil
-}
-
-// hasRule checks if a rule already exists in the slice (by ToolPattern + Effect).
-func hasRule(rules []Rule, r Rule) bool {
-	for _, existing := range rules {
-		if existing.ToolPattern == r.ToolPattern && existing.Effect == r.Effect {
-			return true
-		}
-	}
-	return false
 }
 
 // normalizePattern converts Claude CLI pattern format to our internal format.

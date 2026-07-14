@@ -85,7 +85,6 @@ type Run struct {
 	PlanIteration    int `yaml:"plan_iteration,omitempty"`
 	ReviewIteration  int `yaml:"review_iteration,omitempty"`
 	RebaseCount      int `yaml:"rebase_count,omitempty"`
-	TweakCount       int `yaml:"tweak_count,omitempty"`
 	RefactorCount    int `yaml:"refactor_count,omitempty"`
 	// ReviewCommentsCount is the run-level review-comments cycle counter.
 	// Incremented per RunReviewCommentsLoop invocation. Each invocation gets a
@@ -124,6 +123,11 @@ type Run struct {
 	// their per-repo entries here so existing TUI badges keep working.
 	RepoCycles map[string]*RepoCycleState `yaml:"repo_cycles,omitempty"`
 	RepoStates map[string]*RepoState      `yaml:"repo_states,omitempty"`
+	// RebaseOperation tracks transient feature-level rebase progress while a
+	// harness, smart rebase, or rebase-triggered Final Review is active. It is
+	// cleared on successful/no-op settlement and retained only when actionable
+	// failure/conflict state remains useful to render.
+	RebaseOperation *RebaseOperationState `yaml:"rebase_operation,omitempty"`
 
 	// CurrentPhaseStatus is the mid-flight phase-implement status for the
 	// unified flow ("implementing", "reviewing", or "" when not in a phase).
@@ -194,7 +198,7 @@ func (r *Run) IsSealed() bool { return r != nil && r.SealedAt != nil }
 
 // AccumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.
-// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N, tweak-N,
+// ActiveTimingKey is intentionally preserved so cycle keys (rebase-N,
 // review-comments) survive interrupt/fail transitions and are available when
 // the phase is resumed.
 func (r *Run) AccumulateActiveTime() {
@@ -228,7 +232,7 @@ func (r *Run) RefactorPrefix() string {
 }
 
 // CyclePrefix returns the artifact directory prefix for the current
-// post-publish cycle (rebase, tweak, or review-comments). Returns empty
+// post-publish cycle (rebase, or review-comments). Returns empty
 // string when no cycle is active.
 func (r *Run) CyclePrefix() string {
 	if r == nil {
@@ -240,11 +244,6 @@ func (r *Run) CyclePrefix() string {
 			return fmt.Sprintf("rebase-%d", r.RebaseCount)
 		}
 		return "rebase"
-	case CycleTweak:
-		if r.TweakCount > 0 {
-			return fmt.Sprintf("tweak-%d", r.TweakCount)
-		}
-		return "tweak"
 	case CycleReviewComments:
 		if r.ReviewCommentsCount > 0 {
 			return fmt.Sprintf("review-comments-%d", r.ReviewCommentsCount)

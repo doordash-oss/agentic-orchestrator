@@ -30,7 +30,7 @@ func TestBuildRebasePlan_UsesGenericVerificationCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan := BuildRebasePlan("main", "https://github.com/o/r/pull/1", tt.conflictFiles)
+			plan := BuildRebasePlan(defaultTestBranch, "https://github.com/o/r/pull/1", tt.conflictFiles)
 
 			for _, want := range []string{
 				"`run the project build command`",

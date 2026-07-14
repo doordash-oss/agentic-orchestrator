@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -47,11 +47,6 @@ func reviewCommentsDirForRepo(stateDir string, f *feature.Feature, repoName stri
 	return filepath.Join(reviewCommentsDir(stateDir, f), repoName)
 }
 
-// SaveReviewComments writes the review comments data to the state directory.
-func SaveReviewComments(stateDir string, f *feature.Feature, data ReviewCommentsData) error {
-	return SaveReviewCommentsForRepo(stateDir, f, "", data)
-}
-
 // SaveReviewCommentsForRepo writes the repo-scoped review comments data to the
 // state directory. repoName == "" preserves the legacy single-repo location.
 func SaveReviewCommentsForRepo(stateDir string, f *feature.Feature, repoName string, data ReviewCommentsData) error {
@@ -59,16 +54,13 @@ func SaveReviewCommentsForRepo(stateDir string, f *feature.Feature, repoName str
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating review-comments dir: %w", err)
 	}
+	data.Comments = append([]ports.ReviewComment(nil), data.Comments...)
+	git.SortReviewCommentsChronologically(data.Comments)
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling review comments: %w", err)
 	}
 	return os.WriteFile(filepath.Join(dir, "comments.json"), b, 0o644)
-}
-
-// LoadReviewComments reads the saved review comments data.
-func LoadReviewComments(stateDir string, f *feature.Feature) (*ReviewCommentsData, error) {
-	return LoadReviewCommentsForRepo(stateDir, f, "")
 }
 
 // LoadReviewCommentsForRepo reads the repo-scoped review comments data.
@@ -86,11 +78,6 @@ func LoadReviewCommentsForRepo(stateDir string, f *feature.Feature, repoName str
 	return &result, nil
 }
 
-// LoadReviewResolutions reads the agent's review resolutions file.
-func LoadReviewResolutions(stateDir string, f *feature.Feature) ([]ReviewResolution, error) {
-	return LoadReviewResolutionsForRepo(stateDir, f, "")
-}
-
 // LoadReviewResolutionsForRepo reads the repo-scoped review resolutions file.
 // repoName == "" preserves the legacy single-repo location.
 func LoadReviewResolutionsForRepo(stateDir string, f *feature.Feature, repoName string) ([]ReviewResolution, error) {
@@ -104,12 +91,6 @@ func LoadReviewResolutionsForRepo(stateDir string, f *feature.Feature, repoName 
 		return nil, fmt.Errorf("parsing review resolutions: %w", err)
 	}
 	return result, nil
-}
-
-// SaveAddressedIDs persists which comment IDs have been addressed. It merges
-// with any previously saved IDs so the set grows across iterations.
-func SaveAddressedIDs(stateDir string, f *feature.Feature, ids []int) error {
-	return SaveAddressedIDsForRepo(stateDir, f, "", ids)
 }
 
 // SaveAddressedIDsForRepo persists which repo-scoped comment IDs have been
@@ -134,12 +115,6 @@ func SaveAddressedIDsForRepo(stateDir string, f *feature.Feature, repoName strin
 	return os.WriteFile(filepath.Join(dir, "addressed-ids.json"), b, 0o644)
 }
 
-// LoadAddressedIDs reads the set of previously addressed comment IDs.
-// Returns an empty map (not an error) if the file doesn't exist yet.
-func LoadAddressedIDs(stateDir string, f *feature.Feature) (map[int]bool, error) {
-	return LoadAddressedIDsForRepo(stateDir, f, "")
-}
-
 // LoadAddressedIDsForRepo reads the repo-scoped set of previously addressed
 // comment IDs. repoName == "" preserves the legacy single-repo location.
 func LoadAddressedIDsForRepo(stateDir string, f *feature.Feature, repoName string) (map[int]bool, error) {
@@ -160,72 +135,4 @@ func LoadAddressedIDsForRepo(stateDir string, f *feature.Feature, repoName strin
 		set[id] = true
 	}
 	return set, nil
-}
-
-// BuildReviewCommentsPlan generates a plan document for addressing review comments.
-// resolutionsPath is where the agent writes dispositions.
-func BuildReviewCommentsPlan(comments []ports.ReviewComment, prURL, mode, resolutionsPath string) string {
-	var b strings.Builder
-
-	b.WriteString("# Address Review Comments Plan\n\n")
-	b.WriteString("## Overview\n\n")
-	b.WriteString(fmt.Sprintf("The feature's PR (%s) has received review comments that need attention.\n\n", prURL))
-
-	b.WriteString("## Mode: Agent Decides\n\n")
-	b.WriteString("For each review comment below, decide whether to:\n")
-	b.WriteString("- **Address it**: Make code changes to resolve the feedback\n")
-	b.WriteString("- **Dismiss it**: If the comment is already handled, not applicable, or the current approach is better — explain your reasoning\n\n")
-
-	b.WriteString("## Review Comments\n\n")
-	for i, c := range comments {
-		b.WriteString(fmt.Sprintf("### Comment %d (ID: %d)\n", i+1, c.ID))
-		switch c.Type {
-		case ports.CommentTypeIssue:
-			b.WriteString("**Location**: PR conversation\n")
-		case ports.CommentTypeReviewBody:
-			b.WriteString("**Location**: PR review\n")
-		default:
-			b.WriteString(fmt.Sprintf("**File**: `%s`", c.Path))
-			if c.Line > 0 {
-				b.WriteString(fmt.Sprintf(":%d", c.Line))
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString(fmt.Sprintf("**Author**: @%s\n", c.User.Login))
-		if c.DiffHunk != "" {
-			b.WriteString(fmt.Sprintf("**Context**:\n```diff\n%s\n```\n", c.DiffHunk))
-		}
-		b.WriteString(fmt.Sprintf("**Comment**:\n> %s\n\n", strings.ReplaceAll(c.Body, "\n", "\n> ")))
-	}
-
-	b.WriteString("## Resolution Tracking\n\n")
-	b.WriteString(fmt.Sprintf("After addressing or deciding on each comment, write a JSON file at:\n`%s`\n\n", resolutionsPath))
-	b.WriteString("Format:\n```json\n[\n")
-	b.WriteString(`  {"comment_id": 123, "disposition": "addressed", "description": "Fixed error handling"},`)
-	b.WriteString("\n")
-	b.WriteString(`  {"comment_id": 456, "disposition": "dismissed", "description": "Already handled by existing validation"}`)
-	b.WriteString("\n]\n```\n\n")
-	b.WriteString("Every comment listed above MUST have an entry in this file.\n\n")
-
-	b.WriteString("## Verification\n\n")
-	b.WriteString("Review the verification evidence together with the cycle artifacts below:\n")
-	b.WriteString("- `comments.json`\n")
-	b.WriteString("- `review-resolutions.json`\n")
-	b.WriteString("- the cycle-local verification report\n\n")
-
-	b.WriteString("#### Automated Verification:\n")
-	writeGenericProjectVerificationChecklist(&b)
-
-	b.WriteString("## Success Criteria\n\n")
-	b.WriteString("- All addressed comments have corresponding code changes\n")
-	b.WriteString("- Relevant tests pass\n")
-	b.WriteString("- The build succeeds\n")
-	b.WriteString(fmt.Sprintf("- `%s` is written with an entry for every comment\n\n", resolutionsPath))
-
-	b.WriteString("## Important Notes\n\n")
-	b.WriteString("- Do NOT create a new branch. Work on the current branch.\n")
-	b.WriteString("- Do NOT amend or squash commits unnecessarily.\n")
-	b.WriteString("- Make targeted changes that directly address the feedback.\n")
-
-	return b.String()
 }

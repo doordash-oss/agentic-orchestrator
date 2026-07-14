@@ -113,13 +113,6 @@ type KBBuildUserInput struct {
 	LastCommit     string
 }
 
-type TweakUserInput struct {
-	SkillPath string
-	Name      string
-	PlanPath  string
-	PRURL     string
-}
-
 type DesignUserInput struct {
 	Name        string
 	Description string
@@ -209,6 +202,7 @@ type ImplementUserInput struct {
 	PlanPath              string
 	ExitCriteria          string
 	Feedback              string
+	PlanRevisionFeedback  string
 	HelpAnswers           string
 	PriorUserInputAnswers string
 	Iteration             int
@@ -353,17 +347,6 @@ func TestGoldenSnapshots(t *testing.T) {
 						{Name: "api", Path: "/repos/api"},
 						{Name: "web", Path: "/repos/web"},
 					},
-				})
-			},
-		},
-		{
-			name: "tweak_user",
-			render: func() string {
-				return TweakUserPrompt(TweakUserInput{
-					SkillPath: "/skills/tweak-session/SKILL.md",
-					Name:      "Color tweak",
-					PlanPath:  "/state/feat-x/run-1/roadmap/plan.md",
-					PRURL:     "https://github.com/x/y/pull/123",
 				})
 			},
 		},
@@ -679,6 +662,42 @@ func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 	unavail.SubagentsAvailable = false
 	if strings.Contains(RoleSystemPrompt(unavail), clause) {
 		t.Errorf("SubagentsAvailable=false: subagent clause should be omitted (helper has no subagents)")
+	}
+}
+
+func TestChatSystemPromptDefinesAMASpecificProtocol(t *testing.T) {
+	got := ChatSystemPrompt(ChatSystemInput{
+		SkillPath:       "/state/skills/chat/SKILL.md",
+		RuntimeRoot:     "/isolated/agentico",
+		StateDir:        "/isolated/agentico/features",
+		ConfigPath:      "/isolated/agentico/config.yaml",
+		WorkspaceDir:    "/workspace/repo",
+		CurrentFeatures: "- **2d-retro-game-maker** (ID: feat-1): Build a game maker - Status: Implementing",
+	})
+
+	for _, want := range []string{
+		"Agentic Orchestrator Expert Assistant",
+		"Answer directly whenever the user's request is clear enough",
+		"/state/skills/chat/SKILL.md",
+		"Runtime root: `/isolated/agentico`",
+		"Feature state directory: `/isolated/agentico/features`",
+		"Config file: `/isolated/agentico/config.yaml`",
+		"Workspace: `/workspace/repo`",
+		"Do not substitute the default paths from the user guide",
+		"2d-retro-game-maker",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ChatSystemPrompt() missing %q:\n%s", want, got)
+		}
+	}
+	paths := strings.Join([]string{
+		"- Runtime root: `/isolated/agentico`",
+		"- Feature state directory: `/isolated/agentico/features`",
+		"- Config file: `/isolated/agentico/config.yaml`",
+		"- Workspace: `/workspace/repo`",
+	}, "\n")
+	if !strings.Contains(got, paths) {
+		t.Fatalf("ChatSystemPrompt() runtime paths are not rendered as separate bullets:\n%s", got)
 	}
 }
 

@@ -24,6 +24,15 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// testPhaseTimingPlan1, testPhaseTimingPlan2, and testPhaseTimingImpl1 are
+// fixture PhaseTimings/PhaseCosts map keys reused across this file's
+// roadmap-totals test.
+const (
+	testPhaseTimingPlan1 = "phase-1-plan"
+	testPhaseTimingPlan2 = "phase-2-plan"
+	testPhaseTimingImpl1 = "phase-1-impl"
+)
+
 func TestDetailView(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
@@ -43,11 +52,8 @@ func TestDetailView(t *testing.T) {
 	}
 
 	m := NewDetailModel(f, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 
-	if !strings.Contains(view, "test-feature") {
-		t.Error("expected feature slug in view")
-	}
 	if !strings.Contains(view, "Implementing") {
 		t.Error("expected status in view")
 	}
@@ -56,47 +62,9 @@ func TestDetailView(t *testing.T) {
 func TestDetailViewNoFeature(t *testing.T) {
 	t.Parallel()
 	m := NewDetailModel(nil, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 	if !strings.Contains(view, "No feature selected") {
 		t.Error("expected no feature message")
-	}
-}
-
-func TestDetailFeatureID(t *testing.T) {
-	t.Parallel()
-	f := &feature.Feature{ID: "test-id"}
-	m := NewDetailModel(f, "")
-	if m.FeatureID() != "test-id" {
-		t.Errorf("expected test-id, got %s", m.FeatureID())
-	}
-}
-
-func TestDetailViewFooterActions(t *testing.T) {
-	t.Parallel()
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Slug:         "test-feature",
-		Status:       feature.StatusImplementing,
-		CurrentPhase: feature.PhaseImplement,
-		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-	}
-
-	m := NewDetailModel(f, "")
-	view := m.View()
-
-	// [a] Watch, [N] Input alerts, [s] Stop, [d] Delete, [esc] Back are expected for Implementing.
-	// [r] Restart is hidden while running — [s] Stop takes its slot.
-	// [p] Publish is only shown for PRReady status.
-	for _, action := range []string{"[a]", "[Shift+N]", "[s] Stop", "[d]", "[esc]"} {
-		if !strings.Contains(view, action) {
-			t.Errorf("expected %q in footer", action)
-		}
-	}
-	if strings.Contains(view, "[r] Restart") {
-		t.Error("did not expect [r] Restart for Implementing (running) status — [s] Stop should take its slot")
-	}
-	if strings.Contains(view, "[p]") {
-		t.Error("did not expect [p] Publish for Implementing status")
 	}
 }
 
@@ -124,10 +92,8 @@ func TestDetailViewRendersActiveSetupProgressAndActions(t *testing.T) {
 	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
 
 	m := NewDetailModel(f, "")
-	m.width = 100
-	m.height = 40
 
-	view := m.View()
+	view := m.ViewCompact(100)
 	for _, want := range []string{
 		"Setting up worktrees",
 		"Worktree: payments",
@@ -138,16 +104,14 @@ func TestDetailViewRendersActiveSetupProgressAndActions(t *testing.T) {
 		"attempt 1",
 		"Image 1",
 		"Attachment 1",
-		"[l] Logs",
-		"[d] Delete",
 	} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("DetailModel.View() missing %q:\n%s", want, view)
+			t.Fatalf("DetailModel.ViewCompact() missing %q:\n%s", want, view)
 		}
 	}
-	for _, absent := range []string{"[s] Stop", "[r] Restart", "Retry phase", "context window"} {
+	for _, absent := range []string{"Retry phase", "context window"} {
 		if strings.Contains(view, absent) {
-			t.Fatalf("DetailModel.View() contained %q during active setup:\n%s", absent, view)
+			t.Fatalf("DetailModel.ViewCompact() contained %q during active setup:\n%s", absent, view)
 		}
 	}
 }
@@ -184,25 +148,18 @@ func TestDetailViewRendersFailedSetupErrorAndRetryAction(t *testing.T) {
 	})
 
 	m := NewDetailModel(f, "")
-	m.width = 100
-	m.height = 40
 
-	view := m.View()
+	view := m.ViewCompact(100)
 	for _, want := range []string{
 		"Failed (worktree setup)",
 		"worktree path already exists",
-		"[r] Retry setup",
-		"[l] Logs",
-		"[d] Delete",
 	} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("DetailModel.View() missing %q:\n%s", want, view)
+			t.Fatalf("DetailModel.ViewCompact() missing %q:\n%s", want, view)
 		}
 	}
-	for _, absent := range []string{"[Shift+R] Retry phase", "[s] Stop", "press [r] to restart"} {
-		if strings.Contains(view, absent) {
-			t.Fatalf("DetailModel.View() contained %q for failed setup:\n%s", absent, view)
-		}
+	if strings.Contains(view, "press [r] to restart") {
+		t.Fatalf("DetailModel.ViewCompact() contained %q for failed setup:\n%s", "press [r] to restart", view)
 	}
 }
 
@@ -222,62 +179,38 @@ func TestDetailViewHidesRetryForNonWorktreeSetupFailure(t *testing.T) {
 	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
 
 	m := NewDetailModel(f, "")
-	m.width = 100
-	m.height = 40
 
-	view := m.View()
-	if strings.Contains(view, "[r] Retry setup") || strings.Contains(view, "press [r] to retry setup") {
-		t.Fatalf("DetailModel.View() exposed setup retry without worktree setup failure:\n%s", view)
+	view := m.ViewCompact(100)
+	if strings.Contains(view, "press [r] to retry setup") {
+		t.Fatalf("DetailModel.ViewCompact() exposed setup retry without worktree setup failure:\n%s", view)
 	}
 	if !strings.Contains(view, "setup did not finish") {
-		t.Fatalf("DetailModel.View() missing setup error:\n%s", view)
+		t.Fatalf("DetailModel.ViewCompact() missing setup error:\n%s", view)
 	}
 }
 
-func TestDetailViewFooterUsesContextualAttentionLabel(t *testing.T) {
+func TestDetailCompactViewRendersPendingPermissionAttentionBox(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		f    *feature.Feature
-		want string
-	}{
-		{
-			name: "permission",
-			f: &feature.Feature{
-				ID: "perm", Slug: "perm", Status: feature.StatusImplementing,
-				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
-				Models:           config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-			},
-			want: "[a] Approve",
+	f := &feature.Feature{
+		ID:     "perm",
+		Slug:   "perm",
+		Status: feature.StatusImplementing,
+		PermissionsQueue: []feature.PermissionRequest{
+			{Tool: toolNameBash, Args: `{"command":"go test ./internal/tui"}`, Pending: true}, //nolint:goconst // shared raw-JSON test fixture; not constant-ized per raw-string-fixture policy
 		},
-		{
-			name: "ask user",
-			f: &feature.Feature{
-				ID: "ask", Slug: "ask", Status: feature.StatusImplementing,
-				HelpQueue: []feature.HelpRequest{{Question: "Need input?", Pending: true}},
-				Models:    config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-			},
-			want: "[a] Answer",
-		},
-		{
-			name: "watch",
-			f: &feature.Feature{
-				ID: "watch", Slug: "watch", Status: feature.StatusImplementing,
-				Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-			},
-			want: "[a] Watch",
-		},
+		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
+	m := NewDetailModel(f, "")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := NewDetailModel(tt.f, "")
-			view := m.View()
-			if !strings.Contains(view, tt.want) {
-				t.Fatalf("DetailModel.View(%s) missing %q in:\n%s", tt.name, tt.want, view)
-			}
-		})
+	view := stripANSI(m.ViewCompact(96))
+	for _, want := range []string{attentionTypeLabelPermission, "Bash: go test ./internal/tui", "[a] Approve", "Waiting for approval"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("DetailModel.ViewCompact() missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Question") {
+		t.Fatalf("DetailModel.ViewCompact() rendered permission as question:\n%s", view)
 	}
 }
 
@@ -294,7 +227,7 @@ func TestDetailViewPlanNeedsReview(t *testing.T) {
 			Models:              config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		}
 		m := NewDetailModel(f, "")
-		view := m.View()
+		view := m.ViewCompact(80)
 
 		// Roadmap sub-item must reflect needs-review, not "in progress".
 		if !strings.Contains(view, "needs review") {
@@ -323,9 +256,9 @@ func TestDetailViewPlanNeedsReview(t *testing.T) {
 			t.Error("expected banner call-to-action with [a] key")
 		}
 
-		// Footer must expose the [a] Review hint prominently.
+		// Status line must expose the [a] Review hint prominently.
 		if !strings.Contains(view, "[a] Review") {
-			t.Error("expected '[a] Review' hint in footer for needs-review state")
+			t.Error("expected '[a] Review' hint in status for needs-review state")
 		}
 	})
 
@@ -340,38 +273,14 @@ func TestDetailViewPlanNeedsReview(t *testing.T) {
 			Models:              config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		}
 		m := NewDetailModel(f, "")
-		view := m.View()
+		view := m.ViewCompact(80)
 
 		if !strings.Contains(view, "Phase 2 plan") && !strings.Contains(view, "Phase 2 Plan") {
 			t.Error("expected banner to reference 'Phase 2 plan'")
 		}
 		if !strings.Contains(view, "[a] Review") {
-			t.Error("expected '[a] Review' hint in footer")
+			t.Error("expected '[a] Review' hint in status")
 		}
-	})
-
-	t.Run("footer renders [a] Review on the same line as other hints", func(t *testing.T) {
-		f := &feature.Feature{
-			ID:                  "feat-footer-line",
-			Slug:                "footer-line",
-			Status:              feature.StatusPlanNeedsReview,
-			CurrentPhase:        feature.PhasePlan,
-			CurrentRoadmapPhase: 0,
-			TotalRoadmapPhases:  2,
-			Models:              config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-		}
-		m := NewDetailModel(f, "")
-		view := m.View()
-
-		// Find the footer line that contains "[a] Review" and confirm
-		// neighbouring hints (at minimum [r] Restart) are on the SAME line, not
-		// stranded below.
-		for _, line := range strings.Split(view, "\n") {
-			if strings.Contains(line, "[a] Review") && strings.Contains(line, "[r] Restart") {
-				return
-			}
-		}
-		t.Error("[a] Review not found on the same footer line as [r] Restart")
 	})
 
 	t.Run("compact view shows banner and [a] Review affordance", func(t *testing.T) {
@@ -409,7 +318,7 @@ func TestDetailViewFailedFeature(t *testing.T) {
 	}
 
 	m := NewDetailModel(f, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 
 	if !strings.Contains(view, "Failure Info") {
 		t.Error("expected Failure Info section")
@@ -421,7 +330,7 @@ func TestDetailViewFailedFeature(t *testing.T) {
 		t.Error("expected error message in view")
 	}
 	if !strings.Contains(view, "[l]") {
-		t.Error("expected [l] Logs hint in footer")
+		t.Error("expected [l] logs hint in status")
 	}
 	if !strings.Contains(view, "simplifying the task") {
 		t.Error("expected recovery suggestion")
@@ -445,7 +354,7 @@ func TestProtocolViolationFailureRendering(t *testing.T) {
 	}
 
 	m := NewDetailModel(f, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 	for _, want := range []string{
 		"Failure Info",
 		"protocol violation",
@@ -456,7 +365,7 @@ func TestProtocolViolationFailureRendering(t *testing.T) {
 		"[l] to view",
 	} {
 		if !strings.Contains(view, want) {
-			t.Errorf("DetailModel.View() missing %q in protocol violation rendering:\n%s", want, view)
+			t.Errorf("DetailModel.ViewCompact() missing %q in protocol violation rendering:\n%s", want, view)
 		}
 	}
 }
@@ -485,12 +394,12 @@ func TestDetailStatusShowsActiveArtifactPhaseDuringProtocolRetry(t *testing.T) {
 				FailureType:  "",
 				LastError:    "",
 			}
-			view := NewDetailModel(f, "").View()
+			view := NewDetailModel(f, "").ViewCompact(80)
 			if !strings.Contains(view, tt.want) {
-				t.Fatalf("DetailModel.View() missing active label %q for retry streak %d:\n%s", tt.want, tt.consecutive, view)
+				t.Fatalf("DetailModel.ViewCompact() missing active label %q for retry streak %d:\n%s", tt.want, tt.consecutive, view)
 			}
 			if strings.Contains(view, "Failure Info") || strings.Contains(view, "protocol violation") {
-				t.Fatalf("DetailModel.View() rendered failure during retry streak %d:\n%s", tt.consecutive, view)
+				t.Fatalf("DetailModel.ViewCompact() rendered failure during retry streak %d:\n%s", tt.consecutive, view)
 			}
 		})
 	}
@@ -510,12 +419,12 @@ func TestDetailStatusShowsBuildingKBDuringProtocolRetry(t *testing.T) {
 				FailureType:  "",
 				LastError:    "",
 			}
-			view := NewDetailModel(f, "").View()
+			view := NewDetailModel(f, "").ViewCompact(80)
 			if !strings.Contains(view, "Building Knowledge Base") && !strings.Contains(view, "BuildingKB") {
-				t.Fatalf("DetailModel.View() missing active KB label for retry streak %d:\n%s", consecutive, view)
+				t.Fatalf("DetailModel.ViewCompact() missing active KB label for retry streak %d:\n%s", consecutive, view)
 			}
 			if strings.Contains(view, "Failure Info") || strings.Contains(view, "protocol violation") {
-				t.Fatalf("DetailModel.View() rendered failure during KB retry streak %d:\n%s", consecutive, view)
+				t.Fatalf("DetailModel.ViewCompact() rendered failure during KB retry streak %d:\n%s", consecutive, view)
 			}
 		})
 	}
@@ -531,14 +440,14 @@ func TestDetailStatusShowsTerminalKBProtocolViolation(t *testing.T) {
 		FailureType:  feature.FailureProtocolViolation,
 		LastError:    "protocol violation: knowledge_base_builder @ /tmp/kb: index.md: missing",
 	}
-	view := NewDetailModel(f, "").View()
+	view := NewDetailModel(f, "").ViewCompact(80)
 	for _, want := range []string{"Failed (protocol violation)", "Failure Info", "knowledge_base_builder", "index.md"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("DetailModel.View() missing %q for terminal KB protocol violation:\n%s", want, view)
+			t.Fatalf("DetailModel.ViewCompact() missing %q for terminal KB protocol violation:\n%s", want, view)
 		}
 	}
 	if strings.Contains(view, "Building KB") {
-		t.Fatalf("DetailModel.View() rendered active KB after terminal failure:\n%s", view)
+		t.Fatalf("DetailModel.ViewCompact() rendered active KB after terminal failure:\n%s", view)
 	}
 }
 
@@ -554,7 +463,7 @@ func TestDetailViewFailedNoContext(t *testing.T) {
 	}
 
 	m := NewDetailModel(f, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 
 	if !strings.Contains(view, "Failed") {
 		t.Error("expected Failed status")
@@ -577,7 +486,7 @@ func TestDetailViewDescription(t *testing.T) {
 			Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		}
 		m := NewDetailModel(f, "")
-		view := m.View()
+		view := m.ViewCompact(80)
 		if !strings.Contains(view, "Desc") {
 			t.Error("expected Desc label in view")
 		}
@@ -597,7 +506,7 @@ func TestDetailViewDescription(t *testing.T) {
 			Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		}
 		m := NewDetailModel(f, "")
-		view := m.View()
+		view := m.ViewCompact(80)
 		if !strings.Contains(view, "…") {
 			t.Error("expected truncation ellipsis for long description")
 		}
@@ -612,7 +521,7 @@ func TestDetailViewDescription(t *testing.T) {
 			Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		}
 		m := NewDetailModel(f, "")
-		view := m.View()
+		view := m.ViewCompact(80)
 		if strings.Contains(view, "Desc") {
 			t.Error("should not show Desc label when description is empty")
 		}
@@ -629,7 +538,7 @@ func TestDetailViewDescription(t *testing.T) {
 			Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		}
 		m := NewDetailModel(f, "")
-		view := m.View()
+		view := m.ViewCompact(80)
 		if !strings.Contains(view, "Add caching to the API gateway.") {
 			t.Error("expected summary text in view")
 		}
@@ -648,7 +557,7 @@ func TestDetailViewDescription(t *testing.T) {
 			Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		}
 		m := NewDetailModel(f, "")
-		view := m.View()
+		view := m.ViewCompact(80)
 		if !strings.Contains(view, "Implement user authentication") {
 			t.Error("expected fallback to description when summary is empty")
 		}
@@ -669,7 +578,7 @@ func TestDetailHelpQueue(t *testing.T) {
 	}
 
 	m := NewDetailModel(f, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 
 	if !strings.Contains(view, "Attention") {
 		t.Error("expected attention section")
@@ -693,14 +602,14 @@ func TestDetailHelpQueueNormalizesLegacyAPIErrorCopy(t *testing.T) {
 	}
 
 	m := NewDetailModel(f, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 
 	const want = "API error: rate limit exceeded (429) — press 'a' to answer"
 	if !strings.Contains(view, want) {
-		t.Errorf("DetailModel.View() missing normalized API error %q", want)
+		t.Errorf("DetailModel.ViewCompact() missing normalized API error %q", want)
 	}
 	if strings.Contains(strings.ToLower(view), "attach with") {
-		t.Errorf("DetailModel.View() contains retired API error copy:\n%s", view)
+		t.Errorf("DetailModel.ViewCompact() contains retired API error copy:\n%s", view)
 	}
 }
 
@@ -743,11 +652,9 @@ func TestDetailViewShowsCycleTiming(t *testing.T) {
 			"plan":      8 * time.Minute,
 			"implement": 45 * time.Minute,
 			"rebase-1":  15 * time.Minute,
-			"tweak-1":   10 * time.Minute,
 		},
 	}
 	f.SetRebaseCount(1)
-	f.SetTweakCount(1)
 
 	m := NewDetailModel(f, "")
 	view := m.ViewCompact(80)
@@ -755,14 +662,11 @@ func TestDetailViewShowsCycleTiming(t *testing.T) {
 	if !strings.Contains(view, "Rebase #1") {
 		t.Error("expected Rebase #1 sub-item in view")
 	}
-	if !strings.Contains(view, "Tweak #1") {
-		t.Error("expected Tweak #1 sub-item in view")
-	}
 }
 
 // TestDetailViewShowsInFlightRebase covers the case where a rebase is mid-flight
 // (ActiveCycle.Status == running) but PhaseTimings does not yet have a rebase-N
-// entry and ActiveTimingKey is stale (e.g. still pointing at the previous tweak).
+// entry and ActiveTimingKey is stale (e.g. still pointing at the previous refactor).
 // The right-panel Phase Progress must still surface the running rebase row so it
 // matches the left-panel "Rebasing" status.
 func TestDetailViewShowsInFlightRebase(t *testing.T) {
@@ -774,11 +678,11 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 		CurrentPhase: feature.PhasePublish,
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		PhaseTimings: map[string]time.Duration{
-			"implement": 45 * time.Minute,
-			"rebase-1":  15 * time.Minute,
-			"tweak-1":   10 * time.Second,
+			"implement":  45 * time.Minute,
+			"rebase-1":   15 * time.Minute,
+			"refactor-1": 10 * time.Second,
 		},
-		ActiveTimingKey: "tweak-1",
+		ActiveTimingKey: "refactor-1",
 		ActiveCycle: &feature.CycleState{
 			Type:   feature.CycleRebase,
 			Status: feature.RepoCycleRunning,
@@ -786,7 +690,7 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 		},
 	}
 	f.SetRebaseCount(3)
-	f.SetTweakCount(1)
+	f.SetRefactorCount(1)
 	f.SetActiveCycleType(feature.CycleRebase)
 
 	m := NewDetailModel(f, "")
@@ -820,28 +724,28 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 	if !strings.Contains(rebaseLine, sentinelSpinner) {
 		t.Errorf("expected in-flight rebase row to render the live spinner; got: %q", rebaseLine)
 	}
-	if !strings.Contains(rebaseLine, "42%") {
+	if !strings.Contains(rebaseLine, testContextPct42) {
 		t.Errorf("expected in-flight rebase row to render context percentage; got: %q", rebaseLine)
 	}
-	if !strings.Contains(view, "Tweak #1") {
-		t.Error("expected completed Tweak #1 sub-item in view")
+	if !strings.Contains(view, "Refactor #1") {
+		t.Error("expected completed Refactor #1 sub-item in view")
 	}
 
 	// Regression: with a fresh rebase running, the stale ActiveTimingKey
-	// pointing at the previous tweak must not make the Tweak row render
-	// as "in progress". Strip the rebase line to isolate the tweak line.
-	tweakLine := ""
+	// pointing at the previous refactor must not make the Refactor row render
+	// as "in progress". Strip the rebase line to isolate the refactor line.
+	refactorLine := ""
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, "Tweak #1") {
-			tweakLine = line
+		if strings.Contains(line, "Refactor #1") {
+			refactorLine = line
 			break
 		}
 	}
-	if tweakLine == "" {
-		t.Fatalf("could not locate Tweak #1 line in view:\n%s", view)
+	if refactorLine == "" {
+		t.Fatalf("could not locate Refactor #1 line in view:\n%s", view)
 	}
-	if strings.Contains(tweakLine, "in progress") {
-		t.Errorf("Tweak #1 row must NOT render as in progress while a rebase is running; got: %q", tweakLine)
+	if strings.Contains(refactorLine, "in progress") {
+		t.Errorf("Refactor #1 row must NOT render as in progress while a rebase is running; got: %q", refactorLine)
 	}
 }
 
@@ -861,7 +765,7 @@ func TestDetailViewSpinnerOnFinalReview(t *testing.T) {
 	m := NewDetailModel(f, "")
 	const sentinelSpinner = "##SPIN##"
 	m.spinnerView = sentinelSpinner
-	view := m.View()
+	view := m.ViewCompact(80)
 
 	// Locate the Final Review line and confirm it carries the spinner.
 	frLine := ""
@@ -952,12 +856,10 @@ func TestDetailViewTerminalFinalReviewFailureOverridesCodeReadyProjection(t *tes
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
-	m.width = 100
-	m.height = 40
 
-	view := stripANSI(m.View())
+	view := stripANSI(m.ViewCompact(100))
 	if !strings.Contains(view, "Failed (protocol violation) — press [r] to restart") {
-		t.Fatalf("View() = %q, want failed restart status", view)
+		t.Fatalf("ViewCompact() = %q, want failed restart status", view)
 	}
 	frLine := ""
 	for _, line := range strings.Split(view, "\n") {
@@ -975,9 +877,6 @@ func TestDetailViewTerminalFinalReviewFailureOverridesCodeReadyProjection(t *tes
 	if strings.Contains(frLine, "complete") {
 		t.Fatalf("Final Review line = %q, must not render complete", frLine)
 	}
-	if !strings.Contains(view, "[r] Restart") || !strings.Contains(view, "[l] Logs") {
-		t.Fatalf("View() = %q, want restart and logs actions", view)
-	}
 }
 
 func TestDetailViewContextPercentage(t *testing.T) {
@@ -990,10 +889,10 @@ func TestDetailViewContextPercentage(t *testing.T) {
 		wantAbsent string
 	}{
 		{"no data shows calculating", -1, feature.StatusImplementing, "calculating", ""},
-		{"green 42%", 42, feature.StatusImplementing, "42%", "calculating"},
+		{"green 42%", 42, feature.StatusImplementing, testContextPct42, "calculating"},
 		{"yellow 70%", 70, feature.StatusImplementing, "70%", "calculating"},
 		{"red 85%", 85, feature.StatusImplementing, "85%", "calculating"},
-		{"not shown for completed", 42, feature.StatusCodeReady, "", "42%"},
+		{"not shown for completed", 42, feature.StatusCodeReady, "", testContextPct42},
 		{"calculating not shown for completed", -1, feature.StatusCodeReady, "", "calculating"},
 	}
 	for _, tt := range tests {
@@ -1008,7 +907,7 @@ func TestDetailViewContextPercentage(t *testing.T) {
 			}
 			m := NewDetailModel(f, "")
 			m.contextPct = tt.contextPct
-			view := m.View()
+			view := m.ViewCompact(80)
 			if tt.wantStr != "" && !strings.Contains(view, tt.wantStr) {
 				t.Errorf("expected %q in view, not found", tt.wantStr)
 			}
@@ -1032,7 +931,7 @@ func TestDetailViewContextPctInCompact(t *testing.T) {
 	m := NewDetailModel(f, "")
 	m.contextPct = 42
 	compact := m.ViewCompact(80)
-	if !strings.Contains(compact, "42%") {
+	if !strings.Contains(compact, testContextPct42) {
 		t.Error("context percentage should appear in compact view for active implementing feature")
 	}
 }
@@ -1051,25 +950,15 @@ func TestDetailViewRoadmapPlanSubItems(t *testing.T) {
 
 	m := NewDetailModel(f, "")
 
-	// Full-screen view
-	view := m.View()
-	if !strings.Contains(view, "Roadmap") {
-		t.Error("expected Roadmap sub-item in full-screen view")
-	}
-	if !strings.Contains(view, "Phase 1 Plan") {
-		t.Error("expected Phase 1 Plan sub-item in full-screen view")
-	}
-	if !strings.Contains(view, "Phase 2 Plan") {
-		t.Error("expected Phase 2 Plan sub-item in full-screen view")
-	}
-
-	// Compact view
 	compact := m.ViewCompact(80)
 	if !strings.Contains(compact, "Roadmap") {
 		t.Error("expected Roadmap sub-item in compact view")
 	}
 	if !strings.Contains(compact, "Phase 1 Plan") {
 		t.Error("expected Phase 1 Plan sub-item in compact view")
+	}
+	if !strings.Contains(compact, "Phase 2 Plan") {
+		t.Error("expected Phase 2 Plan sub-item in compact view")
 	}
 }
 
@@ -1087,7 +976,7 @@ func TestDetailViewRoadmapImplSubItems(t *testing.T) {
 	}
 
 	m := NewDetailModel(f, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 
 	// Phase 1 should show as complete (< CurrentRoadmapPhase)
 	if !strings.Contains(view, "Phase 1") {
@@ -1097,6 +986,56 @@ func TestDetailViewRoadmapImplSubItems(t *testing.T) {
 	if !strings.Contains(view, "Phase 2") {
 		t.Error("expected Phase 2 sub-item under Implement")
 	}
+}
+
+func TestDetailViewParentPhaseRowsAggregateRoadmapSubphaseTotals(t *testing.T) {
+	t.Parallel()
+	activeStart := time.Now().Add(-(3*time.Minute + 10*time.Second))
+	f := &feature.Feature{
+		ID:                  "feat-roadmap-totals",
+		Slug:                "roadmap-totals",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentIteration:    1,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+		ActiveTimingKey:     "phase-2-impl",
+		ActivePhaseStart:    &activeStart,
+		Models:              config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+		PhaseTimings: map[string]time.Duration{
+			"plan":               4 * time.Minute,
+			testPhaseTimingPlan1: 5 * time.Minute,
+			testPhaseTimingPlan2: 6 * time.Minute,
+			testPhaseTimingImpl1: 8 * time.Minute,
+		},
+		PhaseCosts: map[string]float64{
+			"plan":               1.00,
+			testPhaseTimingPlan1: 1.50,
+			testPhaseTimingPlan2: 2.00,
+			testPhaseTimingImpl1: 0.40,
+			"phase-2-impl":       0.20,
+		},
+	}
+
+	m := NewDetailModel(f, "")
+	view := stripANSI(m.renderPhaseProgress(f))
+	planningLine := renderedLineContaining(view, "Planning")
+	if !strings.Contains(planningLine, "15m") || !strings.Contains(planningLine, "$4.50") {
+		t.Fatalf("Planning row = %q, want aggregate of roadmap plan subphase totals", planningLine)
+	}
+	implementLine := renderedLineContaining(view, "Implement")
+	if !strings.Contains(implementLine, "11m") || !strings.Contains(implementLine, "$0.60") {
+		t.Fatalf("Implement row = %q, want aggregate of roadmap implementation subphase totals", implementLine)
+	}
+}
+
+func renderedLineContaining(view, needle string) string {
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
 }
 
 func TestDetailViewNoCycleTimingWhenNone(t *testing.T) {
@@ -1116,7 +1055,7 @@ func TestDetailViewNoCycleTimingWhenNone(t *testing.T) {
 	m := NewDetailModel(f, "")
 	view := m.ViewCompact(80)
 
-	if strings.Contains(view, "Rebase") || strings.Contains(view, "Tweak") {
+	if strings.Contains(view, "Rebase") {
 		t.Error("should not show cycle sub-items when none exist")
 	}
 }
@@ -1135,102 +1074,6 @@ func TestRepoDisplayOrder(t *testing.T) {
 			t.Errorf("expected [b a], got %v", got)
 		}
 	})
-}
-
-func TestDetailViewWorkDirMultiRepo(t *testing.T) {
-	t.Parallel()
-	t.Run("multi-repo shows worktree parent", func(t *testing.T) {
-		f := &feature.Feature{
-			Repos: []feature.FeatureRepo{
-				{Name: "a", WorktreePath: "/home/user/.agentic-workflow/worktrees/my-feature/a"},
-				{Name: "b", WorktreePath: "/home/user/.agentic-workflow/worktrees/my-feature/b"},
-			},
-			Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-		}
-		m := NewDetailModel(f, "")
-		m.width = 80
-		m.height = 40
-		view := m.View()
-		// Should show the parent directory, not the repo-specific path
-		if !strings.Contains(view, "/home/user/.agentic-workflow/worktrees/my-feature") {
-			t.Error("expected worktree parent path for multi-repo")
-		}
-		// Should NOT show the repo-specific subdirectory path as the full path
-		// (it might contain it as a substring of the parent, but the actual displayed path should be the parent)
-	})
-
-	t.Run("single-repo shows repo worktree path", func(t *testing.T) {
-		f := &feature.Feature{
-			Repos: []feature.FeatureRepo{
-				{Name: "a", WorktreePath: "/home/user/.agentic-workflow/worktrees/my-feature/a"},
-			},
-			Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-		}
-		m := NewDetailModel(f, "")
-		m.width = 80
-		m.height = 40
-		view := m.View()
-		if !strings.Contains(view, "/home/user/.agentic-workflow/worktrees/my-feature/a") {
-			t.Error("expected single repo worktree path")
-		}
-	})
-}
-
-// TestRetryPhaseHiddenWhileImplementing verifies that [Shift+R] Retry phase
-// does NOT appear in the footer when the feature is still StatusImplementing,
-// even if a repo has failed. This prevents killing unrelated in-flight sessions.
-func TestRetryPhaseHiddenWhileImplementing(t *testing.T) {
-	t.Parallel()
-	f := &feature.Feature{
-		ID:           "test-retry-gate",
-		Name:         "retry gate test",
-		Slug:         "retry-gate",
-		Status:       feature.StatusImplementing,
-		CurrentPhase: feature.PhaseImplement,
-		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-		Repos:        []feature.FeatureRepo{{Name: "a"}, {Name: "b"}},
-		RepoStates: map[string]*feature.RepoState{
-			"a": {Touched: true, LastError: "test failure"},
-			"b": {},
-		},
-	}
-
-	m := NewDetailModel(f, "")
-	m.width = 80
-	m.height = 40
-
-	view := m.View()
-	if strings.Contains(view, "Retry phase") {
-		t.Error("expected [Shift+R] Retry phase to be hidden while feature is StatusImplementing")
-	}
-}
-
-// TestRetryPhaseShownWhenFeatureFailed verifies that [Shift+R] Retry phase
-// appears in the footer when the feature is StatusFailed with a failed repo.
-func TestRetryPhaseShownWhenFeatureFailed(t *testing.T) {
-	t.Parallel()
-	f := &feature.Feature{
-		ID:           "test-retry-shown",
-		Name:         "retry shown test",
-		Slug:         "retry-shown",
-		Status:       feature.StatusFailed,
-		CurrentPhase: feature.PhaseImplement,
-		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-		Repos:        []feature.FeatureRepo{{Name: "a"}, {Name: "b"}},
-		RepoStates: map[string]*feature.RepoState{
-			"a": {Touched: true, LastError: "test failure"},
-			"b": {Touched: true},
-		},
-	}
-
-	m := NewDetailModel(f, "")
-	m.width = 80
-	m.height = 40
-
-	view := m.View()
-	if !strings.Contains(view, "Retry phase") {
-		t.Error("expected [Shift+R] Retry phase to appear when feature is StatusFailed with a failed repo")
-	}
 }
 
 func TestDetailViewShowsRefactorTiming(t *testing.T) {
@@ -1284,26 +1127,6 @@ func TestDetailViewNoRefactorTimingWhenNone(t *testing.T) {
 	}
 }
 
-func TestDetailViewFooterHidesPublishHintsForUnpublished(t *testing.T) {
-	t.Parallel()
-	falseBool := false
-	f := &feature.Feature{
-		ID:          "f1",
-		Slug:        "test",
-		Status:      feature.StatusCodeReady,
-		Repos:       []feature.FeatureRepo{{Name: "r", Publishable: &falseBool}},
-		Checkpoints: feature.Checkpoints{ManualPublish: true},
-	}
-	m := NewDetailModel(f, "")
-	view := m.View()
-	if strings.Contains(view, "[p]") {
-		t.Error("expected [p] hint to be hidden for unpublished feature")
-	}
-	if strings.Contains(view, "[m]") {
-		t.Error("expected [m] hint to be hidden for unpublished feature")
-	}
-}
-
 func TestDetailFormatStatusHidesPublishHintsForUnpublished(t *testing.T) {
 	t.Parallel()
 	falseBool := false
@@ -1321,10 +1144,7 @@ func TestDetailFormatStatusHidesPublishHintsForUnpublished(t *testing.T) {
 	if strings.Contains(result, "[m]") {
 		t.Error("expected [m] to be hidden in formatDetailStatus for unpublished feature")
 	}
-	// [t] and [F] should still be present
-	if !strings.Contains(result, "[t]") {
-		t.Error("expected [t] to still be present for unpublished feature")
-	}
+	// [Shift+F] should still be present
 	if !strings.Contains(result, "[Shift+F]") {
 		t.Error("expected [Shift+F] to still be present for unpublished feature")
 	}
@@ -1342,6 +1162,42 @@ func TestDetailFormatStatusHidesPublishHintsForUnpublished(t *testing.T) {
 	// [Shift+D] mark done should still be present
 	if !strings.Contains(result, "[Shift+D]") {
 		t.Error("expected [Shift+D] to still be present for unpublished feature")
+	}
+}
+
+func TestDetailFormatStatusCodeReadyOmitsManualPublishShortcut(t *testing.T) {
+	t.Parallel()
+	trueBool := true
+	f := &feature.Feature{
+		Status:      feature.StatusCodeReady,
+		Repos:       []feature.FeatureRepo{{Publishable: &trueBool}},
+		Checkpoints: feature.Checkpoints{ManualPublish: true},
+	}
+
+	result := formatDetailStatus(f)
+	if strings.Contains(result, "[m]") || strings.Contains(strings.ToLower(result), "manual publish") {
+		t.Fatalf("formatDetailStatus() exposed removed manual publish shortcut:\n%s", result)
+	}
+	if !strings.Contains(result, "[p] publish") {
+		t.Fatalf("formatDetailStatus() should keep the publish action after removing m:\n%s", result)
+	}
+}
+
+func TestDetailFormatStatusNamesReviewedArtifactWhenPendingTargetIsNextPhase(t *testing.T) {
+	t.Parallel()
+
+	target := feature.PhaseDesign
+	f := &feature.Feature{
+		Status:             feature.StatusResearchNeedsReview,
+		PendingReviewPhase: &target,
+	}
+
+	got := stripANSI(formatDetailStatus(f))
+	if !strings.Contains(got, "Research needs review") {
+		t.Fatalf("formatDetailStatus() = %q, want Research needs review", got)
+	}
+	if strings.Contains(got, "Design gate") {
+		t.Fatalf("formatDetailStatus() = %q, should not label review by next target phase", got)
 	}
 }
 
@@ -1452,44 +1308,6 @@ func TestRenderLightbulbHint(t *testing.T) {
 	}
 }
 
-func TestRenderMetadataFull_WorkDir_FullPathForSingleRepo(t *testing.T) {
-	t.Parallel()
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Slug:   "test",
-		Status: feature.StatusImplementing,
-		Repos:  []feature.FeatureRepo{{Name: "payments", WorktreePath: "/tmp/wt/feat/repo-a"}},
-		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-	}
-	m := NewDetailModel(f, "")
-	got := m.renderMetadataFull(f)
-	if !strings.Contains(got, "/tmp/wt/feat/repo-a") {
-		t.Errorf("renderMetadataFull() = %q, want full worktree path for single-repo", got)
-	}
-}
-
-func TestRenderMetadataFull_WorkDir_ParentDirForMultiRepo(t *testing.T) {
-	t.Parallel()
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Slug:   "test",
-		Status: feature.StatusImplementing,
-		Repos: []feature.FeatureRepo{
-			{Name: "payments", WorktreePath: "/tmp/wt/feat/repo-a"},
-			{Name: "worker", WorktreePath: "/tmp/wt/feat/repo-b"},
-		},
-		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-	}
-	m := NewDetailModel(f, "")
-	got := m.renderMetadataFull(f)
-	if !strings.Contains(got, "/tmp/wt/feat") {
-		t.Errorf("renderMetadataFull() = %q, want parent dir of worktree for multi-repo", got)
-	}
-	if strings.Contains(got, "/tmp/wt/feat/repo-a") {
-		t.Errorf("renderMetadataFull() = %q, did not expect first-repo full path for multi-repo", got)
-	}
-}
-
 func TestRenderMetadataCompact_WorkDir_FullPathForSingleRepo(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
@@ -1545,7 +1363,6 @@ func TestRenderMetadata_UsesShortModelNames(t *testing.T) {
 	}
 	m := NewDetailModel(f, "")
 	for name, got := range map[string]string{
-		"full":    stripANSI(m.renderMetadataFull(f)),
 		"compact": stripANSI(m.renderMetadataCompact(f)),
 	} {
 		if strings.Contains(got, "portkey/@fireworks/accounts/fireworks/models") {
@@ -1554,48 +1371,6 @@ func TestRenderMetadata_UsesShortModelNames(t *testing.T) {
 		if !strings.Contains(got, "R:gateway:glm-5p2[1.04M]") {
 			t.Fatalf("%s metadata missing compact model summary:\n%s", name, got)
 		}
-	}
-}
-
-func TestRenderPhaseProgressFull_KBSubRows_HiddenForSingleRepo(t *testing.T) {
-	t.Parallel()
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Slug:         "test",
-		Status:       feature.StatusBuildingKB,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Repos:        []feature.FeatureRepo{{Name: "payments"}},
-		KBStatus:     map[string]string{"payments": "completed"},
-		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-	}
-	m := NewDetailModel(f, "")
-	got := m.renderPhaseProgressFull(f)
-	if strings.Contains(got, "↳") {
-		t.Errorf("renderPhaseProgressFull() = %q, did not expect KB sub-row marker for single-repo", got)
-	}
-}
-
-func TestRenderPhaseProgressFull_KBSubRows_RenderedForMultiRepo(t *testing.T) {
-	t.Parallel()
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Slug:         "test",
-		Status:       feature.StatusBuildingKB,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Repos:        []feature.FeatureRepo{{Name: "payments"}, {Name: "worker"}},
-		KBStatus:     map[string]string{"payments": "completed", "worker": "pending"},
-		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
-	}
-	m := NewDetailModel(f, "")
-	got := m.renderPhaseProgressFull(f)
-	if !strings.Contains(got, "↳") {
-		t.Fatalf("renderPhaseProgressFull() = %q, want KB sub-row marker in multi-repo", got)
-	}
-	if !strings.Contains(got, "payments") {
-		t.Errorf("renderPhaseProgressFull() = %q, want payments name in KB sub-rows", got)
-	}
-	if !strings.Contains(got, "worker") {
-		t.Errorf("renderPhaseProgressFull() = %q, want worker name in KB sub-rows", got)
 	}
 }
 

@@ -51,7 +51,7 @@ func MissingEvidenceRequirements(feedback string) []MissingEvidenceRequirement {
 		if !ok {
 			continue
 		}
-		if kind != "visual" && kind != "behavioral" {
+		if kind != testingContractVisualSource && kind != testingContractBehavioralSource {
 			continue
 		}
 		requirement = strings.TrimSpace(requirement)

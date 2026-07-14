@@ -23,45 +23,10 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
-
-// TestOrchestrator_ApplyRefactorPipeline_SetsProfileAndCheckpoints
-// ---------------------------------------------------------------------------
-// ApplyRefactorPipeline replaces the TUI's Store.Modify for
-// applyRefactorPipelineAndStart. Unlike UpgradePipeline it permits any
-// profile (including downgrade) because refactor resets the cycle.
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_ApplyRefactorPipeline_SetsProfileAndCheckpoints(t *testing.T) {
-	f := &feature.Feature{
-		ID:       "feat-1",
-		Status:   feature.StatusPublished,
-		Pipeline: feature.PipelineLarge,
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	if err := o.ApplyRefactorPipeline("feat-1", feature.PipelineMedium); err != nil {
-		t.Fatalf("ApplyRefactorPipeline: %v", err)
-	}
-
-	if f.Pipeline != feature.PipelineMedium {
-		t.Errorf("Pipeline = %v, want PipelineMedium", f.Pipeline)
-	}
-	// Medium disables auto-publish by default; Checkpoints should reflect the
-	// profile-specific defaults.
-	defaults := feature.DefaultCheckpointsForProfile(feature.PipelineMedium)
-	if f.Checkpoints != defaults {
-		t.Errorf("Checkpoints = %+v, want %+v", f.Checkpoints, defaults)
-	}
-}
 
 // TestOrchestrator_EnterReviewGate_SetsStatusAndPendingPhase
 // ---------------------------------------------------------------------------
@@ -163,74 +128,13 @@ func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T)
 	if gotSourceRun != 1 || gotNewRun != 2 {
 		t.Errorf("hook source/new run = %d/%d, want 1/2", gotSourceRun, gotNewRun)
 	}
-}
-
-// TestOrchestrator_ResetToPublishedFromTweak_PublishedBranch
-// ---------------------------------------------------------------------------
-// ResetToPublishedFromTweak restores a feature's pre-tweak state. For a
-// feature with a PR URL, Status flips to Published; for one without, it flips
-// to CodeReady. ActiveCycleType + failure fields are cleared unconditionally.
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_ResetToPublishedFromTweak_PublishedBranch(t *testing.T) {
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusFailed,
-		Repos:  []feature.FeatureRepo{{Name: "repo-a"}},
-		RepoStates: map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://example.com/pr/1"},
-		},
-		LastError:    "boom",
-		FailureType:  feature.FailureInfrastructure,
-		CurrentPhase: feature.PhaseImplement,
-	}
-	f.SetActiveCycleType(feature.CycleTweak)
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	if err := o.ResetToPublishedFromTweak("feat-1"); err != nil {
-		t.Fatalf("ResetToPublishedFromTweak: %v", err)
-	}
-
-	if f.Status != feature.StatusPublished {
-		t.Errorf("Status = %v, want StatusPublished (feature has PRURL)", f.Status)
-	}
-	if f.CurrentPhase != feature.PhasePublish {
-		t.Errorf("CurrentPhase = %v, want PhasePublish", f.CurrentPhase)
-	}
-	if f.ActiveCycleType() != "" {
-		t.Errorf("ActiveCycleType = %v, want empty", f.ActiveCycleType())
-	}
-	if f.LastError != "" || f.FailureType != "" {
-		t.Errorf("failure fields not cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
-	}
-}
-
-func TestOrchestrator_ResetToPublishedFromTweak_CodeReadyBranch(t *testing.T) {
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusInterrupted,
-	}
-	f.SetActiveCycleType(feature.CycleTweak)
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	if err := o.ResetToPublishedFromTweak("feat-1"); err != nil {
-		t.Fatalf("ResetToPublishedFromTweak: %v", err)
-	}
-
-	if f.Status != feature.StatusCodeReady {
-		t.Errorf("Status = %v, want StatusCodeReady (no PRURL)", f.Status)
+	select {
+	case ev := <-o.Events():
+		if ev.Type != ports.FeatureRewound || ev.FeatureID != "feat-rewind" || ev.Phase != feature.PhaseImplement {
+			t.Fatalf("event = %+v, want FeatureRewound for feat-rewind implement", ev)
+		}
+	default:
+		t.Fatal("RewindWithRequest emitted no domain event, want FeatureRewound")
 	}
 }
 
@@ -319,7 +223,7 @@ func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *te
 		ID:     "feat-1",
 		Status: feature.StatusPublished,
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleReviewComments, PlanPath: reviewPath},
+			repoName: {Type: feature.CycleReviewComments, PlanPath: reviewPath},
 			"repo-b": {Type: feature.CycleRefactor, PlanPath: refactorPath},
 		},
 	}
@@ -339,7 +243,7 @@ func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *te
 	if len(restarts) != 1 {
 		t.Fatalf("expected 1 non-refactor restart, got %d", len(restarts))
 	}
-	if restarts[0].RepoName != "repo-a" || restarts[0].CycleType != feature.CycleReviewComments {
+	if restarts[0].RepoName != repoName || restarts[0].CycleType != feature.CycleReviewComments {
 		t.Errorf("unexpected restart descriptor: %+v", restarts[0])
 	}
 	if restarts[0].PlanContent != "review content" {
@@ -357,12 +261,13 @@ func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *te
 	}
 }
 
-func TestOrchestrator_CollectAndClearRepoCycleRestarts_SkipsTweakCycles(t *testing.T) {
+func TestOrchestrator_CollectAndClearRepoCycleRestarts_UsesPersistedRefactorPromptWhenPlanPathMissing(t *testing.T) {
 	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusPublished,
+		ID:             "feat-1",
+		Status:         feature.StatusInterrupted,
+		RefactorPrompt: "keep restart prompt",
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleTweak, PlanPath: ""},
+			"repo-b": {Type: feature.CycleRefactor, Status: feature.RepoCycleInterrupted},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -377,64 +282,23 @@ func TestOrchestrator_CollectAndClearRepoCycleRestarts_SkipsTweakCycles(t *testi
 	if err != nil {
 		t.Fatalf("CollectAndClearRepoCycleRestarts: %v", err)
 	}
-	assertLifecycleCall(t, lc, "ClearRepoCycles")
 	if len(restarts) != 0 {
-		t.Errorf("tweak cycles must not produce restart descriptors; got %d", len(restarts))
+		t.Fatalf("expected no non-refactor restarts, got %d", len(restarts))
 	}
-	if refactor != nil {
-		t.Errorf("tweak cycles must not produce a refactor descriptor; got %+v", refactor)
+	if refactor == nil {
+		t.Fatal("expected refactor restart, got nil")
+	}
+	if refactor.RepoName != "repo-b" {
+		t.Errorf("refactor RepoName = %q, want repo-b", refactor.RepoName)
+	}
+	if refactor.Prompt != "keep restart prompt" {
+		t.Errorf("refactor Prompt = %q, want %q", refactor.Prompt, "keep restart prompt")
 	}
 }
 
 // ---------------------------------------------------------------------------
 // Iteration 13 additions: RestartPhase + ResolveGateReviewContext
 // ---------------------------------------------------------------------------
-
-// TestOrchestrator_RestartPhase_TweakCycle_ResetsWithoutDispatch
-// ---------------------------------------------------------------------------
-// When a feature has an active tweak cycle, RestartPhase routes through
-// ResetToPublishedFromTweak (force-set pre-tweak state) and returns
-// RestartNoOp so the TUI just refreshes — no StartPhaseMsg is emitted.
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_RestartPhase_TweakCycle_ResetsWithoutDispatch(t *testing.T) {
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Status:       feature.StatusImplementing,
-		CurrentPhase: feature.PhaseImplement,
-		Repos:        []feature.FeatureRepo{{Name: "repo-a"}},
-		RepoStates: map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://example.com/pr/1"},
-		},
-		LastError:   "boom",
-		FailureType: feature.FailureInfrastructure,
-	}
-	f.SetActiveCycleType(feature.CycleTweak)
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	outcome, err := o.RestartPhase("feat-1", 10, 2)
-	if err != nil {
-		t.Fatalf("RestartPhase: %v", err)
-	}
-	if outcome.Action != orchestrator.RestartNoOp {
-		t.Errorf("Action = %v, want RestartNoOp", outcome.Action)
-	}
-	if f.ActiveCycleType() != "" {
-		t.Errorf("ActiveCycleType should be cleared, got %q", f.ActiveCycleType())
-	}
-	if f.Status != feature.StatusPublished {
-		t.Errorf("Status = %v, want Published (PRURL set)", f.Status)
-	}
-	if f.LastError != "" || f.FailureType != "" {
-		t.Errorf("failure fields should be cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
-	}
-}
 
 // TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches
 // ---------------------------------------------------------------------------
@@ -492,9 +356,9 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 		CurrentPhase: feature.PhaseFinalReview,
 		FailureType:  feature.FailureProtocolViolation,
 		LastError:    "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
-		Repos:        []feature.FeatureRepo{{Name: "agentic"}},
+		Repos:        []feature.FeatureRepo{{Name: agenticRepoName}},
 		RepoStates: map[string]*feature.RepoState{
-			"agentic": {
+			agenticRepoName: {
 				Touched:   true,
 				LastError: "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
 			},
@@ -527,7 +391,7 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 	if f.LastError != "" || f.FailureType != "" {
 		t.Fatalf("failure fields should be cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
 	}
-	if st := f.RepoStates["agentic"]; st == nil || st.LastError != "" {
+	if st := f.RepoStates[agenticRepoName]; st == nil || st.LastError != "" {
 		t.Fatalf("RepoStates[agentic] = %+v, want LastError cleared", st)
 	}
 }
@@ -550,7 +414,7 @@ func TestOrchestrator_RestartPhase_PublishedWithRepoCycles_ReturnsRestartList(t 
 		ID:     "feat-1",
 		Status: feature.StatusPublished,
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleReviewComments, PlanPath: planPath},
+			repoName: {Type: feature.CycleReviewComments, PlanPath: planPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -571,62 +435,11 @@ func TestOrchestrator_RestartPhase_PublishedWithRepoCycles_ReturnsRestartList(t 
 	if len(outcome.RepoCycleRestarts) != 1 {
 		t.Fatalf("expected 1 repo-cycle restart, got %d", len(outcome.RepoCycleRestarts))
 	}
-	if outcome.RepoCycleRestarts[0].RepoName != "repo-a" {
+	if outcome.RepoCycleRestarts[0].RepoName != repoName {
 		t.Errorf("RepoName = %q, want repo-a", outcome.RepoCycleRestarts[0].RepoName)
 	}
 	if outcome.RepoCycleRestarts[0].PlanContent != "review plan" {
 		t.Errorf("PlanContent = %q, want %q", outcome.RepoCycleRestarts[0].PlanContent, "review plan")
-	}
-	assertLifecycleCall(t, lc, "ClearRepoCycles")
-}
-
-func TestOrchestrator_RestartPhase_InterruptedWithRepoCycles_ReturnsRestartList(t *testing.T) {
-	tmp := t.TempDir()
-	planPath := filepath.Join(tmp, "rebase-plan.md")
-	if err := os.WriteFile(planPath, []byte("rebase plan"), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Status:       feature.StatusInterrupted,
-		CurrentPhase: feature.PhasePublish,
-		Repos: []feature.FeatureRepo{
-			{Name: "repo-a"},
-		},
-		RepoStates: map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/example/repo/pull/1"},
-		},
-		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleRebase, Status: feature.RepoCycleInterrupted, PlanPath: planPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	outcome, err := o.RestartPhase("feat-1", 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase: %v", err)
-	}
-	if outcome.Action != orchestrator.RestartDispatchRepoCycles {
-		t.Fatalf("Action = %v, want RestartDispatchRepoCycles", outcome.Action)
-	}
-	if len(outcome.RepoCycleRestarts) != 1 {
-		t.Fatalf("expected 1 repo-cycle restart, got %d", len(outcome.RepoCycleRestarts))
-	}
-	if outcome.RepoCycleRestarts[0].RepoName != "repo-a" {
-		t.Errorf("RepoName = %q, want repo-a", outcome.RepoCycleRestarts[0].RepoName)
-	}
-	if outcome.RepoCycleRestarts[0].PlanContent != "rebase plan" {
-		t.Errorf("PlanContent = %q, want %q", outcome.RepoCycleRestarts[0].PlanContent, "rebase plan")
-	}
-	if f.Status != feature.StatusPublished {
-		t.Errorf("Status after restart preparation = %v, want Published", f.Status)
 	}
 	assertLifecycleCall(t, lc, "ClearRepoCycles")
 }
@@ -864,7 +677,7 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_ReturnsPlan(t *tes
 		CurrentPhase: feature.PhaseImplement,
 		Artifacts:    map[string]string{"plan": planPath},
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", WorktreePath: "/tmp/repo-a-worktree", Path: "/tmp/repo-a"},
+			{Name: repoName, WorktreePath: repoAWorktreePath, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -885,7 +698,7 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_ReturnsPlan(t *tes
 	if ctx.ArtifactPath != planPath {
 		t.Errorf("ArtifactPath = %q, want %q", ctx.ArtifactPath, planPath)
 	}
-	if ctx.WorkDir != "/tmp/repo-a-worktree" {
+	if ctx.WorkDir != repoAWorktreePath {
 		t.Errorf("WorkDir = %q, want /tmp/repo-a-worktree", ctx.WorkDir)
 	}
 }
@@ -915,7 +728,7 @@ func TestOrchestrator_ResolveGateReviewContext_RoadmapPhaseZero_ReturnsRoadmap(t
 		CurrentRoadmapPhase: 0,
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
+			{Name: repoName, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -933,7 +746,7 @@ func TestOrchestrator_ResolveGateReviewContext_RoadmapPhaseZero_ReturnsRoadmap(t
 		t.Errorf("ArtifactPath = %q, want roadmap path %q", ctx.ArtifactPath, roadmapPath)
 	}
 	// No WorktreePath, so WorkDir falls back to Path.
-	if ctx.WorkDir != "/tmp/repo-a" {
+	if ctx.WorkDir != repoAPath {
 		t.Errorf("WorkDir = %q, want /tmp/repo-a", ctx.WorkDir)
 	}
 }
@@ -1024,7 +837,7 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_Retur
 		// "phase-N-plan"] on every code path).
 		Artifacts: map[string]string{"plan": genericPlanPath},
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", WorktreePath: "/tmp/repo-a-worktree", Path: "/tmp/repo-a"},
+			{Name: repoName, WorktreePath: repoAWorktreePath, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -1044,7 +857,7 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_Retur
 	if ctx.ArtifactPath == genericPlanPath {
 		t.Error("ArtifactPath fell back to generic plan artifact; expected phase-specific plan")
 	}
-	if ctx.WorkDir != "/tmp/repo-a-worktree" {
+	if ctx.WorkDir != repoAWorktreePath {
 		t.Errorf("WorkDir = %q, want /tmp/repo-a-worktree", ctx.WorkDir)
 	}
 }
@@ -1078,7 +891,7 @@ func TestRestartPhase_PublishedWithRepoCycles_DispatchesRepoCycleRestarts(t *tes
 		Status:       feature.StatusPublished,
 		CurrentPhase: feature.PhasePublish,
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleReviewComments, PlanPath: planPath, Status: "failed"},
+			repoName: {Type: feature.CycleReviewComments, PlanPath: planPath, Status: feature.RepoCycleFailed},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -1099,7 +912,7 @@ func TestRestartPhase_PublishedWithRepoCycles_DispatchesRepoCycleRestarts(t *tes
 	if len(outcome.RepoCycleRestarts) != 1 {
 		t.Fatalf("expected 1 repo-cycle restart, got %d", len(outcome.RepoCycleRestarts))
 	}
-	if outcome.RepoCycleRestarts[0].RepoName != "repo-a" {
+	if outcome.RepoCycleRestarts[0].RepoName != repoName {
 		t.Errorf("RepoName = %q, want repo-a", outcome.RepoCycleRestarts[0].RepoName)
 	}
 }
@@ -1140,7 +953,7 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RefactorRoadmapPha
 		// Refactor fields set so RefactorPrefix() returns "refactor-1".
 		RefactorPrompt: "Restructure the thing",
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", WorktreePath: "/tmp/repo-a-worktree", Path: "/tmp/repo-a"},
+			{Name: repoName, WorktreePath: repoAWorktreePath, Path: repoAPath},
 		},
 	}
 	f.SetRefactorCount(1)
@@ -1202,7 +1015,7 @@ func TestOrchestrator_ResolveRewindReviewContext_PartialImplementReturnsPendingP
 			"phase-2-plan": phasePlanPath,
 		},
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", WorktreePath: "/tmp/repo-a-worktree", Path: "/tmp/repo-a"},
+			{Name: repoName, WorktreePath: repoAWorktreePath, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -1224,7 +1037,7 @@ func TestOrchestrator_ResolveRewindReviewContext_PartialImplementReturnsPendingP
 	if len(ctx.Warnings) != 0 {
 		t.Errorf("Warnings = %v, want none", ctx.Warnings)
 	}
-	if ctx.WorkDir != "/tmp/repo-a-worktree" {
+	if ctx.WorkDir != repoAWorktreePath {
 		t.Errorf("WorkDir = %q, want /tmp/repo-a-worktree", ctx.WorkDir)
 	}
 }

@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -49,17 +48,6 @@ type attachDoneMsg struct {
 	generation int
 }
 
-// agentInterruptedMsg is the result of a Stop action in the tweak-session
-// finish prompt. err is nil on success; non-nil when the interrupt could
-// not be delivered.
-type agentInterruptedMsg struct {
-	err error
-}
-
-// agentToastClearMsg is dispatched after interruptToastDuration to clear
-// the transient toast shown after an interrupt.
-type agentToastClearMsg struct{}
-
 // skillsLoadedMsg carries the loaded skills from async discovery.
 type skillsLoadedMsg struct {
 	items   []AutocompleteItem
@@ -82,13 +70,14 @@ const (
 	minInputLines = 1 // textarea starts at 1 line
 	maxInputLines = 6 // textarea grows to at most 6 lines
 
-	questionPromptMaxLines              = 6  // cap long AskUser context so choices stay visible
 	questionPanelBaseMaxLines           = 20 // default AskUser panel cap for normal/small terminals
 	questionPanelTallMaxLines           = 32 // upper bound so the transcript remains visible
 	expandedQuestionPromptReservedLines = 4  // room for scroll indicators and the return hint
-
-	interruptToastDuration = 10 * time.Second
 )
+
+// thinkingLineText is the transient status line shown while the agent is
+// generating without a specific tool/task activity to report.
+const thinkingLineText = "Thinking..."
 
 func (f attachFilter) String() string {
 	switch f {
@@ -103,36 +92,6 @@ func (f attachFilter) String() string {
 
 func (f attachFilter) next() attachFilter {
 	return (f + 1) % 3
-}
-
-// askUserQuestion holds parsed AskUserQuestion data for attach rendering.
-type askUserQuestion struct {
-	RawQuestion string
-	Question    string
-	Header      string
-	MultiSelect bool
-	Options     []askUserOption
-}
-
-type askUserOption struct {
-	Label       string
-	Description string
-	Confidence  *float64
-	// Preview is free-text (markdown or HTML) Claude emits when the question
-	// benefits from a visual mockup; rendered in a bordered box alongside the
-	// option list. Empty when Claude did not attach a preview.
-	Preview string
-}
-
-// pendingAskBundle captures everything needed to re-activate a deferred
-// AskUserQuestion control_request after the active one is submitted.
-// Stored in AttachModel.pendingAskQueue; only requestID/questions/raw are
-// needed because per-question UI state is rebuilt fresh by
-// activateAskUserQuestions when the bundle is promoted.
-type pendingAskBundle struct {
-	questions []askUserQuestion
-	requestID string
-	raw       json.RawMessage
 }
 
 // controlRequestStillPending reports whether the given requestID is still
@@ -219,93 +178,6 @@ func autoPickedMessageKey(question, answer string, confidence float64) string {
 	return fmt.Sprintf("%s\x00%s\x00%.6f", question, answer, confidence)
 }
 
-// questionUIState is a per-question snapshot of selection/cursor state so that
-// back/forward navigation through an AskUserQuestion batch can restore what
-// the user had chosen.
-type questionUIState struct {
-	selectedOption int          // cursor row (incl. "Type something" slot)
-	selectedMulti  map[int]bool // ticked option indices for multiSelect
-	scrollOffset   int          // windowed option-list offset
-	typingCustom   bool         // answer was given via "Type something" freeform
-	customText     string       // stored freeform text for re-editing
-	askedEmitted   bool         // true once QuestionAsked observability fired
-}
-
-var numberedAskUserOptionRe = regexp.MustCompile(`^\d+\.\s+(.+)$`)
-var askUserConfidenceSuffixRe = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
-
-// buildAskUserAnnotations converts the collected per-question notes map into
-// the llm wire-format map; returns nil when no notes were captured so the
-// response payload omits the `annotations` key entirely.
-func buildAskUserAnnotations(notes map[string]string) map[string]llm.AskUserAnnotation {
-	if len(notes) == 0 {
-		return nil
-	}
-	out := make(map[string]llm.AskUserAnnotation, len(notes))
-	for q, n := range notes {
-		if n == "" {
-			continue
-		}
-		out[q] = llm.AskUserAnnotation{Notes: n}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func questionUsesDirectFreeform(q askUserQuestion) bool {
-	return len(q.Options) == 0
-}
-
-// parseAskUserQuestions extracts structured question data from AskUserQuestion tool input.
-func parseAskUserQuestions(input json.RawMessage) []askUserQuestion {
-	if len(input) == 0 {
-		return nil
-	}
-	var parsed struct {
-		Questions []struct {
-			Question    string `json:"question"`
-			Header      string `json:"header"`
-			MultiSelect bool   `json:"multiSelect"`
-			Options     []struct {
-				Label       string   `json:"label"`
-				Description string   `json:"description"`
-				Confidence  *float64 `json:"confidence"`
-				Preview     string   `json:"preview"`
-			} `json:"options"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal(input, &parsed); err != nil || len(parsed.Questions) == 0 {
-		return nil
-	}
-	var result []askUserQuestion
-	for _, q := range parsed.Questions {
-		aq := askUserQuestion{
-			RawQuestion: q.Question,
-			Question:    q.Question,
-			Header:      q.Header,
-			MultiSelect: q.MultiSelect,
-		}
-		for _, o := range q.Options {
-			aq.Options = append(aq.Options, askUserOption{
-				Label:       o.Label,
-				Description: o.Description,
-				Confidence:  o.Confidence,
-				Preview:     o.Preview,
-			})
-		}
-		if len(aq.Options) == 0 {
-			if cleaned, inferred, ok := inferAskUserOptionsFromQuestionText(q.Question); ok {
-				aq.Question = cleaned
-				aq.Options = inferred
-			}
-		}
-		result = append(result, aq)
-	}
-	return result
-}
-
 func (m *AttachModel) parseAskUserQuestionsForDisplay(input json.RawMessage) []askUserQuestion {
 	questions := parseAskUserQuestions(input)
 	if len(questions) == 0 {
@@ -321,7 +193,7 @@ func (m *AttachModel) enrichAskUserQuestionConfidence(questions []askUserQuestio
 	blocks := m.sess.MessageLog().ToolUseBlocks()
 	for i := len(blocks) - 1; i >= 0; i-- {
 		block := blocks[i]
-		if block.Name != "AskUserQuestion" || len(block.Input) == 0 {
+		if block.Name != toolNameAskUserQuestion || len(block.Input) == 0 {
 			continue
 		}
 		source := parseAskUserQuestions(block.Input)
@@ -380,124 +252,12 @@ func copyAskUserQuestionConfidence(questions, source []askUserQuestion) []askUse
 	return enriched
 }
 
-func inferAskUserOptionsFromQuestionText(question string) (string, []askUserOption, bool) {
-	lines := strings.Split(strings.ReplaceAll(question, "\r\n", "\n"), "\n")
-	stem := make([]string, 0, len(lines))
-	rawOptions := make([]string, 0, 4)
-	inOptions := false
-
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			if !inOptions && len(stem) > 0 && stem[len(stem)-1] != "" {
-				stem = append(stem, "")
-			}
-			continue
-		}
-
-		if matches := numberedAskUserOptionRe.FindStringSubmatch(line); matches != nil {
-			inOptions = true
-			rawOptions = append(rawOptions, strings.TrimSpace(matches[1]))
-			continue
-		}
-
-		if inOptions {
-			if isAskUserReplyInstruction(line) {
-				continue
-			}
-			if len(rawOptions) > 0 {
-				rawOptions[len(rawOptions)-1] += " " + line
-				continue
-			}
-		}
-
-		if !inOptions {
-			stem = append(stem, line)
-		}
-	}
-
-	if len(rawOptions) < 2 {
-		return "", nil, false
-	}
-	if looksLikeAskUserQuestionBundle(rawOptions) {
-		return "", nil, false
-	}
-
-	options := make([]askUserOption, 0, len(rawOptions))
-	for _, raw := range rawOptions {
-		label, desc, confidence := splitAskUserOption(raw)
-		if label == "" {
-			return "", nil, false
-		}
-		options = append(options, askUserOption{Label: label, Description: desc, Confidence: confidence})
-	}
-
-	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))
-	if cleaned == "" {
-		cleaned = question
-	}
-	return cleaned, options, true
-}
-
-func looksLikeAskUserQuestionBundle(rawOptions []string) bool {
-	questionCount := 0
-	for _, raw := range rawOptions {
-		text := strings.TrimSpace(raw)
-		if text == "" {
-			continue
-		}
-		if strings.Contains(text, "?") {
-			questionCount++
-		}
-	}
-	return questionCount == len(rawOptions)
-}
-
-func splitAskUserOption(raw string) (string, string, *float64) {
-	raw, confidence := splitAskUserOptionConfidence(raw)
-	if raw == "" {
-		return "", "", confidence
-	}
-	label := raw
-	desc := ""
-	if idx := strings.Index(raw, ":"); idx >= 0 {
-		label = strings.TrimSpace(raw[:idx])
-		desc = strings.TrimSpace(raw[idx+1:])
-	}
-	label = strings.Trim(label, "`")
-	label = strings.TrimSpace(label)
-	return label, desc, confidence
-}
-
-func splitAskUserOptionConfidence(raw string) (string, *float64) {
-	raw = strings.TrimSpace(raw)
-	matches := askUserConfidenceSuffixRe.FindStringSubmatch(raw)
-	if matches == nil {
-		return raw, nil
-	}
-	confidence, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		return raw, nil
-	}
-	trimmed := strings.TrimSpace(raw[:len(raw)-len(matches[0])])
-	return trimmed, &confidence
-}
-
-func isAskUserReplyInstruction(line string) bool {
-	lower := strings.ToLower(strings.TrimSpace(line))
-	return strings.HasPrefix(lower, "reply with ") ||
-		strings.HasPrefix(lower, "respond with ") ||
-		strings.HasPrefix(lower, "answer with ")
-}
-
 // presentationStatus is the attach tab bar's per-tab rendering token. It
 // carries durable end-of-phase outcomes plus mid-flight presentation-only
 // values (Implementing, Reviewing, FinalReviewing, Blocked, Waiting) used to
 // drive tab spinners and active-state coloring.
 type presentationStatus string
 
-// Durable values are derived from RepoState (Touched + PRURL + LastError)
-// via repoStateToPresentationStatus.
 const (
 	statusPending             presentationStatus = "pending"
 	statusReviewPassed        presentationStatus = "review_passed"
@@ -507,22 +267,6 @@ const (
 	statusNeedUserInput       presentationStatus = "need_user_input"
 	statusSkipped             presentationStatus = "skipped"
 )
-
-func repoStateToPresentationStatus(s *feature.RepoState) presentationStatus {
-	if s == nil {
-		return statusPending
-	}
-	switch {
-	case s.LastError != "":
-		return statusFailed
-	case s.PRURL != "":
-		return statusCodeReady
-	case s.Touched:
-		return statusAwaitingFinalReview
-	default:
-		return statusPending
-	}
-}
 
 // Mid-flight presentation-only tokens. The TUI sets these on its own
 // repoTab values to drive spinner / coloring; they are never persisted
@@ -534,22 +278,6 @@ const (
 	statusBlocked        presentationStatus = "blocked"
 	statusWaiting        presentationStatus = "waiting"
 )
-
-// validatorTabStatus maps validator status strings (the values written to
-// f.ValidatorStatuses) onto the presentationStatus tokens used by the attach
-// tab bar.
-func validatorTabStatus(status string) presentationStatus {
-	switch status {
-	case "APPROVED":
-		return statusReviewPassed
-	case "CHANGES_REQUESTED", "FAILED", "error":
-		return statusFailed
-	case "running":
-		return statusImplementing
-	default:
-		return statusPending
-	}
-}
 
 // abbreviateRepoName shortens a repo name for tab-bar display.
 func abbreviateRepoName(name string) string {
@@ -577,7 +305,7 @@ func abbreviateRepoName(name string) string {
 // repoTab represents one tab in the multi-session attach tab bar.
 // Originally used exclusively for per-repo implementation sessions, it now
 // backs any attach view that cycles across multiple live sessions for a
-// feature (phase sessions, validator critics, review helpers, tweak sessions).
+// feature (phase sessions, validator critics, review helpers).
 //
 // Identity fields:
 //   - repoName: the tab's identity key. For repo-impl tabs this is the repo
@@ -615,6 +343,15 @@ type attachFileChange struct {
 type attachFileEvent struct {
 	afterMessageCount int
 	change            attachFileChange
+}
+
+type permissionAnswerFailedMsg struct {
+	requestID string
+	toolName  string
+	toolInput json.RawMessage
+	pattern   string
+	choice    int
+	err       error
 }
 
 // AttachModel is a Bubbletea model for the structured attach view.
@@ -708,15 +445,8 @@ type AttachModel struct {
 	featureSpanID string
 	activeRun     int // mirrors f.ActiveRun at attach time
 
-	// Tweak session state
-	isTweakSession   bool // true when attached to a tweak session
-	tweakFinishing   bool // set by Ctrl+D or finish prompt, read by AppModel during detach
-	showFinishPrompt bool // true when Esc finish/detach prompt is visible
-
-	// Transient toast shown after the Stop option in the finish prompt.
-	// Cleared by agentToastClearMsg after interruptToastDuration.
-	interruptToast   string
-	interruptToastAt time.Time
+	// Transient toast shown after a permission-answer failure.
+	interruptToast string
 
 	// Tool spinner state (single-line animated indicator, like chat model)
 	thinkingLine   string    // current tool name/progress (overwritten on each update)
@@ -762,6 +492,10 @@ type AttachModel struct {
 	fileIndex        *FileIndex // nil until first @ trigger; rebuilt on tab switch
 	fileIndexLoading bool       // true while Build() is in progress
 	fileIndexWorkDir string     // work dir the index was built for (stale detection)
+}
+
+type explicitPermissionResponder interface {
+	RespondToPermissionDecision(requestID, decision, rememberPattern, rememberScope string) error
 }
 
 const (
@@ -816,30 +550,10 @@ func NewScrollRateLimiter() func(tea.Model, tea.Msg) tea.Msg {
 	}
 }
 
-// attachModelFromSession builds a single-tab AttachModel from one session.
-// Used by callers that don't have a precomputed []repoTab list (e.g.,
-// the legacy attachToSession entry point and ~87 test fixtures). The
-// resulting model behaves identically to today's classic single-session
-// attach because renderTabBar collapses to "" when len(repoTabs) == 1.
-func attachModelFromSession(sess session.SessionView, width, height int) AttachModel {
-	repoName := sess.PermCacheScope()
-	if repoName == "" {
-		repoName = sess.RepoName()
-	}
-	tabs := []repoTab{{
-		repoName: repoName,
-		kind:     ports.KindPhase,
-		sess:     sess,
-		status:   statusPending,
-	}}
-	return NewAttachModel(tabs, 0, sess.FeatureID(), width, height)
-}
-
 // NewAttachModel creates an attach model with optional tab bar; renderTabBar
 // collapses to empty when len(tabs) <= 1, so a single-entry tabs slice produces
 // a model that renders byte-for-byte identical to the classic single-session
-// attach view. Callers without a precomputed []repoTab can use
-// attachModelFromSession to build a 1-tab list from a session.
+// attach view.
 func NewAttachModel(tabs []repoTab, initialIdx int, featureID string, width, height int) AttachModel {
 	activeSess := tabs[initialIdx].sess
 
@@ -896,7 +610,7 @@ func NewAttachModel(tabs []repoTab, initialIdx int, featureID string, width, hei
 		for i, scanMsg := range allMsgs {
 			if scanMsg.Assistant != nil {
 				for _, block := range scanMsg.Assistant.Message.Content {
-					if block.IsToolUse() && block.Name == "AskUserQuestion" {
+					if block.IsToolUse() && block.Name == toolNameAskUserQuestion {
 						// Check if a subsequent message answered this question:
 						// look for a non-error tool_result with matching
 						// tool_use_id, or a plain user message (text response).
@@ -948,6 +662,22 @@ func NewAttachModel(tabs []repoTab, initialIdx int, featureID string, width, hei
 	return m
 }
 
+func resolveInitialTab(tabs []repoTab, lastAttachedRepo string) int {
+	if lastAttachedRepo != "" {
+		for i, t := range tabs {
+			if t.repoName == lastAttachedRepo && t.sess != nil {
+				return i
+			}
+		}
+	}
+	for i, t := range tabs {
+		if t.sess != nil {
+			return i
+		}
+	}
+	return -1
+}
+
 // attachLayout computes viewport width, viewport height, and input width
 // from the overall terminal dimensions, accounting for header, borders,
 // the chat panel, and footer. When readOnly is true, the chat panel is
@@ -988,46 +718,6 @@ func (m AttachModel) questionContentWidth() int {
 	return max(panelW-4, 10) // subtract border(2) + padding(0,1)(2)
 }
 
-// wrappedLineCount returns how many terminal lines text occupies when
-// rendered at the given width. Uses lipgloss for width-aware wrapping.
-func wrappedLineCount(text string, width int) int {
-	if width <= 0 || text == "" {
-		return 1
-	}
-	rendered := lipgloss.NewStyle().Width(width).Render(text)
-	return lipgloss.Height(rendered)
-}
-
-func questionPromptVisualLines(question string, width int) []string {
-	if question == "" {
-		return []string{""}
-	}
-	if width <= 0 {
-		return strings.Split(question, "\n")
-	}
-	rendered := lipgloss.NewStyle().Width(width).Render(question)
-	return strings.Split(rendered, "\n")
-}
-
-func questionPromptIsTruncated(question string, width int) bool {
-	return len(questionPromptVisualLines(question, width)) > questionPromptMaxLines
-}
-
-func questionPromptText(question string, width int) string {
-	if question == "" {
-		return question
-	}
-	lines := questionPromptVisualLines(question, width)
-	if len(lines) <= questionPromptMaxLines {
-		return question
-	}
-	return strings.Join(lines[:questionPromptMaxLines-1], "\n") + "\n..."
-}
-
-func questionPromptLineCount(question string, width int) int {
-	return wrappedLineCount(questionPromptText(question, width), width)
-}
-
 func (m AttachModel) questionPanelMaxHeight() int {
 	if m.height <= 0 {
 		return questionPanelBaseMaxLines
@@ -1039,28 +729,8 @@ func (m AttachModel) expandedQuestionPromptLineBudget() int {
 	return max(m.questionPanelMaxHeight()-expandedQuestionPromptReservedLines, 1)
 }
 
-// questionOptionLineCount returns the number of wrapped terminal lines
-// a single option occupies at the given content width, including its
-// label and optional description.
-func questionOptionLineCount(opt askUserOption, idx int, width int) int {
-	label := fmt.Sprintf("  %d. %s", idx+1, opt.Label)
-	lines := wrappedLineCount(label, width)
-	if opt.Description != "" {
-		desc := fmt.Sprintf("     %s", opt.Description)
-		lines += wrappedLineCount(desc, width)
-	}
-	if opt.Confidence != nil {
-		lines += wrappedLineCount(fmt.Sprintf("     Confidence: %.2f", *opt.Confidence), width)
-	}
-	return lines
-}
-
 // chatPanelHeight returns the height needed for the chat panel.
 func (m AttachModel) chatPanelHeight() int {
-	if m.showFinishPrompt {
-		// title (1) + blank (1) + options (2) + blank (1) + hint (1) = 6
-		return 6
-	}
 	if m.showPermMenu {
 		contentW := m.questionContentWidth()
 		detail := formatPermissionDetail(m.pendingPermToolName, m.pendingPermToolInput)
@@ -1181,57 +851,7 @@ func (m AttachModel) questionVisibleOptions() int {
 // plus whether above/below scroll indicators are needed.
 func (m AttachModel) questionVisibleWindow() (start, end int, needAbove, needBelow bool) {
 	q := m.pendingQuestions[m.currentQuestionIdx]
-	totalOptions := len(q.Options)
-	optionArea := m.questionVisibleOptions()
-	contentW := m.questionContentWidth()
-
-	totalLines := 0
-	for i, o := range q.Options {
-		totalLines += questionOptionLineCount(o, i, contentW)
-	}
-
-	// No scrolling needed — all options fit.
-	if totalLines <= optionArea {
-		return 0, totalOptions, false, false
-	}
-
-	start = m.questionScrollOffset
-	if start >= totalOptions {
-		start = totalOptions - 1
-	}
-	if start < 0 {
-		start = 0
-	}
-
-	needAbove = start > 0
-	budget := optionArea
-	if needAbove {
-		budget-- // reserve 1 line for "↑ N more above"
-	}
-
-	// Fill options from start using width-aware line counts.
-	usedLines := 0
-	end = start
-	for i := start; i < totalOptions; i++ {
-		ol := questionOptionLineCount(q.Options[i], i, contentW)
-		if usedLines+ol > budget {
-			break
-		}
-		usedLines += ol
-		end = i + 1
-	}
-
-	needBelow = end < totalOptions
-	if needBelow {
-		// Reclaim 1 line for "↓ N more below" indicator.
-		for end > start && usedLines > budget-1 {
-			end--
-			ol := questionOptionLineCount(q.Options[end], end, contentW)
-			usedLines -= ol
-		}
-	}
-
-	return start, end, needAbove, needBelow
+	return questionVisibleWindowPure(q.Options, m.selectedOption, m.questionScrollOffset, m.questionVisibleOptions(), m.questionContentWidth())
 }
 
 // updateQuestionScrollOffset adjusts questionScrollOffset so that
@@ -1331,7 +951,7 @@ func (m *AttachModel) restoreThinkingLine() {
 			}
 			for _, block := range msg.Assistant.Message.Content {
 				if block.IsThinking() {
-					m.thinkingLine = "Thinking..."
+					m.thinkingLine = thinkingLineText
 					m.lastActivityAt = time.Now()
 					m.turnActive = true
 					return
@@ -1351,7 +971,7 @@ func (m *AttachModel) restoreThinkingLine() {
 // a newline is inserted. This prevents the textarea viewport from scrolling
 // prior lines out of view at the old (smaller) height.
 func (m *AttachModel) preExpandInput() {
-	h := min(m.inputHeight+1, maxInputLines)
+	h := growTextareaHeight(m.inputHeight)
 	if h != m.inputHeight {
 		m.inputHeight = h
 		m.input.SetHeight(h)
@@ -1361,9 +981,7 @@ func (m *AttachModel) preExpandInput() {
 // syncInputHeight recalculates the textarea height based on content line count.
 // Must be called after any operation that changes textarea content.
 func (m *AttachModel) syncInputHeight() {
-	lineCount := strings.Count(m.input.Value(), "\n") + 1
-	h := max(lineCount, minInputLines)
-	h = min(h, maxInputLines)
+	h := syncTextareaHeight(m.input.Value(), minInputLines, maxInputLines)
 	if h != m.inputHeight {
 		m.inputHeight = h
 		m.input.SetHeight(h)
@@ -1431,7 +1049,7 @@ func (m *AttachModel) forwardToViewport(msg tea.Msg) tea.Cmd {
 }
 
 // HasActiveQuestion is the exported form of hasActiveQuestion, used by the
-// parent AppModel to toggle bubbletea mouse capture on only while a question
+// parent model to toggle bubbletea mouse capture on only while a question
 // is pending — so the wheel scrolls the viewport instead of being synthesized
 // into arrow keys by the terminal's alt-screen-scroll fallback.
 func (m AttachModel) HasActiveQuestion() bool {
@@ -1458,12 +1076,19 @@ func (m *AttachModel) syncInputMode() {
 	}
 }
 
+func (m *AttachModel) markAgentProgress() {
+	m.turnActive = true
+	if !m.hasActiveQuestion() && !m.showPermMenu {
+		m.awaitingInput = false
+	}
+}
+
 func (m *AttachModel) restorePendingAskUserQuestions(sess session.SessionView) {
 	if sess == nil {
 		return
 	}
 	for _, cr := range sess.PendingControlRequests() {
-		if cr == nil || cr.Request.ToolName != "AskUserQuestion" {
+		if cr == nil || cr.Request.ToolName != toolNameAskUserQuestion {
 			continue
 		}
 		if !controlRequestStillPending(sess, cr.RequestID) {
@@ -1482,7 +1107,7 @@ func (m *AttachModel) restorePendingPermission(sess session.SessionView) bool {
 		return false
 	}
 	for _, cr := range sess.PendingControlRequests() {
-		if cr == nil || cr.Request.ToolName == "AskUserQuestion" {
+		if cr == nil || cr.Request.ToolName == toolNameAskUserQuestion {
 			continue
 		}
 		if !controlRequestStillPending(sess, cr.RequestID) {
@@ -1619,12 +1244,11 @@ func (m *AttachModel) sendChatInput() tea.Cmd {
 	m.turnActive = true
 	m.lastActivityAt = time.Now()
 	if m.thinkingLine == "" {
-		m.thinkingLine = "Thinking..."
+		m.thinkingLine = thinkingLineText
 	}
 	// Sending a new message is the user's answer to the interrupt toast —
 	// clear it so it doesn't linger after they've moved on.
 	m.interruptToast = ""
-	m.interruptToastAt = time.Time{}
 	m.sess.MessageLog().Append(llm.SDKMessage{
 		Type:            "user",
 		LocallyAppended: true,
@@ -1664,19 +1288,6 @@ func isInterruptResult(r *llm.ResultMessage) bool {
 	return false
 }
 
-// interruptAgentCmd returns a command that asks the session to cancel the
-// current agent turn. Used by the tweak finish prompt's Stop option; the
-// result is delivered as an agentInterruptedMsg which sets the toast.
-func (m *AttachModel) interruptAgentCmd() tea.Cmd {
-	sess := m.sess
-	return func() tea.Msg {
-		if sess == nil {
-			return agentInterruptedMsg{err: fmt.Errorf("no active session")}
-		}
-		return agentInterruptedMsg{err: sess.Interrupt()}
-	}
-}
-
 // skillPlaceholder returns the human-readable placeholder inserted into the
 // textarea when a skill is autocompleted, e.g. "/research-codebase (built-in)".
 func skillPlaceholder(item AutocompleteItem) string {
@@ -1706,18 +1317,6 @@ func wrapLeadingSkillInstruction(text string, skills []AutocompleteItem) string 
 		}
 	}
 	return text
-}
-
-// cloneIntBoolMap returns a shallow copy of src, or nil if src is nil/empty.
-func cloneIntBoolMap(src map[int]bool) map[int]bool {
-	if len(src) == 0 {
-		return nil
-	}
-	out := make(map[int]bool, len(src))
-	for k, v := range src {
-		out[k] = v
-	}
-	return out
 }
 
 // snapshotCurrentQuestion writes the live UI state into
@@ -1935,7 +1534,7 @@ func (m *AttachModel) submitAllAnswers() tea.Cmd {
 	m.turnActive = true
 	m.lastActivityAt = time.Now()
 	if m.thinkingLine == "" {
-		m.thinkingLine = "Thinking..."
+		m.thinkingLine = thinkingLineText
 	}
 
 	// Clear session state synchronously so re-attaching before the async
@@ -1963,7 +1562,7 @@ func (m *AttachModel) submitAllAnswers() tea.Cmd {
 		} else if fallback != "" {
 			_ = m.sess.SendUserMessage(fallback)
 		}
-		return HelpResolvedMsg{FeatureID: featureID}
+		return HelpResolvedMsg{FeatureID: featureID, RequestID: requestID}
 	}
 }
 
@@ -1986,6 +1585,18 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case permissionAnswerFailedMsg:
+		m.pendingPermRequestID = msg.requestID
+		m.pendingPermToolName = msg.toolName
+		m.pendingPermToolInput = append(json.RawMessage(nil), msg.toolInput...)
+		m.permMenuPattern = msg.pattern
+		m.permMenuChoice = msg.choice
+		m.showPermMenu = true
+		if msg.err != nil {
+			m.interruptToast = "Permission answer failed: " + firstLine(msg.err.Error())
+		}
+		m.updateViewport()
+		return m, nil
 	case tea.KeyPressMsg:
 		// Multi-repo tab navigation (tab/shift+tab)
 		if len(m.repoTabs) > 1 {
@@ -2091,13 +1702,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 		// Handle Ctrl+D for rewind review mode
 		if m.rewindReviewMode && key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d"))) {
 			m.showRewindReviewMenu = true
-			return m, nil
-		}
-
-		// Handle Ctrl+D for tweak session: explicit finish (bypasses Esc prompt)
-		if m.isTweakSession && key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d"))) {
-			m.tweakFinishing = true
-			m.detached = true
 			return m, nil
 		}
 
@@ -2323,7 +1927,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 				m.syncInputMode()
 				m.syncInputHeight()
 				return m, nil
-			case key.Matches(msg, key.NewBinding(key.WithKeys("shift+enter"))):
+			case key.Matches(msg, shiftEnterKey):
 				m.preExpandInput()
 				var cmd tea.Cmd
 				m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -2370,7 +1974,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 					return m, m.submitAnswer(text)
 				}
 				return m, nil
-			case key.Matches(msg, key.NewBinding(key.WithKeys("shift+enter"))):
+			case key.Matches(msg, shiftEnterKey):
 				m.preExpandInput()
 				var cmd tea.Cmd
 				m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -2382,30 +1986,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 				m.input, cmd = m.input.Update(msg)
 				m.syncInputHeight()
 				return m, cmd
-			}
-		}
-
-		// Handle tweak finish prompt navigation
-		if m.showFinishPrompt {
-			switch msg.String() {
-			case "f", "enter":
-				m.tweakFinishing = true
-				m.detached = true
-				m.showFinishPrompt = false
-				return m, nil
-			case "s":
-				m.showFinishPrompt = false
-				return m, m.interruptAgentCmd()
-			case "d":
-				m.detached = true
-				m.showFinishPrompt = false
-				return m, nil
-			case "esc":
-				m.showFinishPrompt = false
-				return m, nil
-			default:
-				m.showFinishPrompt = false
-				return m, nil
 			}
 		}
 
@@ -2435,11 +2015,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, keys.Detach):
-			// In tweak sessions, Esc shows the finish prompt; Ctrl+] detaches directly
-			if m.isTweakSession && msg.String() == "esc" {
-				m.showFinishPrompt = true
-				return m, nil
-			}
 			m.detached = true
 			return m, nil
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+f"))):
@@ -2450,7 +2025,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			return m, m.sendChatInput()
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+s"))):
 			return m, m.sendChatInput()
-		case key.Matches(msg, key.NewBinding(key.WithKeys("shift+enter"))):
+		case key.Matches(msg, shiftEnterKey):
 			// Pre-expand before inserting newline so prior lines stay visible.
 			m.preExpandInput()
 			var cmd tea.Cmd
@@ -2534,7 +2109,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 				if !controlRequestStillPending(m.sess, sdkMsg.ControlRequest.RequestID) {
 					continue
 				}
-				if sdkMsg.ControlRequest.Request.ToolName == "AskUserQuestion" {
+				if sdkMsg.ControlRequest.Request.ToolName == toolNameAskUserQuestion {
 					// Route AskUserQuestion control_requests to multi-choice UI
 					if questions := m.parseAskUserQuestionsForDisplay(sdkMsg.ControlRequest.Request.Input); len(questions) > 0 {
 						m.activateAskUserQuestions(questions, sdkMsg.ControlRequest.RequestID, sdkMsg.ControlRequest.Request.Input)
@@ -2550,10 +2125,10 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			// arrives before tool_use — clearing on text would blank the
 			// spinner between every text+tool pair. Result clears it instead.
 			if sdkMsg.Assistant != nil {
-				m.turnActive = true
+				m.markAgentProgress()
 				for _, block := range sdkMsg.Assistant.Message.Content {
 					if block.IsThinking() {
-						m.thinkingLine = "Thinking..."
+						m.thinkingLine = thinkingLineText
 					}
 					if block.IsToolUse() {
 						m.thinkingLine = fmt.Sprintf("Using %s...", block.Name)
@@ -2562,19 +2137,19 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			}
 			// Stream delta events drive the spinner during streaming.
 			if sdkMsg.StreamDeltaType != "" {
-				m.turnActive = true
+				m.markAgentProgress()
 				if sdkMsg.StreamDeltaType == "thinking" {
-					m.thinkingLine = "Thinking..."
+					m.thinkingLine = thinkingLineText
 				}
 			}
 			if sdkMsg.ToolProgress != nil {
-				m.turnActive = true
+				m.markAgentProgress()
 				m.thinkingLine = fmt.Sprintf("Using %s...", sdkMsg.ToolProgress.ToolName)
 			}
 			// Subagent (Task tool) lifecycle messages arrive while the main
 			// agent is blocked — treat them as definitive progress.
 			if sdkMsg.TaskStarted != nil || sdkMsg.TaskProgress != nil || sdkMsg.TaskNotification != nil {
-				m.turnActive = true
+				m.markAgentProgress()
 			}
 			if sdkMsg.Result != nil {
 				m.thinkingLine = ""
@@ -2639,24 +2214,6 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 		m.thinkingLine = ""
 		m.turnActive = false
 		m.updateViewport()
-		return m, nil
-
-	case agentInterruptedMsg:
-		if msg.err != nil {
-			m.interruptToast = "✗ Interrupt failed: " + msg.err.Error()
-		} else {
-			m.interruptToast = "✓ Agent interrupted: what should I do instead?"
-		}
-		m.interruptToastAt = time.Now()
-		return m, tea.Tick(interruptToastDuration, func(time.Time) tea.Msg {
-			return agentToastClearMsg{}
-		})
-
-	case agentToastClearMsg:
-		if !m.interruptToastAt.IsZero() && time.Since(m.interruptToastAt) >= interruptToastDuration {
-			m.interruptToast = ""
-			m.interruptToastAt = time.Time{}
-		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -2768,11 +2325,7 @@ func (m AttachModel) View() string {
 		var chatContent string
 		var chatTitle string
 		var chatTitleStyle lipgloss.Style
-		if m.showFinishPrompt {
-			chatContent = m.renderFinishPromptInline()
-			chatTitle = "Tweak Session"
-			chatTitleStyle = lipgloss.NewStyle().Foreground(colorBrand)
-		} else if m.showPermMenu {
+		if m.showPermMenu {
 			chatContent = m.renderPermMenu()
 			chatTitle = "Permission"
 			chatTitleStyle = lipgloss.NewStyle().Foreground(colorWarning)
@@ -2835,10 +2388,6 @@ func (m AttachModel) View() string {
 		hints = tabHint + " [Enter] Proceed   [Esc] Cancel"
 	} else if m.rewindReviewMode {
 		hints = tabHint + " " + stopWatchingHint + "   [Ctrl+D] Done reviewing   [Ctrl+S] Send   [Ctrl+f] Filter: " + m.filter.String()
-	} else if m.isTweakSession && m.showFinishPrompt {
-		hints = tabHint + " [f/Enter] Finish   [s] Stop   [d] Stop watching   [Esc] Cancel"
-	} else if m.isTweakSession {
-		hints = tabHint + " [Esc] Finish/Stop/Stop watching   [Ctrl+D] Finish   [Enter] Send   [Shift+Enter] Newline   [Ctrl+f] Filter: " + m.filter.String()
 	} else {
 		hints = tabHint + " " + stopWatchingHint + "   [Enter] Send   [Shift+Enter] Newline   [Ctrl+f] Filter: " + m.filter.String()
 	}
@@ -2969,7 +2518,6 @@ func (m AttachModel) renderQuestion() string {
 	questionStyle := lipgloss.NewStyle().Bold(true)
 	selectedLabel := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	normalLabel := lipgloss.NewStyle()
-	descStyle := MutedStyle
 	hintStyle := MutedStyle
 	notesLabelStyle := lipgloss.NewStyle().Foreground(colorBrand)
 	separatorStyle := lipgloss.NewStyle().Foreground(colorSurface)
@@ -2999,50 +2547,13 @@ func (m AttachModel) renderQuestion() string {
 		}
 	}
 
-	// Top block: question title + options list + separator + "Type something".
-	// Rendered at its natural width so side-by-side placement with a preview
-	// doesn't force extra padding.
 	var top strings.Builder
 	contentW := m.questionContentWidth()
 	top.WriteString(questionStyle.Render(questionPromptText(q.Question, contentW)))
 	top.WriteString("\n\n")
 
 	start, end, needAbove, needBelow := m.questionVisibleWindow()
-	if needAbove {
-		top.WriteString(MutedStyle.Render(fmt.Sprintf("  ↑ %d more above", start)))
-		top.WriteByte('\n')
-	}
-	for i := start; i < end; i++ {
-		opt := q.Options[i]
-		cursor := "  "
-		labelStyle := normalLabel
-		if i == m.selectedOption {
-			cursor = "> "
-			labelStyle = selectedLabel
-		}
-		if q.MultiSelect {
-			checkbox := "[ ] "
-			if m.selectedMulti[i] {
-				checkbox = "[x] "
-			}
-			top.WriteString(labelStyle.Render(fmt.Sprintf("%s%d. %s%s", cursor, i+1, checkbox, opt.Label)))
-		} else {
-			top.WriteString(labelStyle.Render(fmt.Sprintf("%s%d. %s", cursor, i+1, opt.Label)))
-		}
-		top.WriteByte('\n')
-		if opt.Description != "" {
-			top.WriteString(descStyle.Render(fmt.Sprintf("     %s", opt.Description)))
-			top.WriteByte('\n')
-		}
-		if opt.Confidence != nil {
-			top.WriteString(descStyle.Render(fmt.Sprintf("     Confidence: %.2f", *opt.Confidence)))
-			top.WriteByte('\n')
-		}
-	}
-	if needBelow {
-		top.WriteString(MutedStyle.Render(fmt.Sprintf("  ↓ %d more below", numOptions-end)))
-		top.WriteByte('\n')
-	}
+	top.WriteString(renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow, contentW))
 
 	top.WriteString(separatorStyle.Render("  ────────────────────────────"))
 	top.WriteByte('\n')
@@ -3066,14 +2577,9 @@ func (m AttachModel) renderQuestion() string {
 		top.WriteString(MutedStyle.Render("  (" + priorPreview + ")"))
 	}
 
-	// Join the top block with the focused option's preview side-by-side when
-	// Claude supplied one. Claude's previews already carry their own ASCII
-	// frame, so render them verbatim at their natural width — no outer border,
-	// no line-count cap. JoinHorizontal pads the shorter column's height.
 	topBlock := top.String()
 	if hasAnyPreview && m.selectedOption < numOptions {
 		if preview := q.Options[m.selectedOption].Preview; preview != "" {
-			contentW := m.questionContentWidth()
 			previewW := 0
 			for _, line := range strings.Split(preview, "\n") {
 				if w := lipgloss.Width(line); w > previewW {
@@ -3090,14 +2596,9 @@ func (m AttachModel) renderQuestion() string {
 			if leftNaturalW+gap+previewW <= contentW {
 				topBlock = lipgloss.JoinHorizontal(lipgloss.Top, topBlock, strings.Repeat(" ", gap), preview)
 			}
-			// Otherwise the preview would overflow the panel — skip it rather
-			// than wrap Claude's frame mid-row.
 		}
 	}
 
-	// Bottom block: notes line + footer hint, or an inline editor for notes
-	// or a freeform answer. Always renders full-width below the top block so
-	// the textarea's natural width doesn't fight the side-by-side layout.
 	var bottom strings.Builder
 	bottom.WriteByte('\n')
 	switch {
@@ -3120,33 +2621,9 @@ func (m AttachModel) renderQuestion() string {
 			bottom.WriteString(hintStyle.Render("press n to add notes"))
 		}
 		bottom.WriteByte('\n')
-		var hint string
-		if q.MultiSelect {
-			hint = "Space to toggle · Enter to submit · ↑/↓ to navigate"
-		} else {
-			hint = "Enter to select · ↑/↓ to navigate"
-		}
-		if questionPromptIsTruncated(q.Question, contentW) {
-			hint += " · ? full question"
-		}
-		hint += " · n for notes"
-		// Only surface arrow-key nav when it actually does something. Left
-		// requires a prior question; right requires this question to have a
-		// committed answer (otherwise forward is Enter-only).
 		canBack := m.currentQuestionIdx > 0
 		_, canForward := m.collectedAnswers[q.Question]
-		switch {
-		case canBack && canForward:
-			hint += " · ←/→ prev/next question"
-		case canBack:
-			hint += " · ← prev question"
-		case canForward:
-			hint += " · → next question"
-		}
-		if len(m.pendingQuestions) > 1 {
-			hint += fmt.Sprintf(" · Question %d of %d", m.currentQuestionIdx+1, len(m.pendingQuestions))
-		}
-		bottom.WriteString(hintStyle.Render(hint))
+		bottom.WriteString(renderQuestionFooterHint(q, m.currentQuestionIdx, len(m.pendingQuestions), canBack, canForward, questionPromptIsTruncated(q.Question, contentW), "n for notes"))
 	}
 
 	return topBlock + "\n" + bottom.String()
@@ -3183,7 +2660,7 @@ func (m AttachModel) renderExpandedQuestion(q askUserQuestion) string {
 		b.WriteString(MutedStyle.Render(fmt.Sprintf("↑ %d more above", start)))
 		b.WriteByte('\n')
 	}
-	b.WriteString(lipgloss.NewStyle().Bold(true).Render(strings.Join(lines[start:end], "\n")))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render(strings.Join(renderExpandedQuestionBody(q, contentW, start, end-start), "\n")))
 	b.WriteByte('\n')
 	if needBelow {
 		b.WriteString(MutedStyle.Render(fmt.Sprintf("↓ %d more below", len(lines)-end)))
@@ -3306,26 +2783,6 @@ func (m AttachModel) renderRewindReviewMenu(panelW int) string {
 	return lipgloss.PlaceHorizontal(panelW, lipgloss.Center, menuBox)
 }
 
-// renderFinishPromptInline renders the finish/detach prompt as plain text for the chat panel.
-func (m AttachModel) renderFinishPromptInline() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBrand)
-	normalStyle := lipgloss.NewStyle()
-	hintStyle := MutedStyle
-
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Finish, Stop, or Stop watching?"))
-	b.WriteString("\n\n")
-	b.WriteString(normalStyle.Render("  [f/Enter] Finish — commit changes and complete"))
-	b.WriteByte('\n')
-	b.WriteString(normalStyle.Render("  [s]       Stop   — interrupt the agent's current task"))
-	b.WriteByte('\n')
-	b.WriteString(normalStyle.Render("  [d]       Stop watching — leave session running"))
-	b.WriteByte('\n')
-	b.WriteByte('\n')
-	b.WriteString(hintStyle.Render("Esc to cancel"))
-	return b.String()
-}
-
 // renderAttachHeader renders the AGENTICO brand header for the attach view.
 func (m AttachModel) renderAttachHeader(w int) string {
 	artLines := []string{
@@ -3414,11 +2871,6 @@ func (m AttachModel) Detached() bool {
 	return m.detached
 }
 
-// TweakFinishing returns true when the user pressed Ctrl+D to finish a tweak session.
-func (m AttachModel) TweakFinishing() bool {
-	return m.tweakFinishing
-}
-
 // Done returns true if the session has exited.
 func (m AttachModel) Done() bool {
 	if len(m.repoTabs) > 1 {
@@ -3431,16 +2883,28 @@ func (m AttachModel) Done() bool {
 func (m *AttachModel) executePermChoice() tea.Cmd {
 	reqID := m.pendingPermRequestID
 	toolName := m.pendingPermToolName
-	toolInput := string(m.pendingPermToolInput)
+	toolInputRaw := append(json.RawMessage(nil), m.pendingPermToolInput...)
+	toolInput := string(toolInputRaw)
 	repoName := m.permRepoName
 	choice := m.permMenuChoice
+	pattern := m.permMenuPattern
 	featureID := m.sess.FeatureID()
+	fail := func(err error) tea.Msg {
+		return permissionAnswerFailedMsg{
+			requestID: reqID,
+			toolName:  toolName,
+			toolInput: toolInputRaw,
+			pattern:   pattern,
+			choice:    choice,
+			err:       err,
+		}
+	}
 
 	// Emit permission resolution before clearing state
 	if sc, ok := m.sessionSpanContext(); ok && m.observer != nil {
-		decisionStr := "allow"
+		decisionStr := permission.DecisionAllowOnce
 		if choice == 1 {
-			decisionStr = "allow_remember"
+			decisionStr = permission.DecisionAllowRemember
 		} else if choice == 2 {
 			decisionStr = "deny"
 		}
@@ -3457,28 +2921,50 @@ func (m *AttachModel) executePermChoice() tea.Cmd {
 
 	switch choice {
 	case 0: // Allow
-		return func() tea.Msg {
-			_ = m.sess.RespondToControl(reqID, true, "")
-			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID}
-		}
+		return m.resolvePermChoiceCmd(reqID, toolName, toolInput, permission.DecisionAllowOnce, "", "", featureID, fail)
 	case 1: // Allow & Remember
-		return func() tea.Msg {
-			_ = m.sess.RespondToControl(reqID, true, "")
-			if m.permCache != nil {
-				m.permCache.RememberAllow(toolName, toolInput, repoName)
-			}
-			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID}
-		}
+		return m.resolvePermChoiceCmd(reqID, toolName, toolInput, permission.DecisionAllowRemember, pattern, repoName, featureID, fail)
 	case 2: // Deny
-		return func() tea.Msg {
-			_ = m.sess.RespondToControl(reqID, false, "denied by user")
-			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID}
-		}
+		return m.resolvePermChoiceCmd(reqID, toolName, toolInput, permission.DecisionDeny, "", "", featureID, fail)
 	}
 	return nil
+}
+
+// resolvePermChoiceCmd dispatches a single permission decision through the
+// session's explicit responder when available, otherwise through
+// permission.NewAnswerService. pattern and repoName are only meaningful for
+// DecisionAllowRemember; they are ignored (and safe to pass empty) for the
+// other decisions. Shared by all three executePermChoice cases.
+func (m *AttachModel) resolvePermChoiceCmd(reqID, toolName, toolInput, decision, pattern, repoName, featureID string, fail func(error) tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if responder, ok := m.sess.(explicitPermissionResponder); ok {
+			err = responder.RespondToPermissionDecision(reqID, decision, pattern, repoName)
+		} else {
+			var audit *permission.AuditSink
+			if decision == permission.DecisionAllowRemember && m.permCache != nil && m.permCache.StoreRef() != nil {
+				audit = permission.NewAuditSink(m.permCache.StoreRef().BaseDir)
+			}
+			_, err = permission.NewAnswerService(m.permCache, audit).Answer(permission.AnswerRequest{
+				RequestID:        reqID,
+				SessionID:        m.sess.ID(),
+				FeatureID:        featureID,
+				ToolName:         toolName,
+				ToolInput:        toolInput,
+				Decision:         decision,
+				RememberPattern:  pattern,
+				RememberScope:    repoName,
+				RememberScopeSet: decision == permission.DecisionAllowRemember,
+			}, func(requestID string, allow bool, reason string) error {
+				return m.sess.RespondToControl(requestID, allow, reason)
+			})
+		}
+		if err != nil {
+			return fail(err)
+		}
+		m.sess.ResetWaitingStatus()
+		return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
+	}
 }
 
 // findNextActiveTab returns the index of the next tab with an active session
@@ -3682,7 +3168,7 @@ func (m AttachModel) switchToTab(idx int) (AttachModel, tea.Cmd) {
 			for i, scanMsg := range allMsgs {
 				if scanMsg.Assistant != nil {
 					for _, block := range scanMsg.Assistant.Message.Content {
-						if block.IsToolUse() && block.Name == "AskUserQuestion" {
+						if block.IsToolUse() && block.Name == toolNameAskUserQuestion {
 							answered := false
 							for j := i + 1; j < len(allMsgs); j++ {
 								laterMsg := allMsgs[j]
@@ -4029,7 +3515,7 @@ func (m AttachModel) renderSpinnerLine() string {
 	}
 	line := strings.Join(strings.Fields(strings.ReplaceAll(m.thinkingLine, "\r", "\n")), " ")
 	if line == "" {
-		line = "Thinking..."
+		line = thinkingLineText
 	}
 
 	// A turn is considered in progress from the moment the user sends
@@ -4143,12 +3629,14 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 					lastAssistantText = strings.TrimSpace(block.Text)
 				case block.IsToolUse():
 					if filter < filterNoTools {
-						if rendered, ok := renderAttachTaskPromptBox(block, viewportWidth); ok {
+						if rendered := renderAttachDelegationToolUse(block, viewportWidth); rendered != "" {
 							b.WriteString(rendered)
+							lastAssistantText = ""
+							continue
 						}
 					}
-					// Tool use blocks are shown as a single spinner line
-					// at the bottom of the viewport (like chat model).
+					// Other tool use blocks are shown as a single spinner
+					// line at the bottom of the viewport (like chat model).
 					lastAssistantText = ""
 					continue
 				case block.IsThinking():
@@ -4167,17 +3655,9 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 						// Rendered with a left accent bar and surrounding
 						// blank lines to visually separate them from the
 						// assistant's response above and below.
-						accent := colorBrand
-						label := "[you]"
-						if msg.AutoPicked {
-							accent = colorWarning
-							label = "[auto-picked]"
-							if msg.AutoPickConfidence > 0 {
-								label = fmt.Sprintf("[auto-picked, confidence: %.2f]", msg.AutoPickConfidence)
-							}
-						}
-						barStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
-						labelStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
+						label, tagStyle := autoPickedTag(msg.AutoPicked, msg.AutoPickConfidence)
+						barStyle := tagStyle
+						labelStyle := tagStyle
 						displayText := replacePastedPaths(block.Text, media)
 						bar := barStyle.Render("▍") + " "
 						prefix := labelStyle.Render(label) + " "
@@ -4202,7 +3682,9 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 						if filter >= filterNoTools {
 							continue
 						}
-						b.WriteString(renderAttachPromptBox("prompt", block.Text, viewportWidth, nil))
+						b.WriteByte('\n')
+						b.WriteString(renderAttachPromptBox(block.Text, "prompt", viewportWidth))
+						b.WriteString("\n\n")
 					}
 				}
 			}
@@ -4246,7 +3728,7 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 			if msg.ControlRequest.Request.Subtype == "hook_callback" {
 				continue
 			}
-			if msg.ControlRequest.Request.Subtype == "can_use_tool" && msg.ControlRequest.Request.ToolName != "" {
+			if msg.ControlRequest.Request.Subtype == controlRequestSubtypeCanUseTool && msg.ControlRequest.Request.ToolName != "" {
 				if filter >= filterNoTools {
 					continue
 				}
@@ -4269,6 +3751,27 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 			}
 			b.WriteString(MutedStyle.Render(fmt.Sprintf("  [status] %s", msg.Status.Message)))
 			b.WriteByte('\n')
+
+		case msg.TaskStarted != nil:
+			lastAssistantText = ""
+			if filter >= filterNoTools {
+				continue
+			}
+			b.WriteString(renderAttachTaskStarted(msg.TaskStarted, viewportWidth))
+
+		case msg.TaskProgress != nil:
+			lastAssistantText = ""
+			if filter >= filterNoTools {
+				continue
+			}
+			b.WriteString(renderAttachTaskProgress(msg.TaskProgress))
+
+		case msg.TaskNotification != nil:
+			lastAssistantText = ""
+			if filter >= filterNoTools {
+				continue
+			}
+			b.WriteString(renderAttachTaskNotification(msg.TaskNotification))
 
 		case msg.ToolProgress != nil:
 			// Tool progress is shown via the spinner line, not as permanent entries.
@@ -4294,34 +3797,101 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 	return b.String()
 }
 
-func renderAttachTaskPromptBox(block llm.ContentBlock, viewportWidth int) (string, bool) {
-	if block.Name != "Task" && block.Name != "Agent" {
-		return "", false
+func renderAttachDelegationToolUse(block llm.ContentBlock, viewportWidth int) string {
+	if !isAttachDelegationTool(block.Name) {
+		return ""
 	}
 	fields := jsonObjectFields(block.Input)
-	prompt := firstNonEmptyString(fields, "prompt")
-	if strings.TrimSpace(prompt) == "" {
-		return "", false
+	summary := firstNonEmptyString(fields, "description", "summary", "title")
+	prompt := firstNonEmptyString(fields, "prompt", "instructions")
+	if summary == "" {
+		summary = prompt
 	}
-	title := block.Name + " prompt"
-	if description := firstNonEmptyString(fields, "description"); description != "" {
-		title = block.Name + ": " + description
+
+	line := block.Name
+	if detail := singleLine(summary); detail != "" {
+		line += ": " + detail
 	}
-	var leading []string
-	if agentType := firstNonEmptyString(fields, "subagent_type", "subagentType", "agent_type", "agent"); agentType != "" {
-		leading = append(leading, MutedStyle.Render(agentType))
+	toolStyle := lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
+	var b strings.Builder
+	b.WriteString(toolStyle.Render("  [tool_use] " + line))
+	b.WriteByte('\n')
+	if strings.TrimSpace(prompt) != "" {
+		b.WriteByte('\n')
+		b.WriteString(renderAttachPromptBox(prompt, "sub-agent prompt", viewportWidth))
+		b.WriteString("\n\n")
 	}
-	return renderAttachPromptBox(title, prompt, viewportWidth, leading), true
+	return b.String()
 }
 
-func renderAttachPromptBox(title, prompt string, viewportWidth int, leading []string) string {
-	prompt = strings.ReplaceAll(prompt, "\r\n", "\n")
-	if strings.TrimSpace(prompt) == "" {
+func isAttachDelegationTool(name string) bool {
+	switch name {
+	case toolNameAgent, "Task", toolNameTaskCreate:
+		return true
+	default:
+		return false
+	}
+}
+
+func renderAttachTaskStarted(msg *llm.TaskStartedMessage, viewportWidth int) string {
+	if msg == nil {
+		return ""
+	}
+	line := "Task started"
+	if detail := firstNonEmpty(msg.Description, msg.TaskType, msg.TaskID); detail != "" {
+		line += ": " + detail
+	}
+	var b strings.Builder
+	b.WriteString(attachTaskStyle(false).Render("  [task] " + line))
+	b.WriteByte('\n')
+	if strings.TrimSpace(msg.Prompt) != "" {
+		b.WriteByte('\n')
+		b.WriteString(renderAttachPromptBox(msg.Prompt, "sub-agent prompt", viewportWidth))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+func renderAttachTaskProgress(msg *llm.TaskProgressMessage) string {
+	if msg == nil {
+		return ""
+	}
+	line := "Task progress"
+	if detail := firstNonEmpty(msg.Description, msg.TaskID); detail != "" {
+		line += ": " + detail
+	}
+	if msg.LastToolName != "" {
+		line += " via " + msg.LastToolName
+	}
+	return attachTaskStyle(false).Render("  [task] "+line) + "\n"
+}
+
+func renderAttachTaskNotification(msg *llm.TaskNotificationMessage) string {
+	if msg == nil {
+		return ""
+	}
+	status := firstNonEmpty(msg.Status, "notification")
+	line := "Task " + status
+	if detail := firstNonEmpty(msg.Summary, msg.OutputFile, msg.TaskID); detail != "" {
+		line += ": " + detail
+	}
+	return attachTaskStyle(status == string(statusFailed) || status == "error").Render("  [task] "+line) + "\n"
+}
+
+func attachTaskStyle(warning bool) lipgloss.Style {
+	if warning {
+		return lipgloss.NewStyle().Foreground(colorWarning).Bold(true)
+	}
+	return lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
+}
+
+func renderAttachPromptBox(text, title string, viewportWidth int) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
 	boxWidth := max(viewportWidth-4, 20)
-	contentWidth := max(boxWidth-4, 10)
-	wrapped := lipgloss.NewStyle().Width(contentWidth).Render(prompt)
+	wrapped := lipgloss.NewStyle().Width(boxWidth - 4).Render(text)
 	lines := strings.Split(wrapped, "\n")
 	var content string
 	if len(lines) > promptMaxLines {
@@ -4329,14 +3899,9 @@ func renderAttachPromptBox(title, prompt string, viewportWidth int, leading []st
 	} else {
 		content = strings.Join(lines, "\n")
 	}
-	if len(leading) > 0 {
-		content = strings.Join(leading, "\n") + "\n\n" + content
-	}
 	box := panelStyle(false).Width(boxWidth).Render(content)
 	titleStyle := lipgloss.NewStyle().Foreground(compat.AdaptiveColor{Light: lipgloss.Color("#6c6f85"), Dark: lipgloss.Color("#6c7086")}).Bold(true)
-	title = truncateString(title, max(boxWidth-10, 10))
-	box = renderBorderTitle(box, title, titleStyle)
-	return "\n" + box + "\n\n"
+	return renderBorderTitle(box, title, titleStyle)
 }
 
 func renderFileEvent(change attachFileChange, viewportWidth int) string {
@@ -4499,6 +4064,9 @@ func buildAttachFileEvents(msgs []llm.SDKMessage, baseMessageCount int) []attach
 				appendChange(change)
 			}
 		}
+		for _, change := range fileChangesFromSDKFileChanges(msg.FileChanges) {
+			appendChange(change)
+		}
 	}
 
 	if len(events) > attachViewportFileLimit {
@@ -4567,13 +4135,13 @@ func fileChangesFromToolUse(block llm.ContentBlock) []attachFileChange {
 	}
 	input := jsonObjectFields(block.Input)
 	switch block.Name {
-	case "Edit", "MultiEdit", "Write":
+	case toolNameEdit, toolNameMultiEdit, toolNameWrite:
 		path := firstNonEmptyString(input, "file_path", "path", "target_file")
 		if path == "" {
 			return nil
 		}
 		op := "update"
-		if block.Name == "Write" && strings.TrimSpace(firstNonEmptyString(input, "old_string")) == "" {
+		if block.Name == toolNameWrite && strings.TrimSpace(firstNonEmptyString(input, "old_string")) == "" {
 			op = "write"
 		}
 		detail := buildToolUseFileChangeDetail(block.Name, input)
@@ -4605,9 +4173,9 @@ func fileChangesFromToolProgress(progress llm.ToolProgressMessage) []attachFileC
 	}
 	var path string
 	switch progress.ToolName {
-	case "Write", "Edit":
+	case toolNameWrite, toolNameEdit:
 		path = extractFilePathFromProgress(progress.Data)
-	case "Bash":
+	case toolNameBash:
 		path = extractExplicitProgressFile(progress.Data)
 	default:
 		return nil
@@ -4644,6 +4212,36 @@ func toolProgressFailed(data string) bool {
 	return false
 }
 
+func fileChangesFromSDKFileChanges(changes []llm.FileChangeEvent) []attachFileChange {
+	if len(changes) == 0 {
+		return nil
+	}
+	out := make([]attachFileChange, 0, len(changes))
+	for _, change := range changes {
+		if strings.TrimSpace(change.Path) == "" {
+			continue
+		}
+		op := strings.TrimSpace(change.Operation)
+		if op == "" {
+			op = "update"
+		}
+		detail := strings.TrimSpace(change.Detail)
+		if detail == "" {
+			detail = "Captured from tool activity."
+		}
+		out = append(out, attachFileChange{
+			Path:         change.Path,
+			OldPath:      change.OldPath,
+			Operation:    op,
+			Detail:       detail,
+			AddedLines:   change.AddedLines,
+			RemovedLines: change.RemovedLines,
+			HasDiffPatch: change.HasDiffPatch,
+		})
+	}
+	return out
+}
+
 func renderFileEventDetail(detail string) string {
 	lines := strings.Split(strings.TrimSpace(detail), "\n")
 	if len(lines) == 0 {
@@ -4678,12 +4276,12 @@ func buildToolUseFileChangeDetail(toolName string, fields map[string]interface{}
 	newString := firstNonEmptyString(fields, "new_string", "newText", "content")
 
 	switch toolName {
-	case "Edit", "MultiEdit":
+	case toolNameEdit, toolNameMultiEdit:
 		if oldString == "" && newString == "" {
 			return ""
 		}
 		return truncateFileChangeDetail(formatSimpleReplacement(oldString, newString))
-	case "Write":
+	case toolNameWrite:
 		if newString == "" {
 			return ""
 		}
@@ -4855,15 +4453,15 @@ func formatPermissionDetail(toolName string, input json.RawMessage) string {
 	}
 
 	switch toolName {
-	case "Bash":
+	case toolNameBash:
 		if cmd, ok := parsed["command"].(string); ok {
 			return cmd
 		}
-	case "Write":
+	case toolNameWrite:
 		if fp, ok := parsed["file_path"].(string); ok {
 			return fp
 		}
-	case "Edit":
+	case toolNameEdit:
 		if fp, ok := parsed["file_path"].(string); ok {
 			return fp
 		}

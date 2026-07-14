@@ -107,6 +107,117 @@ func TestBuildImplementPrompt_TestingContractPath(t *testing.T) {
 	t.Error("testing contract path should not be inlined into the lean implement user prompt")
 }
 
+func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
+	planDir := t.TempDir()
+	planPath := filepath.Join(planDir, "phase-plan.md")
+	if err := os.WriteFile(planPath, []byte("# Phase plan\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	feedback := MissingEvidencePlanRevisionFeedback([]MissingEvidenceRequirement{{
+		Phase:       1,
+		Kind:        testingContractVisualSource,
+		Requirement: "Capture actual rendered README output.",
+	}})
+	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
+		Attempt:      2,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: ReviewChangesRequested.String(),
+	}); err != nil {
+		t.Fatalf("write plan attempt meta: %v", err)
+	}
+	feedbackPath := filepath.Join(planDir, "attempt-02", "validation-feedback.md")
+	if err := os.WriteFile(feedbackPath, []byte(feedback), 0o644); err != nil {
+		t.Fatalf("write validation feedback: %v", err)
+	}
+	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
+		Attempt:      3,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: ReviewApproved.String(),
+	}); err != nil {
+		t.Fatalf("write approved plan attempt meta: %v", err)
+	}
+
+	prompt := BuildImplementPrompt(
+		planPath,
+		"Relevant tests pass",
+		"/tmp/progress.md",
+		"/tmp/verification-report.yaml",
+		"/tmp/testing-contract.yaml",
+		"",
+		"",
+		"",
+		"",
+		"",
+		nil,
+		3,
+	)
+
+	for _, want := range []string{
+		"Approved plan revision context",
+		"MISSING_EVIDENCE_REQUIREMENT phase 1 visual: Capture actual rendered README output.",
+		"Previous progress.md may predate this approved plan revision",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
+	planDir := t.TempDir()
+	planPath := filepath.Join(planDir, "phase-plan.md")
+	if err := os.WriteFile(planPath, []byte("# Phase plan\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	feedback := "# Multi-Validator Plan Review\n\n" +
+		"**Overall: CHANGES_REQUESTED** (1/2 validators approved)\n\n" +
+		"## Structural Validator -- ERROR\n\n" +
+		"running Structural validation session: protocol violation: validation-structural-feedback.md: review-feedback.md missing required section \"## Suggestions\"\n"
+	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
+		Attempt:      1,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: ReviewChangesRequested.String(),
+	}); err != nil {
+		t.Fatalf("write rejected plan attempt meta: %v", err)
+	}
+	feedbackPath := filepath.Join(planDir, "attempt-01", "validation-feedback.md")
+	if err := os.WriteFile(feedbackPath, []byte(feedback), 0o644); err != nil {
+		t.Fatalf("write validation feedback: %v", err)
+	}
+	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
+		Attempt:      2,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: ReviewApproved.String(),
+	}); err != nil {
+		t.Fatalf("write approved plan attempt meta: %v", err)
+	}
+
+	prompt := BuildImplementPrompt(
+		planPath,
+		"Relevant tests pass",
+		"/tmp/progress.md",
+		"/tmp/verification-report.yaml",
+		"/tmp/testing-contract.yaml",
+		"",
+		"",
+		"",
+		"",
+		"",
+		nil,
+		2,
+	)
+
+	for _, unexpected := range []string{
+		"Approved plan revision context",
+		"Multi-Validator Plan Review",
+		"review-feedback.md missing required section",
+	} {
+		if strings.Contains(prompt, unexpected) {
+			t.Fatalf("prompt included stale validator feedback %q:\n%s", unexpected, prompt)
+		}
+	}
+}
+
 func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
@@ -174,7 +285,7 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("RunImplementationLoop() FinalStatus = %s, want review_passed", result.FinalStatus)
 	}
 	if len(*captured) < 2 {
@@ -212,10 +323,10 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 
 func TestLoopResultTypes(t *testing.T) {
 	result := &LoopResult{
-		FinalStatus: "review_passed",
+		FinalStatus: finalStatusReviewPassed,
 		Iterations:  5,
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected review_passed, got %s", result.FinalStatus)
 	}
 	if result.Iterations != 5 {
@@ -316,11 +427,11 @@ func TestWaitForStatus(t *testing.T) {
 
 	t.Run("done_with_pending_SUCCESS", func(t *testing.T) {
 		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.SendStatus("SUCCESS")
+		sess.SendStatus(agentStatusSuccess)
 		sess.CloseDone()
 
 		got := waitForStatus(sess, nil, "")
-		if got != "SUCCESS" {
+		if got != agentStatusSuccess {
 			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
 		}
 	})
@@ -329,7 +440,7 @@ func TestWaitForStatus(t *testing.T) {
 		for i := 0; i < 200; i++ {
 			sess := session.NewSession("test", "feat", feature.PhaseImplement)
 			sess.SetCost(newEndedAfterTextResult())
-			sess.SendStatus("SUCCESS")
+			sess.SendStatus(agentStatusSuccess)
 			sess.CloseDone()
 
 			got := waitForStatus(sess, nil, "", func() bool { return false })
@@ -404,11 +515,11 @@ func TestWaitForStatus(t *testing.T) {
 	t.Run("status_SUCCESS_before_done", func(t *testing.T) {
 		sess := session.NewSession("test", "feat", feature.PhaseImplement)
 		go func() {
-			sess.SendStatus("SUCCESS")
+			sess.SendStatus(agentStatusSuccess)
 		}()
 
 		got := waitForStatus(sess, nil, "")
-		if got != "SUCCESS" {
+		if got != agentStatusSuccess {
 			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
 		}
 	})
@@ -417,11 +528,11 @@ func TestWaitForStatus(t *testing.T) {
 		sess := session.NewSession("test", "feat", feature.PhaseImplement)
 		go func() {
 			sess.SendStatus("API_ERROR")
-			sess.SendStatus("SUCCESS")
+			sess.SendStatus(agentStatusSuccess)
 		}()
 
 		got := waitForStatus(sess, nil, "")
-		if got != "SUCCESS" {
+		if got != agentStatusSuccess {
 			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
 		}
 	})
@@ -726,7 +837,7 @@ func TestImplementLoopCodexRouting(t *testing.T) {
 				if (*captured)[0].Model != tt.model {
 					t.Errorf("expected BuildSession model=%q, got %q", tt.model, (*captured)[0].Model)
 				}
-				if result.FinalStatus != "review_passed" {
+				if result.FinalStatus != finalStatusReviewPassed {
 					t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 				}
 			}
@@ -1015,7 +1126,7 @@ done
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 }
@@ -1086,13 +1197,13 @@ func attachCaptureSink(sess *session.Session) *captureSink {
 // newTruncatedResult builds a ResultMessage that the classifier will treat
 // as TermTurnTruncated.
 func newTruncatedResult() *llm.ResultMessage {
-	return &llm.ResultMessage{Subtype: "success", StopReason: "tool_use"}
+	return &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "tool_use"}
 }
 
 // newEndedAfterTextResult builds a ResultMessage that the classifier will
 // treat as TermEndedAfterText (deliberate stop).
 func newEndedAfterTextResult() *llm.ResultMessage {
-	return &llm.ResultMessage{Subtype: "success", StopReason: "end_turn"}
+	return &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn}
 }
 
 // nudgeRecorderSession is a SessionHandle test double that records the messages
@@ -1327,7 +1438,7 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 		},
 		SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
 			iterDir := filepath.Join(artifactDir, "iteration-01")
-			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, "SUCCESS")
+			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
 			if err := os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("complete\n"), 0o644); err != nil {
 				t.Fatalf("write phase_complete: %v", err)
 			}
@@ -1340,7 +1451,7 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 
@@ -1378,7 +1489,7 @@ func TestWaitForStatus_TurnTruncated_AutoResumes(t *testing.T) {
 
 	// Simulate a CLI-truncated SUCCESS: Cost is set, StopReason=tool_use.
 	sess.SetCost(newTruncatedResult())
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	// waitForStatus should SendUserMessage (observable via stdin write)
 	// rather than flipping the session to SessionWaitingHelp.
@@ -1400,11 +1511,11 @@ func TestWaitForStatus_TurnTruncated_AutoResumes(t *testing.T) {
 	// Let the agent now signal completion — readyCheck will be true, so
 	// waitForStatus should return SUCCESS cleanly.
 	ready.Store(true)
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	select {
 	case got := <-done:
-		if got != "SUCCESS" {
+		if got != agentStatusSuccess {
 			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
 		}
 	case <-time.After(2 * time.Second):
@@ -1425,7 +1536,7 @@ func TestWaitForStatus_TurnTruncated_RetryCapEscalates(t *testing.T) {
 	// trigger an auto-resume message without escalating.
 	for i := 0; i < maxAutoResumeAttempts; i++ {
 		sess.SetCost(newTruncatedResult())
-		sess.SendStatus("SUCCESS")
+		sess.SendStatus(agentStatusSuccess)
 		sink.waitForWrite(t, 2*time.Second)
 	}
 
@@ -1436,7 +1547,7 @@ func TestWaitForStatus_TurnTruncated_RetryCapEscalates(t *testing.T) {
 	// One more truncated SUCCESS beyond the cap — this one must return a
 	// missing-marker status instead of sending another continuation.
 	sess.SetCost(newTruncatedResult())
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	if got := countContinuationMessages(sink.contents()); got != maxAutoResumeAttempts {
 		t.Errorf("continuation messages after cap = %d, want %d (no extra send)", got, maxAutoResumeAttempts)
@@ -1472,7 +1583,7 @@ func TestWaitForStatus_EndedAfterText_ReturnsMissingMarker(t *testing.T) {
 	// A deliberate end_turn SUCCESS — no truncation auto-resume should fire,
 	// but the capability is armed so exactly one nudge is sent.
 	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 	sink.waitForWrite(t, 2*time.Second)
 
 	if got := countContinuationMessages(sink.contents()); got != 0 {
@@ -1510,7 +1621,7 @@ func TestWaitForStatus_EndedAfterText_RetryStateNotNudged(t *testing.T) {
 	// A deliberate end_turn SUCCESS with the readiness check satisfied — the
 	// RETRY path. !isReady() is false, so the nudge block is unreachable.
 	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	select {
 	case got := <-done:
@@ -1559,7 +1670,7 @@ func TestWaitForStatus_EndedAfterText_NudgesThenSucceeds(t *testing.T) {
 
 	// First end_turn without the marker — should nudge, not escalate.
 	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 	sink.waitForWrite(t, 2*time.Second)
 
 	if got := countNudgeMessages(sink.contents()); got != 1 {
@@ -1573,11 +1684,11 @@ func TestWaitForStatus_EndedAfterText_NudgesThenSucceeds(t *testing.T) {
 
 	// Now the agent finishes — readyCheck becomes true.
 	ready.Store(true)
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	select {
 	case got := <-done:
-		if got != "SUCCESS" {
+		if got != agentStatusSuccess {
 			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
 		}
 	case <-time.After(2 * time.Second):
@@ -1602,7 +1713,7 @@ func TestWaitForStatus_EndedAfterText_NudgeCapEscalates(t *testing.T) {
 
 	for i := 0; i < maxFinishOrViolateNudges; i++ {
 		sess.SetCost(newEndedAfterTextResult())
-		sess.SendStatus("SUCCESS")
+		sess.SendStatus(agentStatusSuccess)
 		sink.waitForWrite(t, 2*time.Second)
 	}
 	if got := countNudgeMessages(sink.contents()); got != maxFinishOrViolateNudges {
@@ -1611,7 +1722,7 @@ func TestWaitForStatus_EndedAfterText_NudgeCapEscalates(t *testing.T) {
 
 	// One more end_turn beyond the cap — must escalate, no extra nudge.
 	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	select {
 	case got := <-done:
@@ -1641,7 +1752,7 @@ func TestWaitForStatus_EndedAfterText_DisabledNotNudged(t *testing.T) {
 	}()
 
 	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	select {
 	case got := <-done:
@@ -1674,7 +1785,7 @@ func TestWaitForStatus_AskedFormal_ReturnsMissingMarker(t *testing.T) {
 	}()
 
 	sess.SetCost(newTruncatedResult())
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	if got := countContinuationMessages(sink.contents()); got != 0 {
 		t.Errorf("continuation messages = %d, want 0 when AskUserQuestion is pending", got)
@@ -1736,11 +1847,11 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 
 	// Let the agent complete cleanly.
 	ready.Store(true)
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	select {
 	case got := <-done:
-		if got != "SUCCESS" {
+		if got != agentStatusSuccess {
 			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
 		}
 	case <-time.After(2 * time.Second):
@@ -1775,7 +1886,7 @@ func TestWaitForStatus_ContextHandoff_CodexUsesDefaultThreshold(t *testing.T) {
 		t.Errorf("codex handoff message should include 60%% threshold, got: %s", sink.contents())
 	}
 
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -1804,7 +1915,7 @@ func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
 	}()
 
 	sink.waitForWrite(t, 2*time.Second)
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	select {
 	case got := <-done:
@@ -1852,7 +1963,7 @@ func TestWaitForStatus_ContextHandoff_BelowThreshold_NoSend(t *testing.T) {
 	}
 
 	// Clean up.
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -1886,7 +1997,7 @@ func TestWaitForStatus_ContextHandoff_DisabledBelowOneMillionWindow(t *testing.T
 		t.Errorf("handoff messages below 1M window = %d, want 0", got)
 	}
 
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -1919,7 +2030,7 @@ func TestWaitForStatus_ContextHandoff_NotSentBeforeUsageArrives(t *testing.T) {
 		t.Errorf("handoff messages before usage data = %d, want 0", got)
 	}
 
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -1976,10 +2087,10 @@ func TestWaitForStatus_ContextHandoff_DisabledForSharedWaiter(t *testing.T) {
 		t.Errorf("handoff messages from shared waiter = %d, want 0", got)
 	}
 
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 	select {
 	case got := <-done:
-		if got != "SUCCESS" {
+		if got != agentStatusSuccess {
 			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
 		}
 	case <-time.After(2 * time.Second):
@@ -2003,7 +2114,7 @@ func TestWaitForStatus_ReadyCheckFalse(t *testing.T) {
 
 	// SUCCESS with a false readyCheck should return a structured
 	// missing-marker status instead of parking the session for help.
-	sess.SendStatus("SUCCESS")
+	sess.SendStatus(agentStatusSuccess)
 
 	select {
 	case got := <-done:
@@ -2083,7 +2194,7 @@ func TestImplementLoopSkipIterationReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 	if result.Iterations != 1 {
@@ -2166,7 +2277,7 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 
@@ -2244,7 +2355,7 @@ func TestImplementLoopReviewHelperUsesChildDirAndMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	iterDir := filepath.Join(artifactDir, "iteration-01")
@@ -2310,7 +2421,7 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if !strings.Contains(result.LastError, "iteration_reviewer") || !strings.Contains(result.LastError, "phase_complete") {
@@ -2341,10 +2452,18 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	if !strings.Contains(string(parentFeedback), "phase_complete") {
 		t.Fatalf("parent review feedback missing phase_complete violation:\n%s", parentFeedback)
 	}
-	if !strings.Contains(string(parentFeedback), "CHANGES_REQUESTED") || strings.Contains(string(parentFeedback), "\nAPPROVED") {
+	if !strings.Contains(string(parentFeedback), ReviewChangesRequested.String()) || strings.Contains(string(parentFeedback), "\n"+ReviewApproved.String()) {
 		t.Fatalf("parent review feedback did not override approved verdict:\n%s", parentFeedback)
 	}
 }
+
+// mixedFailureCrash and mixedFailureDrift are the mixedFailureScript sequence
+// keywords that make the mock agent CLI emit, respectively, an error line
+// (simulating an agent crash) or a protocol-violation progress.md (drift).
+const (
+	mixedFailureCrash = "crash"
+	mixedFailureDrift = "drift"
+)
 
 func TestImplementLoopMixedFailuresTripIterationDeterminesFinalStatus(t *testing.T) {
 	if testing.Short() {
@@ -2356,8 +2475,8 @@ func TestImplementLoopMixedFailuresTripIterationDeterminesFinalStatus(t *testing
 		sequence   []string
 		wantStatus string
 	}{
-		{name: "contract violation trips", sequence: []string{"drift", "crash", "drift"}, wantStatus: "protocol_violation"},
-		{name: "agent crash trips", sequence: []string{"crash", "drift", "crash"}, wantStatus: "safety_rail"},
+		{name: "contract violation trips", sequence: []string{mixedFailureDrift, mixedFailureCrash, mixedFailureDrift}, wantStatus: BoundedHelperStatusProtocolViolation},
+		{name: "agent crash trips", sequence: []string{mixedFailureCrash, mixedFailureDrift, mixedFailureCrash}, wantStatus: "safety_rail"},
 	}
 
 	for _, tt := range tests {
@@ -2435,11 +2554,11 @@ case "$_step" in
 		b.WriteString(strconv.Itoa(i + 1))
 		b.WriteString(")\n")
 		switch failure {
-		case "drift":
+		case mixedFailureDrift:
 			b.WriteString(testutil.WriteImplementProtocolViolation(artifactDir))
 			b.WriteString("\n")
 			b.WriteString(testutil.JSONLSuccess)
-		case "crash":
+		case mixedFailureCrash:
 			b.WriteString(testutil.JSONLError("mock agent crash"))
 		}
 		b.WriteString("\n;;\n")
@@ -2516,7 +2635,7 @@ func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %s, want review_passed", result.FinalStatus)
 	}
 
@@ -2588,7 +2707,7 @@ required_checks:
 			// minimal valid progress.md so the new harness handoff parser
 			// passes and the iteration reaches the Report Integrity Gate
 			// where the contradiction is rejected.
-			testutil.WriteImplementProgressMd(artifactDir, "SUCCESS")+"\n"+
+			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
 			testutil.TouchPhaseComplete(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
@@ -2662,7 +2781,7 @@ required_checks:
 	feedback := string(feedbackBytes)
 	wantSubstrings := []string{
 		"Report Integrity Gate",
-		"CHANGES_REQUESTED",
+		ReviewChangesRequested.String(),
 		"caveat", // hedge phrase from the agent's own evidence
 	}
 	for _, s := range wantSubstrings {
@@ -2739,7 +2858,7 @@ func TestImplementLoop_IntegrityGateRejectsStaleContractRevision(t *testing.T) {
 			writeReportCmd+"\n"+
 			// Custom verification-report is written above; pair with a
 			// valid progress.md so the harness handoff parser passes.
-			testutil.WriteImplementProgressMd(artifactDir, "SUCCESS")+"\n"+
+			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
 			testutil.TouchPhaseComplete(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
@@ -2855,7 +2974,7 @@ func TestImplementLoop_SkillReadInstruction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 

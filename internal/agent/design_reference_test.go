@@ -23,7 +23,7 @@ func TestBuildFinalReviewPrompt_EmitsApprovedDesignContext(t *testing.T) {
 	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
 		FeatureDescription: "Build a thing",
 		ExitCriteria:       "tests pass",
-		DiffBase:           "main",
+		DiffBase:           defaultTestBranch,
 		WorkDir:            "/tmp/work",
 		Iteration:          1,
 		RoadmapPath:        "/tmp/roadmap.md",

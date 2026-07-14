@@ -28,53 +28,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// newReviewCommentsTestFeature seeds a multi-repo feature whose RepoImpl
-// entries are at "pr_ready" (post-publish) — the precondition for
-// the unified review-comments cycle. The store is a real on-disk store
-// so AtomicPhaseStamp's transactional writes round-trip through
-// Modify/Load.
 func newReviewCommentsTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
-	store := feature.NewStore(stateDir)
-	repos := make([]feature.FeatureRepo, 0, len(repoNames))
-	repoPaths := make([]string, 0, len(repoNames))
-	repoImpl := map[string]*feature.RepoState{}
-	for _, name := range repoNames {
-		repoDir := filepath.Join(t.TempDir(), name)
-		if err := os.MkdirAll(repoDir, 0o755); err != nil {
-			t.Fatalf("mkdir repo %q: %v", name, err)
-		}
-		repos = append(repos, feature.FeatureRepo{
-			Name:       name,
-			Path:       repoDir,
-			BaseBranch: "main",
-		})
-		repoPaths = append(repoPaths, repoDir)
-		repoImpl[name] = &feature.RepoState{
-			Touched: true, PRURL: fmt.Sprintf("https://github.com/example/%s/pull/1", name),
-		}
-	}
-	f := &feature.Feature{
-		ID:            featureID,
-		Name:          "Review Comments Loop Test",
-		Slug:          "review-comments-loop-test",
-		Description:   "Feature-level review-comments cycle test fixture",
-		Status:        feature.StatusPublished,
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos:         repos,
-		RepoStates:    repoImpl,
-		ExitCriteria:  "Review comments addressed",
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	loaded, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("reload feature: %v", err)
-	}
-	return store, loaded, repoPaths
+	return newLoopTestFeature(t, stateDir, featureID, repoNames, loopTestFeatureOptions{
+		Name:         "Review Comments Loop Test",
+		Slug:         "review-comments-loop-test",
+		Description:  "Feature-level review-comments cycle test fixture",
+		ExitCriteria: "Review comments addressed",
+	})
 }
 
 // makeReviewCommentTarget is a builder for a per-repo target with N
@@ -106,28 +67,28 @@ func makeReviewCommentTarget(repo string, prURL string, ids ...int) ReviewCommen
 // "awaiting_final_review" and clears Feature.ActiveCycle.
 func TestRunReviewCommentsLoop_SuccessAtomicallyStampsStagedRepos(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-success", []string{"api", "web", "infra"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-success", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 101, 102),
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 201),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 101, 102),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 201),
 		},
 		MaxIterations:  3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil),
 	}
 
 	result, err := RunReviewCommentsLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunReviewCommentsLoop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
-	if got, want := result.Repos, []string{"api", "web"}; !reflect.DeepEqual(got, want) {
+	if got, want := result.Repos, []string{testRepoNameAPI, testRepoNameWeb}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Repos = %v, want %v", got, want)
 	}
 
@@ -135,13 +96,13 @@ func TestRunReviewCommentsLoop_SuccessAtomicallyStampsStagedRepos(t *testing.T) 
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.Touched == false {
 			t.Errorf("repo %s = %+v, want awaiting_final_review", name, st)
 		}
 	}
-	if st := loaded.RepoStates["infra"]; st == nil || st.PRURL == "" {
+	if st := loaded.RepoStates[testRepoNameInfra]; st == nil || st.PRURL == "" {
 		t.Errorf("infra = %+v, want pr_ready (preserved — no comments)", st)
 	}
 	if loaded.ActiveCycle != nil {
@@ -158,25 +119,25 @@ func TestRunReviewCommentsLoop_SuccessAtomicallyStampsStagedRepos(t *testing.T) 
 // approved on iter-2.
 func TestRunReviewCommentsLoop_RetryLandsAfterFollowupIteration(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-retry", []string{"api", "web"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-retry", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1, 2, 3),
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 50),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1, 2, 3),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 50),
 		},
 		MaxIterations:  5,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 2}, nil),
 	}
 
 	result, err := RunReviewCommentsLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunReviewCommentsLoop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if result.Iterations != 2 {
@@ -202,14 +163,14 @@ func TestRunReviewCommentsLoop_RetryLandsAfterFollowupIteration(t *testing.T) {
 // repo "failed"; ActiveCycle.Status flips to "failed".
 func TestRunReviewCommentsLoop_MaxIterationsTrip(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-maxiter", []string{"api", "web"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-maxiter", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
 		},
 		MaxIterations: 2,
 		RunImplementFn: stubRunImplementFn(&LoopResult{
@@ -231,11 +192,11 @@ func TestRunReviewCommentsLoop_MaxIterationsTrip(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	if st := loaded.RepoStates["api"]; st == nil || st.LastError == "" {
+	if st := loaded.RepoStates[testRepoNameAPI]; st == nil || st.LastError == "" {
 		t.Errorf("api = %+v, want failed", st)
 	}
 	// Repo without comments preserved.
-	if st := loaded.RepoStates["web"]; st == nil || st.PRURL == "" {
+	if st := loaded.RepoStates[testRepoNameWeb]; st == nil || st.PRURL == "" {
 		t.Errorf("web = %+v, want pr_ready (preserved — no comments staged)", st)
 	}
 	if loaded.ActiveCycle == nil {
@@ -253,15 +214,15 @@ func TestRunReviewCommentsLoop_MaxIterationsTrip(t *testing.T) {
 // safety rail: inner loop returns safety_rail.
 func TestRunReviewCommentsLoop_SafetyRailTrip(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-safety", []string{"api", "web"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-safety", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1, 2),
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 5),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1, 2),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 5),
 		},
 		MaxIterations:  10,
 		MaxConsecFails: 2,
@@ -281,7 +242,7 @@ func TestRunReviewCommentsLoop_SafetyRailTrip(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError == "" {
 			t.Errorf("repo %s = %+v, want failed", name, st)
@@ -294,7 +255,7 @@ func TestRunReviewCommentsLoop_SafetyRailTrip(t *testing.T) {
 // "failed" and surfaces the error.
 func TestRunReviewCommentsLoop_DispatchErrorStampsFailure(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-dispatch-err", []string{"api"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-dispatch-err", []string{testRepoNameAPI})
 
 	dispatchErr := errors.New("session manager: ports.ErrSessionShuttingDown")
 	cfg := ReviewCommentsLoopConfig{
@@ -302,7 +263,7 @@ func TestRunReviewCommentsLoop_DispatchErrorStampsFailure(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 7),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 7),
 		},
 		MaxIterations:  3,
 		RunImplementFn: stubRunImplementFn(nil, dispatchErr),
@@ -323,7 +284,7 @@ func TestRunReviewCommentsLoop_DispatchErrorStampsFailure(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	if st := loaded.RepoStates["api"]; st == nil || st.LastError == "" {
+	if st := loaded.RepoStates[testRepoNameAPI]; st == nil || st.LastError == "" {
 		t.Errorf("api = %+v, want failed", st)
 	}
 }
@@ -332,14 +293,14 @@ func TestRunReviewCommentsLoop_DispatchErrorStampsFailure(t *testing.T) {
 // preserves state for resume.
 func TestRunReviewCommentsLoop_InterruptedPreservesState(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-interrupt", []string{"api"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-interrupt", []string{testRepoNameAPI})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
 		},
 		MaxIterations:  3,
 		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "interrupted", Iterations: 1}, nil),
@@ -354,7 +315,7 @@ func TestRunReviewCommentsLoop_InterruptedPreservesState(t *testing.T) {
 	}
 
 	loaded, _ := store.Load(f.ID)
-	if st := loaded.RepoStates["api"]; st == nil || st.PRURL == "" {
+	if st := loaded.RepoStates[testRepoNameAPI]; st == nil || st.PRURL == "" {
 		t.Errorf("api = %+v, want pr_ready (preserved on interrupt)", st)
 	}
 	if loaded.ActiveCycle == nil {
@@ -370,7 +331,7 @@ func TestRunReviewCommentsLoop_InterruptedPreservesState(t *testing.T) {
 // staged repos failed.
 func TestRunReviewCommentsLoop_NeedUserInputSurfacesGate(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-nui", []string{"api", "web"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-nui", []string{testRepoNameAPI, testRepoNameWeb})
 	gatePath := filepath.Join(stateDir, "review-comments-1", "iteration-01", "need-user-input.yaml")
 
 	cfg := ReviewCommentsLoopConfig{
@@ -378,8 +339,8 @@ func TestRunReviewCommentsLoop_NeedUserInputSurfacesGate(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 2),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 2),
 		},
 		MaxIterations: 3,
 		RunImplementFn: stubRunImplementFn(&LoopResult{
@@ -408,7 +369,7 @@ func TestRunReviewCommentsLoop_NeedUserInputSurfacesGate(t *testing.T) {
 	if loaded.PendingNeedUserInputPath != gatePath {
 		t.Errorf("PendingNeedUserInputPath = %q, want %q", loaded.PendingNeedUserInputPath, gatePath)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError != "" {
 			t.Errorf("repo %s = %+v, want prior state without failure", name, st)
@@ -427,7 +388,7 @@ func TestRunReviewCommentsLoop_NeedUserInputSurfacesGate(t *testing.T) {
 // without touching state.
 func TestRunReviewCommentsLoop_NoTargetsShortCircuits(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-empty", []string{"api"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-empty", []string{testRepoNameAPI})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
@@ -458,18 +419,18 @@ func TestRunReviewCommentsLoop_NoTargetsShortCircuits(t *testing.T) {
 // review threads frequently reference cross-repo behavior.
 func TestRunReviewCommentsLoop_FullWorkspaceMounted(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, repoPaths := newReviewCommentsTestFeature(t, stateDir, "rc-workspace", []string{"api", "web", "infra"})
+	store, f, repoPaths := newReviewCommentsTestFeature(t, stateDir, "rc-workspace", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
 			// web has comments; infra does NOT — but infra MUST be mounted.
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 2),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 2),
 		},
 		MaxIterations:  3,
 		RunImplementFn: captureFn,
@@ -504,18 +465,18 @@ func TestRunReviewCommentsLoop_FullWorkspaceMounted(t *testing.T) {
 // only, no plan-source items.
 func TestRunReviewCommentsLoop_PlanLessTestingContractEmitted(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-contract", []string{"api", "web"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-contract", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 2),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 2),
 		},
 		MaxIterations:  3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil),
 	}
 
 	if _, err := RunReviewCommentsLoop(cfg, nil); err != nil {
@@ -535,7 +496,7 @@ func TestRunReviewCommentsLoop_PlanLessTestingContractEmitted(t *testing.T) {
 		}
 		gotPerRepo[item.Repo]++
 	}
-	if gotPerRepo["api"] == 0 || gotPerRepo["web"] == 0 {
+	if gotPerRepo[testRepoNameAPI] == 0 || gotPerRepo[testRepoNameWeb] == 0 {
 		t.Errorf("expected per-repo baseline rows for api+web; got %v", gotPerRepo)
 	}
 }
@@ -545,17 +506,17 @@ func TestRunReviewCommentsLoop_PlanLessTestingContractEmitted(t *testing.T) {
 // (no per-repo subdir).
 func TestRunReviewCommentsLoop_FlatArtifactDirLayout(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-flat", []string{"api", "web"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-flat", []string{testRepoNameAPI, testRepoNameWeb})
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed"})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 2),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 2),
 		},
 		MaxIterations:  3,
 		RunImplementFn: captureFn,
@@ -573,7 +534,7 @@ func TestRunReviewCommentsLoop_FlatArtifactDirLayout(t *testing.T) {
 	if gotDir != wantDir {
 		t.Errorf("ArtifactDir = %q, want %q (flat layout)", gotDir, wantDir)
 	}
-	for _, repo := range []string{"api", "web"} {
+	for _, repo := range []string{testRepoNameAPI, testRepoNameWeb} {
 		legacyPath := filepath.Join(wantDir, repo)
 		if _, statErr := os.Stat(legacyPath); statErr == nil {
 			t.Errorf("legacy per-repo subdir %q exists; flat layout violated", legacyPath)
@@ -585,17 +546,17 @@ func TestRunReviewCommentsLoop_FlatArtifactDirLayout(t *testing.T) {
 // per-invocation counter bump and dir naming.
 func TestRunReviewCommentsLoop_CountIncrementsPerInvocation(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-count", []string{"api"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-count", []string{testRepoNameAPI})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
 		},
 		MaxIterations:  3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed"}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed}, nil),
 	}
 	if _, err := RunReviewCommentsLoop(cfg, nil); err != nil {
 		t.Fatalf("first RunReviewCommentsLoop: %v", err)
@@ -611,7 +572,7 @@ func TestRunReviewCommentsLoop_CountIncrementsPerInvocation(t *testing.T) {
 	// Reset staged repo to CodeReady so a second invocation makes
 	// sense.
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.RepoStates["api"].LastError = ""
+		ff.RepoStates[testRepoNameAPI].LastError = ""
 		return nil
 	}); err != nil {
 		t.Fatalf("modify: %v", err)
@@ -638,7 +599,7 @@ func TestRunReviewCommentsLoop_CountIncrementsPerInvocation(t *testing.T) {
 // readable so ArtifactManager.LatestIteration sees it.
 func TestRunReviewCommentsLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-recover", []string{"api"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-recover", []string{testRepoNameAPI})
 
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.SetReviewCommentsCount(1)
@@ -659,14 +620,14 @@ func TestRunReviewCommentsLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 		t.Fatalf("seed iteration-01: %v", err)
 	}
 
-	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 2})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      loaded,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
 		},
 		MaxIterations:  3,
 		RunImplementFn: captureFn,
@@ -693,7 +654,7 @@ func TestRunReviewCommentsLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 // entry stamp lands before the inner loop runs.
 func TestRunReviewCommentsLoop_ActiveCycleSetAtEntry(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-cycle-entry", []string{"api"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-cycle-entry", []string{testRepoNameAPI})
 
 	var midRunCycle *feature.CycleState
 	cfg := ReviewCommentsLoopConfig{
@@ -701,7 +662,7 @@ func TestRunReviewCommentsLoop_ActiveCycleSetAtEntry(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 1),
 		},
 		MaxIterations: 3,
 		RunImplementFn: func(_ ImplementConfig, _ ports.SessionManager) (*LoopResult, error) {
@@ -710,7 +671,7 @@ func TestRunReviewCommentsLoop_ActiveCycleSetAtEntry(t *testing.T) {
 				cp := *loaded.ActiveCycle
 				midRunCycle = &cp
 			}
-			return &LoopResult{FinalStatus: "review_passed"}, nil
+			return &LoopResult{FinalStatus: finalStatusReviewPassed}, nil
 		},
 	}
 
@@ -744,19 +705,19 @@ func TestRunReviewCommentsLoop_NilFeatureReturnsError(t *testing.T) {
 // before invoking the inner implement loop.
 func TestRunReviewCommentsLoop_CrossPRAggregationSurfacesAllComments(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-aggregate", []string{"api", "web", "infra"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-aggregate", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 100, 101, 102),
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 200, 201),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 100, 101, 102),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 200, 201),
 			// infra: no comments — should be omitted from the plan.
 		},
 		MaxIterations:  3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed"}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed}, nil),
 	}
 
 	if _, err := RunReviewCommentsLoop(cfg, nil); err != nil {
@@ -806,26 +767,26 @@ func TestRunReviewCommentsLoop_CrossPRAggregationSurfacesAllComments(t *testing.
 // staged subset).
 func TestRunReviewCommentsLoop_RepoNamesDeduplicateAndSort(t *testing.T) {
 	stateDir := t.TempDir()
-	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-dedup", []string{"api", "web"})
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-dedup", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := ReviewCommentsLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
 		RepoTargets: []ReviewCommentsRepoTarget{
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 1),
-			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 2),
-			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 3), // duplicate repo
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 1),
+			makeReviewCommentTarget(testRepoNameAPI, "https://github.com/example/api/pull/1", 2),
+			makeReviewCommentTarget(testRepoNameWeb, "https://github.com/example/web/pull/1", 3), // duplicate repo
 		},
 		MaxIterations:  3,
-		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: "review_passed"}, nil),
+		RunImplementFn: stubRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed}, nil),
 	}
 
 	result, err := RunReviewCommentsLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunReviewCommentsLoop: %v", err)
 	}
-	want := []string{"api", "web"}
+	want := []string{testRepoNameAPI, testRepoNameWeb}
 	got := append([]string(nil), result.Repos...)
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {
@@ -846,11 +807,16 @@ func TestBuildAggregatedReviewCommentsPlan_Formatting(t *testing.T) {
 	c3.User.Login = "carol"
 
 	plan := BuildAggregatedReviewCommentsPlan([]ReviewCommentsRepoTarget{
-		{RepoName: "web", PRURL: "https://github.com/o/web/pull/2", Mode: "auto", Comments: []ports.ReviewComment{c1, c2}},
-		{RepoName: "api", PRURL: "https://github.com/o/api/pull/1", Mode: "auto", Comments: []ports.ReviewComment{c3}},
+		{RepoName: testRepoNameWeb, PRURL: "https://github.com/o/web/pull/2", Mode: "auto", Comments: []ports.ReviewComment{c1, c2}},
+		{RepoName: testRepoNameAPI, PRURL: "https://github.com/o/api/pull/1", Mode: "auto", Comments: []ports.ReviewComment{c3}},
 	}, "/state/runs/run-001/review-comments-1/review-resolutions.json")
 
 	for _, want := range []string{
+		"## Cycle Communication Contract",
+		wantProgressPathTemplate,
+		wantVerificationReportPathTemplate,
+		wantPhaseCompletePathTemplate,
+		"Do not place `progress.md` under `{iteration_dir}`",
 		"## Repo: `api`",
 		"## Repo: `web`",
 		"`api` — PR https://github.com/o/api/pull/1 — 1 comment",
@@ -871,6 +837,49 @@ func TestBuildAggregatedReviewCommentsPlan_Formatting(t *testing.T) {
 	// Sorted output: api before web.
 	if idxAPI, idxWeb := strings.Index(plan, "## Repo: `api`"), strings.Index(plan, "## Repo: `web`"); idxAPI >= 0 && idxWeb >= 0 && idxAPI > idxWeb {
 		t.Errorf("api section should appear before web; api=%d web=%d", idxAPI, idxWeb)
+	}
+}
+
+func TestBuildAggregatedReviewCommentsPlanSortsCommentsByCreatedAt(t *testing.T) {
+	late := ports.ReviewComment{ID: 3, Path: "late.go", Line: 30, Body: "late", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T12:00:00Z"}
+	middle := ports.ReviewComment{ID: 2, Path: "middle.go", Line: 20, Body: "middle", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T11:00:00Z"}
+	early := ports.ReviewComment{ID: 1, Path: "early.go", Line: 10, Body: "early", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T10:00:00Z"}
+
+	plan := BuildAggregatedReviewCommentsPlan([]ReviewCommentsRepoTarget{{
+		RepoName: testRepoNameAPI,
+		PRURL:    "https://github.com/o/api/pull/1",
+		Mode:     "auto",
+		Comments: []ports.ReviewComment{late, early, middle},
+	}}, "/state/review-resolutions.json")
+
+	idxEarly := strings.Index(plan, "ID: 1)")
+	idxMiddle := strings.Index(plan, "ID: 2)")
+	idxLate := strings.Index(plan, "ID: 3)")
+	if idxEarly < 0 || idxMiddle < 0 || idxLate < 0 {
+		t.Fatalf("plan missing expected comment IDs:\n%s", plan)
+	}
+	if idxEarly >= idxMiddle || idxMiddle >= idxLate {
+		t.Fatalf("comment order indexes = early:%d middle:%d late:%d, want chronological", idxEarly, idxMiddle, idxLate)
+	}
+}
+
+func TestReviewCommentsSkillDocumentsStandardImplementHandoff(t *testing.T) {
+	data, err := os.ReadFile(repoRootPath(t, "skills", "review-comments", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read review-comments skill: %v", err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		wantProgressPathTemplate,
+		wantVerificationReportPathTemplate,
+		wantPhaseCompletePathTemplate,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("skills/review-comments/SKILL.md missing %q", want)
+		}
+	}
+	if strings.Contains(content, "at the cycle's iteration artifact dir") {
+		t.Fatalf("skills/review-comments/SKILL.md still says the handoff is at the iteration artifact dir")
 	}
 }
 

@@ -72,8 +72,10 @@ const (
 // checkpointsStart, lastRow) because the Checkpoints count depends on
 // provisionalPublishable.
 const (
-	configEditorModelsCount = 5
+	configEditorModelsCount = 6
 )
+
+const configBoxTitleAgents = "Agents"
 
 type checkpointField struct {
 	Gate  feature.GateIndex
@@ -243,9 +245,6 @@ func (m ConfigEditorModel) Snapshot() feature.ConfigSnapshot {
 		Checkpoints: cp,
 	}
 }
-
-// Original returns the seed snapshot captured at construction time.
-func (m ConfigEditorModel) Original() feature.ConfigSnapshot { return m.original }
 
 // HasChanges reports whether the current snapshot differs from the original
 // along any of the three axes.
@@ -677,7 +676,13 @@ func displayModelLabel(entry PhaseModelEntry, fallback string) string {
 		return entry.DisplayName
 	}
 	if fallback != "" {
-		return compactModelValueLabel(fallback)
+		if provider, model := splitProviderModel(fallback); provider != "" {
+			return provider + " / " + compactModelIDLabel(model)
+		}
+		return compactModelIDLabel(fallback)
+	}
+	if provider, model := splitProviderModel(entry.ModelID); provider != "" && provider == entry.Agent {
+		return provider + " / " + compactModelIDLabel(model)
 	}
 	return compactModelIDLabel(entry.ModelID)
 }
@@ -891,7 +896,7 @@ func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone, width int
 func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidth, modelWidth int) string {
 	field := m.currentModelField()
 	if field == "" {
-		emptyAgents := titledConfigBox("Agents", MutedStyle.Render("No phase"), agentWidth, modelPanelHeight, focus == configFocusAgentList)
+		emptyAgents := titledConfigBox(configBoxTitleAgents, MutedStyle.Render("No phase"), agentWidth, modelPanelHeight, focus == configFocusAgentList)
 		emptyModels := titledConfigBox("Models", MutedStyle.Render("No phase"), modelWidth, modelPanelHeight, focus == configFocusModelList)
 		return lipgloss.JoinHorizontal(lipgloss.Top, emptyAgents, "  ", emptyModels)
 	}
@@ -904,7 +909,7 @@ func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidt
 func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, focus configFocusZone, width int) string {
 	agents := m.agentOptionsForField(field)
 	if len(agents) == 0 {
-		return titledConfigBox("Agents", MutedStyle.Render("No agents"), width, modelPanelHeight, focus == configFocusAgentList)
+		return titledConfigBox(configBoxTitleAgents, MutedStyle.Render("No agents"), width, modelPanelHeight, focus == configFocusAgentList)
 	}
 	var lines []string
 	for _, agent := range agents {
@@ -922,7 +927,7 @@ func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, 
 		}
 		lines = append(lines, prefix+label)
 	}
-	return titledConfigBox("Agents", strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusAgentList)
+	return titledConfigBox(configBoxTitleAgents, strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusAgentList)
 }
 
 func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFocusZone, width int) string {
@@ -1046,10 +1051,15 @@ func (m ConfigEditorModel) phaseAssignmentLabel(field string) string {
 // cascade. The focused row expands into agent choices and model choices scoped
 // to the selected agent.
 func (m ConfigEditorModel) renderModelsBox(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Render("Models")
+	return m.renderModelsBoxWithTitle(width, "Models")
+}
+
+func (m ConfigEditorModel) renderModelsBoxWithTitle(width int, titleText string) string {
+	title := lipgloss.NewStyle().Bold(true).Render(titleText)
 	lines := []string{
 		title,
-		MutedStyle.Render(fmt.Sprintf("%-14s %-12s %s", "Phase", "Agent", "Model")),
+		MutedStyle.Render("Assignments"),
+		MutedStyle.Render(fmt.Sprintf("%-14s %-12s %s", "Phase", toolNameAgent, "Model")),
 	}
 	onModelsRow := m.rowCategory() == rowCatModels
 
@@ -1081,7 +1091,7 @@ func (m ConfigEditorModel) renderModelsBox(width int) string {
 
 	if onModelsRow {
 		field := m.currentModelField()
-		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(colorBrand).Render("Selection for "+field))
+		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(colorBrand).Render("Choices for "+field))
 		lines = append(lines, m.renderModelCascadeDetails(field, width)...)
 	}
 	return strings.Join(lines, "\n")

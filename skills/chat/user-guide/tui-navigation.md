@@ -70,10 +70,8 @@ Keys available in the right panel depend on the feature's current status:
 |-----|--------|
 | `p` | Publish (create PR) |
 | `v` | View diff |
-| `t` | Tweak (interactive session) |
 | `Shift+F` | Refactor (re-run pipeline) |
 | `b` | Rebase on main |
-| `m` | Mark as manually published (skip PR) |
 | `Shift+M` | Merge to base branch |
 | `Shift+D` | Mark as done |
 
@@ -81,7 +79,6 @@ Keys available in the right panel depend on the feature's current status:
 
 | Key | Action |
 |-----|--------|
-| `t` | Tweak (interactive session) |
 | `Shift+F` | Refactor (re-run pipeline) |
 | `b` | Rebase on main |
 | `g` | View PR review comments |
@@ -90,7 +87,7 @@ Keys available in the right panel depend on the feature's current status:
 
 Inside the review comments view (opened with `g`), press `Shift+A` to auto-address all comments with an autonomous agent session.
 
-Other keys available in all states: `d` (delete feature), `Shift+N` (toggle input notifications), `a` on NeedsReview features (review artifacts).
+Other keys available in all states: `d` (delete feature), `e` (feature config, including input-alert override), `Shift+E` (workspace config defaults, including the input-alert default), `a` on NeedsReview features (review artifacts).
 
 ## Watch View
 
@@ -123,7 +120,6 @@ When prompted: `y` = allow, `r` = allow and remember, `n` = deny. Navigate with 
 
 - **Agent questions**: Options appear as a selectable list (`j`/`k` to navigate, `Enter` to select). Freeform input available when offered.
 - **Plan review**: Press `Ctrl+D` to choose **Iterate more** or **Proceed**.
-- **Tweak sessions**: Press `Ctrl+D` to finish immediately. Press `Esc` to choose: `f` = finish and push, `d` = stop watching without finishing.
 
 ## Wizard View
 
@@ -179,8 +175,6 @@ Shown at startup when interrupted sessions are detected:
 | `j` / `↓` | Move down |
 | `↑` | Move up |
 | `Enter` | Confirm all actions and continue |
-
-Note: Tweak sessions (interactive) can only be killed, not resumed or skipped.
 
 ## Logs View
 

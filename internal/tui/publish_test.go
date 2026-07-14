@@ -116,7 +116,7 @@ func TestPublishSteps(t *testing.T) {
 
 	// Step 1: Diff
 	view := m.View()
-	if !strings.Contains(view, "Diff Review") {
+	if !strings.Contains(view, diffReviewTitle) {
 		t.Error("expected diff review step")
 	}
 
@@ -155,49 +155,11 @@ func TestPublishWithGit(t *testing.T) {
 	if m.branch != "feature/test" {
 		t.Errorf("branch = %q, want feature/test", m.branch)
 	}
-	if m.repoPath != "/tmp/repo" {
-		t.Errorf("repoPath = %q, want /tmp/repo", m.repoPath)
-	}
-
 	// Confirm step should show branch
 	m.step = publishStepConfirm
 	view := m.View()
 	if !strings.Contains(view, "feature/test") {
 		t.Error("expected branch in confirm view")
-	}
-}
-
-func TestPublishExecuteResult(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
-
-	// Simulate success result
-	m, _ = m.Update(publishExecuteResultMsg{prURL: "https://github.com/org/repo/pull/42"})
-	if m.prURL != "https://github.com/org/repo/pull/42" {
-		t.Errorf("prURL = %q", m.prURL)
-	}
-	if !m.IsDone() {
-		t.Error("expected done after result")
-	}
-	view := m.View()
-	if !strings.Contains(view, "https://github.com/org/repo/pull/42") {
-		t.Error("expected PR URL in done view")
-	}
-}
-
-func TestPublishExecuteError(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
-
-	// Simulate error result
-	m, _ = m.Update(publishExecuteResultMsg{err: fmt.Errorf("push failed")})
-	if m.errMsg != "push failed" {
-		t.Errorf("errMsg = %q", m.errMsg)
-	}
-	if !m.IsDone() {
-		t.Error("expected done after error")
-	}
-	view := m.View()
-	if !strings.Contains(view, "push failed") {
-		t.Error("expected error in done view")
 	}
 }
 
@@ -304,31 +266,6 @@ func TestPublishBodyEditable(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if m.editingBody {
 		t.Error("expected editingBody to be false after second Tab")
-	}
-}
-
-func TestPublishExecuteWithoutGitConfig(t *testing.T) {
-	// Create model without git config
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
-
-	// Advance to execute step
-	m.step = publishStepConfirm
-	m, cmd := m.advanceStep()
-
-	if m.step != publishStepExecute {
-		t.Errorf("expected execute step, got %d", m.step)
-	}
-
-	// Execute the command, should return error about missing config
-	if cmd != nil {
-		msg := cmd()
-		result, ok := msg.(publishExecuteResultMsg)
-		if !ok {
-			t.Fatalf("expected publishExecuteResultMsg, got %T", msg)
-		}
-		if result.err == nil {
-			t.Error("expected error for missing worktree config")
-		}
 	}
 }
 
@@ -473,39 +410,6 @@ func TestPublishMultiRepoStepProgression(t *testing.T) {
 	}
 }
 
-// TestPublishExecuteErrorCarriesRepoName verifies that all error paths in
-// executePublish carry the repoName field so the app handler can record
-// repo-scoped publish errors instead of failing the entire feature.
-func TestPublishExecuteErrorCarriesRepoName(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
-	m.repoName = "repo-a"
-	m.worktreeDir = "/nonexistent/path"
-	m.branch = "feature/test"
-
-	// Execute publish — will fail because the paths don't exist.
-	m.step = publishStepConfirm
-	m, cmd := m.advanceStep()
-	if cmd == nil {
-		t.Fatal("expected a command from advanceStep at confirm step")
-	}
-
-	// Execute the command to get the result message.
-	result := cmd()
-	msg, ok := result.(publishExecuteResultMsg)
-	if !ok {
-		t.Fatalf("expected publishExecuteResultMsg, got %T", result)
-	}
-
-	// The error should be set (some step will fail with nonexistent paths).
-	if msg.err == nil {
-		t.Fatal("expected an error from executePublish with nonexistent paths")
-	}
-	// The repoName must be carried through on error paths.
-	if msg.repoName != "repo-a" {
-		t.Errorf("repoName = %q, want %q; error results must carry repoName for repo-scoped error handling", msg.repoName, "repo-a")
-	}
-}
-
 func TestPublishRepoSelectPublishedRepoSelectable(t *testing.T) {
 	repos := []publishRepoEntry{
 		{Name: "repo-a", Branch: "feature/test", WorktreeDir: "/tmp/a", RepoPath: "/tmp/a", PRStatus: "pending"},
@@ -528,26 +432,6 @@ func TestPublishRepoSelectPublishedRepoSelectable(t *testing.T) {
 	if m.repoName != "repo-b" {
 		t.Errorf("repoName = %q, want %q", m.repoName, "repo-b")
 	}
-	if m.existingPRURL != "https://github.com/org/repo-b/pull/99" {
-		t.Errorf("existingPRURL = %q, want existing PR URL for re-publish", m.existingPRURL)
-	}
-}
-
-func TestPublishRepoSelectPendingRepoNoExistingPRURL(t *testing.T) {
-	repos := []publishRepoEntry{
-		{Name: "repo-a", Branch: "feature/test", WorktreeDir: "/tmp/a", RepoPath: "/tmp/a", PRStatus: "pending"},
-		{Name: "repo-b", Branch: "feature/test", WorktreeDir: "/tmp/b", RepoPath: "/tmp/b", PRStatus: "published", PRURL: "https://github.com/org/repo-b/pull/99"},
-	}
-	m := NewPublishModel(newTestFeatureFromRepos("feat-1", "My Feature", repos), repos, "", "", 80, 24)
-
-	// Select the pending repo (index 0) and press Enter
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.step != publishStepDiff {
-		t.Errorf("step = %d, want publishStepDiff", m.step)
-	}
-	if m.existingPRURL != "" {
-		t.Errorf("existingPRURL = %q, want empty for pending repo", m.existingPRURL)
-	}
 }
 
 func TestPublishRepoSelectViewShowsPRNumber(t *testing.T) {
@@ -564,41 +448,6 @@ func TestPublishRepoSelectViewShowsPRNumber(t *testing.T) {
 	}
 	if strings.Contains(view, "(done)") {
 		t.Error("view should NOT contain '(done)' — published repos are selectable for re-publish")
-	}
-}
-
-func TestPublishRepublishSetsExistingPRURL(t *testing.T) {
-	// Verify that executePublish uses existingPRURL for re-publish instead of CreatePR
-	m := newTestPublishModel("feat-1", "diff", "log", "Updated Title", "Updated body", 80, 24)
-	m.repoName = "repo-b"
-	m.worktreeDir = "/nonexistent/path"
-	m.branch = "feature/test"
-	m.existingPRURL = "https://github.com/org/repo-b/pull/99"
-
-	// Execute publish — will fail at push step because paths don't exist,
-	// but we verify the existingPRURL field is correctly set on the model
-	if m.existingPRURL != "https://github.com/org/repo-b/pull/99" {
-		t.Errorf("existingPRURL = %q, want existing URL", m.existingPRURL)
-	}
-
-	// Also verify that advanceStep from confirm correctly invokes executePublish
-	m.step = publishStepConfirm
-	m, cmd := m.advanceStep()
-	if m.step != publishStepExecute {
-		t.Errorf("step = %d, want publishStepExecute", m.step)
-	}
-	if cmd == nil {
-		t.Fatal("expected command from advanceStep at confirm")
-	}
-
-	// The cmd will fail (nonexistent paths), but the result should carry repoName
-	result := cmd()
-	msg, ok := result.(publishExecuteResultMsg)
-	if !ok {
-		t.Fatalf("expected publishExecuteResultMsg, got %T", result)
-	}
-	if msg.repoName != "repo-b" {
-		t.Errorf("repoName = %q, want %q", msg.repoName, "repo-b")
 	}
 }
 
@@ -619,127 +468,6 @@ func TestPublishRepoSelectView_PublishErrorShowsFailed(t *testing.T) {
 	}
 	if !strings.Contains(view, "repo-b") {
 		t.Error("view should contain repo-b")
-	}
-}
-
-func TestPublishExecuteResultWithRepoName(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
-	m.repoName = "repo-a"
-
-	m, _ = m.Update(publishExecuteResultMsg{
-		prURL:    "https://github.com/org/repo/pull/42",
-		repoName: "repo-a",
-	})
-
-	if m.prURL != "https://github.com/org/repo/pull/42" {
-		t.Errorf("prURL = %q, want URL", m.prURL)
-	}
-	if !m.IsDone() {
-		t.Error("expected IsDone() to be true")
-	}
-}
-
-func boolPtrPub(b bool) *bool { return &b }
-
-func TestPublishExecuteGuardUnpublishable(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
-	m.worktreeDir = "/tmp/nonexistent-wt"
-	m.branch = "feature/test"
-	m.publishable = false
-
-	cmd := m.executePublish()
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd")
-	}
-	result := cmd()
-	msg, ok := result.(publishExecuteResultMsg)
-	if !ok {
-		t.Fatalf("expected publishExecuteResultMsg, got %T", result)
-	}
-	if msg.err == nil {
-		t.Fatal("expected error for unpublishable feature")
-	}
-	if !strings.Contains(msg.err.Error(), "not publishable") {
-		t.Errorf("error = %q, want to contain 'not publishable'", msg.err.Error())
-	}
-}
-
-func TestPublishExecuteGuardPublishable(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
-	m.worktreeDir = "/tmp/nonexistent-wt"
-	m.branch = "feature/test"
-	// publishable defaults to true — don't set it
-
-	cmd := m.executePublish()
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd")
-	}
-	result := cmd()
-	msg, ok := result.(publishExecuteResultMsg)
-	if !ok {
-		t.Fatalf("expected publishExecuteResultMsg, got %T", result)
-	}
-	// Should fail at git ops, NOT at publishability guard
-	if msg.err == nil {
-		t.Fatal("expected error (git ops should fail)")
-	}
-	if strings.Contains(msg.err.Error(), "not publishable") {
-		t.Error("publishable feature should not be blocked by publishability guard")
-	}
-}
-
-func TestPublishModelPublishableField(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
-	if !m.publishable {
-		t.Error("NewPublishModel should default publishable to true")
-	}
-
-	m.publishable = false
-	if m.publishable {
-		t.Error("publishable should be settable to false")
-	}
-}
-
-func TestPublishGuardConditionUnpublishable(t *testing.T) {
-	f := &feature.Feature{
-		Status: feature.StatusCodeReady,
-		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Publishable: boolPtrPub(false)},
-		},
-	}
-	f.Checkpoints.ManualPublish = true
-
-	if f.IsPublishable() {
-		t.Error("feature with Publishable=false should not be publishable")
-	}
-}
-
-func TestPublishGuardConditionPublishable(t *testing.T) {
-	f := &feature.Feature{
-		Status: feature.StatusCodeReady,
-		Repos: []feature.FeatureRepo{
-			{Name: "repo-a"}, // Publishable: nil = publishable
-		},
-	}
-	f.Checkpoints.ManualPublish = true
-
-	if !f.IsPublishable() {
-		t.Error("feature with Publishable=nil should be publishable")
-	}
-}
-
-func TestPublishGuardConditionMixedRepos(t *testing.T) {
-	f := &feature.Feature{
-		Status: feature.StatusCodeReady,
-		Repos: []feature.FeatureRepo{
-			{Name: "repo-a"}, // Publishable: nil = publishable
-			{Name: "repo-b", Publishable: boolPtrPub(false)},
-		},
-	}
-	f.Checkpoints.ManualPublish = true
-
-	if f.IsPublishable() {
-		t.Error("feature with mixed publishable repos should not be publishable")
 	}
 }
 
@@ -766,9 +494,6 @@ func TestNewPublishModel_SingleRepoEntry_AutoSelects(t *testing.T) {
 	}
 	if m.featureID != "feat-1" {
 		t.Errorf("featureID = %q, want feat-1", m.featureID)
-	}
-	if m.featureName != "Feature Name" {
-		t.Errorf("featureName = %q, want Feature Name", m.featureName)
 	}
 	view := m.View()
 	if !strings.Contains(view, "1/6") {

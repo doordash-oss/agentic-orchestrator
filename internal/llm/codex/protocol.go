@@ -42,6 +42,28 @@ var nextID atomic.Int64
 // what a user sees inside Codex itself.
 const codexContextBaselineTokens = 12000
 
+// codexItemTypeFileChange is the ItemUnion.Type discriminator for a Codex
+// thread item representing a file mutation (item/started, item/completed).
+const codexItemTypeFileChange = "fileChange"
+
+// codexFileChangeOperationWrite and codexFileChangeOperationUpdate are the
+// normalized llm.FileChangeEvent.Operation values produced by
+// normalizeFileChangeOperation, and also the raw FileChangeKind.Type /
+// CommandAction.Type values reported by Codex for a write-style action.
+const (
+	codexFileChangeOperationWrite  = "write"
+	codexFileChangeOperationUpdate = "update"
+)
+
+// codexToolNameWrite is the llm.ToolProgressMessage.ToolName Codex reports
+// for file-change tool activity, mirroring Claude's "Write" tool name so
+// downstream consumers treat it consistently across providers.
+const codexToolNameWrite = "Write"
+
+// codexRoleAssistant is the llm.SDKMessage/AssistantMessage Type and
+// llm.ConversationMsg Role value for assistant-authored content.
+const codexRoleAssistant = "assistant"
+
 // Protocol implements llm.Protocol for the Codex app-server JSON-RPC protocol.
 type Protocol struct {
 	opts llm.ProtocolOpts
@@ -607,7 +629,7 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 				RequestID: strconv.Itoa(id),
 				Request: llm.ControlRequest{
 					Subtype:  "can_use_tool",
-					ToolName: "Write",
+					ToolName: codexToolNameWrite,
 					Input:    json.RawMessage(inputJSON),
 				},
 			},
@@ -728,13 +750,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 
 		return llm.SDKMessage{
-			Type:    "assistant",
+			Type:    codexRoleAssistant,
 			Subtype: "partial",
 			Assistant: &llm.AssistantMessage{
-				Type:    "assistant",
+				Type:    codexRoleAssistant,
 				Subtype: "partial",
 				Message: llm.ConversationMsg{
-					Role: "assistant",
+					Role: codexRoleAssistant,
 					Content: []llm.ContentBlock{
 						{Type: "text", Text: accumulated},
 					},
@@ -770,7 +792,15 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			}
 			p.mu.Unlock()
 
-			if !textContainsVerdictSentinel(lastText) {
+			// The entire text-parsed AskUserQuestion pipeline below exists only to
+			// imitate Claude's native AskUserQuestion tool call for a provider whose
+			// questions are otherwise just plain text. Interactive sessions (a human
+			// answers every turn directly, e.g. AMA chat) get no benefit from that
+			// imitation — the human can read the model's question and reply with an
+			// ordinary chat message exactly as they would with bare Codex — so they
+			// always fall through to a normal completion below and never synthesize
+			// a picker.
+			if !p.opts.Interactive && !textContainsVerdictSentinel(lastText) {
 				if stripped, ok := trimFreeFormSentinel(lastText); ok {
 					p.mu.Lock()
 					p.formatRetryCount = 0
@@ -778,7 +808,14 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					return p.synthesizeAskUser(stripped, nil), true
 				}
 
-				if stem, options, ok := parseNumberedOptions(lastText); ok {
+				// A numbered list is only a candidate AskUserQuestion when its stem
+				// actually reads like a question (checked on the stem, not the raw
+				// text, since the stem may lead the options and end well before the
+				// text's final character). An informational list ("Here's what I
+				// found: 1. ... 2. ...") has a non-question stem and is a normal
+				// completion; it must not be forced through the question pipeline
+				// just because it enumerates items.
+				if stem, options, ok := parseNumberedOptions(lastText); ok && textLooksLikeQuestion(stem) {
 					p.mu.Lock()
 					p.formatRetryCount = 0
 					p.mu.Unlock()
@@ -977,7 +1014,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			ToolProgress: &llm.ToolProgressMessage{
 				Type:      "tool_progress",
 				ToolUseID: delta.ItemID,
-				ToolName:  "Write",
+				ToolName:  codexToolNameWrite,
 				Data:      delta.Delta,
 			},
 		}, true
@@ -988,13 +1025,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return llm.SDKMessage{}, false
 		}
 		return llm.SDKMessage{
-			Type:    "assistant",
+			Type:    codexRoleAssistant,
 			Subtype: "partial",
 			Assistant: &llm.AssistantMessage{
-				Type:    "assistant",
+				Type:    codexRoleAssistant,
 				Subtype: "partial",
 				Message: llm.ConversationMsg{
-					Role: "assistant",
+					Role: codexRoleAssistant,
 					Content: []llm.ContentBlock{
 						{Type: "thinking", Thinking: delta.Delta},
 					},
@@ -1041,6 +1078,15 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 		switch completed.Item.Type {
 		case "agentMessage":
+			if strings.TrimSpace(completed.Item.Text) == "" {
+				p.mu.Lock()
+				if p.deltaBuf != nil {
+					delete(p.deltaBuf, completed.Item.ID)
+				}
+				p.mu.Unlock()
+				return llm.SDKMessage{}, false
+			}
+
 			p.mu.Lock()
 			previousText := p.lastAssistantText
 			if p.deltaBuf != nil {
@@ -1056,11 +1102,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.mu.Unlock()
 
 			return llm.SDKMessage{
-				Type: "assistant",
+				Type: codexRoleAssistant,
 				Assistant: &llm.AssistantMessage{
-					Type: "assistant",
+					Type: codexRoleAssistant,
 					Message: llm.ConversationMsg{
-						Role: "assistant",
+						Role: codexRoleAssistant,
 						Content: []llm.ContentBlock{
 							{Type: "text", Text: completed.Item.Text},
 						},
@@ -1078,6 +1124,16 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 				FileReads: p.fileReadEventsForCommand(completed.Item),
 			}, true
+		case codexItemTypeFileChange:
+			return llm.SDKMessage{
+				Type: "tool_progress",
+				ToolProgress: &llm.ToolProgressMessage{
+					Type:      "tool_progress",
+					ToolUseID: completed.Item.ID,
+					ToolName:  codexToolNameWrite,
+				},
+				FileChanges: fileChangeEventsForItem(completed.Item),
+			}, true
 		default:
 			return llm.SDKMessage{}, false
 		}
@@ -1089,7 +1145,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 		p.mu.Lock()
 		isMainItem := p.isMainThread(started.ThreadID)
-		if isMainItem && (started.Item.Type == "commandExecution" || started.Item.Type == "fileChange") {
+		if isMainItem && (started.Item.Type == "commandExecution" || started.Item.Type == codexItemTypeFileChange) {
 			p.turnHadToolUse = true
 		}
 		p.mu.Unlock()
@@ -1106,13 +1162,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					ToolName:  "Bash",
 				},
 			}, true
-		case "fileChange":
+		case codexItemTypeFileChange:
 			return llm.SDKMessage{
 				Type: "tool_progress",
 				ToolProgress: &llm.ToolProgressMessage{
 					Type:      "tool_progress",
 					ToolUseID: started.Item.ID,
-					ToolName:  "Write",
+					ToolName:  codexToolNameWrite,
 				},
 			}, true
 		default:
@@ -1147,13 +1203,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			errText = fmt.Sprintf("%s (%s)", errText, errNotif.Error.ErrorInfo.RawKind)
 		}
 		return llm.SDKMessage{
-			Type:    "assistant",
+			Type:    codexRoleAssistant,
 			Subtype: "partial",
 			Assistant: &llm.AssistantMessage{
-				Type:    "assistant",
+				Type:    codexRoleAssistant,
 				Subtype: "partial",
 				Message: llm.ConversationMsg{
-					Role: "assistant",
+					Role: codexRoleAssistant,
 					Content: []llm.ContentBlock{
 						{Type: "text", Text: fmt.Sprintf("[codex error] %s", errText)},
 					},
@@ -1207,14 +1263,70 @@ func (p *Protocol) fileReadEventsForCommand(item ItemUnion) []llm.FileReadEvent 
 	return events
 }
 
+func fileChangeEventsForItem(item ItemUnion) []llm.FileChangeEvent {
+	if len(item.Changes) == 0 {
+		return nil
+	}
+	events := make([]llm.FileChangeEvent, 0, len(item.Changes))
+	for _, change := range item.Changes {
+		path := strings.TrimSpace(change.Path)
+		if path == "" {
+			continue
+		}
+		detail := strings.TrimSpace(change.Diff)
+		added, removed := countDiffPatchLines(detail)
+		events = append(events, llm.FileChangeEvent{
+			Path:         path,
+			OldPath:      strings.TrimSpace(change.Kind.MovePath),
+			Operation:    normalizeFileChangeOperation(change.Kind.Type),
+			Detail:       detail,
+			AddedLines:   added,
+			RemovedLines: removed,
+			HasDiffPatch: detail != "",
+		})
+	}
+	return events
+}
+
+func normalizeFileChangeOperation(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "add", "create", codexFileChangeOperationWrite:
+		return codexFileChangeOperationWrite
+	case "delete", "remove":
+		return "delete"
+	case "move", "rename":
+		return "rename"
+	case codexFileChangeOperationUpdate, "modify", "modified":
+		return codexFileChangeOperationUpdate
+	default:
+		return codexFileChangeOperationUpdate
+	}
+}
+
+func countDiffPatchLines(patch string) (added, removed int) {
+	for _, line := range strings.Split(patch, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added++
+		case strings.HasPrefix(line, "-"):
+			removed++
+		}
+	}
+	return added, removed
+}
+
+// textLooksLikeQuestion reports whether text's final utterance is a question.
+// It checks the trailing character rather than scanning for '?' anywhere, so a
+// completion that merely mentions a "?" mid-answer (or a follow-up offer tacked
+// onto an otherwise-finished answer) is not misread as a blocking question.
 func textLooksLikeQuestion(text string) bool {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return false
 	}
-	return strings.HasSuffix(text, "?") ||
-		strings.HasSuffix(text, "?\n") ||
-		strings.Contains(text, "?")
+	return strings.HasSuffix(text, "?")
 }
 
 // verdictSentinelRe matches the structured `## Verdict` section the
@@ -1345,6 +1457,7 @@ func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]st
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
+	sb.WriteString("This answer clarifies requirements; it is not authorization to implement, edit repository files, or modify files outside your phase artifact/output directory.\n\n")
 	sb.WriteString(askingFormatReminder)
 	return strings.TrimSpace(sb.String())
 }

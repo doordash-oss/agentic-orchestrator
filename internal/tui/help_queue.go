@@ -16,8 +16,6 @@ package tui
 
 import (
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 const (
@@ -26,6 +24,8 @@ const (
 	legacyAPIErrorHelpSuffix      = " — attach with 'a' to respond"
 	apiErrorHelpPrefix            = "API error:"
 	apiErrorHelpSuffix            = " — press 'a' to answer"
+	waitingInputHelpMessage       = "Agent is waiting for input — press 'a' to answer"
+	questionHelpMessage           = "Agent has a question — press 'a' to answer"
 )
 
 func normalizeManagedHelpQuestion(question string) string {
@@ -40,24 +40,4 @@ func normalizeManagedHelpQuestion(question string) string {
 		}
 		return question
 	}
-}
-
-func sameManagedHelpMessage(got, want string) bool {
-	return normalizeManagedHelpQuestion(got) == normalizeManagedHelpQuestion(want)
-}
-
-func normalizeManagedHelpQueue(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	changed := false
-	for i := range f.HelpQueue {
-		normalized := normalizeManagedHelpQuestion(f.HelpQueue[i].Question)
-		if normalized == f.HelpQueue[i].Question {
-			continue
-		}
-		f.HelpQueue[i].Question = normalized
-		changed = true
-	}
-	return changed
 }

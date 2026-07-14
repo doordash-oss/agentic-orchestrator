@@ -64,7 +64,7 @@ func TestImplementLoop_Routing_SUCCESS_RunsReviewGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if result.Iterations != 1 {
@@ -317,7 +317,7 @@ func TestImplementLoop_Routing_NEED_USER_INPUT_MissingGateTripsProtocolViolation
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if !strings.Contains(result.LastError, "need-user-input.yaml") || !strings.Contains(result.LastError, "missing") {
@@ -360,7 +360,7 @@ func TestImplementLoop_Routing_NEED_USER_INPUT_MalformedGateTripsProtocolViolati
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if !strings.Contains(result.LastError, "need-user-input.yaml") || !strings.Contains(result.LastError, "unparseable") {
@@ -582,7 +582,7 @@ func TestImplementLoop_Routing_ProtocolViolation_BypassesReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Errorf("FinalStatus = %q, want protocol_violation (reviewer must not run on protocol violations)", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "protocol violation: implementer @") || !strings.Contains(result.LastError, "progress.md") {
@@ -597,7 +597,7 @@ func TestImplementLoop_Routing_ProtocolViolation_BypassesReview(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read meta iter %d: %v", n, err)
 		}
-		if meta.ReviewStatus != "CHANGES_REQUESTED" {
+		if meta.ReviewStatus != agentStatusChangesRequested {
 			t.Errorf("iter %d ReviewStatus = %q, want CHANGES_REQUESTED (protocol-violation feedback)", n, meta.ReviewStatus)
 		}
 		// Synthesized feedback file should be present.
@@ -633,7 +633,7 @@ func TestImplementLoop_Routing_ProtocolViolation_ResumesFailureBudget(t *testing
 		if err := am.WriteMeta(iterDir, IterationMeta{
 			Iteration:    n,
 			AgentStatus:  agentStatusProtocolViolation,
-			ReviewStatus: "CHANGES_REQUESTED",
+			ReviewStatus: agentStatusChangesRequested,
 		}); err != nil {
 			t.Fatalf("write meta iteration %d: %v", n, err)
 		}
@@ -662,7 +662,7 @@ func TestImplementLoop_Routing_ProtocolViolation_ResumesFailureBudget(t *testing
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if result.Iterations != 3 {
@@ -697,7 +697,7 @@ VR_EOF`
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
 			malformedReport+"\n"+
-			testutil.WriteImplementProgressMd(artifactDir, "SUCCESS")+"\n"+
+			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
 			testutil.TouchPhaseComplete(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
@@ -721,7 +721,7 @@ VR_EOF`
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Errorf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "protocol violation: implementer @") || !strings.Contains(result.LastError, "verification-report.yaml") {

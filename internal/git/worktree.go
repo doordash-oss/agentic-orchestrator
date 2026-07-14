@@ -42,6 +42,10 @@ func (w *WorktreeManager) ExpectedPath(featureSlug, repoName string) string {
 // Create creates a new worktree branching from startPoint. If startPoint is
 // empty, HEAD is used (preserving legacy behavior).
 func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	if strings.TrimSpace(repoPath) == "" {
+		return "", fmt.Errorf("repo path is required for %q", repoName)
+	}
+
 	branch := BranchName(featureSlug)
 	wtPath := w.ExpectedPath(featureSlug, repoName)
 

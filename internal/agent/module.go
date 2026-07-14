@@ -19,6 +19,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"go.uber.org/fx"
@@ -27,13 +28,14 @@ import (
 // AgentParams holds fx-injected parameters for the agent module.
 type AgentParams struct {
 	fx.In
-	SessionManager ports.SessionManager
-	FeatureStore   ports.FeatureStore
-	Config         *config.Config
-	Registry       *llm.Registry
-	StateDir       string `name:"stateDir"`
-	DSP            bool   `name:"dsp"`
-	Observer       *observe.Observer
+	SessionManager  ports.SessionManager
+	FeatureStore    ports.FeatureStore
+	Config          *config.Config
+	Registry        *llm.Registry
+	PermissionCache *permission.Cache
+	StateDir        string `name:"stateDir"`
+	DSP             bool   `name:"dsp"`
+	Observer        *observe.Observer
 }
 
 // Module provides the PhaseRunner via fx.
@@ -47,6 +49,7 @@ var Module = fx.Module("agent",
 		pr.Registry = p.Registry
 		pr.Config = p.Config
 		pr.DangerouslySkipPermissions = p.DSP
+		pr.PermissionCache = p.PermissionCache
 		pr.Observer = p.Observer
 		return pr
 	}),

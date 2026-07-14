@@ -1,0 +1,119 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package server
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestBearerTokenRequiredForAPIReads(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing token status = %d, want 401", w.Result().StatusCode)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("valid token status = %d, want 200", w.Result().StatusCode)
+	}
+}
+
+func TestBearerTokenAcceptedForSSEQueryFallback(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/api/v1/events?access_token=test-token&heartbeat_ms=1000")
+	if err != nil {
+		t.Fatalf("GET SSE: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("SSE query token status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestAuthorizedRejectsBareTokenWithoutBearerPrefix(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req.Header.Set("Authorization", testAuthToken)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bare-token status = %d, want 401", w.Result().StatusCode)
+	}
+}
+
+func TestHostValidationRejectsDNSRebindingHosts(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Host = "attacker.example"
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("bad Host status = %d, want 403", w.Result().StatusCode)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Host = "127.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("loopback Host status = %d, want 200", w.Result().StatusCode)
+	}
+}
+
+func TestHealthDoesNotRequireAuth(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("unauthenticated /health status = %d, want 200", w.Result().StatusCode)
+	}
+}
+
+func TestSequenceHeaderNotSetForUnauthorizedRequest(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Result().StatusCode)
+	}
+	if seq := w.Header().Get("X-Agentico-Seq"); seq != "" {
+		t.Fatalf("X-Agentico-Seq = %q, want empty for unauthorized request", seq)
+	}
+}

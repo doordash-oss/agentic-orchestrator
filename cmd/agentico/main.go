@@ -16,18 +16,27 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	agentprompts "github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -41,10 +50,13 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui/markdown"
+	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"go.uber.org/fx"
 	"golang.org/x/term"
 )
@@ -62,6 +74,56 @@ const (
 	defaultLogBasename    = "agentico.log"
 )
 
+// Wire-level result/status/action strings shared across server mutation
+// handlers (and reused by their tests) to avoid duplicated literals.
+const (
+	resultFailed   = "failed"
+	resultAnswered = "answered"
+	resultConflict = "conflict"
+	resultCleaned  = "cleaned"
+	resultStarted  = "started"
+	resultUpdated  = "updated"
+	resultSent     = "sent"
+	resultRetried  = "retried"
+
+	dispatchNone = "none"
+
+	toolNameBash            = "Bash"
+	toolNameAskUserQuestion = "AskUserQuestion"
+
+	chatName = "chat"
+
+	reviewModeAuto = "auto"
+
+	phaseNameInquire     = "inquire"
+	phaseNameImplement   = "implement"
+	phaseNameFinalReview = "final-review"
+	phaseNameResearch    = "research"
+	phaseNamePlan        = "plan"
+	phaseNameReview      = "review"
+	phaseNamePublish     = "publish"
+
+	cleanupTargetCycles    = "cycles"
+	cleanupTargetWorktrees = "worktrees"
+
+	providerNameClaude   = "claude"
+	providerNameCodex    = "codex"
+	providerNameOpencode = "opencode"
+
+	modelNameSonnet = "sonnet"
+
+	cliSubcommandServer            = "server"
+	cliSubcommandValidateArtifacts = "validate-artifacts"
+	cliFlagDir                     = "--dir"
+	cliFlagPhase                   = "--phase"
+	cliFlagRole                    = "--role"
+
+	// repoConflictKey is the Target map key used to report the repo name on
+	// a publish conflict. Coincidentally shares its value with an unrelated
+	// "repo" fixture in update_test.go's slug-parsing table.
+	repoConflictKey = "repo"
+)
+
 func main() {
 	run()
 }
@@ -74,6 +136,7 @@ const (
 	launchModeVersion
 	launchModeUpdate
 	launchModeValidateArtifacts
+	launchModeServer
 )
 
 type launchOptions struct {
@@ -95,9 +158,11 @@ type validateArtifactsOptions struct {
 	dir   string
 }
 
-type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool)
+type defaultLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int
 
-// updater is the injectable update seam. It mirrors tuiLauncher: production
+type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int
+
+// updater is the injectable update seam. It mirrors defaultLauncher: production
 // wiring passes the real updater, tests pass a fake. It returns the process
 // exit code the router propagates verbatim. The update path deliberately never
 // acquires the instance lock, starts the fx container, or reconciles assets.
@@ -129,10 +194,10 @@ func pickRuntimeParent(stat func(string) (os.FileInfo, error)) string {
 }
 
 func run() {
-	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runTUI, runUpdate))
+	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runDefaultClientServer, runServer, runUpdate))
 }
 
-func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, update updater) int {
+func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, launchServer serverLauncher, update updater) int {
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -153,10 +218,38 @@ func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, update
 		return update(opts.updateCheck, stdout, stderr)
 	case launchModeValidateArtifacts:
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
+	case launchModeServer:
+		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 	default:
-		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
-		return 0
+		return launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 	}
+}
+
+// canonicalizeStateDir resolves stateDir to its real, symlink-free path,
+// creating it first if necessary. macOS routes common runtime parents through
+// symlinks (e.g. /var -> /private/var, /tmp -> /private/tmp), and every path
+// Agentico later derives from stateDir — worktrees, the knowledge-base tree,
+// skills/guidelines mounts — gets handed to providers as a workdir or a
+// writable/read root. OpenCode in particular matches a tool call's path
+// against permission globs inconsistently, sometimes against the raw cwd and
+// sometimes against a symlink-resolved worktree root (upstream opencode#14473,
+// opencode#20045), so an unresolved stateDir can make an otherwise-correct
+// "allow" rule silently never match. Resolving once here, before any of those
+// derived paths are computed, means they are all already canonical — no
+// downstream string comparison can be fooled by a symlink. Falls back to the
+// original (unresolved) path when the directory can't be created or resolved,
+// so this never turns into a hard failure. Called from bootstrapRuntime
+// (rather than at CLI-flag-dispatch time) so pure argument-parsing/dispatch
+// tests never touch the real filesystem.
+func canonicalizeStateDir(stateDir string) string {
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return stateDir
+	}
+	resolved, err := filepath.EvalSymlinks(stateDir)
+	if err != nil {
+		return stateDir
+	}
+	return resolved
 }
 
 func parseLaunchArgs(args []string) (launchOptions, error) {
@@ -169,9 +262,13 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if len(args) > 0 && args[0] == "update" {
 		return parseUpdateArgs(opts, args[1:])
 	}
-	if len(args) > 0 && args[0] == "validate-artifacts" {
+	if len(args) > 0 && args[0] == cliSubcommandValidateArtifacts {
 		opts.mode = launchModeValidateArtifacts
 		return parseValidateArtifactsArgs(opts, args[1:])
+	}
+	if len(args) > 0 && args[0] == cliSubcommandServer {
+		opts.mode = launchModeServer
+		args = args[1:]
 	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -218,19 +315,19 @@ func parseValidateArtifactsArgs(opts launchOptions, args []string) (launchOption
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
-		case "--phase":
+		case cliFlagPhase:
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--phase requires a value")
 			}
 			i++
 			opts.validateArtifacts.phase = args[i]
-		case "--role":
+		case cliFlagRole:
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--role requires a value")
 			}
 			i++
 			opts.validateArtifacts.role = args[i]
-		case "--dir":
+		case cliFlagDir:
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--dir requires a value")
 			}
@@ -262,14 +359,16 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
 Usage: agentico [flags]
+       agentico server [flags]
        agentico update [--check|-n]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
 
 Launches the Bubble Tea TUI dashboard.
+Run 'agentico server' to start the foreground loopback HTTP server.
 Run 'agentico update' to upgrade the binary, or 'agentico update --check'
 (alias -n) to report the latest available release without installing.
 Run 'agentico validate-artifacts' from agent sessions before phase_complete
-to parse and validate role output artifacts without starting the TUI.
+to parse and validate role output artifacts without starting the TUI/server.
 
 Flags:
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
@@ -287,7 +386,7 @@ runtime parent is used in place so legacy installs remain discoverable.`)
 }
 
 func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Writer) int {
-	phase, err := parseValidateArtifactsPhase(opts.phase)
+	phase, err := parseServerPhaseStrict(opts.phase)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -309,31 +408,10 @@ func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Write
 	return 0
 }
 
-func parseValidateArtifactsPhase(value string) (feature.Phase, error) {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	for _, phase := range []feature.Phase{
-		feature.PhaseResearch,
-		feature.PhasePlan,
-		feature.PhaseImplement,
-		feature.PhasePublish,
-		feature.PhaseReview,
-		feature.PhaseKnowledgeBase,
-		feature.PhaseInquire,
-		feature.PhaseDesign,
-	} {
-		if normalized == strings.ToLower(phase.DirName()) || normalized == strings.ToLower(phase.String()) {
-			return phase, nil
-		}
-	}
-	if normalized == strings.ToLower(feature.PhaseFinalReview.String()) {
-		return feature.PhaseReview, nil
-	}
-	return 0, fmt.Errorf("unknown validate-artifacts phase: %s", value)
-}
-
 const providerReadinessTimeout = 5 * time.Second
 const providerReadinessNoticeDelay = 3 * time.Second
 const providerCatalogDiscoveryTimeout = 45 * time.Second
+const defaultLaunchServerReadyTimeout = providerCatalogDiscoveryTimeout + 15*time.Second
 
 type providerReadinessIssue struct {
 	provider llm.LLMProvider
@@ -581,17 +659,8 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 	models, err := discoverModelCatalog(discoveryCtx, discoverer, reportModel)
 	cancel()
 	if err != nil {
-		if refreshModels && cacheRoot != "" && version != "" {
-			if cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version); cerr == nil {
-				enricher.SetModelCatalog(cached.Models)
-				warnings = append(warnings, fmt.Sprintf(
-					"Warning: could not refresh %s model catalog; using stale cache from %s: %v",
-					providerName,
-					cached.DiscoveredAt.Format(time.RFC3339),
-					err,
-				))
-				return warnings
-			}
+		if fallback, ok := tryStaleCacheFallback(enricher, cacheRoot, providerName, version, refreshModels, err.Error()); ok {
+			return append(warnings, fallback...)
 		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Warning: could not discover %s model catalog; using built-in fallback: %v",
@@ -601,16 +670,8 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		return warnings
 	}
 	if len(models) == 0 {
-		if refreshModels && cacheRoot != "" && version != "" {
-			if cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version); cerr == nil {
-				enricher.SetModelCatalog(cached.Models)
-				warnings = append(warnings, fmt.Sprintf(
-					"Warning: could not refresh %s model catalog; discovered empty catalog; using stale cache from %s",
-					providerName,
-					cached.DiscoveredAt.Format(time.RFC3339),
-				))
-				return warnings
-			}
+		if fallback, ok := tryStaleCacheFallback(enricher, cacheRoot, providerName, version, refreshModels, "discovered empty catalog"); ok {
+			return append(warnings, fallback...)
 		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Warning: discovered empty %s model catalog; using built-in fallback",
@@ -629,6 +690,26 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		}
 	}
 	return warnings
+}
+
+// tryStaleCacheFallback serves a previously cached catalog when a refresh
+// failed (reason); ok is false if no cache fallback applies.
+func tryStaleCacheFallback(enricher llm.CatalogEnricher, cacheRoot, providerName, version string, refreshModels bool, reason string) ([]string, bool) {
+	if !refreshModels || cacheRoot == "" || version == "" {
+		return nil, false
+	}
+	cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version)
+	if cerr != nil {
+		return nil, false
+	}
+	enricher.SetModelCatalog(cached.Models)
+	warning := fmt.Sprintf(
+		"Warning: could not refresh %s model catalog; %s; using stale cache from %s",
+		providerName,
+		reason,
+		cached.DiscoveredAt.Format(time.RFC3339),
+	)
+	return []string{warning}, true
 }
 
 func discoverModelCatalog(ctx context.Context, discoverer llm.CatalogDiscoverer, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
@@ -687,52 +768,1355 @@ func formatNoReadyProviderMessage(all []llm.LLMProvider, issues []providerReadin
 	return b.String()
 }
 
-func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) {
-	lock, acquired, owner, err := instancelock.Acquire(filepath.Dir(stateDir), stateDir, configPath, tui.GetVersion())
+type runtimeLockBusyError struct {
+	stateDir string
+	owner    instancelock.Owner
+}
+
+func (e runtimeLockBusyError) Error() string {
+	return formatInstanceLockBusyMessage(e.stateDir, e.owner)
+}
+
+type runtimeBootstrap struct {
+	lock            *instancelock.Lock
+	owner           instancelock.Owner
+	fxApp           *fx.App
+	featureManager  *feature.Manager
+	sessionManager  *session.Manager
+	orchestrator    *orchestrator.Orchestrator
+	registry        *llm.Registry
+	cfg             *config.Config
+	phaseRunner     *agent.PhaseRunner
+	observer        *observe.Observer
+	permissionCache *permission.Cache
+	eventCh         chan interface{}
+	runtime         serverruntime.RuntimeIdentity
+	workspaceDir    string
+	recoveryItems   []session.RecoveryItem
+	recoveryScanOK  bool
+}
+
+func (b *runtimeBootstrap) Close(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	var errStop error
+	if b.fxApp != nil {
+		errStop = b.fxApp.Stop(ctx)
+		b.fxApp = nil
+	}
+	var errLock error
+	if b.lock != nil {
+		errLock = b.lock.Close()
+		b.lock = nil
+	}
+	return errors.Join(errStop, errLock)
+}
+
+type serverMutationTarget struct {
+	mu              sync.Mutex
+	orch            *orchestrator.Orchestrator
+	rebaseStarter   featureRebaseStarter
+	cfg             *config.Config
+	configPath      string
+	store           *feature.Store
+	sessions        ports.SessionManager
+	phaseRunner     *agent.PhaseRunner
+	permissionCache *permission.Cache
+	workspaceDir    string
+	reviewer        ports.ReviewCommentOperator
+}
+
+type featureRebaseStarter interface {
+	StartFeatureRebase(featureID string) error
+}
+
+type gitFreshnessProvider struct{}
+
+func (gitFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) serverruntime.RepoFreshness {
+	worktree := repo.WorktreePath
+	if worktree == "" {
+		worktree = repo.Path
+	}
+	switch git.RepoFreshness(worktree) {
+	case "in sync":
+		return serverruntime.RepoFreshnessInSync
+	case git.FreshnessLocalChanges:
+		return serverruntime.RepoFreshnessLocalChanges
+	case "local only":
+		return serverruntime.RepoFreshnessLocalOnly
+	default:
+		return serverruntime.RepoFreshnessUnknown
+	}
+}
+
+func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (serverruntime.CreateFeatureResponse, error) {
+	cfg := t.cfg
+	if cfg == nil {
+		cfg = config.NewDefault()
+	}
+	models := cfg.Defaults.Models
+	if hasAnyModelConfig(req.Models) {
+		models = mergeModelConfig(models, req.Models)
+	}
+	pipeline := effectiveCreatePipeline(req.Pipeline, cfg)
+	checkpoints := pipeline.ProjectGates(req.Checkpoints, true).Checkpoints
+	f, err := t.orch.CreateFeature(req.Name, req.Description, req.Repos, models, req.ExitCriteria, req.Inquireness, req.Images, feature.CreateOptions{
+		UseCurrentBranch:        req.UseCurrentBranch,
+		UseCurrentBranchPerRepo: req.UseCurrentBranchPerRepo,
+		Checkpoints:             checkpoints,
+		Attachments:             req.Attachments,
+		QueueSetup:              true,
+		RiskLevel:               req.RiskLevel,
+		Pipeline:                req.Pipeline,
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error acquiring instance lock: %v\n", err)
-		os.Exit(1)
+		return serverruntime.CreateFeatureResponse{}, err
+	}
+	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Inquireness, f.Checkpoints, true); err != nil {
+		return serverruntime.CreateFeatureResponse{}, err
+	}
+	return serverruntime.CreateFeatureResponse{FeatureID: f.ID, Result: "created"}, nil
+}
+
+func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
+	if err := t.orch.StartFeature(featureID); err != nil {
+		return serverruntime.FeatureStartResponse{}, err
+	}
+	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
+}
+
+func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
+	if err := t.orch.InterruptFeature(featureID); err != nil {
+		return serverruntime.FeatureStopResponse{}, err
+	}
+	return serverruntime.FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
+}
+
+func (t *serverMutationTarget) RestartFeature(featureID string, req serverruntime.RestartFeatureRequest) (serverruntime.FeatureRestartResponse, error) {
+	outcome, err := t.orch.RestartPhase(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
+	if err != nil {
+		return serverruntime.FeatureRestartResponse{}, err
+	}
+	resp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: "restarted"}
+	if outcome.Phase.String() != "" {
+		resp.Phase = outcome.Phase.String()
+	}
+	if err := t.dispatchRestartOutcome(featureID, outcome, &resp); err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome orchestrator.RestartOutcome, resp *serverruntime.FeatureRestartResponse) error {
+	if t.orch == nil {
+		return errors.New("orchestrator is not available")
+	}
+	switch outcome.Action {
+	case orchestrator.RestartNoOp:
+		resp.Dispatch = dispatchNone
+		return nil
+	case orchestrator.RestartDispatchPhase:
+		resp.Dispatch = "phase"
+		if outcome.Phase.String() != "" {
+			resp.Phase = outcome.Phase.String()
+		}
+		return t.orch.StartFeature(featureID)
+	case orchestrator.RestartDispatchRepoCycles:
+		resp.Dispatch = "repo_cycles"
+		resp.RepoCycleCount = len(outcome.RepoCycleRestarts)
+		sessionIDs := make([]string, 0, len(outcome.RepoCycleRestarts)+1)
+		for _, restart := range outcome.RepoCycleRestarts {
+			sessionID, err := t.orch.StartRepoCycleImplement(featureID, restart.RepoName, restart.CycleType, restart.PlanContent)
+			if sessionID != "" {
+				sessionIDs = append(sessionIDs, sessionID)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		if outcome.RefactorRestart != nil {
+			resp.RefactorCount = 1
+			sessionID, err := t.orch.RestartRefactorCycle(featureID, outcome.RefactorRestart.RepoName, outcome.RefactorRestart.Prompt)
+			if sessionID != "" {
+				sessionIDs = append(sessionIDs, sessionID)
+			}
+			if err != nil {
+				return err
+			}
+		} else {
+			resp.RefactorCount = 0
+		}
+		if len(sessionIDs) > 0 {
+			resp.SessionIDs = sessionIDs
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown restart action %d", outcome.Action)
+	}
+}
+
+func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) (serverruntime.ReviewDecisionResponse, error) {
+	decision := orchestrator.ReviewDecision{
+		Decision:    req.Decision,
+		TargetPhase: parseServerPhase(req.Phase),
+		IsRewind:    req.IsRewind,
+		PhasePlan:   req.PhasePlan,
+		Roadmap:     req.Roadmap,
+		Comment:     req.Comment,
+	}
+	if err := t.orch.HandleReviewDecision(featureID, decision); err != nil {
+		return serverruntime.ReviewDecisionResponse{}, err
+	}
+	return serverruntime.ReviewDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "submitted"}, nil
+}
+
+func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
+	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
+		Models:             req.Models,
+		Inquireness:        feature.Inquireness(req.Inquireness),
+		Checkpoints:        req.Checkpoints,
+		InputNotifications: feature.InputNotificationsMode(req.InputNotifications),
+	}); err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
+	}
+	if t.store == nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, errors.New("feature store is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
+	}
+	pipeline := req.Pipeline
+	if pipeline == "" {
+		pipeline = f.EffectivePipeline()
+	}
+	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
+	}
+	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
+}
+
+func (t *serverMutationTarget) NeedUserInputDecision(featureID string, req serverruntime.NeedUserInputDecisionRequest) (serverruntime.NeedUserInputDecisionResponse, error) {
+	if err := t.orch.HandleNeedUserInputDecision(featureID, orchestrator.NeedUserInputDecision{
+		Decision:  req.Decision,
+		RepoName:  req.RepoName,
+		CycleType: feature.RepoCycleType(req.CycleType),
+	}); err != nil {
+		return serverruntime.NeedUserInputDecisionResponse{}, err
+	}
+	return serverruntime.NeedUserInputDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "decided"}, nil
+}
+
+func (t *serverMutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.NeedUserInputDraftResponse, error) {
+	gatePath, err := t.needUserInputGatePath(featureID, req.RepoName)
+	if err != nil {
+		return serverruntime.NeedUserInputDraftResponse{}, err
+	}
+	rec, err := agent.ReadNeedUserInputRecord(gatePath)
+	if err != nil {
+		return serverruntime.NeedUserInputDraftResponse{}, fmt.Errorf("read need-user-input gate: %w", err)
+	}
+	if err := applyNeedUserInputDraftAnswers(&rec, req.Answers); err != nil {
+		return serverruntime.NeedUserInputDraftResponse{}, err
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		return serverruntime.NeedUserInputDraftResponse{}, fmt.Errorf("write need-user-input gate: %w", err)
+	}
+	return serverruntime.NeedUserInputDraftResponse{FeatureID: featureID, Result: "drafted"}, nil
+}
+
+func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnswerRequest) (serverruntime.PermissionAnswerResponse, error) {
+	sess, pending, err := t.findPendingControlRequest(req.SessionID, req.RequestID, false)
+	if err != nil {
+		return serverruntime.PermissionAnswerResponse{}, err
+	}
+	rememberScope := ""
+	if req.RememberScope != nil {
+		rememberScope = *req.RememberScope
+	}
+	result, err := t.permissionAnswerService().Answer(permission.AnswerRequest{
+		RequestID:        pending.RequestID,
+		SessionID:        sess.ID(),
+		FeatureID:        sess.FeatureID(),
+		ToolName:         pending.Request.ToolName,
+		ToolInput:        string(pending.Request.Input),
+		Decision:         req.Decision,
+		RememberPattern:  req.RememberPattern,
+		RememberScope:    rememberScope,
+		RememberScopeSet: req.RememberScope != nil,
+	}, func(requestID string, allow bool, reason string) error {
+		return sess.RespondToControl(requestID, allow, reason)
+	})
+	if err != nil {
+		return serverruntime.PermissionAnswerResponse{}, err
+	}
+	return serverruntime.PermissionAnswerResponse{
+		SessionID:      sess.ID(),
+		RequestID:      pending.RequestID,
+		Decision:       result.Decision,
+		Result:         resultAnswered,
+		AlreadyExisted: result.AlreadyExisted,
+		AuditWarning:   result.AuditWarning,
+	}, nil
+}
+
+func (t *serverMutationTarget) permissionAnswerService() *permission.AnswerService {
+	var audit *permission.AuditSink
+	if t != nil && t.permissionCache != nil && t.permissionCache.StoreRef() != nil {
+		audit = permission.NewAuditSink(t.permissionCache.StoreRef().BaseDir)
+	}
+	return permission.NewAnswerService(t.permissionCache, audit)
+}
+
+func (t *serverMutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequest) (serverruntime.AskUserAnswerResponse, error) {
+	sess, pending, err := t.findPendingControlRequest(req.SessionID, req.RequestID, true)
+	if err != nil {
+		return serverruntime.AskUserAnswerResponse{}, err
+	}
+	answers := normalizeAskUserAnswerKeys(pending.Request.Input, req.Answers)
+	if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, answers, nil); err != nil {
+		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("answer ask-user question: %w", err)
+	}
+	return serverruntime.AskUserAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Result: resultAnswered}, nil
+}
+
+func normalizeAskUserAnswerKeys(input json.RawMessage, answers map[string]string) map[string]string {
+	if len(input) == 0 || len(answers) == 0 {
+		return answers
+	}
+	var envelope struct {
+		Questions []struct {
+			Question string `json:"question"`
+			Header   string `json:"header"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil || len(envelope.Questions) == 0 {
+		return answers
+	}
+	keys := make([]string, 0, len(envelope.Questions))
+	for _, q := range envelope.Questions {
+		key := q.Question
+		if strings.TrimSpace(key) == "" {
+			key = q.Header
+		}
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return answers
+	}
+
+	normalized := make(map[string]string, len(answers))
+	remaining := make(map[string]string, len(answers))
+	for key, answer := range answers {
+		remaining[key] = answer
+	}
+	for _, originalKey := range keys {
+		if answer, ok := remaining[originalKey]; ok {
+			normalized[originalKey] = answer
+			delete(remaining, originalKey)
+			continue
+		}
+		var matchedKey string
+		for submittedKey := range remaining {
+			if askUserSubmittedKeyMatchesOriginal(submittedKey, originalKey) {
+				if matchedKey != "" {
+					matchedKey = ""
+					break
+				}
+				matchedKey = submittedKey
+			}
+		}
+		if matchedKey != "" {
+			normalized[originalKey] = remaining[matchedKey]
+			delete(remaining, matchedKey)
+		}
+	}
+	if len(keys) == 1 && len(normalized) == 0 && len(answers) == 1 {
+		for _, answer := range answers {
+			return map[string]string{keys[0]: answer}
+		}
+	}
+	for key, answer := range remaining {
+		normalized[key] = answer
+	}
+	return normalized
+}
+
+func askUserSubmittedKeyMatchesOriginal(submittedKey, originalKey string) bool {
+	submittedKey = strings.TrimSpace(submittedKey)
+	originalKey = strings.TrimSpace(originalKey)
+	if submittedKey == "" || originalKey == "" {
+		return false
+	}
+	if submittedKey == originalKey {
+		return true
+	}
+	if strings.HasSuffix(submittedKey, "...") {
+		prefix := strings.TrimSuffix(submittedKey, "...")
+		return prefix != "" && strings.HasPrefix(originalKey, prefix)
+	}
+	return false
+}
+
+func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (serverruntime.HelpSendResponse, error) {
+	sess, err := t.helpSession(req)
+	if err != nil {
+		return serverruntime.HelpSendResponse{}, err
+	}
+	if err := sess.SendUserMessage(req.Message); err != nil {
+		return serverruntime.HelpSendResponse{}, fmt.Errorf("send help message: %w", err)
+	}
+	return serverruntime.HelpSendResponse{FeatureID: sess.FeatureID(), SessionID: sess.ID(), Result: resultSent}, nil
+}
+
+const serverChatSessionID = serverruntime.ChatSessionID
+
+func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (serverruntime.ChatStartResponse, error) {
+	message := strings.TrimSpace(req.Message)
+	if message == "" {
+		return serverruntime.ChatStartResponse{}, errors.New("message is required")
+	}
+	if t.sessions == nil {
+		return serverruntime.ChatStartResponse{}, errors.New("session manager is not available")
+	}
+	if sess := t.sessions.GetSession(serverChatSessionID); sess != nil && sess.IsActive() {
+		if err := sess.SendUserMessage(message); err != nil {
+			return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
+		}
+		return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultSent}, nil
+	}
+	if t.phaseRunner == nil {
+		return serverruntime.ChatStartResponse{}, errors.New("phase runner is not available")
+	}
+
+	chatSkillPath := serverChatSkillPath(t.phaseRunner.SkillsDir)
+	prompt := message
+	if instruction := serverChatSkillInstruction(t.phaseRunner.SkillsDir); instruction != "" {
+		prompt = instruction + "\n\n" + prompt
+	}
+	model := modelNameSonnet
+	if t.cfg != nil && t.cfg.Defaults.Models.Utilities != "" {
+		model = t.cfg.Defaults.Models.Utilities
+	}
+	model = t.phaseRunner.ModelForRole(model, llm.PhaseChat)
+	workDir := t.workspaceDir
+	if workDir == "" {
+		workDir = t.phaseRunner.StateDir
+	}
+	chatDir := filepath.Join(t.phaseRunner.StateDir, chatName)
+	if err := os.MkdirAll(chatDir, 0o755); err != nil {
+		return serverruntime.ChatStartResponse{}, fmt.Errorf("prepare chat state: %w", err)
+	}
+	cmd, env, sessOpts, err := t.phaseRunner.BuildSession(agent.BuildSessionOpts{
+		Model:           model,
+		Prompt:          prompt,
+		SystemPrompt:    t.buildChatSystemPrompt(chatSkillPath),
+		DisallowedTools: []string{"Task"},
+		WorkDir:         workDir,
+		PIDDir:          chatDir,
+		PermHandler:     &session.AMAHandler{},
+		Phase:           utilskill.PhaseAll,
+		TurnMode:        ports.TurnModeInteractive,
+		EffortLevel:     llm.EffortLow,
+		Interactive:     true,
+	})
+	if err != nil {
+		return serverruntime.ChatStartResponse{}, fmt.Errorf("build chat session: %w", err)
+	}
+	if sessOpts == nil {
+		sessOpts = &ports.SessionOpts{}
+	}
+	sessOpts.InitialPrompt = prompt
+	sessOpts.Kind = ports.KindChat
+	sessOpts.TurnMode = ports.TurnModeInteractive
+	sessOpts.Label = chatName
+	sessOpts.LogPath = filepath.Join(chatDir, "output.txt")
+	sessOpts.StderrPath = filepath.Join(chatDir, "stderr.log")
+	sess, err := t.sessions.StartSession(serverChatSessionID, serverChatSessionID, feature.PhaseResearch, cmd, workDir, env, sessOpts)
+	if err != nil {
+		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)
+	}
+	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultStarted}, nil
+}
+
+func serverChatSkillInstruction(skillsDir string) string {
+	skillPath := serverChatSkillPath(skillsDir)
+	if skillPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", skillPath)
+}
+
+func serverChatSkillPath(skillsDir string) string {
+	if strings.TrimSpace(skillsDir) == "" {
+		return ""
+	}
+	return filepath.Join(skillsDir, chatName, "SKILL.md")
+}
+
+func (t *serverMutationTarget) buildChatSystemPrompt(skillPath string) string {
+	runtimeRoot := ""
+	stateDir := ""
+	if t.phaseRunner != nil {
+		stateDir = t.phaseRunner.StateDir
+		if stateDir != "" {
+			runtimeRoot = filepath.Dir(stateDir)
+		}
+	}
+	return agentprompts.ChatSystemPrompt(agentprompts.ChatSystemInput{
+		SkillPath:       skillPath,
+		RuntimeRoot:     runtimeRoot,
+		StateDir:        stateDir,
+		ConfigPath:      t.configPath,
+		WorkspaceDir:    t.workspaceDir,
+		CurrentFeatures: strings.TrimSpace(t.buildChatContext()),
+	})
+}
+
+func (t *serverMutationTarget) buildChatContext() string {
+	if t.store == nil {
+		return ""
+	}
+	features, err := t.store.List()
+	if err != nil || len(features) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n## Current Features\n\n")
+	for _, f := range features {
+		if f == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "- **%s** (ID: %s): %s - Status: %s\n", f.Name, f.ID, f.Description, f.Status)
+		if len(f.Repos) > 0 {
+			fmt.Fprintf(&b, "  Repo: %s", f.Repos[0].Path)
+			if f.Repos[0].WorktreePath != "" {
+				fmt.Fprintf(&b, ", Worktree: %s", f.Repos[0].WorktreePath)
+			}
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMutationRequest) (serverruntime.RuntimeConfigUpdateResponse, error) {
+	if t.configPath == "" {
+		return serverruntime.RuntimeConfigUpdateResponse{}, errors.New("config path is not available")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cfg := t.cfg
+	if cfg == nil {
+		cfg = config.NewDefault()
+	}
+	changed := mergeRuntimeDefaultsMutation(&cfg.Defaults, req.Defaults)
+	if req.WorkspaceRoots != nil {
+		if !slices.Equal(cfg.WorkspaceRoots, *req.WorkspaceRoots) {
+			changed = true
+		}
+		cfg.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)
+		config.DiscoverReposFromRoots(cfg)
+	}
+	if req.UI != nil {
+		if !slices.Equal(cfg.UI.CollapsedSections, req.UI.CollapsedSections) {
+			cfg.UI.CollapsedSections = append([]string(nil), req.UI.CollapsedSections...)
+			changed = true
+		}
+		if req.UI.KeyboardLayout != "" && req.UI.KeyboardLayout != cfg.UI.KeyboardLayout {
+			cfg.UI.KeyboardLayout = req.UI.KeyboardLayout
+			changed = true
+		}
+	}
+	if req.Notifications != nil && cfg.Notifications.MuteFeatureInput != req.Notifications.MuteFeatureInput {
+		cfg.Notifications.MuteFeatureInput = req.Notifications.MuteFeatureInput
+		changed = true
+	}
+	if err := config.Save(t.configPath, cfg); err != nil {
+		return serverruntime.RuntimeConfigUpdateResponse{}, err
+	}
+	t.cfg = cfg
+	status := "unchanged"
+	if changed {
+		status = resultUpdated
+	}
+	return serverruntime.RuntimeConfigUpdateResponse{Result: status}, nil
+}
+
+func (t *serverMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
+	return t.orch.ScanRecovery(ctx)
+}
+
+func (t *serverMutationTarget) ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (serverruntime.RecoveryActionResponse, error) {
+	if err := t.orch.ExecuteRecovery(ctx, items, actions); err != nil {
+		return serverruntime.RecoveryActionResponse{}, err
+	}
+	return serverruntime.RecoveryActionResponse{Result: "recovered"}, nil
+}
+
+func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntime.PublishFeatureRequest) (serverruntime.PublishFeatureResponse, error) {
+	if t.orch == nil {
+		return serverruntime.PublishFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
+		Repos: req.Repos,
+		Title: req.Title,
+		Body:  req.Body,
+	}); err != nil {
+		if conflict := actionConflictError(err); conflict != nil {
+			return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultConflict}, conflict
+		}
+		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
+}
+
+func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
+	if t.phaseRunner == nil {
+		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("phase runner is not available")
+	}
+	title, body, err := t.phaseRunner.RunDescriptionGeneration(context.Background(), featureID, req.Model, agent.PRContext{
+		FeatureName:        req.FeatureName,
+		FeatureDescription: req.FeatureDescription,
+		Roadmap:            req.Roadmap,
+		CommitBodies:       req.CommitBodies,
+		DiffStat:           req.DiffStat,
+	})
+	if err != nil {
+		return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, err
+	}
+	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, nil
+}
+
+func (t *serverMutationTarget) MergeFeature(featureID string) (serverruntime.MergeFeatureResponse, error) {
+	if t.orch == nil {
+		return serverruntime.MergeFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.MergeFeatureLocal(featureID); err != nil {
+		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: "merged"}, nil
+}
+
+func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime.RewindFeatureRequest) (serverruntime.RewindFeatureResponse, error) {
+	requestedTarget := strings.ToLower(strings.TrimSpace(req.TargetPhase))
+	targetPhase, err := parseServerPhaseStrict(req.TargetPhase)
+	resp := serverruntime.RewindFeatureResponse{FeatureID: featureID, TargetPhase: requestedTarget, RoadmapPhase: req.RoadmapPhase}
+	if err == nil {
+		resp.TargetPhase = targetPhase.DirName()
+	}
+	if req.UpgradePipeline != "" {
+		resp.UpgradePipeline = string(req.UpgradePipeline)
+	}
+	if err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	if t.orch == nil {
+		resp.Result = resultFailed
+		return resp, errors.New("orchestrator is not available")
+	}
+	if req.UpgradePipeline != "" {
+		if err := t.orch.UpgradePipeline(featureID, req.UpgradePipeline); err != nil {
+			resp.Result = resultFailed
+			return resp, err
+		}
+	}
+	t.orch.StopFeatureSessions(featureID)
+	warnings, effectiveTarget, err := t.orch.RewindWithRequest(featureID, feature.RewindRequest{
+		TargetPhase:  targetPhase,
+		RoadmapPhase: req.RoadmapPhase,
+	})
+	if effectiveTarget != 0 || strings.EqualFold(req.TargetPhase, phaseNameResearch) {
+		resp.EffectivePhase = effectiveTarget.DirName()
+	}
+	resp.WarningCount = len(warnings)
+	if err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	resp.Result = "rewound"
+	return resp, nil
+}
+
+func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.RetryFeatureResponse, error) {
+	if t.orch == nil {
+		return serverruntime.RetryFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if t.store != nil {
+		f, err := t.store.Load(featureID)
+		if err == nil && isFailedSetupFeature(f) {
+			if err := t.orch.RetrySetup(featureID); err != nil {
+				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+			}
+			return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
+		}
+	}
+	if err := t.orch.RetryPhase(featureID); err != nil {
+		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
+}
+
+func isFailedSetupFeature(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	setup := f.Run().Setup
+	return f.Status == feature.StatusFailed &&
+		f.FailureType == feature.FailureWorktreeSetup &&
+		setup != nil &&
+		setup.Status == feature.SetupStatusFailed
+}
+
+func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.RebaseActionRequest) (serverruntime.RebaseStartResponse, error) {
+	resp := serverruntime.RebaseStartResponse{
+		FeatureID: featureID,
+		CycleType: string(feature.CycleRebase),
+	}
+	starter := t.rebaseStarter
+	if starter == nil {
+		starter = t.orch
+	}
+	if starter == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	if err := starter.StartFeatureRebase(featureID); err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	resp.Result = resultStarted
+	return resp, nil
+}
+
+func (t *serverMutationTarget) FetchReviewComments(featureID string, req serverruntime.ReviewCommentsFetchRequest) (serverruntime.ReviewCommentsFetchResponse, error) {
+	comments, err := t.fetchUnaddressedReviewComments(featureID, req.Repo)
+	if err != nil {
+		return serverruntime.ReviewCommentsFetchResponse{}, err
+	}
+	return serverruntime.ReviewCommentsFetchResponse{
+		APIVersion: serverruntime.APIVersion,
+		FeatureID:  featureID,
+		Repo:       req.Repo,
+		Mode:       reviewModeAuto,
+		Comments:   reviewCommentDTOs(req.Repo, comments),
+	}, nil
+}
+
+func (t *serverMutationTarget) fetchUnaddressedReviewComments(featureID, repoName string) ([]ports.ReviewComment, error) {
+	if t.store == nil {
+		return nil, errors.New("feature store is not available")
+	}
+	if t.reviewer == nil {
+		return nil, errors.New("review comment adapter is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return nil, err
+	}
+	repo, ok := findFeatureRepo(f, repoName)
+	if !ok {
+		return nil, fmt.Errorf("repo %s not found", repoName)
+	}
+	prURL := f.PRURLs()[repoName]
+	if prURL == "" {
+		return nil, fmt.Errorf("repo %s has no PR URL", repoName)
+	}
+	comments, err := t.reviewer.FetchPRComments(repo.Path, prURL)
+	if err != nil {
+		return nil, err
+	}
+	for i := range comments {
+		comments[i].RepoName = repoName
+	}
+	addressed, _ := agent.LoadAddressedIDsForRepo(t.store.BaseDir, f, repoName)
+	if len(addressed) > 0 {
+		filtered := comments[:0]
+		for _, comment := range comments {
+			if !addressed[comment.ID] {
+				filtered = append(filtered, comment)
+			}
+		}
+		comments = filtered
+	}
+	return comments, nil
+}
+
+func (t *serverMutationTarget) StartReviewComments(featureID string, req serverruntime.ReviewCommentsActionRequest) (serverruntime.ReviewCommentsStartResponse, error) {
+	resp := serverruntime.ReviewCommentsStartResponse{
+		FeatureID: featureID,
+		Repo:      req.Repo,
+		Mode:      req.Mode,
+		CycleType: string(feature.CycleReviewComments),
+	}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	comments := reviewCommentDTOsToPorts(req.Repo, req.Comments)
+	if len(comments) == 0 {
+		var err error
+		comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
+		if err != nil {
+			resp.Result = resultFailed
+			return resp, err
+		}
+	} else {
+		resp.Source = "provided"
+	}
+	comments = threadedReviewComments(comments)
+	if len(comments) == 0 {
+		resp.Result = "no_comments"
+		return resp, fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
+	}
+	git.SortReviewCommentsChronologically(comments)
+	resp.CommentCount = len(comments)
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	sessionID, err := t.orch.StartRepoCycleImplement(featureID, req.Repo, feature.CycleReviewComments, "")
+	if sessionID != "" {
+		resp.SessionID = sessionID
+	}
+	if err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	resp.Result = resultStarted
+	return resp, nil
+}
+
+func (t *serverMutationTarget) StartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.RefactorStartResponse, error) {
+	return t.startRefactorAction(featureID, req, false)
+}
+
+func (t *serverMutationTarget) RestartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.RefactorRestartResponse, error) {
+	resp, err := t.startRefactorAction(featureID, req, true)
+	return serverruntime.RefactorRestartResponse{
+		FeatureID: resp.FeatureID,
+		Result:    resp.Result,
+		Repo:      resp.Repo,
+		CycleType: resp.CycleType,
+		Pipeline:  resp.Pipeline,
+		SessionID: resp.SessionID,
+	}, err
+}
+
+func (t *serverMutationTarget) MarkDone(featureID string) (serverruntime.MarkDoneResponse, error) {
+	if t.orch == nil {
+		return serverruntime.MarkDoneResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.MarkDone(featureID); err != nil {
+		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: "done"}, nil
+}
+
+func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntime.CleanupActionRequest) (serverruntime.CleanupFeatureResponse, error) {
+	target := strings.ToLower(strings.TrimSpace(req.Target))
+	if target == "" {
+		target = cleanupTargetWorktrees
+	}
+	resp := serverruntime.CleanupFeatureResponse{FeatureID: featureID, Target: target}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	switch target {
+	case cleanupTargetWorktrees:
+		if err := t.orch.CleanWorktree(featureID); err != nil {
+			resp.Result = resultFailed
+			return resp, err
+		}
+	case cleanupTargetCycles:
+		if err := t.orch.ClearRepoCycles(featureID); err != nil {
+			resp.Result = resultFailed
+			return resp, err
+		}
+	case "failed-cycles", "completed-cycles":
+		resp.Result = "unsupported"
+		return resp, fmt.Errorf("cleanup target %q is not supported by the orchestrator adapter", target)
+	default:
+		resp.Result = resultFailed
+		return resp, fmt.Errorf("unknown cleanup target %q", req.Target)
+	}
+	resp.Result = resultCleaned
+	return resp, nil
+}
+
+func (t *serverMutationTarget) DeleteFeature(featureID string) (serverruntime.DeleteFeatureResponse, error) {
+	if t.orch == nil {
+		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.Delete(featureID); err != nil {
+		return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
+}
+
+func actionConflictError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var publishConflict *orchestrator.PublishConflictError
+	if errors.As(err, &publishConflict) {
+		return &serverruntime.ActionConflictError{
+			Err:     err,
+			Message: "publish conflict",
+			Target: map[string]any{
+				resultConflict:   phaseNamePublish,
+				repoConflictKey:  publishConflict.RepoName,
+				"branch":         publishConflict.Branch,
+				"rebase_target":  publishConflict.RebaseTarget,
+				"conflict_files": []string{},
+			},
+		}
+	}
+	return nil
+}
+
+func (t *serverMutationTarget) startRefactorAction(featureID string, req serverruntime.RefactorActionRequest, restart bool) (serverruntime.RefactorStartResponse, error) {
+	resp := serverruntime.RefactorStartResponse{
+		FeatureID: featureID,
+		Repo:      req.Repo,
+		CycleType: string(feature.CycleRefactor),
+		Pipeline:  string(req.Pipeline),
+	}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	var (
+		sessionID string
+		err       error
+	)
+	if restart {
+		sessionID, err = t.orch.RestartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
+			Images:      append([]string(nil), req.Images...),
+			Attachments: append([]string(nil), req.Attachments...),
+			Pipeline:    req.Pipeline,
+		})
+	} else {
+		sessionID, err = t.orch.StartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
+			Images:      append([]string(nil), req.Images...),
+			Attachments: append([]string(nil), req.Attachments...),
+			Pipeline:    req.Pipeline,
+		})
+	}
+	if sessionID != "" {
+		resp.SessionID = sessionID
+	}
+	if err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	if restart {
+		resp.Result = "restarted"
+	} else {
+		resp.Result = resultStarted
+	}
+	return resp, nil
+}
+
+func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewCommentDTO {
+	out := make([]serverruntime.ReviewCommentDTO, 0, len(comments))
+	for _, comment := range comments {
+		dtoRepo := comment.RepoName
+		if dtoRepo == "" {
+			dtoRepo = repoName
+		}
+		out = append(out, serverruntime.ReviewCommentDTO{
+			ID:        comment.ID,
+			Type:      comment.Type,
+			RepoName:  dtoRepo,
+			Path:      comment.Path,
+			Line:      comment.Line,
+			Body:      comment.Body,
+			UserLogin: comment.User.Login,
+			CreatedAt: comment.CreatedAt,
+			DiffHunk:  comment.DiffHunk,
+			InReplyTo: comment.InReplyTo,
+		})
+	}
+	return out
+}
+
+func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewCommentDTO) []ports.ReviewComment {
+	out := make([]ports.ReviewComment, 0, len(comments))
+	for _, comment := range comments {
+		dtoRepo := comment.RepoName
+		if dtoRepo == "" {
+			dtoRepo = repoName
+		}
+		portComment := ports.ReviewComment{
+			ID:        comment.ID,
+			Type:      comment.Type,
+			RepoName:  dtoRepo,
+			Path:      comment.Path,
+			Line:      comment.Line,
+			Body:      comment.Body,
+			CreatedAt: comment.CreatedAt,
+			DiffHunk:  comment.DiffHunk,
+			InReplyTo: comment.InReplyTo,
+		}
+		portComment.User.Login = comment.UserLogin
+		out = append(out, portComment)
+	}
+	return out
+}
+
+func threadedReviewComments(comments []ports.ReviewComment) []ports.ReviewComment {
+	filtered := comments[:0]
+	for _, comment := range comments {
+		if comment.Type == "" || comment.Type == ports.CommentTypeReview {
+			filtered = append(filtered, comment)
+		}
+	}
+	return filtered
+}
+
+func findFeatureRepo(f *feature.Feature, repoName string) (feature.FeatureRepo, bool) {
+	if f == nil {
+		return feature.FeatureRepo{}, false
+	}
+	for _, repo := range f.Repos {
+		if repo.Name == repoName {
+			return repo, true
+		}
+	}
+	return feature.FeatureRepo{}, false
+}
+
+func parseServerPhaseStrict(in string) (feature.Phase, error) {
+	switch strings.ToLower(strings.TrimSpace(in)) {
+	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
+		return feature.PhaseKnowledgeBase, nil
+	case phaseNameInquire:
+		return feature.PhaseInquire, nil
+	case phaseNameResearch:
+		return feature.PhaseResearch, nil
+	case "design":
+		return feature.PhaseDesign, nil
+	case phaseNamePlan:
+		return feature.PhasePlan, nil
+	case phaseNameImplement:
+		return feature.PhaseImplement, nil
+	case phaseNameReview:
+		return feature.PhaseReview, nil
+	case phaseNameFinalReview, "final review":
+		return feature.PhaseFinalReview, nil
+	case phaseNamePublish:
+		return feature.PhasePublish, nil
+	default:
+		return feature.PhaseResearch, fmt.Errorf("unknown phase %q", in)
+	}
+}
+
+func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID string, wantAskUser bool) (ports.SessionView, *llm.ControlRequestMessage, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil, nil, errors.New("request_id is required")
+	}
+	if t.sessions == nil {
+		return nil, nil, errors.New("session manager is not available")
+	}
+	var candidates []ports.SessionView
+	if strings.TrimSpace(sessionID) != "" {
+		sess := t.sessions.GetSession(strings.TrimSpace(sessionID))
+		if sess == nil {
+			return nil, nil, fmt.Errorf("session %s not found", sessionID)
+		}
+		candidates = []ports.SessionView{sess}
+	} else {
+		candidates = t.sessions.ActiveSessions()
+	}
+	for _, sess := range candidates {
+		if sess == nil {
+			continue
+		}
+		for _, pending := range sess.PendingControlRequests() {
+			if pending == nil || pending.RequestID != requestID {
+				continue
+			}
+			isAskUser := pending.Request.ToolName == toolNameAskUserQuestion
+			if isAskUser != wantAskUser {
+				return nil, nil, fmt.Errorf("request %s has incompatible control type", requestID)
+			}
+			return sess, pending, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("pending request %s not found", requestID)
+}
+
+func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) (ports.SessionView, error) {
+	if t.sessions == nil {
+		return nil, errors.New("session manager is not available")
+	}
+	if id := strings.TrimSpace(req.SessionID); id != "" {
+		sess := t.sessions.GetSession(id)
+		if sess == nil {
+			return nil, fmt.Errorf("session %s not found", id)
+		}
+		return sess, nil
+	}
+	featureID := strings.TrimSpace(req.FeatureID)
+	if featureID == "" {
+		return nil, errors.New("session_id or feature_id is required")
+	}
+	var active []ports.SessionView
+	for _, sess := range t.sessions.FeatureSessions(featureID) {
+		if sess != nil && sess.IsActive() {
+			active = append(active, sess)
+		}
+	}
+	switch len(active) {
+	case 0:
+		return nil, fmt.Errorf("no active session for feature %s", featureID)
+	case 1:
+		return active[0], nil
+	default:
+		return nil, fmt.Errorf("multiple active sessions for feature %s; session_id is required", featureID)
+	}
+}
+
+func (t *serverMutationTarget) needUserInputGatePath(featureID, repoName string) (string, error) {
+	if t.store == nil {
+		return "", errors.New("feature store is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return "", err
+	}
+	repoName = strings.TrimSpace(repoName)
+	if repoName != "" {
+		if rc := f.RepoCycles[repoName]; rc != nil && rc.Status == feature.RepoCycleNeedUserInput && rc.PendingNeedUserInputPath != "" {
+			return rc.PendingNeedUserInputPath, nil
+		}
+		return "", fmt.Errorf("repo %s is not paused on a need-user-input gate", repoName)
+	}
+	if f.PendingNeedUserInputPath == "" {
+		return "", fmt.Errorf("feature %s is not paused on a need-user-input gate", featureID)
+	}
+	return f.PendingNeedUserInputPath, nil
+}
+
+func applyNeedUserInputDraftAnswers(rec *agent.NeedUserInputRecord, answers map[string]string) error {
+	if rec == nil {
+		return errors.New("nil need-user-input record")
+	}
+	questionByKey := make(map[string]*agent.NeedUserInputQuestion)
+	for i := range rec.Questions {
+		q := &rec.Questions[i]
+		if q.Index > 0 {
+			questionByKey[strconv.Itoa(q.Index)] = q
+			questionByKey[fmt.Sprintf("q%d", q.Index)] = q
+		}
+		if prompt := strings.TrimSpace(q.Prompt); prompt != "" {
+			questionByKey[prompt] = q
+		}
+	}
+	for key, answer := range answers {
+		q := questionByKey[strings.TrimSpace(key)]
+		if q == nil {
+			return fmt.Errorf("answer key %q does not match a need-user-input question", key)
+		}
+		q.Answer = answer
+	}
+	return nil
+}
+
+func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntime.RuntimeDefaultsMutation) bool {
+	if dst == nil {
+		return false
+	}
+	changed := false
+	if hasAnyModelConfig(patch.Models) {
+		next := mergeModelConfig(dst.Models, patch.Models)
+		if next != dst.Models {
+			dst.Models = next
+			changed = true
+		}
+	}
+	if patch.ExitCriteria != "" && setIfChanged(&dst.ExitCriteria, patch.ExitCriteria) {
+		changed = true
+	}
+	if patch.Inquireness != "" && setIfChanged(&dst.Inquireness, patch.Inquireness) {
+		changed = true
+	}
+	if patch.Pipeline != "" && setIfChanged(&dst.Pipeline, patch.Pipeline) {
+		changed = true
+	}
+	if patch.MaxIterations > 0 && setIfChanged(&dst.MaxIterations, patch.MaxIterations) {
+		changed = true
+	}
+	if patch.MaxConsecutiveFailures > 0 && setIfChanged(&dst.MaxConsecutiveFailures, patch.MaxConsecutiveFailures) {
+		changed = true
+	}
+	if patch.MaxConsecutiveNoProgress > 0 && setIfChanged(&dst.MaxConsecutiveNoProgress, patch.MaxConsecutiveNoProgress) {
+		changed = true
+	}
+	if patch.MaxPhasePlanIterations > 0 && setIfChanged(&dst.MaxPhasePlanIterations, patch.MaxPhasePlanIterations) {
+		changed = true
+	}
+	if patch.Checkpoints != nil && setCheckpointsIfChanged(&dst.Checkpoints, *patch.Checkpoints) {
+		changed = true
+	}
+	if len(patch.PipelinePreferences) > 0 {
+		dst.PipelinePreferences = patch.PipelinePreferences
+		changed = true
+	}
+	return changed
+}
+
+func setCheckpointsIfChanged(dst *config.Checkpoints, val config.Checkpoints) bool {
+	if dst.InquiryReview == val.InquiryReview &&
+		dst.ResearchReview == val.ResearchReview &&
+		dst.DesignReview == val.DesignReview &&
+		dst.RoadmapReview == val.RoadmapReview &&
+		dst.PhasePlanReview == val.PhasePlanReview &&
+		dst.ManualPublish == val.ManualPublish &&
+		dst.DraftPublish == val.DraftPublish {
+		return false
+	}
+	*dst = val
+	return true
+}
+
+// setIfChanged assigns val to *dst and reports true if that changed dst's value.
+func setIfChanged[T comparable](dst *T, val T) bool {
+	if val == *dst {
+		return false
+	}
+	*dst = val
+	return true
+}
+
+func effectiveCreatePipeline(requested feature.PipelineProfile, cfg *config.Config) feature.PipelineProfile {
+	if requested.IsValid() {
+		return requested
+	}
+	if cfg != nil && cfg.Defaults.Pipeline != "" {
+		if parsed, err := feature.ParsePipelineProfile(cfg.Defaults.Pipeline); err == nil {
+			return parsed
+		}
+	}
+	return feature.PipelineMoonshot
+}
+
+func featureRepoNames(f *feature.Feature) []string {
+	if f == nil {
+		return nil
+	}
+	repos := make([]string, 0, len(f.Repos))
+	for _, repo := range f.Repos {
+		repos = append(repos, repo.Name)
+	}
+	return repos
+}
+
+func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeline feature.PipelineProfile, models config.ModelConfig, inquireness feature.Inquireness, checkpoints feature.Checkpoints, publishable bool) error {
+	if t.configPath == "" {
+		return errors.New("config path is not available")
+	}
+	if !pipeline.IsValid() {
+		return fmt.Errorf("invalid pipeline profile %q", pipeline)
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cfg := t.cfg
+	if cfg == nil {
+		cfg = config.NewDefault()
+	}
+	if cfg.Defaults.PipelinePreferences == nil {
+		cfg.Defaults.PipelinePreferences = make(map[string]config.PipelinePreference)
+	}
+	if cfg.Repos == nil {
+		cfg.Repos = make(map[string]config.RepoConfig)
+	}
+	projection := pipeline.ProjectGates(checkpoints, publishable)
+	profileKey := string(pipeline)
+	cfg.Defaults.PipelinePreferences[profileKey] = config.PipelinePreference{
+		Models:      models,
+		Inquireness: string(inquireness),
+	}
+	configGates := feature.FeatureCheckpointsToConfig(projection.Checkpoints)
+	for _, repoName := range repos {
+		rc := cfg.Repos[repoName]
+		if rc.PipelineGates == nil {
+			rc.PipelineGates = make(map[string]config.Checkpoints)
+		}
+		rc.PipelineGates[profileKey] = configGates
+		cfg.Repos[repoName] = rc
+	}
+	if err := config.Save(t.configPath, cfg); err != nil {
+		return err
+	}
+	t.cfg = cfg
+	return nil
+}
+
+func parseServerPhase(in string) feature.Phase {
+	phase, err := parseServerPhaseStrict(in)
+	if err != nil {
+		return feature.Phase(0)
+	}
+	return phase
+}
+
+func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, stderr io.Writer) (*runtimeBootstrap, error) {
+	stateDir = canonicalizeStateDir(stateDir)
+	runtimeDir := filepath.Dir(stateDir)
+	lock, acquired, owner, err := instancelock.Acquire(runtimeDir, stateDir, configPath, tui.GetVersion())
+	if err != nil {
+		return nil, fmt.Errorf("acquiring instance lock: %w", err)
 	}
 	if !acquired {
-		fmt.Fprint(os.Stderr, formatInstanceLockBusyMessage(stateDir, owner))
-		os.Exit(1)
+		return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
 	}
+	boot := &runtimeBootstrap{
+		lock:  lock,
+		owner: owner,
+		runtime: serverruntime.RuntimeIdentity{
+			RuntimeDir: runtimeDir,
+			StateDir:   stateDir,
+			Config:     configPath,
+		},
+	}
+	success := false
 	defer func() {
-		if err := lock.Close(); err != nil {
-			log.Printf("release instance lock: %v", err)
+		if !success {
+			_ = boot.Close(context.Background())
 		}
 	}()
 
-	// Detect first-run before config is loaded (LoadOrCreate will create it).
 	configIsNew := !fileExists(configPath)
-
 	workspaceDir, _ := os.Getwd()
-	tui.SetMarkdownRenderer(markdown.Render)
+	eventCh := make(chan interface{}, 1000)
 
-	// Use fx for dependency injection only — not lifecycle management.
-	// The TUI's p.Run() is the main event loop; fx.App.Run() would block
-	// forever after it returns waiting for SIGINT/SIGTERM.
-	var app tui.AppModel
 	var fm *feature.Manager
 	var sm *session.Manager
 	var orch *orchestrator.Orchestrator
 	var registry *llm.Registry
 	var cfg *config.Config
 	var phaseRunner *agent.PhaseRunner
+	var observer *observe.Observer
+	var permissionCache *permission.Cache
 	fxApp := fx.New(
-		// Infrastructure
 		fx.Supply(
 			fx.Annotate(configPath, fx.ResultTags(`name:"configPath"`)),
 			fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`)),
 			fx.Annotate(dangerouslySkipPerms, fx.ResultTags(`name:"dsp"`)),
 			fx.Annotate(workspaceDir, fx.ResultTags(`name:"workspaceDir"`)),
+			fx.Annotate(eventCh, fx.ResultTags(`name:"eventCh"`)),
 		),
-		fx.Provide(fx.Annotate(
-			func() chan interface{} { return make(chan interface{}, 1000) },
-			fx.ResultTags(`name:"eventCh"`),
-		)),
-
-		// Modules
 		config.Module,
 		feature.Module,
 		git.Module,
@@ -743,90 +2127,73 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 		fx.Options(providerFxModules(enabledProviders)...),
 		agent.Module,
 		orchestrator.Module,
-		tuiModule,
-
-		// Apply notification settings after config is loaded
 		fx.Invoke(func(c *config.Config) {
 			if c.Notifications.TerminalBundleID != "" {
 				tui.SetTerminalBundleID(c.Notifications.TerminalBundleID)
 			}
 		}),
-
-		// Extract components for use after fx.Start
-		fx.Populate(&app, &fm, &sm, &orch, &registry, &cfg, &phaseRunner),
-
-		// Silence fx startup/shutdown logs
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache),
 		fx.NopLogger,
 	)
-
-	if err := fxApp.Start(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "Error initializing: %v\n", err)
-		os.Exit(1)
+	boot.fxApp = fxApp
+	if err := fxApp.Start(ctx); err != nil {
+		return nil, fmt.Errorf("initializing: %w", err)
 	}
 
-	// Check provider CLIs after fx initialization (registry is now populated)
-	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(context.Background(), registry)
+	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return nil, err
 	}
 	for _, w := range warnings {
-		fmt.Fprintln(os.Stderr, w)
+		fmt.Fprintln(stderr, w)
 	}
 
-	// Check required external tools (git, gh).
 	toolErrors, toolWarnings := agent.CheckRequiredTools()
 	for _, w := range toolWarnings {
-		fmt.Fprintln(os.Stderr, w)
+		fmt.Fprintln(stderr, w)
 	}
 	if len(toolErrors) > 0 {
-		for _, e := range toolErrors {
-			fmt.Fprintln(os.Stderr, e)
-		}
-		os.Exit(1)
+		return nil, fmt.Errorf("%s", strings.Join(toolErrors, "\n"))
 	}
 
-	// Reconcile embedded skills and guidelines to disk (non-fatal). When
-	// either side has work to do (stamp missing or mismatched), surface a
-	// spinner so the user knows the pause is intentional.
-	skillsDir := filepath.Join(filepath.Dir(stateDir), "skills")
-	guidelinesDir := filepath.Join(filepath.Dir(stateDir), "guidelines")
+	skillsDir := filepath.Join(runtimeDir, "skills")
+	guidelinesDir := filepath.Join(runtimeDir, "guidelines")
 	stop := func() {}
 	if skilldef.NeedsReconcile(skillsDir) || guidelinedef.NeedsReconcile(guidelinesDir) {
-		stop = startSyncSpinner(os.Stderr, "Syncing skills and guidelines")
+		stop = startSyncSpinner(stderr, "Syncing skills and guidelines")
 	}
 	if err := skilldef.ReconcileSkills(skillsDir); err != nil {
 		stop()
 		stop = func() {}
-		fmt.Fprintf(os.Stderr, "Warning: could not reconcile skills: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: could not reconcile skills: %v\n", err)
 	} else {
 		phaseRunner.SkillsDir = skillsDir
 	}
 	if err := guidelinedef.ReconcileGuidelines(guidelinesDir); err != nil {
 		stop()
 		stop = func() {}
-		fmt.Fprintf(os.Stderr, "Warning: could not reconcile guidelines: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: could not reconcile guidelines: %v\n", err)
 	} else {
 		phaseRunner.GuidelinesDir = guidelinesDir
 	}
 	stop()
 
-	// Provider-generic version check (replaces old CheckCLIVersion)
 	for _, vr := range agent.CheckProviderVersions(detected) {
-		if vr.Err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not check %s CLI version: %v\n", vr.Provider, vr.Err)
-		} else if vr.Warning != "" {
-			fmt.Fprintf(os.Stderr, "Warning: %s\n", vr.Warning)
-		} else {
-			fmt.Fprintf(os.Stderr, "%s CLI version: %s\n", vr.Provider, vr.Version)
+		switch {
+		case vr.Err != nil:
+			fmt.Fprintf(stderr, "Warning: could not check %s CLI version: %v\n", vr.Provider, vr.Err)
+		case vr.Warning != "":
+			fmt.Fprintf(stderr, "Warning: %s\n", vr.Warning)
+		default:
+			fmt.Fprintf(stderr, "%s CLI version: %s\n", vr.Provider, vr.Version)
 		}
 	}
 
-	modelDiscovery := newModelDiscoveryProgressPrinter(os.Stderr)
-	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir), modelDiscovery.Report, refreshModels)
+	modelDiscovery := newModelDiscoveryProgressPrinter(stderr)
+	catalogWarnings := discoverProviderCatalogs(ctx, detected, runtimeDir, modelDiscovery.Report, refreshModels)
 	modelDiscovery.Done()
 	for _, w := range catalogWarnings {
-		fmt.Fprintln(os.Stderr, w)
+		fmt.Fprintln(stderr, w)
 	}
 
 	// Apply catalog-driven defaults after discovery. For a brand-new config,
@@ -842,40 +2209,662 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	// launch flag never rewrites the user's selections.
 	reconcileModelDefaults(cfg, registry, configPath, configIsNew, enabledProviders != nil, availabilityFiltered)
 
-	showProviderStartupNotices(os.Stderr, startupNotices, providerReadinessNoticeDelay)
+	showProviderStartupNotices(stderr, startupNotices, providerReadinessNoticeDelay)
 
-	// Redirect stderr and Go's default logger to a file before the TUI takes
-	// over the terminal. Any write to stderr (from OTEL, gRPC, net/http, etc.)
-	// would corrupt bubbletea's alternate screen rendering.
-	logPath := filepath.Join(filepath.Dir(stateDir), defaultLogBasename)
-	if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
-		origStderr := os.Stderr
-		os.Stderr = logFile
-		log.SetOutput(logFile)
-		defer func() {
-			os.Stderr = origStderr
-			log.SetOutput(origStderr)
-			logFile.Close()
-		}()
+	recoveryItems, recoveryScanOK := scanStartupRecovery(ctx, orch, stderr)
+	boot.featureManager = fm
+	boot.sessionManager = sm
+	boot.orchestrator = orch
+	boot.registry = registry
+	boot.cfg = cfg
+	boot.phaseRunner = phaseRunner
+	boot.observer = observer
+	boot.permissionCache = permissionCache
+	boot.eventCh = eventCh
+	boot.workspaceDir = workspaceDir
+	boot.recoveryItems = recoveryItems
+	boot.recoveryScanOK = recoveryScanOK
+	success = true
+	return boot, nil
+}
+
+func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, stderr io.Writer) ([]session.RecoveryItem, bool) {
+	if orch == nil {
+		return nil, true
+	}
+	items, err := orch.ScanRecovery(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "Warning: startup recovery scan: %v\n", err)
+		return nil, false
+	}
+	recoveryItems := make([]session.RecoveryItem, len(items))
+	copy(recoveryItems, items)
+	return recoveryItems, true
+}
+
+type defaultLaunchRequest struct {
+	ConfigPath                 string
+	StateDir                   string
+	DangerouslySkipPermissions bool
+	EnabledProviders           []string
+	RefreshModels              bool
+	Stdin                      io.Reader
+	Stdout                     io.Writer
+	Stderr                     io.Writer
+	WaitForReadyTimeout        time.Duration
+	WaitForReadyPollInterval   time.Duration
+}
+
+type defaultLaunchDeps struct {
+	ResolvePolicy    func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error)
+	PrepareDiscovery func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error)
+	StartServer      func(context.Context, serverStartRequest) (serverProcess, error)
+	LaunchClient     func(context.Context, defaultClientLaunch) error
+	HTTPClient       *http.Client
+}
+
+type serverStartRequest struct {
+	ConfigPath                 string
+	StateDir                   string
+	DangerouslySkipPermissions bool
+	EnabledProviders           []string
+	RefreshModels              bool
+	Stdin                      io.Reader
+	Stdout                     io.Writer
+	Stderr                     io.Writer
+}
+
+type serverProcess interface {
+	Stop(context.Context) error
+}
+
+type serverProcessWaiter interface {
+	Wait(context.Context) error
+}
+
+type serverProcessPID interface {
+	PID() int
+}
+
+type defaultClientLaunch struct {
+	BaseURL      string
+	AuthToken    string
+	Runtime      serverruntime.RuntimeIdentity
+	LaunchPolicy serverruntime.LaunchPolicy
+	OwnedServer  bool
+	Server       serverProcess
+}
+
+func runDefaultClientServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:                 configPath,
+		StateDir:                   stateDir,
+		DangerouslySkipPermissions: dangerouslySkipPerms,
+		EnabledProviders:           enabledProviders,
+		RefreshModels:              refreshModels,
+		Stdin:                      os.Stdin,
+		Stdout:                     os.Stdout,
+		Stderr:                     os.Stderr,
+	}, defaultLaunchDeps{
+		LaunchClient: launchAPIClientTUI,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, deps defaultLaunchDeps) error {
+	deps = deps.withDefaults()
+	if deps.LaunchClient == nil {
+		return errors.New("client TUI launcher is required")
+	}
+	// Canonicalize before computing identity, and before it's forwarded to the
+	// spawned server child (which independently canonicalizes the same value
+	// in bootstrapRuntime): the discovery/health handshake below compares this
+	// client's identity against the one the server reports back by exact
+	// struct equality (internal/server/discovery.go's "mismatched discovery
+	// runtime" check), so client and server must resolve stateDir identically
+	// or a symlinked runtime parent (e.g. macOS's /var -> /private/var) makes
+	// every discovery attempt look like a foreign server and time out.
+	req.StateDir = canonicalizeStateDir(req.StateDir)
+	runtimeDir := filepath.Dir(req.StateDir)
+	identity := serverruntime.RuntimeIdentity{
+		RuntimeDir: runtimeDir,
+		StateDir:   req.StateDir,
+		Config:     req.ConfigPath,
+	}
+	policy, err := deps.ResolvePolicy(ctx, req)
+	if err != nil {
+		return fmt.Errorf("resolve launch policy: %w", err)
+	}
+	client := deps.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: time.Second}
+	}
+	decision, err := deps.PrepareDiscovery(ctx, runtimeDir, identity, policy, client)
+	if err != nil {
+		return fmt.Errorf("validating discovery metadata: %w", err)
+	}
+	if decision.AlreadyRunning {
+		return deps.LaunchClient(ctx, defaultClientLaunch{
+			BaseURL:      decision.Record.BaseURL,
+			AuthToken:    decision.Record.AuthToken,
+			Runtime:      identity,
+			LaunchPolicy: policy,
+		})
 	}
 
-	// Run the TUI — this blocks until the user quits.
-	// WithFilter drops excess scroll events (trackpad kinetic bursts) before
-	// Update/View runs, so typing and Esc aren't queued behind them.
+	serverStderr, closeServerStderr := openDefaultLaunchServerStderr(runtimeDir)
+	child, err := deps.StartServer(ctx, serverStartRequest{
+		ConfigPath:                 req.ConfigPath,
+		StateDir:                   req.StateDir,
+		DangerouslySkipPermissions: req.DangerouslySkipPermissions,
+		EnabledProviders:           req.EnabledProviders,
+		RefreshModels:              req.RefreshModels,
+		Stdin:                      req.Stdin,
+		Stdout:                     req.Stdout,
+		Stderr:                     serverStderr,
+	})
+	closeServerStderr()
+	if err != nil {
+		if isRuntimeLockBusy(err) {
+			record, readyErr := waitForDefaultLaunchServerReady(ctx, req, deps, runtimeDir, identity, policy, client)
+			if readyErr != nil {
+				return errors.Join(fmt.Errorf("lock contention from another live owner: %w", err), readyErr)
+			}
+			return deps.LaunchClient(ctx, defaultClientLaunch{
+				BaseURL:      record.BaseURL,
+				AuthToken:    record.AuthToken,
+				Runtime:      identity,
+				LaunchPolicy: policy,
+			})
+		}
+		return fmt.Errorf("server boot failed: %w", err)
+	}
+	record, err := waitForDefaultLaunchServerReady(ctx, req, deps, runtimeDir, identity, policy, client)
+	if err != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return errors.Join(err, child.Stop(stopCtx))
+	}
+	owned := childOwnsReadyRecord(child, record)
+	launchServer := child
+	if !owned {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopErr := child.Stop(stopCtx)
+		cancel()
+		if stopErr != nil {
+			return fmt.Errorf("stop losing child server: %w", stopErr)
+		}
+		launchServer = nil
+	}
+	return deps.LaunchClient(ctx, defaultClientLaunch{
+		BaseURL:      record.BaseURL,
+		AuthToken:    record.AuthToken,
+		Runtime:      identity,
+		LaunchPolicy: policy,
+		OwnedServer:  owned,
+		Server:       launchServer,
+	})
+}
+
+func isRuntimeLockBusy(err error) bool {
+	var busy runtimeLockBusyError
+	return errors.As(err, &busy)
+}
+
+func childOwnsReadyRecord(child serverProcess, record serverruntime.DiscoveryRecord) bool {
+	reporter, ok := child.(serverProcessPID)
+	if !ok {
+		return true
+	}
+	childPID := reporter.PID()
+	if childPID <= 0 || record.PID <= 0 {
+		return true
+	}
+	return childPID == record.PID
+}
+
+func (deps defaultLaunchDeps) withDefaults() defaultLaunchDeps {
+	if deps.ResolvePolicy == nil {
+		deps.ResolvePolicy = resolveDefaultLaunchPolicy
+	}
+	if deps.PrepareDiscovery == nil {
+		deps.PrepareDiscovery = serverruntime.PrepareDiscovery
+	}
+	if deps.StartServer == nil {
+		deps.StartServer = startServerProcess
+	}
+	return deps
+}
+
+func launchAPIClientTUI(ctx context.Context, launch defaultClientLaunch) error {
+	client, err := serverruntime.NewClient(serverruntime.ClientOptions{BaseURL: launch.BaseURL, Token: launch.AuthToken})
+	if err != nil {
+		return fmt.Errorf("create API client: %w", err)
+	}
+	opts := tui.APIAppOptions{
+		Runtime:      launch.Runtime,
+		LaunchPolicy: launch.LaunchPolicy,
+		OwnedServer:  launch.OwnedServer,
+		EventOptions: serverruntime.EventSubscriptionOptions{
+			HeartbeatInterval: 30 * time.Second,
+			ReconnectDelay:    250 * time.Millisecond,
+		},
+	}
+	if launch.OwnedServer && launch.Server != nil {
+		opts.WaitForOwnedServerShutdown = waitForOwnedServerShutdownOrStop(launch.Server, 2*time.Second)
+	}
+	tui.SetMarkdownRenderer(markdown.Render)
+	app, err := tui.NewAPIAppModel(ctx, client, opts)
+	if err != nil {
+		return fmt.Errorf("initialize API TUI: %w", err)
+	}
+	defer app.Close()
+
+	restoreStderr := redirectStderrToRuntimeLog(launch.Runtime.RuntimeDir)
+	defer restoreStderr()
+
+	p := tea.NewProgram(app, tuiProgramOptions()...)
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("run API TUI: %w", err)
+	}
+	return nil
+}
+
+func openRuntimeLogFile(runtimeDir string) (*os.File, error) {
+	if runtimeDir == "" {
+		return nil, errors.New("missing runtime dir")
+	}
+	logPath := filepath.Join(runtimeDir, defaultLogBasename)
+	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+}
+
+func openDefaultLaunchServerStderr(runtimeDir string) (io.Writer, func()) {
+	logFile, err := openRuntimeLogFile(runtimeDir)
+	if err != nil {
+		return io.Discard, func() {}
+	}
+	return logFile, func() {
+		_ = logFile.Close()
+	}
+}
+
+func redirectStderrToRuntimeLog(runtimeDir string) func() {
+	logFile, err := openRuntimeLogFile(runtimeDir)
+	if err != nil {
+		return func() {}
+	}
+	origStderr := os.Stderr
+	os.Stderr = logFile
+	log.SetOutput(logFile)
+	return func() {
+		os.Stderr = origStderr
+		log.SetOutput(origStderr)
+		_ = logFile.Close()
+	}
+}
+
+func tuiProgramOptions() []tea.ProgramOption {
 	opts := []tea.ProgramOption{tea.WithFilter(tui.NewScrollRateLimiter())}
 	if profile, ok := overrideColorProfile(); ok {
 		opts = append(opts, tea.WithColorProfile(profile))
 	}
-	p := tea.NewProgram(app, opts...)
-	app.SetProgram(p)
-	if _, err := p.Run(); err != nil {
+	return opts
+}
+
+func waitForDefaultLaunchServerReady(ctx context.Context, req defaultLaunchRequest, deps defaultLaunchDeps, runtimeDir string, identity serverruntime.RuntimeIdentity, policy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryRecord, error) {
+	timeout := req.WaitForReadyTimeout
+	if timeout <= 0 {
+		timeout = defaultLaunchServerReadyTimeout
+	}
+	poll := req.WaitForReadyPollInterval
+	if poll <= 0 {
+		poll = 50 * time.Millisecond
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	lastReason := "no discovery record"
+	for {
+		decision, err := deps.PrepareDiscovery(waitCtx, runtimeDir, identity, policy, client)
+		if err != nil {
+			return serverruntime.DiscoveryRecord{}, fmt.Errorf("server readiness discovery failed: %w", err)
+		}
+		if decision.AlreadyRunning {
+			return decision.Record, nil
+		}
+		if decision.Reason != "" {
+			lastReason = decision.Reason
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return serverruntime.DiscoveryRecord{}, fmt.Errorf("server readiness timed out: %s: %w", lastReason, waitCtx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func resolveDefaultLaunchPolicy(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+	registry, err := newLaunchPolicyRegistry(req.EnabledProviders, req.Stderr)
+	if err != nil {
+		return serverruntime.LaunchPolicy{}, err
+	}
+	if _, warnings, _, _, err := checkRequiredProviders(ctx, registry); err != nil {
+		return serverruntime.LaunchPolicy{}, err
+	} else if req.Stderr != nil {
+		for _, warning := range warnings {
+			fmt.Fprintln(req.Stderr, warning)
+		}
+	}
+	return runtimeLaunchPolicy(registry, req.DangerouslySkipPermissions), nil
+}
+
+// knownProviderNames is the fixed set of names accepted by --providers.
+func knownProviderNames() []string {
+	return []string{providerNameClaude, providerNameCodex, providerNameOpencode}
+}
+
+// normalizeProviderNames validates/trims enabled against knownProviderNames,
+// defaulting to all of them when enabled is nil and reporting unknowns via
+// warn. warnBlank preserves each caller's differing blank-name behavior.
+func normalizeProviderNames(enabled []string, warnBlank bool, warn func(name string)) []string {
+	if enabled == nil {
+		return knownProviderNames()
+	}
+	known := make(map[string]bool)
+	for _, name := range knownProviderNames() {
+		known[name] = true
+	}
+	var valid []string
+	for _, name := range enabled {
+		name = strings.TrimSpace(name)
+		if name == "" && !warnBlank {
+			continue
+		}
+		if known[name] {
+			valid = append(valid, name)
+			continue
+		}
+		if warn != nil {
+			warn(name)
+		}
+	}
+	return valid
+}
+
+func newLaunchPolicyRegistry(enabled []string, stderr io.Writer) (*llm.Registry, error) {
+	names := normalizeProviderNames(enabled, false, func(name string) {
+		if stderr != nil {
+			fmt.Fprintf(stderr, "Warning: unknown provider %q, skipping\n", name)
+		}
+	})
+	if len(names) == 0 {
+		return nil, errors.New("no valid providers specified in --providers flag")
+	}
+	registry := llm.NewRegistry()
+	for _, name := range names {
+		switch name {
+		case providerNameClaude:
+			registry.Register(&claude.Provider{})
+		case providerNameCodex:
+			registry.Register(&codex.Provider{})
+		case providerNameOpencode:
+			registry.Register(&opencode.Provider{})
+		}
+	}
+	return registry, nil
+}
+
+type childServerProcess struct {
+	cmd  *exec.Cmd
+	done chan error
+}
+
+func startServerProcess(ctx context.Context, req serverStartRequest) (serverProcess, error) {
+	args := []string{cliSubcommandServer, "--config", req.ConfigPath, "--state-dir", req.StateDir}
+	if len(req.EnabledProviders) > 0 {
+		args = append(args, "--providers", strings.Join(req.EnabledProviders, ","))
+	}
+	if req.DangerouslySkipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	if req.RefreshModels {
+		args = append(args, "--refresh-models")
+	}
+	cmd := exec.CommandContext(ctx, os.Args[0], args...)
+	cmd.Stdin = req.Stdin
+	cmd.Stdout = req.Stdout
+	cmd.Stderr = req.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	child := &childServerProcess{cmd: cmd, done: make(chan error, 1)}
+	go func() {
+		child.done <- cmd.Wait()
+	}()
+	return child, nil
+}
+
+func (p *childServerProcess) Stop(ctx context.Context) error {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return nil
+	}
+	if err := p.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	select {
+	case err := <-p.done:
+		return ignoreExpectedProcessStopError(err)
+	case <-ctx.Done():
+		if err := p.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		select {
+		case <-p.done:
+			return nil
+		case <-time.After(time.Second):
+			return ctx.Err()
+		}
+	}
+}
+
+func ignoreExpectedProcessStopError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return err
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return err
+	}
+	switch status.Signal() {
+	case syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL:
+		return nil
+	default:
+		return err
+	}
+}
+
+func (p *childServerProcess) Wait(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	select {
+	case err := <-p.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *childServerProcess) PID() int {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}
+
+func waitForOwnedServerShutdownOrStop(process serverProcess, grace time.Duration) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if process == nil {
+			return nil
+		}
+		waiter, ok := process.(serverProcessWaiter)
+		if !ok {
+			return process.Stop(ctx)
+		}
+		if err, done := waitForServerProcessExit(ctx, waiter, grace); done {
+			return err
+		}
+		return process.Stop(ctx)
+	}
+}
+
+// waitForServerProcessExit waits for the process to exit on its own within
+// grace. done is true when the wait already produced a final result (clean
+// exit, an unexpected error, or outer context cancellation); done is false
+// when the grace period elapsed and the caller should escalate to Stop.
+func waitForServerProcessExit(ctx context.Context, waiter serverProcessWaiter, grace time.Duration) (err error, done bool) {
+	waitCtx := ctx
+	if grace > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, grace)
+		defer cancel()
+	}
+	err = waiter.Wait(waitCtx)
+	if err == nil {
+		return nil, true
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		return err, true
+	}
+	if ctx.Err() != nil {
+		return ctx.Err(), true
+	}
+	return nil, false
+}
+
+func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	runtimeCtx, requestShutdown := context.WithCancel(ctx)
+	defer requestShutdown()
+
+	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stderr)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return 1
+	}
+	defer func() {
+		if err := boot.Close(context.Background()); err != nil {
+			log.Printf("close runtime: %v", err)
+		}
+	}()
+
+	if boot.recoveryScanOK && len(boot.recoveryItems) == 0 {
+		if err := boot.orchestrator.InterruptAllRunning(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: startup sweep: %v\n", err)
+		}
 	}
 
-	app.Close()
-	shutdownFeatures(orch, sm)
-	_ = fxApp.Stop(context.Background())
+	policy := runtimeLaunchPolicy(boot.registry, dangerouslySkipPerms)
+	discoveryClient := &http.Client{Timeout: time.Second}
+	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: validating discovery metadata: %v\n", err)
+		return 1
+	}
+	if decision.AlreadyRunning {
+		fmt.Fprintf(os.Stderr, "Error: Agentic server is already running at %s\n", decision.Record.BaseURL)
+		return 1
+	}
+	authToken, err := serverruntime.EnsureAuthToken(boot.runtime.RuntimeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: preparing server auth token: %v\n", err)
+		return 1
+	}
+
+	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
+		Runtime:      boot.runtime,
+		LaunchPolicy: policy,
+		StartMode:    cliSubcommandServer,
+		Owner:        boot.owner,
+		AuthToken:    authToken,
+		Features:     boot.featureManager,
+		FeatureStore: boot.featureManager.Store,
+		Freshness:    gitFreshnessProvider{},
+		Config:       boot.cfg,
+		Registry:     boot.registry,
+		Sessions:     boot.sessionManager,
+		Events:       boot.eventCh,
+		DomainEvents: boot.orchestrator.Events(),
+		Mutations: &serverMutationTarget{
+			orch:            boot.orchestrator,
+			rebaseStarter:   boot.orchestrator,
+			cfg:             boot.cfg,
+			configPath:      boot.runtime.Config,
+			store:           boot.featureManager.Store,
+			sessions:        boot.sessionManager,
+			phaseRunner:     boot.phaseRunner,
+			permissionCache: boot.permissionCache,
+			workspaceDir:    boot.workspaceDir,
+			reviewer:        &git.ReviewCommentAdapter{},
+		},
+		RequestShutdown: requestShutdown,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)
+		return 1
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := runtimeServer.Close(shutdownCtx); err != nil {
+			log.Printf("close server: %v", err)
+		}
+	}()
+
+	now := time.Now().UTC()
+	if err := serverruntime.PublishDiscovery(boot.runtime.RuntimeDir, serverruntime.DiscoveryRecord{
+		SchemaVersion: 1,
+		APIVersion:    serverruntime.APIVersion,
+		BaseURL:       runtimeServer.BaseURL(),
+		Epoch:         runtimeServer.EventEpoch(),
+		AuthToken:     authToken,
+		Runtime:       boot.runtime,
+		LaunchPolicy:  policy,
+		StartMode:     cliSubcommandServer,
+		PID:           boot.owner.PID,
+		PGID:          boot.owner.PGID,
+		StartedAt:     runtimeServer.StartedAt(),
+		PublishedAt:   now,
+		Owner:         serverruntime.OwnerDTOFromInstanceOwner(boot.owner),
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: publishing discovery metadata: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stderr, "Agentic server listening at %s\n", runtimeServer.BaseURL())
+	<-runtimeCtx.Done()
+	shutdownFeatures(boot.orchestrator, boot.sessionManager)
+	return 0
+}
+
+func runtimeLaunchPolicy(registry *llm.Registry, dangerouslySkipPerms bool) serverruntime.LaunchPolicy {
+	var providers []string
+	if registry != nil {
+		for _, provider := range registry.DetectedProviders() {
+			providers = append(providers, provider.Name())
+		}
+	}
+	return serverruntime.NewLaunchPolicy(providers, dangerouslySkipPerms)
 }
 
 func overrideColorProfile() (colorprofile.Profile, bool) {
@@ -1090,28 +3079,23 @@ func reconcileModelDefaults(cfg *config.Config, registry *llm.Registry, configPa
 // by the same readiness path as any other provider.
 func providerFxModules(enabled []string) []fx.Option {
 	all := map[string]fx.Option{
-		"claude":   claude.Module,
-		"codex":    codex.Module,
-		"opencode": opencode.Module,
+		providerNameClaude:   claude.Module,
+		providerNameCodex:    codex.Module,
+		providerNameOpencode: opencode.Module,
 	}
 
-	if enabled == nil {
-		return []fx.Option{claude.Module, codex.Module, opencode.Module}
-	}
+	names := normalizeProviderNames(enabled, true, func(name string) {
+		fmt.Fprintf(os.Stderr, "Warning: unknown provider %q, skipping\n", name)
+	})
 
-	var modules []fx.Option
-	for _, name := range enabled {
-		name = strings.TrimSpace(name)
-		if mod, ok := all[name]; ok {
-			modules = append(modules, mod)
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: unknown provider %q, skipping\n", name)
-		}
-	}
-
-	if len(modules) == 0 {
+	if len(names) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: no valid providers specified in --providers flag")
 		os.Exit(1)
+	}
+
+	modules := make([]fx.Option, 0, len(names))
+	for _, name := range names {
+		modules = append(modules, all[name])
 	}
 
 	return modules
@@ -1127,6 +3111,31 @@ func hasAnyModelConfig(m config.ModelConfig) bool {
 		m.KBBuild != ""
 }
 
+func mergeModelConfig(base, overlay config.ModelConfig) config.ModelConfig {
+	if overlay.Inquiry != "" {
+		base.Inquiry = overlay.Inquiry
+	}
+	if overlay.Research != "" {
+		base.Research = overlay.Research
+	}
+	if overlay.Planning != "" {
+		base.Planning = overlay.Planning
+	}
+	if overlay.Implementation != "" {
+		base.Implementation = overlay.Implementation
+	}
+	if overlay.Review != "" {
+		base.Review = overlay.Review
+	}
+	if overlay.Utilities != "" {
+		base.Utilities = overlay.Utilities
+	}
+	if overlay.KBBuild != "" {
+		base.KBBuild = overlay.KBBuild
+	}
+	return base
+}
+
 func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {
 	return map[string]string{
 		"inquiry":        m.Inquiry,
@@ -1134,7 +3143,7 @@ func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {
 		"planning":       m.Planning,
 		"implementation": m.Implementation,
 		"review":         m.Review,
-		"chat":           m.Utilities,
+		chatName:         m.Utilities,
 		"kb_build":       m.KBBuild,
 	}
 }

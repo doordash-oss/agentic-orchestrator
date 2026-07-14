@@ -281,9 +281,14 @@ func (m *Manager) executeWorktreeSetupTask(f *Feature, task SetupTask, logPath s
 		return task, fmt.Errorf("repo %q no longer exists on feature", task.Repo)
 	}
 	repo := f.Repos[idx]
-	if task.Branch == "" {
-		task.Branch = repo.Branch
+	workspaceSlug, branch := setupWorkspaceSlug(f, repo, task)
+	if workspaceSlug == "" {
+		workspaceSlug = f.WorkspaceSlug()
 	}
+	if branch == "" || branch == defaultBranchName(workspaceSlug) {
+		branch = m.branchName(workspaceSlug)
+	}
+	task.Branch = branch
 	if task.StartPoint == "" && !task.UseCurrentBranch {
 		task.StartPoint = repo.BaseBranch
 	}
@@ -291,7 +296,7 @@ func (m *Manager) executeWorktreeSetupTask(f *Feature, task SetupTask, logPath s
 		if pather, ok := m.Worktrees.(interface {
 			ExpectedPath(featureSlug, repoName string) string
 		}); ok {
-			task.Path = pather.ExpectedPath(f.Slug, repo.Name)
+			task.Path = pather.ExpectedPath(workspaceSlug, repo.Name)
 		}
 	}
 	if task.Path != "" {
@@ -307,14 +312,11 @@ func (m *Manager) executeWorktreeSetupTask(f *Feature, task SetupTask, logPath s
 		startPoint = ""
 	}
 	appendSetupLog(logPath, "creating worktree repo=%s branch=%s start_point=%s", repo.Name, task.Branch, startPoint)
-	path, err := m.Worktrees.Create(repo.Path, f.Slug, repo.Name, startPoint)
+	path, err := m.Worktrees.Create(repo.Path, workspaceSlug, repo.Name, startPoint)
 	if err != nil {
 		return task, fmt.Errorf("creating worktree for %s: %w", repo.Name, err)
 	}
 	task.Path = path
-	if task.Branch == "" {
-		task.Branch = repo.Branch
-	}
 	appendSetupLog(logPath, "created worktree repo=%s path=%s branch=%s", repo.Name, task.Path, task.Branch)
 	return task, nil
 }

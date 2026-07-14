@@ -24,7 +24,7 @@
 //     feature-level FR session — one Claude session reads the cumulative
 //     diff across every Feature.Repos worktree.
 //
-// Cycle paths (rebase / review-comments / refactor / tweak) still consult
+// Cycle paths (rebase / review-comments / refactor) still consult
 // some of this package's helpers. They will migrate to their own unified
 // loop functions in slices 4-7.
 package agent
@@ -78,6 +78,7 @@ type OrchestratorConfig struct {
 
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
+	CommandRunner              ports.CommandRunner
 
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. Passed through to ImplementConfig.
@@ -143,7 +144,7 @@ func RunMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (
 	if err != nil {
 		return nil, err
 	}
-	if implResult.FinalStatus != "review_passed" {
+	if implResult.FinalStatus != finalStatusReviewPassed {
 		return phaseLoopResultToOrchestratorResult(cfg, implResult), nil
 	}
 	return &OrchestratorResult{FinalStatus: "awaiting_final_review"}, nil
@@ -221,7 +222,7 @@ func RunMultiRepoFinalReview(cfg OrchestratorConfig, sm ports.SessionManager) (*
 	}
 
 	switch frResult.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		return &OrchestratorResult{FinalStatus: "all_passed"}, nil
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}, nil

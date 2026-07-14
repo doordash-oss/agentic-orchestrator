@@ -27,8 +27,7 @@ import (
 )
 
 // testCatalog returns a deterministic 3-provider catalog covering all 5 phase
-// roles with 2–3 model choices each. Tests that need predictable cycling
-// consume this catalog instead of a live *llm.Registry.
+// roles with 2–3 model choices each.
 func testCatalog() PhaseModelCatalog {
 	cat := PhaseModelCatalog{
 		Fields:        []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"},
@@ -65,9 +64,7 @@ func newEditor(f *feature.Feature, provisionalPublishable bool) ConfigEditorMode
 	return NewConfigEditorModel(f, testCatalog(), provisionalPublishable)
 }
 
-// testWorkspaceCatalog extends testCatalog() with a Utilities field, mirroring
-// the shape BuildWorkspaceModelCatalog produces, for tests that need the
-// workspace-only model row.
+// testWorkspaceCatalog extends testCatalog() with the workspace-only Utilities row.
 func testWorkspaceCatalog() PhaseModelCatalog {
 	cat := testCatalog()
 	cat.Fields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
@@ -77,6 +74,16 @@ func testWorkspaceCatalog() PhaseModelCatalog {
 		"codex":  {"codex/gpt-5-codex"},
 	}
 	return cat
+}
+
+func singleAgentCatalog() PhaseModelCatalog {
+	return PhaseModelCatalog{
+		Fields:             append([]string(nil), phaseCatalogFields...),
+		ProviderOrder:      []string{"claude"},
+		ProviderModels:     map[string][]string{"claude": {"sonnet", "opus"}},
+		ProviderModelInfos: map[string][]llm.ModelInfo{"claude": {{ID: "sonnet", Category: "balanced"}, {ID: "opus", Category: "capable"}}},
+		PhaseDefaults:      map[string]string{"Research": "sonnet"},
+	}
 }
 
 func checkpointRowForGate(t *testing.T, e ConfigEditorModel, gate feature.GateIndex) int {
@@ -237,7 +244,7 @@ func TestConfigEditor_Tab_SelectsModelCellOnModelsRow(t *testing.T) {
 
 func TestConfigEditor_ModelsUseAgentFirstCells(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	cat := gatewayWinningCatalog()
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 
 	if got := e.activeModelCell; got != modelCellAgent {
@@ -255,7 +262,7 @@ func TestConfigEditor_ModelsUseAgentFirstCells(t *testing.T) {
 
 func TestConfigEditor_ChangingAgentSelectsRecommendedModel(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	cat := gatewayWinningCatalog()
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: "claude:sonnet[200K]"}}, cat, true)
 	e.rowCursor = 1
 	e.activeModelCell = modelCellAgent
@@ -273,7 +280,7 @@ func TestConfigEditor_ChangingAgentSelectsRecommendedModel(t *testing.T) {
 
 func TestConfigEditor_BlankModelValueInheritsDefaultAgent(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	cat := gatewayWinningCatalog()
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 
 	if got := e.agentValueForField("Research"); got != "gateway" {
@@ -293,23 +300,22 @@ func TestConfigEditor_BlankModelValueInheritsDefaultAgent(t *testing.T) {
 
 func TestConfigEditor_ModelFilteringIsScopedToSelectedAgent(t *testing.T) {
 	t.Parallel()
-	reg := llm.NewRegistry()
-	reg.Register(&phaseCatalogStubProvider{
-		name:   "claude",
-		models: []string{"sonnet"},
-		catalog: []llm.ModelInfo{
-			{ID: "sonnet", DisplayName: "Claude Sonnet", Category: "balanced"},
+	cat := PhaseModelCatalog{
+		Fields:        append([]string(nil), phaseCatalogFields...),
+		ProviderOrder: []string{"claude", "gateway"},
+		ProviderModels: map[string][]string{
+			"claude":  {"sonnet"},
+			"gateway": {"portkey/@fireworks/accounts/fireworks/models/glm-5p2", "ollama/gemma4:31b-256k"},
 		},
-	})
-	reg.Register(&phaseCatalogStubProvider{
-		name:   "gateway",
-		models: []string{"portkey/@fireworks/accounts/fireworks/models/glm-5p2", "ollama/gemma4:31b-256k"},
-		catalog: []llm.ModelInfo{
-			{ID: "portkey/@fireworks/accounts/fireworks/models/glm-5p2", DisplayName: "GLM 5.2", Category: "balanced"},
-			{ID: "ollama/gemma4:31b-256k", DisplayName: "Gemma 4 31B Dense", Category: "balanced"},
+		ProviderModelInfos: map[string][]llm.ModelInfo{
+			"claude": {{ID: "sonnet", DisplayName: "Claude Sonnet", Category: "balanced"}},
+			"gateway": {
+				{ID: "portkey/@fireworks/accounts/fireworks/models/glm-5p2", DisplayName: "GLM 5.2", Category: "balanced"},
+				{ID: "ollama/gemma4:31b-256k", DisplayName: "Gemma 4 31B Dense", Category: "balanced"},
+			},
 		},
-	})
-	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+		PhaseDefaults: map[string]string{"Planning": "gateway:ollama/gemma4:31b-256k"},
+	}
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Planning: "gateway:ollama/gemma4:31b-256k"}}, cat, true)
 	e.rowCursor = 2
 	e.activeModelCell = modelCellModel
@@ -390,16 +396,7 @@ func TestConfigEditor_EmptyFilterEnterPreservesCurrentModel(t *testing.T) {
 
 func TestConfigEditor_SingleAgentCyclePreservesValidNonDefaultModel(t *testing.T) {
 	t.Parallel()
-	reg := llm.NewRegistry()
-	reg.Register(&phaseCatalogStubProvider{
-		name:   "claude",
-		models: []string{"sonnet", "opus"},
-		catalog: []llm.ModelInfo{
-			{ID: "sonnet", Category: "balanced"},
-			{ID: "opus", Category: "capable"},
-		},
-	})
-	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	cat := singleAgentCatalog()
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: "opus"}}, cat, true)
 	e.rowCursor = 1
 	e.activeModelCell = modelCellAgent
@@ -416,16 +413,7 @@ func TestConfigEditor_SingleAgentCyclePreservesValidNonDefaultModel(t *testing.T
 
 func TestConfigEditor_SingleAgentCyclePreservesBlankDefaultModel(t *testing.T) {
 	t.Parallel()
-	reg := llm.NewRegistry()
-	reg.Register(&phaseCatalogStubProvider{
-		name:   "claude",
-		models: []string{"sonnet", "opus"},
-		catalog: []llm.ModelInfo{
-			{ID: "sonnet", Category: "balanced"},
-			{ID: "opus", Category: "capable"},
-		},
-	})
-	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	cat := singleAgentCatalog()
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 	e.rowCursor = 1
 	e.activeModelCell = modelCellAgent
@@ -777,7 +765,7 @@ func TestConfigEditor_StaleModelPreservation(t *testing.T) {
 // catalog default carries the gateway: routing prefix (multi-provider form).
 func TestConfigEditor_ProviderGroupRecommendedMarkerAndSlashForm(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	cat := gatewayWinningCatalog()
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{
 		Research: "gateway:vendor/sonnet[200K]",
 	}}, cat, true)
@@ -801,7 +789,7 @@ func TestConfigEditor_ProviderGroupRecommendedMarkerAndSlashForm(t *testing.T) {
 // is recognized as eligible rather than labelled "(unavailable)".
 func TestConfigEditor_ProviderSelectionPersistsRoutedSlashForm(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	cat := gatewayWinningCatalog()
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 
 	e.rowCursor = 1
@@ -883,7 +871,7 @@ func TestConfigEditor_ChangeCounters(t *testing.T) {
 // summary must not append "(unavailable)" to a model the picker highlights.
 func TestConfigEditor_PrefixedProviderDefaultEligible(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	cat := gatewayWinningCatalog()
 	const prefixed = "gateway:vendor/sonnet[200K]"
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: prefixed}}, cat, true)
 
@@ -907,7 +895,7 @@ func TestConfigEditor_PrefixedProviderDefaultEligible(t *testing.T) {
 // when the current value carried a routing prefix).
 func TestConfigEditor_CycleFromPrefixedDefaultAdvances(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	cat := gatewayWinningCatalog()
 	const prefixed = "gateway:vendor/sonnet[200K]"
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: prefixed}}, cat, true)
 

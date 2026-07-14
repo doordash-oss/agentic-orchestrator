@@ -90,6 +90,7 @@ type ImplementUserInput struct {
 	PlanPath              string
 	ExitCriteria          string
 	Feedback              string
+	PlanRevisionFeedback  string
 	HelpAnswers           string
 	PriorUserInputAnswers string
 	Iteration             int

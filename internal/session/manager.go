@@ -42,6 +42,11 @@ type SDKEventMsg struct {
 	Phase     feature.Phase
 	StartedAt time.Time
 	Message   llm.SDKMessage
+	// RecordCount is the session's transcript record count
+	// (len(s.MessageLog().Messages())) at the moment this event was
+	// emitted — the same index space session_model.go's /output/stream and
+	// /transcript endpoints use.
+	RecordCount int
 }
 
 // SessionDoneMsg signals that a session has ended.
@@ -117,20 +122,23 @@ func (m *Manager) SetAttachDropReporter(r AttachDropReporter) {
 type SessionOpts = ports.SessionOpts
 
 func (m *Manager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*SessionOpts) (SessionHandle, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Refuse new sessions after Shutdown has been called.
+	// Refuse new sessions after Shutdown has been called. stoppingCh is set at
+	// construction, so this read needs no lock; it is re-checked under the
+	// registration lock below to close the race with a Shutdown that fires
+	// while this session is mid-handshake.
 	select {
 	case <-m.stoppingCh:
 		return nil, ErrShuttingDown
 	default:
 	}
 
+	// The subprocess spawn and protocol handshake below can take many seconds
+	// (up to codexHandshakeTimeout). They run WITHOUT the manager lock so they
+	// never block readers — ActiveSessions feeds live-preview/prompts/sessions,
+	// and stalling those during a resume is what makes the TUI's refresh time
+	// out. The session is registered (made visible to readers) only once it is
+	// fully started below.
 	s := NewSession(id, featureID, phase)
-	if m.attachDropReporter != nil {
-		s.SetAttachDropReporter(m.attachDropReporter)
-	}
 	if len(opts) > 0 && opts[0] != nil {
 		s.pidDir = opts[0].PIDDir
 		s.iteration = opts[0].Iteration
@@ -209,7 +217,23 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		}
 	}
 
+	// Register the fully-started session under the lock, re-checking shutdown
+	// (it may have fired during the handshake) so we never leave a
+	// started-but-untracked session behind. The attach-drop reporter is applied
+	// here so it reflects whatever is installed when the session becomes visible.
+	m.mu.Lock()
+	select {
+	case <-m.stoppingCh:
+		m.mu.Unlock()
+		_ = s.Stop()
+		return nil, ErrShuttingDown
+	default:
+	}
+	if m.attachDropReporter != nil {
+		s.SetAttachDropReporter(m.attachDropReporter)
+	}
 	m.sessions[id] = s
+	m.mu.Unlock()
 
 	// Monitor for completion
 	go func() {
@@ -291,11 +315,12 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 	if m.eventCh != nil {
 		assertEmissionIdentity(id, featureID, phase)
 		sdkEvt := SDKEventMsg{
-			SessionID: id,
-			FeatureID: featureID,
-			Phase:     phase,
-			StartedAt: s.StartedAt(),
-			Message:   msg,
+			SessionID:   id,
+			FeatureID:   featureID,
+			Phase:       phase,
+			StartedAt:   s.StartedAt(),
+			Message:     msg,
+			RecordCount: s.MessageLog().Len(),
 		}
 		select {
 		case m.eventCh <- sdkEvt:
@@ -335,6 +360,30 @@ func (m *Manager) ActiveSessions() []SessionView {
 		if s.IsActive() {
 			result = append(result, s)
 		}
+	}
+	return result
+}
+
+// RecentSessions returns the most recently started sessions across features,
+// bounded by limit.
+func (m *Manager) RecentSessions(limit int) []SessionView {
+	if limit <= 0 {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]SessionView, 0, min(limit, len(m.sessions)))
+	for _, s := range m.sessions {
+		result = append(result, s)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].StartedAt().Equal(result[j].StartedAt()) {
+			return result[i].ID() < result[j].ID()
+		}
+		return result[i].StartedAt().After(result[j].StartedAt())
+	})
+	if len(result) > limit {
+		result = result[:limit]
 	}
 	return result
 }

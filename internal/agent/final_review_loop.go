@@ -27,6 +27,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -39,6 +40,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+// finalStatusReviewPassed is the FinalStatus value shared by every loop
+// result type in this package (FeatureFinalReviewResult, LoopResult,
+// PhaseImplementLoopResult, RebaseLoopResult, ReviewCommentsLoopResult,
+// RefactorFeatureLoopResult, ...) to signal that review approved the work.
+const finalStatusReviewPassed = "review_passed"
 
 // FeatureFinalReviewResult is the unified feature-level FR loop's outcome.
 //
@@ -104,7 +111,7 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 		// Nothing to review — degenerate "all repos already past FR" case.
 		// Treat as a no-op success so the orchestrator can fall through to
 		// MarkCodeReady / auto-publish unchanged.
-		return &FeatureFinalReviewResult{FinalStatus: "review_passed"}, nil
+		return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed}, nil
 	}
 
 	// Build the cross-repo workspace. Cwd at the feature state dir, with
@@ -155,7 +162,7 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 	}
 
 	switch result.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		// FR success: AtomicPhaseStamp records the outcome with no
 		// per-repo state mutation (feature-level Status carries the
 		// verdict); PR URL writes are mirrored when supplied.
@@ -187,15 +194,15 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 }
 
 // RunFeatureCycleFinalReviewLoop runs one feature-level Final Review session
-// per iteration for a post-publish cycle (e.g., post-tweak "review changes?
-// y/n" modal "y" path). Unlike RunFeatureFinalReviewLoop, this entry:
+// per iteration for a post-publish cycle. Unlike RunFeatureFinalReviewLoop,
+// this entry:
 //
 //   - Reviews every Feature.Repos worktree (the feature's full repo set)
 //     rather than the touched-only staged subset, because post-publish
 //     cycles operate on already-shipped repos.
 //   - Skips the AtomicPhaseStamp on success/failure: post-publish repo
-//     state is unchanged by the FR's verdict; the surrounding cycle
-//     (e.g., tweak commit/push chain) owns the post-FR transitions.
+//     state is unchanged by the FR's verdict; the surrounding cycle owns
+//     the post-FR transitions.
 //   - Resolves the cycle artifact dir under f.CyclePrefix() so artifacts
 //     live at runs/run-N/<cycle>-N/review/iteration-NN/.
 //
@@ -205,8 +212,8 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 // purely to elide the atomic-stamp wrapper for post-publish cycles.
 //
 // Cumulative-diff review semantics align with the unification principle:
-// the post-tweak FR reviews every Feature.Repos cumulative diff, not just
-// the repos the tweak modified. If the tweak only touched one repo, this
+// the post-cycle FR reviews every Feature.Repos cumulative diff, not just
+// the repos the cycle modified. If the cycle only touched one repo, this
 // is the degenerate len(Feature.Repos) == 1 case.
 func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*FeatureFinalReviewResult, error) {
 	if cfg.Feature == nil {
@@ -225,7 +232,7 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 	sort.Strings(repos)
 	if len(repos) == 0 {
 		// Degenerate "no repos" case — nothing to review.
-		return &FeatureFinalReviewResult{FinalStatus: "review_passed"}, nil
+		return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed}, nil
 	}
 
 	// Build the cross-repo workspace. Cwd at the feature state dir, with
@@ -262,9 +269,8 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 	result, runErr := loopState.run()
 
 	// Post-cycle FR does NOT call AtomicPhaseStamp. The surrounding cycle
-	// (CompleteTweakFinish for tweak; rebase / review-comments for those
-	// cycles) owns the post-FR transitions on success; on failure the
-	// cycle entry's FailRepoCycle path handles state cleanup.
+	// (rebase / review-comments) owns the post-FR transitions on success;
+	// on failure the cycle entry's FailRepoCycle path handles state cleanup.
 	if runErr != nil {
 		return &FeatureFinalReviewResult{
 			FinalStatus: "failed",
@@ -350,7 +356,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				s.writeIterationMetaWithAgent(iterDir, i, agentStatusProtocolViolation, "review_failed")
 				if consecutiveFailures >= maxConsecFails {
 					return &FeatureFinalReviewResult{
-						FinalStatus: "protocol_violation",
+						FinalStatus: BoundedHelperStatusProtocolViolation,
 						Iterations:  i,
 						LastError:   reviewErr.Error(),
 					}, nil
@@ -368,7 +374,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 		switch reviewStatus {
 		case ReviewApproved:
 			s.writeIterationMeta(iterDir, i, "approved")
-			return &FeatureFinalReviewResult{FinalStatus: "review_passed", Iterations: i}, nil
+			return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: i}, nil
 
 		case ReviewChangesRequested:
 			if err := s.seedFixVerificationReport(iterDir); err != nil {
@@ -388,7 +394,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				continue
 			}
 
-			if fixErr != nil || (fixStatus != "SUCCESS" && fixStatus != "") {
+			if fixErr != nil || (fixStatus != agentStatusSuccess && fixStatus != "") {
 				consecutiveFailures++
 				agentStatus := "FAILED"
 				if fixErr == nil {
@@ -519,9 +525,13 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
+	if err := RecordReadOnlyRepoBaseline(context.Background(), cfg.CommandRunner, cfg.Feature, iterDir); err != nil {
+		return ReviewFailed, "", fmt.Errorf("record final reviewer read-only repo baseline: %w", err)
+	}
+
 	sessionID := s.featureFinalReviewSessionID("final-review", iteration)
 
-	sess, err := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
+	sess, err := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseFinalReview, command, s.workspace.Cwd, env, sessOpts)
 	if err != nil {
 		if errors.Is(err, ports.ErrSessionShuttingDown) {
 			return ReviewFailed, "", fmt.Errorf("session manager shutting down")
@@ -561,6 +571,16 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
 		MissingArtifacts:     []string{"review-feedback.md"},
 	}).Status
+
+	if !isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		repoMutationViolations, err := EnforceReadOnlyRepoMutations(context.Background(), cfg.CommandRunner, cfg.Feature, feature.PhaseFinalReview, iterDir)
+		if err != nil {
+			return ReviewFailed, "", fmt.Errorf("enforce final reviewer read-only repo guard: %w", err)
+		}
+		if len(repoMutationViolations) > 0 {
+			return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, repoMutationViolations)
+		}
+	}
 
 	if agentStatus == agentStatusMissingMarker {
 		return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, []ProtocolViolation{{
@@ -650,7 +670,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 
 	sessionID := s.featureFinalReviewSessionID("fix", iteration)
 
-	sess, startErr := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
+	sess, startErr := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseFinalReview, command, s.workspace.Cwd, env, sessOpts)
 	if startErr != nil {
 		if errors.Is(startErr, ports.ErrSessionShuttingDown) {
 			return "", fmt.Errorf("session manager shutting down")
@@ -699,7 +719,7 @@ func (s *featureFinalReviewLoopState) recordFixProtocolViolation(iterDir string,
 	s.writeIterationMetaWithAgent(iterDir, iteration, agentStatusProtocolViolation, "changes_requested")
 	if *consecutiveFailures >= s.maxConsecFails() {
 		return &FeatureFinalReviewResult{
-			FinalStatus: "protocol_violation",
+			FinalStatus: BoundedHelperStatusProtocolViolation,
 			Iterations:  iteration,
 			LastError:   lastErr,
 		}

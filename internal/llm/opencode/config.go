@@ -79,7 +79,7 @@ const catchAllPattern = "*"
 //     roots: when roots are known, each becomes a path-pattern map allowing the
 //     mode decision inside "<root>/**" and explicitly denying everything else;
 //     with no known roots they fall back to the mode decision as a plain value.
-func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string) map[string]any {
+func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string, disallowedTools ...[]string) map[string]any {
 	toolDecision := "ask"
 	if dangerouslySkipPerms {
 		toolDecision = "allow"
@@ -97,7 +97,41 @@ func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, 
 	for _, key := range fileEditPermKeys {
 		perm[key] = editDecision
 	}
+	if len(disallowedTools) > 0 {
+		applyDisallowedTools(perm, disallowedTools[0])
+	}
 	return perm
+}
+
+func applyDisallowedTools(perm map[string]any, tools []string) {
+	for _, tool := range tools {
+		switch normalizedToolName(tool) {
+		case "bash":
+			perm[permKeyBash] = "deny"
+		case "task", "agent":
+			perm[permKeyTask] = "deny"
+		case "webfetch":
+			perm[permKeyWebfetch] = "deny"
+		case "websearch":
+			perm[permKeyWebsearch] = "deny"
+		case "skill":
+			perm[permKeySkill] = "deny"
+		case "edit":
+			perm[permKeyEdit] = "deny"
+		case "write":
+			perm[permKeyWrite] = "deny"
+		case "applypatch", "apply_patch":
+			perm[permKeyApplyPatch] = "deny"
+		case "read":
+			perm[permKeyRead] = "deny"
+		case "externaldirectory", "external_directory":
+			perm[permKeyExternal] = "deny"
+		}
+	}
+}
+
+func normalizedToolName(tool string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(tool), " ", ""))
 }
 
 // readPermission returns the permission value for the read surface.
@@ -258,20 +292,65 @@ func rootPattern(root string) string {
 // roots such as validation feedback artifacts and phase_complete; without it
 // OpenCode only allows children of those files and denies the actual artifact
 // write. An empty or non-relativizable workDir yields the absolute forms alone.
+//
+// A root or workDir that still traverses a symlink (e.g. macOS's /var ->
+// /private/var, /tmp -> /private/tmp) adds another axis of the same problem:
+// OpenCode's edit/write permission resolves relative to Instance.worktree,
+// which for a git repo comes from `git rev-parse --show-toplevel` and IS
+// symlink-resolved, while other surfaces are not always (upstream
+// opencode#14473, opencode#20045). Agentico canonicalizes its own state dir
+// up front (see canonicalizeStateDir in cmd/agentico/main.go) so this should
+// rarely fire in practice, but a root introduced by other tooling — a git
+// worktree added outside Agentico's control, say — can still carry one.
+// Emitting the resolved forms too means that mismatch can't silently
+// collapse the rule to the catch-all deny.
 func rootGlobs(workDir, root string) []string {
 	abs := rootPattern(root)
 	globs := []string{abs, rootGlob(root)}
 	if stripped := strings.TrimPrefix(abs, "/"); stripped != abs && stripped != "" {
 		globs = append(globs, stripped, stripped+"/**")
 	}
+
+	resolvedRoot, rootChanged := resolveSymlinkPath(root)
+	if rootChanged {
+		resolvedAbs := rootPattern(resolvedRoot)
+		globs = append(globs, resolvedAbs, rootGlob(resolvedRoot))
+		if stripped := strings.TrimPrefix(resolvedAbs, "/"); stripped != resolvedAbs && stripped != "" {
+			globs = append(globs, stripped, stripped+"/**")
+		}
+	}
+
 	if workDir == "" {
 		return globs
 	}
-	rel, err := filepath.Rel(workDir, root)
-	if err != nil || rel == "" || rel == "." {
-		return globs
+	if rel, err := filepath.Rel(workDir, root); err == nil && rel != "" && rel != "." {
+		globs = append(globs, rootPattern(rel), rootGlob(rel))
 	}
-	return append(globs, rootPattern(rel), rootGlob(rel))
+
+	resolvedWorkDir, workDirChanged := resolveSymlinkPath(workDir)
+	if rootChanged || workDirChanged {
+		if rel, err := filepath.Rel(resolvedWorkDir, resolvedRoot); err == nil && rel != "" && rel != "." {
+			globs = append(globs, rootPattern(rel), rootGlob(rel))
+		}
+	}
+
+	return globs
+}
+
+// resolveSymlinkPath returns the symlink-resolved form of path and whether it
+// differs from the input. Returns (path, false) when path is empty, does not
+// exist (EvalSymlinks needs to stat every component), or already resolves to
+// itself — so callers only pay for the extra glob variants when a symlink is
+// actually in play.
+func resolveSymlinkPath(path string) (string, bool) {
+	if path == "" {
+		return path, false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || resolved == path {
+		return path, false
+	}
+	return resolved, true
 }
 
 // normalizeRoots trims, drops empties, and de-duplicates writable roots while
@@ -385,6 +464,8 @@ func reasoningEffortFor(backend string, level llm.EffortLevel) (string, bool) {
 		return "", false
 	}
 	switch level {
+	case llm.EffortLow:
+		return "low", true
 	case llm.EffortMedium:
 		return "medium", true
 	case llm.EffortHigh:

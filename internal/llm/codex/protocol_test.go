@@ -150,7 +150,7 @@ func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T)
 			ExitCode:         &exitCode,
 			CommandActions: []CommandAction{
 				{Type: "read", Path: "/tmp/state/guidelines/go/index.md"},
-				{Type: "write", Path: "/tmp/state/output.txt"},
+				{Type: codexFileChangeOperationWrite, Path: "/tmp/state/output.txt"},
 				{Type: "read", Path: ""},
 			},
 		},
@@ -192,6 +192,55 @@ func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T)
 	}
 	if len(dup.FileReads) != 0 {
 		t.Fatalf("duplicate len(FileReads) = %d, want 0", len(dup.FileReads))
+	}
+}
+
+func TestCodexFileChangeCompletedIncludesStructuredDiff(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+
+	params := json.RawMessage(`{
+		"threadId": "thread-1",
+		"turnId": "turn-1",
+		"item": {
+			"id": "call_write",
+			"type": "fileChange",
+			"status": "completed",
+			"changes": [{
+				"path": "/tmp/test/README.md",
+				"kind": {"type": "update", "move_path": null},
+				"diff": "@@ -1,2 +1,2 @@\n-old\n+new\n"
+			}]
+		}
+	}`)
+
+	msg, ok := p.parseNotification("item/completed", params)
+	if !ok {
+		t.Fatal("parseNotification(item/completed fileChange) returned false, want true")
+	}
+	if msg.ToolProgress == nil {
+		t.Fatal("msg.ToolProgress is nil, want non-nil")
+	}
+	if msg.ToolProgress.ToolUseID != "call_write" || msg.ToolProgress.ToolName != codexToolNameWrite {
+		t.Fatalf("ToolProgress = %+v, want call_write Write", msg.ToolProgress)
+	}
+	if len(msg.FileChanges) != 1 {
+		t.Fatalf("len(FileChanges) = %d, want 1", len(msg.FileChanges))
+	}
+	change := msg.FileChanges[0]
+	if change.Path != "/tmp/test/README.md" {
+		t.Fatalf("FileChanges[0].Path = %q", change.Path)
+	}
+	if change.Operation != codexFileChangeOperationUpdate {
+		t.Fatalf("FileChanges[0].Operation = %q, want update", change.Operation)
+	}
+	if !change.HasDiffPatch {
+		t.Fatal("FileChanges[0].HasDiffPatch = false, want true")
+	}
+	if change.AddedLines != 1 || change.RemovedLines != 1 {
+		t.Fatalf("line counts = +%d -%d, want +1 -1", change.AddedLines, change.RemovedLines)
+	}
+	if !strings.Contains(change.Detail, "-old") || !strings.Contains(change.Detail, "+new") {
+		t.Fatalf("FileChanges[0].Detail missing diff lines: %q", change.Detail)
 	}
 }
 
@@ -636,6 +685,7 @@ func TestBuildAskUserAnswerEnvelope_RestatesQuestionAndOptions(t *testing.T) {
 		"2. Add README.scn.md — Preserves the English README.",
 		"3. Add bilingual README.md — Keeps both in one file.",
 		"User's selected answer: Replace README.md (Recommended)",
+		"This answer clarifies requirements; it is not authorization to implement, edit repository files, or modify files outside your phase artifact/output directory.",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(got, want) {
@@ -667,6 +717,9 @@ func TestBuildAskUserAnswerEnvelope_HandlesMissingOptions(t *testing.T) {
 	}
 	if !strings.Contains(got, "User's selected answer: 2.0.0") {
 		t.Errorf("missing answer:\n%s", got)
+	}
+	if !strings.Contains(got, "This answer clarifies requirements; it is not authorization to implement") {
+		t.Errorf("missing non-authorization reminder:\n%s", got)
 	}
 	if strings.Contains(got, "Options you presented:") {
 		t.Errorf("should omit options block when none were presented:\n%s", got)
@@ -722,6 +775,7 @@ func TestRespondToAskUser_SyntheticSendsFramedFollowUp(t *testing.T) {
 		"> Replace or add alongside?",
 		"1. Replace (Recommended) — matches the literal request",
 		"User's selected answer: Replace (Recommended)",
+		"This answer clarifies requirements; it is not authorization to implement, edit repository files, or modify files outside your phase artifact/output directory.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("follow-up turn missing %q\n--- got ---\n%s", want, text)
@@ -797,6 +851,24 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	}
 }
 
+func completedAgentMessageParams(t *testing.T, threadID, itemID, text string) json.RawMessage {
+	t.Helper()
+	payload := ItemCompletedParams{
+		ThreadID: threadID,
+		TurnID:   "turn-1",
+		Item: ItemUnion{
+			ID:   itemID,
+			Type: "agentMessage",
+			Text: text,
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal item/completed: %v", err)
+	}
+	return raw
+}
+
 func TestTurnCompleted_WellFormedQuestionSurfacesOptions(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
@@ -825,6 +897,63 @@ func TestTurnCompleted_WellFormedQuestionSurfacesOptions(t *testing.T) {
 	p.mu.Unlock()
 	if retry != 0 {
 		t.Errorf("formatRetryCount = %d, want 0 after well-formed turn", retry)
+	}
+}
+
+func TestTurnCompleted_BlankAgentMessageDoesNotEraseWellFormedQuestion(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	question := "How broad should the translation be?\n" +
+		"1. README only (Recommended): Translate just the top-level README and leave docs untouched. [confidence: 0.94]\n" +
+		"2. README + user docs: Translate the README plus user-facing docs like docs/. [confidence: 0.34]\n" +
+		"3. Whole repo markdown: Translate every Markdown file in the repo. [confidence: 0.12]"
+	msg, ok := p.parseNotification("item/completed", completedAgentMessageParams(t, "thread-1", "msg-question", question))
+	if !ok {
+		t.Fatal("question item parseNotification ok = false, want true")
+	}
+	if msg.Type != codexRoleAssistant {
+		t.Fatalf("question item Type = %q, want assistant", msg.Type)
+	}
+
+	msg, ok = p.parseNotification("item/completed", completedAgentMessageParams(t, "thread-1", "msg-empty", ""))
+	if ok {
+		t.Fatalf("blank item parseNotification ok = true (msg=%+v), want false", msg)
+	}
+
+	msg, ok = p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("turn/completed parseNotification ok = false, want true")
+	}
+	if msg.Type != "control_request" || msg.ControlRequest == nil {
+		t.Fatalf("got Type=%q ControlRequest=%v, want AskUserQuestion control_request", msg.Type, msg.ControlRequest)
+	}
+	if msg.ControlRequest.Request.ToolName != "AskUserQuestion" {
+		t.Fatalf("ToolName = %q, want AskUserQuestion", msg.ControlRequest.Request.ToolName)
+	}
+
+	var parsed struct {
+		Questions []struct {
+			Question string           `json:"question"`
+			Options  []map[string]any `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &parsed); err != nil {
+		t.Fatalf("unmarshal control request input: %v", err)
+	}
+	if len(parsed.Questions) != 1 {
+		t.Fatalf("questions len = %d, want 1", len(parsed.Questions))
+	}
+	if parsed.Questions[0].Question != "How broad should the translation be?" {
+		t.Errorf("question = %q", parsed.Questions[0].Question)
+	}
+	if len(parsed.Questions[0].Options) != 3 {
+		t.Errorf("options len = %d, want 3", len(parsed.Questions[0].Options))
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
 	}
 }
 
@@ -1220,6 +1349,80 @@ func TestTurnCompleted_LooseQuestionAfterToolUse_WithMarker_EmitsSuccess(t *test
 	}
 }
 
+// TestTurnCompleted_InformationalNumberedListIsCleanSuccess proves a final text
+// that merely summarizes findings as a numbered list — with a non-question stem
+// — completes as a success result rather than being treated as an AskUserQuestion
+// just because it enumerates items.
+func TestTurnCompleted_InformationalNumberedListIsCleanSuccess(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = "Here is what I found:\n" +
+		"1. The config loader ignores env overrides.\n" +
+		"2. The default timeout is 30s.\n" +
+		"3. Logs are written to /tmp/agentico.log."
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "result" || msg.Subtype != "success" {
+		t.Fatalf("got Type=%q Subtype=%q ControlRequest=%v, want result/success", msg.Type, msg.Subtype, msg.ControlRequest)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
+	}
+}
+
+// TestTurnCompleted_InteractiveNeverSynthesizesQuestion proves an Interactive
+// session (AMA chat, where a human answers every turn directly) never
+// synthesizes an AskUserQuestion picker, no matter how question-shaped the
+// final text is: the text-parsing pipeline exists only to imitate Claude's
+// native tool-call UX for a provider that can otherwise only express a
+// question as plain text, and a human reading the chat gets no benefit from
+// that imitation — they can just read whatever the model asked and reply with
+// an ordinary follow-up message.
+func TestTurnCompleted_InteractiveNeverSynthesizesQuestion(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"numbered options", "Which audience should the README target?\n" +
+			"1. Internal engineers (Recommended): Focus on practical value.\n" +
+			"2. Existing users: Focus on usage reference.\n" +
+			"3. External readers: Focus on positioning."},
+		{"bare question", "Should I proceed with the destructive migration?"},
+		{"FREE_FORM sentinel", "FREE_FORM: What exact version string should we pin?"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex", Interactive: true})
+			p.SetStdin(&buf)
+			p.SetThreadIDForTest("thread-1")
+
+			p.mu.Lock()
+			p.lastAssistantText = c.text
+			p.mu.Unlock()
+
+			msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+			if !ok {
+				t.Fatal("parseNotification ok = false, want true")
+			}
+			if msg.Type != "result" || msg.Subtype != "success" {
+				t.Fatalf("got Type=%q Subtype=%q ControlRequest=%v, want result/success", msg.Type, msg.Subtype, msg.ControlRequest)
+			}
+			if buf.Len() != 0 {
+				t.Errorf("sent a reformat reminder, want none: %s", buf.String())
+			}
+		})
+	}
+}
+
 // TestBuildAskUserAnswerEnvelope_AppendsAskingFormatReminder verifies that
 // every answer envelope re-anchors Codex on the question-format contract.
 // The reminder is intentionally a short pointer back to the system prompt
@@ -1243,6 +1446,9 @@ func TestBuildAskUserAnswerEnvelope_AppendsAskingFormatReminder(t *testing.T) {
 	}
 	if !strings.Contains(got, "asking-questions format from your system prompt") {
 		t.Errorf("envelope missing pointer back to system prompt\n--- got ---\n%s", got)
+	}
+	if !strings.Contains(got, "not authorization to implement") {
+		t.Errorf("envelope missing non-authorization reminder\n--- got ---\n%s", got)
 	}
 	// The reminder must come AFTER the answer block so the agent reads the
 	// answer first and the format rule last (most-recent-wins anchoring).

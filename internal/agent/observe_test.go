@@ -239,8 +239,8 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
-		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, "review_passed")
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, finalStatusReviewPassed)
 	}
 
 	// Read events from the observer's state directory
@@ -295,8 +295,8 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 	if len(iterEnded) != 1 {
 		t.Fatalf("expected 1 iteration.ended, got %d", len(iterEnded))
 	}
-	if iterEnded[0].Status != "review_passed" {
-		t.Errorf("iteration.ended Status = %q, want %q", iterEnded[0].Status, "review_passed")
+	if iterEnded[0].Status != finalStatusReviewPassed {
+		t.Errorf("iteration.ended Status = %q, want %q", iterEnded[0].Status, finalStatusReviewPassed)
 	}
 
 	// Verify review events
@@ -309,8 +309,8 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 		t.Fatalf("expected 1 review.completed, got %d", len(reviewCompleted))
 	}
 	// ReviewStatus.String() returns "APPROVED"
-	if reviewCompleted[0].Status != "APPROVED" {
-		t.Errorf("review.completed Status = %q, want %q", reviewCompleted[0].Status, "APPROVED")
+	if reviewCompleted[0].Status != agentStatusApproved {
+		t.Errorf("review.completed Status = %q, want %q", reviewCompleted[0].Status, agentStatusApproved)
 	}
 
 	// Verify session events (2 sessions: impl + review)
@@ -821,8 +821,8 @@ fi
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
-		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, "review_passed")
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, finalStatusReviewPassed)
 	}
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
@@ -854,12 +854,12 @@ fi
 	}
 
 	// Verify iteration 1 ended with non-success status (FAILED or similar)
-	if iterEnded[0].Status == "review_passed" {
+	if iterEnded[0].Status == finalStatusReviewPassed {
 		t.Errorf("iteration 1 should not have status review_passed, got %q", iterEnded[0].Status)
 	}
 	// Verify iteration 2 ended with review_passed
-	if iterEnded[1].Status != "review_passed" {
-		t.Errorf("iteration 2 Status = %q, want %q", iterEnded[1].Status, "review_passed")
+	if iterEnded[1].Status != finalStatusReviewPassed {
+		t.Errorf("iteration 2 Status = %q, want %q", iterEnded[1].Status, finalStatusReviewPassed)
 	}
 
 	// Each iteration should have its own session.started/ended pair
@@ -999,7 +999,7 @@ func TestImplementLoopFailurePathEmitsPhaseCompleted(t *testing.T) {
 
 	// Both iterations ended with non-success status
 	for idx, ie := range iterEnded {
-		if ie.Status == "review_passed" {
+		if ie.Status == finalStatusReviewPassed {
 			t.Errorf("iteration %d should not have status review_passed", idx+1)
 		}
 	}

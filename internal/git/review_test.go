@@ -130,6 +130,22 @@ func TestParsePaginatedCommentsWithType(t *testing.T) {
 	}
 }
 
+func TestSortReviewCommentsChronologically(t *testing.T) {
+	comments := []ReviewComment{
+		{ID: 3, CreatedAt: "2026-07-07T12:00:00Z"},
+		{ID: 1, CreatedAt: "2026-07-07T10:00:00Z"},
+		{ID: 2, CreatedAt: "2026-07-07T11:00:00Z"},
+	}
+
+	SortReviewCommentsChronologically(comments)
+
+	for i, wantID := range []int{1, 2, 3} {
+		if comments[i].ID != wantID {
+			t.Fatalf("comments[%d].ID = %d, want %d", i, comments[i].ID, wantID)
+		}
+	}
+}
+
 func TestParseReviewThreadMap(t *testing.T) {
 	t.Run("unresolved threads", func(t *testing.T) {
 		input := `{
@@ -198,91 +214,5 @@ func TestCommentTypeConstants(t *testing.T) {
 	}
 	if CommentTypeReviewBody != "review_body" {
 		t.Errorf("CommentTypeReviewBody = %q, want %q", CommentTypeReviewBody, "review_body")
-	}
-}
-
-func TestParsePaginatedReviews(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		wantCount int
-		wantIDs   []int
-		wantErr   bool
-	}{
-		{
-			name:      "single page",
-			input:     `[{"id":100,"body":"looks good","state":"APPROVED","user":{"login":"alice"}},{"id":101,"body":"needs work","state":"CHANGES_REQUESTED","user":{"login":"bob"}}]`,
-			wantCount: 2,
-			wantIDs:   []int{100, 101},
-		},
-		{
-			name:      "multi page",
-			input:     `[{"id":100,"body":"review 1"}][{"id":200,"body":"review 2"}]`,
-			wantCount: 2,
-			wantIDs:   []int{100, 200},
-		},
-		{
-			name:      "empty array",
-			input:     `[]`,
-			wantCount: 0,
-		},
-		{
-			name:      "empty input",
-			input:     ``,
-			wantCount: 0,
-		},
-		{
-			name:    "invalid json",
-			input:   `[{"id":1}`,
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reviews, err := parsePaginatedReviews([]byte(tt.input))
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parsePaginatedReviews() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if err != nil {
-				return
-			}
-			if len(reviews) != tt.wantCount {
-				t.Errorf("got %d reviews, want %d", len(reviews), tt.wantCount)
-				return
-			}
-			for i, wantID := range tt.wantIDs {
-				if reviews[i].ID != wantID {
-					t.Errorf("review[%d].ID = %d, want %d", i, reviews[i].ID, wantID)
-				}
-			}
-		})
-	}
-}
-
-func TestParsePaginatedReviewsFields(t *testing.T) {
-	input := `[{"id":42,"body":"Great work!","state":"APPROVED","user":{"login":"reviewer1"},"submitted_at":"2025-01-15T10:00:00Z"}]`
-	reviews, err := parsePaginatedReviews([]byte(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(reviews) != 1 {
-		t.Fatalf("got %d reviews, want 1", len(reviews))
-	}
-	r := reviews[0]
-	if r.ID != 42 {
-		t.Errorf("ID = %d, want 42", r.ID)
-	}
-	if r.Body != "Great work!" {
-		t.Errorf("Body = %q, want %q", r.Body, "Great work!")
-	}
-	if r.State != "APPROVED" {
-		t.Errorf("State = %q, want %q", r.State, "APPROVED")
-	}
-	if r.User.Login != "reviewer1" {
-		t.Errorf("User.Login = %q, want %q", r.User.Login, "reviewer1")
-	}
-	if r.CreatedAt != "2025-01-15T10:00:00Z" {
-		t.Errorf("CreatedAt = %q, want %q", r.CreatedAt, "2025-01-15T10:00:00Z")
 	}
 }

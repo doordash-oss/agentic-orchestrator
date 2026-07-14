@@ -374,7 +374,7 @@ func TestBuildHooks_OnFeatureRewound_FiresObserver(t *testing.T) {
 	fs.LoadRunFn = func(id string, runNumber int) (*feature.Run, error) {
 		switch runNumber {
 		case 1:
-			return &feature.Run{RunNumber: 1, BackupBranches: map[string]string{"repo-a": "feature/hook-backup"}}, nil
+			return &feature.Run{RunNumber: 1, BackupBranches: map[string]string{repoName: "feature/hook-backup"}}, nil
 		case 2:
 			return &feature.Run{RunNumber: 2, CarriedPhases: []string{"roadmap", "phase-01/plan"}}, nil
 		default:

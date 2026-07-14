@@ -372,6 +372,38 @@ func TestParseLine_EstimatesContextUntilUsageUpdateArrives(t *testing.T) {
 	}
 }
 
+// TestEstimatedUsageEmitStep_CapsAt1500ForLargeWindows guards against the
+// emit-step growing so coarse that large-context models (>=150K tokens)
+// visibly stall: with the old 5000-token cap, a 1.04M-window model (typical
+// for zero-telemetry backends like opencode's fireworks/glm-5p2 route) could
+// take several minutes of real tool-call activity before the estimated
+// context display moved at all, because so little text crosses the tracked
+// tool-call boundary while the parent session is idle waiting on delegated
+// Task() subagents.
+func TestEstimatedUsageEmitStep_CapsAt1500ForLargeWindows(t *testing.T) {
+	cases := []struct {
+		name   string
+		window int
+		want   int
+	}{
+		{"tiny window floors at 100", 5000, 100},
+		{"unaffected mid window", 50000, 500},
+		{"large window clamps to new cap", 200000, 1500},
+		{"huge window clamps to new cap", 1040000, 1500},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{ContextWindow: tc.window})
+			p.mu.Lock()
+			got := p.estimatedUsageEmitStepLocked()
+			p.mu.Unlock()
+			if got != tc.want {
+				t.Fatalf("estimatedUsageEmitStepLocked() for window %d = %d, want %d", tc.window, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseLine_ToolProgressKeepsStableID(t *testing.T) {
 	p, _, _ := newPostHandshakeProtocol(t)
 

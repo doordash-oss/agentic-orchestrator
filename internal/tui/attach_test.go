@@ -34,6 +34,17 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+// taskSubtypeTaskStarted, taskSubtypeTaskProgress, and taskSubtypeTaskNotification
+// are llm.SDKMessage.Subtype values for task-lifecycle messages, shared with
+// other tui tests. taskNotificationStatusCompleted is the matching
+// TaskNotificationMessage.Status value.
+const (
+	taskSubtypeTaskStarted          = "task_started"
+	taskSubtypeTaskProgress         = "task_progress"
+	taskSubtypeTaskNotification     = "task_notification"
+	taskNotificationStatusCompleted = "completed"
+)
+
 // testAttachModel creates an AttachModel with properly initialized viewport and
 // textarea fields, suitable for tests that call switchToTab or updateViewport.
 func testAttachModel(sess session.SessionView, width, height int, tabs []repoTab, activeIdx int) AttachModel {
@@ -160,16 +171,16 @@ func TestAttachHeaderSpellsAgentico(t *testing.T) {
 func TestAttachModelRenderViewportContent_ExcludesSpinnerLine(t *testing.T) {
 	sess := session.NewSession("test-spinner", "feat-1", 0)
 	m := attachModelFromSession(sess, 80, 24)
-	m.thinkingLine = "Using Bash..."
+	m.thinkingLine = testUsingBashActivity
 	m.spinnerView = "⠋"
 
 	content := m.renderViewportContent(nil)
-	if strings.Contains(content, "Using Bash...") {
+	if strings.Contains(content, testUsingBashActivity) {
 		t.Fatalf("viewport content should not include spinner line, got %q", content)
 	}
 
 	view := m.View()
-	if !strings.Contains(view, "Using Bash...") {
+	if !strings.Contains(view, testUsingBashActivity) {
 		t.Fatalf("full view should render spinner line outside the viewport content, got %q", view)
 	}
 }
@@ -196,7 +207,7 @@ func TestRenderSpinnerLine_TurnActiveBypassesIdle(t *testing.T) {
 	sess := session.NewSession("test-spinner-turn-active", "feat-1", 0)
 	m := attachModelFromSession(sess, 80, 24)
 	m.spinnerView = "⠋"
-	m.thinkingLine = "Using Bash..."
+	m.thinkingLine = testUsingBashActivity
 	m.turnActive = true
 	m.lastActivityAt = time.Now().Add(-10 * time.Minute)
 
@@ -240,7 +251,7 @@ func TestResultClearsTurnActive(t *testing.T) {
 	sess := session.NewSession("s-result", "feat-1", 0)
 	m := attachModelFromSession(sess, 80, 24)
 	m.turnActive = true
-	m.thinkingLine = "Using Bash..."
+	m.thinkingLine = testUsingBashActivity
 
 	resultMsg := attachMsgsMsg{generation: m.tabGeneration, messages: []llm.SDKMessage{
 		{Type: "result", Result: &llm.ResultMessage{Subtype: "success"}},
@@ -261,7 +272,7 @@ func TestAttachDoneClearsTurnActive(t *testing.T) {
 	sess := session.NewSession("s-done", "feat-1", 0)
 	m := attachModelFromSession(sess, 80, 24)
 	m.turnActive = true
-	m.thinkingLine = "Thinking..."
+	m.thinkingLine = thinkingLineText
 
 	am, _ := m.Update(attachDoneMsg{generation: m.tabGeneration})
 
@@ -431,7 +442,7 @@ func TestBuildAttachFileEvents_ReconstructsFromToolHistory(t *testing.T) {
 		},
 		{
 			ToolProgress: &llm.ToolProgressMessage{
-				ToolName: "Write",
+				ToolName: toolNameWrite,
 				Data:     "Updated internal/foo.go",
 			},
 		},
@@ -457,7 +468,7 @@ func TestBuildAttachFileEvents_ReconstructsFromToolHistory(t *testing.T) {
 
 func TestFileChangesFromToolProgress_PreservesMultilineDetail(t *testing.T) {
 	changes := fileChangesFromToolProgress(llm.ToolProgressMessage{
-		ToolName: "Write",
+		ToolName: toolNameWrite,
 		Data:     "Success. Updated the following files:\nM internal/tui/dashboard.go\n-const Version = \"0.117.2\"\n+const Version = \"0.117.3\"",
 	})
 
@@ -683,10 +694,10 @@ func TestRenderAttachMessages(t *testing.T) {
 			Init: &llm.SystemInitMessage{SessionID: "s1", Model: "opus"},
 		},
 		{
-			Type: "assistant",
+			Type: roleAssistant,
 			Assistant: &llm.AssistantMessage{
 				Message: llm.ConversationMsg{
-					Role:    "assistant",
+					Role:    roleAssistant,
 					Content: []llm.ContentBlock{{Type: "text", Text: "hello world"}},
 				},
 			},
@@ -713,12 +724,12 @@ func TestRenderAttachMessages(t *testing.T) {
 func TestRenderAttachMessages_ControlRequestCanUseToolRendersAsToolUse(t *testing.T) {
 	msgs := []llm.SDKMessage{
 		{
-			Type: "control_request",
+			Type: msgTypeControlRequest,
 			ControlRequest: &llm.ControlRequestMessage{
 				RequestID: "req-1",
 				Request: llm.ControlRequest{
-					Subtype:  "can_use_tool",
-					ToolName: "AskUserQuestion",
+					Subtype:  controlRequestSubtypeCanUseTool,
+					ToolName: toolNameAskUserQuestion,
 				},
 			},
 		},
@@ -733,8 +744,80 @@ func TestRenderAttachMessages_ControlRequestCanUseToolRendersAsToolUse(t *testin
 	}
 
 	output = renderAttachMessages(msgs, filterNoTools, 120, nil)
-	if strings.Contains(output, "AskUserQuestion") {
+	if strings.Contains(output, toolNameAskUserQuestion) {
 		t.Fatalf("expected No Tools filter to hide control-request tool lines, got: %s", output)
+	}
+}
+
+func TestRenderAttachMessages_TaskLifecycleRowsIncludePromptBox(t *testing.T) {
+	msgs := []llm.SDKMessage{
+		{
+			Type:    "system",
+			Subtype: taskSubtypeTaskStarted,
+			TaskStarted: &llm.TaskStartedMessage{
+				Description: "inspect provider docs",
+				TaskType:    taskTypeLocalAgent,
+				Prompt:      testAgentDelegationPrompt,
+			},
+		},
+		{
+			Type:    "system",
+			Subtype: taskSubtypeTaskProgress,
+			TaskProgress: &llm.TaskProgressMessage{
+				Description:  "inspect provider docs",
+				LastToolName: toolNameRead,
+			},
+		},
+		{
+			Type:    "system",
+			Subtype: taskSubtypeTaskNotification,
+			TaskNotification: &llm.TaskNotificationMessage{
+				Status:  taskNotificationStatusCompleted,
+				Summary: "found API transcript gaps",
+			},
+		},
+	}
+
+	output := ansiRegex.ReplaceAllString(renderAttachMessages(msgs, filterAll, 120, nil), "")
+	for _, want := range []string{
+		"Task started: inspect provider docs",
+		"sub-agent prompt",
+		testAgentDelegationPrompt,
+		"Task progress: inspect provider docs via Read",
+		"Task completed: found API transcript gaps",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected task lifecycle rendering to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderAttachMessages_AgentToolUseShowsDelegationSummaryAndPrompt(t *testing.T) {
+	msgs := []llm.SDKMessage{
+		{
+			Type: roleAssistant,
+			Assistant: &llm.AssistantMessage{
+				Message: llm.ConversationMsg{
+					Role: roleAssistant,
+					Content: []llm.ContentBlock{{
+						Type:  "tool_use",
+						Name:  toolNameAgent,
+						Input: json.RawMessage(`{"description":"Explore KB completion handler","prompt":"Inspect KB docs and return the impacted categories."}`),
+					}},
+				},
+			},
+		},
+	}
+
+	output := ansiRegex.ReplaceAllString(renderAttachMessages(msgs, filterAll, 120, nil), "")
+	for _, want := range []string{
+		testAgentToolLabel,
+		"sub-agent prompt",
+		"Inspect KB docs and return the impacted categories.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected Agent tool rendering to contain %q, got:\n%s", want, output)
+		}
 	}
 }
 
@@ -742,19 +825,19 @@ func TestRenderAttachMessages_DedupesConsecutiveAssistantQuestion(t *testing.T) 
 	question := "What exact version should Agentic be bumped to?"
 	msgs := []llm.SDKMessage{
 		{
-			Type: "assistant",
+			Type: roleAssistant,
 			Assistant: &llm.AssistantMessage{
 				Message: llm.ConversationMsg{
-					Role:    "assistant",
+					Role:    roleAssistant,
 					Content: []llm.ContentBlock{{Type: "text", Text: question}},
 				},
 			},
 		},
 		{
-			Type: "assistant",
+			Type: roleAssistant,
 			Assistant: &llm.AssistantMessage{
 				Message: llm.ConversationMsg{
-					Role:    "assistant",
+					Role:    roleAssistant,
 					Content: []llm.ContentBlock{{Type: "text", Text: question}},
 				},
 			},
@@ -999,7 +1082,7 @@ func TestTabSwitchResetsPromptState(t *testing.T) {
 	}
 	m := testAttachModel(sess1, 80, 24, tabs, 0)
 	m.pendingPermRequestID = "req-123"
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.awaitingInput = true
 	m, _ = m.switchToTab(1)
 	if m.pendingPermRequestID != "" {
@@ -1025,15 +1108,15 @@ func TestStaleMessagesIgnored(t *testing.T) {
 		tabGeneration: 1,
 	}
 	staleMsg := attachMsgsMsg{generation: 0, messages: []llm.SDKMessage{
-		{Type: "assistant", Assistant: &llm.AssistantMessage{
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{
 			Message: llm.ConversationMsg{
-				Role:    "assistant",
+				Role:    roleAssistant,
 				Content: []llm.ContentBlock{{Type: "text", Text: "stale"}},
 			},
 		}},
 	}}
 	var cmd tea.Cmd
-	m, cmd = m.Update(staleMsg)
+	_, cmd = m.Update(staleMsg)
 	if cmd != nil {
 		t.Error("expected nil cmd for stale message")
 	}
@@ -1180,7 +1263,7 @@ func TestAttachModel_PermMenuRendered(t *testing.T) {
 	m.showPermMenu = true
 	m.permMenuChoice = 0
 	m.permMenuPattern = `Bash(npm test *)`
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(`{"command":"npm test --coverage"}`)
 
 	output := m.renderPermMenu()
@@ -1238,7 +1321,7 @@ func TestAttachModel_PermMenu_YSelectsAllow(t *testing.T) {
 	m.sess = sess
 	m.showPermMenu = true
 	m.pendingPermRequestID = "req-y"
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(`{"command":"ls -la"}`)
 	m.permMenuPattern = "Bash(ls *)"
 
@@ -1264,7 +1347,7 @@ func TestAttachModel_PermMenu_RSelectsRemember(t *testing.T) {
 	m.sess = sess
 	m.showPermMenu = true
 	m.pendingPermRequestID = "req-r"
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(`{"command":"npm install"}`)
 	m.permMenuPattern = "Bash(npm install *)"
 
@@ -1290,7 +1373,7 @@ func TestAttachModel_PermMenu_NSelectsDeny(t *testing.T) {
 	m.sess = sess
 	m.showPermMenu = true
 	m.pendingPermRequestID = "req-n"
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(`{"command":"rm -rf /"}`)
 	m.permMenuPattern = "Bash(rm *)"
 
@@ -1317,7 +1400,7 @@ func TestAttachModel_PermMenu_EnterSubmitsSelection(t *testing.T) {
 	m.showPermMenu = true
 	m.permMenuChoice = 2 // Deny
 	m.pendingPermRequestID = "req-enter"
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(`{"command":"echo hi"}`)
 	m.permMenuPattern = "Bash(echo *)"
 
@@ -1370,7 +1453,7 @@ func TestAttachModel_PermMenu_SwallowsOtherKeys(t *testing.T) {
 	m.showPermMenu = true
 	m.permMenuChoice = 1
 	m.pendingPermRequestID = "req-swallow"
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(`{"command":"ls"}`)
 	m.permMenuPattern = "Bash(ls *)"
 
@@ -1406,7 +1489,7 @@ func TestAttachModel_PermMenu_DetachStillWorks(t *testing.T) {
 		t.Fatal("Ctrl+] should detach while perm menu is active")
 	}
 
-	// Esc should also detach while perm menu is open (non-tweak session).
+	// Esc should also detach while perm menu is open.
 	m = testAttachModel(sess, 80, 24, tabs, 0)
 	m.showPermMenu = true
 	m.permMenuChoice = 0
@@ -1420,13 +1503,13 @@ func TestAttachModel_PermMenu_DetachStillWorks(t *testing.T) {
 
 func TestAttachModel_PermMenuPatternPreview(t *testing.T) {
 	toolInput := `{"command":"npm test --coverage"}`
-	expectedPattern := permission.InferBashPattern("Bash", toolInput)
+	expectedPattern := permission.InferBashPattern(toolNameBash, toolInput)
 
 	sess := session.NewSession("test-perm-pattern", "feat-1", feature.PhaseImplement)
 	tabs := []repoTab{{repoName: "repo-a", sess: sess}}
 	m := testAttachModel(sess, 80, 24, tabs, 0)
 	m.showPermMenu = true
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(toolInput)
 	m.permMenuPattern = expectedPattern
 
@@ -1534,8 +1617,8 @@ func TestRememberPermission_UsesPermCacheScope(t *testing.T) {
 	tabs := []repoTab{{repoName: "my-repo", sess: mv}}
 	m := testAttachModel(mv, 80, 24, tabs, 0)
 
-	// Set up permission cache (in-memory only, no persistence store)
-	cache := permission.NewCache(nil)
+	// Set up a persistent permission cache; remembered approvals are durable-only.
+	cache := permission.NewCache(permission.NewStore(t.TempDir()))
 	m.permCache = cache
 	m.permRepoName = mv.PermCacheScope() // simulate what attachToSession does
 
@@ -1543,7 +1626,7 @@ func TestRememberPermission_UsesPermCacheScope(t *testing.T) {
 	m.showPermMenu = true
 	m.permMenuChoice = 1 // "Allow & Remember"
 	m.pendingPermRequestID = "req-1"
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(`{"command":"npm test --coverage"}`)
 	m.permMenuPattern = "Bash(npm test *)"
 
@@ -1564,6 +1647,43 @@ func TestRememberPermission_UsesPermCacheScope(t *testing.T) {
 			"if empty, permissions are incorrectly stored at global scope",
 			rules[0].RepoName, "my-repo")
 	}
+	if len(mv.ControlResponses) != 1 || !mv.ControlResponses[0].Allow {
+		t.Fatalf("ControlResponses = %+v, want one allow after remember persistence", mv.ControlResponses)
+	}
+}
+
+func TestRememberPermission_PersistenceFailureKeepsPromptOpenAndDoesNotAnswer(t *testing.T) {
+	mv := mocks.NewMockSessionView("sess-1", "feat-1")
+	mv.PermCacheScopeVal = "my-repo"
+	tabs := []repoTab{{repoName: "my-repo", sess: mv}}
+	m := testAttachModel(mv, 80, 24, tabs, 0)
+
+	blockingPath := filepath.Join(t.TempDir(), "permissions")
+	if err := os.WriteFile(blockingPath, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write blocking permissions path: %v", err)
+	}
+	m.permCache = permission.NewCache(permission.NewStore(blockingPath))
+	m.permRepoName = mv.PermCacheScope()
+	m.showPermMenu = true
+	m.permMenuChoice = 1
+	m.pendingPermRequestID = "req-1"
+	m.pendingPermToolName = toolNameBash
+	m.pendingPermToolInput = json.RawMessage(`{"command":"npm test --coverage"}`)
+	m.permMenuPattern = "Bash(npm test *)"
+
+	cmd := m.executePermChoice()
+	if cmd == nil {
+		t.Fatal("executePermChoice() returned nil command")
+	}
+	msg := cmd()
+	updated, _ := m.Update(msg)
+
+	if len(mv.ControlResponses) != 0 {
+		t.Fatalf("ControlResponses = %+v, want none when remember persistence fails", mv.ControlResponses)
+	}
+	if !updated.showPermMenu || updated.pendingPermRequestID != "req-1" || updated.permMenuChoice != 1 {
+		t.Fatalf("permission prompt state = show %t request %q choice %d, want restored remember prompt", updated.showPermMenu, updated.pendingPermRequestID, updated.permMenuChoice)
+	}
 }
 
 func TestAttachPermissionRequestedIncludesRepoScopeAndIteration(t *testing.T) {
@@ -1578,7 +1698,7 @@ func TestAttachPermissionRequestedIncludesRepoScopeAndIteration(t *testing.T) {
 		observer:             obs,
 		traceID:              "trace-perm-1",
 		sess:                 sess,
-		pendingPermToolName:  "Bash",
+		pendingPermToolName:  toolNameBash,
 		pendingPermToolInput: json.RawMessage(`echo hello`),
 	}
 
@@ -1597,7 +1717,7 @@ func TestAttachPermissionRequestedIncludesRepoScopeAndIteration(t *testing.T) {
 	if evt.iteration != 3 {
 		t.Errorf("expected iteration=3, got %d", evt.iteration)
 	}
-	if evt.data["tool_name"] != "Bash" {
+	if evt.data["tool_name"] != toolNameBash {
 		t.Errorf("expected tool_name=Bash, got %v", evt.data["tool_name"])
 	}
 }
@@ -1622,7 +1742,7 @@ func TestAttachPermissionResolvedIncludesRepoScopeAndIteration(t *testing.T) {
 	if !ok {
 		t.Fatal("expected valid span context")
 	}
-	m.observer.PermissionResolved(sc, m.sess.ID(), m.sess.PermCacheScope(), m.sess.Iteration(), "Edit", "allow")
+	m.observer.PermissionResolved(sc, m.sess.ID(), m.sess.PermCacheScope(), m.sess.Iteration(), "Edit", permission.DecisionAllowOnce)
 
 	evt, found := obs.event("permission.resolved")
 	if !found {
@@ -1637,8 +1757,8 @@ func TestAttachPermissionResolvedIncludesRepoScopeAndIteration(t *testing.T) {
 	if evt.iteration != 5 {
 		t.Errorf("expected iteration=5, got %d", evt.iteration)
 	}
-	if evt.data["decision"] != "allow" {
-		t.Errorf("expected decision=allow, got %v", evt.data["decision"])
+	if evt.data["decision"] != permission.DecisionAllowOnce {
+		t.Errorf("expected decision=%s, got %v", permission.DecisionAllowOnce, evt.data["decision"])
 	}
 }
 
@@ -1757,7 +1877,7 @@ func TestAttachRestoredPermissionReEmitsObservability(t *testing.T) {
 		traceID:              "trace-restore-1",
 		sess:                 sess,
 		showPermMenu:         true,
-		pendingPermToolName:  "Write",
+		pendingPermToolName:  toolNameWrite,
 		pendingPermToolInput: json.RawMessage(`file.go`),
 	}
 
@@ -1859,7 +1979,7 @@ func TestAttachToSessionEmitsRestoredPermissionObservability(t *testing.T) {
 
 	// 2. Simulate a pending permission prompt that was detected during construction
 	m.showPermMenu = true
-	m.pendingPermToolName = "Bash"
+	m.pendingPermToolName = toolNameBash
 	m.pendingPermToolInput = json.RawMessage(`{"command":"npm test"}`)
 	m.pendingPermRequestID = "req-wiring"
 
@@ -1884,7 +2004,7 @@ func TestAttachToSessionEmitsRestoredPermissionObservability(t *testing.T) {
 	if evt.sessionID != "sess-perm-wiring" {
 		t.Errorf("expected session_id=sess-perm-wiring, got %q", evt.sessionID)
 	}
-	if evt.data["tool_name"] != "Bash" {
+	if evt.data["tool_name"] != toolNameBash {
 		t.Errorf("expected tool_name=Bash, got %v", evt.data["tool_name"])
 	}
 }
@@ -1948,312 +2068,6 @@ func TestAttachToMultiRepoEmitsRestoredQuestionObservability(t *testing.T) {
 	}
 	if evt.data["question"] != "Which database?" {
 		t.Errorf("expected question='Which database?', got %v", evt.data["question"])
-	}
-}
-
-func TestAttachModel_Esc_TweakSession_ShowsFinishPrompt(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-1", "feat-1")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-
-	if !m.showFinishPrompt {
-		t.Error("expected showFinishPrompt to be true after Esc in tweak session")
-	}
-	if m.Detached() {
-		t.Error("should not be detached yet — prompt should be shown first")
-	}
-	if m.TweakFinishing() {
-		t.Error("should not be finishing yet — user hasn't chosen")
-	}
-}
-
-func TestAttachModel_Esc_NonTweakSession_DetachesNormally(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-2", "feat-2")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = false
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-
-	if !m.Detached() {
-		t.Error("non-tweak session should detach on Esc")
-	}
-	if m.showFinishPrompt {
-		t.Error("non-tweak session should not show finish prompt")
-	}
-}
-
-func TestAttachModel_FinishPrompt_F_FinishesAndDetaches(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-3", "feat-3")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-	m.showFinishPrompt = true
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
-
-	if !m.TweakFinishing() {
-		t.Error("expected tweakFinishing after pressing 'f' in finish prompt")
-	}
-	if !m.Detached() {
-		t.Error("expected detached after pressing 'f' in finish prompt")
-	}
-	if m.showFinishPrompt {
-		t.Error("finish prompt should be cleared after selection")
-	}
-}
-
-func TestAttachModel_FinishPrompt_Enter_FinishesAndDetaches(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-4", "feat-4")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-	m.showFinishPrompt = true
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-
-	if !m.TweakFinishing() {
-		t.Error("expected tweakFinishing after pressing Enter in finish prompt")
-	}
-	if !m.Detached() {
-		t.Error("expected detached after pressing Enter in finish prompt")
-	}
-}
-
-func TestAttachModel_FinishPrompt_S_TriggersInterrupt(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-stop-1", "feat-stop-1")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-	m.showFinishPrompt = true
-
-	m, cmd := m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
-
-	if m.showFinishPrompt {
-		t.Error("'s' should close the finish prompt")
-	}
-	if m.Detached() {
-		t.Error("'s' should NOT detach — session stays alive after Stop")
-	}
-	if m.TweakFinishing() {
-		t.Error("'s' should NOT mark the session as finishing")
-	}
-	if cmd == nil {
-		t.Fatal("expected an interrupt command to be returned")
-	}
-
-	// Executing the cmd should call Interrupt() on the session and return
-	// an agentInterruptedMsg.
-	msg := cmd()
-	if _, ok := msg.(agentInterruptedMsg); !ok {
-		t.Fatalf("expected agentInterruptedMsg, got %T", msg)
-	}
-	if mv.InterruptCalled != 1 {
-		t.Errorf("expected Interrupt() to be called once, got %d", mv.InterruptCalled)
-	}
-}
-
-func TestAttachModel_AgentInterruptedMsg_SetsSuccessToast(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-stop-2", "feat-stop-2")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-
-	m, cmd := m.Update(agentInterruptedMsg{err: nil})
-
-	if !strings.HasPrefix(m.interruptToast, "✓") {
-		t.Errorf("expected success toast starting with ✓, got %q", m.interruptToast)
-	}
-	if m.interruptToastAt.IsZero() {
-		t.Error("interruptToastAt should be stamped after success")
-	}
-	if cmd == nil {
-		t.Error("expected a clear tick cmd to be returned")
-	}
-}
-
-func TestAttachModel_AgentInterruptedMsg_SetsFailureToast(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-stop-3", "feat-stop-3")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-
-	m, _ = m.Update(agentInterruptedMsg{err: fmt.Errorf("boom")})
-
-	if !strings.HasPrefix(m.interruptToast, "✗") {
-		t.Errorf("expected failure toast starting with ✗, got %q", m.interruptToast)
-	}
-	if !strings.Contains(m.interruptToast, "boom") {
-		t.Errorf("expected failure toast to include error text, got %q", m.interruptToast)
-	}
-}
-
-func TestAttachModel_AgentToastClearMsg_ClearsToast(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-stop-4", "feat-stop-4")
-	m := attachModelFromSession(mv, 80, 24)
-	m.interruptToast = "✓ Agent interrupted: what should I do instead?"
-	// Stamp the toast in the past so the clear message drops it.
-	m.interruptToastAt = m.interruptToastAt.Add(-2 * interruptToastDuration)
-
-	m, _ = m.Update(agentToastClearMsg{})
-
-	if m.interruptToast != "" {
-		t.Errorf("expected toast cleared, got %q", m.interruptToast)
-	}
-}
-
-func TestAttachModel_FinishPromptRenderer_IncludesStopOption(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-stop-render", "feat-stop-render")
-	m := attachModelFromSession(mv, 80, 24)
-	rendered := m.renderFinishPromptInline()
-
-	if !strings.Contains(rendered, "[s]") {
-		t.Errorf("finish prompt should list the [s] Stop option, got: %s", rendered)
-	}
-	if !strings.Contains(rendered, "Stop") {
-		t.Errorf("finish prompt should mention Stop, got: %s", rendered)
-	}
-}
-
-func TestAttachModel_FinishPrompt_D_DetachesWithoutFinishing(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-5", "feat-5")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-	m.showFinishPrompt = true
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
-
-	if !m.Detached() {
-		t.Error("expected detached after pressing 'd' in finish prompt")
-	}
-	if m.TweakFinishing() {
-		t.Error("should NOT be finishing after pressing 'd' — detach only")
-	}
-}
-
-func TestAttachModel_FinishPrompt_SecondEsc_CancelsPrompt(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-6", "feat-6")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-	m.showFinishPrompt = true
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-
-	if m.showFinishPrompt {
-		t.Error("second Esc should cancel the finish prompt")
-	}
-	if m.Detached() {
-		t.Error("second Esc should not detach — just cancel the prompt")
-	}
-}
-
-func TestAttachModel_FinishPrompt_UnrecognizedKey_CancelsPrompt(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-7", "feat-7")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-	m.showFinishPrompt = true
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
-
-	if m.showFinishPrompt {
-		t.Error("unrecognized key should cancel the finish prompt")
-	}
-	if m.Detached() {
-		t.Error("unrecognized key should not detach")
-	}
-	if m.TweakFinishing() {
-		t.Error("unrecognized key should not finish")
-	}
-}
-
-func TestAttachModel_CtrlBracket_TweakSession_DetachesWithoutPrompt(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-9", "feat-9")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: ']', Mod: tea.ModCtrl})
-
-	if !m.Detached() {
-		t.Error("Ctrl+] should detach directly in tweak session")
-	}
-	if m.showFinishPrompt {
-		t.Error("Ctrl+] should not show finish prompt")
-	}
-	if m.TweakFinishing() {
-		t.Error("Ctrl+] should not set finishing (just detach)")
-	}
-}
-
-func TestAttachModel_PermPrompt_Priority_OverFinishPrompt(t *testing.T) {
-	sess := session.NewSession("sess-10", "feat-10", feature.PhaseImplement)
-	tabs := []repoTab{{repoName: "repo-a", sess: sess}}
-	m := testAttachModel(sess, 80, 24, tabs, 0)
-	m.isTweakSession = true
-	m.showPermMenu = true
-	m.permMenuChoice = 0
-	m.pendingPermRequestID = "req-1"
-
-	// Press a key that navigates the perm menu
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
-
-	if m.showFinishPrompt {
-		t.Error("finish prompt should not activate while perm menu is visible")
-	}
-	if m.permMenuChoice != 1 {
-		t.Errorf("perm menu should navigate, got choice %d", m.permMenuChoice)
-	}
-}
-
-func TestAttachModel_AskUserQuestion_Priority_OverFinishPrompt(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-11", "feat-11")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-	m.pendingQuestions = []askUserQuestion{{
-		Question: "Pick one",
-		Options:  []askUserOption{{Label: "A"}, {Label: "B"}},
-	}}
-	m.currentQuestionIdx = 0
-	m.selectedOption = 0
-
-	// Esc in question mode detaches (existing behavior)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-
-	if m.showFinishPrompt {
-		t.Error("finish prompt should not activate while question is active")
-	}
-	// Question mode Esc detaches — this is existing behavior
-	if !m.Detached() {
-		t.Error("Esc during question should detach (existing behavior)")
-	}
-}
-
-func TestAttachModel_CtrlD_TweakSession_SetsFinishing(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-1", "feat-1")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = true
-
-	// Send Ctrl+D (same representation used in TestPlanReviewMenuDispatchesDecision)
-	ctrlD := tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
-	m, _ = m.Update(ctrlD)
-
-	if !m.tweakFinishing {
-		t.Error("tweakFinishing should be true after Ctrl+D in tweak session")
-	}
-	if !m.Detached() {
-		t.Error("should be detached after Ctrl+D in tweak session")
-	}
-}
-
-func TestAttachModel_CtrlD_NonTweakSession_NoOp(t *testing.T) {
-	mv := mocks.NewMockSessionView("sess-2", "feat-2")
-	m := attachModelFromSession(mv, 80, 24)
-	m.isTweakSession = false
-
-	// Send Ctrl+D
-	ctrlD := tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
-	m, _ = m.Update(ctrlD)
-
-	if m.tweakFinishing {
-		t.Error("tweakFinishing should remain false after Ctrl+D in non-tweak session")
-	}
-	if m.Detached() {
-		t.Error("should not be detached after Ctrl+D in non-tweak session")
 	}
 }
 
@@ -3127,7 +2941,7 @@ func TestAttach_TabSwitch_PreservesPerTabMedia(t *testing.T) {
 
 	// Simulate pasted media on tab A (idx 0).
 	m.pastedImages = []string{"/tmp/img-1.png", "/tmp/img-2.png"}
-	m.pastedFiles = []string{"/tmp/spec.pdf"}
+	m.pastedFiles = []string{testPastedFilePath}
 	m.pastedFileNames = []string{"spec.pdf"}
 	m.imageCounter = 2
 
@@ -3470,9 +3284,9 @@ func TestReplacePastedPaths(t *testing.T) {
 		{
 			name:       "file placeholder",
 			text:       "/tmp/spec.pdf review",
-			media:      &pastedMediaMap{files: []string{"/tmp/spec.pdf"}, fileNames: []string{"spec.pdf"}},
+			media:      &pastedMediaMap{files: []string{testPastedFilePath}, fileNames: []string{"spec.pdf"}},
 			wantPlain:  "[spec.pdf]",
-			wantAbsent: "/tmp/spec.pdf",
+			wantAbsent: testPastedFilePath,
 		},
 		{
 			name:       "mixed content",
@@ -3574,13 +3388,13 @@ func TestFilePaste_TracksFilesAndNames(t *testing.T) {
 	m := AttachModel{}
 	m.input = textarea.New()
 
-	m, _ = m.Update(FilesPastedMsg{Paths: []string{"/tmp/spec.pdf"}, Names: []string{"spec.pdf"}})
+	m, _ = m.Update(FilesPastedMsg{Paths: []string{testPastedFilePath}, Names: []string{"spec.pdf"}})
 
 	if len(m.pastedFiles) != 1 {
 		t.Fatalf("len(pastedFiles) = %d, want 1", len(m.pastedFiles))
 	}
-	if m.pastedFiles[0] != "/tmp/spec.pdf" {
-		t.Errorf("pastedFiles[0] = %q, want %q", m.pastedFiles[0], "/tmp/spec.pdf")
+	if m.pastedFiles[0] != testPastedFilePath {
+		t.Errorf("pastedFiles[0] = %q, want %q", m.pastedFiles[0], testPastedFilePath)
 	}
 	if len(m.pastedFileNames) != 1 {
 		t.Fatalf("len(pastedFileNames) = %d, want 1", len(m.pastedFileNames))
@@ -3645,7 +3459,7 @@ func TestExpandMediaPlaceholders(t *testing.T) {
 			name: "single file",
 			text: "see [spec.pdf]",
 			media: &pastedMediaMap{
-				files:     []string{"/tmp/spec.pdf"},
+				files:     []string{testPastedFilePath},
 				fileNames: []string{"spec.pdf"},
 			},
 			want: "see /tmp/spec.pdf",
@@ -3768,7 +3582,7 @@ func TestRenderAttachMessages_FilePlaceholder(t *testing.T) {
 			User: &llm.UserMessage{
 				Message: llm.ConversationMsg{
 					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: "/tmp/spec.pdf"}},
+					Content: []llm.ContentBlock{{Type: "text", Text: testPastedFilePath}},
 				},
 			},
 			LocallyAppended: true,
@@ -3776,7 +3590,7 @@ func TestRenderAttachMessages_FilePlaceholder(t *testing.T) {
 	}
 
 	media := &pastedMediaMap{
-		files:     []string{"/tmp/spec.pdf"},
+		files:     []string{testPastedFilePath},
 		fileNames: []string{"spec.pdf"},
 	}
 	output := renderAttachMessages(msgs, filterAll, 120, media)
@@ -3785,7 +3599,7 @@ func TestRenderAttachMessages_FilePlaceholder(t *testing.T) {
 	if !strings.Contains(stripped, "[spec.pdf]") {
 		t.Errorf("stripped output %q does not contain [spec.pdf]", stripped)
 	}
-	if strings.Contains(stripped, "/tmp/spec.pdf") {
+	if strings.Contains(stripped, testPastedFilePath) {
 		t.Errorf("stripped output %q should not contain raw path /tmp/spec.pdf", stripped)
 	}
 }
@@ -3793,10 +3607,10 @@ func TestRenderAttachMessages_FilePlaceholder(t *testing.T) {
 func TestRenderAttachMessages_AssistantMessageUnaffected(t *testing.T) {
 	msgs := []llm.SDKMessage{
 		{
-			Type: "assistant",
+			Type: roleAssistant,
 			Assistant: &llm.AssistantMessage{
 				Message: llm.ConversationMsg{
-					Role:    "assistant",
+					Role:    roleAssistant,
 					Content: []llm.ContentBlock{{Type: "text", Text: "/tmp/image-1.png"}},
 				},
 			},
@@ -3867,11 +3681,11 @@ func TestRenderAttachMessages_PartialAssistantSkipsMarkdown(t *testing.T) {
 	partialText := "Here is some code:\n\n```go\nfunc foo("
 	msgs := []llm.SDKMessage{
 		{
-			Type:    "assistant",
+			Type:    roleAssistant,
 			Subtype: "partial",
 			Assistant: &llm.AssistantMessage{
 				Message: llm.ConversationMsg{
-					Role:    "assistant",
+					Role:    roleAssistant,
 					Content: []llm.ContentBlock{{Type: "text", Text: partialText}},
 				},
 			},
@@ -3904,11 +3718,11 @@ func TestRenderAttachMessages_CompleteAssistantRendersMarkdown(t *testing.T) {
 	text := "# Heading\n\nHere is some text with `inline code` and a list:\n\n- item one\n- item two\n"
 	msgs := []llm.SDKMessage{
 		{
-			Type: "assistant",
+			Type: roleAssistant,
 			// No Subtype: this is a finalized message.
 			Assistant: &llm.AssistantMessage{
 				Message: llm.ConversationMsg{
-					Role:    "assistant",
+					Role:    roleAssistant,
 					Content: []llm.ContentBlock{{Type: "text", Text: text}},
 				},
 			},

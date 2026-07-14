@@ -42,31 +42,31 @@ func TestCompileTestingContractMultiRepo_PerRepoBaseline(t *testing.T) {
 		"- [ ] web tests: `npm test`",
 	}, "\n")
 	in := MultiRepoContractInput{
-		Repos:    []string{"api", "web"},
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 		PlanPath: "/state/runs/run-001/phase-01/plan/approved.md",
 	}
 	c := CompileTestingContractMultiRepo(in)
 
 	baselineCount := len(DefaultBaselineVerificationSteps())
-	if got := countItems(c.Items, testingContractBaselineSource, "api"); got != baselineCount {
+	if got := countItems(c.Items, testingContractBaselineSource, testRepoNameAPI); got != baselineCount {
 		t.Errorf("api baseline rows = %d, want %d", got, baselineCount)
 	}
-	if got := countItems(c.Items, testingContractBaselineSource, "web"); got != baselineCount {
+	if got := countItems(c.Items, testingContractBaselineSource, testRepoNameWeb); got != baselineCount {
 		t.Errorf("web baseline rows = %d, want %d", got, baselineCount)
 	}
 
-	if got := countItems(c.Items, testingContractPlanSource, "api"); got != 1 {
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameAPI); got != 1 {
 		t.Errorf("api plan rows = %d, want 1", got)
 	}
-	if got := countItems(c.Items, testingContractPlanSource, "web"); got != 1 {
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameWeb); got != 1 {
 		t.Errorf("web plan rows = %d, want 1", got)
 	}
 }
 
 func TestCompileTestingContractMultiRepo_CrossRepoSteps(t *testing.T) {
 	in := MultiRepoContractInput{
-		Repos:    []string{"api", "web"},
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: "## Tasks\n### Task 1\n**Repo:** `api`\n",
 		CrossRepoSteps: []VerificationStep{
 			{Description: "End-to-end smoke", Command: "scripts/e2e.sh"},
@@ -87,7 +87,7 @@ func TestCompileTestingContractMultiRepo_PlanLessNoPlanItems(t *testing.T) {
 		"- [ ] api tests: `go test ./api/... -count=1`",
 	}, "\n")
 	in := MultiRepoContractInput{
-		Repos:    []string{"api"},
+		Repos:    []string{testRepoNameAPI},
 		PlanText: plan,
 		PlanLess: true,
 	}
@@ -99,7 +99,7 @@ func TestCompileTestingContractMultiRepo_PlanLessNoPlanItems(t *testing.T) {
 	}
 	// Baseline should still be emitted.
 	baselineCount := len(DefaultBaselineVerificationSteps())
-	if got := countItems(c.Items, testingContractBaselineSource, "api"); got != baselineCount {
+	if got := countItems(c.Items, testingContractBaselineSource, testRepoNameAPI); got != baselineCount {
 		t.Errorf("baseline rows = %d, want %d", got, baselineCount)
 	}
 }
@@ -134,7 +134,7 @@ func TestCompileTestingContractMultiRepo_EveryItemTagged(t *testing.T) {
 		"- [ ] api: `go test ./api/...`",
 	}, "\n")
 	in := MultiRepoContractInput{
-		Repos:    []string{"api", "web"},
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 		CrossRepoSteps: []VerificationStep{
 			{Description: "smoke", Command: "scripts/e2e.sh"},
@@ -150,7 +150,7 @@ func TestCompileTestingContractMultiRepo_EveryItemTagged(t *testing.T) {
 
 func TestCompileTestingContractMultiRepo_DistinctIDsPerRepo(t *testing.T) {
 	in := MultiRepoContractInput{
-		Repos: []string{"api", "web"},
+		Repos: []string{testRepoNameAPI, testRepoNameWeb},
 	}
 	c := CompileTestingContractMultiRepo(in)
 	ids := make(map[string]bool)
@@ -168,14 +168,14 @@ func TestCompileTestingContractMultiRepo_TopLevelVerificationFanOut(t *testing.T
 		"- [ ] cross check: `make verify`",
 	}, "\n")
 	in := MultiRepoContractInput{
-		Repos:    []string{"api", "web"},
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 	}
 	c := CompileTestingContractMultiRepo(in)
-	if got := countItems(c.Items, testingContractPlanSource, "api"); got != 1 {
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameAPI); got != 1 {
 		t.Errorf("api plan rows = %d, want 1 (top-level fanned to api)", got)
 	}
-	if got := countItems(c.Items, testingContractPlanSource, "web"); got != 1 {
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameWeb); got != 1 {
 		t.Errorf("web plan rows = %d, want 1 (top-level fanned to web)", got)
 	}
 }
@@ -194,13 +194,13 @@ func TestCompileTestingContractMultiRepo_SuccessCriteriaVerificationFanOut(t *te
 		"- [ ] Full suite passes: `make verify`",
 	}, "\n")
 	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos:    []string{"api", "web"},
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 	})
-	if got := countItems(c.Items, testingContractPlanSource, "api"); got != 1 {
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameAPI); got != 1 {
 		t.Errorf("api plan rows = %d, want 1 (success criteria fanned to api)", got)
 	}
-	if got := countItems(c.Items, testingContractPlanSource, "web"); got != 1 {
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameWeb); got != 1 {
 		t.Errorf("web plan rows = %d, want 1 (success criteria fanned to web)", got)
 	}
 }
@@ -221,7 +221,7 @@ func TestCompileTestingContractMultiRepo_ManualVerificationIsCrossRepo(t *testin
 		"- [ ] Complete the end-to-end sign-in flow in a browser.",
 	}, "\n")
 	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos:    []string{"api", "web"},
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 	})
 
@@ -275,7 +275,7 @@ func TestCompileTestingContractMultiRepo_EvidenceRowsMultiRepoAreCrossRepo(t *te
 	}, "\n")
 
 	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos:    []string{"api", "web"},
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 	})
 
@@ -297,7 +297,7 @@ func TestCompileTestingContractMultiRepo_PlanLessNoEvidenceRows(t *testing.T) {
 	}, "\n")
 
 	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos:    []string{"api", "web"},
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 		PlanLess: true,
 	})

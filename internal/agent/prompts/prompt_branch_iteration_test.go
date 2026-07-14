@@ -220,12 +220,12 @@ func TestFinalReviewPromptBranches(t *testing.T) {
 				IsCycleReview:    true,
 				DiffBase:         "main",
 				RoadmapPath:      "/roadmap.md",
-				CycleFocus:       "Tweak: button color only.",
+				CycleFocus:       "Rebase: button color only.",
 				FeedbackPath:     "/cycle/review-feedback.md",
 				Publishable:      false,
 				PreviousFeedback: "Use a darker hover state.",
 			},
-			wantContains: []string{"## Current Cycle Focus", "Tweak: button color only.", "**Review feedback output**: /cycle/review-feedback.md", "NOTE: Local-only repository"},
+			wantContains: []string{"## Current Cycle Focus", "Rebase: button color only.", "**Review feedback output**: /cycle/review-feedback.md", "NOTE: Local-only repository"},
 			wantOmit:     []string{"**Testing contract**", "**Verification report**"},
 		},
 	}
@@ -351,7 +351,6 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"roadmap_user_multi_repo":        true,
 		"scout_user":                     true,
 		"summary_user":                   true,
-		"tweak_user":                     true,
 		"validate_specialized_grounding": true,
 	}
 

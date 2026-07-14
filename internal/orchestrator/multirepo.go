@@ -28,7 +28,7 @@ import (
 // path, runs PhaseScope to derive the phase-declared repo subset, clears any
 // stale per-repo error state on that subset (so the loop starts fresh
 // against known state), invokes the engine via the runMultiRepoImplFn seam,
-// and spawns a goroutine that routes cycle-terminal results back through
+// and asks the phase supervisor to route cycle-terminal results back through
 // HandlePhaseCompletion. Crash recovery re-runs the interrupted unit from
 // scratch with a fresh Claude session; durable state on disk is the resume
 // scaffolding.
@@ -75,31 +75,8 @@ func (o *Orchestrator) StartMultiRepoImplementation(featureID string) error {
 		return fmt.Errorf("run multi-repo implementation: %w", err)
 	}
 
-	go o.dispatchMultiRepoResults(featureID, resultCh)
+	o.phaseSupervisor().superviseImplementationLoop(featureID, resultCh)
 	return nil
-}
-
-// dispatchMultiRepoResults reads the engine's result channel and routes
-// terminal values to HandlePhaseCompletion. Intermediate observations are
-// ignored. The loop exits after the first terminal value because the
-// production engine sends exactly one value on a buffered-1 channel and never
-// closes it.
-func (o *Orchestrator) dispatchMultiRepoResults(featureID string, resultCh <-chan *agent.OrchestratorResult) {
-	for res := range resultCh {
-		if res == nil {
-			continue
-		}
-		switch res.FinalStatus {
-		case "all_passed", "awaiting_final_review", "failed", "need_user_input", "plan_revision_required", "interrupted":
-			if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-				Phase:           feature.PhaseImplement,
-				MultiRepoResult: res,
-			}); err != nil {
-				o.surfaceDispatchCompletionError(featureID, err)
-			}
-			return
-		}
-	}
 }
 
 // repoSubsetForPhaseStart returns the phase-declared repo subset to reset

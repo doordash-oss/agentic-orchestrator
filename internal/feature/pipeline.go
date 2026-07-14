@@ -269,6 +269,7 @@ func mergeCheckpoints(checkpoints ...Checkpoints) Checkpoints {
 		merged.RoadmapReview = merged.RoadmapReview || cp.RoadmapReview
 		merged.PhasePlanReview = merged.PhasePlanReview || cp.PhasePlanReview
 		merged.ManualPublish = merged.ManualPublish || cp.ManualPublish
+		merged.DraftPublish = merged.DraftPublish || cp.DraftPublish
 	}
 	return merged
 }
@@ -314,6 +315,7 @@ func ConfigCheckpointsToFeature(cc config.Checkpoints) Checkpoints {
 		RoadmapReview:   cc.RoadmapReview,
 		PhasePlanReview: cc.PhasePlanReview,
 		ManualPublish:   cc.ManualPublish,
+		DraftPublish:    cc.DraftPublish,
 	}
 }
 
@@ -326,5 +328,6 @@ func FeatureCheckpointsToConfig(fc Checkpoints) config.Checkpoints {
 		RoadmapReview:   fc.RoadmapReview,
 		PhasePlanReview: fc.PhasePlanReview,
 		ManualPublish:   fc.ManualPublish,
+		DraftPublish:    fc.DraftPublish,
 	}
 }

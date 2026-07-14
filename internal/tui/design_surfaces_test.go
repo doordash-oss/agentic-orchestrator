@@ -39,24 +39,3 @@ func TestCheckpointDescriptionsUseDesignLanguage(t *testing.T) {
 		}
 	}
 }
-
-// TestSessionIDParsingCanonicalDesignSuffix ensures the canonical "-design"
-// suffix routes to PhaseDesign.
-func TestSessionIDParsingCanonicalDesignSuffix(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		sessionID string
-		want      feature.Phase
-	}{
-		{"abc123-design", feature.PhaseDesign},
-		{"longid1234567890-design", feature.PhaseDesign},
-	}
-	for _, tt := range tests {
-		t.Run(tt.sessionID, func(t *testing.T) {
-			got := phaseFromSessionID(tt.sessionID)
-			if got != tt.want {
-				t.Errorf("phaseFromSessionID(%q) = %v, want %v", tt.sessionID, got, tt.want)
-			}
-		})
-	}
-}

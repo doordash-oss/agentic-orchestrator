@@ -59,16 +59,6 @@ func JSONLError(errMsg string) string {
 	return fmt.Sprintf(`echo '{"type":"result","subtype":"error","error":"%s"}'`, escaped)
 }
 
-// JSONLControlRequest returns a shell echo for a control_request message
-// using the correct wire format with nested request object.
-func JSONLControlRequest(requestID, toolName string, extraFields ...string) string {
-	extra := ""
-	if len(extraFields) > 0 {
-		extra = "," + strings.Join(extraFields, ",")
-	}
-	return fmt.Sprintf(`echo '{"type":"control_request","request_id":"%s","request":{"subtype":"can_use_tool","tool_name":"%s","input":{}%s}}'`, requestID, toolName, extra)
-}
-
 // TouchPhaseComplete returns a shell command that writes the phase_complete
 // signal file to the latest iteration-* directory under artifactDir. This must
 // be emitted BEFORE the JSONL success result so that waitForStatus's readyCheck
@@ -160,14 +150,6 @@ func WriteImplementSuccessArtifacts(artifactDir string) string {
 // gate.
 func WriteImplementRetryArtifacts(artifactDir string) string {
 	return writeImplArtifacts(artifactDir, "RETRY", "")
-}
-
-// WriteImplementNeedUserInputArtifacts returns a shell snippet for a
-// NEED_USER_INPUT iteration. note becomes both the progress.md state note and
-// the agent-authored gate summary. questions, when non-empty, are emitted as a
-// `## Questions for User` numbered list and in need-user-input.yaml.
-func WriteImplementNeedUserInputArtifacts(artifactDir, note string, questions ...string) string {
-	return WriteImplementNeedUserInputArtifactsWithGateSummary(artifactDir, note, note, questions...)
 }
 
 // WriteImplementNeedUserInputArtifactsWithGateSummary returns a shell snippet

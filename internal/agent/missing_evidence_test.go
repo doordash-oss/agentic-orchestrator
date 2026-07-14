@@ -32,17 +32,17 @@ func TestMissingEvidenceRequirements_ParseStructuredMarkers(t *testing.T) {
 		"- (none)",
 		"",
 		"## Verdict",
-		"CHANGES_REQUESTED",
+		agentStatusChangesRequested,
 	}, "\n")
 
 	got := MissingEvidenceRequirements(feedback)
 	if len(got) != 2 {
 		t.Fatalf("MissingEvidenceRequirements() len = %d, want 2: %+v", len(got), got)
 	}
-	if got[0].Kind != "visual" || got[0].Requirement != "Capture the updated setup wizard empty state." {
+	if got[0].Kind != testingContractVisualSource || got[0].Requirement != "Capture the updated setup wizard empty state." {
 		t.Errorf("MissingEvidenceRequirements()[0] = %+v, want visual setup wizard requirement", got[0])
 	}
-	if got[1].Kind != "behavioral" || got[1].Requirement != "Record the create-project CLI journey through persisted config." {
+	if got[1].Kind != testingContractBehavioralSource || got[1].Requirement != "Record the create-project CLI journey through persisted config." {
 		t.Errorf("MissingEvidenceRequirements()[1] = %+v, want behavioral CLI requirement", got[1])
 	}
 }
@@ -57,7 +57,7 @@ func TestMissingEvidenceRequirements_ParsePhaseQualifiedMarkers(t *testing.T) {
 	if got[0].Phase != 1 {
 		t.Errorf("MissingEvidenceRequirements()[0].Phase = %d, want 1", got[0].Phase)
 	}
-	if got[0].Kind != "behavioral" {
+	if got[0].Kind != testingContractBehavioralSource {
 		t.Errorf("MissingEvidenceRequirements()[0].Kind = %q, want behavioral", got[0].Kind)
 	}
 	if got[0].Requirement != "Record the onboarding CLI journey." {
@@ -114,11 +114,11 @@ func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 func TestLatestPlanRevisionFeedbackAttemptFindsInvalidatedMissingEvidenceAttempt(t *testing.T) {
 	planDir := t.TempDir()
 	feedback := MissingEvidencePlanRevisionFeedback([]MissingEvidenceRequirement{
-		{Kind: "visual", Requirement: "Capture the setup wizard empty state."},
+		{Kind: testingContractVisualSource, Requirement: "Capture the setup wizard empty state."},
 	})
 	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
 		Attempt:      1,
-		ReviewStatus: "CHANGES_REQUESTED",
+		ReviewStatus: agentStatusChangesRequested,
 	}); err != nil {
 		t.Fatalf("WritePlanAttemptMeta() error = %v", err)
 	}
@@ -138,8 +138,8 @@ func TestLatestPlanRevisionFeedbackAttemptFindsInvalidatedMissingEvidenceAttempt
 
 func TestMissingEvidencePlanRevisionFeedback_PreservesReviewerRequirement(t *testing.T) {
 	requirements := []MissingEvidenceRequirement{
-		{Kind: "visual", Requirement: "Capture the updated setup wizard empty state."},
-		{Phase: 1, Kind: "behavioral", Requirement: "Record the phase-one create-project CLI journey."},
+		{Kind: testingContractVisualSource, Requirement: "Capture the updated setup wizard empty state."},
+		{Phase: 1, Kind: testingContractBehavioralSource, Requirement: "Record the phase-one create-project CLI journey."},
 	}
 
 	got := MissingEvidencePlanRevisionFeedback(requirements)

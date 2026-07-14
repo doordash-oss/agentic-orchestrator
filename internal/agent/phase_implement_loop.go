@@ -105,7 +105,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	if len(phaseRepos) == 0 {
 		// Truly empty (no plan tasks AND no Feature.Repos) — nothing to do.
 		return &PhaseImplementLoopResult{
-			FinalStatus: "review_passed",
+			FinalStatus: finalStatusReviewPassed,
 			PhaseRepos:  nil,
 		}, nil
 	}
@@ -194,14 +194,14 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	}
 
 	switch loopResult.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     phaseRepos,
 			Outcome:   PhaseOutcomeReviewPassed,
 		})
 		return &PhaseImplementLoopResult{
-			FinalStatus: "review_passed",
+			FinalStatus: finalStatusReviewPassed,
 			Iterations:  loopResult.Iterations,
 			PhaseRepos:  phaseRepos,
 		}, nil

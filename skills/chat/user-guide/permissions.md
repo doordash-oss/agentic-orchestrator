@@ -75,6 +75,7 @@ When you choose "Allow & Remember", Agentic Orchestrator infers a wildcard patte
 4. Builds the pattern:
    - **Single word** (e.g., `ls`) — `Bash(ls *)`
    - **First arg is a flag** (e.g., `ls -la /tmp`) — `Bash(ls *)` (flags are not subcommands)
+   - **Known file-operand command** (e.g., `touch /tmp/file`) — `Bash(touch *)` (file paths are not subcommands)
    - **First arg is a subcommand** (e.g., `npm test --coverage`) — `Bash(npm test *)` (preserves the subcommand, wildcards the rest)
 
 ### Examples
@@ -84,6 +85,7 @@ When you choose "Allow & Remember", Agentic Orchestrator infers a wildcard patte
 | `npm test --coverage` | `Bash(npm test *)` |
 | `go build ./...` | `Bash(go build *)` |
 | `ls -la /tmp` | `Bash(ls *)` |
+| `touch /tmp/phase_complete` | `Bash(touch *)` |
 | `cd /path && make build` | `Bash(make build *)` |
 | `git push origin main` | `Bash(git push *)` |
 

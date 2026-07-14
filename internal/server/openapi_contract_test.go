@@ -330,7 +330,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: "delete", path: "/api/v1/features/{feature_id}/reviews/{review_id}", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/need-user-input", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/need-user-input-draft", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/input-notifications", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts"},

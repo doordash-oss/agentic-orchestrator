@@ -198,6 +198,8 @@ The `pipeline_gates` map is keyed by pipeline profile name and overrides the def
 
 ## Notifications
 
+The workspace input-alert default can be changed from the TUI with `Shift+E` → Behavior → Input Alerts. A specific feature can override that default with `e` → Behavior → Input Alerts (`default`, `enabled`, or `muted`).
+
 | Field | Description |
 |-------|-------------|
 | `notifications.terminal_bundle_id` | Overrides auto-detected terminal app bundle ID for macOS notifications |

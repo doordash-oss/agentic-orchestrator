@@ -456,6 +456,7 @@ func TestInferBashPattern(t *testing.T) {
 
 		// Binary with flags only (second token is flag → binary *)
 		{"ls with flags", toolNameBash, "ls -la /tmp", patternBashLS},
+		{"touch absolute path uses binary wildcard", toolNameBash, `touch "/private/var/tmp/agentico/features/run-001/phase_complete"`, "Bash(touch *)"},
 		{"rm with flags stays exact", toolNameBash, "rm -rf /tmp/foo", "Bash(rm -rf /tmp/foo)"},
 		{"grep with flags", toolNameBash, "grep -rn 'pattern' .", "Bash(grep *)"},
 		{"rm absolute path stays exact", toolNameBash, "rm /private/var/tmp/agentico/knowledge-base/dbaccess/verification/build-and-lint.md", "Bash(rm /private/var/tmp/agentico/knowledge-base/dbaccess/verification/build-and-lint.md)"},
@@ -482,6 +483,7 @@ func TestInferBashPattern(t *testing.T) {
 		{"json npm test", toolNameBash, testJSONNpmTestCoverage, patternBashNpmTest},
 		{"json ls", toolNameBash, testJSONLsLa, patternBashLS},
 		{"json go test", toolNameBash, `{"command":"go test ./..."}`, patternBashGoTest},
+		{"json touch", toolNameBash, `{"command":"touch \"/private/var/tmp/agentico/features/run-001/phase_complete\""}`, "Bash(touch *)"},
 		{"json cd chain", toolNameBash, `{"command":"cd /repo && npm test"}`, patternBashNpmTest},
 		{"json empty command", toolNameBash, `{"command":""}`, patternBashAny},
 	}

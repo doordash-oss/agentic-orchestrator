@@ -128,7 +128,7 @@ func TestDashboardContextBindings(t *testing.T) {
 	if features == nil {
 		t.Fatal("missing FEATURES section")
 	}
-	for _, k := range []string{"n", "Shift+N", "d", "v", "p", "Shift+R", "Shift+A"} {
+	for _, k := range []string{"n", "d", "v", "p", "Shift+R", "Shift+A"} {
 		if !sectionContainsKey(features, k) {
 			t.Errorf("FEATURES missing key %q", k)
 		}
@@ -166,7 +166,7 @@ func TestDetailPanelContextBindings(t *testing.T) {
 	if actions == nil {
 		t.Fatal("missing ACTIONS section")
 	}
-	for _, k := range []string{"y", "h", "Shift+N", "r", "ctrl+r", "l", "v", "d"} {
+	for _, k := range []string{"y", "h", "r", "ctrl+r", "l", "v", "d"} {
 		if !sectionContainsKey(actions, k) {
 			t.Errorf("ACTIONS missing key %q", k)
 		}
@@ -324,7 +324,7 @@ func TestDetailViewContextBindings(t *testing.T) {
 	if actions == nil {
 		t.Fatal("missing ACTIONS section")
 	}
-	for _, k := range []string{"y", "h", "Shift+N", "r", "ctrl+r"} {
+	for _, k := range []string{"y", "h", "r", "ctrl+r"} {
 		if !sectionContainsKey(actions, k) {
 			t.Errorf("ACTIONS missing key %q", k)
 		}

@@ -1,6 +1,6 @@
 # Agentic Orchestrator Keybinding Reference
 
-_Auto-generated on 2026-07-03. Do not edit manually._
+_Auto-generated on 2026-07-13. Do not edit manually._
 
 _Run `go generate ./internal/tui/...` to regenerate._
 
@@ -19,7 +19,6 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `p` | Publish (when code ready) |
 | `y` | Approve pending permissions |
 | `Shift+A` | Approve & remember permissions |
-| `Shift+N` | Toggle input notifications |
 | `Shift+E` | Edit workspace config |
 | `d` | Delete feature |
 
@@ -32,7 +31,6 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `y` | Approve pending permissions |
 | `Shift+A` | Approve & remember permissions |
 | `h` | Answer agent's help question |
-| `Shift+N` | Toggle input notifications |
 | `r` | Restart current phase |
 | `s` | Stop running feature |
 | `ctrl+r` | Rewind to phase |

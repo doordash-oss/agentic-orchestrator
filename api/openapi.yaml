@@ -320,21 +320,6 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/v1/features/{feature_id}/input-notifications:
-    post:
-      operationId: toggleInputNotificationsLegacy
-      summary: Toggle feature input notifications.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
   /api/v1/features/{feature_id}/actions/{action}:
     post:
       operationId: runFeatureAction
@@ -1522,8 +1507,6 @@ components:
               $ref: "#/components/schemas/NeedUserInputDecisionResponse"
             need_user_input_draft_response:
               $ref: "#/components/schemas/NeedUserInputDraftResponse"
-            input_notifications_toggle_response:
-              $ref: "#/components/schemas/InputNotificationsToggleResponse"
             permission_answer_response:
               $ref: "#/components/schemas/PermissionAnswerResponse"
             ask_user_answer_response:
@@ -1630,15 +1613,6 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-    InputNotificationsToggleResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [muted]
-          properties:
-            muted:
-              type: boolean
     PermissionAnswerResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -1963,6 +1937,9 @@ components:
           $ref: "#/components/schemas/Checkpoints"
         pipeline:
           type: string
+        input_notifications:
+          type: string
+          enum: [default, enabled, muted]
     Publishability:
       type: object
       required: [manual_publish, repos]
@@ -2411,6 +2388,8 @@ components:
         repo_name:
           type: string
         cycle_type:
+          type: string
+        input_notifications:
           type: string
         iteration:
           type: integer

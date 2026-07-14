@@ -974,9 +974,10 @@ func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntim
 
 func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
 	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
-		Models:      req.Models,
-		Inquireness: feature.Inquireness(req.Inquireness),
-		Checkpoints: req.Checkpoints,
+		Models:             req.Models,
+		Inquireness:        feature.Inquireness(req.Inquireness),
+		Checkpoints:        req.Checkpoints,
+		InputNotifications: feature.InputNotificationsMode(req.InputNotifications),
 	}); err != nil {
 		return serverruntime.FeatureConfigUpdateResponse{}, err
 	}
@@ -1332,34 +1333,6 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		status = resultUpdated
 	}
 	return serverruntime.RuntimeConfigUpdateResponse{Result: status}, nil
-}
-
-func (t *serverMutationTarget) ToggleInputNotifications(featureID string) (serverruntime.InputNotificationsToggleResponse, error) {
-	if t.store == nil {
-		return serverruntime.InputNotificationsToggleResponse{}, errors.New("feature store is not available")
-	}
-	defaultMuted := false
-	if t.cfg != nil {
-		defaultMuted = t.cfg.Notifications.MuteFeatureInput
-	}
-	muted := false
-	if err := t.store.Modify(featureID, func(f *feature.Feature) error {
-		current := defaultMuted
-		if f.MuteInputNotifications != nil {
-			current = *f.MuteInputNotifications
-		}
-		next := !current
-		f.MuteInputNotifications = &next
-		muted = next
-		return nil
-	}); err != nil {
-		return serverruntime.InputNotificationsToggleResponse{}, fmt.Errorf("toggling input notifications: %w", err)
-	}
-	status := "enabled"
-	if muted {
-		status = "muted"
-	}
-	return serverruntime.InputNotificationsToggleResponse{FeatureID: featureID, Result: status, Muted: muted}, nil
 }
 
 func (t *serverMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {

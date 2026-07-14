@@ -182,6 +182,8 @@ type FeatureConfigResponse = serverapi.FeatureConfigResponse
 
 type FeatureConfigDTO = serverapi.FeatureConfig
 
+type FeatureConfigInputNotifications = serverapi.FeatureConfigInputNotifications
+
 type CheckpointsDTO = serverapi.Checkpoints
 
 type PublishabilityDTO = serverapi.Publishability
@@ -271,8 +273,6 @@ type FeatureConfigUpdateResponse = serverapi.FeatureConfigUpdateResponse
 type NeedUserInputDecisionResponse = serverapi.NeedUserInputDecisionResponse
 
 type NeedUserInputDraftResponse = serverapi.NeedUserInputDraftResponse
-
-type InputNotificationsToggleResponse = serverapi.InputNotificationsToggleResponse
 
 type PermissionAnswerResponse = serverapi.PermissionAnswerResponse
 

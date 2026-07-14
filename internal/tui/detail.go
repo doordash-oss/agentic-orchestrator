@@ -484,8 +484,6 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 	}
 	b.WriteString(LabelStyle.Render("Models"))
 	b.WriteString("  " + MutedStyle.Render(compactModelSummary(f.Models, " ")) + "\n")
-	b.WriteString(LabelStyle.Render("Input Alerts"))
-	b.WriteString("  " + MutedStyle.Render(inputAlertModeLabel(f)) + "\n")
 	if f.RiskLevel != "" {
 		b.WriteString(LabelStyle.Render("Risk"))
 		b.WriteString("  " + formatRiskBadge(f.RiskLevel) + " " + string(f.RiskLevel) + "\n")
@@ -829,16 +827,6 @@ func needsReviewBanner(f *feature.Feature) string {
 // needsReviewLabel returns a human-readable label for the artifact awaiting review.
 func needsReviewLabel(f *feature.Feature) string {
 	return WarningStyle.Bold(true).Render(reviewArtifactLabel(f))
-}
-
-func inputAlertModeLabel(f *feature.Feature) string {
-	if f.MuteInputNotifications == nil {
-		return "default"
-	}
-	if *f.MuteInputNotifications {
-		return "muted"
-	}
-	return "enabled"
 }
 
 func countPendingHelp(f *feature.Feature) int {

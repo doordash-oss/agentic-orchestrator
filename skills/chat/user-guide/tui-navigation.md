@@ -88,7 +88,7 @@ Keys available in the right panel depend on the feature's current status:
 
 Inside the review comments view (opened with `g`), press `Shift+A` to auto-address all comments with an autonomous agent session.
 
-Other keys available in all states: `d` (delete feature), `Shift+N` (toggle input notifications), `a` on NeedsReview features (review artifacts).
+Other keys available in all states: `d` (delete feature), `e` (feature config, including input-alert override), `Shift+E` (workspace config defaults, including the input-alert default), `a` on NeedsReview features (review artifacts).
 
 ## Watch View
 

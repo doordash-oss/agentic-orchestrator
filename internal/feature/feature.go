@@ -519,14 +519,46 @@ func (c Checkpoints) HasGateForPhase(phase Phase) bool {
 // AutoPublish returns true if manual publish is NOT enabled.
 func (c Checkpoints) AutoPublish() bool { return !c.ManualPublish }
 
-// ConfigSnapshot bundles the three editable per-feature config axes for
+// ConfigSnapshot bundles the editable per-feature config axes for
 // audit-diff and hook transport. Passed by value; fields mirror the
-// feature-level fields on Feature so a snapshot is
-// `{f.Models, f.Inquireness, f.Checkpoints}`.
+// feature-level fields on Feature.
 type ConfigSnapshot struct {
-	Models      config.ModelConfig
-	Inquireness Inquireness
-	Checkpoints Checkpoints
+	Models             config.ModelConfig
+	Inquireness        Inquireness
+	Checkpoints        Checkpoints
+	InputNotifications InputNotificationsMode
+}
+
+type InputNotificationsMode string
+
+const (
+	InputNotificationsDefault InputNotificationsMode = "default"
+	InputNotificationsEnabled InputNotificationsMode = "enabled"
+	InputNotificationsMuted   InputNotificationsMode = "muted"
+)
+
+func NormalizeInputNotificationsMode(mode InputNotificationsMode) InputNotificationsMode {
+	switch mode {
+	case InputNotificationsEnabled, InputNotificationsMuted:
+		return mode
+	default:
+		return InputNotificationsDefault
+	}
+}
+
+func PersistInputNotificationsMode(mode InputNotificationsMode) InputNotificationsMode {
+	normalized := NormalizeInputNotificationsMode(mode)
+	if normalized == InputNotificationsDefault {
+		return ""
+	}
+	return normalized
+}
+
+func InputNotificationsModeForMuted(muted bool) InputNotificationsMode {
+	if muted {
+		return InputNotificationsMuted
+	}
+	return InputNotificationsEnabled
 }
 
 type PermissionRequest struct {
@@ -587,9 +619,9 @@ type Feature struct {
 	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to enforce KB restart on rewind
 	Checkpoints          Checkpoints         `yaml:"checkpoints,omitempty"`
 	LastAttachedRepo     string              `yaml:"last_attached_repo,omitempty"` // repo name for attach mode tab restoration
-	// MuteInputNotifications overrides global notification behavior for this
-	// feature's "waiting for input" alerts. Nil means "use global default".
-	MuteInputNotifications *bool `yaml:"mute_input_notifications,omitempty"`
+	// InputNotifications overrides global notification behavior for this
+	// feature's "waiting for input" alerts. Empty means "use global default".
+	InputNotifications InputNotificationsMode `yaml:"input_notifications,omitempty"`
 
 	TraceID       string `yaml:"trace_id,omitempty"`        // observability correlation; derived from ID if absent
 	FeatureSpanID string `yaml:"feature_span_id,omitempty"` // persisted feature-level span ID so all phases share a common parent

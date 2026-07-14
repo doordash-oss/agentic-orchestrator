@@ -1118,6 +1118,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 			PhasePlanReview: true,
 			ManualPublish:   false,
 		},
+		InputNotifications: string(feature.InputNotificationsMuted),
 	})
 	if err != nil {
 		t.Fatalf("UpdateFeatureConfig() error = %v", err)
@@ -1136,6 +1137,9 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	}
 	if updated.Models.Implementation != testModelClaudeSonnet || updated.Models.Review != testModelCodexGPT54Mini || updated.Inquireness != feature.InquirenessHigh {
 		t.Fatalf("updated feature config = models:%+v inq:%q; want REST edit", updated.Models, updated.Inquireness)
+	}
+	if updated.InputNotifications != feature.InputNotificationsMuted {
+		t.Fatalf("updated InputNotifications = %q, want muted override", updated.InputNotifications)
 	}
 
 	loaded, err := config.Load(configPath)

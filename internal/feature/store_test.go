@@ -87,6 +87,45 @@ func TestStoreSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestStoreSaveAndLoadInputNotifications(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	f := &Feature{
+		ID:                 "test-input-notifications",
+		Name:               "Test Input Notifications",
+		Slug:               "test-input-notifications",
+		Status:             StatusCreated,
+		SchemaVersion:      SchemaVersionCurrent,
+		InputNotifications: InputNotificationsMuted,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.InputNotifications != InputNotificationsMuted {
+		t.Fatalf("InputNotifications = %q, want %q", loaded.InputNotifications, InputNotificationsMuted)
+	}
+
+	loaded.InputNotifications = PersistInputNotificationsMode(InputNotificationsDefault)
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("save default: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, f.ID, "feature.yaml"))
+	if err != nil {
+		t.Fatalf("read feature.yaml: %v", err)
+	}
+	if strings.Contains(string(raw), "input_notifications") {
+		t.Fatalf("feature.yaml contains input_notifications for default mode:\n%s", string(raw))
+	}
+}
+
 func TestStoreList(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -379,34 +418,6 @@ func TestStoreLoadReconcilesSuccessfulStatusWithTerminalFinalReviewFailure(t *te
 	}
 	if loaded.FailureType != FailureProtocolViolation {
 		t.Fatalf("FailureType = %q, want %q", loaded.FailureType, FailureProtocolViolation)
-	}
-}
-
-func TestStoreMuteInputNotificationsPersistence(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	dir := t.TempDir()
-	store := NewStore(dir)
-	muted := true
-
-	f := &Feature{
-		ID:                     "notify-001",
-		Name:                   "Notification Override",
-		Slug:                   "notification-override",
-		Status:                 StatusCreated,
-		MuteInputNotifications: &muted,
-		SchemaVersion:          SchemaVersionCurrent,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	loaded, err := store.Load("notify-001")
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.MuteInputNotifications == nil || !*loaded.MuteInputNotifications {
-		t.Fatal("expected mute_input_notifications override to round-trip as true")
 	}
 }
 

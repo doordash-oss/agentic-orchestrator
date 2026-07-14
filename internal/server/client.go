@@ -282,12 +282,6 @@ func (c *Client) DraftNeedUserInputAnswers(ctx context.Context, featureID string
 	return out, err
 }
 
-func (c *Client) ToggleInputNotifications(ctx context.Context, featureID string) (InputNotificationsToggleResponse, error) {
-	var out InputNotificationsToggleResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/input-notifications", nil, map[string]any{}, &out, true)
-	return out, err
-}
-
 func (c *Client) AnswerPermission(ctx context.Context, req PermissionAnswerRequest) (PermissionAnswerResponse, error) {
 	var out PermissionAnswerResponse
 	err := c.doJSON(ctx, http.MethodPost, apiPathPermissionsAnswer, nil, req, &out, true)

@@ -101,7 +101,6 @@ type MutationTarget interface {
 	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error)
 	NeedUserInputDecision(featureID string, req NeedUserInputDecisionRequest) (NeedUserInputDecisionResponse, error)
 	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error)
-	ToggleInputNotifications(featureID string) (InputNotificationsToggleResponse, error)
 	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
@@ -181,10 +180,11 @@ type ReviewDecisionRequest struct {
 }
 
 type FeatureConfigMutationRequest struct {
-	Models      config.ModelConfig      `json:"models,omitempty"`
-	Inquireness string                  `json:"inquireness,omitempty"`
-	Checkpoints feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Pipeline    feature.PipelineProfile `json:"pipeline,omitempty"`
+	Models             config.ModelConfig      `json:"models,omitempty"`
+	Inquireness        string                  `json:"inquireness,omitempty"`
+	Checkpoints        feature.Checkpoints     `json:"checkpoints,omitempty"`
+	Pipeline           feature.PipelineProfile `json:"pipeline,omitempty"`
+	InputNotifications string                  `json:"input_notifications,omitempty"`
 }
 
 type NeedUserInputDecisionRequest struct {
@@ -391,7 +391,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return nil, false
 	}
 	switch parts[1] {
-	case actionStart, actionResume, "stop", "interrupt", actionRestart, "review-decision", routeSegmentConfig, "need-user-input", "need-user-input-draft", "input-notifications":
+	case actionStart, actionResume, "stop", "interrupt", actionRestart, "review-decision", routeSegmentConfig, "need-user-input", "need-user-input-draft":
 		return []string{http.MethodPost}, true
 	case "reviews":
 		if len(parts) == 2 {
@@ -572,8 +572,6 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		}
 		defaultActionFields(&resp, featureID, "drafted")
 		writeActionJSON(w, http.StatusOK, &resp)
-	case "input-notifications":
-		h.handleToggleInputNotifications(w, r, featureID)
 	default:
 		return false
 	}
@@ -926,23 +924,6 @@ func (h *apiHandler) handleStopFeatureMutationTrusted(w http.ResponseWriter, r *
 		return
 	}
 	defaultActionFields(&resp, featureID, "stopped")
-	writeActionJSON(w, http.StatusOK, &resp)
-}
-
-func (h *apiHandler) handleToggleInputNotifications(w http.ResponseWriter, r *http.Request, featureID string) {
-	if !h.requireTrustedMutation(w, r) {
-		return
-	}
-	var req map[string]any
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	resp, err := h.mutations.ToggleInputNotifications(featureID)
-	if err != nil {
-		writeMutationError(w, err)
-		return
-	}
-	defaultActionFields(&resp, featureID, resultUpdated)
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 

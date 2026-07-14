@@ -136,7 +136,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		}
 	}
 	if f.PendingNeedUserInputPath != "" {
-		gate := needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.PendingNeedUserInputPath)
+		gate := needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
 		detail.NeedUserInput = &gate
 	}
 	return detail
@@ -623,10 +623,11 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 	}
 	cfg := h.configOrDefault()
 	defaults := FeatureConfigDTO{
-		Models:      cfg.Defaults.Models,
-		Inquireness: cfg.Defaults.Inquireness,
-		Checkpoints: checkpointsDTO(featureCheckpoints(cfg.Defaults.Checkpoints)),
-		Pipeline:    cfg.Defaults.Pipeline,
+		Models:             cfg.Defaults.Models,
+		Inquireness:        cfg.Defaults.Inquireness,
+		Checkpoints:        checkpointsDTO(featureCheckpoints(cfg.Defaults.Checkpoints)),
+		Pipeline:           cfg.Defaults.Pipeline,
+		InputNotifications: FeatureConfigInputNotifications(feature.InputNotificationsModeForMuted(cfg.Notifications.MuteFeatureInput)),
 	}
 	current := featureConfigDTO(f)
 	resp := FeatureConfigResponse{
@@ -864,7 +865,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 		}
 		if f.PendingNeedUserInputPath != "" {
 			gates = append(gates, orderedNeedInputGate{
-				dto:       needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.PendingNeedUserInputPath),
+				dto:       needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath),
 				featureID: f.ID,
 				created:   f.Created,
 				gateTime:  gateFileTime(f.PendingNeedUserInputPath),
@@ -876,7 +877,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 				iteration = rc.Iteration
 			}
 			gates = append(gates, orderedNeedInputGate{
-				dto:       needUserInputGateDTO(f.ID, entityFeature, cycle.RepoName, cycle.CycleType, iteration, cycle.GatePath),
+				dto:       needUserInputGateDTO(f.ID, entityFeature, cycle.RepoName, cycle.CycleType, iteration, f.InputNotifications, cycle.GatePath),
 				featureID: f.ID,
 				created:   f.Created,
 				gateTime:  gateFileTime(cycle.GatePath),
@@ -918,14 +919,15 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 	return false
 }
 
-func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.RepoCycleType, iteration int, gatePath string) NeedInputGateDTO {
+func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.RepoCycleType, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedInputGateDTO {
 	dto := NeedInputGateDTO{
-		FeatureID: featureID,
-		Open:      true,
-		Scope:     scope,
-		RepoName:  repoName,
-		CycleType: string(cycleType),
-		Iteration: iteration,
+		FeatureID:          featureID,
+		Open:               true,
+		Scope:              scope,
+		RepoName:           repoName,
+		CycleType:          string(cycleType),
+		InputNotifications: string(feature.NormalizeInputNotificationsMode(inputNotifications)),
+		Iteration:          iteration,
 	}
 	rec, err := agent.ReadNeedUserInputRecord(gatePath)
 	if err != nil {
@@ -1056,10 +1058,11 @@ func beforeByKnownTime(a, b time.Time) bool {
 func featureConfigDTO(f *feature.Feature) FeatureConfigDTO {
 	pipeline := f.Pipeline
 	return FeatureConfigDTO{
-		Models:      f.Models,
-		Inquireness: string(f.Inquireness),
-		Checkpoints: checkpointsDTO(pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())),
-		Pipeline:    string(pipeline),
+		Models:             f.Models,
+		Inquireness:        string(f.Inquireness),
+		Checkpoints:        checkpointsDTO(pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())),
+		Pipeline:           string(pipeline),
+		InputNotifications: FeatureConfigInputNotifications(feature.NormalizeInputNotificationsMode(f.InputNotifications)),
 	}
 }
 

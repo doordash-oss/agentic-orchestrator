@@ -539,7 +539,6 @@ func (m DashboardModel) renderFooter() string {
 			if canEditFeatureConfig(f) {
 				hints = append(hints, "[e] Edit config")
 			}
-			hints = append(hints, "[Shift+N] Input alerts")
 			hints = append(hints, "[d] Delete")
 		}
 		hints = append(hints, "[Shift+E] Workspace Config")

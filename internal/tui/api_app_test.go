@@ -2245,6 +2245,21 @@ func TestAPILivePreviewSessionCarriesFieldsFromREST(t *testing.T) {
 			},
 		},
 		{
+			name: "done status",
+			session: server.SessionSummaryDTO{
+				ID:     testSessionIDLive,
+				Status: ports.SessionDone.String(),
+			},
+			check: func(t *testing.T, sess ports.SessionView) {
+				if got := sess.Status(); got != ports.SessionDone {
+					t.Fatalf("Status() = %s, want Done", got)
+				}
+				if sess.IsActive() {
+					t.Fatal("IsActive() = true for completed live-preview session")
+				}
+			},
+		},
+		{
 			name: "kind and label",
 			session: server.SessionSummaryDTO{
 				ID:     "scope-validator",
@@ -2276,6 +2291,25 @@ func TestAPILivePreviewSessionCarriesFieldsFromREST(t *testing.T) {
 			}
 			tt.check(t, sess)
 		})
+	}
+}
+
+func TestAPILivePreviewSessionWithoutSessionSummaryIsSnapshot(t *testing.T) {
+	t.Parallel()
+
+	sess := newAPILivePreviewSession(APILivePreviewPresentation{
+		FeatureID: testFeatureIDActive,
+		Phase:     testPhaseNameImplement,
+		Activity:  testUsingBashActivity,
+	})
+	if sess == nil {
+		t.Fatal("newAPILivePreviewSession returned nil")
+	}
+	if got := sess.Status(); got != ports.SessionDone {
+		t.Fatalf("Status() = %s, want Done for preview-only snapshot", got)
+	}
+	if sess.IsActive() {
+		t.Fatal("IsActive() = true for preview-only snapshot")
 	}
 }
 
@@ -3332,7 +3366,6 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		toggleInputAccepted: apiTestActionResponse{},
 	}
 	app := newTestAPIAppModel(t, client)
 
@@ -3390,21 +3423,7 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 		t.Fatal("ChatExitMsg did not close AMA panel")
 	}
 
-	model, cmd = closedChat.Update(tea.KeyPressMsg{Code: 'N', Text: "N"})
-	if cmd == nil {
-		t.Fatal("Update(Shift+N) returned nil command, want input-alert mutation")
-	}
-	msg := cmd()
-	model, _ = model.(APIAppModel).Update(msg)
-	toggled := model.(APIAppModel)
-	if got := strings.Join(client.toggleInputFeatureIDs, ","); got != testFeatureIDActive {
-		t.Fatalf("ToggleInputNotifications calls = %q, want active", got)
-	}
-	if view := stripANSI(toggled.View().Content); !strings.Contains(view, "Completed Input Alerts") {
-		t.Fatalf("API app View() missing input-alert completed status in:\n%s", view)
-	}
-
-	model, cmd = toggled.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	model, cmd = closedChat.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
 	if cmd != nil {
 		t.Fatal("Update(?) returned command, want local help overlay")
 	}
@@ -4523,11 +4542,69 @@ func TestAPIAppModelFeatureConfigEditorOpensForRunningFeature(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelFeatureConfigEditorSavesInputAlertOverride(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now()},
+		}},
+		featureConfig: server.FeatureConfigResponse{
+			FeatureID: testFeatureIDActive,
+			Current: server.FeatureConfigDTO{
+				Models:      config.ModelConfig{Research: testModelCodexGPT54},
+				Inquireness: testInquirenessTargeted,
+				Pipeline:    testPipelineSizeLarge,
+				Checkpoints: server.CheckpointsDTO{ManualPublish: true},
+			},
+			Defaults: server.FeatureConfigDTO{
+				InputNotifications: server.FeatureConfigInputNotifications(feature.InputNotificationsMuted),
+			},
+		},
+		updateFeatureConfigAccepted: apiTestActionResponse{},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd == nil {
+		t.Fatal("Update(e) returned nil command, want feature config fetch command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	editing := model.(APIAppModel)
+	if editing.configEditor == nil {
+		t.Fatal("configEditor is nil after loading feature config")
+	}
+	editing.configEditor.activeTab = tabBehavior
+	editing.configEditor.focus = configFocusBody
+	editing.configEditor.behaviorCursor = 1
+
+	view := stripANSI(editing.View().Content)
+	for _, want := range []string{"Input Alerts", "default"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("feature Behavior tab missing %q:\n%s", want, view)
+		}
+	}
+
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})             // default -> enabled override
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // back to tabs
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want feature config save")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+
+	if got := client.updateFeatureConfigRequests; len(got) != 1 ||
+		got[0].InputNotifications != string(feature.InputNotificationsEnabled) {
+		t.Fatalf("UpdateFeatureConfig requests = %+v, want explicit enabled input-alert override", got)
+	}
+}
+
 func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
+			Notifications: server.NotificationConfigDTO{MuteFeatureInput: false},
 			Defaults: config.ModelConfig{
 				Inquiry:        testModelCodexGPT54,
 				Research:       testModelCodexGPT54,
@@ -4600,6 +4677,21 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	}
 	edited.configEditor.editor.inquireness = feature.InquirenessHigh
 	edited.configEditor.editor.checkpoints.RoadmapReview = true
+
+	edited.configEditor.activeTab = tabBehavior
+	edited.configEditor.focus = configFocusBody
+	edited.configEditor.editor.rowCursor = edited.configEditor.editor.inquirenessRow()
+	model, _ = edited.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Input Alerts row
+	editingAlerts := model.(APIAppModel)
+	view = stripANSI(editingAlerts.View().Content)
+	for _, want := range []string{"Input Alerts", "enabled"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("workspace Behavior tab missing %q:\n%s", want, view)
+		}
+	}
+	model, _ = editingAlerts.Update(tea.KeyPressMsg{Code: tea.KeyRight})       // enabled -> muted
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // back to tabs
+	edited = model.(APIAppModel)
 	model, cmd = edited.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want runtime config update command")
@@ -4611,8 +4703,10 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	if got := client.updateRuntimeConfigRequests; len(got) != 1 ||
 		got[0].Defaults.Models.Inquiry != testModelCodexGPT55 ||
 		got[0].Defaults.Inquireness != "high" ||
-		!got[0].Defaults.Checkpoints.RoadmapReview {
-		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited models, behavior, and gates", got)
+		!got[0].Defaults.Checkpoints.RoadmapReview ||
+		got[0].Notifications == nil ||
+		!got[0].Notifications.MuteFeatureInput {
+		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited models, behavior, gates, and muted input alerts", got)
 	}
 	if saved.configEditor != nil {
 		t.Fatal("workspace config editor still open after successful save")
@@ -4625,6 +4719,115 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestAPIAppModelNeedInputNotificationsHonorFeatureMode(t *testing.T) {
+	t.Parallel()
+
+	type call struct {
+		name   string
+		reason string
+	}
+	var calls []call
+	recordNotify := func(featureName, reason string) tea.Cmd {
+		calls = append(calls, call{name: featureName, reason: reason})
+		return nil
+	}
+
+	baseFeature := server.FeatureSummary{
+		ID:        testFeatureIDActive,
+		Name:      testFeatureNameClientCutover,
+		Slug:      testFeatureSlugClientCutover,
+		Status:    testFeatureStatusImplementing,
+		CreatedAt: time.Now(),
+	}
+	gate := func(iteration int, mode feature.InputNotificationsMode) server.NeedInputGateDTO {
+		return server.NeedInputGateDTO{
+			FeatureID:          testFeatureIDActive,
+			Open:               true,
+			Scope:              "feature",
+			Iteration:          iteration,
+			Summary:            "Choose the rollout plan",
+			InputNotifications: string(mode),
+		}
+	}
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{baseFeature}},
+		runtime:  server.RuntimeConfigResponse{Notifications: server.NotificationConfigDTO{MuteFeatureInput: false}},
+		prompts:  server.PromptSnapshotResponse{NeedUserInputs: []server.NeedInputGateDTO{gate(1, feature.InputNotificationsDefault)}},
+	}
+	app := newTestAPIAppModel(t, client)
+	app.notifyUser = recordNotify
+	if len(calls) != 0 {
+		t.Fatalf("startup notifications = %+v, want none", calls)
+	}
+
+	samePrompt := client.prompts
+	model, _ := app.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{Prompts: &samePrompt}})
+	app = model.(APIAppModel)
+	if len(calls) != 0 {
+		t.Fatalf("duplicate prompt notifications = %+v, want none", calls)
+	}
+
+	defaultPrompt := server.PromptSnapshotResponse{NeedUserInputs: []server.NeedInputGateDTO{gate(2, feature.InputNotificationsDefault)}}
+	model, _ = app.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{Prompts: &defaultPrompt}})
+	app = model.(APIAppModel)
+	if len(calls) != 1 || calls[0].name != testFeatureNameClientCutover || calls[0].reason != "Choose the rollout plan" {
+		t.Fatalf("default notification calls = %+v, want one feature alert", calls)
+	}
+
+	clientMuted := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{baseFeature}},
+		runtime:  server.RuntimeConfigResponse{Notifications: server.NotificationConfigDTO{MuteFeatureInput: true}},
+	}
+	mutedApp := newTestAPIAppModel(t, clientMuted)
+	mutedApp.notifyUser = recordNotify
+	before := len(calls)
+	mutedDefault := server.PromptSnapshotResponse{NeedUserInputs: []server.NeedInputGateDTO{gate(3, feature.InputNotificationsDefault)}}
+	model, _ = mutedApp.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{Prompts: &mutedDefault}})
+	mutedApp = model.(APIAppModel)
+	if len(calls) != before {
+		t.Fatalf("global-muted default notification calls = %+v, want unchanged", calls)
+	}
+
+	enabledOverride := server.PromptSnapshotResponse{NeedUserInputs: []server.NeedInputGateDTO{gate(4, feature.InputNotificationsEnabled)}}
+	model, _ = mutedApp.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{Prompts: &enabledOverride}})
+	mutedApp = model.(APIAppModel)
+	if len(calls) != before+1 {
+		t.Fatalf("enabled override notification calls = %+v, want one additional alert", calls)
+	}
+
+	mutedOverride := server.PromptSnapshotResponse{NeedUserInputs: []server.NeedInputGateDTO{gate(5, feature.InputNotificationsMuted)}}
+	model, _ = app.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{Prompts: &mutedOverride}})
+	app = model.(APIAppModel)
+	if len(calls) != before+1 {
+		t.Fatalf("muted override notification calls = %+v, want unchanged", calls)
+	}
+
+	_ = app
+	_ = mutedApp
+}
+
+func TestAPIAppModelShiftNNoLongerTogglesInputNotifications(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
+		}},
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork}, server.FeatureDetailDTO{})},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'N', Text: "N"})
+	if cmd != nil {
+		t.Fatal("Update(Shift+N) returned command, want removed input-alert flow to ignore the key")
+	}
+	after := model.(APIAppModel)
+	if after.statusMessage != "" {
+		t.Fatalf("statusMessage after Shift+N = %q, want unchanged", after.statusMessage)
 	}
 }
 
@@ -4803,13 +5006,18 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 		t.Fatal("Update(i) returned command before need-user-input decision")
 	}
 	prompting := model.(APIAppModel)
-	if !prompting.needInputPromptActive {
-		t.Fatal("Update(i) did not show need-user-input decision prompt")
+	if prompting.artifactReview == nil || prompting.artifactReview.ReviewMode() != reviewModeNeedUserInput {
+		t.Fatalf("Update(i) did not open need-user-input artifact review: %+v", prompting.artifactReview)
 	}
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"Implementation needs user input", testFeatureNameBlockedWork, testQuestionWhichDatabase, testDBOptionPostgres, "Ctrl+D menu"} {
+	for _, want := range []string{"Need User Input", "Implementation needs user input", testQuestionWhichDatabase, testDBOptionPostgres, "Ctrl+D: actions menu"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
+		}
+	}
+	for _, removed := range []string{"Scope:", "[tab] Next question", "Ctrl+D menu"} {
+		if strings.Contains(view, removed) {
+			t.Fatalf("API app View() still contains removed modal copy %q in:\n%s", removed, view)
 		}
 	}
 	if len(client.needUserInputFeatureIDs) != 0 {
@@ -4823,10 +5031,14 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 	menuOpen := model.(APIAppModel)
 	model, cmd = menuOpen.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("Enter returned nil command, want need-user-input decision mutation")
+		t.Fatal("Enter returned nil command, want need-user-input decision message")
 	}
-	msg := cmd()
-	model, _ = model.(APIAppModel).Update(msg)
+	decision := apiTestNeedUserInputDecisionMsg(t, cmd)
+	model, cmd = model.(APIAppModel).Update(decision)
+	if cmd == nil {
+		t.Fatal("NeedUserInputDecisionMsg returned nil command, want REST mutation")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
 	decided := model.(APIAppModel)
 
 	if got := strings.Join(client.needUserInputFeatureIDs, ","); got != testFeatureIDBlocked {
@@ -4835,13 +5047,72 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 	if got := client.needUserInputRequests; len(got) != 1 || got[0].Decision != recoveryActionResume || got[0].RepoName != "" || got[0].CycleType != "" {
 		t.Fatalf("NeedUserInputDecision requests = %+v, want feature-scoped resume", got)
 	}
-	if decided.needInputPromptActive {
-		t.Fatal("need-user-input prompt remained open after accepted decision")
+	if decided.artifactReview != nil {
+		t.Fatal("need-user-input artifact review remained open after accepted decision")
+	}
+	if _, ok := decided.selectedNeedInputGate(testFeatureIDBlocked); ok {
+		t.Fatal("resolved need-user-input gate remained selectable from cached feature detail")
+	}
+	model, cmd = decided.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	afterAttach := model.(APIAppModel)
+	if afterAttach.artifactReview != nil {
+		t.Fatal("Update(a) after resolved need-user-input reopened NUI artifact review")
 	}
 	view = stripANSI(decided.View().Content)
 	for _, want := range []string{"Completed Need Input Decision", testFeatureIDBlocked} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestAPIAppModelContextualAOpensNeedUserInputBeforeAttach(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: testFeatureIDBlocked, Name: testFeatureNameBlockedWork, Slug: "blocked-work", Status: testStatusNeedUserInput, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: testSessionIDOne, FeatureID: testFeatureIDBlocked, Phase: testPhaseNameImplement, Repo: testRepoNameOrchestrator, Kind: logTabPhase, Status: featureStatusTokenRunning},
+		}},
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{
+			ID: testFeatureIDBlocked, Name: testFeatureNameBlockedWork, Slug: "blocked-work", Status: testStatusNeedUserInput, CurrentPhase: testPhaseNameImplement,
+		}, server.FeatureDetailDTO{
+			NeedUserInput: &server.NeedInputGateDTO{
+				FeatureID: testFeatureIDBlocked,
+				Open:      true,
+				Scope:     testActionScopeFeature,
+				Iteration: 1,
+				Summary:   "Review the implementation output before continuing.",
+				Questions: []server.NeedUserInputQuestionDTO{
+					{Index: 1, Prompt: "Does the implementation satisfy the exit criteria?"},
+				},
+			},
+		})},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd != nil {
+		t.Fatal("Update(a) returned attach/session command, want local need-user-input prompt")
+	}
+	prompting := model.(APIAppModel)
+	if prompting.artifactReview == nil || prompting.artifactReview.ReviewMode() != reviewModeNeedUserInput {
+		t.Fatalf("Update(a) did not open need-user-input artifact review: %+v", prompting.artifactReview)
+	}
+	if prompting.attach != nil {
+		t.Fatal("Update(a) attached to session instead of showing need-user-input prompt")
+	}
+	view := stripANSI(prompting.View().Content)
+	for _, want := range []string{"Need User Input", "Implementation needs user input", "Does the implementation satisfy the exit", "criteria?", "Ctrl+D: actions menu"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API app View() missing %q in:\n%s", want, view)
+		}
+	}
+	for _, removed := range []string{"Scope:", "[tab] Next question", "Ctrl+D menu"} {
+		if strings.Contains(view, removed) {
+			t.Fatalf("API app View() still contains removed modal copy %q in:\n%s", removed, view)
 		}
 	}
 }
@@ -4880,16 +5151,20 @@ func TestAPIAppModelNeedUserInputQuestionnaireDraftsAnswersBeforeResume(t *testi
 	prompting := model.(APIAppModel)
 	view := stripANSI(prompting.View().Content)
 	for _, want := range []string{
+		"Need User Input",
 		"Implementation needs user input",
 		"Resolve the rebase conflict before implementation",
 		"continues.",
 		"Keep branch behavior or target behavior?",
-		"Repo: " + testRepoNameAPI,
-		"Cycle: " + testCycleTypeRebase,
-		"Ctrl+D menu",
+		"Ctrl+D: actions menu",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
+		}
+	}
+	for _, removed := range []string{"Repo: " + testRepoNameAPI, "Cycle: " + testCycleTypeRebase, "[tab] Next question", "Ctrl+D menu"} {
+		if strings.Contains(view, removed) {
+			t.Fatalf("API app View() still contains removed modal copy %q in:\n%s", removed, view)
 		}
 	}
 
@@ -4906,24 +5181,31 @@ func TestAPIAppModelNeedUserInputQuestionnaireDraftsAnswersBeforeResume(t *testi
 	if len(client.needUserInputFeatureIDs) != 0 {
 		t.Fatalf("NeedUserInputDecision calls = %v before all answers, want none", client.needUserInputFeatureIDs)
 	}
-	if view := stripANSI(blocked.View().Content); !strings.Contains(view, "Answer every question before resuming.") {
-		t.Fatalf("blocked need-user-input view missing validation message:\n%s", view)
+	if view := stripANSI(blocked.View().Content); !strings.Contains(view, "Resume implementation (answer") || !strings.Contains(view, "all questions to enable)") {
+		t.Fatalf("blocked need-user-input menu missing disabled resume label:\n%s", view)
 	}
+	model, cmd = blocked.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		t.Fatal("Esc returned command while closing need-user-input menu")
+	}
+	editing := model.(APIAppModel)
 
 	const answer = "Keep branch behavior"
-	model, cmd = blocked.Update(tea.KeyPressMsg{Code: 'K', Text: answer})
-	if cmd == nil {
-		t.Fatal("typing answer returned nil command, want draft mutation")
+	drafted := editing
+	for _, ch := range answer {
+		model, cmd = drafted.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
+		if cmd == nil {
+			t.Fatal("typing answer returned nil command, want draft message")
+		}
+		drafted = apiTestApplyNeedUserInputDraftCmd(t, model.(APIAppModel), cmd)
 	}
-	model, _ = model.(APIAppModel).Update(cmd())
-	drafted := model.(APIAppModel)
-	if got := client.needUserInputDraftFeatureIDs; len(got) != 1 || got[0] != testFeatureIDBlocked {
-		t.Fatalf("DraftNeedUserInputAnswers feature IDs = %v, want blocked", got)
+	if got := client.needUserInputDraftFeatureIDs; len(got) == 0 || got[len(got)-1] != testFeatureIDBlocked {
+		t.Fatalf("DraftNeedUserInputAnswers feature IDs = %v, want final blocked draft", got)
 	}
-	if got := client.needUserInputDraftRequests; len(got) != 1 ||
-		got[0].RepoName != testRepoNameAPI ||
-		got[0].CycleType != testCycleTypeRebase ||
-		got[0].Answers["1"] != answer {
+	if got := client.needUserInputDraftRequests; len(got) == 0 ||
+		got[len(got)-1].RepoName != testRepoNameAPI ||
+		got[len(got)-1].CycleType != testCycleTypeRebase ||
+		got[len(got)-1].Answers["1"] != answer {
 		t.Fatalf("DraftNeedUserInputAnswers requests = %+v, want routed answer draft", got)
 	}
 
@@ -4934,7 +5216,12 @@ func TestAPIAppModelNeedUserInputQuestionnaireDraftsAnswersBeforeResume(t *testi
 	menuOpen = model.(APIAppModel)
 	model, cmd = menuOpen.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("Enter on answered resume returned nil command, want need-user-input decision mutation")
+		t.Fatal("Enter on answered resume returned nil command, want need-user-input decision message")
+	}
+	decision := apiTestNeedUserInputDecisionMsg(t, cmd)
+	model, cmd = model.(APIAppModel).Update(decision)
+	if cmd == nil {
+		t.Fatal("NeedUserInputDecisionMsg returned nil command, want REST mutation")
 	}
 	model, _ = model.(APIAppModel).Update(cmd())
 	decided := model.(APIAppModel)
@@ -4944,8 +5231,81 @@ func TestAPIAppModelNeedUserInputQuestionnaireDraftsAnswersBeforeResume(t *testi
 		got[0].CycleType != testCycleTypeRebase {
 		t.Fatalf("NeedUserInputDecision requests = %+v, want routed resume", got)
 	}
-	if decided.needInputPromptActive {
-		t.Fatal("need-user-input prompt remained open after accepted decision")
+	if decided.artifactReview != nil {
+		t.Fatal("need-user-input artifact review remained open after accepted decision")
+	}
+	if _, ok := decided.selectedNeedInputGate(testFeatureIDBlocked); ok {
+		t.Fatal("resolved need-user-input gate remained selectable from prompt snapshot")
+	}
+	model, cmd = decided.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	afterAttach := model.(APIAppModel)
+	if afterAttach.artifactReview != nil {
+		t.Fatal("Update(a) after resolved need-user-input reopened NUI artifact review")
+	}
+}
+
+func apiTestNeedUserInputDecisionMsg(t *testing.T, cmd tea.Cmd) NeedUserInputDecisionMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("command is nil")
+	}
+	var out []NeedUserInputDecisionMsg
+	apiTestCollectNeedUserInputDecisionMsgs(cmd(), &out)
+	if len(out) != 1 {
+		t.Fatalf("command produced %d NeedUserInputDecisionMsg messages, want 1: %+v", len(out), out)
+	}
+	return out[0]
+}
+
+func apiTestCollectNeedUserInputDecisionMsgs(msg tea.Msg, out *[]NeedUserInputDecisionMsg) {
+	switch msg := msg.(type) {
+	case nil:
+		return
+	case NeedUserInputDecisionMsg:
+		*out = append(*out, msg)
+	case tea.BatchMsg:
+		for _, child := range msg {
+			if child != nil {
+				apiTestCollectNeedUserInputDecisionMsgs(child(), out)
+			}
+		}
+	}
+}
+
+func apiTestApplyNeedUserInputDraftCmd(t *testing.T, model APIAppModel, cmd tea.Cmd) APIAppModel {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("command is nil")
+	}
+	var drafts []NeedUserInputDraftMsg
+	apiTestCollectNeedUserInputDraftMsgs(cmd(), &drafts)
+	if len(drafts) == 0 {
+		t.Fatal("command did not produce a NeedUserInputDraftMsg")
+	}
+	for _, draft := range drafts {
+		updated, restCmd := model.Update(draft)
+		model = updated.(APIAppModel)
+		if restCmd == nil {
+			t.Fatal("NeedUserInputDraftMsg returned nil command, want REST mutation")
+		}
+		updated, _ = model.Update(restCmd())
+		model = updated.(APIAppModel)
+	}
+	return model
+}
+
+func apiTestCollectNeedUserInputDraftMsgs(msg tea.Msg, out *[]NeedUserInputDraftMsg) {
+	switch msg := msg.(type) {
+	case nil:
+		return
+	case NeedUserInputDraftMsg:
+		*out = append(*out, msg)
+	case tea.BatchMsg:
+		for _, child := range msg {
+			if child != nil {
+				apiTestCollectNeedUserInputDraftMsgs(child(), out)
+			}
+		}
 	}
 }
 
@@ -8121,9 +8481,6 @@ type fakeTUIAPIClient struct {
 	needUserInputDraftErr          error
 	needUserInputDraftFeatureIDs   []string
 	needUserInputDraftRequests     []server.NeedUserInputDraftRequest
-	toggleInputAccepted            apiTestActionResponse
-	toggleInputErr                 error
-	toggleInputFeatureIDs          []string
 	reviewAccepted                 apiTestActionResponse
 	reviewErr                      error
 	reviewFeatureIDs               []string
@@ -8460,6 +8817,9 @@ func (f *fakeTUIAPIClient) UpdateRuntimeConfig(_ context.Context, req server.Run
 	if req.UI != nil {
 		f.runtime.UI = *req.UI
 	}
+	if req.Notifications != nil {
+		f.runtime.Notifications = *req.Notifications
+	}
 	return server.RuntimeConfigUpdateResponse{Result: f.updateRuntimeConfigAccepted.result("updated")}, f.updateRuntimeConfigErr
 }
 
@@ -8511,12 +8871,6 @@ func (f *fakeTUIAPIClient) DraftNeedUserInputAnswers(_ context.Context, featureI
 	f.needUserInputDraftFeatureIDs = append(f.needUserInputDraftFeatureIDs, featureID)
 	f.needUserInputDraftRequests = append(f.needUserInputDraftRequests, req)
 	return server.NeedUserInputDraftResponse{FeatureID: f.needUserInputDraftAccepted.featureID(featureID), Result: f.needUserInputDraftAccepted.result("drafted")}, f.needUserInputDraftErr
-}
-
-func (f *fakeTUIAPIClient) ToggleInputNotifications(_ context.Context, featureID string) (server.InputNotificationsToggleResponse, error) {
-	f.calls = append(f.calls, "ToggleInputNotifications")
-	f.toggleInputFeatureIDs = append(f.toggleInputFeatureIDs, featureID)
-	return server.InputNotificationsToggleResponse{FeatureID: f.toggleInputAccepted.featureID(featureID), Result: f.toggleInputAccepted.result("toggled"), Muted: f.toggleInputAccepted.Muted}, f.toggleInputErr
 }
 
 func (f *fakeTUIAPIClient) ReviewDecision(_ context.Context, featureID string, req server.ReviewDecisionRequest) (server.ReviewDecisionResponse, error) {

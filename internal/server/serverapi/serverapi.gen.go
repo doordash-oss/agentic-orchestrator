@@ -30,6 +30,27 @@ const (
 	SseAccessTokenScopes sSEAccessTokenContextKey = "sseAccessToken.Scopes"
 )
 
+// Defines values for FeatureConfigInputNotifications.
+const (
+	Default FeatureConfigInputNotifications = "default"
+	Enabled FeatureConfigInputNotifications = "enabled"
+	Muted   FeatureConfigInputNotifications = "muted"
+)
+
+// Valid indicates whether the value is a known member of the FeatureConfigInputNotifications enum.
+func (e FeatureConfigInputNotifications) Valid() bool {
+	switch e {
+	case Default:
+		return true
+	case Enabled:
+		return true
+	case Muted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PermissionAnswerRequestDecision.
 const (
 	AllowOnce     PermissionAnswerRequestDecision = "allow_once"
@@ -366,21 +387,6 @@ func (e UpdateFeatureConfigParamsXAgenticoClient) Valid() bool {
 	}
 }
 
-// Defines values for ToggleInputNotificationsLegacyParamsXAgenticoClient.
-const (
-	ToggleInputNotificationsLegacyParamsXAgenticoClientLocal ToggleInputNotificationsLegacyParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the ToggleInputNotificationsLegacyParamsXAgenticoClient enum.
-func (e ToggleInputNotificationsLegacyParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case ToggleInputNotificationsLegacyParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for InterruptFeatureLegacyParamsXAgenticoClient.
 const (
 	InterruptFeatureLegacyParamsXAgenticoClientLocal InterruptFeatureLegacyParamsXAgenticoClient = "local"
@@ -638,13 +644,13 @@ func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 
 // Defines values for ShutdownRuntimeParamsXAgenticoClient.
 const (
-	ShutdownRuntimeParamsXAgenticoClientLocal ShutdownRuntimeParamsXAgenticoClient = "local"
+	Local ShutdownRuntimeParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the ShutdownRuntimeParamsXAgenticoClient enum.
 func (e ShutdownRuntimeParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case ShutdownRuntimeParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -680,38 +686,37 @@ type ActionInput struct {
 
 // ActionResponse defines model for ActionResponse.
 type ActionResponse struct {
-	APIVersion                       string                           `json:"api_version"`
-	AskUserAnswerResponse            AskUserAnswerResponse            `json:"ask_user_answer_response,omitempty"`
-	ChatStartResponse                ChatStartResponse                `json:"chat_start_response,omitempty"`
-	CleanupFeatureResponse           CleanupFeatureResponse           `json:"cleanup_feature_response,omitempty"`
-	CreateFeatureResponse            CreateFeatureResponse            `json:"create_feature_response,omitempty"`
-	DeleteFeatureResponse            DeleteFeatureResponse            `json:"delete_feature_response,omitempty"`
-	FeatureConfigUpdateResponse      FeatureConfigUpdateResponse      `json:"feature_config_update_response,omitempty"`
-	FeatureRestartResponse           FeatureRestartResponse           `json:"feature_restart_response,omitempty"`
-	FeatureStartResponse             FeatureStartResponse             `json:"feature_start_response,omitempty"`
-	FeatureStopResponse              FeatureStopResponse              `json:"feature_stop_response,omitempty"`
-	HelpSendResponse                 HelpSendResponse                 `json:"help_send_response,omitempty"`
-	InputNotificationsToggleResponse InputNotificationsToggleResponse `json:"input_notifications_toggle_response,omitempty"`
-	MarkDoneResponse                 MarkDoneResponse                 `json:"mark_done_response,omitempty"`
-	MergeFeatureResponse             MergeFeatureResponse             `json:"merge_feature_response,omitempty"`
-	Meta                             ResponseMeta                     `json:"meta,omitempty"`
-	NeedUserInputDecisionResponse    NeedUserInputDecisionResponse    `json:"need_user_input_decision_response,omitempty"`
-	NeedUserInputDraftResponse       NeedUserInputDraftResponse       `json:"need_user_input_draft_response,omitempty"`
-	PermissionAnswerResponse         PermissionAnswerResponse         `json:"permission_answer_response,omitempty"`
-	PublishDescriptionResponse       PublishDescriptionResponse       `json:"publish_description_response,omitempty"`
-	PublishFeatureResponse           PublishFeatureResponse           `json:"publish_feature_response,omitempty"`
-	RebaseStartResponse              RebaseStartResponse              `json:"rebase_start_response,omitempty"`
-	RecoveryActionResponse           RecoveryActionResponse           `json:"recovery_action_response,omitempty"`
-	RefactorRestartResponse          RefactorRestartResponse          `json:"refactor_restart_response,omitempty"`
-	RefactorStartResponse            RefactorStartResponse            `json:"refactor_start_response,omitempty"`
-	RetryFeatureResponse             RetryFeatureResponse             `json:"retry_feature_response,omitempty"`
-	ReviewCommentsFetchResponse      ReviewCommentsFetchResponse      `json:"review_comments_fetch_response,omitempty"`
-	ReviewCommentsStartResponse      ReviewCommentsStartResponse      `json:"review_comments_start_response,omitempty"`
-	ReviewDecisionResponse           ReviewDecisionResponse           `json:"review_decision_response,omitempty"`
-	RewindFeatureResponse            RewindFeatureResponse            `json:"rewind_feature_response,omitempty"`
-	RuntimeConfigUpdateResponse      RuntimeConfigUpdateResponse      `json:"runtime_config_update_response,omitempty"`
-	ShutdownResponse                 ShutdownResponse                 `json:"shutdown_response,omitempty"`
-	AdditionalProperties             map[string]interface{}           `json:"-"`
+	APIVersion                    string                        `json:"api_version"`
+	AskUserAnswerResponse         AskUserAnswerResponse         `json:"ask_user_answer_response,omitempty"`
+	ChatStartResponse             ChatStartResponse             `json:"chat_start_response,omitempty"`
+	CleanupFeatureResponse        CleanupFeatureResponse        `json:"cleanup_feature_response,omitempty"`
+	CreateFeatureResponse         CreateFeatureResponse         `json:"create_feature_response,omitempty"`
+	DeleteFeatureResponse         DeleteFeatureResponse         `json:"delete_feature_response,omitempty"`
+	FeatureConfigUpdateResponse   FeatureConfigUpdateResponse   `json:"feature_config_update_response,omitempty"`
+	FeatureRestartResponse        FeatureRestartResponse        `json:"feature_restart_response,omitempty"`
+	FeatureStartResponse          FeatureStartResponse          `json:"feature_start_response,omitempty"`
+	FeatureStopResponse           FeatureStopResponse           `json:"feature_stop_response,omitempty"`
+	HelpSendResponse              HelpSendResponse              `json:"help_send_response,omitempty"`
+	MarkDoneResponse              MarkDoneResponse              `json:"mark_done_response,omitempty"`
+	MergeFeatureResponse          MergeFeatureResponse          `json:"merge_feature_response,omitempty"`
+	Meta                          ResponseMeta                  `json:"meta,omitempty"`
+	NeedUserInputDecisionResponse NeedUserInputDecisionResponse `json:"need_user_input_decision_response,omitempty"`
+	NeedUserInputDraftResponse    NeedUserInputDraftResponse    `json:"need_user_input_draft_response,omitempty"`
+	PermissionAnswerResponse      PermissionAnswerResponse      `json:"permission_answer_response,omitempty"`
+	PublishDescriptionResponse    PublishDescriptionResponse    `json:"publish_description_response,omitempty"`
+	PublishFeatureResponse        PublishFeatureResponse        `json:"publish_feature_response,omitempty"`
+	RebaseStartResponse           RebaseStartResponse           `json:"rebase_start_response,omitempty"`
+	RecoveryActionResponse        RecoveryActionResponse        `json:"recovery_action_response,omitempty"`
+	RefactorRestartResponse       RefactorRestartResponse       `json:"refactor_restart_response,omitempty"`
+	RefactorStartResponse         RefactorStartResponse         `json:"refactor_start_response,omitempty"`
+	RetryFeatureResponse          RetryFeatureResponse          `json:"retry_feature_response,omitempty"`
+	ReviewCommentsFetchResponse   ReviewCommentsFetchResponse   `json:"review_comments_fetch_response,omitempty"`
+	ReviewCommentsStartResponse   ReviewCommentsStartResponse   `json:"review_comments_start_response,omitempty"`
+	ReviewDecisionResponse        ReviewDecisionResponse        `json:"review_decision_response,omitempty"`
+	RewindFeatureResponse         RewindFeatureResponse         `json:"rewind_feature_response,omitempty"`
+	RuntimeConfigUpdateResponse   RuntimeConfigUpdateResponse   `json:"runtime_config_update_response,omitempty"`
+	ShutdownResponse              ShutdownResponse              `json:"shutdown_response,omitempty"`
+	AdditionalProperties          map[string]interface{}        `json:"-"`
 }
 
 // ActionResult defines model for ActionResult.
@@ -896,11 +901,15 @@ type FeatureActionResult struct {
 
 // FeatureConfig defines model for FeatureConfig.
 type FeatureConfig struct {
-	Checkpoints Checkpoints   `json:"checkpoints"`
-	Inquireness string        `json:"inquireness"`
-	Models      ModelDefaults `json:"models"`
-	Pipeline    string        `json:"pipeline,omitempty"`
+	Checkpoints        Checkpoints                     `json:"checkpoints"`
+	InputNotifications FeatureConfigInputNotifications `json:"input_notifications,omitempty"`
+	Inquireness        string                          `json:"inquireness"`
+	Models             ModelDefaults                   `json:"models"`
+	Pipeline           string                          `json:"pipeline,omitempty"`
 }
+
+// FeatureConfigInputNotifications defines model for FeatureConfig.InputNotifications.
+type FeatureConfigInputNotifications string
 
 // FeatureConfigResponse defines model for FeatureConfigResponse.
 type FeatureConfigResponse struct {
@@ -1082,16 +1091,6 @@ type HelpSendResponse struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
-// InputNotificationsToggleResponse defines model for InputNotificationsToggleResponse.
-type InputNotificationsToggleResponse struct {
-	APIVersion           string                 `json:"api_version"`
-	FeatureID            string                 `json:"feature_id"`
-	Meta                 ResponseMeta           `json:"meta,omitempty"`
-	Muted                bool                   `json:"muted"`
-	Result               string                 `json:"result"`
-	AdditionalProperties map[string]interface{} `json:"-"`
-}
-
 // JSONResponse defines model for JSONResponse.
 type JSONResponse struct {
 	APIVersion           string                 `json:"api_version"`
@@ -1183,14 +1182,15 @@ type NeedUserInputDraftResponse struct {
 
 // NeedUserInputGate defines model for NeedUserInputGate.
 type NeedUserInputGate struct {
-	CycleType string                  `json:"cycle_type,omitempty"`
-	FeatureID string                  `json:"feature_id,omitempty"`
-	Iteration int                     `json:"iteration,omitempty"`
-	Open      bool                    `json:"open"`
-	Questions []NeedUserInputQuestion `json:"questions,omitempty"`
-	RepoName  string                  `json:"repo_name,omitempty"`
-	Scope     string                  `json:"scope,omitempty"`
-	Summary   string                  `json:"summary,omitempty"`
+	CycleType          string                  `json:"cycle_type,omitempty"`
+	FeatureID          string                  `json:"feature_id,omitempty"`
+	InputNotifications string                  `json:"input_notifications,omitempty"`
+	Iteration          int                     `json:"iteration,omitempty"`
+	Open               bool                    `json:"open"`
+	Questions          []NeedUserInputQuestion `json:"questions,omitempty"`
+	RepoName           string                  `json:"repo_name,omitempty"`
+	Scope              string                  `json:"scope,omitempty"`
+	Summary            string                  `json:"summary,omitempty"`
 }
 
 // NeedUserInputQuestion defines model for NeedUserInputQuestion.
@@ -1928,18 +1928,6 @@ type UpdateFeatureConfigParams struct {
 // UpdateFeatureConfigParamsXAgenticoClient defines parameters for UpdateFeatureConfig.
 type UpdateFeatureConfigParamsXAgenticoClient string
 
-// ToggleInputNotificationsLegacyJSONBody defines parameters for ToggleInputNotificationsLegacy.
-type ToggleInputNotificationsLegacyJSONBody map[string]interface{}
-
-// ToggleInputNotificationsLegacyParams defines parameters for ToggleInputNotificationsLegacy.
-type ToggleInputNotificationsLegacyParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient ToggleInputNotificationsLegacyParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// ToggleInputNotificationsLegacyParamsXAgenticoClient defines parameters for ToggleInputNotificationsLegacy.
-type ToggleInputNotificationsLegacyParamsXAgenticoClient string
-
 // InterruptFeatureLegacyJSONBody defines parameters for InterruptFeatureLegacy.
 type InterruptFeatureLegacyJSONBody map[string]interface{}
 
@@ -2200,9 +2188,6 @@ type RunFeatureSubactionJSONRequestBody RunFeatureSubactionJSONBody
 // UpdateFeatureConfigJSONRequestBody defines body for UpdateFeatureConfig for application/json ContentType.
 type UpdateFeatureConfigJSONRequestBody UpdateFeatureConfigJSONBody
 
-// ToggleInputNotificationsLegacyJSONRequestBody defines body for ToggleInputNotificationsLegacy for application/json ContentType.
-type ToggleInputNotificationsLegacyJSONRequestBody ToggleInputNotificationsLegacyJSONBody
-
 // InterruptFeatureLegacyJSONRequestBody defines body for InterruptFeatureLegacy for application/json ContentType.
 type InterruptFeatureLegacyJSONRequestBody InterruptFeatureLegacyJSONBody
 
@@ -2368,14 +2353,6 @@ func (a *ActionResponse) UnmarshalJSON(b []byte) error {
 			return fmt.Errorf("error reading 'help_send_response': %w", err)
 		}
 		delete(object, "help_send_response")
-	}
-
-	if raw, found := object["input_notifications_toggle_response"]; found {
-		err = json.Unmarshal(raw, &a.InputNotificationsToggleResponse)
-		if err != nil {
-			return fmt.Errorf("error reading 'input_notifications_toggle_response': %w", err)
-		}
-		delete(object, "input_notifications_toggle_response")
 	}
 
 	if raw, found := object["mark_done_response"]; found {
@@ -2602,11 +2579,6 @@ func (a ActionResponse) MarshalJSON() ([]byte, error) {
 	object["help_send_response"], err = json.Marshal(a.HelpSendResponse)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'help_send_response': %w", err)
-	}
-
-	object["input_notifications_toggle_response"], err = json.Marshal(a.InputNotificationsToggleResponse)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'input_notifications_toggle_response': %w", err)
 	}
 
 	object["mark_done_response"], err = json.Marshal(a.MarkDoneResponse)
@@ -4482,124 +4454,6 @@ func (a HelpSendResponse) MarshalJSON() ([]byte, error) {
 	object["session_id"], err = json.Marshal(a.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
-	}
-
-	for fieldName, field := range a.AdditionalProperties {
-		object[fieldName], err = json.Marshal(field)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
-		}
-	}
-	return json.Marshal(object)
-}
-
-// Getter for additional properties for InputNotificationsToggleResponse. Returns the specified
-// element and whether it was found
-func (a InputNotificationsToggleResponse) Get(fieldName string) (value interface{}, found bool) {
-	if a.AdditionalProperties != nil {
-		value, found = a.AdditionalProperties[fieldName]
-	}
-	return
-}
-
-// Setter for additional properties for InputNotificationsToggleResponse
-func (a *InputNotificationsToggleResponse) Set(fieldName string, value interface{}) {
-	if a.AdditionalProperties == nil {
-		a.AdditionalProperties = make(map[string]interface{})
-	}
-	a.AdditionalProperties[fieldName] = value
-}
-
-// Override default JSON handling for InputNotificationsToggleResponse to handle AdditionalProperties
-func (a *InputNotificationsToggleResponse) UnmarshalJSON(b []byte) error {
-	object := make(map[string]json.RawMessage)
-	err := json.Unmarshal(b, &object)
-	if err != nil {
-		return err
-	}
-
-	if raw, found := object["api_version"]; found {
-		err = json.Unmarshal(raw, &a.APIVersion)
-		if err != nil {
-			return fmt.Errorf("error reading 'api_version': %w", err)
-		}
-		delete(object, "api_version")
-	}
-
-	if raw, found := object["feature_id"]; found {
-		err = json.Unmarshal(raw, &a.FeatureID)
-		if err != nil {
-			return fmt.Errorf("error reading 'feature_id': %w", err)
-		}
-		delete(object, "feature_id")
-	}
-
-	if raw, found := object["meta"]; found {
-		err = json.Unmarshal(raw, &a.Meta)
-		if err != nil {
-			return fmt.Errorf("error reading 'meta': %w", err)
-		}
-		delete(object, "meta")
-	}
-
-	if raw, found := object["muted"]; found {
-		err = json.Unmarshal(raw, &a.Muted)
-		if err != nil {
-			return fmt.Errorf("error reading 'muted': %w", err)
-		}
-		delete(object, "muted")
-	}
-
-	if raw, found := object["result"]; found {
-		err = json.Unmarshal(raw, &a.Result)
-		if err != nil {
-			return fmt.Errorf("error reading 'result': %w", err)
-		}
-		delete(object, "result")
-	}
-
-	if len(object) != 0 {
-		a.AdditionalProperties = make(map[string]interface{})
-		for fieldName, fieldBuf := range object {
-			var fieldVal interface{}
-			err := json.Unmarshal(fieldBuf, &fieldVal)
-			if err != nil {
-				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
-			}
-			a.AdditionalProperties[fieldName] = fieldVal
-		}
-	}
-	return nil
-}
-
-// Override default JSON handling for InputNotificationsToggleResponse to handle AdditionalProperties
-func (a InputNotificationsToggleResponse) MarshalJSON() ([]byte, error) {
-	var err error
-	object := make(map[string]json.RawMessage)
-
-	object["api_version"], err = json.Marshal(a.APIVersion)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
-	}
-
-	object["feature_id"], err = json.Marshal(a.FeatureID)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
-	}
-
-	object["meta"], err = json.Marshal(a.Meta)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
-	}
-
-	object["muted"], err = json.Marshal(a.Muted)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'muted': %w", err)
-	}
-
-	object["result"], err = json.Marshal(a.Result)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling 'result': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {

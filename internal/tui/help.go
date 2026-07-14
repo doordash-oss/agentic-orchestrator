@@ -101,7 +101,6 @@ func dashboardLeftHelp() ViewHelpContext {
 				Title: "FEATURES",
 				Bindings: []HelpBinding{
 					{"n", "New feature"},
-					{"Shift+N", "Toggle input notifications"},
 					{"d", "Delete feature"},
 					{"v", "View diff"},
 					{"p", "Publish"},
@@ -142,7 +141,6 @@ func dashboardRightHelp() ViewHelpContext {
 					{"y", "Approve permissions"},
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},
-					{"Shift+N", "Toggle input notifications"},
 					{"s", "Stop running feature"},
 					{"r", "Restart phase"},
 					{"ctrl+r", "Rewind"},
@@ -191,7 +189,6 @@ func detailHelp() ViewHelpContext {
 					{"y", "Approve permissions"},
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},
-					{"Shift+N", "Toggle input notifications"},
 					{"Shift+E", "Edit workspace config"},
 					{"s", "Stop running feature"},
 					{"r", "Restart phase"},

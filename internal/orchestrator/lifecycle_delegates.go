@@ -570,15 +570,16 @@ func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 	return nil
 }
 
-// UpdateFeatureConfigInput carries the three editable per-feature config
-// axes for Orchestrator.UpdateFeatureConfig. All three fields are always
+// UpdateFeatureConfigInput carries the editable per-feature config axes
+// for Orchestrator.UpdateFeatureConfig. All fields are always
 // populated — callers build the input from the current feature snapshot
 // plus their edits, so a zero-value field is a real "set this to empty"
 // operation, not "leave alone".
 type UpdateFeatureConfigInput struct {
-	Models      config.ModelConfig
-	Inquireness feature.Inquireness
-	Checkpoints feature.Checkpoints
+	Models             config.ModelConfig
+	Inquireness        feature.Inquireness
+	Checkpoints        feature.Checkpoints
+	InputNotifications feature.InputNotificationsMode
 }
 
 // ErrFeatureNotQuiescent is kept for compatibility with older callers that
@@ -587,7 +588,7 @@ type UpdateFeatureConfigInput struct {
 // and active sessions pick them up on the next phase or restart.
 var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 
-// UpdateFeatureConfig atomically writes the three editable config axes. Same
+// UpdateFeatureConfig atomically writes the editable config axes. Same
 // idiom as ApplyRefactorPipeline — Store.Modify handles locking + atomic
 // write. On success, emits ports.Event{Type: FeatureConfigChanged}
 // (non-blocking) and fires hooks.OnFeatureConfigChanged(before, after) so the
@@ -604,11 +605,22 @@ var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeatureConfigInput) error {
 	var before, after feature.ConfigSnapshot
 	err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		before = feature.ConfigSnapshot{Models: f.Models, Inquireness: f.Inquireness, Checkpoints: f.Checkpoints}
+		before = feature.ConfigSnapshot{
+			Models:             f.Models,
+			Inquireness:        f.Inquireness,
+			Checkpoints:        f.Checkpoints,
+			InputNotifications: feature.NormalizeInputNotificationsMode(f.InputNotifications),
+		}
 		f.Models = input.Models
 		f.Inquireness = input.Inquireness
 		f.Checkpoints = f.Pipeline.NormalizeCheckpoints(input.Checkpoints, f.IsPublishable())
-		after = feature.ConfigSnapshot{Models: f.Models, Inquireness: f.Inquireness, Checkpoints: f.Checkpoints}
+		f.InputNotifications = feature.PersistInputNotificationsMode(input.InputNotifications)
+		after = feature.ConfigSnapshot{
+			Models:             f.Models,
+			Inquireness:        f.Inquireness,
+			Checkpoints:        f.Checkpoints,
+			InputNotifications: feature.NormalizeInputNotificationsMode(f.InputNotifications),
+		}
 		return nil
 	})
 	if err != nil {

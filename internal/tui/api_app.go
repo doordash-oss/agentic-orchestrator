@@ -82,7 +82,6 @@ type APIClient interface {
 	ExecuteRecovery(context.Context, server.RecoveryActionRequest) (server.RecoveryActionResponse, error)
 	NeedUserInputDecision(context.Context, string, server.NeedUserInputDecisionRequest) (server.NeedUserInputDecisionResponse, error)
 	DraftNeedUserInputAnswers(context.Context, string, server.NeedUserInputDraftRequest) (server.NeedUserInputDraftResponse, error)
-	ToggleInputNotifications(context.Context, string) (server.InputNotificationsToggleResponse, error)
 	ReviewDecision(context.Context, string, server.ReviewDecisionRequest) (server.ReviewDecisionResponse, error)
 	CreateReviewSession(context.Context, string) (server.ReviewSessionResponse, error)
 	ReviewSession(context.Context, string, string) (server.ReviewSessionResponse, error)
@@ -363,6 +362,7 @@ type APILivePreviewPresentation struct {
 	Label          string
 	Provider       string
 	Model          string
+	Status         string
 	Activity       string
 	ContextPct     int
 	CostUSD        float64
@@ -469,15 +469,6 @@ type APIAppModel struct {
 	repoActionPanel            *apiRepoActionPanel
 	rewindPanel                *apiRewindPanel
 	rewindPhasePicker          *apiRoadmapRewindPanel
-	needInputPromptActive      bool
-	needInputFeatureID         string
-	needInputFeatureName       string
-	needInputGate              server.NeedInputGateDTO
-	needInputAnswers           map[int]string
-	needInputCursor            int
-	needInputMenuActive        bool
-	needInputMenuChoice        int
-	needInputError             string
 	permissionPromptActive     bool
 	permissionFeatureID        string
 	permissionFeatureName      string
@@ -527,6 +518,8 @@ type APIAppModel struct {
 	liveOutputRecords          <-chan server.SessionOutputRecord
 	liveOutputErrs             <-chan error
 	transcriptBackfills        map[string]bool
+	notifiedNeedInputGates     map[string]struct{}
+	notifyUser                 func(string, string) tea.Cmd
 }
 
 type apiRefreshSignalMsg struct {
@@ -630,6 +623,8 @@ type apiEventErrorMsg struct {
 type apiMutationResultMsg struct {
 	kind      string
 	featureID string
+	repoName  string
+	cycleType string
 	requestID string
 	err       error
 }
@@ -786,12 +781,14 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 		transcripts:                map[string]server.TranscriptResponse{},
 		contents:                   map[string]apiFeatureContentSnapshot{},
 		transcriptBackfills:        map[string]bool{},
+		notifiedNeedInputGates:     map[string]struct{}{},
 		width:                      100,
 		height:                     30,
 		spinner:                    newAPIAppSpinner(),
 		ownedServer:                opts.OwnedServer,
 		waitForOwnedServerShutdown: waitForOwnedServerShutdown,
 		launchPolicy:               opts.LaunchPolicy,
+		notifyUser:                 notifyUserCmd,
 	}
 	features, err := client.Features(ctx)
 	if err != nil {
@@ -826,6 +823,7 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 	app.runtimeConfig = runtimeConfig
 	app.catalog = catalog
 	app.prompts = prompts
+	app.notifiedNeedInputGates = apiOpenNeedInputGateKeys(prompts.NeedUserInputs)
 	app.permissions = permissions
 	app.sessionList = sessions
 	app.recovery = recovery
@@ -976,13 +974,17 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Refresh failed: " + firstLine(msg.err.Error())
 		}
 		m.ApplyRefreshSnapshot(msg.snapshot)
+		var notifyCmd tea.Cmd
+		if msg.snapshot.Prompts != nil {
+			notifyCmd = m.notifyNewNeedInputGatesCmd()
+		}
 		if msg.content != nil {
 			m.storeContent(*msg.content)
 			m.rebuildPresentation(m.selectedFeature)
 			m.syncAPIContentViewport()
 		}
 		m = m.applyAPIChatRefreshSnapshot(msg.snapshot)
-		return m, m.apiChatRecoveryCmdIfResponding()
+		return m, tea.Batch(m.apiChatRecoveryCmdIfResponding(), notifyCmd)
 	case apiAttachSessionsSnapshotMsg:
 		return m.applyAPIAttachSessionsSnapshot(msg)
 	case apiContentSelectionMsg:
@@ -1113,9 +1115,15 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case apiMutationResultMsg:
 		if msg.err != nil {
-			if msg.kind == mutationKindFeatureNeedUserInputDecision || msg.kind == mutationKindFeatureNeedUserInputDraft {
-				m.needInputError = firstLine(msg.err.Error())
-				m.needInputMenuActive = false
+			if msg.kind == mutationKindFeatureNeedUserInputDecision {
+				if m.artifactReview != nil && m.artifactReview.ReviewMode() == reviewModeNeedUserInput {
+					updated := m.artifactReview.WithDecisionError(msg.err)
+					m.artifactReview = &updated
+					return m, nil
+				}
+			}
+			if msg.kind == mutationKindFeatureNeedUserInputDraft {
+				m.statusMessage = "Need-user-input draft failed: " + firstLine(msg.err.Error())
 				return m, nil
 			}
 			if msg.kind == mutationKindFeaturePublish {
@@ -1146,7 +1154,8 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearResolvedControlRequest(msg.requestID)
 		}
 		if msg.kind == mutationKindFeatureNeedUserInputDecision {
-			m.clearNeedInputPrompt()
+			m.artifactReview = nil
+			m.clearResolvedNeedInputGate(msg.featureID, msg.repoName, msg.cycleType)
 		}
 		if msg.kind == mutationKindPermissionAnswer {
 			m.clearPermissionPrompt()
@@ -1213,6 +1222,10 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.saveReviewDraftCmd(msg)
 	case ArtifactReviewSessionDecisionMsg:
 		return m, m.reviewSessionDecisionCmd(msg)
+	case NeedUserInputDecisionMsg:
+		return m, m.needUserInputDecisionCmd(msg)
+	case NeedUserInputDraftMsg:
+		return m, m.needUserInputDraftCmd(msg)
 	case PlanReviewDecisionMsg:
 		return m, m.reviewDecisionCmd(msg.FeatureID, m.planReviewDecisionRequest(msg.FeatureID, msg.Decision))
 	case RoadmapReviewDecisionMsg:
@@ -1338,9 +1351,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.refactorPrompt != nil {
 		return m.handleAPIRefactorPromptKey(msg)
 	}
-	if m.needInputPromptActive {
-		return m.handleAPINeedInputPromptKey(msg)
-	}
 	if m.permissionPromptActive {
 		switch strings.ToLower(msg.Text) {
 		case "a":
@@ -1423,11 +1433,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openAPIWorkspaceManager(), nil
 	case msg.Text == "R":
 		return m.confirmResumeAll()
-	case msg.Text == "N":
-		if !m.requireSelectedFeature() {
-			return m, nil
-		}
-		return m, m.toggleAPIInputNotificationsCmd(m.selectedFeature)
 	case key.Matches(msg, keys.Chat):
 		return m.transitionToAPIChat()
 	case msg.Text == "a":
@@ -1453,6 +1458,9 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case "n":
+		if msg.Text != "n" {
+			return m, nil
+		}
 		return m.openCreateFeaturePrompt(0), nil
 	case "v":
 		return m.openSelectedDiff()
@@ -1492,7 +1500,7 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "b":
 		return m.confirmSelectedFeatureAction(mutationKindFeatureRebase), nil
 	case "i":
-		return m.openNeedInputPrompt(), nil
+		return m.openNeedUserInputReview(), nil
 	case "a":
 		return m.openPermissionPrompt(), nil
 	case "h":
@@ -1528,9 +1536,13 @@ func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.content != nil {
 			m.storeContent(*msg.content)
 		}
+		var notifyCmd tea.Cmd
+		if msg.snapshot.Prompts != nil {
+			notifyCmd = m.notifyNewNeedInputGatesCmd()
+		}
 		var cmd tea.Cmd
 		m, cmd = m.applyAPIAttachRefreshSnapshot(msg.snapshot)
-		return m, cmd
+		return m, tea.Batch(cmd, notifyCmd)
 	case apiAttachSessionsSnapshotMsg:
 		return m.applyAPIAttachSessionsSnapshot(msg)
 	case apiEventErrorMsg:
@@ -1806,9 +1818,6 @@ func (m APIAppModel) View() tea.View {
 	}
 	if m.resumeAllConfirmActive {
 		view = overlayModal(view, m.renderAPIResumeAllConfirm(), w, h)
-	}
-	if m.needInputPromptActive {
-		view = overlayModal(view, m.renderNeedInputPrompt(), w, h)
 	}
 	if m.permissionPromptActive {
 		view = overlayModal(view, m.renderPermissionPrompt(), w, h)
@@ -2442,13 +2451,17 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 	if preview.CostUSD > 0 {
 		cost = &llm.ResultMessage{TotalCostUSD: preview.CostUSD}
 	}
+	status := apiSessionStatus(preview.Status)
+	if strings.TrimSpace(preview.Status) == "" && strings.TrimSpace(preview.SessionID) == "" {
+		status = ports.SessionDone
+	}
 	return &apiSessionView{
 		id:                     preview.SessionID,
 		featureID:              preview.FeatureID,
 		phase:                  apiLivePreviewPhase(preview.Phase),
 		kind:                   apiSessionKind(preview.Kind),
 		label:                  firstNonEmpty(preview.Label, "Live Preview"),
-		status:                 ports.SessionRunning,
+		status:                 status,
 		provider:               preview.Provider,
 		model:                  preview.Model,
 		contextPct:             preview.ContextPct,
@@ -4295,9 +4308,6 @@ func (m *APIAppModel) removeFeatureState(featureID string) {
 	if m.refactorPipeline != nil && m.refactorPipeline.featureID == featureID {
 		m.refactorPipeline = nil
 	}
-	if m.needInputFeatureID == featureID {
-		m.clearNeedInputPrompt()
-	}
 	if m.permissionFeatureID == featureID {
 		m.clearPermissionPrompt()
 	}
@@ -4443,23 +4453,32 @@ func (m *APIAppModel) clearActionConfirm() {
 	m.actionConfirmArgs = apiFeatureActionArgs{}
 }
 
-func (m *APIAppModel) clearNeedInputPrompt() {
-	m.needInputPromptActive = false
-	m.needInputFeatureID = ""
-	m.needInputFeatureName = ""
-	m.needInputGate = server.NeedInputGateDTO{}
-	m.needInputAnswers = nil
-	m.needInputCursor = 0
-	m.needInputMenuActive = false
-	m.needInputMenuChoice = 0
-	m.needInputError = ""
-}
-
 func (m *APIAppModel) clearPermissionPrompt() {
 	m.permissionPromptActive = false
 	m.permissionFeatureID = ""
 	m.permissionFeatureName = ""
 	m.permissionRequest = server.ControlRequestDTO{}
+}
+
+func (m *APIAppModel) clearResolvedNeedInputGate(featureID, repoName, cycleType string) {
+	if featureID == "" {
+		return
+	}
+	if detail, ok := m.featureDetails[featureID]; ok && detail.Feature.NeedUserInput != nil &&
+		needInputGateMatchesTarget(*detail.Feature.NeedUserInput, featureID, repoName, cycleType) {
+		detail.Feature.NeedUserInput = nil
+		m.featureDetails[featureID] = detail
+	}
+	m.prompts.NeedUserInputs = slices.DeleteFunc(m.prompts.NeedUserInputs, func(gate server.NeedInputGateDTO) bool {
+		return needInputGateMatchesTarget(gate, featureID, repoName, cycleType)
+	})
+}
+
+func needInputGateMatchesTarget(gate server.NeedInputGateDTO, featureID, repoName, cycleType string) bool {
+	return gate.Open &&
+		gate.FeatureID == featureID &&
+		gate.RepoName == repoName &&
+		gate.CycleType == cycleType
 }
 
 func (m *APIAppModel) clearHelpPrompt() {
@@ -4721,7 +4740,7 @@ func (m *APIAppModel) requireSelectedFeature() bool {
 	return false
 }
 
-func (m APIAppModel) openNeedInputPrompt() APIAppModel {
+func (m APIAppModel) openNeedUserInputReview() APIAppModel {
 	if !m.requireSelectedFeature() {
 		return m
 	}
@@ -4730,132 +4749,37 @@ func (m APIAppModel) openNeedInputPrompt() APIAppModel {
 		m.statusMessage = "No need-user-input gate for selected feature"
 		return m
 	}
-	m.needInputPromptActive = true
-	m.needInputFeatureID = m.selectedFeature
-	m.needInputFeatureName = m.selectedFeatureName()
-	m.needInputGate = gate
-	m.needInputAnswers = make(map[int]string, len(gate.Questions))
-	m.needInputCursor = 0
-	foundEmpty := false
-	for i, q := range gate.Questions {
-		m.needInputAnswers[i] = strings.TrimSpace(q.Answer)
-		if strings.TrimSpace(q.Answer) == "" && !foundEmpty {
-			m.needInputCursor = i
-			foundEmpty = true
-		}
+	if m.artifactReview != nil &&
+		m.artifactReview.ReviewMode() == reviewModeNeedUserInput &&
+		m.artifactReview.FeatureID() == needUserInputFeatureID(m.selectedFeature, gate) &&
+		m.artifactReview.Detached() &&
+		!m.artifactReview.Decided() &&
+		artifactReviewMatchesNeedInput(m.artifactReview, gate) {
+		_ = m.artifactReview.Reattach()
+		m.statusMessage = ""
+		return m
 	}
-	if m.needInputCursor >= len(gate.Questions) {
-		m.needInputCursor = 0
-	}
-	m.needInputMenuActive = false
-	m.needInputMenuChoice = 0
-	m.needInputError = ""
+	model := NewNeedUserInputReviewModel(m.selectedFeature, gate, m.width, m.height)
+	m.artifactReview = &model
 	m.statusMessage = ""
 	return m
 }
 
-func (m APIAppModel) handleAPINeedInputPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.needInputMenuActive {
-		switch msg.Code {
-		case tea.KeyUp:
-			if m.needInputMenuChoice > 0 {
-				m.needInputMenuChoice--
-			}
-			return m, nil
-		case tea.KeyDown:
-			if m.needInputMenuChoice < 1 {
-				m.needInputMenuChoice++
-			}
-			return m, nil
-		case tea.KeyEnter:
-			if m.needInputMenuChoice == 1 {
-				return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "abort")
-			}
-			if !m.needInputAllAnswered() {
-				m.needInputMenuActive = false
-				m.needInputError = "Answer every question before resuming."
-				return m, nil
-			}
-			return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "resume")
-		case tea.KeyEscape:
-			m.needInputMenuActive = false
-			return m, nil
-		}
-		return m, nil
+func needUserInputFeatureID(selectedFeature string, gate server.NeedInputGateDTO) string {
+	if gate.FeatureID != "" {
+		return gate.FeatureID
 	}
-
-	if msg.Code == 'd' && msg.Mod.Contains(tea.ModCtrl) {
-		m.needInputMenuActive = true
-		m.needInputMenuChoice = 0
-		m.needInputError = ""
-		return m, nil
-	}
-	if msg.Code == tea.KeyEscape {
-		m.clearNeedInputPrompt()
-		return m, nil
-	}
-	if len(m.needInputGate.Questions) == 0 {
-		switch strings.ToLower(msg.Text) {
-		case "r":
-			return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "resume")
-		case "a":
-			return m, m.needUserInputDecisionCmd(m.needInputFeatureID, "abort")
-		}
-		return m, nil
-	}
-
-	switch msg.Code {
-	case tea.KeyTab, tea.KeyDown:
-		m.moveNeedInputCursor(1)
-		return m, nil
-	case tea.KeyUp:
-		m.moveNeedInputCursor(-1)
-		return m, nil
-	case tea.KeyBackspace:
-		if m.needInputCursor < 0 || m.needInputCursor >= len(m.needInputGate.Questions) {
-			return m, nil
-		}
-		current := m.needInputAnswers[m.needInputCursor]
-		if current == "" {
-			return m, nil
-		}
-		runes := []rune(current)
-		m.needInputAnswers[m.needInputCursor] = string(runes[:len(runes)-1])
-		m.needInputGate.Questions[m.needInputCursor].Answer = m.needInputAnswers[m.needInputCursor]
-		m.needInputError = ""
-		return m, m.needUserInputDraftCmd(m.needInputFeatureID, m.needInputGate, m.needInputCursor)
-	}
-	if msg.Text == "" || msg.Mod.Contains(tea.ModCtrl) {
-		return m, nil
-	}
-	if m.needInputCursor < 0 || m.needInputCursor >= len(m.needInputGate.Questions) {
-		return m, nil
-	}
-	m.needInputAnswers[m.needInputCursor] += msg.Text
-	m.needInputGate.Questions[m.needInputCursor].Answer = m.needInputAnswers[m.needInputCursor]
-	m.needInputError = ""
-	return m, m.needUserInputDraftCmd(m.needInputFeatureID, m.needInputGate, m.needInputCursor)
+	return selectedFeature
 }
 
-func (m *APIAppModel) moveNeedInputCursor(delta int) {
-	count := len(m.needInputGate.Questions)
-	if count == 0 {
-		m.needInputCursor = 0
-		return
-	}
-	m.needInputCursor = (m.needInputCursor + delta + count) % count
-}
-
-func (m APIAppModel) needInputAllAnswered() bool {
-	if len(m.needInputGate.Questions) == 0 {
+func artifactReviewMatchesNeedInput(review *ArtifactReviewModel, gate server.NeedInputGateDTO) bool {
+	if review == nil {
 		return false
 	}
-	for i := range m.needInputGate.Questions {
-		if strings.TrimSpace(m.needInputAnswers[i]) == "" {
-			return false
-		}
-	}
-	return true
+	return review.ReviewMode() == reviewModeNeedUserInput &&
+		review.FeatureID() == needUserInputFeatureID(review.FeatureID(), gate) &&
+		review.RepoName() == gate.RepoName &&
+		string(review.CycleType()) == gate.CycleType
 }
 
 func (m APIAppModel) openPermissionPrompt() APIAppModel {
@@ -5059,7 +4983,10 @@ func (m APIAppModel) openRewindPanel() APIAppModel {
 }
 
 func (m APIAppModel) openRuntimeConfigEditor() APIAppModel {
-	cfg := &config.Config{Defaults: apiWizardDefaults(m.runtimeConfig)}
+	cfg := &config.Config{
+		Defaults:      apiWizardDefaults(m.runtimeConfig),
+		Notifications: config.NotificationConfig{MuteFeatureInput: m.runtimeConfig.Notifications.MuteFeatureInput},
+	}
 	editor := NewWorkspaceEditConfigModel(cfg, apiPhaseModelCatalog(m.catalog))
 	m.configEditor = &editor
 	m.statusMessage = ""
@@ -5144,18 +5071,6 @@ func (m APIAppModel) resumeAllCmd(featureIDs []string) tea.Cmd {
 			result.succeeded = append(result.succeeded, featureID)
 		}
 		return result
-	}
-}
-
-func (m APIAppModel) toggleAPIInputNotificationsCmd(featureID string) tea.Cmd {
-	return func() tea.Msg {
-		ctx := m.apiCtx()
-		_, err := m.client.ToggleInputNotifications(ctx, featureID)
-		return apiMutationResultMsg{
-			kind:      "feature.input_notifications.toggle",
-			featureID: featureID,
-			err:       err,
-		}
 	}
 }
 
@@ -5458,11 +5373,11 @@ func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
 	if f := m.selectedAPIDashboardFeature(); f != nil && f.Status.IsNeedsReview() {
 		return m.openAPIReviewAttention(f)
 	}
+	if _, ok := m.selectedNeedInputGate(m.selectedFeature); ok {
+		return m.openNeedUserInputReview(), nil
+	}
 	if m.hasAPIAttachableSession(m.selectedFeature) {
 		return m.openAPIAttachForFeature(m.selectedFeature)
-	}
-	if _, ok := m.selectedNeedInputGate(m.selectedFeature); ok {
-		return m.openNeedInputPrompt(), nil
 	}
 	if m.selectedActionReady(mutationKindFeatureResume) {
 		return m, m.primarySelectedFeatureActionCmd(mutationKindFeatureResume, m.selectedFeature)
@@ -6537,89 +6452,6 @@ func (m APIAppModel) renderAPIRefactorPipelineSelector() string {
 	}
 	b.WriteString("\n\n")
 	b.WriteString(KeyHelpStyle.Render(" [\u2190/\u2192] Navigate   [enter] Confirm   [esc] Cancel"))
-	return b.String()
-}
-
-func (m APIAppModel) renderNeedInputPrompt() string {
-	name := m.needInputFeatureName
-	if name == "" {
-		name = m.needInputFeatureID
-	}
-	var b strings.Builder
-	b.WriteString("Implementation needs user input\n\n")
-	b.WriteString("  " + name + "\n\n")
-	if strings.TrimSpace(m.needInputGate.Summary) != "" {
-		b.WriteString("  " + strings.TrimSpace(m.needInputGate.Summary) + "\n\n")
-	}
-	if m.needInputGate.Scope != "" {
-		b.WriteString("  Scope: " + m.needInputGate.Scope + "\n")
-	}
-	if m.needInputGate.RepoName != "" {
-		b.WriteString("  Repo: " + m.needInputGate.RepoName + "\n")
-	}
-	if m.needInputGate.CycleType != "" {
-		b.WriteString("  Cycle: " + m.needInputGate.CycleType + "\n")
-	}
-	if m.needInputGate.Iteration > 0 {
-		fmt.Fprintf(&b, "  Iteration: %d\n", m.needInputGate.Iteration)
-	}
-	if m.needInputGate.Scope != "" || m.needInputGate.RepoName != "" || m.needInputGate.CycleType != "" || m.needInputGate.Iteration > 0 {
-		b.WriteByte('\n')
-	}
-	if m.needInputError != "" {
-		b.WriteString(WarningStyle.Render("  " + m.needInputError))
-		b.WriteString("\n\n")
-	}
-	if len(m.needInputGate.Questions) == 0 {
-		b.WriteString(WarningStyle.Render("  No structured questions were provided."))
-		b.WriteString("\n\n")
-	} else {
-		for i, q := range m.needInputGate.Questions {
-			prefix := "  "
-			if i == m.needInputCursor && !m.needInputMenuActive {
-				prefix = "> "
-			}
-			index := q.Index
-			if index <= 0 {
-				index = i + 1
-			}
-			b.WriteString(fmt.Sprintf("%s%d. %s\n", prefix, index, strings.TrimSpace(q.Prompt)))
-			answer := m.needInputAnswers[i]
-			if strings.TrimSpace(answer) == "" {
-				answer = MutedStyle.Render("Answer...")
-			}
-			b.WriteString("     " + answer + "\n\n")
-		}
-	}
-	b.WriteString(KeyHelpStyle.Render(" [tab] Next question   Ctrl+D menu   [esc] Cancel"))
-	if m.needInputMenuActive {
-		b.WriteString("\n\n")
-		b.WriteString(m.renderNeedInputMenu())
-	}
-	return renderBoxPanel(58, colorWarning, b.String())
-}
-
-func (m APIAppModel) renderNeedInputMenu() string {
-	labels := []string{"Resume implementation", "Abort implementation"}
-	if !m.needInputAllAnswered() {
-		labels[0] += " (answer all questions to enable)"
-	}
-	var b strings.Builder
-	b.WriteString("Choose an action:\n")
-	for i, label := range labels {
-		prefix := "  "
-		if i == m.needInputMenuChoice {
-			prefix = "> "
-		}
-		line := prefix + label
-		if i == 0 && !m.needInputAllAnswered() {
-			line = MutedStyle.Render(line)
-		} else if i == m.needInputMenuChoice {
-			line = TitleStyle.Render(line)
-		}
-		b.WriteString(line + "\n")
-	}
-	b.WriteString(KeyHelpStyle.Render(" Enter select   Esc close menu"))
 	return b.String()
 }
 
@@ -7734,7 +7566,7 @@ func (m APIAppModel) handleAPIConfigEditorKey(msg tea.KeyPressMsg) (tea.Model, t
 	}
 	switch msg.String() {
 	case keyEsc:
-		if editor.editor.HasChanges() {
+		if editor.HasChanges() {
 			editor.discardConfirm = true
 			return m, nil
 		}
@@ -7872,10 +7704,11 @@ func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 		ctx := m.apiCtx()
 		snap := editor.editor.Snapshot()
 		_, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, server.FeatureConfigMutationRequest{
-			Models:      snap.Models,
-			Inquireness: string(snap.Inquireness),
-			Checkpoints: snap.Checkpoints,
-			Pipeline:    editor.pipeline,
+			Models:             snap.Models,
+			Inquireness:        string(snap.Inquireness),
+			Checkpoints:        snap.Checkpoints,
+			Pipeline:           editor.pipeline,
+			InputNotifications: string(feature.NormalizeInputNotificationsMode(editor.inputAlertsMode)),
 		})
 		return apiMutationResultMsg{
 			kind:      mutationKindFeatureConfigUpdate,
@@ -7895,6 +7728,9 @@ func (m APIAppModel) saveWorkspaceConfigCmd(editor EditConfigModel) tea.Cmd {
 				Inquireness: string(snap.Inquireness),
 				Checkpoints: feature.FeatureCheckpointsToConfig(snap.Checkpoints),
 				Pipeline:    string(editor.pipeline),
+			},
+			Notifications: &server.NotificationConfigDTO{
+				MuteFeatureInput: feature.NormalizeInputNotificationsMode(editor.inputAlertsMode) == feature.InputNotificationsMuted,
 			},
 		})
 		if err != nil {
@@ -7951,33 +7787,43 @@ func (m APIAppModel) startRefactorCmd(panel apiRefactorPipelinePanel) tea.Cmd {
 	}
 }
 
-func (m APIAppModel) needUserInputDecisionCmd(featureID, decision string) tea.Cmd {
+func (m APIAppModel) needUserInputDecisionCmd(msg NeedUserInputDecisionMsg) tea.Cmd {
 	return func() tea.Msg {
+		featureID := msg.FeatureID
 		ctx := m.apiCtx()
 		_, err := m.client.NeedUserInputDecision(ctx, featureID, server.NeedUserInputDecisionRequest{
-			Decision:  decision,
-			RepoName:  m.needInputGate.RepoName,
-			CycleType: m.needInputGate.CycleType,
+			Decision:  msg.Decision,
+			RepoName:  msg.RepoName,
+			CycleType: string(msg.CycleType),
 		})
 		return apiMutationResultMsg{
 			kind:      mutationKindFeatureNeedUserInputDecision,
 			featureID: featureID,
+			repoName:  msg.RepoName,
+			cycleType: string(msg.CycleType),
 			err:       err,
 		}
 	}
 }
 
-func (m APIAppModel) needUserInputDraftCmd(featureID string, gate server.NeedInputGateDTO, questionOffset int) tea.Cmd {
+func (m APIAppModel) needUserInputDraftCmd(msg NeedUserInputDraftMsg) tea.Cmd {
 	return func() tea.Msg {
+		featureID := msg.FeatureID
+		gate := msg.Gate
+		questionOffset := msg.QuestionOffset
 		answerKey := needUserInputQuestionAnswerKey(gate, questionOffset)
 		if answerKey == "" {
 			answerKey = strconv.Itoa(questionOffset + 1)
 		}
+		answer := ""
+		if questionOffset >= 0 && questionOffset < len(gate.Questions) {
+			answer = gate.Questions[questionOffset].Answer
+		}
 		ctx := m.apiCtx()
 		_, err := m.client.DraftNeedUserInputAnswers(ctx, featureID, server.NeedUserInputDraftRequest{
-			RepoName:  gate.RepoName,
-			CycleType: gate.CycleType,
-			Answers:   map[string]string{answerKey: gate.Questions[questionOffset].Answer},
+			RepoName:  msg.RepoName,
+			CycleType: string(msg.CycleType),
+			Answers:   map[string]string{answerKey: answer},
 		})
 		return apiMutationResultMsg{
 			kind:      mutationKindFeatureNeedUserInputDraft,
@@ -8310,8 +8156,9 @@ func apiFeatureFromConfig(featureID, featureName string, response server.Feature
 			PhasePlanReview: current.Checkpoints.PhasePlanReview,
 			ManualPublish:   current.Checkpoints.ManualPublish,
 		},
-		Pipeline: pipeline,
-		Repos:    apiFeatureConfigRepos(response.Publish),
+		Pipeline:           pipeline,
+		InputNotifications: feature.InputNotificationsMode(current.InputNotifications),
+		Repos:              apiFeatureConfigRepos(response.Publish),
 	}
 }
 
@@ -8689,6 +8536,88 @@ func apiAttentionCounts(features []server.FeatureSummary, prompts server.PromptS
 		}
 	}
 	return counts
+}
+
+func (m *APIAppModel) notifyNewNeedInputGatesCmd() tea.Cmd {
+	if m.notifiedNeedInputGates == nil {
+		m.notifiedNeedInputGates = map[string]struct{}{}
+	}
+	current := apiOpenNeedInputGateKeys(m.prompts.NeedUserInputs)
+	var cmds []tea.Cmd
+	for _, gate := range m.prompts.NeedUserInputs {
+		key := apiNeedInputGateKey(gate)
+		if key == "" {
+			continue
+		}
+		if _, seen := m.notifiedNeedInputGates[key]; seen {
+			continue
+		}
+		m.notifiedNeedInputGates[key] = struct{}{}
+		if !m.shouldNotifyNeedInputGate(gate) {
+			continue
+		}
+		notify := m.notifyUser
+		if notify == nil {
+			notify = notifyUserCmd
+		}
+		cmds = append(cmds, notify(m.featureNameByID(gate.FeatureID), apiNeedInputNotificationReason(gate)))
+	}
+	for key := range m.notifiedNeedInputGates {
+		if _, open := current[key]; !open {
+			delete(m.notifiedNeedInputGates, key)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m APIAppModel) shouldNotifyNeedInputGate(gate server.NeedInputGateDTO) bool {
+	mode := feature.NormalizeInputNotificationsMode(feature.InputNotificationsMode(gate.InputNotifications))
+	switch mode {
+	case feature.InputNotificationsMuted:
+		return false
+	case feature.InputNotificationsEnabled:
+		return true
+	default:
+		return !m.runtimeConfig.Notifications.MuteFeatureInput
+	}
+}
+
+func apiOpenNeedInputGateKeys(gates []server.NeedInputGateDTO) map[string]struct{} {
+	keys := make(map[string]struct{}, len(gates))
+	for _, gate := range gates {
+		if key := apiNeedInputGateKey(gate); key != "" {
+			keys[key] = struct{}{}
+		}
+	}
+	return keys
+}
+
+func apiNeedInputGateKey(gate server.NeedInputGateDTO) string {
+	if !gate.Open || strings.TrimSpace(gate.FeatureID) == "" {
+		return ""
+	}
+	parts := []string{
+		gate.FeatureID,
+		gate.Scope,
+		gate.RepoName,
+		gate.CycleType,
+		strconv.Itoa(gate.Iteration),
+		strings.TrimSpace(gate.Summary),
+	}
+	for _, question := range gate.Questions {
+		parts = append(parts, strconv.Itoa(question.Index), strings.TrimSpace(question.Prompt))
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func apiNeedInputNotificationReason(gate server.NeedInputGateDTO) string {
+	if summary := strings.TrimSpace(gate.Summary); summary != "" {
+		return summary
+	}
+	if gate.RepoName != "" {
+		return gate.RepoName + " needs input"
+	}
+	return "needs input"
 }
 
 func apiSuppressedAttentionFeatures(features []server.FeatureSummary) map[string]bool {
@@ -9141,6 +9070,7 @@ func apiLivePreviewPresentation(featureID string, dto server.LivePreviewResponse
 		out.Label = dto.Session.Label
 		out.Provider = dto.Session.Provider
 		out.Model = dto.Session.Model
+		out.Status = dto.Session.Status
 	}
 	for _, req := range dto.Attention {
 		summary := strings.TrimSpace(req.Summary)
@@ -9278,8 +9208,6 @@ func apiMutationKindLabel(kind string) string {
 		return "Need Input Decision"
 	case mutationKindFeatureNeedUserInputDraft:
 		return "Need Input Draft"
-	case "feature.input_notifications.toggle":
-		return "Input Alerts"
 	case "feature.review_decision":
 		return "Review Decision"
 	case mutationKindFeatureConfigUpdate:

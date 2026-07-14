@@ -19,7 +19,8 @@ package agents
 
 import "embed"
 
-// FS contains all agent definition markdown files.
+// FS contains per-agent directories with AGENT.md definitions and any
+// attribution assets.
 //
-//go:embed *.md
+//go:embed *
 var FS embed.FS

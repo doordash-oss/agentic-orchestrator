@@ -1,5 +1,7 @@
 ---
 description: Implementation review Cleanliness axis - audits change-set hygiene and pushability
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 You are the Cleanliness axis for a multi-axis implementation review.

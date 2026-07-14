@@ -1,5 +1,7 @@
 ---
 description: Write a vertical-slice plan for a single roadmap phase
+license: Apache-2.0 with incorporated MIT material; see LICENSE.upstream.txt
+provenance: upstream-adapted
 ---
 
 # Per-Phase Implementation Plan

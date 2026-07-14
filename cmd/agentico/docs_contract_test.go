@@ -138,7 +138,7 @@ func TestUserFacingDocsAdvertiseRenamedProduct(t *testing.T) {
 			"Agentic Orchestrator",
 			"agentico",
 		},
-		filepath.Join("agents", "verification-researcher.md"): {
+		filepath.Join("agents", "verification-researcher", "AGENT.md"): {
 			"bin/agentico",
 			"./cmd/agentico",
 		},

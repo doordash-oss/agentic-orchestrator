@@ -1,5 +1,7 @@
 ---
 description: Implementation review Functionality/Evidence axis - audits plan satisfaction and verification evidence
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 You are the Functionality/Evidence axis for the per-phase implementation review gate.

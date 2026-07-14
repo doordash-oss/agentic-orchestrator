@@ -1,5 +1,7 @@
 ---
 description: Legacy phase-plan grounding validation gate - verifies old-format grounding tables
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 > Legacy only: new `skills/plan-phase/format.md` plans deliberately avoid file inventories and do not contain `## Grounding`. Do not use this validator for new per-phase plans. Code-level grounding is now an implementation-time responsibility.

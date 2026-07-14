@@ -15,11 +15,16 @@
 package skilldef
 
 import (
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	skillsFS "github.com/doordash-oss/agentic-orchestrator/skills"
 )
 
 const expectedEmbeddedSkillCount = 31
@@ -34,9 +39,9 @@ func TestParseSkillFile(t *testing.T) {
 	}{
 		{
 			name:    "full frontmatter",
-			content: "---\nname: my-skill\ndescription: A test skill\nlicense: MIT\n---\nThis is the body.",
+			content: "---\nname: my-skill\ndescription: A test skill\nlicense: MIT\nprovenance: upstream-adapted\n---\nThis is the body.",
 			dirName: "fallback",
-			want:    SkillDef{Name: "my-skill", Description: "A test skill", License: "MIT", Body: "This is the body."},
+			want:    SkillDef{Name: "my-skill", Description: "A test skill", License: "MIT", Provenance: "upstream-adapted", Body: "This is the body."},
 		},
 		{
 			name:    "name fallback to dirName",
@@ -96,8 +101,62 @@ func TestParseSkillFile(t *testing.T) {
 			if got.License != tt.want.License {
 				t.Errorf("License = %q, want %q", got.License, tt.want.License)
 			}
+			if got.Provenance != tt.want.Provenance {
+				t.Errorf("Provenance = %q, want %q", got.Provenance, tt.want.Provenance)
+			}
 			if got.Body != tt.want.Body {
 				t.Errorf("Body = %q, want %q", got.Body, tt.want.Body)
+			}
+		})
+	}
+}
+
+func TestEmbeddedSkillProvenance(t *testing.T) {
+	skills, err := ParseEmbedded()
+	if err != nil {
+		t.Fatalf("ParseEmbedded() error: %v", err)
+	}
+
+	allowed := map[string]bool{
+		"agentic-orchestrator-original": true,
+		"upstream-adapted":              true,
+		"upstream-inspired":             true,
+	}
+	pinnedSource := regexp.MustCompile(`https://github\.com/[^/]+/[^/]+/blob/[0-9a-f]{40}/`)
+
+	for name, def := range skills {
+		t.Run(name, func(t *testing.T) {
+			if def.License == "" {
+				t.Fatal("embedded skill has no license declaration")
+			}
+			if !allowed[def.Provenance] {
+				t.Fatalf("provenance = %q, want one of agentic-orchestrator-original, upstream-adapted, upstream-inspired", def.Provenance)
+			}
+			if def.Provenance == "agentic-orchestrator-original" {
+				return
+			}
+
+			attributionPath := path.Join(name, "ATTRIBUTION.md")
+			attribution, err := fs.ReadFile(skillsFS.FS, attributionPath)
+			if err != nil {
+				t.Fatalf("reading %s: %v", attributionPath, err)
+			}
+			if !pinnedSource.Match(attribution) {
+				t.Errorf("%s has no commit-pinned GitHub blob URL", attributionPath)
+			}
+			entries, err := fs.ReadDir(skillsFS.FS, name)
+			if err != nil {
+				t.Fatalf("reading embedded skill directory: %v", err)
+			}
+			hasLicense := false
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasPrefix(entry.Name(), "LICENSE") {
+					hasLicense = true
+					break
+				}
+			}
+			if !hasLicense {
+				t.Error("non-original embedded skill has no bundled upstream license or notice")
 			}
 		})
 	}
@@ -298,6 +357,16 @@ func TestReconcileSkills(t *testing.T) {
 	}
 	if !strings.Contains(content, "description:") {
 		t.Error("reconciled file missing 'description:'")
+	}
+	for _, companion := range []string{"ATTRIBUTION.md", "LICENSE.txt"} {
+		companionPath := filepath.Join(skillsDir, "frontend-design", companion)
+		data, err := os.ReadFile(companionPath)
+		if err != nil {
+			t.Fatalf("reading reconciled provenance file %s: %v", companionPath, err)
+		}
+		if len(data) == 0 {
+			t.Errorf("reconciled provenance file %s is empty", companionPath)
+		}
 	}
 
 	// Idempotent on second call (modtime unchanged)

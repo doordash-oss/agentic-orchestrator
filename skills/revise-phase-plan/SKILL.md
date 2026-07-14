@@ -1,5 +1,7 @@
 ---
 description: Revise a per-phase implementation plan based on critic feedback
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Phase Plan Revision

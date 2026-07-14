@@ -1,5 +1,7 @@
 ---
 description: Collaborative design document creation from research findings
+license: Apache-2.0 with incorporated MIT material; see LICENSE.upstream.txt
+provenance: upstream-adapted
 ---
 
 # Design — Design Document Creation

@@ -1,5 +1,7 @@
 ---
 description: Ask me Anything chat — Agentic Orchestrator expert persona
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Agentic Orchestrator Expert Assistant

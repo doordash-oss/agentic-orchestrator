@@ -359,6 +359,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				GuidelinesDir: cfg.GuidelinesDir,
 				KBInfos:       cfg.KBInfos,
 				AskingClause:  cfg.AskingClause,
+				Frontend:      cfg.Feature != nil && cfg.Feature.RoadmapPhaseFrontend(cfg.Feature.CurrentRoadmapPhase),
 			})
 
 			// Derive repo name for permission scoping. cfg.RepoName is empty for

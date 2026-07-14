@@ -155,6 +155,42 @@ func TestBuildImplementSystemPromptFromRoleSpec(t *testing.T) {
 	}
 }
 
+func TestBuildImplementSystemPromptRequiresFrontendDesignForFrontendPhase(t *testing.T) {
+	got := BuildImplementSystemPrompt(BuildImplementSystemPromptInput{
+		IterationDir: "/state/feat-x/run-001/phase-01/implement/iteration-02",
+		SkillsDir:    "/skills",
+		Frontend:     true,
+	})
+
+	for _, want := range []string{
+		"## Required Skills",
+		"frontend-design",
+		"/skills/frontend-design/SKILL.md",
+		"mandatory",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("BuildImplementSystemPrompt(frontend) missing %q in:\n%s", want, got)
+		}
+	}
+	if count := strings.Count(got, "/skills/frontend-design/SKILL.md"); count != 1 {
+		t.Fatalf("BuildImplementSystemPrompt(frontend) frontend-design path count = %d, want exactly one required entry:\n%s", count, got)
+	}
+}
+
+func TestBuildImplementSystemPromptKeepsFrontendDesignOptionalForNonFrontendPhase(t *testing.T) {
+	got := BuildImplementSystemPrompt(BuildImplementSystemPromptInput{
+		IterationDir: "/state/feat-x/run-001/phase-01/implement/iteration-02",
+		SkillsDir:    "/skills",
+	})
+
+	if strings.Contains(got, "## Required Skills") || strings.Contains(got, "mandatory for this assignment") {
+		t.Fatalf("BuildImplementSystemPrompt(non-frontend) unexpectedly requires a utility skill:\n%s", got)
+	}
+	if !strings.Contains(got, "/skills/frontend-design/SKILL.md") {
+		t.Fatalf("BuildImplementSystemPrompt(non-frontend) should retain optional frontend-design discovery:\n%s", got)
+	}
+}
+
 func TestRoleSpecCarriesRequiredPhasesAndAskingClauseProvider(t *testing.T) {
 	spec := ImplementRoleSpec()
 	if !slices.Equal(spec.Required, []feature.Phase{feature.PhasePlan}) {

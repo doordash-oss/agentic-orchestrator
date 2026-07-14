@@ -292,7 +292,7 @@ func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
 	}
 }
 
-func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing.T) {
+func TestFrontendImplementationRequiresFrontendDesignAndKeepsVisualReferences(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
@@ -316,21 +316,22 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 	}
 
 	f := &feature.Feature{
-		ID:            "test-feat-001",
-		Name:          "Test Feature",
-		Slug:          "test-feature",
-		Description:   "Legacy tagged feature",
-		Images:        []string{"/tmp/mockup.png"},
-		Tags:          []string{"frontend"},
-		Status:        feature.StatusImplementing,
-		CurrentPhase:  feature.PhaseImplement,
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
+		ID:                  "test-feat-001",
+		Name:                "Test Feature",
+		Slug:                "test-feature",
+		Description:         "Frontend feature",
+		Images:              []string{"/tmp/mockup.png"},
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentRoadmapPhase: 1,
+		ActiveRun:           1,
+		RunCount:            1,
+		SchemaVersion:       feature.SchemaVersionCurrent,
 		Repos: []feature.FeatureRepo{
 			{Name: "test-repo", Path: workDir},
 		},
 	}
+	f.SetRoadmapPhaseFrontend(1, true)
 
 	store := feature.NewStore(filepath.Join(tmpDir, "state"))
 	if err := store.Save(f); err != nil {
@@ -353,6 +354,7 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 		ReviewModel:                "reviewer",
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
+		SkillsDir:                  filepath.Join(tmpDir, "skills"),
 		DangerouslySkipPermissions: true,
 		BuildSession:               buildSession,
 	}, sm)
@@ -366,8 +368,20 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 		t.Fatalf("captured %d BuildSession calls, want implement and review", len(*captured))
 	}
 
-	t.Logf("legacy tagged implement prompt:\n%s", (*captured)[0].Prompt)
-	t.Logf("legacy tagged review prompt:\n%s", (*captured)[1].Prompt)
+	t.Logf("frontend implement prompt:\n%s", (*captured)[0].Prompt)
+	t.Logf("frontend review prompt:\n%s", (*captured)[1].Prompt)
+
+	implementSystemPrompt := (*captured)[0].SystemPrompt
+	for _, want := range []string{
+		"## Required Skills",
+		"frontend-design",
+		filepath.Join(tmpDir, "skills", "frontend-design", "SKILL.md"),
+		"mandatory",
+	} {
+		if !strings.Contains(implementSystemPrompt, want) {
+			t.Errorf("implement system prompt missing required frontend skill guidance %q:\n%s", want, implementSystemPrompt)
+		}
+	}
 
 	for _, got := range []struct {
 		name   string
@@ -387,10 +401,6 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 		}
 		if strings.Contains(got.prompt, "## Behavioral Evidence") {
 			t.Errorf("%s prompt unexpectedly contains behavioral evidence guidance:\n%s", got.name, got.prompt)
-		}
-		requiredSkillsHeading := "Required Skills" + " For This Feature"
-		if strings.Contains(got.prompt, requiredSkillsHeading) {
-			t.Errorf("%s prompt unexpectedly contains required skills guidance:\n%s", got.name, got.prompt)
 		}
 	}
 }

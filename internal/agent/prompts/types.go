@@ -32,10 +32,9 @@ type KBView struct {
 	RootDir   string
 }
 
-// SkillView is the per-skill projection used by the "Additional Skills" row
-// in the system prompt. Name / Description / Topics come from the
-// SKILL.md frontmatter; Path is the absolute path the agent should Read
-// when its topics match the current task.
+// SkillView is the per-skill projection used by the required and additional
+// skill sections in the system prompt. Name / Description / Topics come from
+// the SKILL.md frontmatter; Path is the absolute path the agent should read.
 type SkillView struct {
 	Name        string
 	Description string
@@ -72,6 +71,7 @@ type RoleSystemInput struct {
 	OutputRoots          []OutputRootView
 	MarkerPath           string
 	SkillPath            string
+	RequiredSkills       []SkillView
 	ArtifactPreflight    string
 	Preflight            PreflightInput
 	ReadOnlyOutsideRoots bool

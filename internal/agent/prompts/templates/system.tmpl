@@ -58,6 +58,14 @@ Path:
 
 `{{ .SkillPath }}`
 {{ else }}No primary SKILL.md path was configured for this role.
+{{ end }}{{ if .RequiredSkills }}
+
+## Required Skills
+
+The following skills are also mandatory for this assignment. After reading the primary SKILL.md above, read each SKILL.md below completely before taking any other action, then apply its instructions throughout the work.
+
+{{ range .RequiredSkills }}- **{{ .Name }}** — `{{ .Path }}`
+{{ end }}
 {{ end }}
 {{ if or .Preflight.HasKB .Preflight.HasGuidelines .Preflight.HasSkills }}# Useful Resources
 

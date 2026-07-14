@@ -99,6 +99,7 @@ For visual and behavioral artifact rows, evidence is file-backed:
 - Put visual artifacts under `screenshots/` relative to `{iteration_dir}`.
 - Put behavioral artifacts under `behaviors/` relative to `{iteration_dir}`.
 - For `passed`, `failed`, and `pending_human` visual or behavioral rows, write real files and set `evidence.primary` to the required artifact path. Use `evidence.attachments[]` for optional supporting files. Paths must be relative and stay under the matching directory.
+- When a behavioral requirement asks for command output or a command transcript, preserve one transcript block per named command with the command line, exit code, and actual combined stdout/stderr. A hand-written outcome summary is not command evidence. On retries, carry the complete transcript forward and append or replace individual command blocks; never collapse it into summaries.
 - `blocked`, `not_run`, and `waived` visual or behavioral rows do not require artifact files. A genuine `blocked` row still needs `blocked_reason`; do not use `blocked` to hide missing artifacts.
 - Command and manual rows may keep using `evidence.summary` and `evidence.exit_code`; artifact rows may combine file fields with summary or exit code when useful.
 
@@ -175,7 +176,7 @@ The `## Deferrals` fenced YAML block must always include both keys. Deferrals ar
 `## Iteration State` must be exactly one of:
 
 - `SUCCESS`: every Task and Success Criteria item is complete, required checks pass, and due deferrals are reconciled.
-- `RETRY`: real progress landed, but work remains and the next iteration can continue from `progress.md`.
+- `RETRY`: real progress landed, work remains, and `### Where I stopped` names a concrete next action that the next iteration can perform with the current scope and environment. Do not use `RETRY` when implementation is complete and only an external blocker, plan/contract change, scope expansion, waiver, permission, or human decision remains.
 - `NEED_USER_INPUT`: the plan is wrong, repo state contradicts it, or a human decision is required.
 
 For `NEED_USER_INPUT`, insert this section between `## Verification Report` and `## Iteration State`:

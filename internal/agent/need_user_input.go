@@ -95,6 +95,123 @@ func reconcileNeedUserInputGate(agentRec *NeedUserInputRecord, progress *ParsedP
 	return rec
 }
 
+// retryNeedsUserInput catches a RETRY handoff that has no actionable
+// continuation: every unresolved check is externally blocked, or the agent
+// says implementation is complete while required verification still fails.
+// Letting either state re-enter the implementation loop only repeats the same
+// checks, so the harness promotes it to a user decision gate.
+func retryNeedsUserInput(progress *ParsedProgress, report *VerificationReport) bool {
+	if progress == nil || progress.State != StateRetry || report == nil {
+		return false
+	}
+	blockers := retryBlockingChecks(report)
+	if len(blockers) == 0 {
+		return false
+	}
+	if retryHasOnlyExternalBlockers(blockers) {
+		return true
+	}
+	whereStopped := strings.ToLower(strings.TrimSpace(progress.HandoffSections["Where I stopped"]))
+	return declaresImplementationComplete(whereStopped)
+}
+
+func declaresImplementationComplete(whereStopped string) bool {
+	whereStopped = strings.TrimLeft(strings.TrimSpace(whereStopped), "-* ")
+	for _, prefix := range []string{"complete", "completed"} {
+		if whereStopped == prefix {
+			return true
+		}
+		if strings.HasPrefix(whereStopped, prefix+" ") ||
+			strings.HasPrefix(whereStopped, prefix+";") ||
+			strings.HasPrefix(whereStopped, prefix+".") ||
+			strings.HasPrefix(whereStopped, prefix+":") {
+			return true
+		}
+	}
+	return false
+}
+
+func retryBlockingChecks(report *VerificationReport) []VerificationCheckResult {
+	if report == nil {
+		return nil
+	}
+	var blockers []VerificationCheckResult
+	for _, check := range reportChecks(report) {
+		switch NormalizeStatus(check.Status) {
+		case VerificationStatusFailed, VerificationStatusBlocked, VerificationStatusPendingHuman:
+			blockers = append(blockers, check)
+		}
+	}
+	return blockers
+}
+
+func retryHasOnlyExternalBlockers(blockers []VerificationCheckResult) bool {
+	if len(blockers) == 0 {
+		return false
+	}
+	for _, blocker := range blockers {
+		switch NormalizeStatus(blocker.Status) {
+		case VerificationStatusBlocked, VerificationStatusPendingHuman:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func synthesizeRetryNeedUserInputGate(progress *ParsedProgress, report *VerificationReport, iteration int) NeedUserInputRecord {
+	blockers := retryBlockingChecks(report)
+	labels := make([]string, 0, len(blockers))
+	seenLabels := make(map[string]struct{}, len(blockers))
+	for _, blocker := range blockers {
+		label := strings.TrimSpace(blocker.Name)
+		if label == "" {
+			label = strings.TrimSpace(blocker.Requirement)
+		}
+		if label == "" {
+			label = strings.TrimSpace(blocker.ItemID)
+		}
+		if label != "" {
+			key := strings.ToLower(label)
+			if _, seen := seenLabels[key]; seen {
+				continue
+			}
+			seenLabels[key] = struct{}{}
+			labels = append(labels, label)
+		}
+	}
+	implementationComplete := false
+	if progress != nil {
+		whereStopped := strings.ToLower(strings.TrimSpace(progress.HandoffSections["Where I stopped"]))
+		implementationComplete = declaresImplementationComplete(whereStopped)
+	}
+	summary := "Required verification is externally blocked and cannot be resolved in the current session."
+	if implementationComplete {
+		summary = "Implementation is complete, but required verification remains unresolved."
+	}
+	if len(labels) > 0 {
+		if implementationComplete {
+			summary = fmt.Sprintf("Implementation is complete, but required verification remains unresolved: %s.", strings.Join(labels, "; "))
+		} else {
+			summary = fmt.Sprintf("Required verification is externally blocked and cannot be resolved in the current session: %s.", strings.Join(labels, "; "))
+		}
+	}
+	if progress != nil {
+		if remaining := strings.TrimSpace(progress.HandoffSections["Remaining from the plan"]); remaining != "" {
+			summary += " " + remaining
+		}
+	}
+	return NeedUserInputRecord{
+		Summary: summary,
+		Questions: []NeedUserInputQuestion{{
+			Index:  1,
+			Prompt: "Should Agentico revise or waive the blocking verification requirements, expand implementation scope to address them, or resume in an environment where they can pass?",
+		}},
+		Iteration: iteration,
+	}
+}
+
 // NeedUserInputPath returns the absolute path of the gate artifact for the
 // supplied iteration directory.
 func NeedUserInputPath(iterDir string) string {

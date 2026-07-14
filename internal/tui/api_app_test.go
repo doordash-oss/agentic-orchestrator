@@ -4406,6 +4406,52 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelMaxIterationsRestartExtendsBudgetAfterConfirmation(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameClientCutover,
+		Slug:         testFeatureSlugClientCutover,
+		Status:       testFeatureStatusFailed,
+		CurrentPhase: testPhaseNameImplement,
+		CreatedAt:    time.Now(),
+	}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
+			Failure: &server.FailureDTO{Type: feature.FailureMaxIterations, Message: "reached maximum iteration count"},
+			Actions: []server.ActionDTO{
+				{ID: actionIDRestart, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
+			},
+		})},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd != nil {
+		t.Fatal("Update(r) returned command before confirmation")
+	}
+	confirming := model.(APIAppModel)
+	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "add 10 more iterations") {
+		t.Fatalf("max-iterations confirmation missing budget extension:\n%s", view)
+	}
+	if len(client.restartRequests) != 0 {
+		t.Fatalf("RestartFeature requests = %+v before confirmation, want none", client.restartRequests)
+	}
+
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("Update(y) returned nil command, want restart mutation")
+	}
+	_ = model
+	_ = cmd()
+
+	if got := client.restartRequests; len(got) != 1 || got[0].MaxIterationsDelta != 10 || got[0].MaxPlanIterationsDelta != 2 {
+		t.Fatalf("RestartFeature requests = %+v, want max_iterations_delta=10 and max_plan_iterations_delta=2", got)
+	}
+}
+
 func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.T) {
 	t.Parallel()
 
@@ -8420,6 +8466,7 @@ type fakeTUIAPIClient struct {
 	restartAccepted                apiTestActionResponse
 	restartErr                     error
 	restartFeatureIDs              []string
+	restartRequests                []server.RestartFeatureRequest
 	stopAccepted                   apiTestActionResponse
 	stopErr                        error
 	stopFeatureIDs                 []string
@@ -8688,9 +8735,10 @@ func (f *fakeTUIAPIClient) ResumeFeature(_ context.Context, featureID string) (s
 	return server.FeatureStartResponse{FeatureID: f.resumeAccepted.featureID(featureID), Result: f.resumeAccepted.result("resumed")}, f.resumeErr
 }
 
-func (f *fakeTUIAPIClient) RestartFeature(_ context.Context, featureID string, _ server.RestartFeatureRequest) (server.FeatureRestartResponse, error) {
+func (f *fakeTUIAPIClient) RestartFeature(_ context.Context, featureID string, req server.RestartFeatureRequest) (server.FeatureRestartResponse, error) {
 	f.calls = append(f.calls, "RestartFeature")
 	f.restartFeatureIDs = append(f.restartFeatureIDs, featureID)
+	f.restartRequests = append(f.restartRequests, req)
 	return server.FeatureRestartResponse{FeatureID: f.restartAccepted.featureID(featureID), Result: f.restartAccepted.result("restarted")}, f.restartErr
 }
 

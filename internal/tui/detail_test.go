@@ -337,6 +337,25 @@ func TestDetailViewFailedFeature(t *testing.T) {
 	}
 }
 
+func TestDetailViewMaxIterationsProposesAddingTenMore(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		ID:           "feat-max-iterations",
+		Slug:         "max-iterations",
+		Status:       feature.StatusFailed,
+		CurrentPhase: feature.PhaseImplement,
+		FailureType:  feature.FailureMaxIterations,
+		LastError:    "reached maximum iteration count",
+		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+	}
+
+	view := stripANSI(NewDetailModel(f, "").ViewCompact(100))
+	if !strings.Contains(view, "press [r] to add 10 more iterations") {
+		t.Fatalf("ViewCompact() missing max-iteration continuation hint:\n%s", view)
+	}
+}
+
 func TestProtocolViolationFailureRendering(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{

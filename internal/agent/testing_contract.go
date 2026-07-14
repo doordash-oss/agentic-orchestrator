@@ -42,6 +42,7 @@ const (
 	testingContractVisualKind                = "visual_artifact"
 	testingContractBehavioralKind            = "behavioral_artifact"
 	testingContractEvidenceFileExistsMatcher = "file_exists"
+	testingContractCommandTranscriptMatcher  = "command_transcript"
 	// TestingContractCrossRepoTag is the value put on `repo:` for items
 	// that exercise more than one repo. The unified-flow implementer
 	// dispatches such items to the main session (no per-repo Task
@@ -180,7 +181,7 @@ func CompileTestingContractWithBaseline(planText, planPath, phaseType, baselineP
 			Command: command,
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
-				Matcher: testingContractEvidenceFileExistsMatcher,
+				Matcher: evidenceRequirementMatcher(source, description),
 			},
 			Policy: defaultTestingContractPolicy(source),
 		})
@@ -458,7 +459,7 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 			Command: command,
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
-				Matcher: testingContractEvidenceFileExistsMatcher,
+				Matcher: evidenceRequirementMatcher(source, description),
 			},
 			Policy: defaultTestingContractPolicy(source),
 		})
@@ -624,6 +625,50 @@ func manualVerificationCommand(description string) string {
 
 func evidenceRequirementCommand(source, description string) string {
 	return strings.TrimSpace(source) + ": " + strings.TrimSpace(description)
+}
+
+func evidenceRequirementMatcher(source, description string) string {
+	if source == testingContractBehavioralSource && len(requiredBehavioralTranscriptCommands(description)) > 0 {
+		return testingContractCommandTranscriptMatcher
+	}
+	return testingContractEvidenceFileExistsMatcher
+}
+
+// requiredBehavioralTranscriptCommands returns the executable backtick spans
+// from behavioral requirements that explicitly ask for command output. Other
+// behavioral artifacts remain file-existence checks because their semantics
+// are intentionally assessed by the reviewer.
+func requiredBehavioralTranscriptCommands(description string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(description))
+	if !strings.Contains(normalized, "command output") &&
+		!strings.Contains(normalized, "command transcript") &&
+		!strings.Contains(normalized, "stdout") &&
+		!strings.Contains(normalized, "stderr") {
+		return nil
+	}
+
+	spans := findBacktickSpans(description)
+	commands := make([]string, 0, len(spans))
+	seen := make(map[string]bool, len(spans))
+	for _, span := range spans {
+		command := strings.TrimSpace(description[span[2]:span[3]])
+		if !looksLikeShellCommand(command) {
+			continue
+		}
+		key := normalizeVerificationCommand(command)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		commands = append(commands, command)
+	}
+	if len(commands) == 0 && len(spans) == 1 {
+		command := strings.TrimSpace(description[spans[0][2]:spans[0][3]])
+		if command != "" {
+			commands = append(commands, command)
+		}
+	}
+	return commands
 }
 
 func normalizeVerificationCommand(command string) string {

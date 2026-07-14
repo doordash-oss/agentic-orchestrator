@@ -578,6 +578,25 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// iteration starts fresh against the just-emitted progress.md
 			// (no reviewer feedback — RETRY is not a rejection).
 			if parsed.State == StateRetry {
+				if retryNeedsUserInput(parsed, outcome.VerificationReport) {
+					gatePath := NeedUserInputPath(iterDir)
+					rec := synthesizeRetryNeedUserInputGate(parsed, outcome.VerificationReport, i)
+					if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
+						return nil, fmt.Errorf("persisting escalated retry gate: %w", err)
+					}
+					meta.AgentStatus = "NEED_USER_INPUT"
+					meta.ReviewStatus = "skipped_need_user_input"
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					consecutiveFailures = 0
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
+					return &LoopResult{
+						FinalStatus:       "need_user_input",
+						Iterations:        i,
+						LastError:         rec.Summary,
+						NeedUserInputPath: gatePath,
+					}, nil
+				}
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
 				_ = am.WriteMeta(iterDir, meta)

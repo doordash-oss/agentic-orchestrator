@@ -15,12 +15,9 @@
 package server
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -41,41 +38,6 @@ type raceSafeActiveSessionView struct {
 }
 
 func (s *raceSafeActiveSessionView) IsActive() bool { return s.active.Load() }
-
-func TestSessionOutputBackfillReadsFromByteOffset(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	logPath := filepath.Join(dir, "output.txt")
-	if err := os.WriteFile(logPath, []byte("first\nsecond\nthird\n"), 0o600); err != nil {
-		t.Fatalf("write log: %v", err)
-	}
-	handler := NewHandler(HandlerOptions{
-		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-			id:      fixtureSessionID,
-			logPath: logPath,
-			status:  ports.SessionRunning,
-		}}},
-		DisableHostValidation: true,
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sess-1/output?from=6&limit=6", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	resp := w.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d; want 200 body=%s", resp.StatusCode, w.Body.String())
-	}
-	var body SessionOutputResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body.Offset != 6 || body.NextOffset != 12 || body.Data != "second" || !body.Truncated {
-		t.Fatalf("SessionOutputResponse = %+v, want offset 6 next 12 data second truncated", body)
-	}
-}
 
 func TestSessionOutputStreamEmitsIndexedTranscriptRecordsAndTerminates(t *testing.T) {
 	t.Parallel()

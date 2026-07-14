@@ -1,4 +1,4 @@
-package: serverapi
+package: server
 generate:
   models: true
 output-options:

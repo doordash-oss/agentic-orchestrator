@@ -391,7 +391,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return nil, false
 	}
 	switch parts[1] {
-	case actionStart, actionResume, "stop", "interrupt", actionRestart, "review-decision", routeSegmentConfig, "need-user-input", "need-user-input-draft":
+	case routeSegmentConfig:
 		return []string{http.MethodPost}, true
 	case "reviews":
 		if len(parts) == 2 {
@@ -413,7 +413,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionRefactor, actionRetry, actionMarkDone, actionCleanup, actionDelete:
+		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
@@ -499,82 +499,23 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 	if len(parts) > 0 && parts[0] == "actions" {
 		return h.handleFeatureActionRoute(w, r, featureID, parts[1:])
 	}
-	if len(parts) != 1 {
+	if len(parts) != 1 || parts[0] != routeSegmentConfig {
 		return false
 	}
-	switch parts[0] {
-	case actionStart, actionResume:
-		h.handleStartFeatureMutation(w, r, featureID)
-	case "stop", "interrupt":
-		h.handleStopFeatureMutation(w, r, featureID)
-	case actionRestart:
-		var req RestartFeatureRequest
-		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		h.writeRestartFeature(w, featureID, req)
-	case "review-decision":
-		var req ReviewDecisionRequest
-		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.ReviewDecision(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "submitted")
-		writeActionJSON(w, http.StatusOK, &resp)
-	case routeSegmentConfig:
-		var req FeatureConfigMutationRequest
-		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		if !validatePipelineProfile(w, req.Pipeline) {
-			return true
-		}
-		resp, err := h.mutations.UpdateFeatureConfig(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, resultUpdated)
-		writeActionJSON(w, http.StatusOK, &resp)
-	case "need-user-input":
-		var req NeedUserInputDecisionRequest
-		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		if req.Decision != actionResume && req.Decision != "abort" {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "decision must be resume or abort", nil)
-			return true
-		}
-		resp, err := h.mutations.NeedUserInputDecision(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "decided")
-		writeActionJSON(w, http.StatusOK, &resp)
-	case "need-user-input-draft":
-		var req NeedUserInputDraftRequest
-		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		if len(req.Answers) == 0 {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "answers are required", nil)
-			return true
-		}
-		resp, err := h.mutations.DraftNeedUserInputAnswers(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "drafted")
-		writeActionJSON(w, http.StatusOK, &resp)
-	default:
-		return false
+	var req FeatureConfigMutationRequest
+	if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
+		return true
 	}
+	if !validatePipelineProfile(w, req.Pipeline) {
+		return true
+	}
+	resp, err := h.mutations.UpdateFeatureConfig(featureID, req)
+	if err != nil {
+		writeMutationError(w, err)
+		return true
+	}
+	defaultActionFields(&resp, featureID, resultUpdated)
+	writeActionJSON(w, http.StatusOK, &resp)
 	return true
 }
 
@@ -610,6 +551,59 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		h.writeRestartFeature(w, featureID, req)
+	case actionReviewDecision:
+		if subaction != "" {
+			return false
+		}
+		var req ReviewDecisionRequest
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.ReviewDecision(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "submitted")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionNeedUserInput:
+		if subaction != "" {
+			return false
+		}
+		var req NeedUserInputDecisionRequest
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		if req.Decision != actionResume && req.Decision != "abort" {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "decision must be resume or abort", nil)
+			return true
+		}
+		resp, err := h.mutations.NeedUserInputDecision(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "decided")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionNeedInputDraft:
+		if subaction != "" {
+			return false
+		}
+		var req NeedUserInputDraftRequest
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		if len(req.Answers) == 0 {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "answers are required", nil)
+			return true
+		}
+		resp, err := h.mutations.DraftNeedUserInputAnswers(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "drafted")
+		writeActionJSON(w, http.StatusOK, &resp)
 	case actionPublish:
 		if subaction == phaseNameDescription {
 			var req PublishDescriptionRequest
@@ -885,13 +879,6 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 	}
 }
 
-func (h *apiHandler) handleStartFeatureMutation(w http.ResponseWriter, r *http.Request, featureID string) {
-	if !h.requireTrustedMutation(w, r) {
-		return
-	}
-	h.handleStartFeatureMutationTrusted(w, r, featureID)
-}
-
 func (h *apiHandler) handleStartFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
 	var req map[string]any
 	if !decodeMutationJSON(w, r, &req) {
@@ -904,13 +891,6 @@ func (h *apiHandler) handleStartFeatureMutationTrusted(w http.ResponseWriter, r 
 	}
 	defaultActionFields(&resp, featureID, resultStarted)
 	writeActionJSON(w, http.StatusOK, &resp)
-}
-
-func (h *apiHandler) handleStopFeatureMutation(w http.ResponseWriter, r *http.Request, featureID string) {
-	if !h.requireTrustedMutation(w, r) {
-		return
-	}
-	h.handleStopFeatureMutationTrusted(w, r, featureID)
 }
 
 func (h *apiHandler) handleStopFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {

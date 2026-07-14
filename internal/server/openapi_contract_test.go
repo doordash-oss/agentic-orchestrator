@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,6 +27,14 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestGeneratedOpenAPIIsCurrent(t *testing.T) {
+	cmd := exec.Command("go", "run", "../../tools/openapi-generate", "--check")
+	cmd.Dir = "."
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("OpenAPI generated code drift:\n%s\n%v", out, err)
+	}
+}
 
 // httpMethodGet and httpMethodPost are the lowercase "get"/"post" method
 // literals reused across the documented-route table below.
@@ -141,7 +150,7 @@ func TestOpenAPISpecCoversServerRoutes(t *testing.T) {
 
 func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	spec := loadOpenAPISpec(t)
-	for _, schema := range []string{"ResponseMeta", "SSEEvent", "Resource", "SessionOutputResponse", "SessionOutputChunk", "ErrorResponse"} {
+	for _, schema := range []string{"ResponseMeta", "SSEEvent", "Resource", "SessionOutputChunk", "ErrorResponse"} {
 		if _, ok := spec.Components.Schemas[schema]; !ok {
 			t.Fatalf("components.schemas.%s missing", schema)
 		}
@@ -149,7 +158,6 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	assertSchemaProperties(t, spec, "ResponseMeta", "revision", "generated_at", "as_of_seq")
 	assertSchemaProperties(t, spec, "SSEEvent", "seq", "epoch", "kind", "resource", "resource_version", "snapshot_required")
 	assertSchemaProperties(t, spec, "Resource", "type", "id", "feature_id", "phase")
-	assertSchemaProperties(t, spec, "SessionOutputResponse", "session_id", "offset", "next_offset", "size", "data", "truncated", "done")
 }
 
 func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
@@ -261,8 +269,6 @@ func topLevelPatternForPath(path string) string {
 		return "/api/v1/features/"
 	case strings.HasPrefix(path, apiPathConfigRuntime):
 		return apiPathConfigRuntime
-	case path == apiPathWorkspaceBrowse:
-		return apiPathWorkspaceBrowse
 	case path == apiPathCatalogModels:
 		return apiPathCatalogModels
 	case path == apiPathPrompts:
@@ -317,19 +323,9 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/config"},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/config", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/live-preview"},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/start", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/resume", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/stop", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/interrupt", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/restart", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/review-decision", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/reviews", mutation: true},
-		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/reviews/{review_id}"},
 		{method: "put", path: "/api/v1/features/{feature_id}/reviews/{review_id}/draft", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/reviews/{review_id}/decision", mutation: true},
-		{method: "delete", path: "/api/v1/features/{feature_id}/reviews/{review_id}", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/need-user-input", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/need-user-input-draft", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts"},
@@ -338,7 +334,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathConfigRuntime},
 		{method: "patch", path: apiPathConfigRuntime, mutation: true},
 		{method: "put", path: apiPathConfigRuntime, mutation: true},
-		{method: httpMethodGet, path: apiPathWorkspaceBrowse},
 		{method: httpMethodGet, path: apiPathCatalogModels},
 		{method: httpMethodGet, path: apiPathPrompts},
 		{method: httpMethodPost, path: "/api/v1/prompts/ask-user/answer", mutation: true},
@@ -349,7 +344,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathSessions},
 		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}"},
 		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}/transcript"},
-		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}/output"},
 		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}/output/stream", sse: true},
 		{method: httpMethodGet, path: apiPathRecovery},
 		{method: httpMethodPost, path: apiPathRecoveryActions, mutation: true},

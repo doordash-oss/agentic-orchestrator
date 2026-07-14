@@ -25,12 +25,6 @@ func (h *apiHandler) handleReviewSessionRoute(w http.ResponseWriter, r *http.Req
 	switch {
 	case len(parts) == 0:
 		h.handleCreateReviewSession(w, r, featureID)
-	case len(parts) == 1:
-		if !validEntityID(parts[0]) {
-			writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, "invalid review id", map[string]any{"feature_id": featureID})
-			return
-		}
-		h.handleReviewSessionByID(w, r, featureID, parts[0])
 	case len(parts) == 2:
 		if !validEntityID(parts[0]) {
 			writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, "invalid review id", map[string]any{"feature_id": featureID})
@@ -68,37 +62,6 @@ func (h *apiHandler) handleCreateReviewSession(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeActionJSON(w, http.StatusOK, &resp)
-}
-
-func (h *apiHandler) handleReviewSessionByID(w http.ResponseWriter, r *http.Request, featureID, reviewID string) {
-	switch r.Method {
-	case http.MethodGet:
-		resp, err := h.reviewSessionService().Get(featureID, reviewID)
-		if err != nil {
-			writeReviewSessionError(w, err, featureID, reviewID)
-			return
-		}
-		revision := resp.DraftRevision
-		resp.Meta = h.responseMeta(revision)
-		h.writeRevisionedJSON(w, r, revision, resp)
-	case http.MethodDelete:
-		if !h.requireTrustedJSONMutation(w, r) {
-			return
-		}
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return
-		}
-		resp, err := h.reviewSessionService().Cancel(featureID, reviewID)
-		if err != nil {
-			writeReviewSessionError(w, err, featureID, reviewID)
-			return
-		}
-		writeActionJSON(w, http.StatusOK, &resp)
-	default:
-		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodDelete}, ", "))
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
-	}
 }
 
 func (h *apiHandler) handleSaveReviewDraft(w http.ResponseWriter, r *http.Request, featureID, reviewID string) {

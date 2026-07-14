@@ -16,9 +16,7 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -148,31 +146,6 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
-func (h *apiHandler) handleSessionOutput(w http.ResponseWriter, r *http.Request, sessionID string) {
-	sess := h.getSession(sessionID)
-	if sess == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{sessionIDErrorField: sessionID})
-		return
-	}
-	path := sess.LogFilePath()
-	if path == "" {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session output not found", map[string]any{sessionIDErrorField: sessionID})
-		return
-	}
-	resp, err := h.sessionOutputResponse(sessionID, path, parseInt64Query(r, "from", 0), parseInt64Query(r, "limit", defaultTextLimit), !sess.IsActive())
-	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read session output", map[string]any{sessionIDErrorField: sessionID})
-		return
-	}
-	if resp.Offset < 0 || resp.NextOffset < 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output bounds", map[string]any{sessionIDErrorField: sessionID})
-		return
-	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
-}
-
 // handleSessionOutputStream tails a session's transcript live over SSE,
 // emitting the same row-indexed TranscriptMessageDTO records /transcript
 // returns (see transcriptDTOs) — not raw provider log bytes. This is a
@@ -245,45 +218,6 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 		case <-ticker.C:
 		}
 	}
-}
-
-func (h *apiHandler) sessionOutputResponse(sessionID, path string, offset, limit int64, done bool) (SessionOutputResponse, error) {
-	resp := SessionOutputResponse{APIVersion: APIVersion, SessionID: sessionID, Offset: offset, Done: done}
-	if offset < 0 || limit <= 0 || limit > maxTextLimit {
-		resp.Offset = -1
-		resp.NextOffset = -1
-		return resp, nil
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return resp, err
-	}
-	if info.IsDir() {
-		return resp, os.ErrInvalid
-	}
-	if offset > info.Size() {
-		offset = info.Size()
-	}
-	resp.Offset = offset
-	resp.Size = info.Size()
-	file, err := os.Open(path)
-	if err != nil {
-		return resp, err
-	}
-	defer file.Close()
-	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return resp, err
-	}
-	remaining := info.Size() - offset
-	buf := make([]byte, min(limit, remaining))
-	n, err := io.ReadFull(file, buf)
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return resp, err
-	}
-	resp.Data = string(buf[:n])
-	resp.NextOffset = offset + int64(n)
-	resp.Truncated = resp.NextOffset < info.Size()
-	return resp, nil
 }
 
 // sessionOutputStreamOffset parses the /output/stream resume position from

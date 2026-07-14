@@ -107,7 +107,6 @@ const (
 	apiPathHealth          = "/api/v1/health"
 	apiPathFeatures        = "/api/v1/features"
 	apiPathConfigRuntime   = "/api/v1/config/runtime"
-	apiPathWorkspaceBrowse = "/api/v1/workspace/browse"
 	apiPathCatalogModels   = "/api/v1/catalog/models"
 	apiPathPrompts         = "/api/v1/prompts"
 	apiPathPermissions     = "/api/v1/permissions"
@@ -140,7 +139,6 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathFeatures, func(h *apiHandler) http.HandlerFunc { return h.handleFeaturesRoot }},
 	{apiPathFeatures + "/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
-	{apiPathWorkspaceBrowse, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleWorkspaceBrowse) }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
 	{apiPathPrompts + "/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
@@ -299,8 +297,6 @@ func (h *apiHandler) handleSessionRoutes(w http.ResponseWriter, r *http.Request)
 		h.handleSessionDetail(w, r, parts[0])
 	case len(parts) == 2 && parts[1] == "transcript":
 		h.handleTranscript(w, r, parts[0])
-	case len(parts) == 2 && parts[1] == "output":
-		h.handleSessionOutput(w, r, parts[0])
 	case len(parts) == 3 && parts[1] == "output" && parts[2] == "stream":
 		h.handleSessionOutputStream(w, r, parts[0])
 	default:

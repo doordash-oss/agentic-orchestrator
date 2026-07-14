@@ -360,10 +360,6 @@ func (m EditConfigModel) renderModelsWorkspace() string {
 	return m.editor.renderModelsWorkspaceWithFocus(m.focus)
 }
 
-func truncatePhaseLabel(label string) string {
-	return truncatePhaseLabelForWidth(label, modelPhasePanelWidth)
-}
-
 func truncatePhaseLabelForWidth(label string, panelWidth int) string {
 	labelWidth := modelPhaseLabelWidth
 	if panelWidth > 0 {
@@ -1014,20 +1010,6 @@ func (m *EditConfigModel) clampToActiveTab() {
 	if m.editor.rowCursor > hi {
 		m.editor.rowCursor = hi
 	}
-}
-
-// wrapInRange wraps idx into the inclusive [lo, hi] range so that
-// moving one past hi lands on lo and one before lo lands on hi.
-func wrapInRange(idx, lo, hi int) int {
-	if hi <= lo {
-		return lo
-	}
-	size := hi - lo + 1
-	mod := (idx - lo) % size
-	if mod < 0 {
-		mod += size
-	}
-	return lo + mod
 }
 
 func clampInRange(idx, lo, hi int) int {

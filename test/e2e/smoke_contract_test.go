@@ -16,46 +16,9 @@ package e2e
 
 import (
 	"os"
-	"os/exec"
-	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 	"testing"
 )
-
-var expectedTUISmokeTests = []string{
-	"TestConcurrentPlainAgenticoColdStart",
-	"TestConcurrentPlainAgenticoStaleDiscoveryRepair",
-	"TestLauncherFailureClassification",
-	"TestPlainAgenticoCLIRouting",
-	"TestPlainAgenticoReusePolicyMismatch",
-	"TestPreCutoverRuntimeCompatibility",
-}
-
-func TestConcurrentPlainAgenticoColdStart(t *testing.T) {
-	runRepoGoTest(t, "./cmd/agentico", "^TestDefaultLaunchConcurrentColdStartStartsOneOwnedServer$")
-}
-
-func TestConcurrentPlainAgenticoStaleDiscoveryRepair(t *testing.T) {
-	runRepoGoTest(t, "./cmd/agentico", "^TestDefaultLaunchConcurrentStaleRepairStartsOneOwnedServer$")
-}
-
-func TestLauncherFailureClassification(t *testing.T) {
-	runRepoGoTest(t, "./cmd/agentico", "^Test(DefaultLaunchReportsServerReadinessTimeout|ServerBootstrapRejectsHeldInstanceLock)$")
-}
-
-func TestPlainAgenticoReusePolicyMismatch(t *testing.T) {
-	runRepoGoTest(t, "./internal/server", "^TestPrepareDiscoveryRequiresPolicyEquivalentHealthyServer$")
-}
-
-func TestPlainAgenticoCLIRouting(t *testing.T) {
-	runRepoGoTest(t, "./cmd/agentico", "^Test(RunArgsLaunchesClientServerByDefault|RunArgsPassesRetainedLaunchFlags|RunArgsDispatchesServerToSeam|ParseLaunchArgsServerSurface|ParseLaunchArgsRejectsRemovedSurface)$")
-}
-
-func TestPreCutoverRuntimeCompatibility(t *testing.T) {
-	runRepoGoTest(t, "./cmd/agentico", "^TestPickRuntimeParent$")
-}
 
 func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
 	body, err := os.ReadFile("smoke.sh")
@@ -76,63 +39,9 @@ func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
 
 	for _, want := range []string{
 		"go test ./cmd/agentico -run '^TestRunArgsLaunchesClientServerByDefault$'",
-		"go test ./internal/tui -run '^TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection$'",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("smoke.sh must run %q", want)
 		}
 	}
-
-	existing := e2eTestNames(t)
-	for _, want := range expectedTUISmokeTests {
-		if !existing[want] {
-			t.Fatalf("TUI smoke inventory missing %s", want)
-		}
-	}
-	var got []string
-	for name := range existing {
-		if name == "TestSmokeScriptDoesNotUseRemovedFeatureCommands" {
-			continue
-		}
-		got = append(got, name)
-	}
-	sort.Strings(got)
-	want := append([]string(nil), expectedTUISmokeTests...)
-	sort.Strings(want)
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("TUI smoke inventory drift\n got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-}
-
-func runRepoGoTest(t *testing.T, pkg, run string) {
-	t.Helper()
-	cmd := exec.Command("go", "test", pkg, "-run", run, "-count=1")
-	cmd.Dir = filepath.Join("..", "..")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go test %s -run %s failed: %v\n%s", pkg, run, err, out)
-	}
-	if strings.Contains(string(out), "[no tests to run]") {
-		t.Fatalf("go test %s -run %s matched no tests:\n%s", pkg, run, out)
-	}
-}
-
-func e2eTestNames(t *testing.T) map[string]bool {
-	t.Helper()
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("Glob e2e Go files: %v", err)
-	}
-	re := regexp.MustCompile(`func (Test[A-Za-z0-9_]+)\(`)
-	names := make(map[string]bool)
-	for _, path := range files {
-		body, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s): %v", path, err)
-		}
-		for _, match := range re.FindAllStringSubmatch(string(body), -1) {
-			names[match[1]] = true
-		}
-	}
-	return names
 }

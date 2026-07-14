@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,14 +27,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
-	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 )
 
 // keyX are tea.KeyPressMsg.String() tokens for bubbletea key names shared
@@ -50,10 +45,6 @@ const (
 	keyPgUp  = "pgup"
 )
 
-// subtypePartial is the llm AssistantMessage/SDKMessage.Subtype value for an
-// in-progress streaming delta (as opposed to a finalized turn).
-const subtypePartial = "partial"
-
 // resultSubtypeError is the llm.ResultMessage.Subtype (and mirrored
 // TranscriptMessageDTO status) value for an error-terminated turn.
 const resultSubtypeError = "error"
@@ -61,18 +52,8 @@ const resultSubtypeError = "error"
 // ChatExitMsg signals the chat view should close.
 type ChatExitMsg struct{}
 
-// chatMsgsMsg carries new SDK messages from the chat session's attach channel.
-type chatMsgsMsg struct {
-	messages []llm.SDKMessage
-}
-
-// chatDoneMsg signals a chat session has exited.
-// sess identifies which session exited so stale messages from old sessions
-// don't interfere with newly started sessions.
-type chatDoneMsg struct {
-	sess session.SessionView
-}
-
+// These compatibility messages are still classified by APIAppModel, but the
+// API-backed chat path no longer produces in-process stream or exit events.
 // chatSendErrorMsg is returned when SendUserMessage fails on an existing session.
 type chatSendErrorMsg struct {
 	err error
@@ -184,22 +165,13 @@ type ChatModel struct {
 	pendingPermRemember    *server.PermissionRememberPreviewDTO
 	answeredPermRequestIDs map[string]struct{}
 	inputHeight            int // current input textarea height in lines (1-6)
-	// turnCostBaseline is the Cost() pointer observed at the moment the
-	// current turn started. The recovery tick clears responding when
-	// sess.Cost() no longer matches this baseline — i.e. a new Result was
-	// recorded on the session even if the attachCh forward dropped it.
+	// turnCostBaseline records the session cost when the current turn starts.
+	// API refreshes update it as session snapshots arrive.
 	turnCostBaseline *llm.ResultMessage
-	sessionMgr       *session.Manager // reference for session access
-	workDir          string           // working directory for claude
-	systemPrompt     string           // chat system prompt
-	buildSession     agent.BuildSessionFunc
-	chatModel        string
-	skillsDir        string
 	startSession     func(string) tea.Msg
-	pollSession      bool
 }
 
-func NewChatModel(width, height int, sm *session.Manager, workDir string, systemPrompt string, buildSession agent.BuildSessionFunc, chatModel string, skillsDir string) ChatModel {
+func newChatModel(width, height int) ChatModel {
 	ta := newStyledTextarea()
 	ta.Placeholder = "Ask me anything about Agentic Orchestrator..."
 	ta.CharLimit = 4096
@@ -217,25 +189,18 @@ func NewChatModel(width, height int, sm *session.Manager, workDir string, system
 	}
 
 	m := ChatModel{
-		viewport:     vp,
-		input:        ta,
-		width:        width,
-		height:       height,
-		focused:      true,
-		sessionMgr:   sm,
-		workDir:      workDir,
-		systemPrompt: systemPrompt,
-		buildSession: buildSession,
-		chatModel:    chatModel,
-		skillsDir:    skillsDir,
-		pollSession:  true,
+		viewport: vp,
+		input:    ta,
+		width:    width,
+		height:   height,
+		focused:  true,
 	}
 	m = m.resize(width, height)
 	return m
 }
 
 func NewAPIChatModel(width, height int, client APIClient) ChatModel {
-	m := NewChatModel(width, height, nil, "", "", nil, "", "")
+	m := newChatModel(width, height)
 	m.startSession = func(initialQuestion string) tea.Msg {
 		resp, err := client.StartChat(context.Background(), server.ChatStartRequest{Message: initialQuestion})
 		if err != nil {
@@ -243,7 +208,6 @@ func NewAPIChatModel(width, height int, client APIClient) ChatModel {
 		}
 		return chatSessionStartedMsg{sess: newAPIChatSession(client, resp.SessionID)}
 	}
-	m.pollSession = false
 	return m
 }
 
@@ -563,9 +527,6 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 		case "ctrl+c":
 			if m.responding || m.sess != nil {
-				if m.sessionMgr != nil && m.sess != nil {
-					_ = m.sessionMgr.StopSession(chatSessionID)
-				}
 				m.responding = false
 				m.sess = nil
 				m.thinkingLine = ""
@@ -589,8 +550,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Append user turn
 			m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: question})
 
-			if m.sessionMgr == nil && m.startSession == nil {
-				m.turns = append(m.turns, chatTurn{Role: chatTurnError, Text: "no session manager available"})
+			if m.startSession == nil {
+				m.turns = append(m.turns, chatTurn{Role: chatTurnError, Text: "chat API unavailable"})
 				m.rebuildViewport()
 				return m, nil
 			}
@@ -600,164 +561,27 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.rebuildViewport()
 
 			if m.sess == nil {
-				// First message (or after session died) — start a new interactive session.
-				// No session yet, so no baseline to capture; the recovery tick starts
-				// running only once the session is up (chatSessionStartedMsg).
+				// First message (or after session died) starts a REST-backed chat
+				// session. APIAppModel schedules snapshot recovery after it starts.
 				m.turnCostBaseline = nil
 				return m, m.startSessionCmd(question)
 			}
 
-			// Subsequent message — send via existing session. Capture the
-			// current Cost() pointer so the recovery tick can detect when a
-			// new Result lands on the session (even if attachCh drops it).
+			// Subsequent messages use the API session adapter. Return a recovery
+			// tick so APIAppModel fetches a fresh session snapshot.
 			m.turnCostBaseline = m.sess.Cost()
 			sess := m.sess
-			sendCmd := func() tea.Msg {
+			return m, func() tea.Msg {
 				if err := sess.SendUserMessage(question); err != nil {
 					return chatSendErrorMsg{err: err}
 				}
-				if !m.pollSession {
-					return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
-				}
-				return nil
+				return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
 			}
-			if !m.pollSession {
-				return m, sendCmd
-			}
-			return m, tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
 		}
 
 	case chatSessionStartedMsg:
 		m.sess = msg.sess
-		// Baseline is whatever Cost() reads now (nil for a fresh session,
-		// but don't rely on it). Arm the recovery tick so a dropped first-turn
-		// Result still clears responding.
 		m.turnCostBaseline = msg.sess.Cost()
-		if !m.pollSession {
-			return m, nil
-		}
-		return m, tea.Batch(pollChatChCmd(msg.sess), chatRecoveryTickCmd(msg.sess, m.turnCostBaseline))
-
-	case chatMsgsMsg:
-		if text, ok := chatErrorResponseText(msg.messages); ok {
-			m.discardInProgressTurn()
-			m.responding = false
-			m.thinkingLine = ""
-			m.turns = append(m.turns, chatTurn{Role: chatTurnError, Text: text})
-			if m.sess != nil {
-				m.turnCostBaseline = m.sess.Cost()
-			}
-			m.rebuildViewport()
-			return m, nil
-		}
-		for _, sdkMsg := range msg.messages {
-			if sdkMsg.Assistant != nil {
-				hasText := false
-				for _, block := range sdkMsg.Assistant.Message.Content {
-					if block.IsText() && block.Text != "" {
-						m.setInProgressAgentText(block.Text, sdkMsg.Subtype == subtypePartial)
-						hasText = true
-					}
-					if block.IsThinking() && block.Thinking != "" {
-						thinking := block.Thinking
-						if len(thinking) > 120 {
-							thinking = thinking[len(thinking)-120:]
-						}
-						if idx := strings.LastIndex(thinking, "\n"); idx >= 0 {
-							thinking = thinking[idx+1:]
-						}
-						m.thinkingLine = strings.TrimSpace(thinking)
-					}
-					if block.IsToolUse() {
-						m.thinkingLine = fmt.Sprintf("Using %s...", block.Name)
-					}
-				}
-				if hasText {
-					m.thinkingLine = ""
-				}
-			}
-			if sdkMsg.ToolProgress != nil {
-				m.thinkingLine = fmt.Sprintf("Using %s...", sdkMsg.ToolProgress.ToolName)
-			}
-			if sdkMsg.Status != nil && sdkMsg.Status.Message != "" {
-				m.thinkingLine = sdkMsg.Status.Message
-			}
-			if sdkMsg.Result != nil {
-				m.finalizeInProgressTurn()
-				m.responding = false
-				m.thinkingLine = ""
-				if m.sess != nil {
-					m.turnCostBaseline = m.sess.Cost()
-				}
-			}
-			if sdkMsg.ControlRequest != nil && sdkMsg.ControlRequest.Request.ToolName == toolNameAskUserQuestion && sdkMsg.ControlRequest.RequestID != m.pendingAskRequestID {
-				if _, alreadyAnswered := m.answeredAskRequestIDs[sdkMsg.ControlRequest.RequestID]; alreadyAnswered {
-					continue
-				}
-				questions := parseAskUserQuestions(sdkMsg.ControlRequest.Request.Input)
-				if len(questions) > 0 && !m.hasActiveQuestion() && !askUserQuestionsAlreadyAutoPicked(m.sess, questions) {
-					m.finalizeInProgressTurnBeforeQuestion(questions)
-					m.activateQuestions(questions, sdkMsg.ControlRequest.RequestID, sdkMsg.ControlRequest.Request.Input)
-					m.responding = false
-					m.thinkingLine = ""
-					if m.sess != nil {
-						m.turnCostBaseline = m.sess.Cost()
-					}
-				}
-			}
-			if sdkMsg.ControlRequest != nil && sdkMsg.ControlRequest.Request.ToolName != toolNameAskUserQuestion {
-				toolName := sdkMsg.ControlRequest.Request.ToolName
-				input := sdkMsg.ControlRequest.Request.Input
-				m.applyPendingPermissionEvent(chatEvent{
-					Kind:      chatEventPendingPermission,
-					RequestID: sdkMsg.ControlRequest.RequestID,
-					ToolName:  toolName,
-					Text:      formatPermissionDetail(toolName, input),
-					Raw:       input,
-				})
-			}
-		}
-		m.syncAutoPickedTurns()
-		m.rebuildViewport()
-		if m.pollSession && m.sess != nil {
-			cmds = append(cmds, pollChatChCmd(m.sess))
-		}
-
-	case chatRecoveryTickMsg:
-		// Fires periodically while responding. Compare the session's
-		// current Cost() pointer to the baseline captured at turn start.
-		// If it changed, a Result message was recorded on the session even
-		// if attachCh dropped it — clear responding and flush the pending
-		// partial so the user isn't stuck staring at "Thinking…". If it
-		// didn't change and we're still responding, rearm.
-		if msg.sess != m.sess {
-			return m, nil
-		}
-		if !m.responding {
-			return m, nil
-		}
-		if m.sess == nil {
-			return m, nil
-		}
-		if cur := m.sess.Cost(); cur != nil && cur != msg.baseline {
-			m.finalizeInProgressTurn()
-			m.responding = false
-			m.thinkingLine = ""
-			m.turnCostBaseline = cur
-			m.rebuildViewport()
-			return m, nil
-		}
-		cmds = append(cmds, chatRecoveryTickCmd(m.sess, msg.baseline))
-
-	case chatDoneMsg:
-		if msg.sess != m.sess {
-			return m, nil
-		}
-		m.finalizeInProgressTurn()
-		m.responding = false
-		m.thinkingLine = ""
-		m.sess = nil
-		m.rebuildViewport()
 		return m, nil
 
 	case chatSendErrorMsg:
@@ -802,81 +626,11 @@ type chatSessionStartedMsg struct {
 	sess session.SessionView
 }
 
-// startSessionCmd launches the interactive claude session for the chat.
+// startSessionCmd starts a REST-backed chat session.
 func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 	return func() tea.Msg {
-		if m.startSession != nil {
-			return m.startSession(initialQuestion)
-		}
-		prompt := initialQuestion
-		skillInstruction := chatSkillInstruction(m.skillsDir)
-		if skillInstruction != "" {
-			prompt = skillInstruction + "\n\n" + prompt
-		}
-		cmd, env, sessOpts, err := m.buildSession(agent.BuildSessionOpts{
-			Model:           m.chatModel,
-			Prompt:          prompt,
-			SystemPrompt:    m.systemPrompt,
-			DisallowedTools: []string{"Task"},
-			WorkDir:         m.workDir,
-			PermHandler:     &session.AMAHandler{},
-			Phase:           utilskill.PhaseAll, // chat gets all utility skills for answering user questions
-			TurnMode:        ports.TurnModeInteractive,
-			EffortLevel:     llm.EffortLow,
-		})
-		if err != nil {
-			return chatSendErrorMsg{err: fmt.Errorf("error starting session: %w", err)}
-		}
-		sessOpts.Kind = ports.KindChat
-		sessOpts.Label = ports.KindChat.String()
-		sessOpts.InitialPrompt = prompt
-		sess, err := m.sessionMgr.StartSession(chatSessionID, "", feature.PhaseResearch, cmd, m.workDir, env, sessOpts)
-		if err != nil {
-			return chatSendErrorMsg{err: fmt.Errorf("error starting session: %w", err)}
-		}
-		return chatSessionStartedMsg{sess: sess}
+		return m.startSession(initialQuestion)
 	}
-}
-
-func chatSkillInstruction(skillsDir string) string {
-	if skillsDir == "" {
-		return ""
-	}
-	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", filepath.Join(skillsDir, "chat", "SKILL.md"))
-}
-
-func chatErrorResponseText(messages []llm.SDKMessage) (string, bool) {
-	var lastText string
-	var hasErrorResult bool
-	for _, msg := range messages {
-		if msg.Assistant != nil {
-			for _, block := range msg.Assistant.Message.Content {
-				if block.IsText() && strings.TrimSpace(block.Text) != "" {
-					lastText = strings.TrimSpace(block.Text)
-				}
-			}
-		}
-		if msg.Result != nil && chatResultIsError(msg.Result) {
-			hasErrorResult = true
-			if strings.TrimSpace(msg.Result.Result) != "" {
-				lastText = strings.TrimSpace(msg.Result.Result)
-			}
-		}
-	}
-	if !hasErrorResult {
-		return "", false
-	}
-	if lastText == "" {
-		lastText = sessionErrorFallbackText
-	}
-	return lastText, true
-}
-
-func chatResultIsError(result *llm.ResultMessage) bool {
-	if result == nil {
-		return false
-	}
-	return result.IsError || result.Subtype == resultSubtypeError || result.Subtype == "max_budget"
 }
 
 // chatRecoveryTickCmd schedules a chatRecoveryTickMsg after chatRecoveryInterval.
@@ -888,29 +642,4 @@ func chatRecoveryTickCmd(sess session.SessionView, baseline *llm.ResultMessage) 
 	return tea.Tick(chatRecoveryInterval, func(time.Time) tea.Msg {
 		return chatRecoveryTickMsg{sess: sess, baseline: baseline}
 	})
-}
-
-// pollChatChCmd reads messages from the session's AttachCh in batches.
-func pollChatChCmd(sess session.SessionView) tea.Cmd {
-	return func() tea.Msg {
-		unregister := registerAttachConsumer(sess)
-		defer unregister()
-		ch := sess.AttachCh()
-		msg, ok := <-ch
-		if !ok {
-			return chatDoneMsg{sess: sess}
-		}
-		msgs := []llm.SDKMessage{msg}
-		for {
-			select {
-			case m, ok := <-ch:
-				if !ok {
-					return chatMsgsMsg{messages: msgs}
-				}
-				msgs = append(msgs, m)
-			default:
-				return chatMsgsMsg{messages: msgs}
-			}
-		}
-	}
 }

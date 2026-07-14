@@ -25,7 +25,7 @@ import (
 func TestChatModelApplyEventsFinalizesAssistantTurn(t *testing.T) {
 	t.Parallel()
 
-	m := NewChatModel(100, 24, nil, "/tmp", "test", nil, "", "")
+	m := newChatModel(100, 24)
 	m.responding = true
 
 	m = m.ApplyEvents([]chatEvent{
@@ -53,7 +53,7 @@ func TestChatModelApplyEventsFinalizesAssistantTurn(t *testing.T) {
 func TestChatModelApplyEventsActivatesPendingQuestion(t *testing.T) {
 	t.Parallel()
 
-	m := NewChatModel(100, 24, nil, "/tmp", "test", nil, "", "")
+	m := newChatModel(100, 24)
 	m.responding = true
 	raw := []byte(`{"questions":[{"question":"Pick one","options":[{"label":"A"},{"label":"B"}]}]}`)
 
@@ -81,7 +81,7 @@ func TestChatModelPendingQuestionTrimsStreamedQuestionDraft(t *testing.T) {
 	const intro = "Yo! What can I help you with?"
 	const question = "What would you like me to help you with?"
 	raw := []byte(`{"questions":[{"question":"What would you like me to help you with?","options":[{"label":"Ask about Agentic Orchestrator features (Recommended)","description":"Quick answers from the user guide and codebase","confidence":0.9},{"label":"Search the codebase","description":"Find files, patterns, and trace code paths"},{"label":"Debug an issue","description":"Inspect local state and logs"}]}]}`)
-	m := NewChatModel(120, 24, nil, "/tmp", "test", nil, "", "")
+	m := newChatModel(120, 24)
 	m.responding = true
 
 	m = m.ApplyEvents([]chatEvent{
@@ -129,7 +129,7 @@ func TestChatModelPendingQuestionNeverDeletesWholeTurn(t *testing.T) {
 	const question = "Which database should I target?"
 	const text = question + "\n\n1. Postgres (Recommended): Mature. [confidence: 0.88]\n2. MySQL: Familiar. [confidence: 0.40]\n3. SQLite: Simplest. [confidence: 0.20]"
 	raw := []byte(`{"questions":[{"question":"Which database should I target?","options":[{"label":"Postgres (Recommended)"},{"label":"MySQL"},{"label":"SQLite"}]}]}`)
-	m := NewChatModel(120, 24, nil, "/tmp", "test", nil, "", "")
+	m := newChatModel(120, 24)
 	m.responding = true
 
 	m = m.ApplyEvents([]chatEvent{

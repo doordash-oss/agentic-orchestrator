@@ -15,19 +15,13 @@
 package tui
 
 import (
-	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -57,7 +51,7 @@ func chatTurnsContainText(turns []chatTurn, substr string) bool {
 }
 
 func TestChatModelEscExitsWhenEmpty(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	_ = updated
 	if cmd == nil {
@@ -70,7 +64,7 @@ func TestChatModelEscExitsWhenEmpty(t *testing.T) {
 }
 
 func TestChatModelEscClearsInput(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	m.input.SetValue("some text")
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if cmd != nil {
@@ -82,7 +76,7 @@ func TestChatModelEscClearsInput(t *testing.T) {
 }
 
 func TestChatModelCtrlCExitsWhenNotResponding(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd for ctrl+c")
@@ -94,7 +88,7 @@ func TestChatModelCtrlCExitsWhenNotResponding(t *testing.T) {
 }
 
 func TestChatModelViewEmptyState(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	view := m.View()
 	if !strings.Contains(view, "Ask me Anything") {
 		t.Error("expected title in view")
@@ -105,7 +99,7 @@ func TestChatModelViewEmptyState(t *testing.T) {
 }
 
 func TestChatModelViewDoesNotUseDarkTextareaCursorLine(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	view := m.View()
 	if strings.Contains(view, "\x1b[40m") || strings.Contains(view, "\x1b[48;5;0m") {
 		t.Fatalf("chat view rendered Bubble textarea's dark cursor-line background: %q", view)
@@ -113,14 +107,14 @@ func TestChatModelViewDoesNotUseDarkTextareaCursorLine(t *testing.T) {
 }
 
 func TestChatModelViewFitsAllocatedEmptyPanelHeight(t *testing.T) {
-	m := NewChatModel(100, 8, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(100, 8)
 	if got := lipgloss.Height(m.View()); got > m.height {
 		t.Fatalf("empty chat view height = %d, want <= allocated height %d", got, m.height)
 	}
 }
 
 func TestChatModelEscWhileRespondingMinimizes(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	m.responding = true
 
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -137,7 +131,7 @@ func TestChatModelEscWhileRespondingMinimizes(t *testing.T) {
 }
 
 func TestChatModelViewShowsFooter(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	view := m.View()
 	if !strings.Contains(view, "[enter] Send") {
 		t.Error("expected [enter] Send in footer")
@@ -148,7 +142,7 @@ func TestChatModelViewShowsFooter(t *testing.T) {
 }
 
 func TestChatModelViewBoxesMessageInputPanel(t *testing.T) {
-	m := NewChatModel(100, 20, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(100, 20)
 	m.turns = append(m.turns,
 		chatTurn{Role: chatTurnUser, Text: "what is running?"},
 		chatTurn{Role: chatTurnAgent, Text: strings.Repeat("Transcript content. ", 18)},
@@ -167,7 +161,7 @@ func TestChatModelViewBoxesMessageInputPanel(t *testing.T) {
 
 func TestChatModelViewLeavesTwoBlankRowsAboveMessageInput(t *testing.T) {
 	const finalAnswer = "final answer above the message box"
-	m := NewChatModel(100, 14, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(100, 14)
 	for i := range 8 {
 		text := fmt.Sprintf("earlier answer %d", i)
 		if i == 7 {
@@ -213,7 +207,7 @@ func TestChatModelViewLeavesTwoBlankRowsAboveMessageInput(t *testing.T) {
 }
 
 func TestChatModelViewShowsRespondingFooter(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	m.responding = true
 	view := m.View()
 	if !strings.Contains(view, "[esc] Background") {
@@ -225,24 +219,24 @@ func TestChatModelViewShowsRespondingFooter(t *testing.T) {
 }
 
 func TestChatModelEnterWithEmptyInputIsNoop(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Error("expected nil cmd for enter with empty input")
 	}
 }
 
-func TestChatModelEnterWithNoSessionMgrShowsError(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+func TestChatModelEnterWithNoAPIShowsError(t *testing.T) {
+	m := newChatModel(80, 24)
 	m.input.SetValue("hello")
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !chatTurnsContainText(updated.turns, "no session manager available") {
-		t.Errorf("expected error turn in turns when no session manager, got: %+v", updated.turns)
+	if !chatTurnsContainText(updated.turns, "chat API unavailable") {
+		t.Errorf("expected error turn in turns when chat API is unavailable, got: %+v", updated.turns)
 	}
 }
 
 func TestChatModelResize(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	if updated.width != 120 {
 		t.Errorf("width = %d, want 120", updated.width)
@@ -253,7 +247,7 @@ func TestChatModelResize(t *testing.T) {
 }
 
 func TestChatModelHistorySurvivesMultipleUpdateCycles(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	m := newChatModel(80, 24)
 	m.input.SetValue("first question")
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !chatTurnsContainText(m.turns, "first question") {
@@ -269,389 +263,8 @@ func TestChatModelHistorySurvivesMultipleUpdateCycles(t *testing.T) {
 	}
 }
 
-func TestChatMsgsMsgStreaming(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
-	m.responding = true
-	// Simulate a session so polling continues
-	m.sess = session.NewSession("", "", 0)
-
-	// Simulate receiving assistant messages via chatMsgsMsg
-	msgs := chatMsgsMsg{
-		messages: []llm.SDKMessage{
-			{
-				Type: roleAssistant,
-				Assistant: &llm.AssistantMessage{
-					Message: llm.ConversationMsg{
-						Content: []llm.ContentBlock{
-							{Type: "text", Text: "Hello world"},
-						},
-					},
-				},
-			},
-		},
-	}
-	updated, cmd := m.Update(msgs)
-	if !chatTurnsContainText(updated.turns, "Hello world") {
-		t.Fatalf("expected 'Hello world' in turns, got %+v", updated.turns)
-	}
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd to continue listening")
-	}
-
-	// Simulate a result message (turn complete)
-	resultMsgs := chatMsgsMsg{
-		messages: []llm.SDKMessage{
-			{
-				Type:   "result",
-				Result: &llm.ResultMessage{Subtype: "success"},
-			},
-		},
-	}
-	updated, _ = updated.Update(resultMsgs)
-	if updated.responding {
-		t.Error("expected responding to be false after result message")
-	}
-}
-
-func TestChatMsgsMsgAppendsNonPartialAssistantTextFragments(t *testing.T) {
-	m := NewChatModel(100, 24, nil, "/tmp", "test", nil, "", "")
-	m.responding = true
-
-	messages := []llm.SDKMessage{
-		{
-			Type: roleAssistant,
-			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
-				Content: []llm.ContentBlock{{Type: "text", Text: "## Feature State\n\nStatus discrepancy: feature.yaml says CodeReady."}},
-			}},
-		},
-		{
-			Type: roleAssistant,
-			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
-				Content: []llm.ContentBlock{{Type: "text", Text: "Run 001 (single run) is complete and published."}},
-			}},
-		},
-		{Type: "result", Result: &llm.ResultMessage{Subtype: "success"}},
-	}
-
-	updated, _ := m.Update(chatMsgsMsg{messages: messages})
-	if updated.responding {
-		t.Fatal("chat remained responding after result")
-	}
-	if len(updated.turns) != 1 {
-		t.Fatalf("turn count = %d, want one assistant turn: %+v", len(updated.turns), updated.turns)
-	}
-	text := updated.turns[0].Text
-	for _, want := range []string{"Feature State", "Status discrepancy", "Run 001", "complete and published"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("assistant turn missing %q after fragment merge:\n%s", want, text)
-		}
-	}
-}
-
-func TestChatMsgsMsgSnapshotDrivenModeDoesNotPollSessionChannel(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
-	m.responding = true
-	m.pollSession = false
-	m.sess = session.NewSession("", "", 0)
-
-	updated, cmd := m.Update(chatMsgsMsg{
-		messages: []llm.SDKMessage{
-			{
-				Type: roleAssistant,
-				Assistant: &llm.AssistantMessage{
-					Message: llm.ConversationMsg{
-						Content: []llm.ContentBlock{{Type: "text", Text: "Snapshot answer"}},
-					},
-				},
-			},
-		},
-	})
-
-	if !chatTurnsContainText(updated.turns, "Snapshot answer") {
-		t.Fatalf("expected snapshot answer in turns, got %+v", updated.turns)
-	}
-	if cmd != nil {
-		t.Fatal("expected nil cmd in snapshot-driven mode")
-	}
-}
-
-func TestChatDoneMsgResetsState(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
-	m.responding = true
-	sess := session.NewSession("", "", 0)
-	m.sess = sess
-
-	// chatDoneMsg must match the current session to take effect
-	updated, cmd := m.Update(chatDoneMsg{sess: sess})
-	if updated.responding {
-		t.Error("expected responding to be false after chatDoneMsg")
-	}
-	if updated.sess != nil {
-		t.Error("expected sess to be nil after chatDoneMsg")
-	}
-	if cmd != nil {
-		t.Error("expected nil cmd after chatDoneMsg")
-	}
-}
-
-func TestChatDoneMsgIgnoresStaleSession(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
-	m.responding = true
-	currentSess := session.NewSession("", "", 0)
-	m.sess = currentSess
-
-	// chatDoneMsg from an old (different) session should be ignored
-	oldSess := session.NewSession("", "", 0)
-	updated, _ := m.Update(chatDoneMsg{sess: oldSess})
-	if !updated.responding {
-		t.Error("expected responding to remain true for stale chatDoneMsg")
-	}
-	if updated.sess != currentSess {
-		t.Error("expected sess to remain unchanged for stale chatDoneMsg")
-	}
-}
-
-func TestChatSendErrorMsgResetsState(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
-	m.responding = true
-	m.sess = session.NewSession("", "", 0)
-
-	updated, cmd := m.Update(chatSendErrorMsg{err: nil})
-	if updated.responding {
-		t.Error("expected responding to be false after send error")
-	}
-	if updated.sess != nil {
-		t.Error("expected sess to be nil after send error")
-	}
-	if !chatTurnsContainText(updated.turns, "session ended") {
-		t.Error("expected reconnect hint in turns")
-	}
-	if cmd != nil {
-		t.Error("expected nil cmd after send error")
-	}
-}
-
-func TestChatStartSessionUsesCallback(t *testing.T) {
-	var capturedOpts agent.BuildSessionOpts
-	var called bool
-	mockBuildSession := func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		called = true
-		capturedOpts = opts
-		return nil, nil, nil, fmt.Errorf("test: stop here")
-	}
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	m := NewChatModel(80, 24, sm, "/tmp", "test system prompt", mockBuildSession, "sonnet", "")
-	cmd := m.startSessionCmd("hello world")
-	// Execute the command
-	msg := cmd()
-
-	if !called {
-		t.Fatal("BuildSession callback was not called")
-	}
-	if capturedOpts.Model != "sonnet" {
-		t.Errorf("expected model 'sonnet', got %q", capturedOpts.Model)
-	}
-	if capturedOpts.SystemPrompt != "test system prompt" {
-		t.Errorf("expected system prompt 'test system prompt', got %q", capturedOpts.SystemPrompt)
-	}
-	if capturedOpts.TurnMode != ports.TurnModeInteractive {
-		t.Errorf("expected interactive turn mode, got %v", capturedOpts.TurnMode)
-	}
-	if capturedOpts.EffortLevel != llm.EffortLow {
-		t.Errorf("expected low effort for chat, got %q", capturedOpts.EffortLevel)
-	}
-	// AMA can request top-level diagnostics through permissions, but cannot
-	// delegate to sub-agents.
-	expectedDisallowed := []string{"Task"}
-	if !reflect.DeepEqual(capturedOpts.DisallowedTools, expectedDisallowed) {
-		t.Errorf("expected disallowed tools %v, got %v", expectedDisallowed, capturedOpts.DisallowedTools)
-	}
-	if _, ok := capturedOpts.PermHandler.(*session.AMAHandler); !ok {
-		t.Errorf("expected AMA permission handler, got %T", capturedOpts.PermHandler)
-	}
-	// Verify it returned a terminal error message (since our callback returned an error).
-	errMsg, ok := msg.(chatSendErrorMsg)
-	if !ok {
-		t.Fatalf("expected chatSendErrorMsg, got %T", msg)
-	}
-	if errMsg.err == nil || !strings.Contains(errMsg.err.Error(), "test: stop here") {
-		t.Fatal("expected error message")
-	}
-}
-
-func TestChatUsesConfiguredModel(t *testing.T) {
-	var capturedOpts agent.BuildSessionOpts
-	mockBuildSession := func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		capturedOpts = opts
-		return nil, nil, nil, fmt.Errorf("test: stop here")
-	}
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	m := NewChatModel(80, 24, sm, "/tmp", "test", mockBuildSession, "opus", "")
-	cmd := m.startSessionCmd("test question")
-	cmd()
-
-	if capturedOpts.Model != "opus" {
-		t.Errorf("expected model 'opus', got %q", capturedOpts.Model)
-	}
-}
-
-// TestChatUsesConfiguredProviderModel proves chat hands an explicit provider
-// model selection to the normal provider-neutral session builder unchanged, and
-// stays intentionally markerless — chat is a conversational surface with no
-// phase_complete contract, so it must never thread a marker path.
-func TestChatUsesConfiguredProviderModel(t *testing.T) {
-	var capturedOpts agent.BuildSessionOpts
-	mockBuildSession := func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		capturedOpts = opts
-		return nil, nil, nil, fmt.Errorf("test: stop here")
-	}
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	const routedModel = "gateway:vendor/model"
-	m := NewChatModel(80, 24, sm, "/tmp", "test", mockBuildSession, routedModel, "")
-	cmd := m.startSessionCmd("test question")
-	cmd()
-
-	if capturedOpts.Model != routedModel {
-		t.Errorf("expected model %q, got %q", routedModel, capturedOpts.Model)
-	}
-	if capturedOpts.MarkerPath != "" {
-		t.Errorf("chat threaded a marker path %q; want markerless", capturedOpts.MarkerPath)
-	}
-}
-
-// TestChatRecoveryTickClearsRespondingWhenResultArrives verifies the
-// defensive safety net: if the session records a Result (Cost() returns
-// a new pointer) but the attachCh forward dropped the SDKMessage, the
-// periodic recovery tick clears responding so the chat doesn't hang in
-// "Thinking…" forever.
-func TestChatRecoveryTickClearsRespondingWhenResultArrives(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
-	sess := mocks.NewMockSessionView("__chat__", "")
-	m.sess = sess
-	m.responding = true
-	m.thinkingLine = "Using Agent..."
-	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "partial answer", InProgress: true})
-	m.turnCostBaseline = nil // baseline before the Result landed
-
-	// Simulate: Claude finished the turn and the session recorded the
-	// Result on Cost() — but attachCh dropped the SDKMessage.
-	sess.CostVal = &llm.ResultMessage{Type: "result", Subtype: "success"}
-
-	updated, _ := m.Update(chatRecoveryTickMsg{sess: sess, baseline: nil})
-
-	if updated.responding {
-		t.Fatal("expected responding=false after recovery tick observed a new Result")
-	}
-	if updated.thinkingLine != "" {
-		t.Errorf("expected thinkingLine cleared, got %q", updated.thinkingLine)
-	}
-	n := len(updated.turns)
-	if n == 0 || updated.turns[n-1].InProgress || updated.turns[n-1].Text != "partial answer" {
-		t.Errorf("expected in-progress turn finalized with text preserved, got %+v", updated.turns)
-	}
-	if updated.turnCostBaseline != sess.CostVal {
-		t.Errorf("expected baseline advanced to new Cost pointer")
-	}
-}
-
-// TestChatRecoveryTickRearmsWhenNoNewResult verifies the tick re-arms
-// itself while responding and no Result has arrived, so we keep
-// watching. Without this, a dropped-Result scenario could only recover
-// once — subsequent turns would have no safety net.
-func TestChatRecoveryTickRearmsWhenNoNewResult(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
-	sess := mocks.NewMockSessionView("__chat__", "")
-	m.sess = sess
-	m.responding = true
-	m.turnCostBaseline = nil
-	// No Result yet — Cost stays nil.
-
-	updated, cmd := m.Update(chatRecoveryTickMsg{sess: sess, baseline: nil})
-
-	if !updated.responding {
-		t.Fatal("expected responding to remain true when no new Result observed")
-	}
-	if cmd == nil {
-		t.Fatal("expected rearmed tick command, got nil")
-	}
-}
-
-// TestChatRecoveryTickIgnoredForStaleSession verifies the tick only
-// acts on the current session. A tick left over from a previous session
-// (after ctrl+c + new message) must not touch the new session's state.
-func TestChatRecoveryTickIgnoredForStaleSession(t *testing.T) {
-	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
-	currentSess := mocks.NewMockSessionView("__chat__", "")
-	currentSess.CostVal = &llm.ResultMessage{Type: "result"}
-	m.sess = currentSess
-	m.responding = true
-	m.turnCostBaseline = currentSess.CostVal // already seen
-
-	// Tick references an OLD session (different pointer).
-	oldSess := mocks.NewMockSessionView("__chat__", "")
-	updated, cmd := m.Update(chatRecoveryTickMsg{sess: oldSess, baseline: nil})
-
-	if !updated.responding {
-		t.Error("expected responding unchanged for stale session tick")
-	}
-	if cmd != nil {
-		t.Error("expected no rearm for stale session tick")
-	}
-}
-
-func TestChatStartSession_SkillReadInstruction(t *testing.T) {
-	var capturedOpts agent.BuildSessionOpts
-	var called bool
-	mockBuildSession := func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		called = true
-		capturedOpts = opts
-		return nil, nil, nil, fmt.Errorf("test: stop here")
-	}
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	skillsDir := t.TempDir()
-	m := NewChatModel(80, 24, sm, "/tmp", "test system prompt", mockBuildSession, "sonnet", skillsDir)
-	cmd := m.startSessionCmd("hello world")
-	cmd()
-
-	if !called {
-		t.Fatal("BuildSession callback was not called")
-	}
-
-	// System prompt should be the provided one (no raw chat template)
-	if capturedOpts.SystemPrompt != "test system prompt" {
-		t.Errorf("expected system prompt 'test system prompt', got %q", capturedOpts.SystemPrompt)
-	}
-
-	// User prompt should contain skill-read instruction for chat
-	expectedSkillPath := filepath.Join(skillsDir, "chat", "SKILL.md")
-	if !strings.Contains(capturedOpts.Prompt, expectedSkillPath) {
-		t.Errorf("chat prompt missing skill-read instruction, expected path %q in prompt %q", expectedSkillPath, capturedOpts.Prompt)
-	}
-
-	// User prompt should still contain the original question
-	if !strings.Contains(capturedOpts.Prompt, "hello world") {
-		t.Errorf("chat prompt missing original question 'hello world'")
-	}
-}
-
 func TestChatModelAppendsUserAndAgentTurns(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: "hello"}) //nolint:goconst // arbitrary filler text coincidentally shared with an unrelated textarea test fixture
 	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "**hi**", InProgress: false})
 	m.rebuildViewport()
@@ -669,7 +282,7 @@ func TestChatModelRendersAgentTextThroughMarkdown(t *testing.T) {
 		gotWidth = width
 		return "RENDERED:" + text
 	}
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "hello"})
 	m.rebuildViewport()
 	content := m.viewport.View()
@@ -682,7 +295,7 @@ func TestChatModelRendersAgentTextThroughMarkdown(t *testing.T) {
 }
 
 func TestChatModelShowsSpinnerInAgentTag(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.responding = true
 	m.spinnerView = "⣹"
 	m.thinkingLine = "Using Read..."
@@ -713,7 +326,7 @@ func TestRenderAgentThinkingTagKeepsStableAgentLabel(t *testing.T) {
 }
 
 func TestChatModelActivatesQuestionPicker(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.activateQuestions([]askUserQuestion{{Question: testQuestionPickOne, Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
 	if !m.hasActiveQuestion() {
 		t.Fatal("expected an active question after activateQuestions")
@@ -724,7 +337,7 @@ func TestChatModelActivatesQuestionPicker(t *testing.T) {
 }
 
 func TestChatModelQuestionNavAndSubmit(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.activateQuestions([]askUserQuestion{
 		{Question: testQuestionFirst, Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
 		{Question: testQuestionSecond, Options: []askUserOption{{Label: "C"}, {Label: "D"}}},
@@ -750,7 +363,7 @@ func TestChatModelQuestionNavAndSubmit(t *testing.T) {
 }
 
 func TestChatModelSubmitQuestionAnswersAddsPromptAndAnswerToHistory(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.activateQuestions([]askUserQuestion{
 		{Question: testQuestionPickDirection, Options: []askUserOption{{Label: testOptionLabelAlpha}, {Label: testOptionLabelBeta}}},
 	}, "req-1", nil)
@@ -801,7 +414,7 @@ func TestAPIChatModelSubmitQuestionAnswerSchedulesRecoveryTick(t *testing.T) {
 }
 
 func TestChatModelMultiSelectToggle(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.activateQuestions([]askUserQuestion{
 		{Question: "Which repos?", MultiSelect: true, Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
 	}, "req-1", nil)
@@ -830,7 +443,7 @@ func chatTurnTextCount(turns []chatTurn, role chatTurnRole, text string) int {
 // option list must advertise the "Type something." freeform escape hatch
 // even when not selected, matching attach.go's renderQuestion.
 func TestChatModelRenderQuestionPickerShowsFreeformRow(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.activateQuestions([]askUserQuestion{
 		{Question: testQuestionPickOne, Options: []askUserOption{{Label: testOptionLabelAlpha}, {Label: testOptionLabelBeta}}},
 	}, "req-1", nil)
@@ -842,7 +455,7 @@ func TestChatModelRenderQuestionPickerShowsFreeformRow(t *testing.T) {
 }
 
 func TestChatModelQuestionPickerShowsWrappedOptions(t *testing.T) {
-	m := NewChatModel(72, 20, nil, "", "", nil, "", "")
+	m := newChatModel(72, 20)
 	m.activateQuestions([]askUserQuestion{
 		{
 			Question: "What would you like help with?",
@@ -862,7 +475,7 @@ func TestChatModelQuestionPickerShowsWrappedOptions(t *testing.T) {
 }
 
 func TestChatModelQuestionPickerKeepsChoiceVisibleWhenTypeRowSelected(t *testing.T) {
-	m := NewChatModel(72, 20, nil, "", "", nil, "", "")
+	m := newChatModel(72, 20)
 	m.activateQuestions([]askUserQuestion{
 		{
 			Question: "What would you like help with?",
@@ -889,32 +502,8 @@ func TestChatModelQuestionPickerKeepsChoiceVisibleWhenTypeRowSelected(t *testing
 	}
 }
 
-func TestChatModelDoesNotDuplicateActiveAskUserQuestion(t *testing.T) {
-	input := json.RawMessage(`{"questions":[{"question":"What would you like help with?","options":[{"label":"Understand Agentic Orchestrator (Recommended)","description":"Learn features, phases, and how the TUI works end-to-end."},{"label":"Debug an issue","description":"Trace errors, inspect feature state, and read logs to find root cause."},{"label":"Explore the codebase","description":"Search files and explain internal implementation details."}]}]}`)
-	m := NewChatModel(100, 20, nil, "", "", nil, "", "")
-	m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: "yo?"})
-	m.responding = true
-
-	updated, _ := m.Update(chatMsgsMsg{messages: []llm.SDKMessage{{
-		Type: msgTypeControlRequest,
-		ControlRequest: &llm.ControlRequestMessage{
-			RequestID: testAskRequestID,
-			Request: llm.ControlRequest{
-				Subtype:  controlRequestSubtypeCanUseTool,
-				ToolName: toolNameAskUserQuestion,
-				Input:    input,
-			},
-		},
-	}}})
-
-	view := stripANSI(updated.View())
-	if count := strings.Count(view, "What would you like help with?"); count != 1 {
-		t.Fatalf("active AskUserQuestion prompt rendered %d times, want 1:\n%s", count, view)
-	}
-}
-
 func TestChatModelViewBoxesActiveQuestionPanel(t *testing.T) {
-	m := NewChatModel(100, 24, nil, "", "", nil, "", "")
+	m := newChatModel(100, 24)
 	m.turns = append(m.turns,
 		chatTurn{Role: chatTurnUser, Text: "another 3 choices question pls"},
 		chatTurn{Role: chatTurnAgent, Text: strings.Repeat("Long answer content. ", 24)},
@@ -943,7 +532,7 @@ func TestChatModelViewBoxesActiveQuestionPanel(t *testing.T) {
 }
 
 func TestChatModelActiveQuestionPanelGetsMoreDockedHeight(t *testing.T) {
-	m := NewChatModel(100, 20, nil, "", "", nil, "", "")
+	m := newChatModel(100, 20)
 	m.activateQuestions([]askUserQuestion{{
 		Question: "What would you like me to help you with?",
 		Options: []askUserOption{
@@ -960,7 +549,7 @@ func TestChatModelActiveQuestionPanelGetsMoreDockedHeight(t *testing.T) {
 }
 
 func TestChatModelQuestionViewFitsAllocatedPanel(t *testing.T) {
-	m := NewChatModel(72, 20, nil, "", "", nil, "", "")
+	m := newChatModel(72, 20)
 	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "Ready."})
 	m.activateQuestions([]askUserQuestion{{
 		Question: "Which very long Agentic Orchestrator investigation path should the AMA session take before answering?",
@@ -991,7 +580,7 @@ func TestChatModelQuestionViewFitsAllocatedPanel(t *testing.T) {
 }
 
 func TestChatModelFullscreenQuestionReservesTranscriptSpace(t *testing.T) {
-	m := NewChatModel(120, 60, nil, "", "", nil, "", "")
+	m := newChatModel(120, 60)
 	m.fullscreen = true
 	m.turns = append(m.turns,
 		chatTurn{Role: chatTurnUser, Text: "yo?"},
@@ -1023,7 +612,7 @@ func TestChatModelFullscreenQuestionReservesTranscriptSpace(t *testing.T) {
 // switch the rendered body to the input box instead of continuing to show
 // the (now stale) option list.
 func TestChatModelRenderQuestionPickerFreeformInput(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.activateQuestions([]askUserQuestion{
 		{Question: testQuestionPickOne, Options: []askUserOption{{Label: testOptionLabelAlpha}, {Label: testOptionLabelBeta}}},
 	}, "req-1", nil)
@@ -1056,7 +645,7 @@ func TestChatModelRenderQuestionPickerFreeformInput(t *testing.T) {
 // to question 0 after answering it and advancing must restore the recorded
 // selection instead of resetting the cursor to option 0.
 func TestChatModelBackNavRestoresQ0Selection(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.activateQuestions([]askUserQuestion{
 		{Question: testQuestionFirst, Options: []askUserOption{{Label: "A"}, {Label: "B"}, {Label: "C"}}},
 		{Question: testQuestionSecond, Options: []askUserOption{{Label: "D"}, {Label: "E"}}},
@@ -1085,7 +674,7 @@ func TestChatModelBackNavRestoresQ0Selection(t *testing.T) {
 // stays inside the visible [start, end) range instead of scrolling off
 // screen with no way back.
 func TestChatModelPickerScrollFollowsSelection(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	options := []askUserOption{
 		{Label: testOptionLabelAlpha, Description: "First option"},
 		{Label: testOptionLabelBeta, Description: "Second option"},
@@ -1115,7 +704,7 @@ func TestChatModelPickerScrollFollowsSelection(t *testing.T) {
 // Pressing "left" on the recap slot must return to the last question
 // instead of being a silent no-op.
 func TestChatModelRecapSlotLeftGoesBack(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.activateQuestions([]askUserQuestion{
 		{Question: testQuestionFirst, Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
 		{Question: testQuestionSecond, Options: []askUserOption{{Label: "C"}, {Label: "D"}}},
@@ -1157,7 +746,7 @@ func TestChatModelSyncAutoPickedTurns(t *testing.T) {
 			},
 		},
 	})
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.sess = sess
 	m.syncAutoPickedTurns()
 	if len(m.turns) != 1 {
@@ -1174,7 +763,7 @@ func TestChatModelSyncAutoPickedTurns(t *testing.T) {
 }
 
 func TestChatModelFullscreenToggleAndEscHierarchy(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 
 	// ctrl+g toggles fullscreen on.
 	updated, _ := m.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
@@ -1237,7 +826,7 @@ func TestChatModelFullscreenToggleWorksWhileQuestionActive(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := tc.setup(NewChatModel(80, 20, nil, "", "", nil, "", ""))
+			m := tc.setup(newChatModel(80, 20))
 			if !m.hasActiveQuestion() {
 				t.Fatal("setup: expected active question")
 			}
@@ -1263,18 +852,18 @@ func TestChatModelFullscreenToggleWorksWhileQuestionActive(t *testing.T) {
 // original, taller range (floor/ceiling [10, 18]) and hits the 18 ceiling
 // at totalHeight=100.
 func TestChatPanelHeightEmptyVsNonEmpty(t *testing.T) {
-	empty := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	empty := newChatModel(80, 20)
 	if h := empty.chatPanelHeight(100); h < 5 || h > 8 {
 		t.Errorf("empty chatPanelHeight(100) = %d, want within [5, 8] (compact ceiling)", h)
 	}
 
-	nonEmpty := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	nonEmpty := newChatModel(80, 20)
 	nonEmpty.turns = append(nonEmpty.turns, chatTurn{Role: chatTurnUser, Text: "hi"})
 	if h := nonEmpty.chatPanelHeight(100); h != 18 {
 		t.Errorf("non-empty chatPanelHeight(100) = %d, want exactly 18 (unchanged ceiling)", h)
 	}
 
-	responding := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	responding := newChatModel(80, 20)
 	responding.responding = true
 	if h := responding.chatPanelHeight(100); h != 18 {
 		t.Errorf("responding chatPanelHeight(100) = %d, want exactly 18 (unchanged ceiling)", h)
@@ -1289,7 +878,7 @@ func TestChatPanelHeightEmptyVsNonEmpty(t *testing.T) {
 // branch; the main input had no handler for it at all, so the footer's
 // promise was never honored outside an active question.
 func TestChatModelShiftEnterInsertsNewlineInMainInput(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 
 	for _, ch := range "line1" {
 		m, _ = m.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
@@ -1305,7 +894,7 @@ func TestChatModelShiftEnterInsertsNewlineInMainInput(t *testing.T) {
 }
 
 func TestChatModelResizePreservesDynamicInputHeight(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	m.input.SetValue("line1\nline2\nline3\nline4")
 	m.syncChatInputHeight()
 	if got := m.input.Height(); got != 4 {
@@ -1323,7 +912,7 @@ func TestChatModelResizePreservesDynamicInputHeight(t *testing.T) {
 // states (only the active-question picker's own footer, covered elsewhere,
 // intentionally swallows it while a question owns the keyboard).
 func TestChatModelFooterMentionsFullscreenToggle(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m := newChatModel(80, 20)
 	if idle := m.View(); !strings.Contains(idle, "ctrl+g") {
 		t.Errorf("idle footer missing ctrl+g hint:\n%s", idle)
 	}

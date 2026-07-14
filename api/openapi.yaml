@@ -108,96 +108,6 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/v1/features/{feature_id}/start:
-    post:
-      operationId: startFeatureLegacy
-      summary: Start or resume a feature.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/features/{feature_id}/resume:
-    post:
-      operationId: resumeFeatureLegacy
-      summary: Resume a feature.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/features/{feature_id}/stop:
-    post:
-      operationId: stopFeatureLegacy
-      summary: Stop a feature.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/features/{feature_id}/interrupt:
-    post:
-      operationId: interruptFeatureLegacy
-      summary: Interrupt a feature.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/features/{feature_id}/restart:
-    post:
-      operationId: restartFeatureLegacy
-      summary: Restart a feature.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/features/{feature_id}/review-decision:
-    post:
-      operationId: submitReviewDecisionLegacy
-      summary: Submit a review decision.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
   /api/v1/features/{feature_id}/reviews:
     post:
       operationId: createReviewSession
@@ -213,37 +123,6 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
-          $ref: "#/components/responses/ErrorResponse"
-
-  /api/v1/features/{feature_id}/reviews/{review_id}:
-    get:
-      operationId: getReviewSession
-      summary: Read one artifact review draft session.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/ReviewID"
-      responses:
-        "200":
-          $ref: "#/components/responses/ReviewSessionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/ErrorResponse"
-    delete:
-      operationId: cancelReviewSession
-      summary: Cancel an artifact review draft session without committing it.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/ReviewID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ReviewSessionDecisionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
           $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/features/{feature_id}/reviews/{review_id}/draft:
@@ -289,36 +168,6 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/ErrorResponse"
-
-  /api/v1/features/{feature_id}/need-user-input:
-    post:
-      operationId: answerNeedUserInputLegacy
-      summary: Submit a need-user-input gate decision.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/features/{feature_id}/need-user-input-draft:
-    post:
-      operationId: draftNeedUserInputLegacy
-      summary: Generate draft answers for a need-user-input gate.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /api/v1/features/{feature_id}/actions/{action}:
     post:
@@ -429,22 +278,6 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/workspace/browse:
-    get:
-      operationId: browseWorkspace
-      summary: Browse workspace paths.
-      parameters:
-        - name: path
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        "200":
-          $ref: "#/components/responses/WorkspaceBrowseResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -577,26 +410,6 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/TranscriptResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/sessions/{session_id}/output:
-    get:
-      operationId: getSessionOutput
-      summary: Read a bounded byte slice from the append-only session output log.
-      parameters:
-        - $ref: "#/components/parameters/SessionID"
-        - name: from
-          in: query
-          required: false
-          schema:
-            type: integer
-            format: int64
-            minimum: 0
-        - $ref: "#/components/parameters/Limit"
-      responses:
-        "200":
-          $ref: "#/components/responses/SessionOutputResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -769,7 +582,10 @@ components:
           - retry
           - rebase
           - review-comments
+          - review-decision
           - refactor
+          - need-user-input
+          - need-user-input-draft
           - mark-done
           - cleanup
           - delete
@@ -862,12 +678,6 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RuntimeConfigResponse"
-    WorkspaceBrowseResponse:
-      description: Workspace browse result.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/WorkspaceBrowseResponse"
     ModelCatalogResponse:
       description: Model catalog.
       content:
@@ -934,12 +744,6 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/TranscriptResponse"
-    SessionOutputResponse:
-      description: Append-only output backfill.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SessionOutputResponse"
     RecoverySnapshotResponse:
       description: Recovery snapshot.
       content:
@@ -1027,6 +831,7 @@ components:
           type: object
           additionalProperties: true
     PermissionAnswerRequest:
+      x-go-name: PermissionAnswerSchema
       type: object
       required: [request_id, decision]
       properties:
@@ -1112,32 +917,6 @@ components:
           description: A TranscriptMessageDTO row (see the /transcript response).
         done:
           type: boolean
-    SessionOutputResponse:
-      allOf:
-        - $ref: "#/components/schemas/JSONResponse"
-        - type: object
-          required: [session_id, offset, next_offset, size, data, truncated, done]
-          properties:
-            session_id:
-              type: string
-            offset:
-              type: integer
-              format: int64
-              minimum: 0
-            next_offset:
-              type: integer
-              format: int64
-              minimum: 0
-            size:
-              type: integer
-              format: int64
-              minimum: 0
-            data:
-              type: string
-            truncated:
-              type: boolean
-            done:
-              type: boolean
     JSONResponse:
       type: object
       required: [api_version]
@@ -1247,22 +1026,6 @@ components:
               type: array
               items:
                 type: string
-    WorkspaceBrowseResponse:
-      allOf:
-        - $ref: "#/components/schemas/JSONResponse"
-        - type: object
-          required: [path, is_git_repo, child_repo_count, entries]
-          properties:
-            path:
-              type: string
-            is_git_repo:
-              type: boolean
-            child_repo_count:
-              type: integer
-            entries:
-              type: array
-              items:
-                $ref: "#/components/schemas/WorkspaceBrowseEntry"
     ModelCatalogResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1953,18 +1716,6 @@ components:
           type: object
           additionalProperties:
             type: boolean
-    WorkspaceBrowseEntry:
-      type: object
-      required: [name, path, is_git_repo]
-      properties:
-        name:
-          type: string
-        path:
-          type: string
-        is_git_repo:
-          type: boolean
-        child_repo_count:
-          type: integer
     Model:
       type: object
       required: [id]

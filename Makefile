@@ -37,7 +37,7 @@ lint:
 	go vet ./...
 
 generate-openapi:
-	go generate ./internal/server/serverapi
+	go generate ./internal/server
 
 test-fast:
 	@start=$$(date +%s); \

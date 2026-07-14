@@ -310,15 +310,12 @@ func (m *ChatModel) submitAllQuestionAnswers() tea.Cmd {
 		}
 		return nil
 	}
-	if !m.pollSession {
-		return func() tea.Msg {
-			if msg := sendCmd(); msg != nil {
-				return msg
-			}
-			return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
+	return func() tea.Msg {
+		if msg := sendCmd(); msg != nil {
+			return msg
 		}
+		return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
 	}
-	return tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
 }
 
 // appendOptionPreview joins preview beside topBlock, side by side, when

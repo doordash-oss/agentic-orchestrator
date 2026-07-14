@@ -42,11 +42,6 @@ func TestReviewSessionRoutesCommitDraftViaREST(t *testing.T) {
 		t.Fatalf("created review session = %+v, must have id and not leak %q", created, planPath)
 	}
 
-	got := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodGet, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID, nil, http.StatusOK)
-	if got.Text != "# Plan\n" || got.DraftRevision != created.DraftRevision {
-		t.Fatalf("GET review session = %+v, want created draft", got)
-	}
-
 	saved := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodPut, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/draft", ReviewDraftUpdateRequest{
 		BaseRevision: created.DraftRevision,
 		Text:         "# Edited by REST\n",
@@ -68,32 +63,6 @@ func TestReviewSessionRoutesCommitDraftViaREST(t *testing.T) {
 	}
 	if string(data) != "# Edited by REST\n" {
 		t.Fatalf("canonical artifact = %q, want committed draft", string(data))
-	}
-}
-
-func TestReviewSessionRoutesCancelLeavesCanonicalArtifact(t *testing.T) {
-	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
-	handler := NewHandler(HandlerOptions{
-		Features:              store,
-		FeatureStore:          store,
-		DisableHostValidation: true,
-	})
-
-	created := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews", map[string]any{}, http.StatusOK)
-	_ = doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodPut, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/draft", ReviewDraftUpdateRequest{
-		BaseRevision: created.DraftRevision,
-		Text:         "# Cancelled draft\n",
-	}, http.StatusOK)
-	cancelled := doReviewSessionJSON[ReviewSessionDecisionResponse](t, handler, http.MethodDelete, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID, map[string]any{}, http.StatusOK)
-	if cancelled.Result != "cancelled" {
-		t.Fatalf("cancel response = %+v, want cancelled", cancelled)
-	}
-	data, err := os.ReadFile(planPath)
-	if err != nil {
-		t.Fatalf("read canonical artifact: %v", err)
-	}
-	if string(data) != "# Plan\n" {
-		t.Fatalf("canonical artifact = %q, want original after cancel", string(data))
 	}
 }
 
@@ -221,13 +190,6 @@ func TestReviewSessionServiceCreateRefreshesExistingDraftCanIterate(t *testing.T
 	}
 	if reopened.CanIterate {
 		t.Fatalf("CanIterate = true, want false after approved plan metadata appears")
-	}
-	got, err := service.Get(f.ID, reopened.ReviewID)
-	if err != nil {
-		t.Fatalf("Get reopened: %v", err)
-	}
-	if got.CanIterate {
-		t.Fatalf("persisted CanIterate = true, want false after reopening approved plan review")
 	}
 }
 

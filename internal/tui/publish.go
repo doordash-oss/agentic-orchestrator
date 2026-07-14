@@ -17,7 +17,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,17 +43,6 @@ const (
 	publishStepExecute
 	publishStepDone
 )
-
-// publishExecuteResultMsg carries the result of a publish execution.
-type publishExecuteResultMsg struct {
-	prURL            string
-	err              error
-	conflictDetected bool   // true if pull-rebase encountered merge conflicts
-	branch           string // branch name, set when conflictDetected is true
-	rebaseTarget     string // base branch for follow-up rebase conflict resolution
-	featureID        string // feature ID, set when conflictDetected is true
-	repoName         string // for multi-repo per-repo state tracking
-}
 
 // publishRepoEntry represents a repo in the publish repo selector.
 type publishRepoEntry struct {
@@ -92,7 +80,6 @@ type PublishModel struct {
 	errMsg      string
 	worktreeDir string
 	branch      string
-	repoPath    string
 	descModel   string          // model name for description generation
 	baseBranch  string          // for stacked PRs: target branch instead of default
 	prCtx       agent.PRContext // lean context for PR description generation; filled by caller
@@ -107,16 +94,11 @@ type PublishModel struct {
 	height      int
 
 	// Multi-repo fields
-	repos           []publishRepoEntry  // all repos with their state, for selector
-	selectedRepo    int                 // cursor index in repo selector
-	hasRepoSelect   bool                // true when >1 repo available for publish
-	repoName        string              // name of the selected repo (for cross-ref tracking)
-	featureName     string              // feature name for cross-ref section
-	crossRefEntries []git.CrossRefEntry // built from repos + RepoStates
-	existingPRURL   string              // set when re-publishing an already-published repo
-	publishable     bool                // true if all feature repos have origin remote
-	draft           bool                // true when the feature's checkpoints request a draft PR
-	leasePush       bool                // true when CodeReady publish should update origin with --force-with-lease
+	repos         []publishRepoEntry // all repos with their state, for selector
+	selectedRepo  int                // cursor index in repo selector
+	hasRepoSelect bool               // true when >1 repo available for publish
+	repoName      string             // name of the selected repo (for cross-ref tracking)
+	draft         bool               // true when the feature's checkpoints request a draft PR
 }
 
 // newPublishViewport builds the shared viewport, title input, and body
@@ -154,34 +136,28 @@ func newPublishViewport(width, height int, prTitle, prBody, diff string) (review
 func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, descModel string, width, height int) PublishModel {
 	vp, ti, ta := newPublishViewport(width, height, "", "", "")
 
-	var featureID, featureName string
+	var featureID string
 	if f != nil {
 		featureID = f.ID
-		featureName = f.Name
 	}
 
 	var draft bool
-	var leasePush bool
 	if f != nil {
 		draft = f.Checkpoints.DraftPublish
-		leasePush = f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()
 	}
 
 	m := PublishModel{
-		step:        publishStepDiff,
-		featureID:   featureID,
-		featureName: featureName,
-		repos:       repos,
-		planText:    planText,
-		descModel:   descModel,
-		viewport:    vp,
-		titleInput:  ti,
-		bodyInput:   ta,
-		width:       width,
-		height:      height,
-		publishable: true,
-		draft:       draft,
-		leasePush:   leasePush,
+		step:       publishStepDiff,
+		featureID:  featureID,
+		repos:      repos,
+		planText:   planText,
+		descModel:  descModel,
+		viewport:   vp,
+		titleInput: ti,
+		bodyInput:  ta,
+		width:      width,
+		height:     height,
+		draft:      draft,
 	}
 
 	if f != nil && len(f.Repos) > 1 {
@@ -193,10 +169,8 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 		r := repos[0]
 		m.worktreeDir = r.WorktreeDir
 		m.branch = r.Branch
-		m.repoPath = r.RepoPath
 		m.repoName = r.Name
 		m.baseBranch = r.BaseBranch
-		m.crossRefEntries = buildCrossRefEntriesFromPublishRepos(repos, featureName)
 		m.diff, m.commitLog = loadPublishRepoContext(r.WorktreeDir, r.BaseBranch)
 		m.viewport.SetContent(colorizeDiff(m.diff))
 		m.step = publishStepDiff
@@ -220,40 +194,12 @@ func loadPublishRepoContext(worktreeDir, baseBranch string) (string, string) {
 	return diff, commitLog
 }
 
-// buildCrossRefEntriesFromPublishRepos converts publish repo entries to cross-ref entries.
-func buildCrossRefEntriesFromPublishRepos(repos []publishRepoEntry, _ string) []git.CrossRefEntry {
-	entries := make([]git.CrossRefEntry, 0, len(repos))
-	for _, r := range repos {
-		entry := git.CrossRefEntry{
-			RepoName: r.Name,
-			Branch:   r.Branch,
-		}
-		switch r.PRStatus {
-		case "published":
-			entry.PRURL = r.PRURL
-		case "failed":
-			entry.PRURL = "(failed)"
-		}
-		entries = append(entries, entry)
-	}
-	return entries
-}
-
 func (m PublishModel) Init() tea.Cmd {
 	return nil
 }
 
 func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 	switch msg := msg.(type) {
-	case publishExecuteResultMsg:
-		if msg.err != nil {
-			m.errMsg = msg.err.Error()
-		} else {
-			m.prURL = msg.prURL
-		}
-		m.step = publishStepDone
-		return m, nil
-
 	case publishDescGeneratedMsg:
 		m.generating = false
 		m.prTitle = msg.title
@@ -357,16 +303,8 @@ func (m PublishModel) advanceStep() (PublishModel, tea.Cmd) {
 			selected := m.repos[m.selectedRepo]
 			m.worktreeDir = selected.WorktreeDir
 			m.branch = selected.Branch
-			m.repoPath = selected.RepoPath
 			m.repoName = selected.Name
 			m.baseBranch = selected.BaseBranch
-			m.crossRefEntries = buildCrossRefEntriesFromPublishRepos(m.repos, m.featureName)
-			// Track existing PR URL for re-publish flow
-			if selected.PRStatus == "published" && selected.PRURL != "" {
-				m.existingPRURL = selected.PRURL
-			} else {
-				m.existingPRURL = ""
-			}
 			// Load diff from selected repo
 			m.diff, m.commitLog = loadPublishRepoContext(selected.WorktreeDir, selected.BaseBranch)
 			m.viewport.SetContent(colorizeDiff(m.diff))
@@ -395,7 +333,7 @@ func (m PublishModel) advanceStep() (PublishModel, tea.Cmd) {
 		m.step = publishStepConfirm
 	case publishStepConfirm:
 		m.step = publishStepExecute
-		return m, m.executePublish()
+		return m, nil
 	case publishStepExecute:
 		m.step = publishStepDone
 	}
@@ -430,173 +368,6 @@ func (m PublishModel) generateDescription() tea.Cmd {
 		}
 		title, body, err := m.runDesc(context.Background(), model, prCtx)
 		return publishDescGeneratedMsg{title: title, body: body, err: err, featureID: featureID}
-	}
-}
-
-// pushPublishBranch pushes worktreeDir's branch to origin: a force-with-lease
-// push when leasePush is set (CodeReady publish is an explicit post-review
-// update, so rebased feature branches update origin/<branch> instead of
-// rebasing local history back onto the pre-rebase remote branch), otherwise a
-// pull-rebase-then-push to sync with any remote changes first. It returns a
-// non-nil result only on failure; the caller should return that immediately.
-func pushPublishBranch(worktreeDir, branch, repoPath, baseBranch, repoName, featureID string, leasePush bool) *publishExecuteResultMsg {
-	if leasePush {
-		if err := git.ForcePush(worktreeDir, branch); err != nil {
-			return &publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("force push failed: %w", err)}
-		}
-		return nil
-	}
-
-	prResult := git.PullRebase(worktreeDir, branch)
-	switch prResult.Outcome {
-	case git.PullRebaseConflict:
-		return &publishExecuteResultMsg{
-			featureID:        featureID,
-			repoName:         repoName,
-			err:              fmt.Errorf("pull-rebase conflict: %w", prResult.Err),
-			conflictDetected: true,
-			branch:           branch,
-			rebaseTarget:     pullRebaseConflictTarget(baseBranch, repoPath, worktreeDir),
-		}
-	case git.PullRebaseFailure:
-		return &publishExecuteResultMsg{
-			featureID: featureID,
-			repoName:  repoName,
-			err:       fmt.Errorf("pull-rebase failed: %w", prResult.Err),
-		}
-	}
-
-	if err := git.Push(worktreeDir, branch); err != nil {
-		return &publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("push failed: %w", err)}
-	}
-	return nil
-}
-
-// pullRebaseConflictTarget picks the branch to report as the rebase target
-// when a pull-rebase conflicts: the configured base branch, or else the
-// repo's default branch.
-func pullRebaseConflictTarget(baseBranch, repoPath, worktreeDir string) string {
-	if baseBranch != "" {
-		return baseBranch
-	}
-	defaultRepoPath := repoPath
-	if defaultRepoPath == "" {
-		defaultRepoPath = worktreeDir
-	}
-	return git.DefaultBranch(defaultRepoPath)
-}
-
-// executePublish performs the actual git push and PR creation.
-func (m PublishModel) executePublish() tea.Cmd {
-	worktreeDir := m.worktreeDir
-	branch := m.branch
-	repoPath := m.repoPath
-	baseBranch := m.baseBranch
-	prTitle := m.prTitle
-	prBody := m.prBody
-	repoName := m.repoName
-	featureName := m.featureName
-	crossRefEntries := m.crossRefEntries
-	existingPRURL := m.existingPRURL
-	publishable := m.publishable
-	draft := m.draft
-	leasePush := m.leasePush
-
-	if worktreeDir == "" || branch == "" {
-		return func() tea.Msg {
-			return publishExecuteResultMsg{
-				err: fmt.Errorf("publish not configured: missing worktree or branch"),
-			}
-		}
-	}
-
-	featureID := m.featureID
-
-	return func() tea.Msg {
-		if !publishable {
-			return publishExecuteResultMsg{
-				featureID: featureID,
-				repoName:  repoName,
-				err:       fmt.Errorf("publish skipped: feature repos are not publishable (no origin remote)"),
-			}
-		}
-
-		// For multi-repo CodeReady publish, commit any uncommitted changes before pushing.
-		// Single-repo CodeReady publish already commits in transitionToPublish; auto-publish
-		// commits in autoPublishRepoCmd. This ensures multi-repo parity.
-		if repoName != "" && git.HasUncommittedChanges(worktreeDir) {
-			if err := git.CommitAll(worktreeDir, featureName); err != nil {
-				return publishExecuteResultMsg{
-					featureID: featureID,
-					repoName:  repoName,
-					err:       fmt.Errorf("commit failed: %w", err),
-				}
-			}
-		}
-
-		if res := pushPublishBranch(worktreeDir, branch, repoPath, baseBranch, repoName, featureID, leasePush); res != nil {
-			return *res
-		}
-
-		// Create or update PR
-		effectiveRepoPath := repoPath
-		if effectiveRepoPath == "" {
-			effectiveRepoPath = worktreeDir
-		}
-
-		if prTitle == "" {
-			prTitle = "Feature implementation"
-		}
-		if prBody == "" {
-			prBody = "Automated PR from agentic workflow orchestrator."
-		}
-
-		var prURL string
-		if existingPRURL != "" {
-			// Re-publish: push already done above; update existing PR body
-			prURL = existingPRURL
-			updatedBody := git.InjectPRSignature(prBody)
-			if updateErr := git.UpdatePRBody(prURL, updatedBody); updateErr != nil {
-				log.Printf("re-publish: failed to update PR body for %s: %v", prURL, updateErr)
-			}
-		} else {
-			var err error
-			prURL, err = git.CreatePR(effectiveRepoPath, branch, prTitle, prBody, draft, baseBranch)
-			if err != nil {
-				return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("PR creation failed: %w", err)}
-			}
-		}
-
-		// Inject cross-references for multi-repo features
-		if len(crossRefEntries) > 1 {
-			// Update entries with the current PR URL
-			updatedEntries := make([]git.CrossRefEntry, len(crossRefEntries))
-			copy(updatedEntries, crossRefEntries)
-			for i := range updatedEntries {
-				if updatedEntries[i].RepoName == repoName {
-					updatedEntries[i].PRURL = prURL
-					break
-				}
-			}
-			crossRefSection := git.BuildCrossReferenceSection(featureName, updatedEntries)
-			if crossRefSection != "" {
-				currentBody, getErr := git.GetPRBody(prURL)
-				if getErr != nil {
-					log.Printf("cross-ref: failed to get PR body for %s: %v", prURL, getErr)
-				} else {
-					updatedBody := git.InjectCrossReferenceSection(currentBody, crossRefSection)
-					if updateErr := git.UpdatePRBody(prURL, updatedBody); updateErr != nil {
-						log.Printf("cross-ref: failed to update PR body for %s: %v", prURL, updateErr)
-					}
-				}
-				// Retroactively update earlier PRs
-				if retroErr := git.RetroactivelyUpdateCrossRefs(featureName, updatedEntries, repoName); retroErr != nil {
-					log.Printf("cross-ref: failed to retroactively update PRs: %v", retroErr)
-				}
-			}
-		}
-
-		return publishExecuteResultMsg{prURL: prURL, repoName: repoName}
 	}
 }
 

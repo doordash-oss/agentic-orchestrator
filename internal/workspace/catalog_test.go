@@ -41,38 +41,6 @@ func TestIsGitRepoAcceptsGitDirectoryAndWorktreeFile(t *testing.T) {
 	}
 }
 
-func TestBrowseAnnotatesRepoChildrenAndOneLevelRepoCounts(t *testing.T) {
-	root := t.TempDir()
-	mkdirAll(t, filepath.Join(root, "api", ".git"))
-	mkdirAll(t, filepath.Join(root, "group", "web", ".git"))
-	mkdirAll(t, filepath.Join(root, "empty"))
-	mkdirAll(t, filepath.Join(root, ".hidden", ".git"))
-
-	snapshot := Browse(root, false)
-
-	if snapshot.Path != root {
-		t.Fatalf("Browse path = %q, want %q", snapshot.Path, root)
-	}
-	if snapshot.ChildRepoCount != 1 {
-		t.Fatalf("Browse child repo count = %d, want 1", snapshot.ChildRepoCount)
-	}
-	entries := browseEntriesByName(snapshot.Entries)
-	if entries["api"].Path != filepath.Join(root, "api") || !entries["api"].IsGitRepo {
-		t.Fatalf("api entry = %+v, want git repo at path", entries["api"])
-	}
-	if entries["group"].ChildRepoCount != 1 || entries["group"].IsGitRepo {
-		t.Fatalf("group entry = %+v, want child repo count 1 and not direct repo", entries["group"])
-	}
-	if _, ok := entries[".hidden"]; ok {
-		t.Fatalf("hidden entry present when showHidden=false: %+v", entries[".hidden"])
-	}
-
-	withHidden := browseEntriesByName(Browse(root, true).Entries)
-	if !withHidden[".hidden"].IsGitRepo {
-		t.Fatalf("hidden entry = %+v, want git repo when showHidden=true", withHidden[".hidden"])
-	}
-}
-
 func TestDiscoverReposFromRootsHandlesWorktreeReposAndNameCollisions(t *testing.T) {
 	parent := t.TempDir()
 	rootA := filepath.Join(parent, "root-a")
@@ -94,14 +62,6 @@ func TestDiscoverReposFromRootsHandlesWorktreeReposAndNameCollisions(t *testing.
 	if _, ok := byName["service"]; ok {
 		t.Fatalf("plain service key present for colliding roots: %+v", repos)
 	}
-}
-
-func browseEntriesByName(entries []BrowseEntry) map[string]BrowseEntry {
-	byName := make(map[string]BrowseEntry, len(entries))
-	for _, entry := range entries {
-		byName[entry.Name] = entry
-	}
-	return byName
 }
 
 func repositoriesByName(repos []Repository) map[string]string {

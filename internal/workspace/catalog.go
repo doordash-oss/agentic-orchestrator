@@ -21,22 +21,6 @@ import (
 	"strings"
 )
 
-// BrowseEntry is a directory entry annotated with repo discovery metadata.
-type BrowseEntry struct {
-	Name           string
-	Path           string
-	IsGitRepo      bool
-	ChildRepoCount int
-}
-
-// BrowseSnapshot describes a directory and its immediate child directories.
-type BrowseSnapshot struct {
-	Path           string
-	Entries        []BrowseEntry
-	IsGitRepo      bool
-	ChildRepoCount int
-}
-
 // Repository is a discovered git repository with the config key Agentico uses.
 type Repository struct {
 	Name string
@@ -47,45 +31,6 @@ type Repository struct {
 func IsGitRepo(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, ".git"))
 	return err == nil
-}
-
-// Browse reads path and annotates its immediate child directories.
-func Browse(path string, showHidden bool) BrowseSnapshot {
-	path = resolvePath(path)
-	snapshot := BrowseSnapshot{
-		Path:           path,
-		IsGitRepo:      IsGitRepo(path),
-		ChildRepoCount: countImmediateRepos(path, showHidden),
-	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return snapshot
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !showHidden && strings.HasPrefix(name, ".") {
-			continue
-		}
-		childPath := filepath.Join(path, name)
-		isRepo := IsGitRepo(childPath)
-		childRepoCount := 0
-		if !isRepo {
-			childRepoCount = countImmediateRepos(childPath, showHidden)
-		}
-		snapshot.Entries = append(snapshot.Entries, BrowseEntry{
-			Name:           name,
-			Path:           childPath,
-			IsGitRepo:      isRepo,
-			ChildRepoCount: childRepoCount,
-		})
-	}
-	sort.Slice(snapshot.Entries, func(i, j int) bool {
-		return snapshot.Entries[i].Name < snapshot.Entries[j].Name
-	})
-	return snapshot
 }
 
 // DiscoverReposFromRoots scans workspace roots and returns collision-safe repo keys.
@@ -192,37 +137,6 @@ func DiscoverReposFromRoots(roots []string, explicitRepoPaths map[string]string)
 		return repos[i].Name < repos[j].Name
 	})
 	return repos
-}
-
-func countImmediateRepos(path string, showHidden bool) int {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return 0
-	}
-	count := 0
-	for _, entry := range entries {
-		if !showHidden && strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		if entry.IsDir() && IsGitRepo(filepath.Join(path, entry.Name())) {
-			count++
-		}
-	}
-	return count
-}
-
-func resolvePath(path string) string {
-	path = ExpandHome(path)
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err == nil && home != "" {
-			path = home
-		}
-	}
-	if abs, err := filepath.Abs(path); err == nil {
-		return abs
-	}
-	return path
 }
 
 // ExpandHome expands a leading "~" or "~/" in a path to the user's home directory.

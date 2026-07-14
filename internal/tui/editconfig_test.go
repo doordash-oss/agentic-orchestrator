@@ -29,8 +29,7 @@ func TestEditConfigOverlay_InquirenessCycle(t *testing.T) {
 		Name:        "test",
 		Inquireness: feature.InquirenessMedium,
 	}
-	cat := BuildPhaseModelCatalog(nil, config.DefaultsConfig{})
-	editor := NewConfigEditorModel(f, cat, true)
+	editor := NewConfigEditorModel(f, testCatalog(), true)
 	editor.rowCursor = editor.inquirenessRow()
 
 	editor, _ = editor.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -214,5 +213,5 @@ func TestEditConfig_UpDownHonorsActiveBodyBounds(t *testing.T) {
 }
 
 func newTestEditConfigModel(f *feature.Feature) EditConfigModel {
-	return NewEditConfigModel(f, BuildPhaseModelCatalog(nil, config.DefaultsConfig{}), true)
+	return NewEditConfigModel(f, testCatalog(), true)
 }

@@ -15,7 +15,6 @@
 package tui
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -23,7 +22,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
 // Phase 3 delegation tests. These exercise the wizard's per-axis delegation
@@ -512,50 +510,6 @@ func TestWizardReviewDelegation_NonConfigRowsUntouched(t *testing.T) {
 	}
 	if (m.configEditor.original != feature.ConfigSnapshot{}) {
 		t.Error("Risk editing should not construct configEditor (original != zero)")
-	}
-}
-
-// -- Catalog parity --
-
-func TestWizardConfigEditorCatalogParity(t *testing.T) {
-	reg := llm.NewRegistry()
-	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
-
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "",
-		cat.ProviderModels, cat.ProviderOrder, cat.PhaseDefaults, cat.PhaseProviderModels,
-		nil, nil)
-
-	if !reflect.DeepEqual(m.configCatalog.ProviderModels, cat.ProviderModels) {
-		t.Errorf("configCatalog.ProviderModels diverged from BuildPhaseModelCatalog output")
-	}
-	if !reflect.DeepEqual(m.configCatalog.ProviderOrder, cat.ProviderOrder) {
-		t.Errorf("configCatalog.ProviderOrder diverged")
-	}
-	if !reflect.DeepEqual(m.configCatalog.PhaseDefaults, cat.PhaseDefaults) {
-		t.Errorf("configCatalog.PhaseDefaults diverged")
-	}
-	if !reflect.DeepEqual(m.configCatalog.PhaseProviderModels, cat.PhaseProviderModels) {
-		t.Errorf("configCatalog.PhaseProviderModels diverged")
-	}
-	if !reflect.DeepEqual(m.configCatalog.Fields, cat.Fields) {
-		t.Errorf("configCatalog.Fields diverged: got %v, want %v",
-			m.configCatalog.Fields, cat.Fields)
-	}
-}
-
-func TestWizardAndOverlayShareCatalogStructure(t *testing.T) {
-	reg := llm.NewRegistry()
-	catOverlay := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
-	mw := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "",
-		catOverlay.ProviderModels, catOverlay.ProviderOrder, catOverlay.PhaseDefaults, catOverlay.PhaseProviderModels,
-		nil, nil)
-
-	if !reflect.DeepEqual(mw.configCatalog.Fields, catOverlay.Fields) {
-		t.Errorf("wizard and overlay Fields differ: %v vs %v",
-			mw.configCatalog.Fields, catOverlay.Fields)
-	}
-	if !reflect.DeepEqual(mw.configCatalog.PhaseProviderModels, catOverlay.PhaseProviderModels) {
-		t.Errorf("wizard and overlay PhaseProviderModels differ")
 	}
 }
 

@@ -91,15 +91,12 @@ func (m ChatModel) submitPermissionDecision(decision string) (ChatModel, tea.Cmd
 		}
 		return nil
 	}
-	if !m.pollSession {
-		return m, func() tea.Msg {
-			if msg := sendCmd(); msg != nil {
-				return msg
-			}
-			return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
+	return m, func() tea.Msg {
+		if msg := sendCmd(); msg != nil {
+			return msg
 		}
+		return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
 	}
-	return m, tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
 }
 
 func (m *ChatModel) clearPendingPermission() {

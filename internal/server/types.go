@@ -14,6 +14,8 @@
 
 package server
 
+//go:generate go run ../../tools/openapi-generate
+
 import (
 	"time"
 
@@ -22,7 +24,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/server/serverapi"
 )
 
 const APIVersion = "v1"
@@ -31,10 +32,6 @@ const discoveryFilename = ".agentico-server.json"
 
 // ChatSessionID is the stable utility-session identity used by the AMA chat.
 const ChatSessionID = "__chat__"
-
-type RuntimeIdentity = serverapi.RuntimeIdentity
-
-type LaunchPolicy = serverapi.LaunchPolicy
 
 type Options struct {
 	Runtime      RuntimeIdentity
@@ -90,15 +87,11 @@ type FeatureReader interface {
 	RunDir(featureID string, runNumber int) string
 }
 
-type ResponseMeta = serverapi.ResponseMeta
-
-type ErrorResponse = serverapi.ErrorResponse
-
-type ErrorDTO = serverapi.Error
+type ErrorDTO = Error
 
 // OwnerDTO is the public process-owner metadata safe to expose through REST and
 // discovery records.
-type OwnerDTO = serverapi.Owner
+type OwnerDTO = Owner
 
 // OwnerDTOFromInstanceOwner drops local filesystem paths from lock owner
 // metadata before it crosses public API or discovery boundaries.
@@ -111,210 +104,98 @@ func OwnerDTOFromInstanceOwner(owner instancelock.Owner) OwnerDTO {
 	}
 }
 
-type HealthResponse = serverapi.HealthResponse
+type WarningDTO = Warning
 
-type FeatureListResponse = serverapi.FeatureListResponse
+type FeatureDetailDTO = FeatureDetail
 
-type FeatureSummary = serverapi.FeatureSummary
+type ActionDTO = Action
 
-type FeatureProgress = serverapi.FeatureProgress
+type ActionScopeDTO = ActionScope
 
-type WarningDTO = serverapi.Warning
+type ActionInputDTO = ActionInput
 
-type FeatureDetailResponse = serverapi.FeatureDetailResponse
+type ActionDisabledReasonDTO = ActionDisabledReason
 
-type FeatureDetailDTO = serverapi.FeatureDetail
+type RunSummaryDTO = RunSummary
 
-type ActionDTO = serverapi.Action
+type SetupDTO = Setup
 
-type ActionScopeDTO = serverapi.ActionScope
+type SetupTaskDTO = SetupTask
 
-type ActionInputDTO = serverapi.ActionInput
+type RepoStatusDTO = RepoStatus
 
-type ActionDisabledReasonDTO = serverapi.ActionDisabledReason
+type CycleDTO = Cycle
 
-type RunSummaryDTO = serverapi.RunSummary
+type TimingDTO = Timing
 
-type SetupDTO = serverapi.Setup
+type CostDTO = Cost
 
-type SetupTaskDTO = serverapi.SetupTask
+type ReviewGateDTO = ReviewGate
 
-type RepoStatusDTO = serverapi.RepoStatus
+type FailureDTO = Failure
 
-type CycleDTO = serverapi.Cycle
+type NeedInputGateDTO = NeedUserInputGate
 
-type TimingDTO = serverapi.Timing
+type NeedUserInputQuestionDTO = NeedUserInputQuestion
 
-type CostDTO = serverapi.Cost
-
-type ReviewGateDTO = serverapi.ReviewGate
-
-type FailureDTO = serverapi.Failure
-
-type NeedInputGateDTO = serverapi.NeedUserInputGate
-
-type NeedUserInputQuestionDTO = serverapi.NeedUserInputQuestion
-
-type RecoverySnapshotResponse = serverapi.RecoverySnapshotResponse
-
-type RecoveryItemDTO = serverapi.RecoveryItem
+type RecoveryItemDTO = RecoveryItem
 
 type RecoveryActionRequest struct {
 	SnapshotID string            `json:"snapshot_id"`
 	Actions    map[string]string `json:"actions"`
 }
 
-type RuntimeConfigResponse = serverapi.RuntimeConfigResponse
+type ConfigRepoDTO = ConfigRepo
 
-type WorkspaceBrowseResponse = serverapi.WorkspaceBrowseResponse
+type FeatureDefaultsDTO = FeatureDefaults
 
-type WorkspaceBrowseEntryDTO = serverapi.WorkspaceBrowseEntry
+type NotificationConfigDTO = NotificationConfig
 
-type ConfigRepoDTO = serverapi.ConfigRepo
+type ObservabilityDTO = Observability
 
-type FeatureDefaultsDTO = serverapi.FeatureDefaults
+type FeatureConfigDTO = FeatureConfig
 
-type NotificationConfigDTO = serverapi.NotificationConfig
+type CheckpointsDTO = Checkpoints
 
-type ObservabilityDTO = serverapi.Observability
+type PublishabilityDTO = Publishability
 
-type FeatureConfigResponse = serverapi.FeatureConfigResponse
+type ModelDTO = Model
 
-type FeatureConfigDTO = serverapi.FeatureConfig
+type ControlRequestDTO = ControlRequest
 
-type FeatureConfigInputNotifications = serverapi.FeatureConfigInputNotifications
+type PermissionRememberPreviewDTO = PermissionRememberPreview
 
-type CheckpointsDTO = serverapi.Checkpoints
+type AskUserQuestionDTO = AskUserQuestion
 
-type PublishabilityDTO = serverapi.Publishability
+type AskUserOptionDTO = AskUserOption
 
-type ModelCatalogResponse = serverapi.ModelCatalogResponse
+type HelpQueueDTO = HelpQueue
 
-type ModelDTO = serverapi.Model
+type ArtifactDTO = Artifact
 
-type PromptSnapshotResponse = serverapi.PromptSnapshotResponse
+type ContextDTO = Context
 
-type PermissionSnapshotResponse = serverapi.PermissionSnapshotResponse
+type SessionSummaryDTO = SessionSummary
 
-type ControlRequestDTO = serverapi.ControlRequest
+type SessionDetailDTO = SessionDetail
 
-type PermissionRememberPreviewDTO = serverapi.PermissionRememberPreview
+type CursorDTO = Cursor
 
-type AskUserQuestionDTO = serverapi.AskUserQuestion
+type UsageDTO = Usage
 
-type AskUserOptionDTO = serverapi.AskUserOption
+type TranscriptMessageDTO = TranscriptMessage
 
-type HelpQueueDTO = serverapi.HelpQueue
+type ToolCallDTO = ToolCall
 
-type ArtifactListResponse = serverapi.ArtifactListResponse
+type TaskDTO = Task
 
-type ArtifactDTO = serverapi.Artifact
+type FileChangeDTO = FileChange
 
-type TextContentResponse = serverapi.TextContentResponse
+type ReviewCommentDTO = ReviewComment
 
-type LivePreviewResponse = serverapi.LivePreviewResponse
+type SSEEventDTO = SSEEvent
 
-type ContextDTO = serverapi.Context
-
-type SessionListResponse = serverapi.SessionListResponse
-
-type SessionDetailResponse = serverapi.SessionDetailResponse
-
-type SessionSummaryDTO = serverapi.SessionSummary
-
-type SessionDetailDTO = serverapi.SessionDetail
-
-type CursorDTO = serverapi.Cursor
-
-type UsageDTO = serverapi.Usage
-
-type TranscriptResponse = serverapi.TranscriptResponse
-
-type SessionOutputResponse = serverapi.SessionOutputResponse
-
-// SessionOutputChunk is one record delivered over /output/stream — a single
-// row from the session's transcript (the same TranscriptMessageDTO shape and
-// index space handleTranscript and the client's snapshot-refresh
-// reconciliation use), not a raw log byte window.
-type SessionOutputChunk = serverapi.SessionOutputChunk
-
-type TranscriptMessageDTO = serverapi.TranscriptMessage
-
-type ToolCallDTO = serverapi.ToolCall
-
-type TaskDTO = serverapi.Task
-
-type FileChangeDTO = serverapi.FileChange
-
-type ReviewCommentsFetchResponse = serverapi.ReviewCommentsFetchResponse
-
-type ReviewCommentDTO = serverapi.ReviewComment
-
-type CreateFeatureResponse = serverapi.CreateFeatureResponse
-
-type FeatureStartResponse = serverapi.FeatureStartResponse
-
-type FeatureStopResponse = serverapi.FeatureStopResponse
-
-type FeatureRestartResponse = serverapi.FeatureRestartResponse
-
-type ReviewDecisionResponse = serverapi.ReviewDecisionResponse
-
-type ReviewSessionResponse = serverapi.ReviewSessionResponse
-
-type ReviewDraftUpdateRequest = serverapi.ReviewDraftUpdateRequest
-
-type ReviewSessionDecisionRequest = serverapi.ReviewSessionDecisionRequest
-
-type ReviewSessionDecisionResponse = serverapi.ReviewSessionDecisionResponse
-
-type FeatureConfigUpdateResponse = serverapi.FeatureConfigUpdateResponse
-
-type NeedUserInputDecisionResponse = serverapi.NeedUserInputDecisionResponse
-
-type NeedUserInputDraftResponse = serverapi.NeedUserInputDraftResponse
-
-type PermissionAnswerResponse = serverapi.PermissionAnswerResponse
-
-type AskUserAnswerResponse = serverapi.AskUserAnswerResponse
-
-type HelpSendResponse = serverapi.HelpSendResponse
-
-type ChatStartResponse = serverapi.ChatStartResponse
-
-type RuntimeConfigUpdateResponse = serverapi.RuntimeConfigUpdateResponse
-
-type PublishFeatureResponse = serverapi.PublishFeatureResponse
-
-type PublishDescriptionResponse = serverapi.PublishDescriptionResponse
-
-type MergeFeatureResponse = serverapi.MergeFeatureResponse
-
-type RewindFeatureResponse = serverapi.RewindFeatureResponse
-
-type RetryFeatureResponse = serverapi.RetryFeatureResponse
-
-type RebaseStartResponse = serverapi.RebaseStartResponse
-
-type ReviewCommentsStartResponse = serverapi.ReviewCommentsStartResponse
-
-type RefactorStartResponse = serverapi.RefactorStartResponse
-
-type RefactorRestartResponse = serverapi.RefactorRestartResponse
-
-type MarkDoneResponse = serverapi.MarkDoneResponse
-
-type CleanupFeatureResponse = serverapi.CleanupFeatureResponse
-
-type DeleteFeatureResponse = serverapi.DeleteFeatureResponse
-
-type RecoveryActionResponse = serverapi.RecoveryActionResponse
-
-type ShutdownResponse = serverapi.ShutdownResponse
-
-type SSEEventDTO = serverapi.SSEEvent
-
-type ResourceDTO = serverapi.Resource
+type ResourceDTO = Resource
 
 type DiscoveryRecord struct {
 	SchemaVersion int             `json:"schema_version"`

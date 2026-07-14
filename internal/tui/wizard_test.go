@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1165,63 +1164,6 @@ func wizardBranchInfoStub(infos ...RepoBranchInfo) func(WizardModel) []RepoBranc
 	return func(WizardModel) []RepoBranchInfo {
 		return infos
 	}
-}
-
-func setupGitRepoOnBranch(t *testing.T, branchName string) string {
-	t.Helper()
-	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"git", "init"},
-		{"git", "config", "user.email", "test@test.com"},
-		{"git", "config", "user.name", "Test"},
-	} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("setup %v: %s: %v", args, out, err)
-		}
-	}
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644)
-	for _, args := range [][]string{
-		{"git", "add", "."},
-		{"git", "commit", "-m", "initial"},
-		{"git", "checkout", "-b", branchName},
-	} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("setup %v: %s: %v", args, out, err)
-		}
-	}
-	return dir
-}
-
-func setupGitRepoOnDefault(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"git", "init"},
-		{"git", "config", "user.email", "test@test.com"},
-		{"git", "config", "user.name", "Test"},
-	} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("setup %v: %s: %v", args, out, err)
-		}
-	}
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644)
-	for _, args := range [][]string{
-		{"git", "add", "."},
-		{"git", "commit", "-m", "initial"},
-	} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("setup %v: %s: %v", args, out, err)
-		}
-	}
-	return dir
 }
 
 // --- Test Group: Branch Warning Detection ---
@@ -3499,7 +3441,7 @@ func TestWizardSummaryEditedModelsInResult(t *testing.T) {
 	if r.Models.Implementation != "opus" {
 		t.Errorf("expected Implementation model = %q (unchanged), got %q", "opus", r.Models.Implementation)
 	}
-	// Review uses allModels list; default is first option "opus"
+	// Review remains at its default first option.
 	if r.Models.Review != "opus" {
 		t.Errorf("expected Review model = %q (unchanged), got %q", "opus", r.Models.Review)
 	}
@@ -4283,53 +4225,6 @@ func TestWizardSummaryModelsReviewShowsKBBuild(t *testing.T) {
 	}
 }
 
-func TestWizardModelPickerMultiProvider(t *testing.T) {
-	providerModels := map[string][]string{
-		"claude": {"opus", "sonnet"},
-		"codex":  {"gpt-5.4"},
-	}
-	providerOrder := []string{"claude", "codex"}
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", providerModels, providerOrder, nil, nil, nil, nil)
-
-	// allModels should be flattened in provider order
-	wantAll := []string{"opus", "sonnet", "gpt-5.4"}
-	if !reflect.DeepEqual(m.allModels, wantAll) {
-		t.Errorf("allModels = %v, want %v", m.allModels, wantAll)
-	}
-	// modelOptionsForField should return allModels for any field
-	if !reflect.DeepEqual(m.modelOptionsForField("Research"), wantAll) {
-		t.Errorf("modelOptionsForField(Research) = %v, want %v", m.modelOptionsForField("Research"), wantAll)
-	}
-	if !reflect.DeepEqual(m.modelOptionsForField("Review"), wantAll) {
-		t.Errorf("modelOptionsForField(Review) = %v, want %v", m.modelOptionsForField("Review"), wantAll)
-	}
-}
-
-func TestWizardModelPickerSingleProvider(t *testing.T) {
-	providerModels := map[string][]string{
-		"claude": {"opus", "sonnet"},
-	}
-	providerOrder := []string{"claude"}
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", providerModels, providerOrder, nil, nil, nil, nil)
-
-	wantAll := []string{"opus", "sonnet"}
-	if !reflect.DeepEqual(m.allModels, wantAll) {
-		t.Errorf("allModels = %v, want %v", m.allModels, wantAll)
-	}
-}
-
-func TestWizardModelPickerEmptyProviders(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
-
-	if len(m.allModels) != 0 {
-		t.Errorf("expected empty allModels, got %v", m.allModels)
-	}
-	// cycleModel should be a no-op
-	m.modelCursor = 1
-	m.cycleModel()
-	// Should not panic
-}
-
 func TestWizardPhaseDefaultsClamping(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
@@ -4369,9 +4264,8 @@ func TestWizardPhaseDefaultsClamping(t *testing.T) {
 	if m.models.Review != "gpt-5.4" {
 		t.Errorf("Review = %q, want gpt-5.4", m.models.Review)
 	}
-	// phaseDefaults should be stored
-	if m.phaseDefaults["Research"] != "opus" {
-		t.Errorf("phaseDefaults[Research] = %q, want opus", m.phaseDefaults["Research"])
+	if m.configCatalog.PhaseDefaults["Research"] != "opus" {
+		t.Errorf("configCatalog.PhaseDefaults[Research] = %q, want opus", m.configCatalog.PhaseDefaults["Research"])
 	}
 }
 
@@ -4417,53 +4311,6 @@ func TestWizardClampKeepsPrefixedProviderDefault(t *testing.T) {
 		if pref.Models.Review != prefixed {
 			t.Errorf("pipeline %q Review clamped to %q, want kept %q", profile, pref.Models.Review, prefixed)
 		}
-	}
-}
-
-func TestWizardModelCyclingForwardAndWrap(t *testing.T) {
-	defaults := config.DefaultsConfig{
-		Models: config.ModelConfig{Research: "opus"},
-	}
-	providerModels := map[string][]string{"test": {"opus", "sonnet", "gpt-5.4"}}
-	providerOrder := []string{"test"}
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
-
-	// Forward: opus → sonnet
-	m.modelCursor = 1
-	m.cycleModel()
-	if m.models.Research != "sonnet" {
-		t.Errorf("after cycle forward: Research = %q, want sonnet", m.models.Research)
-	}
-	// Forward: sonnet → gpt-5.4
-	m.cycleModel()
-	if m.models.Research != "gpt-5.4" {
-		t.Errorf("after second cycle: Research = %q, want gpt-5.4", m.models.Research)
-	}
-	// Wrap: gpt-5.4 → opus
-	m.cycleModel()
-	if m.models.Research != "opus" {
-		t.Errorf("after wrap: Research = %q, want opus", m.models.Research)
-	}
-}
-
-func TestWizardModelCyclingReverseAndWrap(t *testing.T) {
-	defaults := config.DefaultsConfig{
-		Models: config.ModelConfig{Research: "opus"},
-	}
-	providerModels := map[string][]string{"test": {"opus", "sonnet", "gpt-5.4"}}
-	providerOrder := []string{"test"}
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
-
-	// Reverse from opus → wraps to gpt-5.4
-	m.modelCursor = 1
-	m.cycleModelReverse()
-	if m.models.Research != "gpt-5.4" {
-		t.Errorf("after reverse wrap: Research = %q, want gpt-5.4", m.models.Research)
-	}
-	// Reverse: gpt-5.4 → sonnet
-	m.cycleModelReverse()
-	if m.models.Research != "sonnet" {
-		t.Errorf("after reverse: Research = %q, want sonnet", m.models.Research)
 	}
 }
 

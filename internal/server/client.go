@@ -206,7 +206,7 @@ func (c *Client) CreateFeature(ctx context.Context, req CreateFeatureRequest) (C
 
 func (c *Client) StartFeature(ctx context.Context, featureID string) (FeatureStartResponse, error) {
 	var out FeatureStartResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/start", nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionStart), nil, map[string]any{}, &out, true)
 	return out, err
 }
 
@@ -218,31 +218,25 @@ func (c *Client) ResumeFeature(ctx context.Context, featureID string) (FeatureSt
 
 func (c *Client) StopFeature(ctx context.Context, featureID string) (FeatureStopResponse, error) {
 	var out FeatureStopResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/stop", nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionPauseStop), nil, map[string]any{}, &out, true)
 	return out, err
 }
 
 func (c *Client) RestartFeature(ctx context.Context, featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error) {
 	var out FeatureRestartResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/restart", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRestart), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) ReviewDecision(ctx context.Context, featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error) {
 	var out ReviewDecisionResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/review-decision", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewDecision), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) CreateReviewSession(ctx context.Context, featureID string) (ReviewSessionResponse, error) {
 	var out ReviewSessionResponse
 	err := c.doJSON(ctx, http.MethodPost, reviewSessionRootPath(featureID), nil, map[string]any{}, &out, true)
-	return out, err
-}
-
-func (c *Client) ReviewSession(ctx context.Context, featureID, reviewID string) (ReviewSessionResponse, error) {
-	var out ReviewSessionResponse
-	err := c.getJSON(ctx, reviewSessionPath(featureID, reviewID), nil, &out)
 	return out, err
 }
 
@@ -258,12 +252,6 @@ func (c *Client) SubmitReviewSessionDecision(ctx context.Context, featureID, rev
 	return out, err
 }
 
-func (c *Client) CancelReviewSession(ctx context.Context, featureID, reviewID string) (ReviewSessionDecisionResponse, error) {
-	var out ReviewSessionDecisionResponse
-	err := c.doJSON(ctx, http.MethodDelete, reviewSessionPath(featureID, reviewID), nil, map[string]any{}, &out, true)
-	return out, err
-}
-
 func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error) {
 	var out FeatureConfigUpdateResponse
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/config", nil, req, &out, true)
@@ -272,13 +260,13 @@ func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req 
 
 func (c *Client) NeedUserInputDecision(ctx context.Context, featureID string, req NeedUserInputDecisionRequest) (NeedUserInputDecisionResponse, error) {
 	var out NeedUserInputDecisionResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/need-user-input", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionNeedUserInput), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) DraftNeedUserInputAnswers(ctx context.Context, featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error) {
 	var out NeedUserInputDraftResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/need-user-input-draft", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionNeedInputDraft), nil, req, &out, true)
 	return out, err
 }
 

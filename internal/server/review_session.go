@@ -191,34 +191,6 @@ func (s *reviewSessionService) SubmitDecision(featureID, reviewID string, req Re
 	}, nil
 }
 
-func (s *reviewSessionService) Cancel(featureID, reviewID string) (ReviewSessionDecisionResponse, error) {
-	meta, _, _, err := s.loadMetaForFeature(featureID, reviewID)
-	if err != nil {
-		return ReviewSessionDecisionResponse{}, err
-	}
-	if err := os.RemoveAll(reviewSessionDir(s.store.RunDir(featureID, meta.RunNumber), reviewID)); err != nil {
-		return ReviewSessionDecisionResponse{}, fmt.Errorf("cancel review session: %w", err)
-	}
-	return ReviewSessionDecisionResponse{
-		APIVersion: APIVersion,
-		FeatureID:  featureID,
-		ReviewID:   reviewID,
-		Result:     "cancelled",
-	}, nil
-}
-
-func (s *reviewSessionService) Get(featureID, reviewID string) (ReviewSessionResponse, error) {
-	meta, draftPath, _, err := s.loadMetaForFeature(featureID, reviewID)
-	if err != nil {
-		return ReviewSessionResponse{}, err
-	}
-	draft, err := os.ReadFile(draftPath)
-	if err != nil {
-		return ReviewSessionResponse{}, fmt.Errorf("read review draft: %w", err)
-	}
-	return reviewSessionResponseFromMeta(meta, string(draft)), nil
-}
-
 func (s *reviewSessionService) loadExistingDraft(metaPath, draftPath string, ctx reviewSessionContext) (reviewSessionMeta, []byte, bool) {
 	meta, err := readReviewSessionMeta(metaPath)
 	if err != nil || meta.SourceRevision != ctx.sourceRevision {

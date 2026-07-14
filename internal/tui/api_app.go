@@ -84,10 +84,8 @@ type APIClient interface {
 	DraftNeedUserInputAnswers(context.Context, string, server.NeedUserInputDraftRequest) (server.NeedUserInputDraftResponse, error)
 	ReviewDecision(context.Context, string, server.ReviewDecisionRequest) (server.ReviewDecisionResponse, error)
 	CreateReviewSession(context.Context, string) (server.ReviewSessionResponse, error)
-	ReviewSession(context.Context, string, string) (server.ReviewSessionResponse, error)
 	SaveReviewDraft(context.Context, string, string, server.ReviewDraftUpdateRequest) (server.ReviewSessionResponse, error)
 	SubmitReviewSessionDecision(context.Context, string, string, server.ReviewSessionDecisionRequest) (server.ReviewSessionDecisionResponse, error)
-	CancelReviewSession(context.Context, string, string) (server.ReviewSessionDecisionResponse, error)
 	FetchReviewComments(context.Context, string, server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error)
 	StartReviewComments(context.Context, string, server.ReviewCommentsActionRequest) (server.ReviewCommentsStartResponse, error)
 	StartRefactor(context.Context, string, server.RefactorActionRequest) (server.RefactorStartResponse, error)
@@ -1641,7 +1639,7 @@ func (m APIAppModel) updateAPIArtifactReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func apiChatOwnsMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case chatSessionStartedMsg, chatMsgsMsg, chatDoneMsg, chatSendErrorMsg, chatRecoveryTickMsg, ChatExitMsg:
+	case chatSessionStartedMsg, chatSendErrorMsg, chatRecoveryTickMsg, ChatExitMsg:
 		return true
 	default:
 		return false
@@ -1654,7 +1652,7 @@ func (m APIAppModel) updateAPIChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chat.fullscreen = false
 		return m, nil
 	}
-	if tick, ok := msg.(chatRecoveryTickMsg); ok && !m.chat.pollSession && tick.sess == m.chat.sess && m.chat.responding && m.chat.sess != nil {
+	if tick, ok := msg.(chatRecoveryTickMsg); ok && tick.sess == m.chat.sess && m.chat.responding && m.chat.sess != nil {
 		return m, m.fetchRefreshSnapshotCmd(apiChatRecoveryRefreshSignal(m.chat.sess))
 	}
 	updated, cmd := m.chat.Update(msg)
@@ -1681,7 +1679,7 @@ func (m APIAppModel) updateAPIChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m APIAppModel) apiChatRecoveryCmdIfResponding() tea.Cmd {
-	if !m.chatReady || m.chat.pollSession || !m.chat.responding || m.chat.sess == nil {
+	if !m.chatReady || !m.chat.responding || m.chat.sess == nil {
 		return nil
 	}
 	return chatRecoveryTickCmd(m.chat.sess, nil)
@@ -4866,7 +4864,6 @@ func (m APIAppModel) openPublishAction() APIAppModel {
 	publish.runDesc = func(ctx context.Context, model string, prCtx agent.PRContext) (string, string, error) {
 		return m.runAPIPublishDescription(ctx, f.ID, model, prCtx)
 	}
-	publish.publishable = f.IsPublishable()
 	publish.spinnerView = m.spinnerView()
 	m.publish = &publish
 	m.statusMessage = ""

@@ -30,7 +30,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
 const maxFeatureDetailHistoricalRuns = 5
@@ -81,6 +80,8 @@ const (
 	actionDelete         = "delete"
 	actionMarkDone       = "mark-done"
 	actionMerge          = "merge"
+	actionNeedUserInput  = "need-user-input"
+	actionNeedInputDraft = "need-user-input-draft"
 	actionPauseStop      = "pause-stop"
 	actionPublish        = "publish"
 	actionRebase         = "rebase"
@@ -90,6 +91,7 @@ const (
 	actionStart          = "start"
 	actionRetry          = "retry"
 	actionReviewComments = "review-comments"
+	actionReviewDecision = "review-decision"
 	actionRewind         = "rewind"
 )
 
@@ -578,41 +580,6 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
 	h.writeRevisionedJSON(w, r, revision, resp)
-}
-
-func (h *apiHandler) handleWorkspaceBrowse(w http.ResponseWriter, r *http.Request) {
-	snapshot := workspace.Browse(
-		r.URL.Query().Get("path"),
-		parseBoolQuery(r.URL.Query().Get("show_hidden")),
-	)
-	entries := make([]WorkspaceBrowseEntryDTO, 0, len(snapshot.Entries))
-	for _, entry := range snapshot.Entries {
-		entries = append(entries, WorkspaceBrowseEntryDTO{
-			Name:           entry.Name,
-			Path:           entry.Path,
-			IsGitRepo:      entry.IsGitRepo,
-			ChildRepoCount: entry.ChildRepoCount,
-		})
-	}
-	resp := WorkspaceBrowseResponse{
-		APIVersion:     APIVersion,
-		Path:           snapshot.Path,
-		IsGitRepo:      snapshot.IsGitRepo,
-		ChildRepoCount: snapshot.ChildRepoCount,
-		Entries:        entries,
-	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
-}
-
-func parseBoolQuery(raw string) bool {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "1", "t", "true", "y", "yes":
-		return true
-	default:
-		return false
-	}
 }
 
 func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request, featureID string) {

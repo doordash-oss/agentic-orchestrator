@@ -22,7 +22,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -720,42 +719,6 @@ func TestRuntimeConfigUsesDiscoveredPathForBlankExplicitRepo(t *testing.T) {
 		}
 	}
 	t.Fatalf("runtime config repos = %+v, want bpfagent", repos)
-}
-
-func TestWorkspaceBrowseProjectsRepoMetadata(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "repo", ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir repo: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "group", "nested", ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir nested repo: %v", err)
-	}
-	handler := NewHandler(HandlerOptions{DisableHostValidation: true})
-
-	body := getJSONMap(t, handler, "/api/v1/workspace/browse?path="+url.QueryEscape(root))
-	if body["api_version"] != APIVersion {
-		t.Fatalf("api_version = %v, want %s", body["api_version"], APIVersion)
-	}
-	if body["path"] != root {
-		t.Fatalf("path = %v, want %s", body["path"], root)
-	}
-	if body["child_repo_count"] != float64(1) {
-		t.Fatalf("child_repo_count = %v, want 1", body["child_repo_count"])
-	}
-	entries := body["entries"].([]any)
-	byName := make(map[string]map[string]any, len(entries))
-	for _, raw := range entries {
-		entry := raw.(map[string]any)
-		byName[entry["name"].(string)] = entry
-	}
-	if got := byName["repo"]; got["path"] != filepath.Join(root, "repo") || got["is_git_repo"] != true {
-		t.Fatalf("repo entry = %+v, want git repo path", got)
-	}
-	if got := byName["group"]; got["is_git_repo"] == true || got["child_repo_count"] != float64(1) {
-		t.Fatalf("group entry = %+v, want nested child repo count", got)
-	}
 }
 
 func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {

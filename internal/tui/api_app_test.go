@@ -8488,7 +8488,6 @@ type fakeTUIAPIClient struct {
 	reviewSession                  server.ReviewSessionResponse
 	reviewSessionErr               error
 	reviewSessionFeatureIDs        []string
-	reviewSessionIDs               []string
 	saveReviewDraftErr             error
 	saveReviewDraftFeatureIDs      []string
 	saveReviewDraftReviewIDs       []string
@@ -8497,9 +8496,6 @@ type fakeTUIAPIClient struct {
 	submitReviewDecisionFeatureIDs []string
 	submitReviewDecisionReviewIDs  []string
 	submitReviewDecisionRequests   []server.ReviewSessionDecisionRequest
-	cancelReviewSessionErr         error
-	cancelReviewSessionFeatureIDs  []string
-	cancelReviewSessionIDs         []string
 	reviewCommentsResponse         server.ReviewCommentsFetchResponse
 	reviewCommentsErr              error
 	reviewCommentsFeatureIDs       []string
@@ -8905,20 +8901,6 @@ func (f *fakeTUIAPIClient) CreateReviewSession(_ context.Context, featureID stri
 	return session, f.reviewSessionErr
 }
 
-func (f *fakeTUIAPIClient) ReviewSession(_ context.Context, featureID, reviewID string) (server.ReviewSessionResponse, error) {
-	f.calls = append(f.calls, "ReviewSession")
-	f.reviewSessionFeatureIDs = append(f.reviewSessionFeatureIDs, featureID)
-	f.reviewSessionIDs = append(f.reviewSessionIDs, reviewID)
-	session := f.reviewSession
-	if session.FeatureID == "" {
-		session.FeatureID = featureID
-	}
-	if session.ReviewID == "" {
-		session.ReviewID = reviewID
-	}
-	return session, f.reviewSessionErr
-}
-
 func (f *fakeTUIAPIClient) SaveReviewDraft(_ context.Context, featureID, reviewID string, req server.ReviewDraftUpdateRequest) (server.ReviewSessionResponse, error) {
 	f.calls = append(f.calls, "SaveReviewDraft")
 	f.saveReviewDraftFeatureIDs = append(f.saveReviewDraftFeatureIDs, featureID)
@@ -8940,13 +8922,6 @@ func (f *fakeTUIAPIClient) SubmitReviewSessionDecision(_ context.Context, featur
 	f.submitReviewDecisionReviewIDs = append(f.submitReviewDecisionReviewIDs, reviewID)
 	f.submitReviewDecisionRequests = append(f.submitReviewDecisionRequests, req)
 	return server.ReviewSessionDecisionResponse{FeatureID: featureID, ReviewID: reviewID, Decision: req.Decision, Result: "submitted"}, f.submitReviewDecisionErr
-}
-
-func (f *fakeTUIAPIClient) CancelReviewSession(_ context.Context, featureID, reviewID string) (server.ReviewSessionDecisionResponse, error) {
-	f.calls = append(f.calls, "CancelReviewSession")
-	f.cancelReviewSessionFeatureIDs = append(f.cancelReviewSessionFeatureIDs, featureID)
-	f.cancelReviewSessionIDs = append(f.cancelReviewSessionIDs, reviewID)
-	return server.ReviewSessionDecisionResponse{FeatureID: featureID, ReviewID: reviewID, Result: "cancelled"}, f.cancelReviewSessionErr
 }
 
 func (f *fakeTUIAPIClient) FetchReviewComments(_ context.Context, featureID string, req server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error) {
@@ -9108,7 +9083,7 @@ func TestAPIAppModelChatResizesAsConversationGrowsWithoutWindowResize(t *testing
 	}
 
 	// Simulate a turn having been added without any resize having happened
-	// yet (e.g. a streamed response arriving via chatMsgsMsg/refresh-snapshot
+	// yet (e.g. a streamed response arriving via refresh-snapshot
 	// handling) — chatPanelHeight should now report the non-empty range.
 	app.chat.turns = []chatTurn{{Role: chatTurnUser, Text: "hello"}}
 	wantHeight := app.chat.chatPanelHeight(app.height)

@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 )
 
-const generatedFile = "internal/server/serverapi/serverapi.gen.go"
+const generatedFile = "internal/server/serverapi.gen.go"
 
 var licenseHeader = []byte(`// Copyright 2026 DoorDash, Inc.
 //
@@ -60,7 +60,7 @@ func main() {
 			fail(fmt.Errorf("read %s: %w", generatedFile, err))
 		}
 		if !bytes.Equal(current, generated) {
-			fail(fmt.Errorf("%s is stale; run go generate ./internal/server/serverapi", generatedFile))
+			fail(fmt.Errorf("%s is stale; run go generate ./internal/server", generatedFile))
 		}
 		return
 	}

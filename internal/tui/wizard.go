@@ -151,12 +151,7 @@ type WizardModel struct {
 	models                  config.ModelConfig
 	modelCursor             int
 	modelFields             []string
-	providerModels          map[string][]string            // provider name → model IDs (ordered)
-	providerOrder           []string                       // provider names in display order
-	phaseDefaults           map[string]string              // field name ("Research", etc.) → recommended model ID
-	phaseProviderModels     map[string]map[string][]string // field → provider → eligible model IDs
 	pipelinePreferences     map[string]config.PipelinePreference
-	allModels               []string // flattened model list for cycling (all providers combined)
 	exitCriteria            string
 	inquirenessCursor       int
 	inquirenessOptions      []string
@@ -176,7 +171,6 @@ type WizardModel struct {
 	cancelled               bool
 	width, height           int
 	filePicker              FilePickerModel
-	skillPicker             SkillPickerModel
 	images                  []string       // temp image paths (ordered)
 	imageCounter            int            // next image number
 	imageTempDir            string         // temp directory for wizard images
@@ -260,10 +254,6 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	ei.Placeholder = "Exit criteria (leave empty for default)"
 	ei.SetHeight(4)
 
-	var allModels []string
-	for _, prov := range providerOrder {
-		allModels = append(allModels, providerModels[prov]...)
-	}
 	// Shared phase-model catalog. Built before clamping so the same
 	// provider-aware matching used by the picker also guards default clamping:
 	// a multi-provider default persisted in "<provider>:<id>" routing form is
@@ -356,12 +346,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		repos:                  repoConfigs,
 		models:                 models,
 		modelFields:            append([]string(nil), phaseCatalogFields...),
-		providerModels:         providerModels,
-		providerOrder:          providerOrder,
-		phaseDefaults:          phaseDefaults,
-		phaseProviderModels:    phaseModels,
 		pipelinePreferences:    pipelinePrefs,
-		allModels:              allModels,
 		exitCriteria:           defaults.ExitCriteria,
 		inquirenessOptions:     []string{"none", "medium", "high"},
 		inquirenessCursor:      inquirenessCursor,
@@ -372,7 +357,6 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		pipelineOptions:        pipelineOptions,
 		pipelineCursor:         initialPipelineCursor,
 		filePicker:             NewFilePickerModel(repoPaths),
-		skillPicker:            NewSkillPickerModel(),
 		canPasteImages:         canPaste,
 		imageTempDir:           tempDir,
 		attachTempDir:          attachDir,
@@ -1163,17 +1147,6 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			}
 		}
 
-		if m.skillPicker.IsActive() {
-			sp, selected, consumed := m.skillPicker.Update(msg)
-			m.skillPicker = sp
-			if selected != "" {
-				m.replaceSlashMention(selected)
-			}
-			if consumed {
-				return m, nil
-			}
-		}
-
 		// When the dedicated branch-selection screen is showing, one repo is
 		// asked about at a time. The user toggles between two options
 		// (default branch / current branch), Enter saves the choice and
@@ -1266,10 +1239,6 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 				m.filePicker.Deactivate()
 				return m, nil
 			}
-			if m.skillPicker.IsActive() {
-				m.skillPicker.Deactivate()
-				return m, nil
-			}
 			// Esc goes back; on first step goBack() cancels the wizard
 			return m.goBack()
 
@@ -1286,16 +1255,10 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.filePicker.IsActive() {
 				return m, nil
 			}
-			if m.skillPicker.IsActive() {
-				return m, nil
-			}
 			return m.advance()
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
 			if m.filePicker.IsActive() {
-				return m, nil
-			}
-			if m.skillPicker.IsActive() {
 				return m, nil
 			}
 			if msg.Mod.Contains(tea.ModAlt) {
@@ -2316,16 +2279,6 @@ func (m WizardModel) detectBranches() []RepoBranchInfo {
 	return infos
 }
 
-// defaultBranchName returns the default branch name from the first branch info entry, or "main" as fallback.
-func (m WizardModel) defaultBranchName() string {
-	for _, bi := range m.branchInfos {
-		if bi.DefaultBranch != "" {
-			return bi.DefaultBranch
-		}
-	}
-	return "main"
-}
-
 func (m WizardModel) hasOffDefaultRepos() bool {
 	for _, bi := range m.branchInfos {
 		if bi.IsOffDefault {
@@ -2472,7 +2425,6 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 		// Pipeline selected — apply pipeline defaults (including per-repo config overrides)
 		// before advancing to the review screen.
 		m.applyPipelineDefaults()
-		m.skillPicker.LoadItems(m.repoPaths, m.selectedRepos)
 		m.summaryCursor = summaryFieldRisk
 		m.step = wizardStepReview
 		return m, nil
@@ -2514,148 +2466,12 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m *WizardModel) modelOptionsForField(field string) []string {
-	if pm, ok := m.phaseProviderModels[field]; ok {
-		var opts []string
-		for _, prov := range m.providerOrder {
-			opts = append(opts, pm[prov]...)
-		}
-		if len(opts) > 0 {
-			return opts
-		}
-	}
-	return m.allModels
-}
-
-// providerModelsForField returns the per-provider model map for a specific
-// phase field, falling back to the global providerModels when no phase-specific
-// filtering is available.
-func (m *WizardModel) providerModelsForField(field string) map[string][]string {
-	if pm, ok := m.phaseProviderModels[field]; ok && len(pm) > 0 {
-		return pm
-	}
-	return m.providerModels
-}
-
-func (m *WizardModel) cycleModel() {
-	field := m.modelFields[m.modelCursor]
-	opts, providers := m.configCatalog.FlatOptionsForField(field)
-	if len(opts) == 0 {
-		return
-	}
-	current := m.getModelField(field)
-	nextIdx := 0
-	for i := range opts {
-		if m.configCatalog.MatchesModelValue(providers[i], opts[i], current) {
-			nextIdx = (i + 1) % len(opts)
-			break
-		}
-	}
-	m.setModelField(field, opts[nextIdx])
-}
-
-func (m *WizardModel) cycleModelReverse() {
-	field := m.modelFields[m.modelCursor]
-	opts, providers := m.configCatalog.FlatOptionsForField(field)
-	if len(opts) == 0 {
-		return
-	}
-	current := m.getModelField(field)
-	nextIdx := len(opts) - 1
-	for i := range opts {
-		if m.configCatalog.MatchesModelValue(providers[i], opts[i], current) {
-			nextIdx = (i - 1 + len(opts)) % len(opts)
-			break
-		}
-	}
-	m.setModelField(field, opts[nextIdx])
-}
-
-func (m *WizardModel) getModelField(field string) string {
-	switch field {
-	case "Clarify":
-		return m.models.Inquiry
-	case "Research":
-		return m.models.Research
-	case "Planning":
-		return m.models.Planning
-	case "Implementation":
-		return m.models.Implementation
-	case "Review":
-		return m.models.Review
-	case "KB Build":
-		return m.models.KBBuild
-	}
-	return ""
-}
-
-func (m *WizardModel) setModelField(field, value string) {
-	switch field {
-	case "Clarify":
-		m.models.Inquiry = value
-	case "Research":
-		m.models.Research = value
-	case "Planning":
-		m.models.Planning = value
-	case "Implementation":
-		m.models.Implementation = value
-	case "Review":
-		m.models.Review = value
-	case "KB Build":
-		m.models.KBBuild = value
-	}
-}
-
-func (m *WizardModel) modelProviderGroups(field string) []modelProviderGroup {
-	providerModels := m.providerModelsForField(field)
-	var groups []modelProviderGroup
-	for _, prov := range m.providerOrder {
-		if models := providerModels[prov]; len(models) > 0 {
-			groups = append(groups, modelProviderGroup{Name: prov, Models: models})
-		}
-	}
-	if len(groups) > 0 {
-		return groups
-	}
-	if opts := m.modelOptionsForField(field); len(opts) > 0 {
-		return []modelProviderGroup{{Name: "Available", Models: opts}}
-	}
-	return nil
-}
-
 func splitProviderModel(value string) (provider, model string) {
 	provider, model, ok := strings.Cut(value, ":")
 	if ok && provider != "" && model != "" {
 		return provider, model
 	}
 	return "", value
-}
-
-func (m *WizardModel) modelAssignmentSummary(field string) string {
-	value := m.getModelField(field)
-	if value == "" {
-		return "—"
-	}
-
-	provider, model := splitProviderModel(value)
-	if provider != "" {
-		return provider + " / " + compactModelIDLabel(model)
-	}
-
-	groups := m.modelProviderGroups(field)
-	showProvider := len(groups) > 1
-	for _, group := range groups {
-		for _, opt := range group.Models {
-			if opt != value {
-				continue
-			}
-			if showProvider && group.Name != "Available" {
-				return group.Name + " / " + value
-			}
-			return value
-		}
-	}
-	return value
 }
 
 func wrapRenderedTokens(tokens []string, width int) []string {
@@ -3392,34 +3208,6 @@ func (m *WizardModel) replaceAtMention(path string) {
 		newVal := val[:idx] + "@" + path + " "
 		m.descInput.SetValue(newVal)
 	}
-}
-
-// trackSkillPrefix manages skill picker activation and prefix tracking.
-func (m *WizardModel) trackSkillPrefix(prevVal, newVal string) {
-	if !m.skillPicker.HasItems() {
-		return
-	}
-	if m.skillPicker.IsActive() {
-		idx := findSkillTriggerSlash(newVal)
-		if idx < 0 {
-			m.skillPicker.Deactivate()
-		} else {
-			m.skillPicker.SetPrefix(newVal[idx+1:])
-		}
-	} else if len(newVal) > len(prevVal) && strings.HasSuffix(newVal, "/") {
-		slashIdx := len(newVal) - 1
-		if slashIdx == 0 || newVal[slashIdx-1] == ' ' {
-			m.skillPicker.Activate("")
-		}
-	}
-}
-
-// replaceSlashMention replaces the trailing /... in the active text input
-// with the selected skill name.
-// The current 3-step flow does not expose a slash-mention text field, but the
-// hook remains so the picker integration has a single re-entry point.
-func (m *WizardModel) replaceSlashMention(skillName string) {
-	return
 }
 
 // SetWidth updates all text input widths based on terminal size.

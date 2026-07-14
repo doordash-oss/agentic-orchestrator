@@ -72,7 +72,6 @@ Keys available in the right panel depend on the feature's current status:
 | `v` | View diff |
 | `Shift+F` | Refactor (re-run pipeline) |
 | `b` | Rebase on main |
-| `m` | Mark as manually published (skip PR) |
 | `Shift+M` | Merge to base branch |
 | `Shift+D` | Mark as done |
 

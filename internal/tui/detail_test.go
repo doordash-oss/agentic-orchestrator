@@ -1165,6 +1165,24 @@ func TestDetailFormatStatusHidesPublishHintsForUnpublished(t *testing.T) {
 	}
 }
 
+func TestDetailFormatStatusCodeReadyOmitsManualPublishShortcut(t *testing.T) {
+	t.Parallel()
+	trueBool := true
+	f := &feature.Feature{
+		Status:      feature.StatusCodeReady,
+		Repos:       []feature.FeatureRepo{{Publishable: &trueBool}},
+		Checkpoints: feature.Checkpoints{ManualPublish: true},
+	}
+
+	result := formatDetailStatus(f)
+	if strings.Contains(result, "[m]") || strings.Contains(strings.ToLower(result), "manual publish") {
+		t.Fatalf("formatDetailStatus() exposed removed manual publish shortcut:\n%s", result)
+	}
+	if !strings.Contains(result, "[p] publish") {
+		t.Fatalf("formatDetailStatus() should keep the publish action after removing m:\n%s", result)
+	}
+}
+
 func TestDetailFormatStatusNamesReviewedArtifactWhenPendingTargetIsNextPhase(t *testing.T) {
 	t.Parallel()
 

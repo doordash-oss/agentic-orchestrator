@@ -1864,10 +1864,10 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 	profile := f.EffectivePipeline()
 	next, hasNext := profile.NextPhase(completedPhase)
 	if !hasNext {
-		// Terminal phase for this profile. Emit nothing; the TUI's
-		// manualPublishCmd owns the StatusDone transition for non-publishable
-		// features, and Publish already owned FeatureCompleted emission for
-		// publishable ones.
+		// Terminal phase for this profile. Emit nothing; explicit mark-done
+		// paths own the StatusDone transition for non-publishable features,
+		// and Publish already owns FeatureCompleted emission for publishable
+		// ones.
 		return nil
 	}
 	if next == feature.PhasePublish {
@@ -1922,8 +1922,8 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 // transitions the feature to StatusPublished.
 //
 // Called from exactly three sites: Publish, onRepoStatusChanged,
-// onMultiRepoImplementDone. The →StatusDone transition is TUI-owned
-// (manualPublishCmd) and is NOT driven by this helper.
+// onMultiRepoImplementDone. The →StatusDone transition is action-owned and is
+// NOT driven by this helper.
 //
 // Source-scan regression Test 73a enforces this invariant.
 func (o *Orchestrator) tryCompleteAndEmit(featureID string) (bool, error) {
@@ -1977,7 +1977,7 @@ type PublishOptions struct {
 
 // PublishWithOptions runs the publish pipeline for all repos, or for the
 // selected repos when Repos is non-empty. Title and Body override generated PR
-// metadata for manual publish flows that already reviewed those fields.
+// metadata for interactive publish flows that already reviewed those fields.
 func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {

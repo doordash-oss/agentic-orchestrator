@@ -102,7 +102,6 @@ type keyMap struct {
 	Tab            key.Binding
 	ViewDiff       key.Binding
 	CleanWorktree  key.Binding
-	ManualPublish  key.Binding
 	ResumeAll      key.Binding
 	Rebase         key.Binding
 	MergeLocal     key.Binding
@@ -167,7 +166,6 @@ var keys = keyMap{
 	Tab:            key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "switch panel")),
 	ViewDiff:       key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "view diff")),
 	CleanWorktree:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clean worktree")),
-	ManualPublish:  key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "mark manually published")),
 	ResumeAll:      key.NewBinding(key.WithKeys("R"), key.WithHelp("Shift+R", "resume all")),
 	Rebase:         key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "rebase on main")),
 	MergeLocal:     key.NewBinding(key.WithKeys("M"), key.WithHelp("Shift+M", "merge to base branch")),

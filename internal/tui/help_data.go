@@ -49,7 +49,6 @@ var DetailSection = HelpSection{
 		{"l", "Live Preview / View logs"},
 		{"v", "View diff"},
 		{"p", "Publish (when code ready)"},
-		{"m", "Manual publish"},
 		{"b", "Rebase on main (code ready or published)"},
 		{"e", "Edit config"},
 		{"Shift+E", "Edit workspace config"},

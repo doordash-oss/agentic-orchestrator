@@ -176,7 +176,7 @@ func TestDetailPanelContextBindings(t *testing.T) {
 	if publish == nil {
 		t.Fatal("missing PUBLISH section")
 	}
-	for _, k := range []string{"p", "m", "b", "Shift+D", "g", "c"} {
+	for _, k := range []string{"p", "b", "Shift+D", "g", "c"} {
 		if !sectionContainsKey(publish, k) {
 			t.Errorf("PUBLISH missing key %q", k)
 		}
@@ -189,6 +189,19 @@ func TestDetailPanelContextBindings(t *testing.T) {
 	for _, k := range []string{"/", "?"} {
 		if !sectionContainsKey(tools, k) {
 			t.Errorf("TOOLS missing key %q", k)
+		}
+	}
+}
+
+func TestHelpContextsOmitManualPublishShortcut(t *testing.T) {
+	for name, ctx := range AllHelpContexts() {
+		for _, section := range ctx.Sections {
+			if section.Title != "PUBLISH" {
+				continue
+			}
+			if sectionContainsKey(&section, "m") {
+				t.Fatalf("%s PUBLISH section still advertises removed manual publish shortcut", name)
+			}
 		}
 	}
 }
@@ -334,7 +347,7 @@ func TestDetailViewContextBindings(t *testing.T) {
 	if publish == nil {
 		t.Fatal("missing PUBLISH section")
 	}
-	for _, k := range []string{"p", "m", "b", "Shift+D", "g", "c"} {
+	for _, k := range []string{"p", "b", "Shift+D", "g", "c"} {
 		if !sectionContainsKey(publish, k) {
 			t.Errorf("PUBLISH missing key %q", k)
 		}

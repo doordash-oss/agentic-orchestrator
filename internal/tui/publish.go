@@ -116,7 +116,7 @@ type PublishModel struct {
 	existingPRURL   string              // set when re-publishing an already-published repo
 	publishable     bool                // true if all feature repos have origin remote
 	draft           bool                // true when the feature's checkpoints request a draft PR
-	leasePush       bool                // true when manual CodeReady publish should update origin with --force-with-lease
+	leasePush       bool                // true when CodeReady publish should update origin with --force-with-lease
 }
 
 // newPublishViewport builds the shared viewport, title input, and body
@@ -434,7 +434,7 @@ func (m PublishModel) generateDescription() tea.Cmd {
 }
 
 // pushPublishBranch pushes worktreeDir's branch to origin: a force-with-lease
-// push when leasePush is set (manual publish is an explicit post-review
+// push when leasePush is set (CodeReady publish is an explicit post-review
 // update, so rebased feature branches update origin/<branch> instead of
 // rebasing local history back onto the pre-rebase remote branch), otherwise a
 // pull-rebase-then-push to sync with any remote changes first. It returns a
@@ -521,8 +521,8 @@ func (m PublishModel) executePublish() tea.Cmd {
 			}
 		}
 
-		// For multi-repo manual publish, commit any uncommitted changes before pushing.
-		// Single-repo manual publish already commits in transitionToPublish; auto-publish
+		// For multi-repo CodeReady publish, commit any uncommitted changes before pushing.
+		// Single-repo CodeReady publish already commits in transitionToPublish; auto-publish
 		// commits in autoPublishRepoCmd. This ensures multi-repo parity.
 		if repoName != "" && git.HasUncommittedChanges(worktreeDir) {
 			if err := git.CommitAll(worktreeDir, featureName); err != nil {

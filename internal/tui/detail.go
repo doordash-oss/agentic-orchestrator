@@ -949,7 +949,7 @@ func formatDetailStatus(f *feature.Feature) string {
 		}
 		hints := "Code Ready \u2014"
 		if f.IsPublishable() {
-			hints += " [p] publish  [m] manual publish "
+			hints += " [p] publish "
 		}
 		hints += " [Shift+F] refactor  [b] rebase"
 		if !f.IsPublishable() {

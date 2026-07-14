@@ -197,9 +197,8 @@ func (o *Orchestrator) TryCompletePublish(featureID string) (bool, error) {
 
 // MarkDone transitions the feature to StatusDone and fires
 // OnFeatureSummaryNeeded so the observe summary is refreshed at the
-// terminal transition. Used by TUI manual-publish and mark-done paths
-// where the feature reached Published without the orchestrator's publish
-// pipeline.
+// terminal transition. Used by explicit mark-done paths where the feature
+// reached a terminal state without the orchestrator's publish pipeline.
 func (o *Orchestrator) MarkDone(featureID string) error {
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		return f.Transition(feature.StatusDone)

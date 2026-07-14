@@ -14,6 +14,8 @@
 
 package prompts
 
+import "strings"
+
 // GrillMeInquireness renders the grillme_inquireness partial for a given
 // inquireness level. level is the raw "none" / "medium" / "high" string;
 // any other value falls through to the medium branch.
@@ -147,7 +149,7 @@ func ReviewUserPrompt(in any) string {
 // ImplementationReviewAxisUserPrompt renders the per-axis implementation
 // review prompt (implementation_review_axis.user.tmpl).
 func ImplementationReviewAxisUserPrompt(in any) string {
-	return MustRender("implementation_review_axis.user", in)
+	return strings.TrimSpace(MustRender("implementation_review_axis.user", in)) + "\n"
 }
 
 // SummaryUserPrompt renders the bounded-helper summary-generation prompt

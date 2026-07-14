@@ -201,11 +201,67 @@ sleep 30
 	}
 }
 
+func TestPendingToolWatchdogFailsIdleInProgressTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "in-progress-tool-stall.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"task-1","tool_name":"Task","data":"pending"}'
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"task-1","tool_name":"Task","data":"in_progress"}'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"in-progress-tool-watchdog-stall",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "test-provider",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout: 25 * time.Millisecond,
+				PollInterval:           5 * time.Millisecond,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "FAILED" {
+			t.Fatalf("StatusCh = %q, want FAILED", status)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for watchdog failure status")
+	}
+
+	select {
+	case <-sess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for watchdog to stop session")
+	}
+
+	if got := sess.ErrorDetail(); !strings.Contains(got, "provider watchdog stalled with pending tool Task") {
+		t.Fatalf("ErrorDetail() = %q, want in-progress Task watchdog detail", got)
+	}
+}
+
 func TestPendingToolWatchdogIgnoresCompletedPendingTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")
 	script := `#!/usr/bin/env bash
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"pending"}'
+sleep 0.01
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"in_progress"}'
 sleep 0.01
 printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"completed"}'
 sleep 0.06
@@ -258,6 +314,8 @@ func TestWatchdogPendingToolDataMatchesStatusLine(t *testing.T) {
 	}{
 		{name: "bare pending status", data: "pending", want: true},
 		{name: "multi-line pending status", data: "File: report.md\nStatus: pending", want: true},
+		{name: "bare in progress status", data: "in_progress", want: true},
+		{name: "multi-line in progress status", data: "File: report.md\nStatus: in_progress", want: true},
 		{name: "completed command mentions pending", data: "grep pending report.md\nStatus: completed", want: false},
 		{name: "path mentions pending", data: "File: pending-report.md\nStatus: completed", want: false},
 		{name: "running is not pending", data: "Status: running", want: false},

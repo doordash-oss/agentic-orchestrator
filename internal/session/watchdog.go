@@ -114,7 +114,10 @@ func observeWatchdogToolProgress(current watchdogPendingTool, progress llm.ToolP
 func isWatchdogPendingToolData(data string) bool {
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.ToLower(strings.TrimSpace(line))
-		if line == "pending" || line == "status: pending" {
+		// OpenCode/ACP commonly starts tools directly in in_progress. Both
+		// statuses are non-terminal and must remain watchdog-eligible.
+		if line == "pending" || line == "status: pending" ||
+			line == "in_progress" || line == "status: in_progress" {
 			return true
 		}
 	}

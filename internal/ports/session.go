@@ -160,9 +160,9 @@ type AskUserAutoPickConfig struct {
 }
 
 // SessionWatchdogConfig enables provider-specific lifecycle safety rails for a
-// session. The first watchdog watches for a provider that reports a pending
-// tool call and then goes silent without emitting a permission request, result,
-// or process exit.
+// session. The first watchdog watches for a provider that reports a pending or
+// in-progress tool call and then goes silent without emitting a permission
+// request, result, or process exit.
 type SessionWatchdogConfig struct {
 	PendingToolIdleTimeout time.Duration
 	PollInterval           time.Duration

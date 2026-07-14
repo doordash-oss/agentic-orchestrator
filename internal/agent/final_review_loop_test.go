@@ -22,6 +22,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,6 +60,17 @@ func newFRTestFeature(t *testing.T, stateDir, featureID string, repoNames []stri
 type frLoopTestEnv struct {
 	stateDir   string
 	scriptsDir string
+}
+
+type lockedMockSessionManager struct {
+	*mocks.MockSessionManager
+	startMu sync.Mutex
+}
+
+func (m *lockedMockSessionManager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
+	return m.MockSessionManager.StartSession(id, featureID, phase, command, workdir, env, opts...)
 }
 
 func newFRLoopEnv(t *testing.T) frLoopTestEnv {
@@ -175,7 +187,7 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		t.Fatalf("mkdir artifact: %v", err)
 	}
 
-	sm := mocks.NewMockSessionManager()
+	sm := &lockedMockSessionManager{MockSessionManager: mocks.NewMockSessionManager()}
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		iterDir := latestFinalReviewIterationDir(t, artDir)
 		switch {

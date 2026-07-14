@@ -42,7 +42,6 @@ const (
 	RoleValidatePlanSecurity                           = roles.RoleValidatePlanSecurity
 	RoleValidatePlanPerformance                        = roles.RoleValidatePlanPerformance
 	RoleValidatePlanTesting                            = roles.RoleValidatePlanTesting
-	RoleIterationReviewer                         Role = "iteration_reviewer"
 	RoleImplementationReviewCraft                      = roles.RoleImplementationReviewCraft
 	RoleImplementationReviewFunctionalityEvidence      = roles.RoleImplementationReviewFunctionalityEvidence
 	RoleImplementationReviewCleanliness                = roles.RoleImplementationReviewCleanliness

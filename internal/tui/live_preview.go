@@ -1138,11 +1138,15 @@ func livePreviewValidatorStatusesValue(f *feature.Feature) string {
 	return strings.Join(parts, "  ")
 }
 
+var validatorDisplayOrder = []string{
+	"Architecture", "Structural", "Grounding", "Security", "Performance", "Testing", "Scope",
+	"Craft", "Functionality/Evidence", "Cleanliness", "QA", "Design",
+}
+
 func livePreviewOrderedValidatorNames(statuses map[string]string) []string {
-	order := []string{"Architecture", "Structural", "Grounding", "Security", "Performance", "Testing", "Scope", "Craft", "Functionality/Evidence", "Cleanliness", "QA", "Design"}
 	seen := make(map[string]struct{}, len(statuses))
 	names := make([]string, 0, len(statuses))
-	for _, name := range order {
+	for _, name := range validatorDisplayOrder {
 		if _, ok := statuses[name]; ok {
 			names = append(names, name)
 			seen[name] = struct{}{}

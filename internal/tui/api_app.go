@@ -2818,7 +2818,50 @@ func (m APIAppModel) apiAttachTabsForFeature(featureID string) []repoTab {
 			status:   apiAttachTabStatus(sess),
 		})
 	}
+	apiOrderAttachTabs(tabs)
 	return tabs
+}
+
+func apiOrderAttachTabs(tabs []repoTab) {
+	sort.SliceStable(tabs, func(i, j int) bool {
+		leftGroup := apiAttachTabGroup(tabs[i])
+		rightGroup := apiAttachTabGroup(tabs[j])
+		if leftGroup != rightGroup {
+			return leftGroup < rightGroup
+		}
+		if leftGroup != 1 {
+			return false
+		}
+		leftAxis := slices.Index(validatorDisplayOrder, tabs[i].label)
+		rightAxis := slices.Index(validatorDisplayOrder, tabs[j].label)
+		if leftAxis < 0 {
+			leftAxis = len(validatorDisplayOrder)
+		}
+		if rightAxis < 0 {
+			rightAxis = len(validatorDisplayOrder)
+		}
+		if leftAxis != rightAxis {
+			return leftAxis < rightAxis
+		}
+		return tabs[i].label < tabs[j].label
+	})
+}
+
+func apiAttachTabGroup(tab repoTab) int {
+	if tab.kind == ports.KindRepoImpl ||
+		(tab.kind == ports.KindPhase && tab.sess != nil && tab.sess.Phase() == feature.PhaseImplement) {
+		return 0
+	}
+	switch tab.kind {
+	case ports.KindValidator:
+		return 1
+	case ports.KindReviewHelper:
+		return 2
+	case ports.KindPhase:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func apiLivePreviewFallbackTab(featureID string, preview server.LivePreviewResponse) (repoTab, bool) {
@@ -2870,6 +2913,15 @@ func apiInitialAttachTab(tabs []repoTab) int {
 	}
 	for i, tab := range tabs {
 		if tab.sess != nil && firstPendingAskUserControlRequest(tab.sess) != nil {
+			return i
+		}
+	}
+	for i, tab := range tabs {
+		if tab.sess == nil {
+			continue
+		}
+		switch tab.status {
+		case statusImplementing, statusReviewing, statusFinalReviewing, statusWaiting:
 			return i
 		}
 	}

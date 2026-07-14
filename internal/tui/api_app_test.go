@@ -40,6 +40,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -1502,6 +1503,43 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 	}
 	if view := stripANSI(refreshed.View().Content); strings.Contains(view, testValidatorNameTesting) || strings.Contains(view, "Plan (running)") {
 		t.Fatalf("attach view still renders completed validator as running:\n%s", view)
+	}
+}
+
+func TestAPIAttachTabsKeepImplementationFirstAndReviewAxesStable(t *testing.T) {
+	t.Parallel()
+
+	impl := session.NewSession("impl", testFeatureIDActive, feature.PhaseImplement)
+	design := session.NewSession("design", testFeatureIDActive, feature.PhaseFinalReview)
+	functionality := session.NewSession("functionality", testFeatureIDActive, feature.PhaseFinalReview)
+	cleanliness := session.NewSession("cleanliness", testFeatureIDActive, feature.PhaseFinalReview)
+	tabs := []repoTab{
+		{repoName: "Design", label: "Design", kind: ports.KindValidator, sess: design},
+		{repoName: "Cleanliness", label: "Cleanliness", kind: ports.KindValidator, sess: cleanliness},
+		{repoName: "impl", kind: ports.KindPhase, sess: impl},
+		{repoName: "Functionality/Evidence", label: "Functionality/Evidence", kind: ports.KindValidator, sess: functionality},
+	}
+
+	apiOrderAttachTabs(tabs)
+	got := []string{tabs[0].repoName, tabs[1].label, tabs[2].label, tabs[3].label}
+	want := []string{"impl", "Functionality/Evidence", "Cleanliness", "Design"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ordered attach tabs = %v, want %v", got, want)
+	}
+}
+
+func TestAPIInitialAttachTabPrefersRunningAxisOverFailedAxis(t *testing.T) {
+	t.Parallel()
+
+	failed := session.NewSession("design", testFeatureIDActive, feature.PhaseFinalReview)
+	running := session.NewSession("functionality", testFeatureIDActive, feature.PhaseFinalReview)
+	tabs := []repoTab{
+		{repoName: "Design", label: "Design", kind: ports.KindValidator, sess: failed, status: statusFailed},
+		{repoName: "Functionality/Evidence", label: "Functionality/Evidence", kind: ports.KindValidator, sess: running, status: statusImplementing},
+	}
+
+	if got := apiInitialAttachTab(tabs); got != 1 {
+		t.Fatalf("apiInitialAttachTab() = %d, want running Functionality/Evidence tab", got)
 	}
 }
 

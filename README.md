@@ -257,6 +257,7 @@ Usa `agentico --refresh-models` quando il CLI di un provider mostra nuovi modell
 
 ```text
 agentico [flags]
+agentico server [flags]
 
 Flags:
   --config <path>                  Config file (default: ~/.agentic-orchestrator/config.yaml)

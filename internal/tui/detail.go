@@ -877,6 +877,9 @@ func formatDetailStatus(f *feature.Feature) string {
 		if f.FailureType != "" {
 			msg = "Failed (" + formatFailureType(f.FailureType) + ")"
 		}
+		if f.FailureType == feature.FailureMaxIterations {
+			return ErrorStyle.Render(msg + " — press [r] to add 10 more iterations, [l] logs")
+		}
 		return ErrorStyle.Render(msg + " — press [r] to restart, [l] logs")
 	}
 	if f.Status.IsNeedsReview() {
@@ -977,6 +980,9 @@ func formatDetailStatus(f *feature.Feature) string {
 		if f.FailureType != "" {
 			msg = "Failed (" + formatFailureType(f.FailureType) + ")"
 		}
+		if f.FailureType == feature.FailureMaxIterations {
+			return ErrorStyle.Render(msg + " \u2014 press [r] to add 10 more iterations, [l] logs")
+		}
 		return ErrorStyle.Render(msg + " \u2014 press [r] to restart, [l] logs")
 	default:
 		return f.Status.String()
@@ -1035,7 +1041,7 @@ func recoverySuggestion(ft string) string {
 	case feature.FailureSafetyRail:
 		return "Agent made no progress. Consider simplifying the task or adding more context."
 	case feature.FailureMaxIterations:
-		return "Reached max iterations. The task may need to be broken into smaller steps."
+		return "Reached max iterations. Press [r] to add 10 more iterations and continue."
 	case feature.FailureSessionCrash:
 		return "Session crashed. Press [r] to retry or [l] to view logs."
 	case feature.FailureMissingArtifact:

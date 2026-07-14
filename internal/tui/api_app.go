@@ -115,6 +115,11 @@ const (
 )
 
 const (
+	maxIterationsRestartDelta     = 10
+	maxPlanIterationsRestartDelta = 2
+)
+
+const (
 	statusMsgNoFeatureSelected       = "No feature selected"
 	statusMsgNoActiveSessions        = "No active sessions to watch."
 	statusMsgLoadingReviewArtifact   = "Loading review artifact"
@@ -661,13 +666,15 @@ type apiReviewCommentsPanel struct {
 }
 
 type apiFeatureActionArgs struct {
-	Repo            string
-	Repos           []string
-	Title           string
-	Body            string
-	TargetPhase     string
-	RoadmapPhase    int
-	UpgradePipeline feature.PipelineProfile
+	Repo                   string
+	Repos                  []string
+	Title                  string
+	Body                   string
+	TargetPhase            string
+	RoadmapPhase           int
+	UpgradePipeline        feature.PipelineProfile
+	MaxIterationsDelta     int
+	MaxPlanIterationsDelta int
 }
 
 type apiRepoActionPanel struct {
@@ -1470,7 +1477,12 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if canRetrySetup(m.selectedAPIDashboardFeature()) {
 			return m, m.selectedFeatureActionCmd(mutationKindFeatureRetry, m.selectedFeature)
 		}
-		return m.confirmSelectedFeatureAction(mutationKindFeatureRestart), nil
+		args := apiFeatureActionArgs{}
+		if f := m.selectedAPIDashboardFeature(); f != nil && f.Status == feature.StatusFailed && f.FailureType == feature.FailureMaxIterations {
+			args.MaxIterationsDelta = maxIterationsRestartDelta
+			args.MaxPlanIterationsDelta = maxPlanIterationsRestartDelta
+		}
+		return m.confirmSelectedFeatureActionWithArgs(mutationKindFeatureRestart, args), nil
 	case "s":
 		return m.confirmSelectedFeatureAction(mutationKindFeatureStop), nil
 	case "d":
@@ -6082,7 +6094,11 @@ func (m APIAppModel) renderFeatureActionConfirm() string {
 	if m.actionConfirmArgs.TargetPhase != "" {
 		b.WriteString("  Target phase: " + apiRewindPhaseLabel(m.actionConfirmArgs.TargetPhase) + "\n\n")
 	}
-	if lines, ok := apiFeatureActionConfirmWarnings[m.actionConfirmKind]; ok {
+	if m.actionConfirmKind == mutationKindFeatureRestart && m.actionConfirmArgs.MaxIterationsDelta > 0 {
+		b.WriteString(WarningStyle.Render(fmt.Sprintf("  This will add %d more iterations and continue.", m.actionConfirmArgs.MaxIterationsDelta)))
+		b.WriteString("\n")
+		b.WriteString(WarningStyle.Render("  The failed phase will use the extended budget."))
+	} else if lines, ok := apiFeatureActionConfirmWarnings[m.actionConfirmKind]; ok {
 		b.WriteString(WarningStyle.Render("  " + lines[0]))
 		b.WriteString("\n")
 		b.WriteString(WarningStyle.Render("  " + lines[1]))
@@ -7110,7 +7126,10 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 		case mutationKindFeatureMerge:
 			_, err = m.client.MergeFeature(ctx, featureID)
 		case mutationKindFeatureRestart:
-			_, err = m.client.RestartFeature(ctx, featureID, server.RestartFeatureRequest{})
+			_, err = m.client.RestartFeature(ctx, featureID, server.RestartFeatureRequest{
+				MaxIterationsDelta:     args.MaxIterationsDelta,
+				MaxPlanIterationsDelta: args.MaxPlanIterationsDelta,
+			})
 		case mutationKindFeatureRetry:
 			_, err = m.client.RetryFeature(ctx, featureID)
 		case mutationKindFeatureMarkDone:

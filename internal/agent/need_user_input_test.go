@@ -110,3 +110,91 @@ func TestReconcileNeedUserInputGate(t *testing.T) {
 		})
 	}
 }
+
+func TestRetryNeedsUserInput(t *testing.T) {
+	failed := VerificationCheckResult{
+		Name:   "Integration tests pass",
+		Status: VerificationStatusFailed,
+	}
+	blocked := VerificationCheckResult{
+		ItemID: "plan_docker",
+		Name:   "Container tests pass",
+		Status: VerificationStatusBlocked,
+	}
+	passed := VerificationCheckResult{
+		Name:   "Build succeeds",
+		Status: VerificationStatusPassed,
+	}
+	notRun := VerificationCheckResult{
+		Name:   "Tests remain to run",
+		Status: VerificationStatusNotRun,
+	}
+
+	tests := []struct {
+		name     string
+		progress *ParsedProgress
+		report   *VerificationReport
+		want     bool
+	}{
+		{
+			name: "complete retry with failed legacy check escalates",
+			progress: &ParsedProgress{
+				State: StateRetry,
+				HandoffSections: map[string]string{
+					"Where I stopped": "Complete for implementation; Docker is unavailable.",
+				},
+			},
+			report: &VerificationReport{RequiredChecks: []VerificationCheckResult{failed}},
+			want:   true,
+		},
+		{
+			name: "retry with only blocked contract results escalates",
+			progress: &ParsedProgress{
+				State: StateRetry,
+				HandoffSections: map[string]string{
+					"Where I stopped": "Waiting for external infrastructure.",
+				},
+			},
+			report: &VerificationReport{Results: []VerificationCheckResult{passed, blocked}},
+			want:   true,
+		},
+		{
+			name: "actionable retry stays in loop",
+			progress: &ParsedProgress{
+				State: StateRetry,
+				HandoffSections: map[string]string{
+					"Where I stopped": "Fix the failing parser test next.",
+				},
+			},
+			report: &VerificationReport{RequiredChecks: []VerificationCheckResult{failed}},
+		},
+		{
+			name: "complete retry with only not-run work stays in loop",
+			progress: &ParsedProgress{
+				State: StateRetry,
+				HandoffSections: map[string]string{
+					"Where I stopped": "Complete with the first task; continue with the second.",
+				},
+			},
+			report: &VerificationReport{RequiredChecks: []VerificationCheckResult{notRun}},
+		},
+		{
+			name: "success state never escalates",
+			progress: &ParsedProgress{
+				State: StateSuccess,
+				HandoffSections: map[string]string{
+					"Where I stopped": "Complete",
+				},
+			},
+			report: &VerificationReport{RequiredChecks: []VerificationCheckResult{failed}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := retryNeedsUserInput(tt.progress, tt.report); got != tt.want {
+				t.Errorf("retryNeedsUserInput() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

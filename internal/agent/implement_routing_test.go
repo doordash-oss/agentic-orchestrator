@@ -188,6 +188,117 @@ touch "$_d/phase_complete"
 	}
 }
 
+// TestImplementLoop_Routing_RETRY_CompleteWithBlockersEscalatesNeedUserInput
+// locks in the convergence guard for a contradictory handoff: RETRY claims
+// implementation is complete while required verification remains failed.
+// There is no actionable next iteration, so the harness must synthesize a
+// NEED_USER_INPUT gate instead of spending the remaining iteration budget.
+func TestImplementLoop_Routing_RETRY_CompleteWithBlockersEscalatesNeedUserInput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-retry-blocked")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		_ = os.MkdirAll(d, 0o755)
+	}
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `for _d in "`+artifactDir+`"/iteration-*; do :; done
+mkdir -p "$_d"
+cat > "`+artifactDir+`/progress.md" <<PROGRESS_EOF
+# Iteration Progress
+
+## Iteration Handoff
+
+### Completed this iteration
+- implementation and evidence are complete
+
+### Remaining from the plan
+- the required integration check cannot run because Docker is unavailable
+
+### Where I stopped
+Complete for implementation; verification requires a Docker-enabled environment.
+
+### Gotchas / blockers / in-flight decisions
+- expanding scope or changing the verification contract requires a decision
+
+## Deferrals
+
+`+"~~~"+`yaml
+deferrals: []
+closed_deferrals: []
+`+"~~~"+`
+
+## Verification Report
+
+- **Path**: $_d/verification-report.yaml
+- **Summary**: 0 passed, 1 failed, 0 blocked, 0 not_run
+
+## Iteration State
+
+RETRY
+PROGRESS_EOF
+cat > "$_d/verification-report.yaml" <<'REPORT_EOF'
+version: 1
+required_checks:
+  - name: Integration tests pass
+    requirement: task test-coverage
+    status: failed
+    evidence: rootless Docker not found
+REPORT_EOF
+touch "$_d/phase_complete"
+`+testutil.JSONLInit+`
+`+testutil.JSONLSuccess+`
+`)
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	planPath := writePlanFile(t, artifactDir, "Blocked RETRY escalation test")
+	result, err := RunImplementationLoop(ImplementConfig{
+		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 3,
+		MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
+		Model: "agent", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		BuildSession: mockBuildSession(agentScript, reviewScript),
+	}, sm)
+	if err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+	if result.FinalStatus != "need_user_input" {
+		t.Fatalf("FinalStatus = %q, want need_user_input (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if result.Iterations != 1 {
+		t.Fatalf("Iterations = %d, want 1", result.Iterations)
+	}
+	if result.NeedUserInputPath == "" {
+		t.Fatal("NeedUserInputPath should point at the synthesized gate")
+	}
+	rec, err := ReadNeedUserInputRecord(result.NeedUserInputPath)
+	if err != nil {
+		t.Fatalf("read synthesized gate: %v", err)
+	}
+	if !strings.Contains(rec.Summary, "required verification") {
+		t.Errorf("gate summary = %q, want required-verification explanation", rec.Summary)
+	}
+	if len(rec.Questions) != 1 || !strings.Contains(rec.Questions[0].Prompt, "verification") {
+		t.Fatalf("gate questions = %+v, want one verification decision", rec.Questions)
+	}
+	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("read iteration meta: %v", err)
+	}
+	if meta.AgentStatus != "NEED_USER_INPUT" || meta.ReviewStatus != "skipped_need_user_input" {
+		t.Fatalf("meta statuses = %q/%q, want NEED_USER_INPUT/skipped_need_user_input", meta.AgentStatus, meta.ReviewStatus)
+	}
+}
+
 func padIter(n int) string {
 	if n < 10 {
 		return "0" + string(rune('0'+n))

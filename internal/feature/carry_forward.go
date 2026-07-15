@@ -355,7 +355,11 @@ func carryForwardRoadmapPhaseFrontend(old map[int]bool, target Phase, targetRoad
 	switch {
 	case target == PhaseImplement && targetRoadmapPhase > 0:
 		for phase, frontend := range old {
-			if phase < targetRoadmapPhase {
+			// A partial rewind carries the target phase's approved plan so it
+			// can be reimplemented. Keep its frontend classification with that
+			// plan; otherwise the implementation prompt treats a frontend phase
+			// as non-frontend and makes frontend-design optional.
+			if phase <= targetRoadmapPhase {
 				out[phase] = frontend
 			}
 		}

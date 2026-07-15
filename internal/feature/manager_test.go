@@ -6344,7 +6344,7 @@ func TestRoadmapPhaseFrontendPersistsThroughRunShadowSync(t *testing.T) {
 	}
 }
 
-func TestRewindWithRequest_PartialDropsOnlyFrontendPhase(t *testing.T) {
+func TestRewindWithRequest_PartialRetainsTargetPhaseFrontend(t *testing.T) {
 	mgr := newTestManager(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
 		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
@@ -6378,22 +6378,22 @@ func TestRewindWithRequest_PartialDropsOnlyFrontendPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.RoadmapPhaseFrontend(2) {
-		t.Error("RoadmapPhaseFrontend(2) = true after rewinding to phase 2, want dropped")
+	if !got.RoadmapPhaseFrontend(2) {
+		t.Error("RoadmapPhaseFrontend(2) = false after rewinding to phase 2, want retained for the carried phase plan")
 	}
-	if got.AnyRoadmapPhaseFrontend() {
-		t.Error("AnyRoadmapPhaseFrontend() = true after dropping only frontend phase")
+	if !got.AnyRoadmapPhaseFrontend() {
+		t.Error("AnyRoadmapPhaseFrontend() = false after retaining the frontend target phase")
 	}
 
 	run, err := mgr.Store.LoadRun(f.ID, 2)
 	if err != nil {
 		t.Fatalf("LoadRun(2): %v", err)
 	}
-	if run.RoadmapPhaseFrontend(2) {
-		t.Error("run RoadmapPhaseFrontend(2) = true after rewinding to phase 2, want dropped")
+	if !run.RoadmapPhaseFrontend(2) {
+		t.Error("run RoadmapPhaseFrontend(2) = false after rewinding to phase 2, want retained for the carried phase plan")
 	}
-	if run.AnyRoadmapPhaseFrontend() {
-		t.Error("run AnyRoadmapPhaseFrontend() = true after dropping only frontend phase")
+	if !run.AnyRoadmapPhaseFrontend() {
+		t.Error("run AnyRoadmapPhaseFrontend() = false after retaining the frontend target phase")
 	}
 }
 

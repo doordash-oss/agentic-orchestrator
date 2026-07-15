@@ -54,6 +54,18 @@ describe('PhaseSpine', () => {
     expect(screen.getByRole('group', { name: /connection lifecycle/i })).toBeInTheDocument();
   });
 
+  it('renders long phase names in full with a title fallback', () => {
+    const longStages = [
+      { id: 'setup', label: 'Setup' },
+      { id: 'knowledge-base', label: 'Knowledge Base' },
+      { id: 'implement', label: 'Implement' },
+    ] as const;
+    render(<PhaseSpine stages={longStages} activeIndex={1} tone="progress" />);
+    const label = screen.getByText('Knowledge Base');
+    expect(label).toHaveTextContent('Knowledge Base');
+    expect(label).toHaveAttribute('title', 'Knowledge Base');
+  });
+
   it('pulses the active needle only when motion is allowed', () => {
     matchMediaState.reducedMotion = false;
     const { unmount } = render(<PhaseSpine stages={stages} activeIndex={1} tone="progress" />);

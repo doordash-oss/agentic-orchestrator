@@ -16,9 +16,9 @@ export interface PhaseSpineProps {
 }
 
 /**
- * The signature instrument rail: one tick per lifecycle stage, the amber
- * needle on the current stage, mono labels beneath. Reused by later phases
- * for the feature pipeline spine.
+ * The signature instrument rail: one tick per lifecycle stage, the signal
+ * needle on the current stage, condensed display labels beneath. Reused by
+ * later phases for the feature pipeline spine.
  */
 export function PhaseSpine({
   stages,
@@ -53,7 +53,9 @@ export function PhaseSpine({
                   />
                 ) : null}
               </span>
-              <span className="phase-spine__label">{stage.label}</span>
+              <span className="phase-spine__label" title={stage.label}>
+                {stage.label}
+              </span>
             </li>
           );
         })}

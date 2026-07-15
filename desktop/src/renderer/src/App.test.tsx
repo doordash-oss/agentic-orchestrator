@@ -1,9 +1,20 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { ConnectionState } from '../../shared/ipc';
 import App from './App';
-import { installAgenticoMock } from './test/agenticoMock';
+import { installAgenticoMock, readySnapshot } from './test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from './test/setup';
+
+function connection(overrides: Partial<ConnectionState>): ConnectionState {
+  return {
+    status: 'discovering',
+    stage: 'discover',
+    detail: 'Looking for a running Agentico runtime.',
+    ownership: 'none',
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   matchMediaState.darkScheme = true;
@@ -55,5 +66,76 @@ describe('App theming', () => {
     dispatchMediaChange('(prefers-color-scheme: dark)', false);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(document.documentElement.dataset['theme']).toBe('dark');
+  });
+});
+
+describe('App readiness gating', () => {
+  it('shows the connection shell — never the wizard — before the gateway is ready', async () => {
+    const mock = installAgenticoMock();
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /^agentico$/i })).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
+    expect(mock.api.getReadiness).not.toHaveBeenCalled();
+  });
+
+  it('opens the mandatory wizard when the runtime is ready but setup is incomplete', async () => {
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'app-owned' }),
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
+    );
+    expect(mock.api.getReadiness).toHaveBeenCalled();
+    // No path into feature creation exists while gates are unsatisfied.
+    expect(screen.queryByRole('button', { name: /create|new feature/i })).not.toBeInTheDocument();
+  });
+
+  it('skips the wizard entirely for an already-ready runtime', async () => {
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText(/1 repository available/i)).toBeInTheDocument());
+    expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the connection shell on disconnect and re-derives on recovery', async () => {
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'app-owned' }),
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
+    );
+    const fetchesBeforeCrash = mock.api.getReadiness.mock.calls.length;
+
+    act(() => {
+      mock.emitConnection(
+        connection({
+          status: 'crashed',
+          stage: 'connect',
+          detail: 'The app-managed runtime exited unexpectedly.',
+          error: { code: 'E_SERVER_CRASHED', message: 'exited', remediation: 'Retry.' },
+        }),
+      );
+    });
+    expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/agentico connection/i)).toBeInTheDocument();
+
+    act(() => {
+      mock.emitConnection(connection({ status: 'ready', stage: 'ready', ownership: 'app-owned' }));
+    });
+    // Recovery refetches the authoritative snapshot instead of trusting
+    // anything remembered from before the crash.
+    await waitFor(() =>
+      expect(mock.api.getReadiness.mock.calls.length).toBeGreaterThan(fetchesBeforeCrash),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /set up agentico/i })).toBeInTheDocument(),
+    );
   });
 });

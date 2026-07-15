@@ -78,6 +78,7 @@ export interface AgenticoMock {
   api: AgenticoApi & {
     getConnectionStatus: ReturnType<typeof vi.fn>;
     retryConnection: ReturnType<typeof vi.fn>;
+    getSettings: ReturnType<typeof vi.fn>;
     updateSettings: ReturnType<typeof vi.fn>;
     setThemePreference: ReturnType<typeof vi.fn>;
     getReadiness: ReturnType<typeof vi.fn>;

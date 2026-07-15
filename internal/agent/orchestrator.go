@@ -199,7 +199,7 @@ func phaseRepoStatuses(repos []string, status string) map[string]string {
 // Called by completion.go after the last roadmap-phase implement returns
 // "awaiting_final_review".
 //
-// Cwd at the feature state dir; --add-dir for every Feature.Repos
+// Cwd at the active run dir; --add-dir for every Feature.Repos
 // worktree. The reviewer reads the cumulative diff across all repos and
 // emits one APPROVED / CHANGES_REQUESTED verdict. FR atomicity: every
 // repo at Touched (staged for FR) transitions to review_passed

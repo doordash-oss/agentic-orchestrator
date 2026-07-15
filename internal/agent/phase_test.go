@@ -453,8 +453,8 @@ func TestResolveUnifiedWorkDir(t *testing.T) {
 				Repos: nil,
 			},
 			stateDir:        "/tmp/state",
-			expectedWorkDir: "/tmp/state",
-			expectedAddDirs: []string{"/tmp/state"},
+			expectedWorkDir: "/tmp/state/runs/run-001",
+			expectedAddDirs: []string{"/tmp/state/runs/run-001"},
 		},
 		{
 			name: "single_repo",
@@ -465,7 +465,7 @@ func TestResolveUnifiedWorkDir(t *testing.T) {
 			},
 			stateDir:        "/tmp/state",
 			expectedWorkDir: "/tmp/repos/a",
-			expectedAddDirs: []string{"/tmp/state"},
+			expectedAddDirs: []string{"/tmp/state/runs/run-001"},
 		},
 		{
 			name: "multi_repo_with_worktrees",
@@ -477,7 +477,7 @@ func TestResolveUnifiedWorkDir(t *testing.T) {
 			},
 			stateDir:        "/tmp/state",
 			expectedWorkDir: "/tmp/worktrees",
-			expectedAddDirs: []string{"/tmp/state", "/tmp/worktrees/a", "/tmp/worktrees/b"},
+			expectedAddDirs: []string{"/tmp/state/runs/run-001", "/tmp/worktrees/a", "/tmp/worktrees/b"},
 		},
 		{
 			name: "multi_repo_no_worktrees",
@@ -489,7 +489,7 @@ func TestResolveUnifiedWorkDir(t *testing.T) {
 			},
 			stateDir:        "/tmp/state",
 			expectedWorkDir: "/tmp/repos/a",
-			expectedAddDirs: []string{"/tmp/state", "/tmp/repos/b"},
+			expectedAddDirs: []string{"/tmp/state/runs/run-001", "/tmp/repos/b"},
 		},
 		{
 			name: "multi_repo_partial_worktrees",
@@ -501,7 +501,7 @@ func TestResolveUnifiedWorkDir(t *testing.T) {
 			},
 			stateDir:        "/tmp/state",
 			expectedWorkDir: "/tmp/repos/a",
-			expectedAddDirs: []string{"/tmp/state", "/tmp/repos/b"},
+			expectedAddDirs: []string{"/tmp/state/runs/run-001", "/tmp/repos/b"},
 		},
 		{
 			name: "single_repo_fresh_with_worktree",
@@ -513,7 +513,7 @@ func TestResolveUnifiedWorkDir(t *testing.T) {
 			},
 			stateDir:        "/tmp/state",
 			expectedWorkDir: "/tmp/worktrees",
-			expectedAddDirs: []string{"/tmp/state", "/tmp/worktrees/a"},
+			expectedAddDirs: []string{"/tmp/state/runs/run-001", "/tmp/worktrees/a"},
 		},
 		{
 			name: "single_repo_fresh_no_worktree",
@@ -525,7 +525,7 @@ func TestResolveUnifiedWorkDir(t *testing.T) {
 			},
 			stateDir:        "/tmp/state",
 			expectedWorkDir: "/tmp/repos/a",
-			expectedAddDirs: []string{"/tmp/state"},
+			expectedAddDirs: []string{"/tmp/state/runs/run-001"},
 		},
 	}
 	for _, tt := range tests {
@@ -538,6 +538,24 @@ func TestResolveUnifiedWorkDir(t *testing.T) {
 				t.Errorf("additionalDirs = %v, want %v", addDirs, tt.expectedAddDirs)
 			}
 		})
+	}
+}
+
+func TestResolveUnifiedWorkDir_GrantsOnlyActiveRunState(t *testing.T) {
+	f := &feature.Feature{
+		ID:        "feature-a",
+		ActiveRun: 5,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo-a", Path: "/tmp/repos/a"},
+		},
+	}
+	workDir, additionalDirs := resolveUnifiedWorkDir(f, "/tmp/state")
+	if workDir != "/tmp/repos/a" {
+		t.Fatalf("workDir = %q, want repo workdir", workDir)
+	}
+	wantRunDir := "/tmp/state/feature-a/runs/run-005"
+	if !reflect.DeepEqual(additionalDirs, []string{wantRunDir}) {
+		t.Fatalf("additionalDirs = %v, want only active run %q", additionalDirs, wantRunDir)
 	}
 }
 
@@ -804,8 +822,12 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 				}
 			}
 
-			if !slices.Contains(cap.additionalDirs, stateDir) {
-				t.Errorf("additionalDirs %v does not include stateDir %q", cap.additionalDirs, stateDir)
+			activeRunDir := filepath.Join(stateDir, tt.featureID, "runs", "run-001")
+			if !slices.Contains(cap.additionalDirs, activeRunDir) {
+				t.Errorf("additionalDirs %v does not include active run dir %q", cap.additionalDirs, activeRunDir)
+			}
+			if slices.Contains(cap.additionalDirs, stateDir) {
+				t.Errorf("additionalDirs %v must not expose global state dir %q", cap.additionalDirs, stateDir)
 			}
 		})
 	}
@@ -1390,17 +1412,20 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 		t.Fatalf("BuildSession() error: %v", err)
 	}
 
-	for _, want := range []string{dir, kbDir, skillsDir, guidelinesDir, workDir} {
+	for _, want := range []string{kbDir, skillsDir, guidelinesDir, workDir} {
 		if !slices.Contains(provider.buildOpts.ReadRoots, want) {
 			t.Fatalf("ReadRoots = %v, missing %q", provider.buildOpts.ReadRoots, want)
 		}
 	}
-	for _, want := range []string{dir, kbDir} {
+	for _, want := range []string{kbDir, workDir} {
 		if !slices.Contains(provider.buildOpts.WritableRoots, want) {
 			t.Fatalf("WritableRoots = %v, missing %q", provider.buildOpts.WritableRoots, want)
 		}
 	}
-	for _, forbidden := range []string{skillsDir, guidelinesDir} {
+	if slices.Contains(provider.buildOpts.ReadRoots, dir) {
+		t.Fatalf("ReadRoots = %v, should omit global state directory %q", provider.buildOpts.ReadRoots, dir)
+	}
+	for _, forbidden := range []string{dir, skillsDir, guidelinesDir} {
 		if slices.Contains(provider.buildOpts.WritableRoots, forbidden) {
 			t.Fatalf("WritableRoots = %v, should omit read-only context dir %q", provider.buildOpts.WritableRoots, forbidden)
 		}

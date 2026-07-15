@@ -299,6 +299,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		ReviewModel:                cfg.ReviewModel,
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
+		RunDir:                     runDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
 		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),

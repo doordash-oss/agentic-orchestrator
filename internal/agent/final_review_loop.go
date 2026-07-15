@@ -114,8 +114,8 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 		return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed}, nil
 	}
 
-	// Build the cross-repo workspace. Cwd at the feature state dir, with
-	// --add-dir for every Feature.Repos worktree (and the state dir).
+	// Build the cross-repo workspace. Cwd at the active run dir, with
+	// --add-dir for every Feature.Repos worktree (and the active run).
 	stateDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
 	workspace, err := BuildWorkspace(cfg.Feature, stateDir)
 	if err != nil {
@@ -235,8 +235,8 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 		return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed}, nil
 	}
 
-	// Build the cross-repo workspace. Cwd at the feature state dir, with
-	// --add-dir for every Feature.Repos worktree (and the state dir).
+	// Build the cross-repo workspace. Cwd at the active run dir, with
+	// --add-dir for every Feature.Repos worktree (and the active run).
 	stateDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
 	workspace, err := BuildWorkspace(cfg.Feature, stateDir)
 	if err != nil {
@@ -440,7 +440,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 }
 
 // runReview launches one feature-level review session for iteration i.
-// Cwd at the feature state dir, --add-dir for every Feature.Repos
+// Cwd at the active run dir, --add-dir for every Feature.Repos
 // worktree. The reviewer reads the cumulative diff across all repos and
 // writes review-feedback.md at iterDir.
 func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (ReviewStatus, string, error) {
@@ -490,8 +490,9 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 
 	additionalDirs := append([]string(nil), additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
 	additionalDirs = append(additionalDirs, guidelineAdditionalDirs(cfg.GuidelinesDir)...)
-	// State dir always present so the agent can navigate ./<run>/<phase>/...
-	additionalDirs = append([]string{s.stateDir}, additionalDirs...)
+	// Only the active run is mounted; the containing feature state directory
+	// also contains sealed predecessor runs.
+	additionalDirs = append([]string{s.workspace.Cwd}, additionalDirs...)
 
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          FinalReviewerRoleSpec(),
@@ -642,7 +643,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 
 	RemovePhaseComplete(iterDir)
 
-	additionalDirs := append([]string{s.stateDir}, additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
+	additionalDirs := append([]string{s.workspace.Cwd}, additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
 	additionalDirs = append(additionalDirs, guidelineAdditionalDirs(cfg.GuidelinesDir)...)
 
 	command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{

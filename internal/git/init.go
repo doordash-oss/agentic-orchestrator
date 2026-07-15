@@ -15,9 +15,12 @@
 package git
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -34,19 +37,39 @@ func InitRepository(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("repository path %q is not a directory", path)
 	}
-	cmd := exec.Command("git", "-C", path, "init")
+	if _, err := os.Lstat(filepath.Join(path, ".git")); err == nil {
+		return fmt.Errorf("repository path %q already contains git metadata", path)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("inspect git metadata: %w", err)
+	}
+
+	stagingPath, err := os.MkdirTemp(filepath.Dir(path), ".agentico-git-init-")
+	if err != nil {
+		return fmt.Errorf("create git staging directory: %w", err)
+	}
+	defer os.RemoveAll(stagingPath)
+
+	templatePath := filepath.Join(stagingPath, "template")
+	if err := os.Mkdir(templatePath, 0o755); err != nil {
+		return fmt.Errorf("create git template directory: %w", err)
+	}
+	cmd := exec.Command("git", "-C", stagingPath, "init", "--template="+templatePath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git init: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	// The identity is passed explicitly and signing is disabled so the commit
-	// never depends on (or is broken by) the user's global git configuration.
-	commit := exec.Command("git", "-C", path,
+	// The identity, signing, hooks, and template are explicit so the synthetic
+	// commit is unaffected by a user's global Git configuration.
+	commit := exec.Command("git", "-C", stagingPath,
 		"-c", "user.name=Agentico",
 		"-c", "user.email=agentico@localhost",
 		"-c", "commit.gpgsign=false",
+		"-c", "core.hooksPath=/dev/null",
 		"commit", "--allow-empty", "-m", "Initial commit")
 	if out, err := commit.CombinedOutput(); err != nil {
 		return fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := os.Rename(filepath.Join(stagingPath, ".git"), filepath.Join(path, ".git")); err != nil {
+		return fmt.Errorf("publish initialized repository: %w", err)
 	}
 	return nil
 }

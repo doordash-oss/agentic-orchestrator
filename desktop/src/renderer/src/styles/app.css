@@ -17,7 +17,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Keyboard focus is always visible: amber ring with offset. */
+/* Keyboard focus is always visible: signal ring with offset. */
 :focus-visible {
   outline: var(--focus-ring);
   outline-offset: 2px;
@@ -62,9 +62,10 @@ body {
 .shell-card__title {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 20px;
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  font-size: 21px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .shell-card__version {
@@ -113,11 +114,11 @@ body {
   background: transparent;
 }
 
-/* The needle: the one amber element on screen. */
+/* The needle: signal marks the current stage; amber stays reserved for attention. */
 .phase-spine__needle {
   position: absolute;
   inset: -4px -1px;
-  background: var(--color-accent);
+  background: var(--color-signal);
   border-radius: 1px;
 }
 
@@ -145,16 +146,20 @@ body {
   }
 }
 
+/*
+ * Phase labels: the display face, rendered in full. Labels wrap at word
+ * boundaries rather than truncating; they only compact at narrow widths.
+ */
 .phase-spine__label {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--color-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  text-align: center;
   max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 .phase-spine__stage[data-state='active'] .phase-spine__label {
@@ -246,7 +251,7 @@ body {
 .shell-card__retry {
   align-self: flex-start;
   font-family: var(--font-body);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 13px;
   color: var(--color-text);
   background: transparent;
@@ -257,7 +262,7 @@ body {
 }
 
 .shell-card__retry:hover {
-  border-color: var(--color-accent);
+  border-color: var(--color-signal);
 }
 
 /* --- Theme switcher -------------------------------------------------------------- */
@@ -295,8 +300,10 @@ body {
     padding: var(--space-4) var(--space-3);
   }
 
+  /* Genuinely narrow: compact the phase labels instead of truncating them. */
   .phase-spine__label {
-    font-size: 9px;
+    font-size: 10px;
+    letter-spacing: 0.04em;
   }
 
   .shell-card__status {
@@ -373,7 +380,7 @@ body {
 .setup-wizard__action {
   align-self: flex-start;
   font-family: var(--font-body);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 13px;
   color: var(--color-text);
   background: transparent;
@@ -384,7 +391,7 @@ body {
 }
 
 .setup-wizard__action:hover:not(:disabled) {
-  border-color: var(--color-accent);
+  border-color: var(--color-signal);
 }
 
 .setup-wizard__action:disabled {
@@ -472,7 +479,7 @@ body {
 
 .provider-row__name {
   font-family: var(--font-mono);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .provider-row__state {
@@ -541,7 +548,7 @@ body {
 }
 
 .provider-row__copy:hover {
-  border-color: var(--color-accent);
+  border-color: var(--color-signal);
 }
 
 /* --- Model + path lists --------------------------------------------------------------------- */
@@ -572,7 +579,7 @@ body {
 }
 
 .path-list__name {
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .path-list__path {
@@ -612,7 +619,9 @@ body {
 .consent-dialog__title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 16px;
+  font-weight: 600;
+  font-size: 17px;
+  letter-spacing: 0.02em;
 }
 
 .consent-dialog__body {
@@ -640,7 +649,7 @@ body {
 
 .consent-dialog__actions button {
   font-family: var(--font-body);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 13px;
   color: var(--color-text);
   background: transparent;
@@ -650,8 +659,9 @@ body {
   cursor: pointer;
 }
 
+/* Primary intervention: signal edge on the confirming action. */
 .consent-dialog__confirm {
-  border-color: var(--color-accent) !important;
+  border-color: var(--color-signal) !important;
 }
 
 /* --- Readiness gate ------------------------------------------------------------------------------ */
@@ -749,8 +759,8 @@ body {
 }
 
 .form-field__label {
-  font-family: var(--font-display);
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-weight: 700;
   font-size: 13px;
 }
 
@@ -772,7 +782,7 @@ body {
 .form-field__input:focus-visible {
   outline: var(--focus-ring);
   outline-offset: 0;
-  border-color: var(--color-accent);
+  border-color: var(--color-signal);
 }
 
 .form-field__input[aria-invalid='true'] {
@@ -817,7 +827,7 @@ body {
 }
 
 .repo-option__name {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 13px;
 }
 
@@ -845,8 +855,8 @@ body {
 
 .defaults-panel__title {
   margin: 0;
-  font-family: var(--font-display);
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-weight: 700;
   font-size: 13px;
 }
 
@@ -870,14 +880,15 @@ body {
   font-size: 12px;
 }
 
+/* Primary intervention: the one filled signal control in the form. */
 .create-form__submit {
   align-self: flex-start;
-  font-family: var(--font-display);
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-weight: 700;
   font-size: 14px;
   color: var(--color-bg);
-  background: var(--color-accent);
-  border: 1px solid var(--color-accent);
+  background: var(--color-signal);
+  border: 1px solid var(--color-signal);
   border-radius: var(--radius);
   padding: var(--space-2) var(--space-5);
   cursor: pointer;
@@ -909,8 +920,8 @@ body {
 }
 
 .tab-strip__tab {
-  font-family: var(--font-display);
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-weight: 700;
   font-size: 13px;
   color: var(--color-muted);
   background: transparent;
@@ -924,11 +935,13 @@ body {
   white-space: nowrap;
 }
 
+/* Active navigation: a quiet signal edge marks the selected tab. */
 .tab-strip__tab[aria-selected='true'] {
   color: var(--color-text);
   border-color: var(--color-hairline);
   border-bottom-color: var(--color-panel);
   margin-bottom: -1px;
+  box-shadow: inset 0 2px 0 var(--color-signal);
 }
 
 .tab-strip__close {
@@ -988,7 +1001,7 @@ body {
 }
 
 .feature-list__name {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 13px;
 }
 
@@ -1055,19 +1068,22 @@ body {
   word-break: break-all;
 }
 
+/* Attention: the amber needle marks stale data; text stays high-contrast. */
 .cockpit__stale {
   margin: 0;
-  color: var(--color-accent);
+  color: var(--color-text);
   font-size: 12px;
   font-family: var(--font-mono);
+  border-left: 2px solid var(--color-accent);
+  padding-left: var(--space-2);
 }
 
 .cockpit__ready {
   margin: 0;
   align-self: flex-start;
   color: var(--color-success);
-  font-family: var(--font-display);
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-weight: 700;
   font-size: 14px;
   border: 1px solid var(--color-success);
   border-radius: var(--radius);
@@ -1129,8 +1145,9 @@ body {
   color: var(--color-success);
 }
 
+/* Running = active state: the signal role, not attention amber. */
 .task-row__state[data-status='running'] {
-  color: var(--color-accent);
+  color: var(--color-signal);
 }
 
 .task-row__state[data-status='failed'] {
@@ -1138,7 +1155,7 @@ body {
 }
 
 .task-row__label {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 13px;
 }
 
@@ -1186,13 +1203,14 @@ body {
   max-width: 260px;
 }
 
+/* Primary intervention: the one filled signal control in the cockpit. */
 .cockpit__start {
-  font-family: var(--font-display);
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-weight: 700;
   font-size: 14px;
   color: var(--color-bg);
-  background: var(--color-accent);
-  border: 1px solid var(--color-accent);
+  background: var(--color-signal);
+  border: 1px solid var(--color-signal);
   border-radius: var(--radius);
   padding: var(--space-2) var(--space-5);
   cursor: pointer;

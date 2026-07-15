@@ -1,5 +1,5 @@
 /**
- * The narrow Phase 1 creation flow: name, description, repository selection
+ * The feature creation flow: name, description, repository selection
  * from fresh server discovery, branch choice, and the server-provided
  * defaults the creation contract applies. Client-side validation mirrors the
  * IPC schema; structured server rejections map onto the owning control with
@@ -281,7 +281,7 @@ export function CreateFeatureForm({ onCreated }: CreateFeatureFormProps) {
       <section className="defaults-panel" aria-label="Server defaults">
         <h3 className="defaults-panel__title">Server defaults</h3>
         <p className="setup-step__hint">
-          Applied by the runtime at creation; configurable in a later milestone.
+          Set when the feature is created. You can change it later.
         </p>
         <dl className="defaults-panel__facts">
           {defaults.pipeline !== undefined ? (

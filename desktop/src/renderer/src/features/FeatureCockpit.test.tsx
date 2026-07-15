@@ -141,14 +141,13 @@ describe('FeatureCockpit failure and retry', () => {
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
-  it('disables Start with the server-provided reason while setup is unfinished', async () => {
+  it('attributes the server-provided reason to Start when the action is unavailable', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
     await screen.findByRole('heading', { name: 'Search revamp' });
-    const start = screen.getByRole('button', { name: 'Start' });
-    expect(start).toBeDisabled();
-    expect(screen.getByText('setup must succeed first')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
+    expect(screen.getByText('Start: setup must succeed first')).toBeInTheDocument();
   });
 });
 
@@ -182,31 +181,15 @@ describe('FeatureCockpit ready-to-start', () => {
     });
   }
 
-  it('labels the feature Ready to start and enables Start from the catalogue', async () => {
+  it('labels the feature Ready to start without offering an unavailable Start action', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(readySnapshotDetail());
     renderCockpit(mock);
     await screen.findByRole('heading', { name: 'Search revamp' });
 
     expect(screen.getByText('Ready to start')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled();
-  });
-
-  it('never invokes any action when Start is clicked in this phase', async () => {
-    const mock = installAgenticoMock();
-    mock.api.getFeature.mockResolvedValue(readySnapshotDetail());
-    renderCockpit(mock);
-    const user = userEvent.setup();
-    await screen.findByRole('heading', { name: 'Search revamp' });
-
-    const invocations = () =>
-      mock.api.dispatchFeatureSetup.mock.calls.length + mock.api.createFeature.mock.calls.length;
-    const before = invocations();
-    await user.click(screen.getByRole('button', { name: 'Start' }));
-    expect(invocations()).toBe(before);
-    expect(
-      screen.getByText("Nothing was started — starting isn't available yet."),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
+    expect(screen.getByText("Starting isn't available in this version yet.")).toBeInTheDocument();
   });
 });
 

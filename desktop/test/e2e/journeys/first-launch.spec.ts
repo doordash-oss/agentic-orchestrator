@@ -1,5 +1,5 @@
 /**
- * Journey 1 — first launch, full creation tracer bullet against the packaged
+ * Journey 1 — first launch, full creation flow against the packaged
  * app and the real bundled server:
  *
  * clean state → connection shell (app-owned launch) → wizard blocks creation
@@ -47,10 +47,10 @@ const RUN_NAME = `first-launch-${
   process.env['AGENTICO_E2E_VARIANT'] ?? (process.platform === 'darwin' ? 'macos' : 'linux')
 }`;
 
-test('first launch: wizard-gated creation tracer bullet reaches Ready to start', async ({}, testInfo) => {
+test('first launch: wizard-gated creation reaches Ready to start', async ({}, testInfo) => {
   const transcript = new Transcript(
     RUN_NAME,
-    'Journey 1 — first launch creation tracer bullet (packaged app, real bundled server)',
+    'Journey 1 — first launch creation (packaged app, real bundled server)',
   );
   const world = createWorld('first-launch', { auth: { loggedIn: false }, authDelaySeconds: 6 });
   const demoApp = createPlainFolder(world, 'demo-app');
@@ -176,7 +176,8 @@ test('first launch: wizard-gated creation tracer bullet reaches Ready to start',
     await expect(cockpit.getByText('1 of 1 tasks complete')).toBeVisible();
     const worktreeTask = cockpit.locator('.task-row', { hasText: 'Worktree: demo-app' });
     await expect(worktreeTask).toContainText('Done');
-    await expect(cockpit.getByRole('button', { name: 'Start' })).toBeEnabled();
+    await expect(cockpit.getByRole('button', { name: 'Start' })).toHaveCount(0);
+    await expect(cockpit.getByText("Starting isn't available in this version yet.")).toBeVisible();
     await evidenceShotBothThemes(handle, 'ready-to-start');
 
     const features = await handle.page.evaluate(() => window.agentico.listFeatures());
@@ -217,7 +218,8 @@ test('first launch: wizard-gated creation tracer bullet reaches Ready to start',
     if (discovery!.auth_token !== undefined && discovery!.auth_token !== '') {
       expect(logText).not.toContain(discovery!.auth_token);
     }
-    transcript.codeBlock('app/server log excerpt (redacted at source)', tail(logText, 30));
+    const logExcerpt = nonemptyLogExcerpt(logText, 30);
+    transcript.codeBlock('app/server log excerpt (redacted at source)', logExcerpt);
 
     await closeApp(handle);
     await waitFor(
@@ -244,7 +246,10 @@ test('first launch: wizard-gated creation tracer bullet reaches Ready to start',
         'and no longer exists after app quit — the bounded SIGTERM→reap path ran',
     );
     ownership.step(`ownership reported over IPC while connected: \`${connection.ownership}\``);
-    ownership.codeBlock('app/server log tail at shutdown (redacted at source)', tail(logText, 15));
+    ownership.codeBlock(
+      'app/server log tail at shutdown (redacted at source)',
+      nonemptyLogExcerpt(logText, 15),
+    );
     ownership.write(testInfo);
   } finally {
     if (handle !== null) {
@@ -254,6 +259,13 @@ test('first launch: wizard-gated creation tracer bullet reaches Ready to start',
     destroyWorld(world);
   }
 });
+
+function nonemptyLogExcerpt(logText: string, lines: number): string {
+  const excerpt = tail(logText, lines).trim();
+  return excerpt === ''
+    ? '[no app/server process output was emitted; PID lifecycle assertions verified shutdown]'
+    : excerpt;
+}
 
 /** Tabs from the document body until the named button owns focus. */
 async function focusButtonByKeyboard(handle: AppHandle, label: string): Promise<void> {

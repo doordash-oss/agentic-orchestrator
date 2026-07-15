@@ -159,7 +159,13 @@ body {
   color: var(--color-muted);
   text-align: center;
   max-width: 100%;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+
+.phase-spine__label-text--compact {
+  display: none;
 }
 
 .phase-spine__stage[data-state='active'] .phase-spine__label {
@@ -295,15 +301,25 @@ body {
 
 /* --- Responsive: narrow (400px) up to wide ---------------------------------------- */
 
+@media (max-width: 640px) {
+  .phase-spine__label {
+    white-space: nowrap;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+  }
+
+  .phase-spine__label-text--full {
+    display: none;
+  }
+
+  .phase-spine__label-text--compact {
+    display: inline;
+  }
+}
+
 @media (max-width: 480px) {
   .shell-card {
     padding: var(--space-4) var(--space-3);
-  }
-
-  /* Genuinely narrow: compact the phase labels instead of truncating them. */
-  .phase-spine__label {
-    font-size: 10px;
-    letter-spacing: 0.04em;
   }
 
   .shell-card__status {

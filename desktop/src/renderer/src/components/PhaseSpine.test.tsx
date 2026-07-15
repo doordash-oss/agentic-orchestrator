@@ -63,7 +63,21 @@ describe('PhaseSpine', () => {
     render(<PhaseSpine stages={longStages} activeIndex={1} tone="progress" />);
     const label = screen.getByText('Knowledge Base');
     expect(label).toHaveTextContent('Knowledge Base');
-    expect(label).toHaveAttribute('title', 'Knowledge Base');
+    expect(label.closest('.phase-spine__label')).toHaveAttribute('title', 'Knowledge Base');
+    expect(label.closest('.phase-spine__label')).toHaveAttribute('aria-label', 'Knowledge Base');
+  });
+
+  it('provides intentional compact labels without splitting phase names', () => {
+    const longStages = [
+      { id: 'knowledge-base', label: 'Knowledge Base' },
+      { id: 'inquire', label: 'Inquire' },
+      { id: 'implement', label: 'Implement' },
+    ] as const;
+    render(<PhaseSpine stages={longStages} activeIndex={1} tone="progress" />);
+
+    expect(screen.getByText('KB')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByText('INQ')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByText('IMP')).toHaveAttribute('aria-hidden', 'true');
   });
 
   it('pulses the active needle only when motion is allowed', () => {

@@ -106,7 +106,8 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
     await expect(cockpit.getByText('2 of 2 tasks complete')).toBeVisible();
     await expect(cockpit.getByText('(attempt 2)')).toBeVisible();
-    await expect(cockpit.getByRole('button', { name: 'Start' })).toBeEnabled();
+    await expect(cockpit.getByRole('button', { name: 'Start' })).toHaveCount(0);
+    await expect(cockpit.getByText("Starting isn't available in this version yet.")).toBeVisible();
 
     const afterRetry = await handle.page.evaluate(
       (id) => window.agentico.getFeature(id),
@@ -140,7 +141,10 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     await expect(restoredCockpit).toBeVisible({ timeout: 60_000 });
     await expect(restoredCockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
     await expect(restoredCockpit.getByText('2 of 2 tasks complete')).toBeVisible();
-    await expect(restoredCockpit.getByRole('button', { name: 'Start' })).toBeEnabled();
+    await expect(restoredCockpit.getByRole('button', { name: 'Start' })).toHaveCount(0);
+    await expect(
+      restoredCockpit.getByText("Starting isn't available in this version yet."),
+    ).toBeVisible();
 
     const restored = await handle.page.evaluate((id) => window.agentico.getFeature(id), featureId);
     expect(restored.id).toBe(featureId);

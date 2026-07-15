@@ -2,10 +2,10 @@
  * Minimal feature cockpit: always reloads the authoritative snapshot from
  * the server (fetch on mount, refetch on matching SSE invalidations and on
  * resync), shows server-owned setup order/status/attempts with safe failure
- * data and diagnostics, and renders its action row FROM the authoritative
- * action catalogue. Start is shown exactly as the server authorizes it but
- * is never invoked in this phase; Retry re-dispatches durable setup for the
- * SAME feature. A vanished feature (404) renders a close affordance instead
+ * data and diagnostics, and renders the server-authorized setup action.
+ * Readiness is displayed without a Start control until starting is implemented;
+ * Retry re-dispatches durable setup for the SAME feature. A vanished feature
+ * (404) renders a close affordance instead
  * of crashing. No runtime files are ever read here.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -124,11 +124,6 @@ export function FeatureCockpit({
       })
       .finally(() => setBusy(false));
   }, [busy, featureId, load]);
-
-  const startPlaceholder = useCallback(() => {
-    // STUB(Phase 2): invoke start action via the server catalogue.
-    setAnnouncement("Nothing was started — starting isn't available yet.");
-  }, []);
 
   if (state.phase === 'loading') {
     return (
@@ -299,27 +294,13 @@ export function FeatureCockpit({
             ) : null}
           </span>
         ) : null}
-        {startAction !== undefined ? (
-          <span className="cockpit__action">
-            <button
-              type="button"
-              className="cockpit__start"
-              disabled={!startAction.enabled}
-              onClick={startPlaceholder}
-              {...(startAction.disabledReasons[0] !== undefined
-                ? { title: startAction.disabledReasons[0].message }
-                : {})}
-            >
-              Start
-            </button>
-            {!startAction.enabled && startAction.disabledReasons[0] !== undefined ? (
-              <span className="cockpit__action-reason">
-                {startAction.disabledReasons[0].message}
-              </span>
-            ) : null}
-            {startAction.enabled ? (
-              <span className="cockpit__action-reason">Starting isn&apos;t available yet.</span>
-            ) : null}
+        {startAction?.enabled ? (
+          <span className="cockpit__action-reason">
+            Starting isn&apos;t available in this version yet.
+          </span>
+        ) : startAction?.disabledReasons[0] !== undefined ? (
+          <span className="cockpit__action-reason">
+            Start: {startAction.disabledReasons[0].message}
           </span>
         ) : null}
       </div>

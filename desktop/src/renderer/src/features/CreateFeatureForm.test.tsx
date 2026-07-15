@@ -27,6 +27,7 @@ describe('CreateFeatureForm defaults', () => {
     expect(panel).toHaveTextContent('medium');
     expect(panel).toHaveTextContent('balanced');
     expect(panel).toHaveTextContent('model-plan');
+    expect(panel).toHaveTextContent('Set when the feature is created. You can change it later.');
   });
 
   it('shows repository eligibility: invalid repositories are disabled with the reason', async () => {

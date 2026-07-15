@@ -107,19 +107,38 @@ func TestEnsureTestingContractBaseCommitsIsAtomicOnResolutionFailure(t *testing.
 	}
 }
 
-func TestEnsureTestingContractBaseCommitsRejectsMissingWorktree(t *testing.T) {
+func TestEnsureTestingContractBaseCommitsPathlessRepos(t *testing.T) {
 	t.Parallel()
 
-	contract := &TestingContract{}
-	err := EnsureTestingContractBaseCommits(contract, []feature.FeatureRepo{{Name: "api"}}, func(string) (string, error) {
-		t.Fatal("resolver should not run without a worktree path")
-		return "", nil
-	})
-	if err == nil || !strings.Contains(err.Error(), `repository "api" has no worktree path`) {
-		t.Fatalf("error = %v, want missing worktree detail", err)
+	tests := []struct {
+		name  string
+		repos []feature.FeatureRepo
+		want  map[string]string
+	}{
+		{
+			name:  "falls back to repo path when worktree was cleaned",
+			repos: []feature.FeatureRepo{{Name: "api", Path: "/repos/api"}},
+			want:  map[string]string{"api": "head-of-/repos/api"},
+		},
+		{
+			name:  "skips repo with neither path instead of failing",
+			repos: []feature.FeatureRepo{{Name: "api"}, {Name: "web", WorktreePath: "/worktrees/web"}},
+			want:  map[string]string{"web": "head-of-/worktrees/web"},
+		},
 	}
-	if contract.BaseCommits != nil {
-		t.Fatalf("BaseCommits = %#v, want nil after failure", contract.BaseCommits)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := &TestingContract{}
+			err := EnsureTestingContractBaseCommits(contract, tt.repos, func(path string) (string, error) {
+				return "head-of-" + path, nil
+			})
+			if err != nil {
+				t.Fatalf("EnsureTestingContractBaseCommits: %v", err)
+			}
+			if !reflect.DeepEqual(contract.BaseCommits, tt.want) {
+				t.Fatalf("BaseCommits = %#v, want %#v", contract.BaseCommits, tt.want)
+			}
+		})
 	}
 }
 

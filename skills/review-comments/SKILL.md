@@ -4,7 +4,7 @@ description: Execute a feature-level review-comments cycle — aggregate unaddre
 
 # Review-Comments Cycle
 
-The harness has detected unaddressed PR review comments on one or more of this feature's PRs. Your job is to address (or, with reasoning, dismiss) every aggregated comment, run the project verification commands on every touched repo, and emit one combined `review-resolutions.json`. One Claude session per iteration; the same handoff contract as the implement skill applies.
+The harness has detected unaddressed PR review comments on one or more of this feature's PRs. Your job is to address (or, with reasoning, dismiss) every aggregated comment, validate your edits with focused development tests, and emit one combined `review-resolutions.json`. One agent session per iteration; the same handoff contract as the implement skill applies.
 
 ## Workspace
 
@@ -53,7 +53,7 @@ Every aggregated comment must appear exactly once. The orchestrator reads this f
 
 ### Step 4 — Per repo: commit + push
 
-Each Task agent, after a clean baseline:
+Each Task agent, once its edits are validated:
 
 - `git add -A` and `git commit -m "Address review comments"` on that repo's branch.
 - `git push origin <branch>` (no force needed; we're appending commits, not rewriting history).
@@ -72,7 +72,7 @@ Emit `progress.md` per the standard handoff contract (see [implement skill](../i
 - `## Iteration Handoff → Completed this iteration` — one bullet per repo touched (e.g., `- api: addressed 3 comments, dismissed 1, force-pushed`).
 - `## Iteration Handoff → Remaining from the plan` — comments not yet decided (empty when every aggregated comment has a resolution entry).
 - `## Iteration State` — exactly one of:
-  - `SUCCESS` — every aggregated comment has a resolution entry, every touched repo's baseline checks passed, the combined `review-resolutions.json` is written.
+  - `SUCCESS` — every aggregated comment has a resolution entry, your focused development tests on the touched repos pass, and the combined `review-resolutions.json` is written.
   - `RETRY` — partial progress (e.g., one comment fix broke a test; revisit on the next iteration with fresh context). The next iteration starts from your `progress.md`.
   - `NEED_USER_INPUT` — a comment is fundamentally ambiguous (e.g., the reviewer asked for a behavior change that contradicts a prior product decision and you cannot resolve it from the visible context). Surface a `## Questions for User` section.
 

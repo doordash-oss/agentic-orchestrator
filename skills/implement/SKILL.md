@@ -19,7 +19,7 @@ Never create or edit `verification-report.yaml`. The harness derives it after `p
 
 1. Read the full phase plan.
 2. If `{phase_dir}/progress.md` exists, read it and resume from `### Where I stopped`. Reviewer feedback and the current plan override stale handoff prose.
-3. Read `{phase_dir}/../testing-contract.yaml`. Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility.
+3. Read `testing-contract.yaml` — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/refactor/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility.
 4. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, emit `NEED_USER_INPUT`.
 5. Build a dependency graph from `Blocked by`, shared files, repo tags, and acceptance criteria.
 

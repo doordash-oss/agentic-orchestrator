@@ -4,7 +4,7 @@ description: Execute a feature-level refactor cycle — author a refactor plan w
 
 # Refactor Cycle
 
-The harness has dispatched a refactor cycle on a published feature. Your job is to author a refactor plan that scopes the work via per-Task `**Repo:** <name>` tags, then implement the plan across every staged repo. Cross-repo Tasks (one Task touching multiple repos) are first-class; the same Claude session iterates over every repo via Task sub-agents.
+The harness has dispatched a refactor cycle on a published feature. Your job is to author a refactor plan that scopes the work via per-Task `**Repo:** <name>` tags, then implement the plan across every staged repo. Cross-repo Tasks (one Task touching multiple repos) are first-class; the same agent session iterates over every repo via Task sub-agents.
 
 ## Output Files
 
@@ -42,7 +42,7 @@ Do NOT make code edits in this step — that work happens in the iterations that
 
 ### Step 2 — Iterate on the plan
 
-Each iteration runs one Claude session that:
+Each iteration runs one agent session that:
 
 1. Reads `refactor-plan.md` and the testing contract at `<artifactDir>/testing-contract.yaml`.
 2. Dispatches per-repo Task sub-agents for the file edits. Each sub-agent's prompt names exactly one repo; the main agent owns the cross-repo coordination (e.g., land repo-a's API change before repo-b's import update).

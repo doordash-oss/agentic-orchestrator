@@ -59,9 +59,16 @@ func EnsureTestingContractBaseCommits(contract *TestingContract, repos []feature
 			continue
 		}
 
+		// Post-publish cycles may run after the worktree was cleaned; fall
+		// back to the repository path like the cycle dispatch does. A repo
+		// with neither path stays unanchored: its failures classify as
+		// unclassified instead of aborting the whole loop.
 		worktreePath := strings.TrimSpace(repo.WorktreePath)
 		if worktreePath == "" {
-			return fmt.Errorf("ensuring testing contract base commits: repository %q has no worktree path", name)
+			worktreePath = strings.TrimSpace(repo.Path)
+		}
+		if worktreePath == "" {
+			continue
 		}
 		commit, err := resolver(worktreePath)
 		if err != nil {

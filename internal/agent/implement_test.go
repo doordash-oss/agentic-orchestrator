@@ -2887,6 +2887,79 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 	}
 }
 
+func TestImplementLoopSkipReviewRoutesHarnessRegressionToRetry(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-harness-regression")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	if err := os.WriteFile(filepath.Join(workDir, "check.sh"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runVerificationTestCommand(t, runner, workDir, "git add check.sh")
+	runVerificationTestCommand(t, runner, workDir, "git commit -qm base")
+	// The uncommitted change regresses the check: candidate fails while the
+	// anchored base commit still passes.
+	if err := os.WriteFile(filepath.Join(workDir, "check.sh"), []byte("#!/bin/sh\necho regressed >&2\nexit 9\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	planPath := filepath.Join(artifactDir, "plan.md")
+	plan := "### Automated Verification\n- [ ] Check passes: `./check.sh`\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	f := &feature.Feature{
+		ID: "test-harness-regression", Name: "Harness Regression", Slug: "harness-regression",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, _ := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: true, PhaseType: "collapsed",
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus == finalStatusReviewPassed {
+		t.Fatalf("result = %+v, want harness-detected regression to block review_passed", result)
+	}
+	meta, err := os.ReadFile(filepath.Join(artifactDir, "iteration-01", "meta.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(meta), ReviewChangesRequested.String()) {
+		t.Fatalf("iteration meta = %s, want review status %q", meta, ReviewChangesRequested.String())
+	}
+}
+
 func TestImplementLoop_RejectsImplementerContractMutation(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")

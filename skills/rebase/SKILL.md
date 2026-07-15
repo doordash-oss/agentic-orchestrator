@@ -1,10 +1,10 @@
 ---
-description: Execute a feature-level rebase cycle — rebase conflicting branches onto their bases, resolve conflicts, verify the feature, and emit the standard handoff without pushing
+description: Execute a feature-level rebase cycle — rebase conflicting branches onto their bases, resolve conflicts, leave every worktree clean, and emit the standard handoff without pushing
 ---
 
 # Rebase Cycle
 
-The harness has detected one or more conflicting branches across this feature's repos. Your job is to rebase each listed target onto its base, resolve conflicts, run the project verification commands across the feature, and stop without pushing. The orchestrator runs Final Review and applies publish policy after approval. One Claude session per iteration; the same handoff contract as the implement skill applies.
+The harness has detected one or more conflicting branches across this feature's repos. Your job is to rebase each listed target onto its base, resolve conflicts, leave every worktree clean, and stop without pushing. Agentico executes the plan-declared conflict-marker check after handoff; the orchestrator runs Final Review and applies publish policy after approval. One agent session per iteration; the same handoff contract as the implement skill applies.
 
 ## Workspace
 
@@ -40,7 +40,7 @@ Dispatch one Task agent per behind repo. Each agent:
 5. `git rebase --continue` until the rebase completes.
 6. Verify the worktree:
    - `git status` is clean (no `Unmerged paths`, no `interactive rebase in progress`).
-   - No conflict markers remain: `grep -rn "<<<<<<< " <repo-path> | head -5` returns nothing.
+   - No conflict markers remain: `! grep -rln "<<<<<<< " <repo-path>` exits 0.
 
 ### Step 3 — Do not push
 
@@ -62,7 +62,7 @@ Emit `progress.md` per the standard handoff contract (see [implement skill](../i
 - `## Iteration Handoff → Completed this iteration` — one bullet per repo rebased (e.g., `- api: rebased onto origin/main, verified; not pushed`).
 - `## Iteration Handoff → Remaining from the plan` — repos NOT yet rebased (empty when every behind repo is done).
 - `## Iteration State` — exactly one of:
-  - `SUCCESS` — every target repo is rebased, no rebase is in progress, conflict markers are gone, and the feature verification checks passed. Do not require or report a push.
+  - `SUCCESS` — every target repo is rebased, no rebase is in progress, and conflict markers are gone (Agentico re-verifies the plan-declared conflict-marker check after handoff). Do not require or report a push.
   - `RETRY` — partial progress (e.g., one repo rebased cleanly, another hit a non-trivial conflict you want to revisit with fresh context). The next iteration starts from your `progress.md`.
   - `NEED_USER_INPUT` — the conflict is fundamentally ambiguous (e.g., the same line was independently rewritten by two PRs and either resolution is plausible). Surface a `## Questions for User` section. Do NOT use this as an escape hatch for "the conflict is hard"; reserve for genuine ambiguity.
 

@@ -711,7 +711,29 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Fall through: SUCCESS — run the review gate.
 			if cfg.SkipIterationReview {
-				// Medium/Large: skip per-iteration review, rely on Final Review
+				// Medium/Large: skip per-iteration review, rely on Final Review.
+				// Deterministically classified regressions still route back to
+				// the implementer — with no per-iteration reviewer there is
+				// nobody else to act on a red harness report.
+				if harnessVerification != nil && len(harnessVerification.RegressionItems) > 0 {
+					meta.ReviewStatus = ReviewChangesRequested.String()
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					consecutiveFailures = 0
+					reviewerFeedback = fmt.Sprintf(
+						"Harness verification detected regressions: %s. These commands pass at the contract base commit but fail with your changes. See verification-report.yaml in the iteration directory for evidence; fix the regressions before declaring SUCCESS.",
+						strings.Join(harnessVerification.RegressionItems, ", "))
+					if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
+						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
+						return &LoopResult{
+							FinalStatus: "safety_rail",
+							Iterations:  i,
+							LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
+						}, nil
+					}
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
+					continue
+				}
 				meta.ReviewStatus = reviewStatusSkipped
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)

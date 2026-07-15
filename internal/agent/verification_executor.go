@@ -433,7 +433,9 @@ func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner,
 	var stdout, stderr bytes.Buffer
 	started := time.Now().UTC()
 	err := func() error {
-		_, runErr := runner.Run(runCtx, "/bin/sh", []string{"-lc", command}, ports.CommandOpts{Dir: cwd, Stdout: &stdout, Stderr: &stderr})
+		// Non-login shell: sourcing the user's profile would make runs
+		// machine-dependent and pollute captured output.
+		_, runErr := runner.Run(runCtx, "/bin/sh", []string{"-c", command}, ports.CommandOpts{Dir: cwd, Stdout: &stdout, Stderr: &stderr})
 		return runErr
 	}()
 	exitCode := commandExitCode(err)
@@ -507,6 +509,10 @@ func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, cont
 
 var unstableFailureText = regexp.MustCompile(`(?m)(/[^\s:]+|[A-Za-z]:\\[^\s:]+|\b\d+(?:\.\d+)?(?:ms|s|m)\b)`)
 
+// sameVerificationFailure is a heuristic: equal exit codes plus normalized
+// (volatile-scrubbed, line-sorted) output. Failures with little or no output
+// — including mutual timeouts (exit 124) — can match even when the underlying
+// causes differ, which biases classification toward inherited over regression.
 func sameVerificationFailure(a, b capturedVerificationRun) bool {
 	if a.record.ExitCode != b.record.ExitCode {
 		return false

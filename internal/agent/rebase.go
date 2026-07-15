@@ -73,7 +73,7 @@ func BuildRebasePlan(baseBranch, prURL string, conflictFiles []string) string {
 	b.WriteString("### Verify\n\n")
 	b.WriteString("After the rebase is fully complete:\n\n")
 	b.WriteString("#### Automated Verification:\n")
-	fmt.Fprintf(&b, "- [ ] No conflict markers remain: `grep -rn %q . --include=\"*.go\" --include=\"*.ts\" --include=\"*.js\" --include=\"*.py\" | head -20`\n", conflictMarkerPattern)
+	fmt.Fprintf(&b, "- [ ] No conflict markers remain: `! grep -rln %q . --include=\"*.go\" --include=\"*.ts\" --include=\"*.js\" --include=\"*.py\"`\n", conflictMarkerPattern)
 	b.WriteString("\n")
 
 	b.WriteString("## Success Criteria\n\n")

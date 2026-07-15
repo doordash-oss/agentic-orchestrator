@@ -63,7 +63,7 @@ When a command needs an external login, credential, device, service, or
 permission, declare the capability and a safe non-mutating probe on that same
 line before the final command:
 
-`- [ ] Protected integration [agentico capability: Okta session; probe: okta auth status]: \`make test-integration\``
+- [ ] Protected integration [agentico capability: Okta session; probe: okta auth status]: `make test-integration`
 
 Do not add capability metadata based only on an expected error message. The
 probe must directly answer whether the prerequisite is currently available.

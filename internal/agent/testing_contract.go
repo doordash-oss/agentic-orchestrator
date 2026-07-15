@@ -381,7 +381,14 @@ func WriteTestingContract(path string, contract TestingContract) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating testing contract directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// Write-then-rename so a crash mid-write cannot leave a truncated
+	// contract: a partial file would silently drop BaseCommits and cause the
+	// next iteration to re-anchor at post-change HEAD.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("writing testing contract: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("writing testing contract: %w", err)
 	}
 	return nil

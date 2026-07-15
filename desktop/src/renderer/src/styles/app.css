@@ -73,6 +73,10 @@ body {
   color: var(--color-muted);
 }
 
+.shell-card__version--server {
+  margin-left: auto;
+}
+
 /* --- Phase spine ----------------------------------------------------------- */
 
 .phase-spine__rail {
@@ -179,12 +183,29 @@ body {
   font-size: 12px;
 }
 
-.shell-card__status-label[data-status='connected'] {
+.shell-card__status-label[data-status='ready'] {
   color: var(--color-success);
 }
 
-.shell-card__status-label[data-status='error'] {
+.shell-card__status-label[data-status='error'],
+.shell-card__status-label[data-status='incompatible'],
+.shell-card__status-label[data-status='resources-missing'],
+.shell-card__status-label[data-status='launch-failed'],
+.shell-card__status-label[data-status='crashed'] {
   color: var(--color-danger);
+}
+
+/* Ownership badge: text label with a hairline chip — never color alone. */
+.shell-card__ownership {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+  border: 1px solid var(--color-hairline);
+  border-radius: 3px;
+  padding: 1px var(--space-2);
+  white-space: nowrap;
 }
 
 .shell-card__status-detail {

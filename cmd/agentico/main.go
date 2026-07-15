@@ -218,7 +218,7 @@ func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, la
 		printUsage(stdout)
 		return 0
 	case launchModeVersion:
-		fmt.Fprintf(stdout, "agentico v%s\n", tui.GetVersion())
+		fmt.Fprintln(stdout, tui.VersionLine())
 		return 0
 	case launchModeUpdate:
 		// Dispatch through the updater seam ahead of the TUI branch, early

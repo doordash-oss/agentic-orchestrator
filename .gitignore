@@ -47,3 +47,6 @@ node_modules/
 desktop/out/
 desktop/dist/
 desktop/coverage/
+# Packaging staging area (server binary + build-identity.json), regenerated
+# by desktop/scripts/prepare-server.mjs on every package build.
+desktop/resources/

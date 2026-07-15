@@ -62,6 +62,43 @@ func InjectedVersion() string {
 	return version
 }
 
+// revision is set at build time via ldflags:
+//
+//	-X github.com/doordash-oss/agentic-orchestrator/internal/tui.revision=<full-sha>
+//
+// Packaging injects it explicitly because the Go toolchain does not stamp
+// vcs.revision when building from a linked git worktree.
+var revision string
+
+// GetRevision returns the build's VCS revision, resolving in order:
+//  1. Build-time ldflags (make build, desktop packaging)
+//  2. Toolchain-stamped vcs.revision from build info
+//  3. "" (unstamped local builds / tests)
+func GetRevision() string {
+	if revision != "" {
+		return revision
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return setting.Value
+			}
+		}
+	}
+	return ""
+}
+
+// VersionLine is the single-line CLI version banner printed by
+// `agentico --version`, including the VCS revision when the build carries
+// one. Package verification parses this exact shape to cross-check the
+// bundled server binary against the shipped build-identity.json.
+func VersionLine() string {
+	if rev := GetRevision(); rev != "" {
+		return fmt.Sprintf("agentico v%s (revision %s)", GetVersion(), rev)
+	}
+	return fmt.Sprintf("agentico v%s", GetVersion())
+}
+
 // listItemKind distinguishes section headers from feature rows in the virtual list.
 type listItemKind int
 

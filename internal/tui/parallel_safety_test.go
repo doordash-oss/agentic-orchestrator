@@ -41,6 +41,8 @@ import (
 //     and should stay serial until the filesystem fixtures are narrowed.
 //   - live_preview_markdown_test.go: mutates the package-level Markdown
 //     renderer seam.
+//   - version_test.go: mutates the package-level ldflags-injected version
+//     and revision vars.
 //   - icons_test.go and notify_test.go: mutate terminal-related environment
 //     with t.Setenv.
 //   - clipboard_test.go: probes host clipboard integration.
@@ -90,6 +92,7 @@ var tuiParallelIneligibleTestFiles = []string{
 	"notify_test.go",
 	"publish_test.go",
 	"skillpicker_test.go",
+	"version_test.go",
 	"welcome_test.go",
 	"wizard_delegation_test.go",
 	"wizard_test.go",

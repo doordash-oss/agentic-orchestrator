@@ -1,7 +1,10 @@
 BINARY  := agentico
 BIN_DIR := ./bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -s -w -X github.com/doordash-oss/agentic-orchestrator/internal/tui.version=$(VERSION)
+# Injected explicitly because the Go toolchain does not stamp vcs.revision
+# when building from a linked git worktree.
+REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || echo "")
+LDFLAGS := -s -w -X github.com/doordash-oss/agentic-orchestrator/internal/tui.version=$(VERSION) -X github.com/doordash-oss/agentic-orchestrator/internal/tui.revision=$(REVISION)
 
 .PHONY: build install install-system uninstall clean lint generate-openapi test-fast jaeger jaeger-stop jaeger-status
 

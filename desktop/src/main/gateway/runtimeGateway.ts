@@ -13,14 +13,8 @@
  *  - Every failure lands in a renderer-visible connection-shell state with
  *    redacted diagnostics and a manual retry path.
  */
-import {
-  SafeErrorException,
-  safeError,
-  toSafeError,
-  redactText,
-  type SafeError,
-} from '../../shared/errors';
-import type { ConnectionState } from '../../shared/ipc';
+import { SafeErrorException, safeError, toSafeError, redactText } from '../../shared/errors';
+import { isConnectionErrorState, type ConnectionState } from '../../shared/ipc';
 import { z } from 'zod';
 import { evaluateCompatibility } from './compatibility';
 import { evaluateDiscoveryFile, type DiscoveryDeps, type DiscoveryRecord } from './discovery';
@@ -728,20 +722,19 @@ export class RuntimeGateway {
       }
       return out;
     };
-    const error: SafeError | undefined =
-      state.error === undefined
-        ? undefined
-        : {
-            code: state.error.code,
-            message: scrub(state.error.message),
-            ...(state.error.remediation === undefined
-              ? {}
-              : { remediation: scrub(state.error.remediation) }),
-          };
+    if (!isConnectionErrorState(state)) {
+      return { ...state, detail: scrub(state.detail) };
+    }
     return {
       ...state,
       detail: scrub(state.detail),
-      ...(error === undefined ? {} : { error }),
+      error: {
+        code: state.error.code,
+        message: scrub(state.error.message),
+        ...(state.error.remediation === undefined
+          ? {}
+          : { remediation: scrub(state.error.remediation) }),
+      },
     };
   }
 }

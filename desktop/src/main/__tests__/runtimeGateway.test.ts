@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConnectionStateSchema, type ConnectionState } from '../../shared/ipc';
+import {
+  ConnectionStateSchema,
+  isConnectionErrorState,
+  type ConnectionState,
+} from '../../shared/ipc';
+import type { SafeError } from '../../shared/errors';
 import type { ChildExit } from '../gateway/serverProcess';
 import {
   RuntimeGateway,
@@ -211,6 +216,14 @@ function makeEnv(options: EnvOptions = {}): Env {
   return env;
 }
 
+/** Narrows to the failure variant; terminal states always carry an error. */
+function requireError(state: ConnectionState): SafeError {
+  if (!isConnectionErrorState(state)) {
+    throw new Error(`expected a failure state, got ${state.status}`);
+  }
+  return state.error;
+}
+
 function expectNoTokenLeak(env: Env): void {
   for (const state of env.states) {
     ConnectionStateSchema.parse(state); // strict: token-shaped fields fail
@@ -263,10 +276,11 @@ describe('RuntimeGateway attach', () => {
     const state = env.gateway.getState();
     expect(state.status).toBe('incompatible');
     expect(state.ownership).toBe('external');
-    expect(state.error?.code).toBe('E_INCOMPATIBLE_SERVER');
-    expect(state.error?.remediation).toMatch(/update/i);
+    const error = requireError(state);
+    expect(error.code).toBe('E_INCOMPATIBLE_SERVER');
+    expect(error.remediation).toMatch(/update/i);
     // Guided resolution never offers to stop the external process.
-    expect(`${state.error?.message} ${state.error?.remediation}`).not.toMatch(
+    expect(`${error.message} ${error.remediation ?? ''}`).not.toMatch(
       /\b(kill|terminate|stop the)\b/i,
     );
     expect(env.spawnCalls).toHaveLength(0);
@@ -297,7 +311,7 @@ describe('RuntimeGateway attach', () => {
     await env.gateway.start();
     const state = env.gateway.getState();
     expect(state.status).toBe('error');
-    expect(state.error?.code).toBe('E_ATTACH_AUTH');
+    expect(requireError(state).code).toBe('E_ATTACH_AUTH');
     expect(env.spawnCalls).toHaveLength(0);
     expectNoTokenLeak(env);
   });
@@ -398,8 +412,9 @@ describe('RuntimeGateway launch', () => {
     await env.gateway.start();
     const state = env.gateway.getState();
     expect(state.status).toBe('resources-missing');
-    expect(state.error?.code).toBe('E_RESOURCES_MISSING');
-    expect(state.error?.remediation).toBeTruthy();
+    const error = requireError(state);
+    expect(error.code).toBe('E_RESOURCES_MISSING');
+    expect(error.remediation).toBeTruthy();
     expect(env.spawnCalls).toHaveLength(0);
     expectNoTokenLeak(env);
   });
@@ -409,7 +424,7 @@ describe('RuntimeGateway launch', () => {
     await env.gateway.start();
     const state = env.gateway.getState();
     expect(state.status).toBe('launch-failed');
-    expect(state.error?.code).toBe('E_LAUNCH_FAILED');
+    expect(requireError(state).code).toBe('E_LAUNCH_FAILED');
     expectNoTokenLeak(env);
   });
 
@@ -422,7 +437,7 @@ describe('RuntimeGateway launch', () => {
     await env.gateway.start();
     const state = env.gateway.getState();
     expect(state.status).toBe('launch-failed');
-    expect(state.error?.message).toMatch(/exited/i);
+    expect(requireError(state).message).toMatch(/exited/i);
     expectNoTokenLeak(env);
   });
 
@@ -453,7 +468,7 @@ describe('RuntimeGateway supervision', () => {
     const state = env.gateway.getState();
     expect(state.status).toBe('crashed');
     expect(state.ownership).toBe('none');
-    expect(state.error?.code).toBe('E_SERVER_CRASHED');
+    expect(requireError(state).code).toBe('E_SERVER_CRASHED');
     expect(env.gateway.hasOwnedChild()).toBe(false);
     expectNoTokenLeak(env);
   });

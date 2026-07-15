@@ -1,19 +1,20 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ConnectionState } from '../../shared/ipc';
+import { ConnectionStateSchema, type ConnectionState } from '../../shared/ipc';
 import App from './App';
 import { installAgenticoMock, readySnapshot } from './test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from './test/setup';
 
-function connection(overrides: Partial<ConnectionState>): ConnectionState {
-  return {
+/** Builds a state through the schema, so tests can only emit valid variants. */
+function connection(overrides: Record<string, unknown>): ConnectionState {
+  return ConnectionStateSchema.parse({
     status: 'discovering',
     stage: 'discover',
     detail: 'Looking for a running Agentico runtime.',
     ownership: 'none',
     ...overrides,
-  };
+  });
 }
 
 beforeEach(() => {

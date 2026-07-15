@@ -69,6 +69,85 @@ describe('ConnectionStateSchema', () => {
     ).toBe(false); // ownership is required
   });
 
+  it('rejects a ready state that names no server ownership', () => {
+    expect(
+      ConnectionStateSchema.safeParse({
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected.',
+        ownership: 'none',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a ready state carrying error detail', () => {
+    expect(
+      ConnectionStateSchema.safeParse({
+        status: 'ready',
+        stage: 'ready',
+        detail: 'Connected.',
+        ownership: 'app-owned',
+        error: { code: 'E_X', message: 'impossible' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects every terminal failure status without error detail', () => {
+    for (const status of [
+      'incompatible',
+      'resources-missing',
+      'launch-failed',
+      'crashed',
+      'error',
+    ]) {
+      expect(
+        ConnectionStateSchema.safeParse({
+          status,
+          stage: 'connect',
+          detail: 'failed',
+          ownership: 'none',
+        }).success,
+        `${status} must require error detail`,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects in-flight startup states carrying an error', () => {
+    for (const status of ['idle', 'resolving-runtime', 'discovering', 'attaching', 'launching']) {
+      expect(
+        ConnectionStateSchema.safeParse({
+          status,
+          stage: 'discover',
+          detail: 'working',
+          ownership: 'none',
+          error: { code: 'E_X', message: 'impossible' },
+        }).success,
+        `${status} must not carry an error`,
+      ).toBe(false);
+    }
+  });
+
+  it('rejects supervision states with impossible ownership', () => {
+    // waiting-health only exists while supervising the app-owned child.
+    expect(
+      ConnectionStateSchema.safeParse({
+        status: 'waiting-health',
+        stage: 'wait-health',
+        detail: 'Waiting for the runtime to become healthy.',
+        ownership: 'none',
+      }).success,
+    ).toBe(false);
+    // connecting authenticates against a concrete server, never no server.
+    expect(
+      ConnectionStateSchema.safeParse({
+        status: 'connecting',
+        stage: 'authenticate',
+        detail: 'Authenticating.',
+        ownership: 'none',
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects token-shaped fields anywhere in the state', () => {
     const base = { status: 'ready', stage: 'ready', detail: '', ownership: 'app-owned' };
     for (const extra of [

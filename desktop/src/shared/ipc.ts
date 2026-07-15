@@ -63,15 +63,17 @@ export const CONNECTION_STAGES = [
 export const ConnectionStageSchema = z.enum(CONNECTION_STAGES);
 export type ConnectionStage = z.output<typeof ConnectionStageSchema>;
 
-export const CONNECTION_STATUSES = [
+/** In-flight startup statuses before any server is attached or owned. */
+export const CONNECTION_PENDING_STATUSES = [
   'idle',
   'resolving-runtime',
   'discovering',
   'attaching',
   'launching',
-  'waiting-health',
-  'connecting',
-  'ready',
+] as const;
+
+/** Terminal states that surface the error panel and a manual retry path. */
+export const CONNECTION_ERROR_STATUSES = [
   'incompatible',
   'resources-missing',
   'launch-failed',
@@ -79,20 +81,21 @@ export const CONNECTION_STATUSES = [
   'error',
 ] as const;
 
+export const CONNECTION_STATUSES = [
+  ...CONNECTION_PENDING_STATUSES,
+  'waiting-health',
+  'connecting',
+  'ready',
+  ...CONNECTION_ERROR_STATUSES,
+] as const;
+
 export const ConnectionStatusSchema = z.enum(CONNECTION_STATUSES);
 export type ConnectionStatus = z.output<typeof ConnectionStatusSchema>;
 
-/** Terminal states that surface the error panel and a manual retry path. */
-export const CONNECTION_ERROR_STATUSES: readonly ConnectionStatus[] = [
-  'incompatible',
-  'resources-missing',
-  'launch-failed',
-  'crashed',
-  'error',
-];
+export type ConnectionErrorStatus = (typeof CONNECTION_ERROR_STATUSES)[number];
 
-export function isConnectionErrorStatus(status: ConnectionStatus): boolean {
-  return CONNECTION_ERROR_STATUSES.includes(status);
+export function isConnectionErrorStatus(status: ConnectionStatus): status is ConnectionErrorStatus {
+  return (CONNECTION_ERROR_STATUSES as readonly ConnectionStatus[]).includes(status);
 }
 
 /**
@@ -110,21 +113,73 @@ export const ServerBuildInfoSchema = z.strictObject({
 
 export type ServerBuildInfo = z.output<typeof ServerBuildInfoSchema>;
 
-/**
- * The renderer-visible connection model. Strict by design: any foreign
- * field — in particular anything token-shaped — fails validation at the
- * preload and IPC boundaries. Credentials never appear here.
- */
-export const ConnectionStateSchema = z.strictObject({
-  status: ConnectionStatusSchema,
+/** Fields every connection-state variant shares. */
+const connectionStateBase = {
   stage: ConnectionStageSchema,
   detail: z.string(),
-  ownership: ServerOwnershipSchema,
   serverBuild: ServerBuildInfoSchema.optional(),
-  error: SafeErrorSchema.optional(),
+} as const;
+
+/** Startup progress before any server exists to own or attach to. */
+export const ConnectionPendingStateSchema = z.strictObject({
+  status: z.enum(CONNECTION_PENDING_STATUSES),
+  ...connectionStateBase,
+  ownership: z.literal('none'),
 });
 
+/** Supervising the freshly spawned child, which is always app-owned. */
+export const ConnectionSupervisingStateSchema = z.strictObject({
+  status: z.literal('waiting-health'),
+  ...connectionStateBase,
+  ownership: z.literal('app-owned'),
+});
+
+/** Authenticating against a concrete server, so ownership is decided. */
+export const ConnectionAuthenticatingStateSchema = z.strictObject({
+  status: z.literal('connecting'),
+  ...connectionStateBase,
+  ownership: z.enum(['external', 'app-owned']),
+});
+
+/** Connected: always names who owns the server and never carries an error. */
+export const ConnectionReadyStateSchema = z.strictObject({
+  status: z.literal('ready'),
+  ...connectionStateBase,
+  ownership: z.enum(['external', 'app-owned']),
+});
+
+/** Terminal failures always carry redacted diagnostics for the shell. */
+export const ConnectionErrorStateSchema = z.strictObject({
+  status: z.enum(CONNECTION_ERROR_STATUSES),
+  ...connectionStateBase,
+  ownership: ServerOwnershipSchema,
+  error: SafeErrorSchema,
+});
+
+/**
+ * The renderer-visible connection model, discriminated on `status` so
+ * impossible combinations — a ready state with no ownership, a terminal
+ * failure without error detail, an in-flight state carrying an error —
+ * are unrepresentable. Strict by design: any foreign field — in particular
+ * anything token-shaped — fails validation at the preload and IPC
+ * boundaries. Credentials never appear here.
+ */
+export const ConnectionStateSchema = z.discriminatedUnion('status', [
+  ConnectionPendingStateSchema,
+  ConnectionSupervisingStateSchema,
+  ConnectionAuthenticatingStateSchema,
+  ConnectionReadyStateSchema,
+  ConnectionErrorStateSchema,
+]);
+
 export type ConnectionState = z.output<typeof ConnectionStateSchema>;
+export type ConnectionReadyState = z.output<typeof ConnectionReadyStateSchema>;
+export type ConnectionErrorState = z.output<typeof ConnectionErrorStateSchema>;
+
+/** Narrows to the failure variant, which always carries error detail. */
+export function isConnectionErrorState(state: ConnectionState): state is ConnectionErrorState {
+  return isConnectionErrorStatus(state.status);
+}
 
 // --- Readiness (renderer-facing view of the authoritative server snapshot) ---
 // Strict by design: any foreign field — in particular anything token-shaped —

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   CONNECTION_STAGES,
-  isConnectionErrorStatus,
+  isConnectionErrorState,
   type ConnectionStage,
   type ConnectionState,
 } from '../../../shared/ipc';
@@ -92,7 +92,8 @@ export function ConnectionShell() {
   }, [refresh]);
 
   const meta = STATUS_META[state.status];
-  const failed = isConnectionErrorStatus(state.status);
+  // Narrowing: error detail exists exactly when the status is terminal.
+  const failure = isConnectionErrorState(state) ? state : null;
   const activeIndex = CONNECTION_STAGES.indexOf(state.stage);
   const ownership = state.ownership === 'none' ? null : OWNERSHIP_META[state.ownership];
 
@@ -111,7 +112,7 @@ export function ConnectionShell() {
       <PhaseSpine
         stages={SPINE_STAGES}
         activeIndex={activeIndex}
-        tone={failed ? 'error' : 'progress'}
+        tone={failure !== null ? 'error' : 'progress'}
       />
 
       <p className="shell-card__status" role="status" aria-live="polite">
@@ -133,16 +134,14 @@ export function ConnectionShell() {
         <span className="shell-card__status-detail">{state.detail}</span>
       </p>
 
-      {failed ? (
+      {failure !== null ? (
         <div className="shell-card__error">
           <div className="shell-card__error-head">
-            <span className="shell-card__error-code">{state.error?.code ?? 'E_UNKNOWN'}</span>
+            <span className="shell-card__error-code">{failure.error.code}</span>
           </div>
-          <p className="shell-card__error-message">
-            {state.error?.message ?? 'The connection failed for an unknown reason.'}
-          </p>
-          {state.error?.remediation !== undefined ? (
-            <p className="shell-card__error-remediation">{state.error.remediation}</p>
+          <p className="shell-card__error-message">{failure.error.message}</p>
+          {failure.error.remediation !== undefined ? (
+            <p className="shell-card__error-remediation">{failure.error.remediation}</p>
           ) : null}
           <button type="button" className="shell-card__retry" onClick={retry}>
             Retry

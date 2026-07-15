@@ -1,18 +1,19 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { ConnectionState } from '../../../shared/ipc';
+import { ConnectionStateSchema, type ConnectionState } from '../../../shared/ipc';
 import { ConnectionShell } from './ConnectionShell';
 import { installAgenticoMock } from '../test/agenticoMock';
 
-function state(overrides: Partial<ConnectionState>): ConnectionState {
-  return {
+/** Builds a state through the schema, so tests can only emit valid variants. */
+function state(overrides: Record<string, unknown>): ConnectionState {
+  return ConnectionStateSchema.parse({
     status: 'discovering',
     stage: 'discover',
     detail: 'Looking for a running Agentico runtime.',
     ownership: 'none',
     ...overrides,
-  };
+  });
 }
 
 describe('ConnectionShell', () => {
@@ -37,29 +38,32 @@ describe('ConnectionShell', () => {
     render(<ConnectionShell />);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
 
+    const failure = { error: { code: 'E_X', message: 'failed', remediation: 'retry' } };
     const cases = [
       { status: 'idle', label: /idle/i },
       { status: 'discovering', label: /discovering/i },
       { status: 'attaching', label: /attaching/i },
       { status: 'launching', label: /launching/i },
-      { status: 'waiting-health', label: /waiting for health/i },
-      { status: 'connecting', label: /authenticating/i },
-      { status: 'ready', label: /ready/i },
-      { status: 'incompatible', label: /incompatible/i },
-      { status: 'resources-missing', label: /resources missing/i },
-      { status: 'launch-failed', label: /launch failed/i },
-      { status: 'crashed', label: /crashed/i },
-      { status: 'error', label: /error/i },
+      { status: 'waiting-health', label: /waiting for health/i, extra: { ownership: 'app-owned' } },
+      { status: 'connecting', label: /authenticating/i, extra: { ownership: 'app-owned' } },
+      { status: 'ready', label: /ready/i, extra: { ownership: 'app-owned' } },
+      {
+        status: 'incompatible',
+        label: /incompatible/i,
+        extra: { ownership: 'external', ...failure },
+      },
+      { status: 'resources-missing', label: /resources missing/i, extra: failure },
+      { status: 'launch-failed', label: /launch failed/i, extra: failure },
+      { status: 'crashed', label: /crashed/i, extra: failure },
+      { status: 'error', label: /error/i, extra: failure },
     ] as const;
-    for (const { status, label } of cases) {
+    for (const { status, label, ...rest } of cases) {
       act(() => {
         mock.emitConnection(
           state({
             status,
             detail: `now ${status}`,
-            ...(status === 'error'
-              ? { error: { code: 'E_X', message: 'failed', remediation: 'retry' } }
-              : {}),
+            ...('extra' in rest ? rest.extra : {}),
           }),
         );
       });
@@ -115,7 +119,14 @@ describe('ConnectionShell', () => {
     render(<ConnectionShell />);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
     act(() => {
-      mock.emitConnection(state({ status: 'connecting', stage: 'authenticate', detail: 'auth' }));
+      mock.emitConnection(
+        state({
+          status: 'connecting',
+          stage: 'authenticate',
+          detail: 'auth',
+          ownership: 'app-owned',
+        }),
+      );
     });
     const items = screen.getAllByRole('listitem');
     expect(items[4]).toHaveAttribute('aria-current', 'step');

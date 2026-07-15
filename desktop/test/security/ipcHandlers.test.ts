@@ -34,9 +34,11 @@ function makeServices(): IpcServices {
 function register(services = makeServices()) {
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>();
   const ipcMain = {
-    handle: vi.fn((channel: string, listener: (typeof handlers extends Map<string, infer H> ? H : never)) => {
-      handlers.set(channel, listener);
-    }),
+    handle: vi.fn(
+      (channel: string, listener: typeof handlers extends Map<string, infer H> ? H : never) => {
+        handlers.set(channel, listener);
+      },
+    ),
   };
   registerIpcHandlers(ipcMain, trusted, services);
   return { handlers, services };

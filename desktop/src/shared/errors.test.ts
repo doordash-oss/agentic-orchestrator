@@ -43,7 +43,10 @@ describe('toSafeError', () => {
   });
 
   it('redacts messages from unknown errors and applies the fallback code', () => {
-    const err = toSafeError(new Error('boom at /Users/somebody/app with Bearer tok123'), 'E_FALLBACK');
+    const err = toSafeError(
+      new Error('boom at /Users/somebody/app with Bearer tok123'),
+      'E_FALLBACK',
+    );
     expect(err.code).toBe('E_FALLBACK');
     expect(err.message).not.toContain('/Users/somebody');
     expect(err.message).not.toContain('tok123');

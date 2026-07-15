@@ -34,7 +34,10 @@ export interface paths {
         /** List feature dashboard summaries. */
         get: operations["listFeatures"];
         put?: never;
-        /** Create a feature. */
+        /**
+         * Create a feature.
+         * @description Queues server-owned durable setup for the new feature. While mandatory readiness is not satisfied (no usable provider, invalid configuration), creation is rejected with a structured `not_ready` error whose target carries the outstanding readiness issues.
+         */
         post: operations["createFeature"];
         delete?: never;
         options?: never;
@@ -266,6 +269,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read consolidated runtime readiness.
+         * @description Reports provider executable, version and authentication readiness, model availability, configuration validity, workspace-root validity, and discovered-repository validity — each with safe remediation metadata (for example the CLI command to run). Available in setup-capable mode before any provider is usable so first-launch clients never probe provider CLIs themselves.
+         */
+        get: operations["getReadiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/readiness/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-probe provider readiness on demand.
+         * @description Re-runs the provider readiness probes (executable detection, version gate, authentication) without restarting the runtime, updates active model routing, and returns the refreshed readiness snapshot. Call after completing an external provider authentication flow.
+         */
+        post: operations["refreshReadiness"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/prompts": {
         parameters: {
             query?: never;
@@ -439,6 +482,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspace/repositories/init": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Initialize a new git repository inside a configured workspace root.
+         * @description Bounded repository-initialization action for first-launch onboarding. Requires an explicit consent flag and a target path confined to a configured workspace root after symlink resolution. Rejects path traversal, symlink escape, targets that are already git repositories, and non-empty incompatible directories. On success the new repository is immediately discoverable through workspace discovery.
+         */
+        post: operations["initWorkspaceRepository"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recovery": {
         parameters: {
             query?: never;
@@ -588,6 +651,81 @@ export interface components {
             owner: components["schemas"]["Owner"];
             /** Format: date-time */
             server_time: string;
+        };
+        /**
+         * @description Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
+         * @enum {string}
+         */
+        ReadinessIssueCode: "missing_executable" | "unsupported_version" | "unauthenticated" | "models_unavailable" | "invalid_configuration" | "invalid_workspace_root" | "invalid_repository";
+        ReadinessIssue: {
+            code: components["schemas"]["ReadinessIssueCode"];
+            /** @description Human-readable problem summary. Never contains credentials. */
+            message: string;
+            /** @description Safe remediation metadata, such as the CLI command to run. Never contains credentials or non-configured filesystem paths. */
+            remedy?: string;
+        };
+        ProviderReadiness: {
+            name: string;
+            installed: boolean;
+            version?: string;
+            ready: boolean;
+            issue?: components["schemas"]["ReadinessIssue"];
+        };
+        ModelReadiness: {
+            available: boolean;
+            models?: string[];
+            issue?: components["schemas"]["ReadinessIssue"];
+        };
+        ConfigurationReadiness: {
+            valid: boolean;
+            issue?: components["schemas"]["ReadinessIssue"];
+        };
+        WorkspaceRootReadiness: {
+            path: string;
+            valid: boolean;
+            issue?: components["schemas"]["ReadinessIssue"];
+        };
+        RepositoryReadiness: {
+            name: string;
+            path: string;
+            valid: boolean;
+            issue?: components["schemas"]["ReadinessIssue"];
+        };
+        RepositoryInitRequest: {
+            /** @description Absolute directory to initialize, confined to a configured workspace root. May not yet exist; an existing directory must be empty and not already a git repository. */
+            path: string;
+            /** @description Explicit user consent to create a git repository at the target path. Must be true. */
+            consent: boolean;
+        };
+        WorkspaceRepository: {
+            /** @description Collision-safe repository key used by workspace discovery. */
+            name: string;
+            path: string;
+            /** @description The configured workspace root containing the repository. */
+            root?: string;
+        };
+        RepositoryInitResponse: components["schemas"]["ActionBaseResponse"] & {
+            result: string;
+            repository: components["schemas"]["WorkspaceRepository"];
+        };
+        WorkspaceReadiness: {
+            roots: components["schemas"]["WorkspaceRootReadiness"][];
+            repositories: components["schemas"]["RepositoryReadiness"][];
+        };
+        ReadinessResponse: components["schemas"]["JSONResponse"] & {
+            /** @description Mandatory readiness — true when at least one provider is usable, models are available, and the configuration is valid. Feature creation is gated on this value. */
+            ready: boolean;
+            /**
+             * Format: date-time
+             * @description When provider probes last ran.
+             */
+            probed_at?: string;
+            providers: components["schemas"]["ProviderReadiness"][];
+            models: components["schemas"]["ModelReadiness"];
+            configuration: components["schemas"]["ConfigurationReadiness"];
+            workspace: components["schemas"]["WorkspaceReadiness"];
+            /** @description Flattened outstanding issues across all sections. */
+            issues?: components["schemas"]["ReadinessIssue"][];
         };
         FeatureListResponse: components["schemas"]["JSONResponse"] & {
             features: components["schemas"]["FeatureSummary"][];
@@ -1403,6 +1541,25 @@ export interface components {
                 "application/json": components["schemas"]["RecoverySnapshotResponse"];
             };
         };
+        /** @description Consolidated runtime readiness snapshot. */
+        ReadinessResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ReadinessResponse"];
+            };
+        };
+        /** @description Newly initialized workspace repository. */
+        RepositoryInitResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RepositoryInitResponse"];
+            };
+        };
         /** @description Mutation result. */
         ActionResponse: {
             headers: {
@@ -1531,6 +1688,7 @@ export interface operations {
             201: components["responses"]["ActionResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
         };
     };
     getFeature: {
@@ -1819,6 +1977,35 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    getReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["ReadinessResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    refreshReadiness: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["JSONMutation"];
+        responses: {
+            200: components["responses"]["ReadinessResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     listPrompts: {
         parameters: {
             query?: never;
@@ -1975,6 +2162,28 @@ export interface operations {
         responses: {
             200: components["responses"]["SessionOutputStream"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    initWorkspaceRepository: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryInitRequest"];
+            };
+        };
+        responses: {
+            201: components["responses"]["RepositoryInitResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
         };
     };
     getRecoverySnapshot: {

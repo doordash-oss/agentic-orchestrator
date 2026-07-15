@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  MAX_PAYLOAD_BYTES,
-  assertNoPrototypePollution,
-  assertWithinByteSize,
-} from './sanitize';
+import { MAX_PAYLOAD_BYTES, assertNoPrototypePollution, assertWithinByteSize } from './sanitize';
 import { SafeErrorException } from './errors';
 
 function codeOf(fn: () => void): string {
@@ -56,9 +52,7 @@ describe('assertWithinByteSize', () => {
   });
 
   it('rejects oversized payloads fail-closed with a typed error', () => {
-    expect(codeOf(() => assertWithinByteSize('x'.repeat(1025), 1024))).toBe(
-      'E_PAYLOAD_TOO_LARGE',
-    );
+    expect(codeOf(() => assertWithinByteSize('x'.repeat(1025), 1024))).toBe('E_PAYLOAD_TOO_LARGE');
   });
 
   it('counts multibyte characters by encoded byte length', () => {

@@ -74,20 +74,14 @@ describe('SettingsStore', () => {
   });
 
   it('recovers from an unsupported (newer) schema version', () => {
-    fs.writeFileSync(
-      settingsPath(),
-      JSON.stringify({ ...defaultSettings(), schemaVersion: 99 }),
-    );
+    fs.writeFileSync(settingsPath(), JSON.stringify({ ...defaultSettings(), schemaVersion: 99 }));
     const store = makeStore();
     expect(store.get()).toEqual(defaultSettings());
     expect(fs.existsSync(path.join(dir, 'settings.json.bak-1'))).toBe(true);
   });
 
   it('recovers from schema-valid JSON with foreign fields (fail closed)', () => {
-    fs.writeFileSync(
-      settingsPath(),
-      JSON.stringify({ ...defaultSettings(), bearerToken: 'nope' }),
-    );
+    fs.writeFileSync(settingsPath(), JSON.stringify({ ...defaultSettings(), bearerToken: 'nope' }));
     const store = makeStore();
     expect(store.get()).toEqual(defaultSettings());
   });

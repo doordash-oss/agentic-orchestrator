@@ -13,6 +13,9 @@ export default defineConfig({
       },
       {
         plugins: [react()],
+        define: {
+          __APP_VERSION__: JSON.stringify('0.1.0'),
+        },
         test: {
           name: 'renderer',
           environment: 'jsdom',

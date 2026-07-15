@@ -1,0 +1,285 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keyboard focus is always visible: amber ring with offset. */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+#root,
+.app-frame {
+  min-height: 100vh;
+}
+
+.app-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-5);
+  padding: var(--space-4);
+}
+
+/* --- Instrument card ------------------------------------------------------ */
+
+.shell-card {
+  width: min(560px, 100%);
+  background: var(--color-panel);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-6) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.shell-card__identity {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--color-hairline);
+  padding-bottom: var(--space-4);
+}
+
+.shell-card__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+
+.shell-card__version {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+/* --- Phase spine ----------------------------------------------------------- */
+
+.phase-spine__rail {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-3) 0 0;
+  display: flex;
+  gap: var(--space-2);
+  border-top: 1px solid var(--color-hairline);
+}
+
+.phase-spine__stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.phase-spine__tick {
+  position: relative;
+  display: block;
+  width: 2px;
+  height: 14px;
+  background: var(--color-hairline);
+}
+
+.phase-spine__stage[data-state='done'] .phase-spine__tick {
+  background: var(--color-success);
+}
+
+.phase-spine__stage[data-state='active'] .phase-spine__tick {
+  background: transparent;
+}
+
+/* The needle: the one amber element on screen. */
+.phase-spine__needle {
+  position: absolute;
+  inset: -4px -1px;
+  background: var(--color-accent);
+  border-radius: 1px;
+}
+
+.phase-spine__stage[data-tone='error'] .phase-spine__needle {
+  background: var(--color-danger);
+}
+
+@keyframes needle-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.phase-spine__needle--pulse {
+  animation: needle-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phase-spine__needle--pulse {
+    animation: none;
+  }
+}
+
+.phase-spine__label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.phase-spine__stage[data-state='active'] .phase-spine__label {
+  color: var(--color-text);
+}
+
+/* --- Status line ------------------------------------------------------------ */
+
+.shell-card__status {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.shell-card__status-icon {
+  font-family: var(--font-mono);
+}
+
+.shell-card__status-label {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.shell-card__status-label[data-status='connected'] {
+  color: var(--color-success);
+}
+
+.shell-card__status-label[data-status='error'] {
+  color: var(--color-danger);
+}
+
+.shell-card__status-detail {
+  color: var(--color-muted);
+  font-size: 13px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* --- Error panel -------------------------------------------------------------- */
+
+.shell-card__error {
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.shell-card__error-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-danger);
+}
+
+.shell-card__error-message {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.shell-card__error-remediation {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.shell-card__retry {
+  align-self: flex-start;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.shell-card__retry:hover {
+  border-color: var(--color-accent);
+}
+
+/* --- Theme switcher -------------------------------------------------------------- */
+
+.theme-switcher {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-panel);
+}
+
+.theme-switcher__legend {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-muted);
+  padding: 0 var(--space-1);
+}
+
+.theme-switcher__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 13px;
+}
+
+/* --- Responsive: narrow (400px) up to wide ---------------------------------------- */
+
+@media (max-width: 480px) {
+  .shell-card {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .phase-spine__label {
+    font-size: 9px;
+  }
+
+  .shell-card__status {
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+}

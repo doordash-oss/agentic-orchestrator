@@ -1,0 +1,42 @@
+/*
+ * Precision-instrument visual tokens.
+ * Amber is the needle: reserved for the single active/attention element.
+ */
+:root,
+:root[data-theme='dark'] {
+  --color-bg: #16181d;
+  --color-panel: #1e2127;
+  --color-hairline: #2a2e36;
+  --color-text: #e8eaed;
+  --color-muted: #9aa0ab;
+  --color-accent: #e8a33d;
+  --color-success: #5db87a;
+  --color-danger: #d96a6a;
+}
+
+:root[data-theme='light'] {
+  --color-bg: #f5f6f7;
+  --color-panel: #ffffff;
+  --color-hairline: #dde0e5;
+  --color-text: #1a1d23;
+  --color-muted: #5c6470;
+  --color-accent: #a66a12;
+  --color-success: #2e7d4f;
+  --color-danger: #b34747;
+}
+
+:root {
+  --font-display: 'Space Grotesk', 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', -apple-system, 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', 'Menlo', 'DejaVu Sans Mono', 'Consolas', monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius: 6px;
+  --focus-ring: 2px solid var(--color-accent);
+}

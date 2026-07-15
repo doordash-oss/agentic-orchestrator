@@ -188,7 +188,10 @@ export function isTrustedSender(event: SenderLikeEvent, trusted: TrustedSender):
 // --- Wiring -----------------------------------------------------------------------
 
 interface AppLike {
-  on(event: 'web-contents-created', handler: (event: unknown, contents: ContentsLike) => void): void;
+  on(
+    event: 'web-contents-created',
+    handler: (event: unknown, contents: ContentsLike) => void,
+  ): void;
 }
 
 interface ContentsLike {
@@ -198,11 +201,7 @@ interface ContentsLike {
 
 interface SessionLike {
   setPermissionRequestHandler(
-    handler: (
-      contents: unknown,
-      permission: string,
-      callback: (granted: boolean) => void,
-    ) => void,
+    handler: (contents: unknown, permission: string, callback: (granted: boolean) => void) => void,
   ): void;
   webRequest: {
     onHeadersReceived(

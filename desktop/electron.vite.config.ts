@@ -1,5 +1,8 @@
+import { createRequire } from 'node:module';
 import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
+
+const pkg = createRequire(import.meta.url)('./package.json') as { version: string };
 
 // Everything (including zod and shared modules) is bundled into each target so
 // the packaged app ships no runtime node_modules.
@@ -25,5 +28,8 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react()],
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version),
+    },
   },
 });

@@ -12,5 +12,6 @@
     "electron.vite.config.ts",
     "vitest.config.ts",
     "scripts/**/*.ts"
-  ]
+  ],
+  "exclude": ["test/e2e/**"]
 }

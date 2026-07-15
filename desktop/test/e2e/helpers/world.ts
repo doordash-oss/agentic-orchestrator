@@ -1,0 +1,291 @@
+/**
+ * Per-journey isolated world: throwaway HOME, app userData, runtime parent
+ * (config.yaml + state dir), stub provider CLIs, and workspace repositories.
+ * Everything lives under one mkdtemp root inside the OS temp directory and
+ * is deleted in teardown; the journeys never touch the real user profile.
+ */
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export interface StubAuthState {
+  loggedIn: boolean;
+  authMethod?: string;
+  email?: string;
+}
+
+export interface JourneyWorld {
+  /** mkdtemp root; every other path lives underneath it. */
+  root: string;
+  home: string;
+  userData: string;
+  runtimeDir: string;
+  stateDir: string;
+  configPath: string;
+  workspaceRoot: string;
+  stubDir: string;
+  /** The claude stub CLI (config providers.claude.cli points here). */
+  claudeStub: string;
+  /** Path of the stub's auth-state file. */
+  authStatePath: string;
+  /** Marker file: while present the stub sleeps before answering auth. */
+  authDelayPath: string;
+}
+
+export interface WorldOptions {
+  /** Initial stub auth state (default: signed out). */
+  auth?: StubAuthState;
+  /** Seconds the stub sleeps on auth while the delay marker exists. */
+  authDelaySeconds?: number;
+  /** Pre-configure the workspace root so the wizard is already satisfied. */
+  presetWorkspaceRoot?: boolean;
+}
+
+const STUB_VERSION = '2.99.0 (Claude Code)';
+
+export function createWorld(name: string, options: WorldOptions = {}): JourneyWorld {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `agentico-e2e-${name}-`));
+  const home = path.join(root, 'home');
+  const userData = path.join(root, 'user-data');
+  const runtimeDir = path.join(home, '.agentic-orchestrator');
+  const stateDir = path.join(runtimeDir, 'features');
+  const workspaceRoot = path.join(home, 'workspace');
+  const stubDir = path.join(root, 'stubs');
+  for (const dir of [home, userData, runtimeDir, workspaceRoot, stubDir]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const claudeStub = path.join(stubDir, 'claude-stub');
+  const authStatePath = path.join(stubDir, 'claude-auth.json');
+  const authDelayPath = path.join(stubDir, 'claude-auth-delay');
+  const delaySeconds = options.authDelaySeconds ?? 0;
+  writeStubCli(claudeStub, authStatePath, authDelayPath, delaySeconds);
+  writeAuthState(authStatePath, options.auth ?? { loggedIn: false });
+  if (delaySeconds > 0) {
+    // The journey deletes this marker once it has captured the connection
+    // shell; later probes answer instantly.
+    fs.writeFileSync(authDelayPath, '');
+  }
+
+  const world: JourneyWorld = {
+    root,
+    home,
+    userData,
+    runtimeDir,
+    stateDir,
+    configPath: path.join(runtimeDir, 'config.yaml'),
+    workspaceRoot,
+    stubDir,
+    claudeStub,
+    authStatePath,
+    authDelayPath,
+  };
+  writeRuntimeConfig(world, options.presetWorkspaceRoot === true);
+  return world;
+}
+
+/**
+ * The provider-CLI stub. Speaks exactly the surface the server probes:
+ *   --version            → a supported version string
+ *   auth status --json   → the JSON in the auth-state file
+ * Everything else (e.g. model-catalog probes) fails fast; the server then
+ * falls back to its curated model catalog for detected providers.
+ */
+function writeStubCli(
+  stubPath: string,
+  authStatePath: string,
+  authDelayPath: string,
+  authDelaySeconds: number,
+): void {
+  const script = [
+    '#!/bin/sh',
+    '# Packaged-E2E provider stub (generated per journey; never committed).',
+    'case "$1" in',
+    '  --version)',
+    `    echo "${STUB_VERSION}"`,
+    '    exit 0',
+    '    ;;',
+    '  auth)',
+    ...(authDelaySeconds > 0
+      ? [`    if [ -e "${authDelayPath}" ]; then`, `      sleep ${authDelaySeconds}`, '    fi']
+      : []),
+    `    cat "${authStatePath}"`,
+    '    exit 0',
+    '    ;;',
+    'esac',
+    'exit 1',
+    '',
+  ].join('\n');
+  fs.writeFileSync(stubPath, script, { mode: 0o755 });
+}
+
+export function writeAuthState(authStatePath: string, state: StubAuthState): void {
+  fs.writeFileSync(authStatePath, `${JSON.stringify(state)}\n`);
+}
+
+export function setStubAuthenticated(world: JourneyWorld, loggedIn: boolean): void {
+  writeAuthState(
+    world.authStatePath,
+    loggedIn
+      ? { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' }
+      : { loggedIn: false },
+  );
+}
+
+/**
+ * The runtime config the server loads: the claude provider is redirected to
+ * the stub; codex/opencode are pointed at paths that cannot exist so a
+ * provider installed on the host machine can never leak into a journey.
+ */
+function writeRuntimeConfig(world: JourneyWorld, presetWorkspaceRoot: boolean): void {
+  const missing = path.join(world.stubDir, 'missing');
+  fs.writeFileSync(
+    world.configPath,
+    [
+      'providers:',
+      '  claude:',
+      `    cli: ${world.claudeStub}`,
+      '  codex:',
+      `    cli: ${path.join(missing, 'codex')}`,
+      '  opencode:',
+      `    cli: ${path.join(missing, 'opencode')}`,
+      ...(presetWorkspaceRoot ? ['workspace_roots:', `  - ${world.workspaceRoot}`] : []),
+      '',
+    ].join('\n'),
+  );
+}
+
+// --- git helpers -------------------------------------------------------------
+
+const GIT_IDENTITY = ['-c', 'user.name=Agentico E2E', '-c', 'user.email=e2e@example.invalid'];
+
+export function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', [...GIT_IDENTITY, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...minimalEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+  });
+}
+
+/** Creates a git repository under the workspace root; optionally commits. */
+export function createRepo(world: JourneyWorld, name: string, opts: { commit: boolean }): string {
+  const dir = path.join(world.workspaceRoot, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'README.md'), `# ${name}\n`);
+  git(dir, 'init', '--initial-branch=main');
+  if (opts.commit) {
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'Initial commit');
+  }
+  return dir;
+}
+
+/**
+ * Creates a plain (non-repo) folder under the workspace root. Left empty:
+ * the server's consent-gated init endpoint initializes empty folders or
+ * existing repositories only (`directory_not_empty` otherwise).
+ */
+export function createPlainFolder(world: JourneyWorld, name: string): string {
+  const dir = path.join(world.workspaceRoot, name);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// --- discovery / processes -----------------------------------------------------
+
+export interface DiscoveryRecord {
+  schema_version: number;
+  api_version: string;
+  base_url: string;
+  auth_token?: string;
+  runtime: { runtime_dir: string; state_dir: string; config_path: string };
+  pid: number;
+  started_at?: string;
+}
+
+export function discoveryPath(world: JourneyWorld): string {
+  return path.join(world.runtimeDir, '.agentico-server.json');
+}
+
+export function readDiscovery(world: JourneyWorld): DiscoveryRecord | null {
+  try {
+    return JSON.parse(fs.readFileSync(discoveryPath(world), 'utf8')) as DiscoveryRecord;
+  } catch {
+    return null;
+  }
+}
+
+export function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+export async function waitFor(
+  condition: () => boolean | Promise<boolean>,
+  what: string,
+  timeoutMs = 30_000,
+  intervalMs = 250,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await condition()) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+/**
+ * The minimal environment every journey process (app or server) runs with:
+ * throwaway profile dirs and a PATH of system directories only, so provider
+ * CLIs installed on the host can never be discovered. Display/session
+ * variables pass through on Linux for xvfb.
+ */
+export function minimalEnv(world?: JourneyWorld): Record<string, string> {
+  const env: Record<string, string> = {
+    PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+    TMPDIR: process.env['TMPDIR'] ?? os.tmpdir(),
+    LANG: process.env['LANG'] ?? 'en_US.UTF-8',
+  };
+  if (world !== undefined) {
+    env['HOME'] = world.home;
+    env['AGENTICO_E2E_USER_DATA'] = world.userData;
+    if (process.platform === 'linux') {
+      env['XDG_CONFIG_HOME'] = path.join(world.home, '.config');
+      env['XDG_CACHE_HOME'] = path.join(world.home, '.cache');
+      env['XDG_DATA_HOME'] = path.join(world.home, '.local', 'share');
+    }
+  } else {
+    env['HOME'] = process.env['HOME'] ?? os.homedir();
+  }
+  for (const passthrough of [
+    'DISPLAY',
+    'XAUTHORITY',
+    'WAYLAND_DISPLAY',
+    'XDG_RUNTIME_DIR',
+    'DBUS_SESSION_BUS_ADDRESS',
+  ]) {
+    const value = process.env[passthrough];
+    if (value !== undefined) {
+      env[passthrough] = value;
+    }
+  }
+  return env;
+}
+
+/** Recursively removes the world; never throws (teardown best effort). */
+export function destroyWorld(world: JourneyWorld): void {
+  try {
+    fs.rmSync(world.root, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // Leftover temp files are acceptable; leftover processes are not.
+  }
+}

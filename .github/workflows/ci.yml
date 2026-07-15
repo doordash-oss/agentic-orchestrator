@@ -76,16 +76,15 @@ jobs:
       - name: Package and verify (native target)
         run: npm run package:verify
 
-      # Packaged E2E journeys land in Task 6b as `npm run test:e2e:packaged`.
-      # Run them when present; until then surface a visible warning instead
-      # of a silent pass so the gap cannot be forgotten. Once 6b adds the
-      # script, this step becomes a hard gate automatically.
-      - name: Packaged E2E smoke (Task 6b gate)
+      # Packaged E2E journeys (Task 6b): Playwright drives the unpacked app
+      # verified above with the real bundled server. Electron needs a display
+      # on Linux, so the ubuntu leg runs under xvfb.
+      - name: Packaged E2E journeys
         run: |
-          if node -e "process.exit(require('./package.json').scripts?.['test:e2e:packaged'] ? 0 : 1)"; then
-            npm run test:e2e:packaged
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a --server-args="-screen 0 1600x1000x24" npm run test:e2e:packaged
           else
-            echo "::warning::npm run test:e2e:packaged is not defined yet (Phase 1 Task 6b); packaged smoke was skipped."
+            npm run test:e2e:packaged
           fi
 
       - name: Preserve packaging evidence on failure

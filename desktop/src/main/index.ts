@@ -3,9 +3,12 @@
  * runtime gateway with its bearer token and child-server supervision) lives
  * here; the renderer only ever sees the narrow preload API.
  */
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { BrowserWindow, app, dialog, ipcMain, nativeTheme, session } from 'electron';
 import { createRuntimeGateway } from './gateway/wiring';
+import { resolveTestUserDataDir } from './testHooks';
 import { EventStreamSupervisor } from './gateway/events';
 import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
@@ -20,6 +23,19 @@ import { SettingsStore } from './settings';
 import { SetupService } from './setup';
 import { ThemeController } from './theme';
 import { IPC_EVENTS } from '../shared/ipc';
+
+// Packaged-E2E isolation hook: relocate the app-local data directory
+// (settings.json) only when the target provably lives inside the OS temp
+// directory — see testHooks.ts for the guard rationale. Inert otherwise.
+const testUserData = resolveTestUserDataDir(process.env['AGENTICO_E2E_USER_DATA'], {
+  realpath: (candidate) => fs.realpathSync(candidate),
+  tmpdir: () => os.tmpdir(),
+  isAbsolute: (candidate) => path.isAbsolute(candidate),
+  sep: path.sep,
+});
+if (testUserData !== null) {
+  app.setPath('userData', testUserData);
+}
 
 const devRendererUrl = process.env['ELECTRON_RENDERER_URL'];
 const appOrigins = new Set<string>(['file://']);

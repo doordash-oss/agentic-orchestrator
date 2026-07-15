@@ -45,6 +45,7 @@ id_ed25519*
 # Node / desktop app
 node_modules/
 desktop/out/
+desktop/test-results/
 desktop/dist/
 desktop/coverage/
 # Packaging staging area (server binary + build-identity.json), regenerated

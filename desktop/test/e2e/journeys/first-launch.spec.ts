@@ -32,7 +32,6 @@ import {
   createPlainFolder,
   createWorld,
   destroyWorld,
-  git,
   processAlive,
   readDiscovery,
   setStubAuthenticated,
@@ -147,14 +146,8 @@ test('first launch: wizard-gated creation tracer bullet reaches Ready to start',
     });
     await setTheme(handle, 'light');
     transcript.step(
-      'consented; server ran git init, rediscovered the workspace, and every wizard gate passed → workspace shell with the creation form',
+      'consented; server initialized the repository (git init + initial empty commit), rediscovered the workspace, and every wizard gate passed → workspace shell with the creation form',
     );
-
-    // A server-initialized repository has no commits yet (the endpoint runs
-    // exactly `git init`), and worktree setup requires a born HEAD. Create
-    // the initial commit externally, as a user would in their terminal.
-    const commitOut = git(demoApp, 'commit', '--allow-empty', '-m', 'Initial commit');
-    transcript.command(`git -C ${demoApp} commit --allow-empty -m "Initial commit"`, commitOut);
 
     transcript.section('Create the feature (name/description/repo/branch)');
     await handle.page.locator('#feature-name').fill('Tracer Bullet');

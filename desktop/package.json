@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Agentico desktop app: Electron main/preload plus React renderer.",
+  "homepage": "https://github.com/doordash-oss/agentic-orchestrator",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

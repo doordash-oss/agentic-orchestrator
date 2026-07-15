@@ -44,3 +44,10 @@ linux:
     - AppImage
     - deb
   category: Development
+  # Debian control metadata for the unsigned dev package; the org address is
+  # the doordash-oss GitHub organization behind the project homepage.
+  maintainer: DoorDash open source <opensource@doordash.com>
+# The default deb filename derives from the npm package name
+# (@agentico/desktop) and cannot be written; use the Debian convention.
+deb:
+  artifactName: agentico_${version}_${arch}.${ext}

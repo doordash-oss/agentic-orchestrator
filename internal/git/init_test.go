@@ -17,6 +17,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,27 @@ func TestInitRepositoryCreatesGitRepo(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		t.Fatalf("expected .git after InitRepository: %v", err)
+	}
+}
+
+func TestInitRepositoryCreatesResolvableHead(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "new-repo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := InitRepository(dir); err != nil {
+		t.Fatalf("InitRepository() error = %v", err)
+	}
+
+	out, err := gitCmd(dir, "rev-parse", "--verify", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("HEAD should resolve after InitRepository: %v: %s",
+			err, strings.TrimSpace(string(out)))
+	}
+	if status := gitOutput(t, dir, "status", "--porcelain"); status != "" {
+		t.Fatalf("worktree should be clean after InitRepository; status:\n%s", status)
 	}
 }
 

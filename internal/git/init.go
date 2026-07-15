@@ -22,8 +22,10 @@ import (
 )
 
 // InitRepository initializes a new git repository in the existing directory
-// at path. The caller owns all path validation (containment, emptiness,
-// symlink resolution) — this adapter only performs the git operation.
+// at path and creates an initial empty commit so HEAD resolves immediately
+// (worktree setup requires a born HEAD). The caller owns all path validation
+// (containment, emptiness, symlink resolution) — this adapter only performs
+// the git operations.
 func InitRepository(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -35,6 +37,16 @@ func InitRepository(path string) error {
 	cmd := exec.Command("git", "-C", path, "init")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git init: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	// The identity is passed explicitly and signing is disabled so the commit
+	// never depends on (or is broken by) the user's global git configuration.
+	commit := exec.Command("git", "-C", path,
+		"-c", "user.name=Agentico",
+		"-c", "user.email=agentico@localhost",
+		"-c", "commit.gpgsign=false",
+		"commit", "--allow-empty", "-m", "Initial commit")
+	if out, err := commit.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

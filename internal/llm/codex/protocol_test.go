@@ -442,10 +442,62 @@ func TestCodexProtocol_DefaultApprovalPolicyIsOnRequest(t *testing.T) {
 	}
 }
 
-func TestCodexProtocol_DSPApprovalPolicyIsNever(t *testing.T) {
+func TestCodexProtocol_DSPUsesMDMCompatiblePolicyWithDangerFullAccess(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex", DSP: true})
-	if p.approvalPolicy != "never" {
-		t.Errorf("DSP approvalPolicy = %q, want %q", p.approvalPolicy, "never")
+	if p.approvalPolicy != "on-request" {
+		t.Errorf("DSP approvalPolicy = %q, want %q", p.approvalPolicy, "on-request")
+	}
+
+	var buf bytes.Buffer
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-123")
+	if err := p.startTurn("do something"); err != nil {
+		t.Fatalf("startTurn() error: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `"approvalPolicy":"on-request"`) {
+		t.Fatalf("DSP turn must use MDM-compatible on-request policy; payload=%s", got)
+	}
+	if !strings.Contains(got, `"type":"dangerFullAccess"`) {
+		t.Fatalf("DSP turn must retain dangerFullAccess sandbox; payload=%s", got)
+	}
+}
+
+func TestCodexProtocol_AdoptsEffectiveThreadApprovalPolicy(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{
+		WorkDir:        "/tmp/test",
+		Model:          "codex",
+		DSP:            true,
+		ApprovalPolicy: "never",
+	})
+	threadStarted := []byte(`{"id":2,"result":{"thread":{"id":"thread-123"},"approvalPolicy":"on-request","sandbox":{"type":"dangerFullAccess"}}}`)
+	if _, err := p.ParseLine(threadStarted); err != nil {
+		t.Fatalf("ParseLine(thread/start) error: %v", err)
+	}
+
+	var buf bytes.Buffer
+	p.SetStdin(&buf)
+	if err := p.startTurn("review the plan"); err != nil {
+		t.Fatalf("startTurn() error: %v", err)
+	}
+	got := buf.String()
+	if strings.Contains(got, `"approvalPolicy":"never"`) || !strings.Contains(got, `"approvalPolicy":"on-request"`) {
+		t.Fatalf("turn must adopt effective thread approval policy; payload=%s", got)
+	}
+	if !strings.Contains(got, `"type":"dangerFullAccess"`) {
+		t.Fatalf("effective policy adoption must not downgrade DSP sandbox; payload=%s", got)
+	}
+
+	buf.Reset()
+	if err := p.sendFollowUpTurn("continue"); err != nil {
+		t.Fatalf("sendFollowUpTurn() error: %v", err)
+	}
+	got = buf.String()
+	if strings.Contains(got, `"approvalPolicy":"never"`) || !strings.Contains(got, `"approvalPolicy":"on-request"`) {
+		t.Fatalf("follow-up must retain effective thread approval policy; payload=%s", got)
+	}
+	if !strings.Contains(got, `"type":"dangerFullAccess"`) {
+		t.Fatalf("follow-up must retain DSP sandbox; payload=%s", got)
 	}
 }
 

@@ -96,7 +96,8 @@ type SandboxPolicy struct {
 
 // ThreadStartResult is the response to thread/start.
 type ThreadStartResult struct {
-	Thread Thread `json:"thread"`
+	Thread         Thread `json:"thread"`
+	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
 }
 
 // Thread identifies a conversation thread.

@@ -15,12 +15,41 @@
 package agent
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
+
+func TestBuildWorkspace_GrantsOnlyActiveRunState(t *testing.T) {
+	featureStateDir := t.TempDir()
+	sealedRunDir := filepath.Join(featureStateDir, "runs", "run-004")
+	activeRunDir := filepath.Join(featureStateDir, "runs", "run-005")
+	for _, dir := range []string{sealedRunDir, activeRunDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+
+	ws, err := BuildWorkspace(&feature.Feature{ActiveRun: 5}, featureStateDir)
+	if err != nil {
+		t.Fatalf("BuildWorkspace() error = %v", err)
+	}
+	if ws.Cwd != activeRunDir {
+		t.Fatalf("Cwd = %q, want active run %q", ws.Cwd, activeRunDir)
+	}
+	if !slices.Contains(ws.AdditionalDirs, activeRunDir) {
+		t.Fatalf("AdditionalDirs = %v, want active run %q", ws.AdditionalDirs, activeRunDir)
+	}
+	for _, forbidden := range []string{featureStateDir, sealedRunDir} {
+		if slices.Contains(ws.AdditionalDirs, forbidden) {
+			t.Fatalf("AdditionalDirs = %v, must not grant predecessor scope %q", ws.AdditionalDirs, forbidden)
+		}
+	}
+}
 
 func TestBuildWorkspace_SingleRepoWorktree(t *testing.T) {
 	stateDir := t.TempDir()
@@ -32,10 +61,11 @@ func TestBuildWorkspace_SingleRepoWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ws.Cwd != stateDir {
-		t.Errorf("Cwd = %q, want %q", ws.Cwd, stateDir)
+	activeRunDir := filepath.Join(stateDir, "runs", "run-001")
+	if ws.Cwd != activeRunDir {
+		t.Errorf("Cwd = %q, want %q", ws.Cwd, activeRunDir)
 	}
-	want := []string{stateDir, wt}
+	want := []string{activeRunDir, wt}
 	if !reflect.DeepEqual(ws.AdditionalDirs, want) {
 		t.Errorf("AdditionalDirs = %v, want %v", ws.AdditionalDirs, want)
 	}
@@ -58,7 +88,7 @@ func TestBuildWorkspace_MultiRepoSorted(t *testing.T) {
 		t.Fatal(err)
 	}
 	abs := func(p string) string { a, _ := filepath.Abs(p); return a }
-	want := []string{stateDir, abs("/repos/alpha"), abs("/repos/mid"), abs("/repos/zeta")}
+	want := []string{filepath.Join(stateDir, "runs", "run-001"), abs("/repos/alpha"), abs("/repos/mid"), abs("/repos/zeta")}
 	if !reflect.DeepEqual(ws.AdditionalDirs, want) {
 		t.Errorf("AdditionalDirs = %v, want %v", ws.AdditionalDirs, want)
 	}
@@ -71,8 +101,9 @@ func TestBuildWorkspace_NoRepos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ws.AdditionalDirs) != 1 || ws.AdditionalDirs[0] != stateDir {
-		t.Errorf("AdditionalDirs = %v, want only state dir", ws.AdditionalDirs)
+	activeRunDir := filepath.Join(stateDir, "runs", "run-001")
+	if len(ws.AdditionalDirs) != 1 || ws.AdditionalDirs[0] != activeRunDir {
+		t.Errorf("AdditionalDirs = %v, want only active run dir", ws.AdditionalDirs)
 	}
 }
 
@@ -102,7 +133,7 @@ func TestWorkspaceForRepos_FiltersSubset(t *testing.T) {
 		t.Fatal(err)
 	}
 	abs := func(p string) string { a, _ := filepath.Abs(p); return a }
-	want := []string{stateDir, abs("/r/api"), abs("/r/web")}
+	want := []string{filepath.Join(stateDir, "runs", "run-001"), abs("/r/api"), abs("/r/web")}
 	if !reflect.DeepEqual(ws.AdditionalDirs, want) {
 		t.Errorf("AdditionalDirs = %v, want %v", ws.AdditionalDirs, want)
 	}

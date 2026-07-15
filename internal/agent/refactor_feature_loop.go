@@ -177,7 +177,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		return nil, fmt.Errorf("refactor feature loop: prompt is empty")
 	}
 
-	// Build the cross-repo workspace. Cwd at the feature state dir, with
+	// Build the cross-repo workspace. Cwd at the active run dir, with
 	// --add-dir for every Feature.Repos worktree (refactors are cross-repo
 	// by design — even when the plan ends up scoped to one repo, the agent
 	// needs full visibility to judge cross-repo impact).
@@ -435,6 +435,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		ReviewModel:                cfg.ReviewModel,
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
+		RunDir:                     runDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,

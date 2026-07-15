@@ -1478,6 +1478,7 @@ func TestComposeValidatorResults(t *testing.T) {
 		results    []ValidatorResult
 		wantStatus ReviewStatus
 		wantInFeed string
+		wantError  bool
 	}{
 		{
 			name: "all approved → APPROVED",
@@ -1489,12 +1490,25 @@ func TestComposeValidatorResults(t *testing.T) {
 			wantStatus: ReviewApproved,
 			wantInFeed: "Overall: APPROVED**",
 		},
+		{
+			name: "provider error is infrastructure failure",
+			results: []ValidatorResult{
+				{Domain: "architecture", Status: ReviewFailed, Error: fmt.Errorf("codex rejected turn/start")},
+				{Domain: "scope", Status: ReviewApproved},
+			},
+			wantStatus: ReviewChangesRequested,
+			wantInFeed: "architecture Validator — ERROR",
+			wantError:  true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			status, feedback, err := composeValidatorResults(tc.results, feature.RiskMedium)
-			if err != nil {
+			if err != nil && !tc.wantError {
 				t.Fatalf("compose err: %v", err)
+			}
+			if err == nil && tc.wantError {
+				t.Fatal("compose err = nil, want infrastructure error")
 			}
 			if status != tc.wantStatus {
 				t.Errorf("status = %s, want %s", status, tc.wantStatus)
@@ -1503,6 +1517,74 @@ func TestComposeValidatorResults(t *testing.T) {
 				t.Errorf("feedback missing %q; got:\n%s", tc.wantInFeed, feedback)
 			}
 		})
+	}
+}
+
+func TestRoadmapLoopValidatorInfrastructureFailureDoesNotRevisePlan(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	roadmapDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "roadmap")
+	for _, dir := range []string{workDir, scriptsDir, roadmapDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+
+			writeRoadmapArtifactSnippet(roadmapDir)+
+			testutil.TouchPhaseCompleteInLatestAttemptDir(roadmapDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic-error.sh",
+		testutil.JSONLInit+"\n"+testutil.JSONLError("codex rejected turn/start")+"\n")
+	buildSession := mockBuildSession(planScript, criticScript)
+	var callsMu sync.Mutex
+	plannerCalls := 0
+	criticCalls := 0
+
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMoonshot
+	f.RiskLevel = feature.RiskLow
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	sm := session.NewManager(make(chan interface{}, 100))
+	defer sm.Shutdown()
+	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     tmpDir,
+		WorkDir:      workDir,
+		MaxAttempts:  3,
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			callsMu.Lock()
+			if !isReviewHelper(opts.PermHandler) {
+				plannerCalls++
+			} else {
+				criticCalls++
+			}
+			callsMu.Unlock()
+			return buildSession(opts)
+		},
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "failed" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want infrastructure failure in attempt 1", result)
+	}
+	if plannerCalls != 1 {
+		t.Fatalf("planner calls = %d, want 1; validator failure must not trigger plan revision", plannerCalls)
+	}
+	wantCriticCalls := len(roadmapValidatorsForRisk(feature.RiskLow)) * maxValidatorInfrastructureSessionAttempts
+	if criticCalls != wantCriticCalls {
+		t.Fatalf("critic calls = %d, want %d validation-only retries", criticCalls, wantCriticCalls)
+	}
+	if _, err := os.Stat(filepath.Join(roadmapDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Fatalf("attempt-02 stat error = %v, want no second plan attempt", err)
 	}
 }
 

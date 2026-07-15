@@ -1,0 +1,4 @@
+out/
+dist/
+node_modules/
+src/shared/api/schema.gen.ts

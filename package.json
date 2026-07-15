@@ -1,0 +1,19 @@
+{
+  "name": "agentic-orchestrator-root",
+  "private": true,
+  "type": "module",
+  "description": "npm workspace root for the Agentico desktop app (Go code is built via Make, not npm).",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "desktop"
+  ],
+  "scripts": {
+    "check": "npm run check --workspace desktop",
+    "test": "npm run test --workspace desktop",
+    "test:security": "npm run test:security --workspace desktop",
+    "build": "npm run build --workspace desktop",
+    "generate:api": "npm run generate:api --workspace desktop"
+  }
+}

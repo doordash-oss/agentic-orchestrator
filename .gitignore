@@ -41,3 +41,9 @@ id_ed25519*
 .claude/
 /agentic
 /bin/agentic
+
+# Node / desktop app
+node_modules/
+desktop/out/
+desktop/dist/
+desktop/coverage/

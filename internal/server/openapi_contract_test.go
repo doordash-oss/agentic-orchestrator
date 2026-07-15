@@ -271,6 +271,10 @@ func topLevelPatternForPath(path string) string {
 		return apiPathConfigRuntime
 	case path == apiPathCatalogModels:
 		return apiPathCatalogModels
+	case path == apiPathReadiness:
+		return apiPathReadiness
+	case path == apiPathReadinessRefresh:
+		return apiPathReadinessRefresh
 	case path == apiPathPrompts:
 		return apiPathPrompts
 	case strings.HasPrefix(path, "/api/v1/prompts/"):
@@ -335,6 +339,8 @@ func documentedServerRoutes() []documentedRoute {
 		{method: "patch", path: apiPathConfigRuntime, mutation: true},
 		{method: "put", path: apiPathConfigRuntime, mutation: true},
 		{method: httpMethodGet, path: apiPathCatalogModels},
+		{method: httpMethodGet, path: apiPathReadiness},
+		{method: httpMethodPost, path: apiPathReadinessRefresh, mutation: true},
 		{method: httpMethodGet, path: apiPathPrompts},
 		{method: httpMethodPost, path: "/api/v1/prompts/ask-user/answer", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/prompts/help/send", mutation: true},

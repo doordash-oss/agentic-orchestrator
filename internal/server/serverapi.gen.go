@@ -130,6 +130,39 @@ func (e PermissionAnswerRequestDecision) Valid() bool {
 	}
 }
 
+// Defines values for ReadinessIssueCode.
+const (
+	InvalidConfiguration ReadinessIssueCode = "invalid_configuration"
+	InvalidRepository    ReadinessIssueCode = "invalid_repository"
+	InvalidWorkspaceRoot ReadinessIssueCode = "invalid_workspace_root"
+	MissingExecutable    ReadinessIssueCode = "missing_executable"
+	ModelsUnavailable    ReadinessIssueCode = "models_unavailable"
+	Unauthenticated      ReadinessIssueCode = "unauthenticated"
+	UnsupportedVersion   ReadinessIssueCode = "unsupported_version"
+)
+
+// Valid indicates whether the value is a known member of the ReadinessIssueCode enum.
+func (e ReadinessIssueCode) Valid() bool {
+	switch e {
+	case InvalidConfiguration:
+		return true
+	case InvalidRepository:
+		return true
+	case InvalidWorkspaceRoot:
+		return true
+	case MissingExecutable:
+		return true
+	case ModelsUnavailable:
+		return true
+	case Unauthenticated:
+		return true
+	case UnsupportedVersion:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureAction.
 const (
 	FeatureActionCleanup            FeatureAction = "cleanup"
@@ -577,6 +610,21 @@ func (e SendHelpPromptParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for RefreshReadinessParamsXAgenticoClient.
+const (
+	RefreshReadinessParamsXAgenticoClientLocal RefreshReadinessParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RefreshReadinessParamsXAgenticoClient enum.
+func (e RefreshReadinessParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RefreshReadinessParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ExecuteRecoveryActionsParamsXAgenticoClient.
 const (
 	ExecuteRecoveryActionsParamsXAgenticoClientLocal ExecuteRecoveryActionsParamsXAgenticoClient = "local"
@@ -594,13 +642,13 @@ func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 
 // Defines values for ShutdownRuntimeParamsXAgenticoClient.
 const (
-	ShutdownRuntimeParamsXAgenticoClientLocal ShutdownRuntimeParamsXAgenticoClient = "local"
+	Local ShutdownRuntimeParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the ShutdownRuntimeParamsXAgenticoClient enum.
 func (e ShutdownRuntimeParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case ShutdownRuntimeParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -771,6 +819,12 @@ type ConfigRepo struct {
 	Name          string                        `json:"name"`
 	Path          string                        `json:"path,omitempty"`
 	PipelineGates map[string]config.Checkpoints `json:"pipeline_gates,omitempty"`
+}
+
+// ConfigurationReadiness defines model for ConfigurationReadiness.
+type ConfigurationReadiness struct {
+	Issue *ReadinessIssue `json:"issue,omitempty"`
+	Valid bool            `json:"valid"`
 }
 
 // Context defines model for Context.
@@ -1116,6 +1170,13 @@ type ModelCatalogResponse struct {
 // ModelDefaults defines model for ModelDefaults.
 type ModelDefaults = config.ModelConfig
 
+// ModelReadiness defines model for ModelReadiness.
+type ModelReadiness struct {
+	Available bool            `json:"available"`
+	Issue     *ReadinessIssue `json:"issue,omitempty"`
+	Models    []string        `json:"models,omitempty"`
+}
+
 // NeedUserInputDecisionResponse defines model for NeedUserInputDecisionResponse.
 type NeedUserInputDecisionResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -1224,6 +1285,15 @@ type PromptSnapshotResponse struct {
 	NeedUserInputs   []NeedUserInputGate `json:"need_user_inputs"`
 }
 
+// ProviderReadiness defines model for ProviderReadiness.
+type ProviderReadiness struct {
+	Installed bool            `json:"installed"`
+	Issue     *ReadinessIssue `json:"issue,omitempty"`
+	Name      string          `json:"name"`
+	Ready     bool            `json:"ready"`
+	Version   string          `json:"version,omitempty"`
+}
+
 // PublishDescriptionResponse defines model for PublishDescriptionResponse.
 type PublishDescriptionResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -1246,6 +1316,40 @@ type PublishFeatureResponse struct {
 type Publishability struct {
 	ManualPublish bool            `json:"manual_publish"`
 	Repos         map[string]bool `json:"repos"`
+}
+
+// ReadinessIssue defines model for ReadinessIssue.
+type ReadinessIssue struct {
+	// Code Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
+	Code ReadinessIssueCode `json:"code"`
+
+	// Message Human-readable problem summary. Never contains credentials.
+	Message string `json:"message"`
+
+	// Remedy Safe remediation metadata, such as the CLI command to run. Never contains credentials or non-configured filesystem paths.
+	Remedy string `json:"remedy,omitempty"`
+}
+
+// ReadinessIssueCode Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.
+type ReadinessIssueCode string
+
+// ReadinessResponse defines model for ReadinessResponse.
+type ReadinessResponse struct {
+	APIVersion    string                 `json:"api_version"`
+	Configuration ConfigurationReadiness `json:"configuration"`
+
+	// Issues Flattened outstanding issues across all sections.
+	Issues []ReadinessIssue `json:"issues,omitempty"`
+	Meta   ResponseMeta     `json:"meta,omitempty"`
+	Models ModelReadiness   `json:"models"`
+
+	// ProbedAt When provider probes last ran.
+	ProbedAt  *time.Time          `json:"probed_at,omitempty"`
+	Providers []ProviderReadiness `json:"providers"`
+
+	// Ready Mandatory readiness — true when at least one provider is usable, models are available, and the configuration is valid. Feature creation is gated on this value.
+	Ready     bool               `json:"ready"`
+	Workspace WorkspaceReadiness `json:"workspace"`
 }
 
 // RebaseStartResponse defines model for RebaseStartResponse.
@@ -1315,6 +1419,14 @@ type RepoStatus struct {
 	RebaseStatus  string   `json:"rebase_status,omitempty"`
 	RebaseTarget  string   `json:"rebase_target,omitempty"`
 	Touched       bool     `json:"touched"`
+}
+
+// RepositoryReadiness defines model for RepositoryReadiness.
+type RepositoryReadiness struct {
+	Issue *ReadinessIssue `json:"issue,omitempty"`
+	Name  string          `json:"name"`
+	Path  string          `json:"path"`
+	Valid bool            `json:"valid"`
 }
 
 // Resource defines model for Resource.
@@ -1704,6 +1816,19 @@ type Warning struct {
 	Message   string `json:"message"`
 }
 
+// WorkspaceReadiness defines model for WorkspaceReadiness.
+type WorkspaceReadiness struct {
+	Repositories []RepositoryReadiness    `json:"repositories"`
+	Roots        []WorkspaceRootReadiness `json:"roots"`
+}
+
+// WorkspaceRootReadiness defines model for WorkspaceRootReadiness.
+type WorkspaceRootReadiness struct {
+	Issue *ReadinessIssue `json:"issue,omitempty"`
+	Path  string          `json:"path"`
+	Valid bool            `json:"valid"`
+}
+
 // ArtifactID defines model for ArtifactID.
 type ArtifactID = string
 
@@ -1924,6 +2049,18 @@ type SendHelpPromptParams struct {
 // SendHelpPromptParamsXAgenticoClient defines parameters for SendHelpPrompt.
 type SendHelpPromptParamsXAgenticoClient string
 
+// RefreshReadinessJSONBody defines parameters for RefreshReadiness.
+type RefreshReadinessJSONBody map[string]interface{}
+
+// RefreshReadinessParams defines parameters for RefreshReadiness.
+type RefreshReadinessParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RefreshReadinessParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RefreshReadinessParamsXAgenticoClient defines parameters for RefreshReadiness.
+type RefreshReadinessParamsXAgenticoClient string
+
 // ExecuteRecoveryActionsJSONBody defines parameters for ExecuteRecoveryActions.
 type ExecuteRecoveryActionsJSONBody map[string]interface{}
 
@@ -1998,6 +2135,9 @@ type StartChatPromptJSONRequestBody StartChatPromptJSONBody
 
 // SendHelpPromptJSONRequestBody defines body for SendHelpPrompt for application/json ContentType.
 type SendHelpPromptJSONRequestBody SendHelpPromptJSONBody
+
+// RefreshReadinessJSONRequestBody defines body for RefreshReadiness for application/json ContentType.
+type RefreshReadinessJSONRequestBody RefreshReadinessJSONBody
 
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody

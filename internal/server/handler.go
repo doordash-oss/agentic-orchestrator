@@ -57,6 +57,12 @@ type apiHandler struct {
 	recoveryMu         sync.Mutex
 	recoverySnapshots  map[string][]ports.RecoveryItem
 	reviewSessionLocks *reviewSessionLockSet
+
+	// readinessMu guards the cached provider readiness probe results served
+	// by /api/v1/readiness and refreshed by /api/v1/readiness/refresh.
+	readinessMu       sync.Mutex
+	providerReadiness []ProviderReadiness
+	readinessProbedAt time.Time
 }
 
 func newAPIHandler(opts HandlerOptions) *apiHandler {
@@ -106,17 +112,19 @@ type topLevelRoute struct {
 }
 
 const (
-	apiPathHealth          = "/api/v1/health"
-	apiPathFeatures        = "/api/v1/features"
-	apiPathConfigRuntime   = "/api/v1/config/runtime"
-	apiPathCatalogModels   = "/api/v1/catalog/models"
-	apiPathPrompts         = "/api/v1/prompts"
-	apiPathPermissions     = "/api/v1/permissions"
-	apiPathSessions        = "/api/v1/sessions"
-	apiPathRecovery        = "/api/v1/recovery"
-	apiPathRecoveryActions = "/api/v1/recovery/actions"
-	apiPathShutdown        = "/api/v1/shutdown"
-	apiPathEvents          = "/api/v1/events"
+	apiPathHealth           = "/api/v1/health"
+	apiPathFeatures         = "/api/v1/features"
+	apiPathConfigRuntime    = "/api/v1/config/runtime"
+	apiPathCatalogModels    = "/api/v1/catalog/models"
+	apiPathReadiness        = "/api/v1/readiness"
+	apiPathReadinessRefresh = "/api/v1/readiness/refresh"
+	apiPathPrompts          = "/api/v1/prompts"
+	apiPathPermissions      = "/api/v1/permissions"
+	apiPathSessions         = "/api/v1/sessions"
+	apiPathRecovery         = "/api/v1/recovery"
+	apiPathRecoveryActions  = "/api/v1/recovery/actions"
+	apiPathShutdown         = "/api/v1/shutdown"
+	apiPathEvents           = "/api/v1/events"
 )
 
 // routeSegmentConfig is the feature sub-route segment for the per-feature
@@ -142,6 +150,8 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathFeatures + "/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
+	{apiPathReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleReadiness) }},
+	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
 	{apiPathPrompts + "/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
 	{apiPathPermissions, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePermissions) }},

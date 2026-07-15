@@ -480,6 +480,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathRecoveryActions:
 		return []string{http.MethodPost}, true
+	case apiPathReadinessRefresh:
+		return []string{http.MethodPost}, true
 	case apiPathShutdown:
 		return []string{http.MethodPost}, true
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start":
@@ -586,6 +588,9 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		return
 	}
 	if !h.requireTrustedMutation(w, r) {
+		return
+	}
+	if h.rejectNotReadyForCreation(w, r) {
 		return
 	}
 	resp, err := h.mutations.CreateFeature(req)

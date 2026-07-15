@@ -2244,7 +2244,15 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 
 	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
 	if err != nil {
-		return nil, err
+		// Setup-capable mode: the headless server stays reachable when no
+		// provider CLI is installed or authenticated so a first-launch client
+		// can drive remediation through /api/v1/readiness and re-probe with
+		// /api/v1/readiness/refresh instead of requiring a new runtime. Model
+		// routing is restricted to nothing until a readiness refresh finds a
+		// usable provider; feature creation is gated server-side meanwhile.
+		fmt.Fprintf(stderr, "Warning: no usable LLM provider; starting in setup-capable mode.\n%v\n", err)
+		registry.RestrictToProviders(nil)
+		detected, warnings, startupNotices, availabilityFiltered = nil, nil, nil, true
 	}
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, w)

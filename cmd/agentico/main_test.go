@@ -1798,6 +1798,37 @@ func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {
 	}
 }
 
+func TestServerBootstrapStartsSetupCapableWithoutUsableProvider(t *testing.T) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available in PATH")
+	}
+	binDir := t.TempDir()
+	if err := os.Symlink(gitPath, filepath.Join(binDir, "git")); err != nil {
+		t.Fatalf("symlink git: %v", err)
+	}
+	// PATH with git only: no provider CLI is installed at all.
+	t.Setenv("PATH", binDir)
+
+	runtimeDir := canonicalTempDir(t)
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+
+	var stderr bytes.Buffer
+	boot, err := bootstrapRuntime(context.Background(), configPath, stateDir, false, []string{providerNameCodex}, false, &stderr)
+	if err != nil {
+		t.Fatalf("bootstrapRuntime() error = %v; want setup-capable startup without provider CLIs", err)
+	}
+	t.Cleanup(func() { _ = boot.Close(context.Background()) })
+
+	if models := boot.registry.AvailableModels(); len(models) != 0 {
+		t.Fatalf("AvailableModels() = %v; want none while no provider is usable", models)
+	}
+	if !strings.Contains(stderr.String(), "setup-capable") {
+		t.Fatalf("stderr = %q; want setup-capable mode warning", stderr.String())
+	}
+}
+
 func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 	tests := []struct {
 		name    string

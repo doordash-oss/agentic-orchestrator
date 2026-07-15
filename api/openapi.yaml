@@ -41,6 +41,11 @@ paths:
     post:
       operationId: createFeature
       summary: Create a feature.
+      description: >-
+        Queues server-owned durable setup for the new feature. While mandatory
+        readiness is not satisfied (no usable provider, invalid
+        configuration), creation is rejected with a structured `not_ready`
+        error whose target carries the outstanding readiness issues.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -52,6 +57,8 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/features/{feature_id}:
     get:
@@ -288,6 +295,42 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ModelCatalogResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/readiness:
+    get:
+      operationId: getReadiness
+      summary: Read consolidated runtime readiness.
+      description: >-
+        Reports provider executable, version and authentication readiness,
+        model availability, configuration validity, workspace-root validity,
+        and discovered-repository validity — each with safe remediation
+        metadata (for example the CLI command to run). Available in
+        setup-capable mode before any provider is usable so first-launch
+        clients never probe provider CLIs themselves.
+      responses:
+        "200":
+          $ref: "#/components/responses/ReadinessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/readiness/refresh:
+    post:
+      operationId: refreshReadiness
+      summary: Re-probe provider readiness on demand.
+      description: >-
+        Re-runs the provider readiness probes (executable detection, version
+        gate, authentication) without restarting the runtime, updates active
+        model routing, and returns the refreshed readiness snapshot. Call
+        after completing an external provider authentication flow.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReadinessResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -750,6 +793,15 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RecoverySnapshotResponse"
+    ReadinessResponse:
+      description: Consolidated runtime readiness snapshot.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ReadinessResponse"
     ActionResponse:
       description: Mutation result.
       content:
@@ -945,6 +997,145 @@ components:
             server_time:
               type: string
               format: date-time
+    ReadinessIssueCode:
+      type: string
+      description: >-
+        Readiness problem taxonomy. missing_executable — a provider CLI binary
+        is not installed; unsupported_version — an installed provider CLI is
+        below the enforced minimum version; unauthenticated — a provider CLI
+        is installed but its authentication flow has not been completed;
+        models_unavailable — no usable provider exposes any model;
+        invalid_configuration — the runtime configuration is unusable;
+        invalid_workspace_root — a configured workspace root does not resolve
+        to a directory; invalid_repository — a configured repository path is
+        not a git repository.
+      enum:
+        - missing_executable
+        - unsupported_version
+        - unauthenticated
+        - models_unavailable
+        - invalid_configuration
+        - invalid_workspace_root
+        - invalid_repository
+    ReadinessIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: "#/components/schemas/ReadinessIssueCode"
+        message:
+          type: string
+          description: Human-readable problem summary. Never contains credentials.
+        remedy:
+          type: string
+          description: >-
+            Safe remediation metadata, such as the CLI command to run. Never
+            contains credentials or non-configured filesystem paths.
+    ProviderReadiness:
+      type: object
+      required: [name, installed, ready]
+      properties:
+        name:
+          type: string
+        installed:
+          type: boolean
+        version:
+          type: string
+        ready:
+          type: boolean
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    ModelReadiness:
+      type: object
+      required: [available]
+      properties:
+        available:
+          type: boolean
+        models:
+          type: array
+          items:
+            type: string
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    ConfigurationReadiness:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    WorkspaceRootReadiness:
+      type: object
+      required: [path, valid]
+      properties:
+        path:
+          type: string
+        valid:
+          type: boolean
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    RepositoryReadiness:
+      type: object
+      required: [name, path, valid]
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        valid:
+          type: boolean
+        issue:
+          $ref: "#/components/schemas/ReadinessIssue"
+          x-go-type-skip-optional-pointer: false
+    WorkspaceReadiness:
+      type: object
+      required: [roots, repositories]
+      properties:
+        roots:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkspaceRootReadiness"
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepositoryReadiness"
+    ReadinessResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [ready, providers, models, configuration, workspace]
+          properties:
+            ready:
+              type: boolean
+              description: >-
+                Mandatory readiness — true when at least one provider is
+                usable, models are available, and the configuration is valid.
+                Feature creation is gated on this value.
+            probed_at:
+              type: string
+              format: date-time
+              x-go-type-skip-optional-pointer: false
+              description: When provider probes last ran.
+            providers:
+              type: array
+              items:
+                $ref: "#/components/schemas/ProviderReadiness"
+            models:
+              $ref: "#/components/schemas/ModelReadiness"
+            configuration:
+              $ref: "#/components/schemas/ConfigurationReadiness"
+            workspace:
+              $ref: "#/components/schemas/WorkspaceReadiness"
+            issues:
+              type: array
+              description: Flattened outstanding issues across all sections.
+              items:
+                $ref: "#/components/schemas/ReadinessIssue"
     FeatureListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

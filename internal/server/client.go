@@ -163,6 +163,21 @@ func (c *Client) ModelCatalog(ctx context.Context) (ModelCatalogResponse, error)
 	return out, err
 }
 
+// Readiness reads the consolidated runtime readiness snapshot.
+func (c *Client) Readiness(ctx context.Context) (ReadinessResponse, error) {
+	var out ReadinessResponse
+	err := c.getJSON(ctx, "/api/v1/readiness", nil, &out)
+	return out, err
+}
+
+// RefreshReadiness re-probes provider readiness on demand (e.g. after an
+// external authentication flow) and returns the refreshed snapshot.
+func (c *Client) RefreshReadiness(ctx context.Context) (ReadinessResponse, error) {
+	var out ReadinessResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/readiness/refresh", nil, map[string]any{}, &out, true)
+	return out, err
+}
+
 func (c *Client) Prompts(ctx context.Context) (PromptSnapshotResponse, error) {
 	var out PromptSnapshotResponse
 	err := c.getJSON(ctx, "/api/v1/prompts", nil, &out)

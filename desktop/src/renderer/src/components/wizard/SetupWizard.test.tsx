@@ -174,6 +174,22 @@ describe('SetupWizard repository step', () => {
     expect(screen.queryByText('/work/space/plain')).not.toBeInTheDocument();
   });
 
+  it('consent dialog is keyboard-dismissable: focus starts on Cancel and Escape cancels', async () => {
+    const mock = installAgenticoMock();
+    mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/plain' });
+    const user = userEvent.setup();
+    render(<Harness initial={repositoryStep()} />);
+
+    await user.click(screen.getByRole('button', { name: /choose repository folder/i }));
+    await screen.findByRole('dialog');
+    expect(screen.getByRole('button', { name: /^cancel$/i })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(mock.api.initRepository).not.toHaveBeenCalled();
+    expect(screen.getByText('/work/space/plain')).toBeInTheDocument();
+  });
+
   it('a failed initialization shows the safe server reason and keeps the choice', async () => {
     const mock = installAgenticoMock();
     mock.api.pickWorkspaceDirectory.mockResolvedValue({ path: '/work/space/full' });

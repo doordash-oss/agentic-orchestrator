@@ -569,3 +569,65 @@ describe('RuntimeGateway apiRequest', () => {
     });
   });
 });
+
+describe('RuntimeGateway openEventStream', () => {
+  function withSse(env: Env) {
+    const calls: Array<{ url: string; token: string }> = [];
+    env.deps.openSse = (url, options) => {
+      calls.push({ url, token: options.token });
+      return Promise.resolve({
+        status: 200,
+        lines: (async function* () {})(),
+        close: () => undefined,
+      });
+    };
+    return calls;
+  }
+
+  it('rejects with E_NOT_CONNECTED before the gateway is ready', async () => {
+    const env = makeEnv();
+    env.deps.openSse = () => Promise.reject(new Error('must not be called'));
+    await expect(env.gateway.openEventStream()).rejects.toMatchObject({
+      safe: { code: 'E_NOT_CONNECTED' },
+    });
+  });
+
+  it('opens the fixed events path with the bearer as a header option, never in the URL', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    const calls = withSse(env);
+    await env.gateway.start();
+    const stream = await env.gateway.openEventStream();
+    expect(stream.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${EXTERNAL_BASE}/api/v1/events`);
+    expect(calls[0]!.token).toBe(EXTERNAL_TOKEN);
+    expectNoTokenLeak(env);
+  });
+
+  it('resumes with after/epoch query parameters and no credential material', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    const calls = withSse(env);
+    await env.gateway.start();
+    await env.gateway.openEventStream({ afterSeq: 42, epoch: 'epoch-a' });
+    expect(calls[0]!.url).toBe(`${EXTERNAL_BASE}/api/v1/events?after=42&epoch=epoch-a`);
+    expect(calls[0]!.url).not.toContain(EXTERNAL_TOKEN);
+  });
+
+  it('fails closed when no SSE transport is wired', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    await expect(env.gateway.openEventStream()).rejects.toMatchObject({
+      safe: { code: 'E_SSE_UNAVAILABLE' },
+    });
+  });
+
+  it('rejects after shutdown so a stream can never carry a stale credential', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    withSse(env);
+    await env.gateway.start();
+    await env.gateway.shutdown();
+    await expect(env.gateway.openEventStream()).rejects.toMatchObject({
+      safe: { code: 'E_NOT_CONNECTED' },
+    });
+  });
+});

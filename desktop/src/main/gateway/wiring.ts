@@ -10,6 +10,7 @@ import path from 'node:path';
 import { redactText } from '../../shared/errors';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../../shared/sanitize';
 import type { DiscoveryDeps } from './discovery';
+import type { SseStream } from './events';
 import { RedactedLogBuffer } from './logBuffer';
 import { fileIsExecutable, resolveServerBinary } from './resources';
 import { RuntimeGateway, type GatewayDeps, type SelectedRuntime } from './runtimeGateway';
@@ -74,6 +75,7 @@ export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): Wire
     selectRuntime: () => selectRuntime(options.getRuntimeSelection()),
     discovery,
     fetchJson,
+    openSse,
     resolveServerBinary: () =>
       resolveServerBinary(
         {
@@ -196,5 +198,68 @@ async function fetchJson(
     return { status: response.status, body };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** Upper bound for one buffered SSE line (invalidation events are tiny). */
+const MAX_SSE_LINE_BYTES = 1024 * 1024;
+
+/**
+ * Opens a long-lived SSE response. The Authorization header is attached here
+ * in the main process only — the token never appears in the URL, so it can
+ * never reach server request logs or proxies.
+ */
+async function openSse(url: string, options: { token: string }): Promise<SseStream> {
+  const controller = new AbortController();
+  const response = await fetch(url, {
+    method: 'GET',
+    signal: controller.signal,
+    redirect: 'error',
+    headers: {
+      Accept: 'text/event-stream',
+      Authorization: `Bearer ${options.token}`,
+    },
+  });
+  const body = response.body;
+  return {
+    status: response.status,
+    lines: body === null ? emptyLines() : streamLines(body, controller),
+    close: () => controller.abort(),
+  };
+}
+
+async function* emptyLines(): AsyncIterable<string> {
+  // No body — the caller sees an immediately-ended stream.
+}
+
+/** Decodes a byte stream into newline-separated lines with a size bound. */
+async function* streamLines(
+  body: ReadableStream<Uint8Array>,
+  controller: AbortController,
+): AsyncIterable<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_SSE_LINE_BYTES) {
+        throw new Error('event stream line exceeded the size bound');
+      }
+      let newline = buffer.indexOf('\n');
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        yield line.endsWith('\r') ? line.slice(0, -1) : line;
+        newline = buffer.indexOf('\n');
+      }
+    }
+  } finally {
+    controller.abort();
+    reader.releaseLock();
   }
 }

@@ -25,6 +25,7 @@ export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 /** Main-to-renderer push events (webContents.send). */
 export const IPC_EVENTS = {
   connectionChanged: 'agentico:connection:changed',
+  appEvent: 'agentico:events:app',
 } as const;
 
 // --- Safe error shape crossing the boundary --------------------------------
@@ -205,6 +206,35 @@ export const ReadinessSnapshotSchema = z.strictObject({
 });
 
 export type ReadinessSnapshot = z.output<typeof ReadinessSnapshotSchema>;
+
+// --- Server event invalidations (pushed main → renderer) --------------------
+// Carries ONLY invalidation metadata and stream health — never domain
+// payloads, summaries, or credentials. Strict schemas fail closed on any
+// foreign field at the preload boundary.
+
+/** Event kinds are dotted lowercase identifiers (e.g. `feature.updated`). */
+export const InvalidationKindSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9._-]+$/i);
+
+export const AppEventSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('invalidated'),
+    /** Server event kind, or the synthetic `resync` full-refresh signal. */
+    kind: InvalidationKindSchema,
+    resourceType: z.string().max(64).optional(),
+    resourceId: z.string().max(200).optional(),
+    featureId: z.string().max(200).optional(),
+  }),
+  z.strictObject({
+    type: z.literal('status'),
+    stream: z.enum(['connecting', 'live', 'stale']),
+  }),
+]);
+
+export type AppEvent = z.output<typeof AppEventSchema>;
 
 // --- Workspace/setup operations ----------------------------------------------
 

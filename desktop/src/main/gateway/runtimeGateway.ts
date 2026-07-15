@@ -24,6 +24,7 @@ import type { ConnectionState } from '../../shared/ipc';
 import { z } from 'zod';
 import { evaluateCompatibility } from './compatibility';
 import { evaluateDiscoveryFile, type DiscoveryDeps, type DiscoveryRecord } from './discovery';
+import type { SseStream } from './events';
 import type { ResolveResult } from './resources';
 import type { ChildExit } from './serverProcess';
 
@@ -87,6 +88,11 @@ export interface GatewayDeps {
     url: string,
     options: { token?: string; timeoutMs: number; method?: ApiMethod; body?: unknown },
   ): Promise<HttpResult>;
+  /**
+   * Opens a long-lived SSE response. The bearer travels only as an
+   * Authorization header supplied here — never as a URL parameter.
+   */
+  openSse?(url: string, options: { token: string }): Promise<SseStream>;
   resolveServerBinary(): ResolveResult;
   /** Spawns the bundled server (argv array, never a shell string). */
   spawnServer(binaryPath: string, args: readonly string[]): ServerChildLike;
@@ -183,6 +189,38 @@ export class RuntimeGateway {
       timeoutMs: this.timeouts.apiRequestMs,
       ...(method === 'GET' ? {} : { method, body: init.body ?? {} }),
     });
+  }
+
+  /**
+   * Opens the authenticated global event stream (`GET /api/v1/events`) with
+   * optional cursor resume. The bearer token and base URL never leave this
+   * method — callers receive status plus a line iterator only.
+   */
+  async openEventStream(options: { afterSeq?: number; epoch?: string } = {}): Promise<SseStream> {
+    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
+      throw new SafeErrorException(
+        safeError(
+          'E_NOT_CONNECTED',
+          'The app is not connected to an Agentico runtime.',
+          'Wait for the connection to become ready, then retry.',
+        ),
+      );
+    }
+    const openSse = this.deps.openSse;
+    if (openSse === undefined) {
+      throw new SafeErrorException(
+        safeError('E_SSE_UNAVAILABLE', 'This build has no event-stream transport wired.'),
+      );
+    }
+    const query = new URLSearchParams();
+    if (options.afterSeq !== undefined && options.afterSeq > 0) {
+      query.set('after', String(Math.floor(options.afterSeq)));
+      if (options.epoch !== undefined && options.epoch !== '') {
+        query.set('epoch', options.epoch);
+      }
+    }
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return openSse(`${this.baseUrl}/api/v1/events${suffix}`, { token: this.token });
   }
 
   /** Runs one full connect cycle. Safe to call repeatedly. */

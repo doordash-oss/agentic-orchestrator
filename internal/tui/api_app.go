@@ -1953,13 +1953,15 @@ func (m APIAppModel) apiDashboardFeatureByID(featureID string) *feature.Feature 
 }
 
 // applyAPIFeatureDetail merges feature detail fields (description, timings,
-// costs, active run info, failure, and need-input state) into f.
+// costs, review-gate state, active run info, failure, and need-input state) into f.
 func applyAPIFeatureDetail(f *feature.Feature, detail server.FeatureDetailDTO) {
 	f.Description = detail.Description
 	f.Summary = detail.Summary
 	f.Pipeline = feature.PipelineProfile(detail.Pipeline)
 	f.PhaseTimings = apiPhaseTimings(detail.Timing.ByPhase)
 	f.PhaseCosts = apiPhaseCosts(detail.Cost.ByPhase, detail.Cost.TotalUSD, f.CurrentPhase)
+	f.ReviewingGate = detail.ReviewGate.ReviewingGate
+	f.ReviewFixing = detail.ReviewGate.ReviewFixing
 	f.ValidatingPlan = detail.ReviewGate.ValidatingPlan
 	f.ValidatorStatuses = copyStringMapValues(detail.ReviewGate.ValidatorStatuses)
 	applyAPIActiveRunDetail(f, detail.ActiveRunDetail)
@@ -2159,6 +2161,8 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		RepoCycles:                      f.RepoCycles,
 		ActiveCycle:                     f.ActiveCycle,
 		RebaseOperation:                 f.RebaseOperation,
+		ReviewingGate:                   f.ReviewingGate,
+		ReviewFixing:                    f.ReviewFixing,
 		ValidatingPlan:                  f.ValidatingPlan,
 		ValidatorStatuses:               f.ValidatorStatuses,
 		PhaseTimings:                    f.PhaseTimings,

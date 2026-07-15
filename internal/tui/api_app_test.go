@@ -2398,6 +2398,61 @@ func TestAPIAppModelDashboardFeatureCarriesValidationReviewGateFromREST(t *testi
 	}
 }
 
+func TestAPIAppModelDashboardFeatureCarriesImplementationReviewGateFromREST(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           testFeatureIDActive,
+		Name:         "Review implementation",
+		Slug:         "review-implementation",
+		Status:       testFeatureStatusImplementing,
+		CurrentPhase: testPhaseNameImplement,
+		Progress: server.FeatureProgress{
+			CurrentRoadmapPhase: 1,
+			TotalRoadmapPhases:  11,
+		},
+	}
+	detail := apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
+		ActiveRunDetail: &server.RunSummaryDTO{
+			RunNumber:    5,
+			CurrentPhase: testPhaseNameImplement,
+			Iteration:    3,
+			RoadmapPhase: 1,
+			RoadmapTotal: 11,
+		},
+		ReviewGate: server.ReviewGateDTO{
+			ReviewingGate: true,
+			ReviewFixing:  true,
+			ValidatorStatuses: map[string]string{
+				"Craft":                  featureStatusTokenRunning,
+				"Functionality/Evidence": featureStatusTokenRunning,
+				"Cleanliness":            featureStatusTokenRunning,
+				"Design":                 featureStatusTokenRunning,
+			},
+		},
+	})
+
+	f := (APIAppModel{}).apiDashboardFeature(summary, detail, true)
+	if !f.ReviewingGate {
+		t.Fatal("ReviewingGate = false, want true")
+	}
+	if !f.ReviewFixing {
+		t.Fatal("ReviewFixing = false, want true")
+	}
+
+	leftPanelStatus := stripANSI(formatStatus(f))
+	if !strings.Contains(leftPanelStatus, "Reviewing [3]") {
+		t.Fatalf("left-panel status = %q, want active review wording", leftPanelStatus)
+	}
+
+	overviewStatus := stripANSI(formatPhaseStatus(f))
+	for _, want := range []string{"reviewing:", "Craft ⟳", "Func ⟳", "Clean ⟳", "Design ⟳"} {
+		if !strings.Contains(overviewStatus, want) {
+			t.Fatalf("Overview phase status missing %q in %q", want, overviewStatus)
+		}
+	}
+}
+
 func TestAPIAppModelTranscriptLoadsSelectedSessionFromREST(t *testing.T) {
 	t.Parallel()
 

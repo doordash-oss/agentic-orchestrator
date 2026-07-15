@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * Read runtime health and launch metadata.
-         * @description Liveness-only endpoint (status, runtime identity, launch policy, start time, owner — no secrets). Intentionally exempt from bearer auth so that a stale discovery token can't make a live, healthy server look dead to PrepareDiscovery.
+         * @description Liveness-only endpoint (status, runtime identity, launch policy, start time, owner, explicit compatibility declaration — no secrets). Intentionally exempt from bearer auth so that a stale discovery token can't make a live, healthy server look dead to PrepareDiscovery, and so clients can evaluate compatibility before presenting credentials.
          */
         get: operations["getHealth"];
         put?: never;
@@ -651,6 +651,26 @@ export interface components {
             owner: components["schemas"]["Owner"];
             /** Format: date-time */
             server_time: string;
+            compatibility: components["schemas"]["CompatibilityDeclaration"];
+        };
+        /** @description Build provenance for one side of the desktop/server pairing. Purely informational: a differing build identity alone never blocks attachment — compatibility is decided by the explicit declaration fields, not by comparing versions. */
+        BuildIdentity: {
+            /** @description Human-readable build version (e.g. a git describe string). */
+            version: string;
+            /** @description VCS revision the binary was built from, when known. */
+            revision?: string;
+        };
+        /** @description The server's explicit compatibility contract. Clients (such as the desktop app) must attach only when they support the declared (api_version, schema_version) REST contract AND the declared runtime_policy, and when their own client schema version is at least min_client_schema. A shared API major version alone is never sufficient. Contains no secrets. */
+        CompatibilityDeclaration: {
+            /** @description The REST API major version this server serves (e.g. "v1"). */
+            api_version: string;
+            /** @description Monotonic series number of the REST schema contract within the API major. Bumped whenever the wire schema changes incompatibly. */
+            schema_version: number;
+            /** @description The minimum client schema series a connecting client must implement for this server to consider it compatible. */
+            min_client_schema: number;
+            /** @description Name of the runtime security/ownership policy contract in force (e.g. "loopback-bearer-v1" — loopback-only listener with bearer token auth and single-owner discovery). */
+            runtime_policy: string;
+            server_build: components["schemas"]["BuildIdentity"];
         };
         /**
          * @description Readiness problem taxonomy. missing_executable — a provider CLI binary is not installed; unsupported_version — an installed provider CLI is below the enforced minimum version; unauthenticated — a provider CLI is installed but its authentication flow has not been completed; models_unavailable — no usable provider exposes any model; invalid_configuration — the runtime configuration is unusable; invalid_workspace_root — a configured workspace root does not resolve to a directory; invalid_repository — a configured repository path is not a git repository.

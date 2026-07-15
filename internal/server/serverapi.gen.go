@@ -813,6 +813,15 @@ type AutomaticReviewStateMode string
 // AutomaticReviewStateSource defines model for AutomaticReviewState.Source.
 type AutomaticReviewStateSource string
 
+// BuildIdentity Build provenance for one side of the desktop/server pairing. Purely informational: a differing build identity alone never blocks attachment — compatibility is decided by the explicit declaration fields, not by comparing versions.
+type BuildIdentity struct {
+	// Revision VCS revision the binary was built from, when known.
+	Revision string `json:"revision,omitempty"`
+
+	// Version Human-readable build version (e.g. a git describe string).
+	Version string `json:"version"`
+}
+
 // ChatStartResponse defines model for ChatStartResponse.
 type ChatStartResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -839,6 +848,24 @@ type CleanupFeatureResponse struct {
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
 	Target     string       `json:"target,omitempty"`
+}
+
+// CompatibilityDeclaration The server's explicit compatibility contract. Clients (such as the desktop app) must attach only when they support the declared (api_version, schema_version) REST contract AND the declared runtime_policy, and when their own client schema version is at least min_client_schema. A shared API major version alone is never sufficient. Contains no secrets.
+type CompatibilityDeclaration struct {
+	// APIVersion The REST API major version this server serves (e.g. "v1").
+	APIVersion string `json:"api_version"`
+
+	// MinClientSchema The minimum client schema series a connecting client must implement for this server to consider it compatible.
+	MinClientSchema int `json:"min_client_schema"`
+
+	// RuntimePolicy Name of the runtime security/ownership policy contract in force (e.g. "loopback-bearer-v1" — loopback-only listener with bearer token auth and single-owner discovery).
+	RuntimePolicy string `json:"runtime_policy"`
+
+	// SchemaVersion Monotonic series number of the REST schema contract within the API major. Bumped whenever the wire schema changes incompatibly.
+	SchemaVersion int `json:"schema_version"`
+
+	// ServerBuild Build provenance for one side of the desktop/server pairing. Purely informational: a differing build identity alone never blocks attachment — compatibility is decided by the explicit declaration fields, not by comparing versions.
+	ServerBuild BuildIdentity `json:"server_build"`
 }
 
 // ConfigRepo defines model for ConfigRepo.
@@ -1112,14 +1139,17 @@ type FileChange struct {
 
 // HealthResponse defines model for HealthResponse.
 type HealthResponse struct {
-	APIVersion   string          `json:"api_version"`
-	LaunchPolicy LaunchPolicy    `json:"launch_policy"`
-	Meta         ResponseMeta    `json:"meta,omitempty"`
-	Owner        Owner           `json:"owner"`
-	Runtime      RuntimeIdentity `json:"runtime"`
-	ServerTime   time.Time       `json:"server_time"`
-	StartedAt    time.Time       `json:"started_at"`
-	Status       string          `json:"status"`
+	APIVersion string `json:"api_version"`
+
+	// Compatibility The server's explicit compatibility contract. Clients (such as the desktop app) must attach only when they support the declared (api_version, schema_version) REST contract AND the declared runtime_policy, and when their own client schema version is at least min_client_schema. A shared API major version alone is never sufficient. Contains no secrets.
+	Compatibility CompatibilityDeclaration `json:"compatibility"`
+	LaunchPolicy  LaunchPolicy             `json:"launch_policy"`
+	Meta          ResponseMeta             `json:"meta,omitempty"`
+	Owner         Owner                    `json:"owner"`
+	Runtime       RuntimeIdentity          `json:"runtime"`
+	ServerTime    time.Time                `json:"server_time"`
+	StartedAt     time.Time                `json:"started_at"`
+	Status        string                   `json:"status"`
 }
 
 // HelpQueue defines model for HelpQueue.

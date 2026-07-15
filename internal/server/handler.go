@@ -201,13 +201,14 @@ func (h *apiHandler) routes() http.Handler {
 
 func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, HealthResponse{
-		APIVersion:   APIVersion,
-		Status:       "ok",
-		Runtime:      h.runtime,
-		LaunchPolicy: h.policy,
-		StartedAt:    h.startedAt,
-		Owner:        OwnerDTOFromInstanceOwner(h.owner),
-		ServerTime:   time.Now().UTC(),
+		APIVersion:    APIVersion,
+		Status:        "ok",
+		Runtime:       h.runtime,
+		LaunchPolicy:  h.policy,
+		StartedAt:     h.startedAt,
+		Owner:         OwnerDTOFromInstanceOwner(h.owner),
+		ServerTime:    time.Now().UTC(),
+		Compatibility: NewCompatibilityDeclaration(h.owner.Version),
 	})
 }
 

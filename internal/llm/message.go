@@ -348,6 +348,13 @@ const (
 	// TermErrored means the CLI reported an error (subtype=error or
 	// is_error=true).
 	TermErrored
+
+	// TermAwaitingBackgroundTasks means the agent ended its turn while
+	// background subagents (Task tool, run in background) were still running —
+	// it yielded to wait for their notifications, not to stop. The invocation
+	// should be kept alive until the tasks complete, not counted as a
+	// protocol violation.
+	TermAwaitingBackgroundTasks
 )
 
 // String returns the enum name — used in logs and tests.
@@ -365,6 +372,8 @@ func (t TerminationClass) String() string {
 		return "Refused"
 	case TermErrored:
 		return "Errored"
+	case TermAwaitingBackgroundTasks:
+		return "AwaitingBackgroundTasks"
 	default:
 		return "Unknown"
 	}
@@ -383,6 +392,11 @@ type TerminationInputs struct {
 	// is still awaiting the user's response. If the question was already
 	// answered before the Result arrived, this should be false.
 	AskUserQuestionPending bool
+	// BackgroundTasksRunning is true when background subagents spawned by the
+	// session are still running at the time the Result is classified. Callers
+	// must only set this for live sessions — a dead process cannot deliver
+	// task notifications, so its stale task set must not defer classification.
+	BackgroundTasksRunning bool
 }
 
 // ClassifyTermination returns the TerminationClass for a completed invocation
@@ -406,6 +420,9 @@ func ClassifyTermination(in TerminationInputs) TerminationClass {
 	}
 	if in.AskUserQuestionPending {
 		return TermAskedFormal
+	}
+	if in.BackgroundTasksRunning {
+		return TermAwaitingBackgroundTasks
 	}
 	switch r.StopReason {
 	case "refusal":

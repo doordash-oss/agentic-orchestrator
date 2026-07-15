@@ -2998,3 +2998,187 @@ func TestImplementLoop_SkillReadInstruction(t *testing.T) {
 		t.Errorf("user prompt should not contain RoleSpec-owned skill path %q", expectedSkillPath)
 	}
 }
+
+// bgTaskSession is a SessionHandle double whose live-background-task count and
+// stdout-activity timestamp are test-controlled, mirroring a Claude session
+// that spawned background Task subagents.
+type bgTaskSession struct {
+	*utilityTestSession
+	liveTasks    atomic.Int32
+	lastStdoutNs atomic.Int64
+	userMessages chan string
+	stopped      atomic.Bool
+}
+
+func newBgTaskSession() *bgTaskSession {
+	s := &bgTaskSession{
+		utilityTestSession: newUtilityTestSession(),
+		userMessages:       make(chan string, 4),
+	}
+	s.lastStdoutNs.Store(time.Now().UnixNano())
+	return s
+}
+
+func (s *bgTaskSession) LiveBackgroundTaskCount() int { return int(s.liveTasks.Load()) }
+func (s *bgTaskSession) LastStdoutAt() time.Time      { return time.Unix(0, s.lastStdoutNs.Load()) }
+func (s *bgTaskSession) SendUserMessage(text string) error {
+	s.userMessages <- text
+	return nil
+}
+func (s *bgTaskSession) Stop() error {
+	s.stopped.Store(true)
+	return nil
+}
+
+func withBackgroundTaskPollInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := backgroundTaskPollInterval
+	backgroundTaskPollInterval = d
+	t.Cleanup(func() { backgroundTaskPollInterval = prev })
+}
+
+func TestWaitForStatus_BackgroundTasks(t *testing.T) {
+	t.Run("end_turn with live tasks keeps waiting without nudge or stop", func(t *testing.T) {
+		withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+
+		sess := newBgTaskSession()
+		sess.result = newEndedAfterTextResult()
+		sess.liveTasks.Store(3)
+		sess.lastStdoutNs.Store(time.Now().UnixNano())
+
+		var ready atomic.Bool
+		done := make(chan string, 1)
+		go func() {
+			done <- waitForStatus(sess, nil, "", func() bool { return ready.Load() })
+		}()
+
+		sess.statusCh <- agentStatusSuccess
+
+		select {
+		case got := <-done:
+			t.Fatalf("waitForStatus() returned %q; want it to keep waiting on background tasks", got)
+		case msg := <-sess.userMessages:
+			t.Fatalf("unexpected user message %q while background tasks run", msg)
+		case <-time.After(100 * time.Millisecond):
+		}
+		if sess.stopped.Load() {
+			t.Fatal("session was stopped while background tasks were running")
+		}
+
+		// Background tasks finish; the CLI re-invokes the agent, which
+		// completes normally.
+		sess.liveTasks.Store(0)
+		ready.Store(true)
+		sess.statusCh <- agentStatusSuccess
+
+		select {
+		case got := <-done:
+			if got != agentStatusSuccess {
+				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for final SUCCESS")
+		}
+		select {
+		case msg := <-sess.userMessages:
+			t.Fatalf("unexpected user message %q; completion needed no nudge", msg)
+		default:
+		}
+	})
+
+	t.Run("tasks finish quietly without re-invocation triggers auto-resume", func(t *testing.T) {
+		withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+
+		sess := newBgTaskSession()
+		sess.result = newEndedAfterTextResult()
+		sess.liveTasks.Store(1)
+		sess.lastStdoutNs.Store(time.Now().UnixNano())
+
+		var ready atomic.Bool
+		done := make(chan string, 1)
+		go func() {
+			done <- waitForStatus(sess, nil, "", func() bool { return ready.Load() })
+		}()
+
+		sess.statusCh <- agentStatusSuccess
+
+		// Give the waiter a moment to defer, then finish the tasks with a
+		// stale stdout stamp: the CLI never re-invoked the agent.
+		time.Sleep(20 * time.Millisecond)
+		sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
+		sess.liveTasks.Store(0)
+
+		select {
+		case msg := <-sess.userMessages:
+			if !strings.Contains(msg, "Continue where you left off") {
+				t.Fatalf("SendUserMessage() = %q, want auto-resume message", msg)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for auto-resume after tasks finished")
+		}
+
+		ready.Store(true)
+		sess.statusCh <- agentStatusSuccess
+		select {
+		case got := <-done:
+			if got != agentStatusSuccess {
+				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for final SUCCESS")
+		}
+	})
+
+	t.Run("wedged session with live tasks hits stall backstop", func(t *testing.T) {
+		withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+		prev := backgroundTaskStallTimeout
+		backgroundTaskStallTimeout = 30 * time.Millisecond
+		t.Cleanup(func() { backgroundTaskStallTimeout = prev })
+
+		sess := newBgTaskSession()
+		sess.result = newEndedAfterTextResult()
+		sess.liveTasks.Store(1)
+		sess.lastStdoutNs.Store(time.Now().UnixNano())
+
+		done := make(chan string, 1)
+		go func() {
+			done <- waitForStatus(sess, nil, "", func() bool { return false })
+		}()
+
+		sess.statusCh <- agentStatusSuccess
+
+		select {
+		case got := <-done:
+			if got != agentStatusMissingMarker {
+				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for stall backstop")
+		}
+		if !sess.stopped.Load() {
+			t.Fatal("session was not stopped by the stall backstop")
+		}
+	})
+
+	t.Run("dead session with stale live tasks does not hang", func(t *testing.T) {
+		sess := newBgTaskSession()
+		sess.result = newEndedAfterTextResult()
+		sess.liveTasks.Store(2)
+		sess.statusCh <- agentStatusSuccess
+		close(sess.done)
+
+		done := make(chan string, 1)
+		go func() {
+			done <- waitForStatus(sess, nil, "", func() bool { return false })
+		}()
+
+		select {
+		case got := <-done:
+			if got != agentStatusMissingMarker {
+				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("waitForStatus() hung on a dead session with stale background tasks")
+		}
+	})
+}

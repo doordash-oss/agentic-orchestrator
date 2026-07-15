@@ -2247,3 +2247,94 @@ func TestSession_StatusChSignalAfterResultCallback(t *testing.T) {
 
 	<-done
 }
+
+func taskStartedMsg(taskID string) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: "system", Subtype: "task_started",
+		TaskStarted: &llm.TaskStartedMessage{TaskID: taskID},
+	}
+}
+
+func taskProgressMsg(taskID string) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: "system", Subtype: "task_progress",
+		TaskProgress: &llm.TaskProgressMessage{TaskID: taskID},
+	}
+}
+
+func taskNotificationMsg(taskID string) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: "system", Subtype: "task_notification",
+		TaskNotification: &llm.TaskNotificationMessage{TaskID: taskID, Status: "completed"},
+	}
+}
+
+func TestObserveBackgroundTasks_TracksLifecycle(t *testing.T) {
+	s := NewSession("bg-test", "feat-1", feature.PhaseImplement)
+
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("initial LiveBackgroundTaskCount() = %d, want 0", got)
+	}
+
+	s.observeBackgroundTasks(taskStartedMsg("task-a"))
+	s.observeBackgroundTasks(taskStartedMsg("task-b"))
+	if got := s.LiveBackgroundTaskCount(); got != 2 {
+		t.Fatalf("after two starts LiveBackgroundTaskCount() = %d, want 2", got)
+	}
+
+	// Duplicate progress for a known task must not double-count.
+	s.observeBackgroundTasks(taskProgressMsg("task-a"))
+	if got := s.LiveBackgroundTaskCount(); got != 2 {
+		t.Fatalf("after progress LiveBackgroundTaskCount() = %d, want 2", got)
+	}
+
+	// Progress for a task whose start we never saw (session attach mid-task)
+	// registers it as live.
+	s.observeBackgroundTasks(taskProgressMsg("task-c"))
+	if got := s.LiveBackgroundTaskCount(); got != 3 {
+		t.Fatalf("after unseen-task progress LiveBackgroundTaskCount() = %d, want 3", got)
+	}
+
+	// task_notification is the terminal lifecycle event.
+	s.observeBackgroundTasks(taskNotificationMsg("task-a"))
+	s.observeBackgroundTasks(taskNotificationMsg("task-b"))
+	s.observeBackgroundTasks(taskNotificationMsg("task-c"))
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("after notifications LiveBackgroundTaskCount() = %d, want 0", got)
+	}
+
+	// Notification for an unknown task is a no-op, not a panic or negative count.
+	s.observeBackgroundTasks(taskNotificationMsg("task-x"))
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("after unknown notification LiveBackgroundTaskCount() = %d, want 0", got)
+	}
+}
+
+func TestShouldShutdownOnResult_LiveBackgroundTasksKeepAlive(t *testing.T) {
+	endTurn := &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+
+	t.Run("keep-alive session with live tasks stays up on end_turn", func(t *testing.T) {
+		s := NewSession("bg-keepalive", "feat-1", feature.PhaseImplement)
+		s.keepAliveOnTruncatedResult = true
+		s.observeBackgroundTasks(taskStartedMsg("task-a"))
+		if s.shouldShutdownOnResult(endTurn) {
+			t.Error("shouldShutdownOnResult() = true, want false while background tasks run")
+		}
+	})
+
+	t.Run("keep-alive session without live tasks shuts down on end_turn", func(t *testing.T) {
+		s := NewSession("bg-none", "feat-1", feature.PhaseImplement)
+		s.keepAliveOnTruncatedResult = true
+		if !s.shouldShutdownOnResult(endTurn) {
+			t.Error("shouldShutdownOnResult() = false, want true with no background tasks")
+		}
+	})
+
+	t.Run("non-loop session with live tasks still shuts down", func(t *testing.T) {
+		s := NewSession("bg-oneshot", "feat-1", feature.PhaseImplement)
+		s.observeBackgroundTasks(taskStartedMsg("task-a"))
+		if !s.shouldShutdownOnResult(endTurn) {
+			t.Error("shouldShutdownOnResult() = false, want true for non-keep-alive session")
+		}
+	})
+}

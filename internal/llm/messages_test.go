@@ -341,6 +341,58 @@ func TestClassifyTermination_Priorities(t *testing.T) {
 	})
 }
 
+func TestClassifyTermination_BackgroundTasks(t *testing.T) {
+	// An end_turn while background subagents are still running is the agent
+	// yielding to wait for them, not a deliberate stop.
+	t.Run("end_turn with running background tasks awaits", func(t *testing.T) {
+		in := TerminationInputs{
+			Result:                 &ResultMessage{Subtype: "success", StopReason: "end_turn"},
+			BackgroundTasksRunning: true,
+		}
+		if got := ClassifyTermination(in); got != TermAwaitingBackgroundTasks {
+			t.Errorf("got %s, want AwaitingBackgroundTasks", got)
+		}
+	})
+	t.Run("truncation with running background tasks awaits", func(t *testing.T) {
+		in := TerminationInputs{
+			Result:                 &ResultMessage{Subtype: "success", StopReason: "tool_use"},
+			BackgroundTasksRunning: true,
+		}
+		if got := ClassifyTermination(in); got != TermAwaitingBackgroundTasks {
+			t.Errorf("got %s, want AwaitingBackgroundTasks", got)
+		}
+	})
+	t.Run("error beats running background tasks", func(t *testing.T) {
+		in := TerminationInputs{
+			Result:                 &ResultMessage{Subtype: "error", IsError: true},
+			BackgroundTasksRunning: true,
+		}
+		if got := ClassifyTermination(in); got != TermErrored {
+			t.Errorf("got %s, want Errored", got)
+		}
+	})
+	t.Run("phase_complete beats running background tasks", func(t *testing.T) {
+		in := TerminationInputs{
+			Result:                 &ResultMessage{Subtype: "success", StopReason: "end_turn"},
+			PhaseCompleteExists:    true,
+			BackgroundTasksRunning: true,
+		}
+		if got := ClassifyTermination(in); got != TermCompleted {
+			t.Errorf("got %s, want Completed", got)
+		}
+	})
+	t.Run("pending AskUserQuestion beats running background tasks", func(t *testing.T) {
+		in := TerminationInputs{
+			Result:                 &ResultMessage{Subtype: "success", StopReason: "end_turn"},
+			AskUserQuestionPending: true,
+			BackgroundTasksRunning: true,
+		}
+		if got := ClassifyTermination(in); got != TermAskedFormal {
+			t.Errorf("got %s, want AskedFormal", got)
+		}
+	})
+}
+
 func TestSDKMessage_UnmarshalJSON_ControlRequest(t *testing.T) {
 	data := `{
 		"type": "control_request",

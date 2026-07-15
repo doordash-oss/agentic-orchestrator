@@ -28,27 +28,54 @@ describe('IPC channel registry', () => {
 });
 
 describe('ConnectionStateSchema', () => {
-  it('accepts the stub awaiting-gateway state', () => {
+  it('accepts gateway lifecycle states with ownership and server build', () => {
     const state = {
-      status: 'awaiting-gateway',
-      stage: 'resolve-runtime',
-      detail: 'Runtime gateway not yet available.',
+      status: 'ready',
+      stage: 'ready',
+      detail: 'Connected to an externally managed Agentico runtime.',
+      ownership: 'external',
+      serverBuild: { version: 'v1.2.3', revision: 'abc' },
+    };
+    expect(ConnectionStateSchema.parse(state)).toEqual(state);
+  });
+
+  it('accepts terminal error states with redacted diagnostics', () => {
+    const state = {
+      status: 'incompatible',
+      stage: 'connect',
+      detail: 'A running Agentico runtime is not compatible with this app.',
+      ownership: 'external',
+      error: { code: 'E_INCOMPATIBLE_SERVER', message: 'nope', remediation: 'update' },
     };
     expect(ConnectionStateSchema.parse(state)).toEqual(state);
   });
 
   it('rejects unknown statuses and extra fields fail-closed', () => {
     expect(
-      ConnectionStateSchema.safeParse({ status: 'nope', stage: 'discover', detail: '' }).success,
-    ).toBe(false);
-    expect(
       ConnectionStateSchema.safeParse({
-        status: 'idle',
+        status: 'nope',
         stage: 'discover',
         detail: '',
-        bearerToken: 'x',
+        ownership: 'none',
       }).success,
     ).toBe(false);
+    expect(
+      ConnectionStateSchema.safeParse({ status: 'idle', stage: 'discover', detail: '' }).success,
+    ).toBe(false); // ownership is required
+  });
+
+  it('rejects token-shaped fields anywhere in the state', () => {
+    const base = { status: 'ready', stage: 'ready', detail: '', ownership: 'app-owned' };
+    for (const extra of [
+      { bearerToken: 'x' },
+      { authToken: 'x' },
+      { token: 'x' },
+      { auth_token: 'x' },
+      { baseUrl: 'http://127.0.0.1:1' },
+      { serverBuild: { version: 'v1', token: 'x' } },
+    ]) {
+      expect(ConnectionStateSchema.safeParse({ ...base, ...extra }).success).toBe(false);
+    }
   });
 });
 

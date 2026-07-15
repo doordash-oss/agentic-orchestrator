@@ -1,8 +1,19 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import type { ConnectionState } from '../../../shared/ipc';
 import { ConnectionShell } from './ConnectionShell';
 import { installAgenticoMock } from '../test/agenticoMock';
+
+function state(overrides: Partial<ConnectionState>): ConnectionState {
+  return {
+    status: 'discovering',
+    stage: 'discover',
+    detail: 'Looking for a running Agentico runtime.',
+    ownership: 'none',
+    ...overrides,
+  };
+}
 
 describe('ConnectionShell', () => {
   it('shows the app identity with a mono build version', async () => {
@@ -10,12 +21,12 @@ describe('ConnectionShell', () => {
     render(<ConnectionShell />);
     expect(screen.getByRole('heading', { name: /agentico/i })).toBeInTheDocument();
     expect(screen.getByText(/v\d+\.\d+\.\d+/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/standby/i));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
   });
 
   it('renders the initial state fetched over the preload API', async () => {
     installAgenticoMock({
-      connection: { status: 'awaiting-gateway', stage: 'resolve-runtime', detail: 'Waiting.' },
+      connection: state({ detail: 'Waiting.' }),
     });
     render(<ConnectionShell />);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Waiting.'));
@@ -24,30 +35,72 @@ describe('ConnectionShell', () => {
   it('gives every status a text label and a non-color icon cue', async () => {
     const mock = installAgenticoMock();
     render(<ConnectionShell />);
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/standby/i));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
 
     const cases = [
       { status: 'idle', label: /idle/i },
-      { status: 'connecting', label: /connecting/i },
-      { status: 'connected', label: /connected/i },
+      { status: 'discovering', label: /discovering/i },
+      { status: 'attaching', label: /attaching/i },
+      { status: 'launching', label: /launching/i },
+      { status: 'waiting-health', label: /waiting for health/i },
+      { status: 'connecting', label: /authenticating/i },
+      { status: 'ready', label: /ready/i },
+      { status: 'incompatible', label: /incompatible/i },
+      { status: 'resources-missing', label: /resources missing/i },
+      { status: 'launch-failed', label: /launch failed/i },
+      { status: 'crashed', label: /crashed/i },
       { status: 'error', label: /error/i },
     ] as const;
     for (const { status, label } of cases) {
       act(() => {
-        mock.emitConnection({
-          status,
-          stage: 'discover',
-          detail: `now ${status}`,
-          ...(status === 'error'
-            ? { error: { code: 'E_X', message: 'failed', remediation: 'retry' } }
-            : {}),
-        });
+        mock.emitConnection(
+          state({
+            status,
+            detail: `now ${status}`,
+            ...(status === 'error'
+              ? { error: { code: 'E_X', message: 'failed', remediation: 'retry' } }
+              : {}),
+          }),
+        );
       });
       const region = screen.getByRole('status');
       expect(region).toHaveTextContent(label);
       expect(region.querySelector('[data-status-icon]')).toBeInTheDocument();
       expect(region.querySelector('[data-status-icon]')).toHaveAttribute('aria-hidden', 'true');
     }
+  });
+
+  it('labels external versus app-owned server ownership', async () => {
+    const mock = installAgenticoMock();
+    render(<ConnectionShell />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
+
+    act(() => {
+      mock.emitConnection(state({ status: 'ready', stage: 'ready', ownership: 'external' }));
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(/external runtime/i);
+
+    act(() => {
+      mock.emitConnection(state({ status: 'ready', stage: 'ready', ownership: 'app-owned' }));
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(/app-managed runtime/i);
+  });
+
+  it('shows the server build identity beside the desktop build when known', async () => {
+    const mock = installAgenticoMock();
+    render(<ConnectionShell />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
+    act(() => {
+      mock.emitConnection(
+        state({
+          status: 'ready',
+          stage: 'ready',
+          ownership: 'external',
+          serverBuild: { version: 'v9.9.9-other' },
+        }),
+      );
+    });
+    expect(screen.getByText(/server v9\.9\.9-other/i)).toBeInTheDocument();
   });
 
   it('announces changes politely via a live region', async () => {
@@ -60,47 +113,76 @@ describe('ConnectionShell', () => {
   it('renders the phase spine with the current stage active', async () => {
     const mock = installAgenticoMock();
     render(<ConnectionShell />);
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/standby/i));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
     act(() => {
-      mock.emitConnection({ status: 'connecting', stage: 'authenticate', detail: 'auth' });
+      mock.emitConnection(state({ status: 'connecting', stage: 'authenticate', detail: 'auth' }));
     });
     const items = screen.getAllByRole('listitem');
-    expect(items[3]).toHaveAttribute('aria-current', 'step');
+    expect(items[4]).toHaveAttribute('aria-current', 'step');
   });
 
-  it('shows the error panel with remediation and retries on demand', async () => {
+  it('presents incompatible servers with guidance and no way to stop them', async () => {
     const mock = installAgenticoMock();
     render(<ConnectionShell />);
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/standby/i));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
 
     act(() => {
-      mock.emitConnection({
-        status: 'error',
-        stage: 'discover',
-        detail: 'Discovery failed.',
-        error: { code: 'E_DISCOVERY', message: 'No runtime found.', remediation: 'Start one.' },
-      });
+      mock.emitConnection(
+        state({
+          status: 'incompatible',
+          stage: 'connect',
+          ownership: 'external',
+          detail: 'A running Agentico runtime is not compatible with this app.',
+          error: {
+            code: 'E_INCOMPATIBLE_SERVER',
+            message: 'The server declares schema series 9.',
+            remediation: 'Update the Agentico desktop app and the agentico runtime.',
+          },
+        }),
+      );
     });
-    expect(screen.getByText('E_DISCOVERY')).toBeInTheDocument();
-    expect(screen.getByText(/no runtime found/i)).toBeInTheDocument();
-    expect(screen.getByText(/start one/i)).toBeInTheDocument();
+    expect(screen.getByText('E_INCOMPATIBLE_SERVER')).toBeInTheDocument();
+    expect(screen.getByText(/update the agentico desktop app/i)).toBeInTheDocument();
+    // The only action offered is Retry — never stop/kill of the external server.
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveTextContent(/retry/i);
+  });
 
-    const before = mock.api.getConnectionStatus.mock.calls.length;
+  it('offers retry on a crash and routes it through the retry IPC op', async () => {
+    const mock = installAgenticoMock();
+    render(<ConnectionShell />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
+
+    act(() => {
+      mock.emitConnection(
+        state({
+          status: 'crashed',
+          stage: 'connect',
+          detail: 'The app-managed runtime exited unexpectedly.',
+          error: { code: 'E_SERVER_CRASHED', message: 'exited', remediation: 'Retry.' },
+        }),
+      );
+    });
+    expect(screen.getByText('E_SERVER_CRASHED')).toBeInTheDocument();
+
     await userEvent.click(screen.getByRole('button', { name: /retry/i }));
-    expect(mock.api.getConnectionStatus.mock.calls.length).toBe(before + 1);
+    expect(mock.api.retryConnection).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the retry button reachable and focusable by keyboard', async () => {
     const mock = installAgenticoMock();
     render(<ConnectionShell />);
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/standby/i));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
     act(() => {
-      mock.emitConnection({
-        status: 'error',
-        stage: 'discover',
-        detail: 'x',
-        error: { code: 'E_X', message: 'm' },
-      });
+      mock.emitConnection(
+        state({
+          status: 'launch-failed',
+          stage: 'connect',
+          detail: 'x',
+          error: { code: 'E_X', message: 'm' },
+        }),
+      );
     });
     await userEvent.tab();
     expect(screen.getByRole('button', { name: /retry/i })).toHaveFocus();

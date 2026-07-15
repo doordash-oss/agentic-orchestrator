@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 export const IPC_CHANNELS = {
   connectionGetStatus: 'agentico:connection:get-status',
+  connectionRetry: 'agentico:connection:retry',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
   themeGet: 'agentico:theme:get',
@@ -41,7 +42,8 @@ export type IpcEnvelope = z.output<typeof IpcEnvelopeSchema>;
 export const CONNECTION_STAGES = [
   'resolve-runtime',
   'discover',
-  'attach',
+  'connect',
+  'wait-health',
   'authenticate',
   'ready',
 ] as const;
@@ -49,10 +51,64 @@ export const CONNECTION_STAGES = [
 export const ConnectionStageSchema = z.enum(CONNECTION_STAGES);
 export type ConnectionStage = z.output<typeof ConnectionStageSchema>;
 
+export const CONNECTION_STATUSES = [
+  'idle',
+  'resolving-runtime',
+  'discovering',
+  'attaching',
+  'launching',
+  'waiting-health',
+  'connecting',
+  'ready',
+  'incompatible',
+  'resources-missing',
+  'launch-failed',
+  'crashed',
+  'error',
+] as const;
+
+export const ConnectionStatusSchema = z.enum(CONNECTION_STATUSES);
+export type ConnectionStatus = z.output<typeof ConnectionStatusSchema>;
+
+/** Terminal states that surface the error panel and a manual retry path. */
+export const CONNECTION_ERROR_STATUSES: readonly ConnectionStatus[] = [
+  'incompatible',
+  'resources-missing',
+  'launch-failed',
+  'crashed',
+  'error',
+];
+
+export function isConnectionErrorStatus(status: ConnectionStatus): boolean {
+  return CONNECTION_ERROR_STATUSES.includes(status);
+}
+
+/**
+ * Who owns the server process: `app-owned` children may be stopped by the
+ * app on quit; `external` servers are never signalled or terminated.
+ */
+export const ServerOwnershipSchema = z.enum(['none', 'external', 'app-owned']);
+export type ServerOwnership = z.output<typeof ServerOwnershipSchema>;
+
+/** Server build identity (informational; never gates compatibility). */
+export const ServerBuildInfoSchema = z.strictObject({
+  version: z.string(),
+  revision: z.string().optional(),
+});
+
+export type ServerBuildInfo = z.output<typeof ServerBuildInfoSchema>;
+
+/**
+ * The renderer-visible connection model. Strict by design: any foreign
+ * field — in particular anything token-shaped — fails validation at the
+ * preload and IPC boundaries. Credentials never appear here.
+ */
 export const ConnectionStateSchema = z.strictObject({
-  status: z.enum(['idle', 'awaiting-gateway', 'connecting', 'connected', 'error']),
+  status: ConnectionStatusSchema,
   stage: ConnectionStageSchema,
   detail: z.string(),
+  ownership: ServerOwnershipSchema,
+  serverBuild: ServerBuildInfoSchema.optional(),
   error: SafeErrorSchema.optional(),
 });
 
@@ -128,6 +184,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([]),
     response: ConnectionStateSchema,
   },
+  [IPC_CHANNELS.connectionRetry]: {
+    request: z.tuple([]),
+    response: ConnectionStateSchema,
+  },
   [IPC_CHANNELS.settingsGet]: {
     request: z.tuple([]),
     response: SettingsSchema,
@@ -150,6 +210,7 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
 
 export interface AgenticoApi {
   getConnectionStatus(): Promise<ConnectionState>;
+  retryConnection(): Promise<ConnectionState>;
   onConnectionChanged(listener: (state: ConnectionState) => void): () => void;
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;

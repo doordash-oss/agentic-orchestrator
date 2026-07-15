@@ -1,11 +1,12 @@
 /**
- * Electron main entry point. All privileged state (settings, theme,
- * connection lifecycle, and later the server transport with its bearer
- * token) lives here; the renderer only ever sees the narrow preload API.
+ * Electron main entry point. All privileged state (settings, theme, the
+ * runtime gateway with its bearer token and child-server supervision) lives
+ * here; the renderer only ever sees the narrow preload API.
  */
 import path from 'node:path';
 import { BrowserWindow, app, ipcMain, nativeTheme, session } from 'electron';
-import { StubConnectionSource } from './connection';
+import { createRuntimeGateway } from './gateway/wiring';
+import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
 import {
   installSecurityPolicies,
@@ -32,7 +33,7 @@ const trusted: TrustedSender & { webContentsId: number } = {
   allowedOrigins: appOrigins,
 };
 
-function createMainWindow(settings: SettingsStore, connection: StubConnectionSource): void {
+function createMainWindow(settings: SettingsStore, gateway: RuntimeGateway): void {
   const bounds = settings.get().window.bounds;
   const window = new BrowserWindow({
     title: 'Agentico',
@@ -51,7 +52,7 @@ function createMainWindow(settings: SettingsStore, connection: StubConnectionSou
 
   window.on('ready-to-show', () => {
     window.show();
-    connection.start();
+    void gateway.start();
   });
 
   window.on('close', () => {
@@ -67,7 +68,7 @@ function createMainWindow(settings: SettingsStore, connection: StubConnectionSou
     trusted.webContentsId = -1;
   });
 
-  const unsubscribe = connection.subscribe((state) => {
+  const unsubscribe = gateway.subscribe((state) => {
     if (!window.isDestroyed()) {
       window.webContents.send(IPC_EVENTS.connectionChanged, state);
     }
@@ -85,7 +86,13 @@ void app.whenReady().then(() => {
   installSecurityPolicies({ app, session: session.defaultSession, appOrigins });
 
   const settings = new SettingsStore(app.getPath('userData'));
-  const connection = new StubConnectionSource();
+  const { gateway } = createRuntimeGateway({
+    getRuntimeSelection: () => settings.get().runtime.selection,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    // out/main → out → desktop → repository root (development layout).
+    appRoot: path.resolve(import.meta.dirname, '../../..'),
+  });
 
   const theme = new ThemeController(
     nativeTheme,
@@ -95,7 +102,8 @@ void app.whenReady().then(() => {
   theme.applyStored();
 
   const services: IpcServices = {
-    getConnectionStatus: () => connection.getState(),
+    getConnectionStatus: () => gateway.getState(),
+    retryConnection: () => gateway.retry(),
     getSettings: () => settings.get(),
     updateSettings: (patch) => settings.update(patch),
     getTheme: () => theme.getInfo(),
@@ -103,12 +111,26 @@ void app.whenReady().then(() => {
   };
   registerIpcHandlers(ipcMain, trusted, services);
 
-  createMainWindow(settings, connection);
+  createMainWindow(settings, gateway);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow(settings, connection);
+      createMainWindow(settings, gateway);
     }
+  });
+
+  // Graceful, bounded shutdown of the app-owned server child on quit.
+  // External servers are never signalled and survive app exit.
+  let shutdownStarted = false;
+  app.on('before-quit', (event) => {
+    if (shutdownStarted) {
+      return;
+    }
+    shutdownStarted = true;
+    event.preventDefault();
+    void gateway.shutdown().finally(() => {
+      app.quit();
+    });
   });
 });
 

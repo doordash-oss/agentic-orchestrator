@@ -33,6 +33,7 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 const api: AgenticoApi = {
   getConnectionStatus: () => call(IPC_CHANNELS.connectionGetStatus),
+  retryConnection: () => call(IPC_CHANNELS.connectionRetry),
   onConnectionChanged: (listener: (state: ConnectionState) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

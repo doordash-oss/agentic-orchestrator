@@ -5,6 +5,7 @@ import { defaultSettings } from '../../../shared/ipc';
 export interface AgenticoMock {
   api: AgenticoApi & {
     getConnectionStatus: ReturnType<typeof vi.fn>;
+    retryConnection: ReturnType<typeof vi.fn>;
     updateSettings: ReturnType<typeof vi.fn>;
     setThemePreference: ReturnType<typeof vi.fn>;
   };
@@ -21,9 +22,10 @@ export function installAgenticoMock(
   } = {},
 ): AgenticoMock {
   const connection: ConnectionState = overrides.connection ?? {
-    status: 'awaiting-gateway',
+    status: 'resolving-runtime',
     stage: 'resolve-runtime',
-    detail: 'Runtime gateway not yet available in this build.',
+    detail: 'Resolving the selected runtime.',
+    ownership: 'none',
   };
   const settings = overrides.settings ?? defaultSettings();
   let theme: ThemeInfo = overrides.theme ?? { preference: 'system', resolved: 'dark' };
@@ -32,6 +34,7 @@ export function installAgenticoMock(
 
   const api = {
     getConnectionStatus: vi.fn(() => Promise.resolve(connection)),
+    retryConnection: vi.fn(() => Promise.resolve(connection)),
     onConnectionChanged: vi.fn((listener: (state: ConnectionState) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

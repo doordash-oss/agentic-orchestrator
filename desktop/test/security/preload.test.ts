@@ -26,6 +26,7 @@ describe('preload surface', () => {
       'getSettings',
       'getThemePreference',
       'onConnectionChanged',
+      'retryConnection',
       'setThemePreference',
       'updateSettings',
     ]);
@@ -82,12 +83,14 @@ describe('preload surface', () => {
     expect(on).toHaveBeenCalledWith('agentico:connection:changed', expect.any(Function));
     const listener = on.mock.calls[0]![1] as (event: unknown, payload: unknown) => void;
 
-    listener({}, { status: 'connected', stage: 'ready', detail: 'ok' });
-    expect(cb).toHaveBeenCalledWith({ status: 'connected', stage: 'ready', detail: 'ok' });
+    const validState = { status: 'ready', stage: 'ready', detail: 'ok', ownership: 'external' };
+    listener({}, validState);
+    expect(cb).toHaveBeenCalledWith(validState);
 
     cb.mockClear();
-    listener({}, { status: 'connected', stage: 'ready', detail: 'ok', bearerToken: 'x' });
-    listener({}, JSON.parse('{"__proto__": {}, "status": "connected"}'));
+    listener({}, { ...validState, bearerToken: 'x' });
+    listener({}, { ...validState, authToken: 'x' });
+    listener({}, JSON.parse('{"__proto__": {}, "status": "ready"}'));
     expect(cb).not.toHaveBeenCalled();
 
     unsubscribe();

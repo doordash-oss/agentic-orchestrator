@@ -20,9 +20,16 @@ const foreignEvent = {
 function makeServices(): IpcServices {
   return {
     getConnectionStatus: vi.fn(() => ({
-      status: 'awaiting-gateway' as const,
+      status: 'discovering' as const,
+      stage: 'discover' as const,
+      detail: 'Looking for a running Agentico runtime.',
+      ownership: 'none' as const,
+    })),
+    retryConnection: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
       stage: 'resolve-runtime' as const,
-      detail: 'Runtime gateway not yet available.',
+      detail: 'Resolving the selected runtime.',
+      ownership: 'none' as const,
     })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn((patch) => ({ ...defaultSettings(), ...patch })),
@@ -68,7 +75,29 @@ describe('registerIpcHandlers', () => {
       value: { status: string };
     };
     expect(result.ok).toBe(true);
-    expect(result.value.status).toBe('awaiting-gateway');
+    expect(result.value.status).toBe('discovering');
+  });
+
+  it('rejects a connection state carrying token-shaped fields fail-closed', async () => {
+    const services = makeServices();
+    services.getConnectionStatus = vi.fn(
+      () =>
+        ({
+          status: 'ready',
+          stage: 'ready',
+          detail: 'ok',
+          ownership: 'app-owned',
+          authToken: 'tok-leak-123',
+        }) as never,
+    );
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.connectionGetStatus)!(goodEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(JSON.stringify(result)).not.toContain('tok-leak-123');
   });
 
   it('fails closed on schema-invalid payloads without invoking the service', async () => {

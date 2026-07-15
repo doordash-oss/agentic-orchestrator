@@ -26,6 +26,7 @@ import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './sec
 
 export interface IpcServices {
   getConnectionStatus(): ConnectionState;
+  retryConnection(): Promise<ConnectionState> | ConnectionState;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
   getTheme(): ThemeInfo;
@@ -76,6 +77,7 @@ export function registerIpcHandlers(
 ): void {
   const bindings: Record<IpcChannel, (...args: never[]) => unknown> = {
     [IPC_CHANNELS.connectionGetStatus]: () => services.getConnectionStatus(),
+    [IPC_CHANNELS.connectionRetry]: () => services.retryConnection(),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (patch: SettingsPatch) => services.updateSettings(patch),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),

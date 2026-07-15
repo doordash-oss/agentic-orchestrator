@@ -496,8 +496,10 @@ paths:
         Requires an explicit consent flag and a target path confined to a
         configured workspace root after symlink resolution. Rejects path
         traversal, symlink escape, targets that are already git repositories,
-        and non-empty incompatible directories. On success the new repository
-        is immediately discoverable through workspace discovery.
+        and non-empty incompatible directories. On success the repository is
+        initialized with an initial empty commit (so HEAD resolves and
+        worktree setup can proceed) and is immediately discoverable through
+        workspace discovery.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:

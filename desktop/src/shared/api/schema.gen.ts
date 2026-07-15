@@ -493,7 +493,7 @@ export interface paths {
         put?: never;
         /**
          * Initialize a new git repository inside a configured workspace root.
-         * @description Bounded repository-initialization action for first-launch onboarding. Requires an explicit consent flag and a target path confined to a configured workspace root after symlink resolution. Rejects path traversal, symlink escape, targets that are already git repositories, and non-empty incompatible directories. On success the new repository is immediately discoverable through workspace discovery.
+         * @description Bounded repository-initialization action for first-launch onboarding. Requires an explicit consent flag and a target path confined to a configured workspace root after symlink resolution. Rejects path traversal, symlink escape, targets that are already git repositories, and non-empty incompatible directories. On success the repository is initialized with an initial empty commit (so HEAD resolves and worktree setup can proceed) and is immediately discoverable through workspace discovery.
          */
         post: operations["initWorkspaceRepository"];
         delete?: never;

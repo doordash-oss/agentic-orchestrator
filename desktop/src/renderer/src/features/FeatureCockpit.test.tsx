@@ -204,7 +204,9 @@ describe('FeatureCockpit ready-to-start', () => {
     const before = invocations();
     await user.click(screen.getByRole('button', { name: 'Start' }));
     expect(invocations()).toBe(before);
-    expect(screen.getByText('Starting is delivered in a later phase.')).toBeInTheDocument();
+    expect(
+      screen.getByText("Nothing was started — starting isn't available yet."),
+    ).toBeInTheDocument();
   });
 });
 

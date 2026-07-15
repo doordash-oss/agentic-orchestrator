@@ -127,7 +127,7 @@ export function FeatureCockpit({
 
   const startPlaceholder = useCallback(() => {
     // STUB(Phase 2): invoke start action via the server catalogue.
-    setAnnouncement('Starting is delivered in a later phase.');
+    setAnnouncement("Nothing was started — starting isn't available yet.");
   }, []);
 
   if (state.phase === 'loading') {
@@ -318,7 +318,7 @@ export function FeatureCockpit({
               </span>
             ) : null}
             {startAction.enabled ? (
-              <span className="cockpit__action-reason">Starts in a later phase.</span>
+              <span className="cockpit__action-reason">Starting isn&apos;t available yet.</span>
             ) : null}
           </span>
         ) : null}

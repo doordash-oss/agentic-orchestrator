@@ -4,7 +4,7 @@
  * here; the renderer only ever sees the narrow preload API.
  */
 import path from 'node:path';
-import { BrowserWindow, app, ipcMain, nativeTheme, session } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, nativeTheme, session } from 'electron';
 import { createRuntimeGateway } from './gateway/wiring';
 import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
@@ -15,6 +15,7 @@ import {
   type TrustedSender,
 } from './security';
 import { SettingsStore } from './settings';
+import { SetupService } from './setup';
 import { ThemeController } from './theme';
 import { IPC_EVENTS } from '../shared/ipc';
 
@@ -101,6 +102,27 @@ void app.whenReady().then(() => {
   );
   theme.applyStored();
 
+  const setup = new SetupService({
+    transport: gateway,
+    dialogs: {
+      pickDirectory: async () => {
+        const focused = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        const options = {
+          title: 'Choose a folder',
+          properties: ['openDirectory', 'createDirectory'] as Array<
+            'openDirectory' | 'createDirectory'
+          >,
+        };
+        const result =
+          focused !== undefined
+            ? await dialog.showOpenDialog(focused, options)
+            : await dialog.showOpenDialog(options);
+        const picked = result.filePaths[0];
+        return result.canceled || picked === undefined ? null : picked;
+      },
+    },
+  });
+
   const services: IpcServices = {
     getConnectionStatus: () => gateway.getState(),
     retryConnection: () => gateway.retry(),
@@ -108,6 +130,12 @@ void app.whenReady().then(() => {
     updateSettings: (patch) => settings.update(patch),
     getTheme: () => theme.getInfo(),
     setTheme: (preference) => theme.setPreference(preference),
+    getReadiness: () => setup.getReadiness(),
+    refreshReadiness: () => setup.refreshReadiness(),
+    pickWorkspaceDirectory: () => setup.pickWorkspaceDirectory(),
+    addWorkspaceRoot: (rootPath) => setup.addWorkspaceRoot(rootPath),
+    initRepository: (request) => setup.initRepository(request),
+    listRepositories: () => setup.listRepositories(),
   };
   registerIpcHandlers(ipcMain, trusted, services);
 

@@ -17,6 +17,18 @@ const foreignEvent = {
   senderFrame: { url: 'https://evil.example.com/' },
 };
 
+function emptyReadinessSnapshot() {
+  return {
+    ready: false,
+    providers: [],
+    models: { available: false },
+    configuration: { valid: true },
+    workspaceRoots: [],
+    repositories: [],
+    issues: [],
+  };
+}
+
 function makeServices(): IpcServices {
   return {
     getConnectionStatus: vi.fn(() => ({
@@ -35,6 +47,12 @@ function makeServices(): IpcServices {
     updateSettings: vi.fn((patch) => ({ ...defaultSettings(), ...patch })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
     setTheme: vi.fn((preference) => ({ preference, resolved: 'light' as const })),
+    getReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    refreshReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
+    addWorkspaceRoot: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    initRepository: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    listRepositories: vi.fn(() => Promise.resolve([])),
   };
 }
 

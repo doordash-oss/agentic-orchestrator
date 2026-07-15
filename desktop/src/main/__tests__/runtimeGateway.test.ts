@@ -511,3 +511,61 @@ describe('RuntimeGateway supervision', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+describe('RuntimeGateway apiRequest', () => {
+  it('rejects with E_NOT_CONNECTED before the gateway is ready', async () => {
+    const env = makeEnv();
+    await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({
+      safe: { code: 'E_NOT_CONNECTED' },
+    });
+    expect(env.fetchCalls).toHaveLength(0);
+  });
+
+  it('sends authenticated requests to the attached runtime once ready', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    const result = await env.gateway.apiRequest('/api/v1/readiness');
+    expect(result.status).toBe(200);
+    const call = env.fetchCalls.at(-1);
+    expect(call?.url).toBe(`${EXTERNAL_BASE}/api/v1/readiness`);
+    expect(call?.token).toBe(EXTERNAL_TOKEN);
+    expectNoTokenLeak(env);
+  });
+
+  it('rejects paths outside /api/v1 and traversal shapes fail-closed', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    for (const path of [
+      'http://evil.example.com/api/v1/readiness',
+      '/etc/passwd',
+      '/api/v1/../secrets',
+      '/api/v1/readiness?token=x',
+      '//evil.example.com/api/v1/readiness',
+    ]) {
+      await expect(env.gateway.apiRequest(path)).rejects.toMatchObject({
+        safe: { code: 'E_BAD_API_PATH' },
+      });
+    }
+  });
+
+  it('rejects with E_NOT_CONNECTED again after the owned runtime crashes', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+    await expect(env.gateway.apiRequest('/api/v1/readiness')).resolves.toMatchObject({
+      status: 200,
+    });
+    env.spawned[0]!.emitExit(1, null);
+    await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({
+      safe: { code: 'E_NOT_CONNECTED' },
+    });
+  });
+
+  it('rejects after shutdown so no request can carry a stale credential', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    await env.gateway.shutdown();
+    await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({
+      safe: { code: 'E_NOT_CONNECTED' },
+    });
+  });
+});

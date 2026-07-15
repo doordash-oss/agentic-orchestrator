@@ -12,6 +12,7 @@ import {
   IpcEnvelopeSchema,
   type AgenticoApi,
   type ConnectionState,
+  type InitRepositoryRequest,
   type SettingsPatch,
   type ThemePreference,
 } from '../shared/ipc';
@@ -55,6 +56,13 @@ const api: AgenticoApi = {
   updateSettings: (patch: SettingsPatch) => call(IPC_CHANNELS.settingsUpdate, patch),
   getThemePreference: () => call(IPC_CHANNELS.themeGet),
   setThemePreference: (preference: ThemePreference) => call(IPC_CHANNELS.themeSet, preference),
+  getReadiness: () => call(IPC_CHANNELS.readinessGet),
+  refreshReadiness: () => call(IPC_CHANNELS.readinessRefresh),
+  pickWorkspaceDirectory: () => call(IPC_CHANNELS.workspacePickDirectory),
+  addWorkspaceRoot: (path: string) => call(IPC_CHANNELS.workspaceAddRoot, path),
+  initRepository: (request: InitRepositoryRequest) =>
+    call(IPC_CHANNELS.workspaceInitRepository, request),
+  listRepositories: () => call(IPC_CHANNELS.repositoriesList),
 };
 
 contextBridge.exposeInMainWorld('agentico', api);

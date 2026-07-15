@@ -14,8 +14,12 @@ import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sani
 import {
   IPC_CHANNELS,
   type ConnectionState,
+  type InitRepositoryRequest,
   type IpcChannel,
   type IpcEnvelope,
+  type PickedDirectory,
+  type ReadinessSnapshot,
+  type RepositoryState,
   type Settings,
   type SettingsPatch,
   type ThemeInfo,
@@ -31,6 +35,12 @@ export interface IpcServices {
   updateSettings(patch: SettingsPatch): Settings;
   getTheme(): ThemeInfo;
   setTheme(preference: ThemePreference): ThemeInfo;
+  getReadiness(): Promise<ReadinessSnapshot>;
+  refreshReadiness(): Promise<ReadinessSnapshot>;
+  pickWorkspaceDirectory(): Promise<PickedDirectory>;
+  addWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
+  initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
+  listRepositories(): Promise<RepositoryState[]>;
 }
 
 export interface IpcMainLike {
@@ -82,6 +92,13 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.settingsUpdate]: (patch: SettingsPatch) => services.updateSettings(patch),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),
     [IPC_CHANNELS.themeSet]: (preference: ThemePreference) => services.setTheme(preference),
+    [IPC_CHANNELS.readinessGet]: () => services.getReadiness(),
+    [IPC_CHANNELS.readinessRefresh]: () => services.refreshReadiness(),
+    [IPC_CHANNELS.workspacePickDirectory]: () => services.pickWorkspaceDirectory(),
+    [IPC_CHANNELS.workspaceAddRoot]: (path: string) => services.addWorkspaceRoot(path),
+    [IPC_CHANNELS.workspaceInitRepository]: (request: InitRepositoryRequest) =>
+      services.initRepository(request),
+    [IPC_CHANNELS.repositoriesList]: () => services.listRepositories(),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

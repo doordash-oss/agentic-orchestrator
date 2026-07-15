@@ -119,7 +119,31 @@ describe('SettingsStore', () => {
       runtime: { selection: null },
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
+      wizard: { collapsedHelp: false, lastRepositoryPathHint: null },
     });
+  });
+
+  it('persists wizard presentation prefs and loads pre-wizard files with defaults', () => {
+    const store = makeStore();
+    store.update({ wizard: { collapsedHelp: true, lastRepositoryPathHint: '/work/repo' } });
+    expect(makeStore().get().wizard).toEqual({
+      collapsedHelp: true,
+      lastRepositoryPathHint: '/work/repo',
+    });
+
+    // A document written before the wizard section existed still loads.
+    fs.writeFileSync(
+      settingsPath(),
+      JSON.stringify({
+        schemaVersion: 1,
+        runtime: { selection: null },
+        window: {},
+        theme: 'dark',
+      }),
+    );
+    const upgraded = makeStore();
+    expect(upgraded.get().theme).toBe('dark');
+    expect(upgraded.get().wizard).toEqual({ collapsedHelp: false, lastRepositoryPathHint: null });
   });
 
   it('never throws while loading a corrupt file', () => {

@@ -12,6 +12,12 @@ export const IPC_CHANNELS = {
   settingsUpdate: 'agentico:settings:update',
   themeGet: 'agentico:theme:get',
   themeSet: 'agentico:theme:set',
+  readinessGet: 'agentico:readiness:get',
+  readinessRefresh: 'agentico:readiness:refresh',
+  workspacePickDirectory: 'agentico:workspace:pick-directory',
+  workspaceAddRoot: 'agentico:workspace:add-root',
+  workspaceInitRepository: 'agentico:workspace:init-repository',
+  repositoriesList: 'agentico:repositories:list',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -114,6 +120,125 @@ export const ConnectionStateSchema = z.strictObject({
 
 export type ConnectionState = z.output<typeof ConnectionStateSchema>;
 
+// --- Readiness (renderer-facing view of the authoritative server snapshot) ---
+// Strict by design: any foreign field — in particular anything token-shaped —
+// fails validation at the IPC boundary. The renderer never receives raw
+// server payloads; the main process maps them into this shape.
+
+export const READINESS_ISSUE_CODES = [
+  'missing_executable',
+  'unsupported_version',
+  'unauthenticated',
+  'models_unavailable',
+  'invalid_configuration',
+  'invalid_workspace_root',
+  'invalid_repository',
+] as const;
+
+export const ReadinessIssueCodeSchema = z.enum(READINESS_ISSUE_CODES);
+export type ReadinessIssueCode = z.output<typeof ReadinessIssueCodeSchema>;
+
+export const ReadinessIssueSchema = z.strictObject({
+  code: ReadinessIssueCodeSchema,
+  /** Server-provided safe summary; never carries credentials. */
+  message: z.string(),
+  /** Safe remediation metadata, e.g. the provider CLI auth command. */
+  remedy: z.string().optional(),
+});
+
+export type ReadinessIssue = z.output<typeof ReadinessIssueSchema>;
+
+export const ProviderReadinessSchema = z.strictObject({
+  name: z.string(),
+  installed: z.boolean(),
+  version: z.string().optional(),
+  ready: z.boolean(),
+  issue: ReadinessIssueSchema.optional(),
+});
+
+export type ProviderReadiness = z.output<typeof ProviderReadinessSchema>;
+
+export const ModelsReadinessSchema = z.strictObject({
+  available: z.boolean(),
+  models: z.array(z.string()).optional(),
+  issue: ReadinessIssueSchema.optional(),
+});
+
+export type ModelsReadiness = z.output<typeof ModelsReadinessSchema>;
+
+export const ConfigurationReadinessSchema = z.strictObject({
+  valid: z.boolean(),
+  issue: ReadinessIssueSchema.optional(),
+});
+
+export type ConfigurationReadiness = z.output<typeof ConfigurationReadinessSchema>;
+
+export const WorkspaceRootStateSchema = z.strictObject({
+  path: z.string(),
+  valid: z.boolean(),
+  issue: ReadinessIssueSchema.optional(),
+});
+
+export type WorkspaceRootState = z.output<typeof WorkspaceRootStateSchema>;
+
+export const RepositoryStateSchema = z.strictObject({
+  name: z.string(),
+  path: z.string(),
+  valid: z.boolean(),
+  issue: ReadinessIssueSchema.optional(),
+});
+
+export type RepositoryState = z.output<typeof RepositoryStateSchema>;
+
+export const ReadinessSnapshotSchema = z.strictObject({
+  /** Server-declared mandatory readiness (providers + models + configuration). */
+  ready: z.boolean(),
+  /** When provider probes last ran (RFC 3339), if known. */
+  probedAt: z.string().optional(),
+  providers: z.array(ProviderReadinessSchema),
+  models: ModelsReadinessSchema,
+  configuration: ConfigurationReadinessSchema,
+  workspaceRoots: z.array(WorkspaceRootStateSchema),
+  repositories: z.array(RepositoryStateSchema),
+  /** Flattened outstanding issues across all sections. */
+  issues: z.array(ReadinessIssueSchema),
+});
+
+export type ReadinessSnapshot = z.output<typeof ReadinessSnapshotSchema>;
+
+// --- Workspace/setup operations ----------------------------------------------
+
+/**
+ * The only path shape allowed across the IPC boundary: an absolute POSIX
+ * path with no NUL/control separators. Relative paths and anything else
+ * fail closed at the schema layer.
+ */
+export const AbsolutePathSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .refine((value) => value.startsWith('/') && !value.includes('\0') && !value.includes('\n'), {
+    message: 'Expected an absolute path.',
+  });
+
+/** Native directory-picker result; `path` is null when the user cancelled. */
+export const PickedDirectorySchema = z.strictObject({
+  path: AbsolutePathSchema.nullable(),
+});
+
+export type PickedDirectory = z.output<typeof PickedDirectorySchema>;
+
+/**
+ * Repository initialization requires explicit consent at the schema layer:
+ * a request without `consent: true` never reaches the service.
+ */
+export const InitRepositoryRequestSchema = z.strictObject({
+  path: AbsolutePathSchema,
+  consent: z.literal(true),
+});
+
+export type InitRepositoryRequest = z.output<typeof InitRepositoryRequestSchema>;
+
 // --- Theme ------------------------------------------------------------------
 
 export const ThemePreferenceSchema = z.enum(['light', 'dark', 'system']);
@@ -139,6 +264,22 @@ export const WindowBoundsSchema = z.strictObject({
   height: z.number().int().min(1),
 });
 
+/**
+ * Wizard presentation preferences ONLY: a path *hint* for preselecting the
+ * repository picker and collapsed-help state. Wizard progress is never
+ * stored locally — completed gates always derive from the server snapshot.
+ */
+export const WizardPrefsSchema = z.strictObject({
+  collapsedHelp: z.boolean(),
+  lastRepositoryPathHint: z.string().max(4096).nullable(),
+});
+
+export type WizardPrefs = z.output<typeof WizardPrefsSchema>;
+
+export function defaultWizardPrefs(): WizardPrefs {
+  return { collapsedHelp: false, lastRepositoryPathHint: null };
+}
+
 export const SettingsSchema = z.strictObject({
   schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION),
   runtime: z.strictObject({
@@ -149,6 +290,7 @@ export const SettingsSchema = z.strictObject({
     bounds: WindowBoundsSchema.optional(),
   }),
   theme: ThemePreferenceSchema,
+  wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
 });
 
 export type Settings = z.output<typeof SettingsSchema>;
@@ -157,6 +299,7 @@ export const SettingsPatchSchema = z.strictObject({
   runtime: z.strictObject({ selection: z.string().max(200).nullable() }).optional(),
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }).optional(),
   theme: ThemePreferenceSchema.optional(),
+  wizard: WizardPrefsSchema.optional(),
 });
 
 export type SettingsPatch = z.output<typeof SettingsPatchSchema>;
@@ -167,6 +310,7 @@ export function defaultSettings(): Settings {
     runtime: { selection: null },
     window: {},
     theme: 'system',
+    wizard: defaultWizardPrefs(),
   };
 }
 
@@ -204,6 +348,30 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([ThemePreferenceSchema]),
     response: ThemeInfoSchema,
   },
+  [IPC_CHANNELS.readinessGet]: {
+    request: z.tuple([]),
+    response: ReadinessSnapshotSchema,
+  },
+  [IPC_CHANNELS.readinessRefresh]: {
+    request: z.tuple([]),
+    response: ReadinessSnapshotSchema,
+  },
+  [IPC_CHANNELS.workspacePickDirectory]: {
+    request: z.tuple([]),
+    response: PickedDirectorySchema,
+  },
+  [IPC_CHANNELS.workspaceAddRoot]: {
+    request: z.tuple([AbsolutePathSchema]),
+    response: ReadinessSnapshotSchema,
+  },
+  [IPC_CHANNELS.workspaceInitRepository]: {
+    request: z.tuple([InitRepositoryRequestSchema]),
+    response: ReadinessSnapshotSchema,
+  },
+  [IPC_CHANNELS.repositoriesList]: {
+    request: z.tuple([]),
+    response: z.array(RepositoryStateSchema),
+  },
 };
 
 // --- The narrow window API the preload exposes -------------------------------
@@ -216,4 +384,10 @@ export interface AgenticoApi {
   updateSettings(patch: SettingsPatch): Promise<Settings>;
   getThemePreference(): Promise<ThemeInfo>;
   setThemePreference(preference: ThemePreference): Promise<ThemeInfo>;
+  getReadiness(): Promise<ReadinessSnapshot>;
+  refreshReadiness(): Promise<ReadinessSnapshot>;
+  pickWorkspaceDirectory(): Promise<PickedDirectory>;
+  addWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
+  initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
+  listRepositories(): Promise<RepositoryState[]>;
 }

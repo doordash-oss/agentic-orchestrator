@@ -3,10 +3,14 @@ import {
   ConnectionStateSchema,
   IPC_CHANNELS,
   IPC_EVENTS,
+  InitRepositoryRequestSchema,
   IpcEnvelopeSchema,
+  AbsolutePathSchema,
+  ReadinessSnapshotSchema,
   SettingsPatchSchema,
   SettingsSchema,
   defaultSettings,
+  defaultWizardPrefs,
   ipcContracts,
 } from './ipc';
 
@@ -108,8 +112,19 @@ describe('SettingsSchema', () => {
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
+      wizard: { collapsedHelp: true, lastRepositoryPathHint: '/work/repo' },
     };
     expect(SettingsSchema.parse(doc)).toEqual(doc);
+  });
+
+  it('fills wizard presentation prefs with defaults for pre-wizard documents', () => {
+    const doc = {
+      schemaVersion: 1,
+      runtime: { selection: null },
+      window: {},
+      theme: 'system',
+    };
+    expect(SettingsSchema.parse(doc)).toEqual({ ...doc, wizard: defaultWizardPrefs() });
   });
 });
 
@@ -124,6 +139,68 @@ describe('SettingsPatchSchema', () => {
   it('rejects schemaVersion tampering and unknown keys', () => {
     expect(SettingsPatchSchema.safeParse({ schemaVersion: 9 }).success).toBe(false);
     expect(SettingsPatchSchema.safeParse({ apiToken: 'x' }).success).toBe(false);
+  });
+});
+
+describe('ReadinessSnapshotSchema', () => {
+  const snapshot = {
+    ready: false,
+    probedAt: '2026-07-14T10:00:00Z',
+    providers: [
+      {
+        name: 'claude',
+        installed: true,
+        version: '2.1.0',
+        ready: false,
+        issue: { code: 'unauthenticated', message: 'not authenticated', remedy: 'claude login' },
+      },
+    ],
+    models: { available: false, issue: { code: 'models_unavailable', message: 'no models' } },
+    configuration: { valid: true },
+    workspaceRoots: [{ path: '/w', valid: true }],
+    repositories: [{ name: 'r', path: '/w/r', valid: true }],
+    issues: [{ code: 'unauthenticated', message: 'not authenticated', remedy: 'claude login' }],
+  };
+
+  it('accepts a complete snapshot', () => {
+    expect(ReadinessSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it('rejects unknown issue codes and token-shaped extras fail-closed', () => {
+    expect(
+      ReadinessSnapshotSchema.safeParse({
+        ...snapshot,
+        issues: [{ code: 'mystery', message: 'x' }],
+      }).success,
+    ).toBe(false);
+    for (const extra of [{ authToken: 'x' }, { token: 'x' }, { baseUrl: 'http://127.0.0.1:1' }]) {
+      expect(ReadinessSnapshotSchema.safeParse({ ...snapshot, ...extra }).success).toBe(false);
+    }
+  });
+});
+
+describe('AbsolutePathSchema', () => {
+  it('accepts absolute POSIX paths', () => {
+    expect(AbsolutePathSchema.parse('/work/space')).toBe('/work/space');
+  });
+
+  it('rejects relative paths, NUL bytes, and empty strings', () => {
+    for (const bad of ['relative/path', '', '/bad\0path', '/bad\npath', 'C:\\windows']) {
+      expect(AbsolutePathSchema.safeParse(bad).success).toBe(false);
+    }
+  });
+});
+
+describe('InitRepositoryRequestSchema', () => {
+  it('requires consent to be literally true at the schema layer', () => {
+    expect(InitRepositoryRequestSchema.safeParse({ path: '/w/repo', consent: true }).success).toBe(
+      true,
+    );
+    for (const consent of [false, 'true', 1, undefined]) {
+      expect(InitRepositoryRequestSchema.safeParse({ path: '/w/repo', consent }).success).toBe(
+        false,
+      );
+    }
   });
 });
 

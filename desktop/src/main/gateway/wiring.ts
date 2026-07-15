@@ -152,21 +152,40 @@ function canonicalize(candidate: string): string {
 }
 
 /**
- * Bounded, sanitized JSON GET. The Authorization header is attached here in
- * the main process only; tokens never appear in URLs.
+ * Bounded, sanitized JSON request (GET unless a mutating method is given).
+ * The Authorization header is attached here in the main process only; tokens
+ * never appear in URLs. Mutations carry the server's CSRF defense header.
  */
 async function fetchJson(
   url: string,
-  requestOptions: { token?: string; timeoutMs: number },
+  requestOptions: {
+    token?: string;
+    timeoutMs: number;
+    method?: 'GET' | 'POST' | 'PATCH' | 'PUT';
+    body?: unknown;
+  },
 ): Promise<{ status: number; body: unknown }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), requestOptions.timeoutMs);
   try {
+    const method = requestOptions.method ?? 'GET';
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (requestOptions.token !== undefined) {
       headers['Authorization'] = `Bearer ${requestOptions.token}`;
     }
-    const response = await fetch(url, { signal: controller.signal, headers, redirect: 'error' });
+    let payload: string | undefined;
+    if (method !== 'GET') {
+      headers['Content-Type'] = 'application/json';
+      headers['X-Agentico-Client'] = 'local';
+      payload = JSON.stringify(requestOptions.body ?? {});
+    }
+    const response = await fetch(url, {
+      method,
+      signal: controller.signal,
+      headers,
+      redirect: 'error',
+      ...(payload === undefined ? {} : { body: payload }),
+    });
     const text = await response.text();
     assertWithinByteSize(text, MAX_PROBE_RESPONSE_BYTES);
     let body: unknown;

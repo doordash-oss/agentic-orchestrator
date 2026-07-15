@@ -13,7 +13,13 @@
  *  - Every failure lands in a renderer-visible connection-shell state with
  *    redacted diagnostics and a manual retry path.
  */
-import { toSafeError, redactText, type SafeError } from '../../shared/errors';
+import {
+  SafeErrorException,
+  safeError,
+  toSafeError,
+  redactText,
+  type SafeError,
+} from '../../shared/errors';
 import type { ConnectionState } from '../../shared/ipc';
 import { z } from 'zod';
 import { evaluateCompatibility } from './compatibility';
@@ -30,6 +36,14 @@ export interface SelectedRuntime {
 export interface HttpResult {
   status: number;
   body: unknown;
+}
+
+/** Mutating verbs allowed against the connected runtime's REST API. */
+export type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT';
+
+export interface ApiRequestInit {
+  method?: ApiMethod;
+  body?: unknown;
 }
 
 /** The supervision surface the gateway needs from a spawned server child. */
@@ -49,6 +63,11 @@ export interface GatewayTimeouts {
   pollIntervalMs: number;
   /** Grace period for stopping the app-owned child before SIGKILL. */
   shutdownGraceMs: number;
+  /**
+   * Per-request bound for authenticated API calls once connected. Larger
+   * than the probe bound because readiness refresh re-probes provider CLIs.
+   */
+  apiRequestMs: number;
 }
 
 const DEFAULT_TIMEOUTS: GatewayTimeouts = {
@@ -56,14 +75,18 @@ const DEFAULT_TIMEOUTS: GatewayTimeouts = {
   launchReadyMs: 20000,
   pollIntervalMs: 250,
   shutdownGraceMs: 5000,
+  apiRequestMs: 30000,
 };
 
 export interface GatewayDeps {
   /** Resolves the user's selected runtime to concrete directories. */
   selectRuntime(): SelectedRuntime;
   discovery: DiscoveryDeps;
-  /** JSON GET with bounded timeout; throws on network failure. */
-  fetchJson(url: string, options: { token?: string; timeoutMs: number }): Promise<HttpResult>;
+  /** Bounded JSON request; throws on network failure. GET when no method. */
+  fetchJson(
+    url: string,
+    options: { token?: string; timeoutMs: number; method?: ApiMethod; body?: unknown },
+  ): Promise<HttpResult>;
   resolveServerBinary(): ResolveResult;
   /** Spawns the bundled server (argv array, never a shell string). */
   spawnServer(binaryPath: string, args: readonly string[]): ServerChildLike;
@@ -107,6 +130,8 @@ export class RuntimeGateway {
 
   /** Bearer credential; never leaves the main process. */
   private token: string | null = null;
+  /** Base URL of the connected runtime; only set while status is ready. */
+  private baseUrl: string | null = null;
   private child: ServerChildLike | null = null;
   private childExitUnsubscribe: (() => void) | null = null;
   private busy = false;
@@ -130,6 +155,34 @@ export class RuntimeGateway {
 
   hasOwnedChild(): boolean {
     return this.child !== null && !this.child.exited;
+  }
+
+  /**
+   * Authenticated request against the connected runtime's REST API. The
+   * bearer token and base URL never leave this method's closure — callers
+   * pass an `/api/v1/...` path and receive status + parsed JSON body only.
+   */
+  async apiRequest(path: string, init: ApiRequestInit = {}): Promise<HttpResult> {
+    if (!/^\/api\/v1(\/[a-z0-9_-]+)*$/i.test(path)) {
+      throw new SafeErrorException(
+        safeError('E_BAD_API_PATH', 'The requested API path is not allowed.'),
+      );
+    }
+    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
+      throw new SafeErrorException(
+        safeError(
+          'E_NOT_CONNECTED',
+          'The app is not connected to an Agentico runtime.',
+          'Wait for the connection to become ready, then retry.',
+        ),
+      );
+    }
+    const method = init.method ?? 'GET';
+    return this.deps.fetchJson(`${this.baseUrl}${path}`, {
+      token: this.token,
+      timeoutMs: this.timeouts.apiRequestMs,
+      ...(method === 'GET' ? {} : { method, body: init.body ?? {} }),
+    });
   }
 
   /** Runs one full connect cycle. Safe to call repeatedly. */
@@ -172,6 +225,7 @@ export class RuntimeGateway {
     this.generation += 1; // invalidate in-flight connect work
     await this.stopChild();
     this.token = null;
+    this.baseUrl = null;
   }
 
   // --- connect cycle ---------------------------------------------------------
@@ -179,6 +233,7 @@ export class RuntimeGateway {
   private async connect(generation: number): Promise<void> {
     await this.stopChild(); // never leave a stray child from an earlier cycle
     this.token = null;
+    this.baseUrl = null;
 
     this.setState({
       status: 'resolving-runtime',
@@ -317,6 +372,7 @@ export class RuntimeGateway {
       });
       return 'blocked';
     }
+    this.baseUrl = trimBase(record.base_url);
     this.setState({
       status: 'ready',
       stage: 'ready',
@@ -456,6 +512,7 @@ export class RuntimeGateway {
       });
       return;
     }
+    this.baseUrl = trimBase(ready.record.base_url);
     this.setState({
       status: 'ready',
       stage: 'ready',
@@ -556,6 +613,7 @@ export class RuntimeGateway {
       return;
     }
     this.token = null;
+    this.baseUrl = null;
     this.setState({
       status: 'crashed',
       stage: 'connect',

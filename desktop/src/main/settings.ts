@@ -63,6 +63,7 @@ export class SettingsStore {
       ...(parsed.data.runtime !== undefined ? { runtime: parsed.data.runtime } : {}),
       ...(parsed.data.window !== undefined ? { window: parsed.data.window } : {}),
       ...(parsed.data.theme !== undefined ? { theme: parsed.data.theme } : {}),
+      ...(parsed.data.wizard !== undefined ? { wizard: parsed.data.wizard } : {}),
       schemaVersion: this.settings.schemaVersion,
     };
     this.persist(next);

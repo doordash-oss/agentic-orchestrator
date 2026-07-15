@@ -118,6 +118,87 @@ export const HealthResponseSchema = z.object({
 
 export type HealthResponse = z.output<typeof HealthResponseSchema>;
 
+// --- Readiness (GET /api/v1/readiness, POST /api/v1/readiness/refresh) -----
+
+export const ServerReadinessIssueSchema = z.object({
+  code: z.enum([
+    'missing_executable',
+    'unsupported_version',
+    'unauthenticated',
+    'models_unavailable',
+    'invalid_configuration',
+    'invalid_workspace_root',
+    'invalid_repository',
+  ]),
+  message: z.string(),
+  remedy: z.string().optional(),
+});
+
+export const ReadinessResponseSchema = z.object({
+  api_version: z.string(),
+  ready: z.boolean(),
+  probed_at: z.string().optional(),
+  providers: z.array(
+    z.object({
+      name: z.string(),
+      installed: z.boolean(),
+      version: z.string().optional(),
+      ready: z.boolean(),
+      issue: ServerReadinessIssueSchema.optional(),
+    }),
+  ),
+  models: z.object({
+    available: z.boolean(),
+    models: z.array(z.string()).optional(),
+    issue: ServerReadinessIssueSchema.optional(),
+  }),
+  configuration: z.object({
+    valid: z.boolean(),
+    issue: ServerReadinessIssueSchema.optional(),
+  }),
+  workspace: z.object({
+    roots: z.array(
+      z.object({
+        path: z.string(),
+        valid: z.boolean(),
+        issue: ServerReadinessIssueSchema.optional(),
+      }),
+    ),
+    repositories: z.array(
+      z.object({
+        name: z.string(),
+        path: z.string(),
+        valid: z.boolean(),
+        issue: ServerReadinessIssueSchema.optional(),
+      }),
+    ),
+  }),
+  issues: z.array(ServerReadinessIssueSchema).optional(),
+});
+
+export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
+
+// --- Runtime config (GET /api/v1/config/runtime) — workspace-roots subset ---
+// Only the fields the desktop setup flow consumes; the full response has
+// many more, which z.object tolerates and strips.
+
+export const RuntimeConfigWorkspaceSchema = z.object({
+  api_version: z.string(),
+  workspace_roots: z.array(z.string()).optional(),
+});
+
+export type RuntimeConfigWorkspace = z.output<typeof RuntimeConfigWorkspaceSchema>;
+
+// --- Structured server error bodies (ErrorResponse) -------------------------
+// Lenient on purpose: error paths must degrade gracefully, never fail open.
+
+export const ServerErrorResponseSchema = z.object({
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+  }),
+});
+
 // Compile-time drift guards: zod outputs must stay assignable to the
 // generated OpenAPI component types.
 type HealthDTO = components['schemas']['HealthResponse'];
@@ -126,3 +207,11 @@ void _healthAssignable;
 type CompatibilityDTO = components['schemas']['CompatibilityDeclaration'];
 const _compatibilityAssignable = (value: CompatibilityDeclaration): CompatibilityDTO => value;
 void _compatibilityAssignable;
+type ReadinessDTO = components['schemas']['ReadinessResponse'];
+const _readinessAssignable = (value: ReadinessResponse): ReadinessDTO => value;
+void _readinessAssignable;
+// Reverse guard for the subset schema: every field it parses must exist on
+// the generated RuntimeConfigResponse with a compatible type.
+type RuntimeConfigDTO = components['schemas']['RuntimeConfigResponse'];
+const _runtimeConfigSubset = (value: RuntimeConfigDTO): RuntimeConfigWorkspace => value;
+void _runtimeConfigSubset;

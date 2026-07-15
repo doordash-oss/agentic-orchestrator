@@ -22,10 +22,16 @@ describe('preload surface', () => {
     const [name, api] = exposeInMainWorld.mock.calls[0]!;
     expect(name).toBe('agentico');
     expect(Object.keys(api as object).sort()).toEqual([
+      'addWorkspaceRoot',
       'getConnectionStatus',
+      'getReadiness',
       'getSettings',
       'getThemePreference',
+      'initRepository',
+      'listRepositories',
       'onConnectionChanged',
+      'pickWorkspaceDirectory',
+      'refreshReadiness',
       'retryConnection',
       'setThemePreference',
       'updateSettings',

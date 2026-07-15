@@ -229,6 +229,21 @@ test('first launch: wizard-gated creation tracer bullet reaches Ready to start',
     assertNoLeakedProcesses(world);
     transcript.step('no processes referencing the journey world remain');
     transcript.write(testInfo);
+
+    // Ownership evidence doc: contribute the app-owned shutdown proof
+    // (journeys 3 and 4 contribute the external-server sections).
+    const ownership = new Transcript(
+      'ownership-compatibility',
+      'App-owned graceful shutdown (journey 1 teardown)',
+      { append: true },
+    );
+    ownership.step(
+      `app-owned server pid ${serverPid} (from the discovery record) was alive while connected ` +
+        'and no longer exists after app quit — the bounded SIGTERM→reap path ran',
+    );
+    ownership.step(`ownership reported over IPC while connected: \`${connection.ownership}\``);
+    ownership.codeBlock('app/server log tail at shutdown (redacted at source)', tail(logText, 15));
+    ownership.write(testInfo);
   } finally {
     if (handle !== null) {
       await closeApp(handle).catch(() => {});

@@ -5,11 +5,10 @@
  * server-domain data, stores tokens, or trusts renderer-provided paths
  * beyond the validated absolute-path schema.
  */
-import { redactText, SafeErrorException, safeError } from '../shared/errors';
+import { SafeErrorException, safeError } from '../shared/errors';
 import {
   ReadinessResponseSchema,
   RuntimeConfigWorkspaceSchema,
-  ServerErrorResponseSchema,
   validateWithSchema,
   type ReadinessResponse,
 } from '../shared/api/parse';
@@ -20,12 +19,11 @@ import {
   type ReadinessSnapshot,
   type RepositoryState,
 } from '../shared/ipc';
-import type { ApiRequestInit, HttpResult } from './gateway/runtimeGateway';
+import type { ApiRequestInit } from './gateway/runtimeGateway';
+import { serverRequest, type ServerTransport } from './serverClient';
 
 /** The authenticated transport surface the gateway provides. */
-export interface SetupTransport {
-  apiRequest(path: string, init?: ApiRequestInit): Promise<HttpResult>;
-}
+export type SetupTransport = ServerTransport;
 
 export interface SetupDialogs {
   /** Native directory picker; resolves null when the user cancels. */
@@ -132,30 +130,9 @@ export class SetupService {
 
   // --- transport helpers -----------------------------------------------------
 
-  private async api(path: string, init?: ApiRequestInit): Promise<unknown> {
-    const result = await this.deps.transport.apiRequest(path, init);
-    if (result.status >= 200 && result.status < 300) {
-      return result.body;
-    }
-    throw serverError(result);
+  private api(path: string, init?: ApiRequestInit): Promise<unknown> {
+    return serverRequest(this.deps.transport, path, init, { remedyByCode: REMEDY_BY_CODE });
   }
-}
-
-/** Maps a structured server error body into a SafeError, failing closed. */
-function serverError(result: HttpResult): SafeErrorException {
-  const parsed = ServerErrorResponseSchema.safeParse(result.body);
-  if (parsed.success) {
-    const { code, message } = parsed.data.error;
-    const remedy = REMEDY_BY_CODE[code];
-    return new SafeErrorException(safeError(code, redactText(message), remedy));
-  }
-  return new SafeErrorException(
-    safeError(
-      `E_HTTP_${result.status}`,
-      'The runtime rejected the request.',
-      'Retry; if this persists, restart the runtime and check its log.',
-    ),
-  );
 }
 
 /** Maps the validated server readiness response to the renderer-facing shape. */

@@ -7,13 +7,12 @@
  * `setup` action afterwards, and success ends at the startable Created state
  * (Start itself is a later-phase action this service never invokes).
  */
-import { redactText, SafeErrorException, safeError } from '../shared/errors';
+import { redactText } from '../shared/errors';
 import {
   FeatureActionResponseSchema,
   FeatureDetailResponseSchema,
   FeatureListResponseSchema,
   RuntimeConfigCreationSchema,
-  ServerErrorWithIssuesSchema,
   validateWithSchema,
   type ServerFeatureDetail,
   type ServerSetup,
@@ -32,12 +31,11 @@ import {
   type SetupDispatchResult,
   type SetupTaskView,
 } from '../shared/ipc';
-import type { ApiRequestInit, HttpResult } from './gateway/runtimeGateway';
+import type { ApiRequestInit } from './gateway/runtimeGateway';
+import { serverRequest, type ServerTransport } from './serverClient';
 
 /** The authenticated transport surface the gateway provides. */
-export interface FeatureTransport {
-  apiRequest(path: string, init?: ApiRequestInit): Promise<HttpResult>;
-}
+export type FeatureTransport = ServerTransport;
 
 export interface FeatureServiceDeps {
   transport: FeatureTransport;
@@ -156,37 +154,17 @@ export class FeatureService {
 
   // --- transport helpers -----------------------------------------------------
 
-  private async api(path: string, init?: ApiRequestInit): Promise<unknown> {
-    const result = await this.deps.transport.apiRequest(path, init);
-    if (result.status >= 200 && result.status < 300) {
-      return result.body;
-    }
-    throw serverError(result);
+  /**
+   * One authenticated request through the shared server client. The 409
+   * `not_ready` rejection carries its outstanding readiness issues; their
+   * safe messages are folded into the remediation so the form can show why.
+   */
+  private api(path: string, init?: ApiRequestInit): Promise<unknown> {
+    return serverRequest(this.deps.transport, path, init, {
+      remedyByCode: REMEDY_BY_CODE,
+      foldTargetIssues: true,
+    });
   }
-}
-
-/**
- * Maps a structured server error body into a SafeError, failing closed. The
- * 409 `not_ready` rejection carries its outstanding readiness issues; their
- * safe messages are folded into the remediation so the form can show why.
- */
-function serverError(result: HttpResult): SafeErrorException {
-  const parsed = ServerErrorWithIssuesSchema.safeParse(result.body);
-  if (parsed.success) {
-    const { code, message, target } = parsed.data.error;
-    const issues = target?.issues ?? [];
-    const issueText = issues.map((issue) => redactText(issue.message)).join(' ');
-    const remedy =
-      issueText !== '' ? `${issueText} ${REMEDY_BY_CODE[code] ?? ''}`.trim() : REMEDY_BY_CODE[code];
-    return new SafeErrorException(safeError(code, redactText(message), remedy));
-  }
-  return new SafeErrorException(
-    safeError(
-      `E_HTTP_${result.status}`,
-      'The runtime rejected the request.',
-      'Retry; if this persists, restart the runtime and check its log.',
-    ),
-  );
 }
 
 /** Maps the validated server detail to the strict renderer-facing snapshot. */

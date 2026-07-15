@@ -36,6 +36,10 @@ mac:
   identity: null
   notarize: false
 linux:
+  # electron-builder would otherwise derive the executable from the npm
+  # package name (@agentico/desktop), which it rejects for file paths; the
+  # journeys and verify-package.mjs resolve <unpacked>/agentico.
+  executableName: agentico
   target:
     - AppImage
     - deb

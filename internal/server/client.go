@@ -252,6 +252,14 @@ func (c *Client) CreateFeature(ctx context.Context, req CreateFeatureRequest) (C
 	return out, err
 }
 
+// SetupFeature dispatches server-owned durable setup (or a retry of failed
+// setup) for the feature without starting orchestration.
+func (c *Client) SetupFeature(ctx context.Context, featureID string) (FeatureSetupResponse, error) {
+	var out FeatureSetupResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionSetup), nil, map[string]any{}, &out, true)
+	return out, err
+}
+
 func (c *Client) StartFeature(ctx context.Context, featureID string) (FeatureStartResponse, error) {
 	var out FeatureStartResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionStart), nil, map[string]any{}, &out, true)

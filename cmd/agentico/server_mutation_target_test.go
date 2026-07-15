@@ -67,6 +67,7 @@ const (
 	testSessionPermissionID = "session-permission"
 	testPermRequestID       = "perm-1"
 	testRepoAName           = "repo-a"
+	testRepoBName           = "repo-b"
 	testSessionAskID        = "session-ask"
 	testSessionHelpID       = "session-help"
 	testReviewerLogin       = "reviewer"
@@ -1021,6 +1022,141 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 	}
 	if len(worktrees.Calls) != 0 {
 		t.Fatalf("worktree calls = %+v, want none during feature_create", worktrees.Calls)
+	}
+}
+
+func TestServerMutationTargetSetupFeatureCompletesToStartableStateWithoutStarting(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	}
+	manager.Worktrees = worktrees
+
+	started := 0
+	target := serverMutationTarget{
+		orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{
+			OnFeatureStarted: func(string) { started++ },
+		}),
+		store:         store,
+		dispatchAsync: func(fn func()) { fn() },
+	}
+	f, err := manager.Create("Setup via REST action", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		QueueSetup: true,
+		Pipeline:   feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+
+	result, err := target.SetupFeature(f.ID)
+	if err != nil {
+		t.Fatalf("SetupFeature() error = %v", err)
+	}
+	if result.Result != resultSetupStarted || result.FeatureID != f.ID {
+		t.Fatalf("SetupFeature() = %+v; want setup_started", result)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Status != feature.StatusCreated {
+		t.Fatalf("status = %s; want Created (Start enabled, not started)", updated.Status)
+	}
+	setup := updated.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusDone {
+		t.Fatalf("setup = %+v; want done", setup)
+	}
+	if started != 0 {
+		t.Fatalf("OnFeatureStarted fired %d times; want 0 — setup must not start orchestration", started)
+	}
+
+	// A second setup dispatch has nothing to do and reports a conflict.
+	if _, err := target.SetupFeature(f.ID); err == nil {
+		t.Fatal("SetupFeature() on completed setup error = nil; want conflict")
+	}
+}
+
+func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStarting(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	cfg.Repos[testRepoBName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoBName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	failRepoB := true
+	creates := 0
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		creates++
+		if repoName == testRepoBName && failRepoB {
+			return "", errors.New("transient checkout failure")
+		}
+		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	}
+	manager.Worktrees = worktrees
+
+	started := 0
+	target := serverMutationTarget{
+		orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{
+			OnFeatureStarted: func(string) { started++ },
+		}),
+		store:         store,
+		dispatchAsync: func(fn func()) { fn() },
+	}
+	f, err := manager.Create("Retry setup via REST action", "desc", []string{testRepoAName, testRepoBName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		QueueSetup: true,
+		Pipeline:   feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+
+	if _, err := target.SetupFeature(f.ID); err != nil {
+		t.Fatalf("SetupFeature() dispatch error = %v; want dispatch success with durable failure", err)
+	}
+	failed, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load failed feature: %v", err)
+	}
+	if failed.Status != feature.StatusFailed || failed.FailureType != feature.FailureWorktreeSetup {
+		t.Fatalf("failed feature = %s/%s; want Failed/worktree_setup with preserved state", failed.Status, failed.FailureType)
+	}
+	if failedSetup := failed.Run().Setup; failedSetup == nil || failedSetup.LastError == "" {
+		t.Fatalf("failed setup = %+v; want durable last_error", failedSetup)
+	}
+	createsAfterFailure := creates
+
+	failRepoB = false
+	result, err := target.SetupFeature(f.ID)
+	if err != nil {
+		t.Fatalf("SetupFeature() retry error = %v", err)
+	}
+	if result.Result != resultSetupStarted {
+		t.Fatalf("retry result = %+v; want setup_started", result)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load retried feature: %v", err)
+	}
+	if updated.Status != feature.StatusCreated {
+		t.Fatalf("status = %s; want Created after retry without start", updated.Status)
+	}
+	setup := updated.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusDone || setup.Attempt != 2 {
+		t.Fatalf("setup = %+v; want done on attempt 2", setup)
+	}
+	if creates-createsAfterFailure != 1 {
+		t.Fatalf("retry worktree creates = %d; want only the previously failed task", creates-createsAfterFailure)
+	}
+	if started != 0 {
+		t.Fatalf("OnFeatureStarted fired %d times; want 0 for setup retry", started)
 	}
 }
 

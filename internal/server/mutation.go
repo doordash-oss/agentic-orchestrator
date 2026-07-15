@@ -58,6 +58,7 @@ const (
 	resultGenerated         = "generated"
 	resultRecovered         = "recovered"
 	resultRewound           = "rewound"
+	resultSetupStarted      = "setup_started"
 	resultStarted           = "started"
 	resultUpdated           = "updated"
 	resultShutdownScheduled = "shutdown_scheduled"
@@ -95,6 +96,10 @@ const apiPathPermissionsAnswer = "/api/v1/permissions/answer"
 
 type MutationTarget interface {
 	CreateFeature(CreateFeatureRequest) (CreateFeatureResponse, error)
+	// SetupFeature dispatches server-owned durable setup (fresh run or retry
+	// of unfinished tasks) without starting orchestration; on success the
+	// feature ends in a startable pre-orchestration state.
+	SetupFeature(featureID string) (FeatureSetupResponse, error)
 	StartFeature(featureID string) (FeatureStartResponse, error)
 	StopFeature(featureID string) (FeatureStopResponse, error)
 	RestartFeature(featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error)
@@ -519,7 +524,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete:
+		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
@@ -650,6 +655,21 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		return true
 	}
 	switch action {
+	case actionSetup:
+		if subaction != "" {
+			return false
+		}
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.SetupFeature(featureID)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, resultSetupStarted)
+		writeActionJSON(w, http.StatusOK, &resp)
 	case actionStart, actionResume:
 		if subaction != "" {
 			return false

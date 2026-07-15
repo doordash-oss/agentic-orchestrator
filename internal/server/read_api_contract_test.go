@@ -838,6 +838,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		}
 	}
 	wantIDs := []string{
+		actionSetup,
 		"start",
 		actionPauseStop,
 		actionResume,

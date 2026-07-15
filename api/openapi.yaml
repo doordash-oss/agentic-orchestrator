@@ -644,6 +644,7 @@ components:
       schema:
         type: string
         enum:
+          - setup
           - start
           - resume
           - pause-stop
@@ -1519,6 +1520,8 @@ components:
           properties:
             create_feature_response:
               $ref: "#/components/schemas/CreateFeatureResponse"
+            feature_setup_response:
+              $ref: "#/components/schemas/FeatureSetupResponse"
             feature_start_response:
               $ref: "#/components/schemas/FeatureStartResponse"
             feature_stop_response:
@@ -1574,6 +1577,16 @@ components:
             shutdown_response:
               $ref: "#/components/schemas/ShutdownResponse"
     CreateFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    FeatureSetupResponse:
+      description: >-
+        Result of the setup action: durable server-owned setup (fresh run or
+        retry of unfinished tasks) has been dispatched without starting
+        orchestration. Progress is reported through the feature detail setup
+        state and SSE invalidation events; on success the feature reaches a
+        startable pre-orchestration state.
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"

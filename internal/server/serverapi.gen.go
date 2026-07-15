@@ -181,6 +181,7 @@ const (
 	FeatureActionReviewComments     FeatureAction = "review-comments"
 	FeatureActionReviewDecision     FeatureAction = "review-decision"
 	FeatureActionRewind             FeatureAction = "rewind"
+	FeatureActionSetup              FeatureAction = "setup"
 	FeatureActionStart              FeatureAction = "start"
 )
 
@@ -218,6 +219,8 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionReviewDecision:
 		return true
 	case FeatureActionRewind:
+		return true
+	case FeatureActionSetup:
 		return true
 	case FeatureActionStart:
 		return true
@@ -343,6 +346,7 @@ const (
 	RunFeatureActionParamsActionReviewComments     RunFeatureActionParamsAction = "review-comments"
 	RunFeatureActionParamsActionReviewDecision     RunFeatureActionParamsAction = "review-decision"
 	RunFeatureActionParamsActionRewind             RunFeatureActionParamsAction = "rewind"
+	RunFeatureActionParamsActionSetup              RunFeatureActionParamsAction = "setup"
 	RunFeatureActionParamsActionStart              RunFeatureActionParamsAction = "start"
 )
 
@@ -380,6 +384,8 @@ func (e RunFeatureActionParamsAction) Valid() bool {
 	case RunFeatureActionParamsActionReviewDecision:
 		return true
 	case RunFeatureActionParamsActionRewind:
+		return true
+	case RunFeatureActionParamsActionSetup:
 		return true
 	case RunFeatureActionParamsActionStart:
 		return true
@@ -421,6 +427,7 @@ const (
 	RunFeatureSubactionParamsActionReviewComments     RunFeatureSubactionParamsAction = "review-comments"
 	RunFeatureSubactionParamsActionReviewDecision     RunFeatureSubactionParamsAction = "review-decision"
 	RunFeatureSubactionParamsActionRewind             RunFeatureSubactionParamsAction = "rewind"
+	RunFeatureSubactionParamsActionSetup              RunFeatureSubactionParamsAction = "setup"
 	RunFeatureSubactionParamsActionStart              RunFeatureSubactionParamsAction = "start"
 )
 
@@ -458,6 +465,8 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 	case RunFeatureSubactionParamsActionReviewDecision:
 		return true
 	case RunFeatureSubactionParamsActionRewind:
+		return true
+	case RunFeatureSubactionParamsActionSetup:
 		return true
 	case RunFeatureSubactionParamsActionStart:
 		return true
@@ -699,14 +708,17 @@ type ActionInput struct {
 
 // ActionResponse defines model for ActionResponse.
 type ActionResponse struct {
-	APIVersion                    string                        `json:"api_version"`
-	AskUserAnswerResponse         AskUserAnswerResponse         `json:"ask_user_answer_response,omitempty"`
-	ChatStartResponse             ChatStartResponse             `json:"chat_start_response,omitempty"`
-	CleanupFeatureResponse        CleanupFeatureResponse        `json:"cleanup_feature_response,omitempty"`
-	CreateFeatureResponse         CreateFeatureResponse         `json:"create_feature_response,omitempty"`
-	DeleteFeatureResponse         DeleteFeatureResponse         `json:"delete_feature_response,omitempty"`
-	FeatureConfigUpdateResponse   FeatureConfigUpdateResponse   `json:"feature_config_update_response,omitempty"`
-	FeatureRestartResponse        FeatureRestartResponse        `json:"feature_restart_response,omitempty"`
+	APIVersion                  string                      `json:"api_version"`
+	AskUserAnswerResponse       AskUserAnswerResponse       `json:"ask_user_answer_response,omitempty"`
+	ChatStartResponse           ChatStartResponse           `json:"chat_start_response,omitempty"`
+	CleanupFeatureResponse      CleanupFeatureResponse      `json:"cleanup_feature_response,omitempty"`
+	CreateFeatureResponse       CreateFeatureResponse       `json:"create_feature_response,omitempty"`
+	DeleteFeatureResponse       DeleteFeatureResponse       `json:"delete_feature_response,omitempty"`
+	FeatureConfigUpdateResponse FeatureConfigUpdateResponse `json:"feature_config_update_response,omitempty"`
+	FeatureRestartResponse      FeatureRestartResponse      `json:"feature_restart_response,omitempty"`
+
+	// FeatureSetupResponse Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state.
+	FeatureSetupResponse          FeatureSetupResponse          `json:"feature_setup_response,omitempty"`
 	FeatureStartResponse          FeatureStartResponse          `json:"feature_start_response,omitempty"`
 	FeatureStopResponse           FeatureStopResponse           `json:"feature_stop_response,omitempty"`
 	HelpSendResponse              HelpSendResponse              `json:"help_send_response,omitempty"`
@@ -1042,6 +1054,14 @@ type FeatureRestartResponse struct {
 	RepoCycleCount int          `json:"repo_cycle_count,omitempty"`
 	Result         string       `json:"result"`
 	SessionIDs     []string     `json:"session_ids,omitempty"`
+}
+
+// FeatureSetupResponse defines model for FeatureSetupResponse.
+type FeatureSetupResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
 }
 
 // FeatureStartResponse defines model for FeatureStartResponse.

@@ -88,6 +88,7 @@ const (
 	actionRefactor       = "refactor"
 	actionRestart        = "restart"
 	actionResume         = "resume"
+	actionSetup          = "setup"
 	actionStart          = "start"
 	actionRetry          = "retry"
 	actionReviewComments = "review-comments"
@@ -286,6 +287,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	repoOptional := ActionScopeDTO{Type: entityFeature, RepoSelection: "optional"}
 	repoRequired := ActionScopeDTO{Type: entityFeature, RepoSelection: "required"}
 
+	canSetup := setupActionEligible(f)
 	canStart := !running && !activeCycle && (status == feature.StatusCreated ||
 		status == feature.StatusInquireReady ||
 		status == feature.StatusPlanReady ||
@@ -309,6 +311,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	canDelete := !running
 
 	return []ActionDTO{
+		action(actionSetup, canSetup, featureScope, nil, ActionDisabledReasonDTO{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"}),
 		action(actionStart, canStart, featureScope, nil, disabledStatusReason(status)),
 		action(actionPauseStop, canStop, featureScope, nil, ActionDisabledReasonDTO{Code: "not_running", Message: "feature has no active work to pause or stop"}),
 		action(actionResume, canResume, featureScope, nil, ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"}),
@@ -337,6 +340,25 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 		}, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"}),
 		action(actionDelete, canDelete, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"}),
 	}
+}
+
+// setupActionEligible reports whether the setup action applies: either the
+// feature has queued durable setup that has not completed (fresh run) or its
+// setup failed and only the unfinished tasks are retryable.
+func setupActionEligible(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	setup := f.Run().Setup
+	if setup == nil {
+		return false
+	}
+	if f.Status == feature.StatusSettingUpWorktrees {
+		return setup.Status == feature.SetupStatusQueued || setup.Status == feature.SetupStatusRunning
+	}
+	return f.Status == feature.StatusFailed &&
+		f.FailureType == feature.FailureWorktreeSetup &&
+		setup.Status == feature.SetupStatusFailed
 }
 
 func disabledStatusReason(status feature.Status) ActionDisabledReasonDTO {

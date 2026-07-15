@@ -77,14 +77,15 @@ const (
 // Wire-level result/status/action strings shared across server mutation
 // handlers (and reused by their tests) to avoid duplicated literals.
 const (
-	resultFailed   = "failed"
-	resultAnswered = "answered"
-	resultConflict = "conflict"
-	resultCleaned  = "cleaned"
-	resultStarted  = "started"
-	resultUpdated  = "updated"
-	resultSent     = "sent"
-	resultRetried  = "retried"
+	resultFailed       = "failed"
+	resultAnswered     = "answered"
+	resultConflict     = "conflict"
+	resultCleaned      = "cleaned"
+	resultStarted      = "started"
+	resultUpdated      = "updated"
+	resultSent         = "sent"
+	resultRetried      = "retried"
+	resultSetupStarted = "setup_started"
 
 	dispatchNone = "none"
 
@@ -900,6 +901,9 @@ type serverMutationTarget struct {
 	permissionCache *permission.Cache
 	workspaceDir    string
 	reviewer        ports.ReviewCommentOperator
+	// dispatchAsync runs server-owned background work (durable feature
+	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
+	dispatchAsync func(fn func())
 }
 
 type featureRebaseStarter interface {
@@ -955,6 +959,60 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		return serverruntime.CreateFeatureResponse{}, err
 	}
 	return serverruntime.CreateFeatureResponse{FeatureID: f.ID, Result: "created"}, nil
+}
+
+// SetupFeature dispatches server-owned durable setup for a freshly created
+// feature — or a retry of a failed setup that reruns only the unfinished
+// tasks — without starting orchestration. On success the feature returns to
+// the startable StatusCreated state; failures are persisted on the feature's
+// setup state and surfaced through setup events, so the HTTP response only
+// acknowledges the dispatch.
+func (t *serverMutationTarget) SetupFeature(featureID string) (serverruntime.FeatureSetupResponse, error) {
+	resp := serverruntime.FeatureSetupResponse{FeatureID: featureID}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	if t.store == nil {
+		return resp, errors.New("feature store is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return resp, err
+	}
+	retry := isFailedSetupFeature(f)
+	if !retry && !isPendingSetupFeature(f) {
+		return resp, &serverruntime.ActionConflictError{
+			Message: "feature has no pending or failed setup work",
+			Target:  map[string]any{"feature_id": featureID},
+		}
+	}
+	dispatch := t.dispatchAsync
+	if dispatch == nil {
+		dispatch = func(fn func()) { go fn() }
+	}
+	dispatch(func() {
+		// Errors are durable: the setup runner persists per-task and failure
+		// state on the feature and emits setup events that reach the SSE
+		// stream, so the API surface reports them via the read model.
+		if retry {
+			_ = t.orch.RetrySetupOnly(featureID)
+		} else {
+			_ = t.orch.RunSetupOnly(featureID)
+		}
+	})
+	resp.Result = resultSetupStarted
+	return resp, nil
+}
+
+// isPendingSetupFeature reports whether the feature has queued durable setup
+// that has not completed yet (the state Create leaves it in with QueueSetup).
+func isPendingSetupFeature(f *feature.Feature) bool {
+	if f == nil || f.Status != feature.StatusSettingUpWorktrees {
+		return false
+	}
+	setup := f.Run().Setup
+	return setup != nil &&
+		(setup.Status == feature.SetupStatusQueued || setup.Status == feature.SetupStatusRunning)
 }
 
 func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.FeatureStartResponse, error) {

@@ -148,6 +148,43 @@ describe('ConnectionStateSchema', () => {
     ).toBe(false);
   });
 
+  it('rejects lifecycle statuses paired with another stage', () => {
+    const validStageByStatus = {
+      idle: { stage: 'resolve-runtime', ownership: 'none' },
+      'resolving-runtime': { stage: 'resolve-runtime', ownership: 'none' },
+      discovering: { stage: 'discover', ownership: 'none' },
+      attaching: { stage: 'connect', ownership: 'none' },
+      launching: { stage: 'connect', ownership: 'none' },
+      'waiting-health': { stage: 'wait-health', ownership: 'app-owned' },
+      connecting: { stage: 'authenticate', ownership: 'app-owned' },
+      ready: { stage: 'ready', ownership: 'app-owned' },
+      incompatible: { stage: 'connect', ownership: 'external' },
+      'resources-missing': { stage: 'connect', ownership: 'none' },
+      'launch-failed': { stage: 'connect', ownership: 'none' },
+      crashed: { stage: 'connect', ownership: 'none' },
+      error: { stage: 'resolve-runtime', ownership: 'none' },
+    } as const;
+
+    for (const [status, expected] of Object.entries(validStageByStatus)) {
+      expect(
+        ConnectionStateSchema.safeParse({
+          status,
+          stage: expected.stage === 'ready' ? 'discover' : 'ready',
+          detail: 'invalid lifecycle pairing',
+          ownership: expected.ownership,
+          ...(status === 'incompatible' ||
+          status === 'resources-missing' ||
+          status === 'launch-failed' ||
+          status === 'crashed' ||
+          status === 'error'
+            ? { error: { code: 'E_X', message: 'failed' } }
+            : {}),
+        }).success,
+        `${status} must only accept its lifecycle stage`,
+      ).toBe(false);
+    }
+  });
+
   it('rejects token-shaped fields anywhere in the state', () => {
     const base = { status: 'ready', stage: 'ready', detail: '', ownership: 'app-owned' };
     for (const extra of [

@@ -113,16 +113,42 @@ export const ServerBuildInfoSchema = z.strictObject({
 
 export type ServerBuildInfo = z.output<typeof ServerBuildInfoSchema>;
 
-/** Fields every connection-state variant shares. */
+/** Fields every connection-state variant shares apart from its lifecycle stage. */
 const connectionStateBase = {
-  stage: ConnectionStageSchema,
   detail: z.string(),
   serverBuild: ServerBuildInfoSchema.optional(),
 } as const;
 
+const connectionStage = <T extends ConnectionStage>(stage: T) => z.literal(stage);
+
 /** Startup progress before any server exists to own or attach to. */
-export const ConnectionPendingStateSchema = z.strictObject({
-  status: z.enum(CONNECTION_PENDING_STATUSES),
+const ConnectionIdleStateSchema = z.strictObject({
+  status: z.literal('idle'),
+  stage: connectionStage('resolve-runtime'),
+  ...connectionStateBase,
+  ownership: z.literal('none'),
+});
+const ConnectionResolvingRuntimeStateSchema = z.strictObject({
+  status: z.literal('resolving-runtime'),
+  stage: connectionStage('resolve-runtime'),
+  ...connectionStateBase,
+  ownership: z.literal('none'),
+});
+const ConnectionDiscoveringStateSchema = z.strictObject({
+  status: z.literal('discovering'),
+  stage: connectionStage('discover'),
+  ...connectionStateBase,
+  ownership: z.literal('none'),
+});
+const ConnectionAttachingStateSchema = z.strictObject({
+  status: z.literal('attaching'),
+  stage: connectionStage('connect'),
+  ...connectionStateBase,
+  ownership: z.literal('none'),
+});
+const ConnectionLaunchingStateSchema = z.strictObject({
+  status: z.literal('launching'),
+  stage: connectionStage('connect'),
   ...connectionStateBase,
   ownership: z.literal('none'),
 });
@@ -130,6 +156,7 @@ export const ConnectionPendingStateSchema = z.strictObject({
 /** Supervising the freshly spawned child, which is always app-owned. */
 export const ConnectionSupervisingStateSchema = z.strictObject({
   status: z.literal('waiting-health'),
+  stage: connectionStage('wait-health'),
   ...connectionStateBase,
   ownership: z.literal('app-owned'),
 });
@@ -137,6 +164,7 @@ export const ConnectionSupervisingStateSchema = z.strictObject({
 /** Authenticating against a concrete server, so ownership is decided. */
 export const ConnectionAuthenticatingStateSchema = z.strictObject({
   status: z.literal('connecting'),
+  stage: connectionStage('authenticate'),
   ...connectionStateBase,
   ownership: z.enum(['external', 'app-owned']),
 });
@@ -144,17 +172,55 @@ export const ConnectionAuthenticatingStateSchema = z.strictObject({
 /** Connected: always names who owns the server and never carries an error. */
 export const ConnectionReadyStateSchema = z.strictObject({
   status: z.literal('ready'),
+  stage: connectionStage('ready'),
   ...connectionStateBase,
   ownership: z.enum(['external', 'app-owned']),
 });
 
 /** Terminal failures always carry redacted diagnostics for the shell. */
-export const ConnectionErrorStateSchema = z.strictObject({
-  status: z.enum(CONNECTION_ERROR_STATUSES),
+const ConnectionIncompatibleStateSchema = z.strictObject({
+  status: z.literal('incompatible'),
+  stage: connectionStage('connect'),
   ...connectionStateBase,
   ownership: ServerOwnershipSchema,
   error: SafeErrorSchema,
 });
+const ConnectionResourcesMissingStateSchema = z.strictObject({
+  status: z.literal('resources-missing'),
+  stage: connectionStage('connect'),
+  ...connectionStateBase,
+  ownership: ServerOwnershipSchema,
+  error: SafeErrorSchema,
+});
+const ConnectionLaunchFailedStateSchema = z.strictObject({
+  status: z.literal('launch-failed'),
+  stage: z.enum(['connect', 'wait-health', 'authenticate']),
+  ...connectionStateBase,
+  ownership: ServerOwnershipSchema,
+  error: SafeErrorSchema,
+});
+const ConnectionCrashedStateSchema = z.strictObject({
+  status: z.literal('crashed'),
+  stage: connectionStage('connect'),
+  ...connectionStateBase,
+  ownership: ServerOwnershipSchema,
+  error: SafeErrorSchema,
+});
+const ConnectionUnexpectedErrorStateSchema = z.strictObject({
+  status: z.literal('error'),
+  stage: z.enum(['resolve-runtime', 'discover', 'connect', 'wait-health', 'authenticate']),
+  ...connectionStateBase,
+  ownership: ServerOwnershipSchema,
+  error: SafeErrorSchema,
+});
+
+export const ConnectionErrorStateSchema = z.union([
+  ConnectionIncompatibleStateSchema,
+  ConnectionResourcesMissingStateSchema,
+  ConnectionLaunchFailedStateSchema,
+  ConnectionCrashedStateSchema,
+  ConnectionUnexpectedErrorStateSchema,
+]);
 
 /**
  * The renderer-visible connection model, discriminated on `status` so
@@ -165,11 +231,19 @@ export const ConnectionErrorStateSchema = z.strictObject({
  * boundaries. Credentials never appear here.
  */
 export const ConnectionStateSchema = z.discriminatedUnion('status', [
-  ConnectionPendingStateSchema,
+  ConnectionIdleStateSchema,
+  ConnectionResolvingRuntimeStateSchema,
+  ConnectionDiscoveringStateSchema,
+  ConnectionAttachingStateSchema,
+  ConnectionLaunchingStateSchema,
   ConnectionSupervisingStateSchema,
   ConnectionAuthenticatingStateSchema,
   ConnectionReadyStateSchema,
-  ConnectionErrorStateSchema,
+  ConnectionIncompatibleStateSchema,
+  ConnectionResourcesMissingStateSchema,
+  ConnectionLaunchFailedStateSchema,
+  ConnectionCrashedStateSchema,
+  ConnectionUnexpectedErrorStateSchema,
 ]);
 
 export type ConnectionState = z.output<typeof ConnectionStateSchema>;
@@ -418,7 +492,7 @@ export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
 
 // --- Feature creation ---------------------------------------------------------
 
-/** The narrow Phase 1 creation input, validated at both IPC boundaries. */
+/** The narrow creation input, validated at both IPC boundaries. */
 export const CreateFeatureInputSchema = z.strictObject({
   name: z
     .string()

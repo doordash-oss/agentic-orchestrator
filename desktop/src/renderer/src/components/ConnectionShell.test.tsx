@@ -40,28 +40,46 @@ describe('ConnectionShell', () => {
 
     const failure = { error: { code: 'E_X', message: 'failed', remediation: 'retry' } };
     const cases = [
-      { status: 'idle', label: /idle/i },
-      { status: 'discovering', label: /discovering/i },
-      { status: 'attaching', label: /attaching/i },
-      { status: 'launching', label: /launching/i },
-      { status: 'waiting-health', label: /waiting for health/i, extra: { ownership: 'app-owned' } },
-      { status: 'connecting', label: /authenticating/i, extra: { ownership: 'app-owned' } },
-      { status: 'ready', label: /ready/i, extra: { ownership: 'app-owned' } },
+      { status: 'idle', stage: 'resolve-runtime', label: /idle/i },
+      { status: 'resolving-runtime', stage: 'resolve-runtime', label: /resolving/i },
+      { status: 'discovering', stage: 'discover', label: /discovering/i },
+      { status: 'attaching', stage: 'connect', label: /attaching/i },
+      { status: 'launching', stage: 'connect', label: /launching/i },
+      {
+        status: 'waiting-health',
+        stage: 'wait-health',
+        label: /waiting for health/i,
+        extra: { ownership: 'app-owned' },
+      },
+      {
+        status: 'connecting',
+        stage: 'authenticate',
+        label: /authenticating/i,
+        extra: { ownership: 'app-owned' },
+      },
+      { status: 'ready', stage: 'ready', label: /ready/i, extra: { ownership: 'app-owned' } },
       {
         status: 'incompatible',
         label: /incompatible/i,
+        stage: 'connect',
         extra: { ownership: 'external', ...failure },
       },
-      { status: 'resources-missing', label: /resources missing/i, extra: failure },
-      { status: 'launch-failed', label: /launch failed/i, extra: failure },
-      { status: 'crashed', label: /crashed/i, extra: failure },
-      { status: 'error', label: /error/i, extra: failure },
+      {
+        status: 'resources-missing',
+        stage: 'connect',
+        label: /resources missing/i,
+        extra: failure,
+      },
+      { status: 'launch-failed', stage: 'connect', label: /launch failed/i, extra: failure },
+      { status: 'crashed', stage: 'connect', label: /crashed/i, extra: failure },
+      { status: 'error', stage: 'connect', label: /error/i, extra: failure },
     ] as const;
-    for (const { status, label, ...rest } of cases) {
+    for (const { status, stage, label, ...rest } of cases) {
       act(() => {
         mock.emitConnection(
           state({
             status,
+            stage,
             detail: `now ${status}`,
             ...('extra' in rest ? rest.extra : {}),
           }),

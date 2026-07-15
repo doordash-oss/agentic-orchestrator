@@ -261,8 +261,24 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		cfg, err := c.RuntimeConfig(ctx)
 		return RefreshSnapshot{RuntimeConfig: &cfg}, err
 	case evt.Kind == "prompt.updated":
+		snapshot := RefreshSnapshot{}
 		prompts, err := c.Prompts(ctx)
-		return RefreshSnapshot{Prompts: &prompts}, err
+		snapshot.Prompts = &prompts
+		if err != nil {
+			return snapshot, err
+		}
+		// A feature-scoped prompt update is emitted when implementation enters
+		// a need-user-input gate. The prompt snapshot drives the notification
+		// count, while feature detail drives the selected feature's paused
+		// status, contextual Answer action, and questionnaire panel. Refresh
+		// both atomically so the dashboard does not stay visually Implementing
+		// until the user changes feature focus.
+		if resource.Type == entityFeature && resource.FeatureID != "" {
+			feature, featureErr := c.FeatureDetail(ctx, resource.FeatureID)
+			snapshot.Feature = &feature
+			return snapshot, featureErr
+		}
+		return snapshot, nil
 	case evt.Kind == "permission.updated":
 		permissions, err := c.Permissions(ctx)
 		return RefreshSnapshot{Permissions: &permissions}, err

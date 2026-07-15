@@ -485,6 +485,35 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/workspace/repositories/init:
+    post:
+      operationId: initWorkspaceRepository
+      summary: Initialize a new git repository inside a configured workspace root.
+      description: >-
+        Bounded repository-initialization action for first-launch onboarding.
+        Requires an explicit consent flag and a target path confined to a
+        configured workspace root after symlink resolution. Rejects path
+        traversal, symlink escape, targets that are already git repositories,
+        and non-empty incompatible directories. On success the new repository
+        is immediately discoverable through workspace discovery.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryInitRequest"
+      responses:
+        "201":
+          $ref: "#/components/responses/RepositoryInitResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/recovery:
     get:
       operationId: getRecoverySnapshot
@@ -802,6 +831,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ReadinessResponse"
+    RepositoryInitResponse:
+      description: Newly initialized workspace repository.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryInitResponse"
     ActionResponse:
       description: Mutation result.
       content:
@@ -1092,6 +1127,44 @@ components:
         issue:
           $ref: "#/components/schemas/ReadinessIssue"
           x-go-type-skip-optional-pointer: false
+    RepositoryInitRequest:
+      x-go-name: RepositoryInitSchema
+      type: object
+      required: [path, consent]
+      properties:
+        path:
+          type: string
+          description: >-
+            Absolute directory to initialize, confined to a configured
+            workspace root. May not yet exist; an existing directory must be
+            empty and not already a git repository.
+        consent:
+          type: boolean
+          description: >-
+            Explicit user consent to create a git repository at the target
+            path. Must be true.
+    WorkspaceRepository:
+      type: object
+      required: [name, path]
+      properties:
+        name:
+          type: string
+          description: Collision-safe repository key used by workspace discovery.
+        path:
+          type: string
+        root:
+          type: string
+          description: The configured workspace root containing the repository.
+    RepositoryInitResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [result, repository]
+          properties:
+            result:
+              type: string
+            repository:
+              $ref: "#/components/schemas/WorkspaceRepository"
     WorkspaceReadiness:
       type: object
       required: [roots, repositories]

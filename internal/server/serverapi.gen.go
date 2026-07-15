@@ -642,13 +642,28 @@ func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 
 // Defines values for ShutdownRuntimeParamsXAgenticoClient.
 const (
-	Local ShutdownRuntimeParamsXAgenticoClient = "local"
+	ShutdownRuntimeParamsXAgenticoClientLocal ShutdownRuntimeParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the ShutdownRuntimeParamsXAgenticoClient enum.
 func (e ShutdownRuntimeParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case ShutdownRuntimeParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
+const (
+	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
+func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -1421,6 +1436,23 @@ type RepoStatus struct {
 	Touched       bool     `json:"touched"`
 }
 
+// RepositoryInitSchema defines model for RepositoryInitRequest.
+type RepositoryInitSchema struct {
+	// Consent Explicit user consent to create a git repository at the target path. Must be true.
+	Consent bool `json:"consent"`
+
+	// Path Absolute directory to initialize, confined to a configured workspace root. May not yet exist; an existing directory must be empty and not already a git repository.
+	Path string `json:"path"`
+}
+
+// RepositoryInitResponse defines model for RepositoryInitResponse.
+type RepositoryInitResponse struct {
+	APIVersion string              `json:"api_version"`
+	Meta       ResponseMeta        `json:"meta,omitempty"`
+	Repository WorkspaceRepository `json:"repository"`
+	Result     string              `json:"result"`
+}
+
 // RepositoryReadiness defines model for RepositoryReadiness.
 type RepositoryReadiness struct {
 	Issue *ReadinessIssue `json:"issue,omitempty"`
@@ -1822,6 +1854,16 @@ type WorkspaceReadiness struct {
 	Roots        []WorkspaceRootReadiness `json:"roots"`
 }
 
+// WorkspaceRepository defines model for WorkspaceRepository.
+type WorkspaceRepository struct {
+	// Name Collision-safe repository key used by workspace discovery.
+	Name string `json:"name"`
+	Path string `json:"path"`
+
+	// Root The configured workspace root containing the repository.
+	Root string `json:"root,omitempty"`
+}
+
 // WorkspaceRootReadiness defines model for WorkspaceRootReadiness.
 type WorkspaceRootReadiness struct {
 	Issue *ReadinessIssue `json:"issue,omitempty"`
@@ -2097,6 +2139,15 @@ type ShutdownRuntimeParams struct {
 // ShutdownRuntimeParamsXAgenticoClient defines parameters for ShutdownRuntime.
 type ShutdownRuntimeParamsXAgenticoClient string
 
+// InitWorkspaceRepositoryParams defines parameters for InitWorkspaceRepository.
+type InitWorkspaceRepositoryParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InitWorkspaceRepositoryParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InitWorkspaceRepositoryParamsXAgenticoClient defines parameters for InitWorkspaceRepository.
+type InitWorkspaceRepositoryParamsXAgenticoClient string
+
 // PatchRuntimeConfigJSONRequestBody defines body for PatchRuntimeConfig for application/json ContentType.
 type PatchRuntimeConfigJSONRequestBody PatchRuntimeConfigJSONBody
 
@@ -2144,3 +2195,6 @@ type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
 
 // ShutdownRuntimeJSONRequestBody defines body for ShutdownRuntime for application/json ContentType.
 type ShutdownRuntimeJSONRequestBody ShutdownRuntimeJSONBody
+
+// InitWorkspaceRepositoryJSONRequestBody defines body for InitWorkspaceRepository for application/json ContentType.
+type InitWorkspaceRepositoryJSONRequestBody = RepositoryInitSchema

@@ -178,6 +178,14 @@ func (c *Client) RefreshReadiness(ctx context.Context) (ReadinessResponse, error
 	return out, err
 }
 
+// InitWorkspaceRepository initializes a new git repository inside a
+// configured workspace root. Requires req.Consent to be true.
+func (c *Client) InitWorkspaceRepository(ctx context.Context, req RepositoryInitSchema) (RepositoryInitResponse, error) {
+	var out RepositoryInitResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/workspace/repositories/init", nil, req, &out, true)
+	return out, err
+}
+
 func (c *Client) Prompts(ctx context.Context) (PromptSnapshotResponse, error) {
 	var out PromptSnapshotResponse
 	err := c.getJSON(ctx, "/api/v1/prompts", nil, &out)

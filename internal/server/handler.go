@@ -53,6 +53,7 @@ type apiHandler struct {
 	mutations             MutationTarget
 	requestShutdown       func()
 	disableHostValidation bool
+	initGitRepository     func(path string) error
 
 	recoveryMu         sync.Mutex
 	recoverySnapshots  map[string][]ports.RecoveryItem
@@ -96,6 +97,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		mutations:             opts.Mutations,
 		requestShutdown:       opts.RequestShutdown,
 		disableHostValidation: opts.DisableHostValidation,
+		initGitRepository:     opts.InitGitRepository,
 		reviewSessionLocks:    newReviewSessionLockSet(),
 	}
 	return handler
@@ -152,6 +154,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
 	{apiPathReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleReadiness) }},
 	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
+	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},
 	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
 	{apiPathPrompts + "/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
 	{apiPathPermissions, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePermissions) }},

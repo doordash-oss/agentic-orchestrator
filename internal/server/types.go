@@ -52,6 +52,10 @@ type Options struct {
 	DomainEvents         <-chan ports.Event
 	Mutations            MutationTarget
 	RequestShutdown      func()
+	// InitGitRepository overrides the git-init implementation used by the
+	// workspace repository-initialization endpoint. Nil means the default
+	// git adapter (internal/git.InitRepository).
+	InitGitRepository func(path string) error
 }
 
 type HandlerOptions struct {
@@ -74,6 +78,10 @@ type HandlerOptions struct {
 	DomainEvents          <-chan ports.Event
 	Mutations             MutationTarget
 	RequestShutdown       func()
+	// InitGitRepository overrides the git-init implementation used by the
+	// workspace repository-initialization endpoint. Nil means the default
+	// git adapter (internal/git.InitRepository).
+	InitGitRepository func(path string) error
 }
 
 type FeatureLister interface {

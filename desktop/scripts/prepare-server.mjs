@@ -75,8 +75,7 @@ function resolveTarget() {
     return { os: 'darwin', arch: 'universal' };
   }
   if (platform === 'linux') {
-    const arch =
-      process.env.AGENTICO_PACKAGE_ARCH ?? (process.arch === 'arm64' ? 'arm64' : 'x64');
+    const arch = process.env.AGENTICO_PACKAGE_ARCH ?? (process.arch === 'arm64' ? 'arm64' : 'x64');
     if (!(arch in GOARCH_BY_ARCH)) {
       throw new Error(`unsupported AGENTICO_PACKAGE_ARCH=${arch}; expected x64 or arm64`);
     }
@@ -128,7 +127,9 @@ function main() {
 
   const identity = createBuildIdentity({
     desktop_version: JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')).version,
-    api_version: parseOpenApiInfoVersion(readFileSync(join(repoRoot, 'api', 'openapi.yaml'), 'utf8')),
+    api_version: parseOpenApiInfoVersion(
+      readFileSync(join(repoRoot, 'api', 'openapi.yaml'), 'utf8'),
+    ),
     schema_version: parseCompatibilitySchemaVersion(
       readFileSync(join(repoRoot, 'internal', 'server', 'compatibility.go'), 'utf8'),
     ),

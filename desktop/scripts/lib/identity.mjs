@@ -62,7 +62,9 @@ export function validateBuildIdentity(value) {
     if (allowed === undefined) {
       errors.push(`os must be one of ${Object.keys(OS_ARCHES).join(', ')}, got ${value.os}`);
     } else if (isNonEmptyString(value.arch) && !allowed.includes(value.arch)) {
-      errors.push(`arch for os=${value.os} must be one of ${allowed.join(', ')}, got ${value.arch}`);
+      errors.push(
+        `arch for os=${value.os} must be one of ${allowed.join(', ')}, got ${value.arch}`,
+      );
     }
   }
   if (isNonEmptyString(value.built_at) && Number.isNaN(Date.parse(value.built_at))) {

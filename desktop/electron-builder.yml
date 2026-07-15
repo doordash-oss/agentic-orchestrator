@@ -1,5 +1,7 @@
-# Packaging configuration. Actual signed/packaged release jobs land in a later
-# task; this config exists so `electron-builder` can already produce artifacts.
+# Unsigned development packaging (Phase 1 Task 6): universal macOS DMG plus
+# Linux AppImage/deb. Signing, notarization, publishing, and update delivery
+# are all explicitly out of scope — no publish config may be added here
+# without a release-engineering task.
 appId: com.doordash.agentico
 productName: Agentico
 directories:
@@ -10,11 +12,29 @@ files:
   - package.json
 asar: true
 npmRebuild: false
+# No publishing or update delivery: a null publish config also stops
+# electron-builder from emitting auto-update metadata (latest-*.yml).
+publish: null
+# Staged by scripts/prepare-server.mjs before every package build: the
+# target-matched Go server at bin/agentico (lipo'd universal on macOS) and
+# the build-identity.json binding desktop/API/schema/server/os/arch
+# identities. Lands in Contents/Resources/ (macOS) or resources/ (Linux),
+# which is exactly where src/main/gateway/resources.ts resolves the bundled
+# server: process.resourcesPath/bin/agentico.
+extraResources:
+  - from: resources
+    to: .
 mac:
   target:
     - target: dmg
       arch: universal
   category: public.app-category.developer-tools
+  # Unsigned development build: never look up a signing identity and never
+  # notarize. macOS arm64 still requires a signature to execute, so
+  # electron-builder falls back to ad-hoc signing — which is not a
+  # distribution signature.
+  identity: null
+  notarize: false
 linux:
   target:
     - AppImage

@@ -14,6 +14,8 @@
     "test": "npm run test --workspace desktop",
     "test:security": "npm run test:security --workspace desktop",
     "build": "npm run build --workspace desktop",
+    "package:build": "npm run package:build --workspace desktop",
+    "package:verify": "npm run package:verify --workspace desktop",
     "generate:api": "npm run generate:api --workspace desktop"
   }
 }

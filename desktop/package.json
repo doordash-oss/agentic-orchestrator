@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Agentico desktop app: Electron main/preload plus React renderer.",
-  "main": "out/main/index.mjs",
+  "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -16,7 +16,9 @@
     "check:api-drift": "node scripts/check-api-drift.mjs",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run check:api-drift",
     "test": "vitest run",
-    "test:security": "vitest run --project security"
+    "test:security": "vitest run --project security",
+    "package:build": "node scripts/package-build.mjs",
+    "package:verify": "node scripts/package-build.mjs && node scripts/verify-package.mjs"
   },
   "devDependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

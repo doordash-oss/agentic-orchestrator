@@ -276,6 +276,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		ReviewModel:                cfg.ReviewModel,
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
+		RunDir:                     runDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
 		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),

@@ -239,6 +239,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		ReviewModel:                f.Models.Review,
 		ArtifactDir:                cycleBaseDir,
 		StateDir:                   filepath.Join(baseDir, featureID),
+		RunDir:                     agent.ActiveRunDir(baseDir, f),
 		RepoName:                   repoName,
 		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,

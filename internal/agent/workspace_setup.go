@@ -31,22 +31,21 @@ import (
 //
 // Construction is pure: feature → workspace. Callers may further filter the
 // AdditionalDirs slice (e.g. add a guidelines dir) but the canonical
-// "feature state dir + every Feature.Repos worktree" set lives here.
+// "active run dir + every Feature.Repos worktree" set lives here.
 type WorkspaceSetup struct {
 	// Cwd is the working directory the session runs in. Always set to the
-	// feature state dir (the per-feature artifacts root) so progress.md,
-	// verification-report.yaml, and review-feedback.md write-paths are
-	// stable across cycles. Per-repo loops historically used the repo's
-	// worktree path; the unified flow sits at the state dir and reaches
-	// each repo through AdditionalDirs.
+	// active run directory so relative artifact navigation cannot cross into a
+	// sealed predecessor run. Per-repo loops historically used the repo's
+	// worktree path; the unified flow sits at the active run and reaches each
+	// repo through AdditionalDirs.
 	Cwd string
 
 	// AdditionalDirs is the deduplicated, deterministically-ordered list of
-	// directories to mount via --add-dir. Always contains the feature state
-	// dir at index 0 (so the agent can navigate ./<run>/<phase>/... without
-	// needing the absolute path), followed by every Feature.Repos worktree
-	// (or repo.Path when worktrees aren't in use), sorted by repo name for
-	// stable test output.
+	// directories to mount via --add-dir. Always contains the active run dir at
+	// index 0, followed by every Feature.Repos worktree (or repo.Path when
+	// worktrees aren't in use), sorted by repo name for stable test output. The
+	// containing feature state directory is deliberately excluded because it
+	// also contains sealed predecessor runs.
 	AdditionalDirs []string
 
 	// RepoPaths is the per-repo absolute path map, keyed by repo name.
@@ -57,18 +56,19 @@ type WorkspaceSetup struct {
 }
 
 // BuildWorkspace returns the canonical workspace bootstrap for the given
-// feature. The state dir is the per-feature root (i.e. the directory that
-// contains `feature.yaml` and `runs/`).
+// feature. The state dir argument is the per-feature root (i.e. the directory
+// that contains `feature.yaml` and `runs/`); only its active run child is
+// exposed in the returned workspace.
 //
 // Behavior:
-//   - Cwd is always stateDir. Single-repo and multi-repo cases share this.
+//   - Cwd is always the feature's active run directory. Single-repo and
+//     multi-repo cases share this.
 //   - Every Feature.Repos entry contributes one AdditionalDirs path: the
 //     worktree path when set, falling back to repo.Path. Repos missing both
 //     fields are skipped silently (the validator catches this earlier).
-//   - The state dir is always present at AdditionalDirs[0] to keep
-//     navigation paths stable in the agent's prompt.
-//   - Output is order-stable for tests: state dir first, then repos sorted
-//     by name.
+//   - The active run dir is always present at AdditionalDirs[0].
+//   - Output is order-stable for tests: active run first, then repos sorted by
+//     name.
 func BuildWorkspace(feat *feature.Feature, stateDir string) (WorkspaceSetup, error) {
 	if feat == nil {
 		return WorkspaceSetup{}, fmt.Errorf("workspace setup: feature is nil")
@@ -80,14 +80,19 @@ func BuildWorkspace(feat *feature.Feature, stateDir string) (WorkspaceSetup, err
 	if err != nil {
 		return WorkspaceSetup{}, fmt.Errorf("workspace setup: state dir abs: %w", err)
 	}
+	runNumber := feat.ActiveRun
+	if runNumber <= 0 {
+		runNumber = 1
+	}
+	activeRunDir := filepath.Join(abs, "runs", feature.RunDirName(runNumber))
 
 	// Canonical sort: by repo name. Stable output for tests, predictable
 	// --add-dir ordering for the agent.
 	repos := append([]feature.FeatureRepo(nil), feat.Repos...)
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
 
-	dirs := []string{abs}
-	seen := map[string]bool{abs: true}
+	dirs := []string{activeRunDir}
+	seen := map[string]bool{activeRunDir: true}
 	paths := make(map[string]string, len(repos))
 	for _, r := range repos {
 		p := r.WorktreePath
@@ -109,7 +114,7 @@ func BuildWorkspace(feat *feature.Feature, stateDir string) (WorkspaceSetup, err
 	}
 
 	return WorkspaceSetup{
-		Cwd:            abs,
+		Cwd:            activeRunDir,
 		AdditionalDirs: dirs,
 		RepoPaths:      paths,
 	}, nil
@@ -117,9 +122,9 @@ func BuildWorkspace(feat *feature.Feature, stateDir string) (WorkspaceSetup, err
 
 // WorkspaceForRepos is a filtering helper for cycles that legitimately mount
 // only a subset of Feature.Repos (e.g. a rebase cycle scoped to the behind
-// repos). The base WorkspaceSetup is computed first so the state dir is
+// repos). The base WorkspaceSetup is computed first so the active run dir is
 // always present; the AdditionalDirs slice is then narrowed to the requested
-// repo names plus the state dir.
+// repo names plus the active run.
 //
 // Repo names not in feat.Repos are silently dropped. RepoPaths is filtered
 // to match. Returns the unfiltered workspace when repos is empty (treated as

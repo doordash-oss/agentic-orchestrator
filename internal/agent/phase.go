@@ -432,10 +432,10 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		Model:        kbModel,
 		Prompt:       prompt,
 		SystemPrompt: systemPrompt,
-		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), not a
-		// descendant, so it must be mounted explicitly: this makes it readable and,
-		// via the default writable-root derivation, writable for managed providers.
-		AdditionalDirs:                 []string{pr.StateDir, kbDir},
+		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), so it
+		// must be mounted explicitly. The global feature-state root is not KB
+		// context and must not be exposed to this agent.
+		AdditionalDirs:                 []string{kbDir},
 		AgentNames:                     knowledgeBaseAgentNames(),
 		PIDDir:                         pidDir,
 		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
@@ -690,6 +690,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		ReviewModel:                reviewModel,
 		ArtifactDir:                pr.resolveImplementArtifactDir(f),
 		StateDir:                   filepath.Join(pr.StateDir, f.ID),
+		RunDir:                     ActiveRunDir(pr.StateDir, f),
 		PhaseType:                  phaseType,
 		RoadmapPath:                roadmapPath,
 		DesignArtifactPath:         f.DesignArtifactPath(),
@@ -720,7 +721,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 }
 
 // RunFeatureCycleFinalReview spawns the unified feature-level Final Review
-// loop for a post-publish cycle. Cwd at the feature state dir; --add-dir for every
+// loop for a post-publish cycle. Cwd at the active run dir; --add-dir for every
 // Feature.Repos worktree. The reviewer reads the cumulative diff across
 // all repos. Unlike the engine FR, the post-cycle FR does NOT atomic-stamp
 // per-repo state on completion — the surrounding cycle owns the post-FR
@@ -985,13 +986,14 @@ func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 // for unified phases (Inquire, Research, Design, Plan).
 //
 // With worktrees: workDir = worktree parent, additionalDirs includes
-// each repo's worktree path plus stateDir.
+// each repo's worktree path plus the active run directory.
 // Without worktrees: workDir = repos[0].Path, additionalDirs includes
-// each other repo's path plus stateDir.
-// No repos: workDir = stateDir, additionalDirs = [stateDir].
+// each other repo's path plus the active run directory.
+// No repos: workDir = active run dir, additionalDirs = [active run dir].
 func resolveUnifiedWorkDir(f *feature.Feature, stateDir string) (workDir string, additionalDirs []string) {
+	activeRunDir := ActiveRunDir(stateDir, f)
 	if len(f.Repos) == 0 {
-		return stateDir, []string{stateDir}
+		return activeRunDir, []string{activeRunDir}
 	}
 	allWorktrees := true
 	for _, r := range f.Repos {
@@ -1002,14 +1004,14 @@ func resolveUnifiedWorkDir(f *feature.Feature, stateDir string) (workDir string,
 	}
 	if allWorktrees {
 		workDir = filepath.Dir(f.Repos[0].WorktreePath)
-		additionalDirs = []string{stateDir}
+		additionalDirs = []string{activeRunDir}
 		for _, r := range f.Repos {
 			additionalDirs = append(additionalDirs, r.WorktreePath)
 		}
 		return workDir, additionalDirs
 	}
 	workDir = f.Repos[0].Path
-	additionalDirs = []string{stateDir}
+	additionalDirs = []string{activeRunDir}
 	for _, r := range f.Repos[1:] {
 		additionalDirs = append(additionalDirs, r.Path)
 	}
@@ -1025,8 +1027,9 @@ type BuildSessionOpts struct {
 	DisallowedTools []string
 	AdditionalDirs  []string
 	// WritableRoots overrides the provider write surface. Nil preserves the
-	// default StateDir + AdditionalDirs behavior, except that read-only context
-	// mounts are not passed as command-level writable roots.
+	// default WorkDir + AdditionalDirs behavior, except that read-only context
+	// mounts are not passed as command-level writable roots. The orchestrator's
+	// global state root is never granted implicitly.
 	WritableRoots []string
 	PIDDir        string
 	PermHandler   ports.PermissionHandler
@@ -1116,6 +1119,26 @@ func subtractRoots(roots, remove []string) []string {
 	return out
 }
 
+func appendUniqueRoots(roots []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(roots)+len(additions))
+	for _, root := range roots {
+		if root != "" {
+			seen[root] = struct{}{}
+		}
+	}
+	for _, root := range additions {
+		if root == "" {
+			continue
+		}
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
+	}
+	return roots
+}
+
 // BuildSession creates CLI command args, env vars, and session opts by
 // routing through the provider registry. This is the primary entry point
 // for all session creation (research, KB, implementation, review, planning).
@@ -1165,17 +1188,16 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 
 	writableRoots := append([]string(nil), opts.WritableRoots...)
 	if opts.WritableRoots == nil {
-		writableRoots = []string{pr.StateDir}
-		writableRoots = append(writableRoots, opts.AdditionalDirs...)
+		writableRoots = appendUniqueRoots(nil, opts.AdditionalDirs...)
+		writableRoots = appendUniqueRoots(writableRoots, opts.WorkDir)
 	}
 
 	// Read roots are everything a provider may read without per-call mediation:
-	// the feature state, the working directory, and every additional mounted dir
-	// (skills, guidelines, worktrees, knowledge base, images, attachments).
-	readRoots := append([]string{pr.StateDir}, opts.AdditionalDirs...)
-	if opts.WorkDir != "" {
-		readRoots = append(readRoots, opts.WorkDir)
-	}
+	// the working directory and every additional mounted dir (active-run state,
+	// skills, guidelines, worktrees, knowledge base, images, attachments). The
+	// global state root is provider bookkeeping, not agent context.
+	readRoots := appendUniqueRoots(nil, opts.AdditionalDirs...)
+	readRoots = appendUniqueRoots(readRoots, opts.WorkDir)
 
 	// Command-level writable roots omit read-only context mounts unless the
 	// caller supplied an explicit writable-root list.

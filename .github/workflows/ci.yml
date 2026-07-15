@@ -22,5 +22,86 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: OpenAPI drift (generated Go server code)
+        run: go run ./tools/openapi-generate --check
+
       - name: go test
         run: go test ./... -short -count=1
+
+  # Native package gate per platform: strict checks (typecheck, lint, format,
+  # OpenAPI->TypeScript drift), unit/component/security suites, production
+  # build, then construct and inspect the unsigned package for this host
+  # (universal DMG on macOS; x64 AppImage + deb on ubuntu-latest). Linux
+  # arm64 packages are configured (AGENTICO_PACKAGE_ARCH=arm64) but have no
+  # native runner in this matrix yet.
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so `git describe --tags` produces the real server
+          # version bound into build-identity.json.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check (typecheck, lint, format, API drift)
+        run: npm run check
+
+      - name: Unit and component tests
+        run: npm test
+
+      - name: Security tests
+        run: npm run test:security
+
+      - name: Build
+        run: npm run build
+
+      - name: Package and verify (native target)
+        run: npm run package:verify
+
+      # Packaged E2E journeys land in Task 6b as `npm run test:e2e:packaged`.
+      # Run them when present; until then surface a visible warning instead
+      # of a silent pass so the gap cannot be forgotten. Once 6b adds the
+      # script, this step becomes a hard gate automatically.
+      - name: Packaged E2E smoke (Task 6b gate)
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.['test:e2e:packaged'] ? 0 : 1)"; then
+            npm run test:e2e:packaged
+          else
+            echo "::warning::npm run test:e2e:packaged is not defined yet (Phase 1 Task 6b); packaged smoke was skipped."
+          fi
+
+      - name: Preserve packaging evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}-failure-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            desktop/dist/**/*.dmg
+            desktop/dist/**/*.AppImage
+            desktop/dist/**/*.deb
+            desktop/dist/**/*.yml
+            desktop/dist/**/*.yaml
+            desktop/dist/package-verification.json
+            desktop/dist/builder-debug.yml
+            desktop/resources/build-identity.json
+            desktop/test-results/

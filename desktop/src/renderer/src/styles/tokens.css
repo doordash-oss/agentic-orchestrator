@@ -1,34 +1,46 @@
 /*
- * Precision-instrument visual tokens.
- * Amber is the needle: reserved for the single active/attention element.
+ * Precision-instrument visual tokens (approved design system).
+ * Quiet mineral surfaces; the signal color is reserved for state and
+ * intervention; amber is the needle, reserved for attention. Light and
+ * dark are distinct token sets, not mechanical inversions.
  */
 :root,
 :root[data-theme='dark'] {
-  --color-bg: #16181d;
-  --color-panel: #1e2127;
-  --color-hairline: #2a2e36;
-  --color-text: #e8eaed;
-  --color-muted: #9aa0ab;
-  --color-accent: #e8a33d;
-  --color-success: #5db87a;
-  --color-danger: #d96a6a;
+  /* Dark set: Basalt / Chalk / Zinc / Rail Dark / Ion Signal / Amber Light */
+  --color-bg: #101514; /* Basalt */
+  --color-panel: #161c1b; /* mineral card, slightly lifted over Basalt */
+  --color-hairline: #2b3532; /* Rail Dark */
+  --color-text: #e8eeec; /* Chalk */
+  --color-muted: #93a09c; /* Zinc */
+  --color-signal: #88a4ff; /* Ion Signal: state + intervention */
+  --color-accent: #f0b15a; /* Amber Light: attention */
+  --color-success: #5fbe8e;
+  --color-danger: #f08a7e;
 }
 
 :root[data-theme='light'] {
-  --color-bg: #f5f6f7;
-  --color-panel: #ffffff;
-  --color-hairline: #dde0e5;
-  --color-text: #1a1d23;
-  --color-muted: #5c6470;
-  --color-accent: #a66a12;
-  --color-success: #2e7d4f;
-  --color-danger: #b34747;
+  /* Light set: Porcelain / Graphite / Slate / Rail / Cobalt / Amber Signal */
+  --color-bg: #f3f6f5; /* Porcelain */
+  --color-panel: #ffffff; /* near-white mineral card over Porcelain */
+  --color-hairline: #c9d2cf; /* Rail */
+  --color-text: #18201f; /* Graphite */
+  --color-muted: #66716e; /* Slate */
+  --color-signal: #315cf5; /* Cobalt Signal: state + intervention */
+  --color-accent: #c57818; /* Amber Signal: attention */
+  --color-success: #1e7a4a;
+  --color-danger: #b0433c;
 }
 
 :root {
-  --font-display: 'Space Grotesk', 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
-  --font-body: 'IBM Plex Sans', -apple-system, 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', 'SF Mono', 'Menlo', 'DejaVu Sans Mono', 'Consolas', monospace;
+  /* Display: phase labels and high-level instrument headings. */
+  --font-display:
+    'Barlow Condensed', 'Avenir Next Condensed', 'Arial Narrow', 'Helvetica Neue', system-ui,
+    sans-serif;
+  /* Body: controls and reading text. */
+  --font-body:
+    'Atkinson Hyperlegible', -apple-system, 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+  /* Utility: identifiers, logs, diffs, timing, telemetry. */
+  --font-mono: 'IBM Plex Mono', 'SF Mono', 'Menlo', 'Consolas', 'DejaVu Sans Mono', monospace;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -38,5 +50,5 @@
   --space-6: 32px;
 
   --radius: 6px;
-  --focus-ring: 2px solid var(--color-accent);
+  --focus-ring: 2px solid var(--color-signal);
 }

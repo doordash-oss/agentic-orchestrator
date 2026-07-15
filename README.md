@@ -115,7 +115,7 @@ When creating a feature, choose a pipeline depth:
 |---------|--------|----------|
 | **Medium** | Roadmap plan → per-phase plan/implement loop → Final Review → Publish | Small, well-understood changes where you already know the approach |
 | **Large** | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features (default) |
-| **Moonshot** | Same phase sequence as Large, with max effort and per-iteration implementation review | High-risk or highly ambiguous changes |
+| **Moonshot** | Same phase sequence as Large, with high effort and per-iteration implementation review | High-risk or highly ambiguous changes |
 
 ### Worktree Isolation
 

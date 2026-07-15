@@ -1338,6 +1338,39 @@ const maxAutoResumeAttempts = 3
 // the completion protocol so a genuinely-finished agent can exit cleanly.
 const autoResumeMessage = "Continue where you left off. If you have already finished the task, write the phase_complete marker file now."
 
+// backgroundTaskPollInterval is how often the waiter re-checks a session that
+// ended its turn while background subagents were still running. Declared as
+// var (not const) so tests can override it.
+var backgroundTaskPollInterval = 2 * time.Second
+
+// backgroundTaskQuietGrace is how long a session whose background tasks have
+// all finished may stay quiet (no stdout) before the waiter concludes the CLI
+// did not re-invoke the agent on its own and sends the auto-resume
+// continuation.
+var backgroundTaskQuietGrace = 15 * time.Second
+
+// backgroundTaskStallTimeout bounds how long the waiter defers to
+// still-"live" background tasks with zero stdout activity. Running subagents
+// emit periodic task_progress lines, so a totally silent stream this long
+// means the CLI wedged; give up instead of waiting forever.
+var backgroundTaskStallTimeout = 10 * time.Minute
+
+// liveBackgroundTaskCounter is the optional session capability that reports
+// running background subagents. Provider sessions that do not track them
+// (or test doubles that predate the capability) simply never defer.
+type liveBackgroundTaskCounter interface {
+	LiveBackgroundTaskCount() int
+}
+
+// liveBackgroundTasks returns the session's running background-subagent
+// count, or 0 when the session does not expose the capability.
+func liveBackgroundTasks(sess ports.SessionView) int {
+	if c, ok := sess.(liveBackgroundTaskCounter); ok {
+		return c.LiveBackgroundTaskCount()
+	}
+	return 0
+}
+
 // maxFinishOrViolateNudges caps how many times a session that ended its turn
 // without writing the required completion artifacts is nudged to finish on the
 // same live session before the turn is counted as a protocol violation.
@@ -1541,6 +1574,12 @@ func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot) *Cont
 //     maxAutoResumeAttempts consecutive times. This covers the common case
 //     where the claude CLI ends an invocation while the agent is still
 //     working, without the agent having asked anything.
+//   - TermAwaitingBackgroundTasks (turn ended while background subagents
+//     were still running) defers without sending anything: the CLI
+//     re-invokes the agent when its tasks complete. If the tasks finish and
+//     no re-invocation arrives, the waiter falls back to the auto-resume
+//     continuation; a fully wedged stream is bounded by
+//     backgroundTaskStallTimeout.
 //   - Anything else (EndedAfterText, Refused, Errored), or an exhausted
 //     truncation retry budget, returns MISSING_PHASE_COMPLETE so the caller
 //     can count the turn as a protocol violation.
@@ -1603,6 +1642,14 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 		ThresholdPct: defaultContextHandoffThresholdPct,
 	}
 
+	// awaitingBackgroundTasks is set when the agent ended its turn while its
+	// background subagents were still running. The waiter then defers: the CLI
+	// re-invokes the agent when the tasks complete, so no nudge is sent and no
+	// budget is consumed. The bgTicker below provides the fallback paths.
+	awaitingBackgroundTasks := false
+	bgTicker := time.NewTicker(backgroundTaskPollInterval)
+	defer bgTicker.Stop()
+
 	handleStatus := func(status string, sessionDone bool) (string, bool) {
 		if status == agentStatusAPIError {
 			if sessionDone {
@@ -1619,8 +1666,21 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 				Result:                 sess.Cost(),
 				PhaseCompleteExists:    false, // isReady just returned false
 				AskUserQuestionPending: sess.HasPendingAskUserQuestion(),
+				// A dead process cannot deliver task notifications; never
+				// defer to a stale task set.
+				BackgroundTasksRunning: !sessionDone && liveBackgroundTasks(sess) > 0,
 			}
 			class := llm.ClassifyTermination(inputs)
+
+			// The agent yielded while its background subagents are still
+			// running. Keep the session alive and wait: the CLI re-invokes
+			// the agent when the tasks complete. The bgTicker case handles
+			// the CLI failing to do so.
+			if class == llm.TermAwaitingBackgroundTasks {
+				awaitingBackgroundTasks = true
+				return "", false
+			}
+			awaitingBackgroundTasks = false
 
 			if class == llm.TermTurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
 				autoResumeAttempts++
@@ -1677,6 +1737,38 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 				}
 			}
 			// On send error, leave handoffSent=false so a later tick retries.
+
+		case <-bgTicker.C:
+			if !awaitingBackgroundTasks {
+				continue
+			}
+			quiet := time.Since(sess.LastStdoutAt())
+			if liveBackgroundTasks(sess) > 0 {
+				// Running subagents emit periodic task_progress lines; a
+				// stream this quiet means the CLI wedged. Give up rather
+				// than wait forever.
+				if quiet >= backgroundTaskStallTimeout {
+					_ = sess.Stop()
+					return waitForStatusResult{Status: agentStatusMissingMarker, Handoff: handoff}
+				}
+				continue
+			}
+			// All tasks finished but no new result arrived: the CLI did not
+			// re-invoke the agent on its own. Resume it explicitly, reusing
+			// the truncation budget so a session that keeps yielding without
+			// finishing still converges to a violation.
+			if quiet < backgroundTaskQuietGrace {
+				continue
+			}
+			awaitingBackgroundTasks = false
+			if autoResumeAttempts < maxAutoResumeAttempts {
+				autoResumeAttempts++
+				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
+					continue
+				}
+			}
+			_ = sess.Stop()
+			return waitForStatusResult{Status: agentStatusMissingMarker, Handoff: handoff}
 
 		case <-doneCh:
 			// Session exited — drain StatusCh for any pending status

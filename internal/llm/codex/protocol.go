@@ -83,6 +83,7 @@ type Protocol struct {
 	inputTokens        int
 	cachedInputTokens  int
 	outputTokens       int
+	totalCostUSD       float64
 	modelContextWindow int
 	deltaBuf           map[string]string
 	questionIDs        map[string]string
@@ -781,10 +782,10 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		switch completed.Turn.Status {
 		case "completed":
 			p.mu.Lock()
-			model := p.model
 			inTok := p.inputTokens
 			cachedInTok := p.cachedInputTokens
 			outTok := p.outputTokens
+			costUSD := p.totalCostUSD
 			hadToolUse := p.turnHadToolUse
 			lastText := p.lastAssistantText
 			if lastText == "" {
@@ -849,7 +850,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.formatRetryCount = 0
 			p.mu.Unlock()
 
-			costUSD := computeCost(model, inTok, cachedInTok, outTok)
 			msg := llm.SDKMessage{
 				Type:    "result",
 				Subtype: "success",
@@ -870,13 +870,12 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 		case "failed":
 			p.mu.Lock()
-			model := p.model
 			inTok := p.inputTokens
 			cachedInTok := p.cachedInputTokens
 			outTok := p.outputTokens
+			costUSD := p.totalCostUSD
 			p.mu.Unlock()
 
-			costUSD := computeCost(model, inTok, cachedInTok, outTok)
 			errMsg := fmt.Sprintf("codex turn failed: %s", completed.Turn.ID)
 			if completed.Turn.Error != nil {
 				errMsg = completed.Turn.Error.Message
@@ -914,13 +913,12 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 		case "interrupted":
 			p.mu.Lock()
-			model := p.model
 			inTok := p.inputTokens
 			cachedInTok := p.cachedInputTokens
 			outTok := p.outputTokens
+			costUSD := p.totalCostUSD
 			p.mu.Unlock()
 
-			costUSD := computeCost(model, inTok, cachedInTok, outTok)
 			msg := llm.SDKMessage{
 				Type:    "result",
 				Subtype: "error",
@@ -954,6 +952,21 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		// Total = lifetime cumulative (for cost calculation on turn completion).
 		// Last = current context fill (resets on compaction; use for context %).
 		p.mu.Lock()
+		inputDelta := usage.TokenUsage.Total.InputTokens - p.inputTokens
+		cachedInputDelta := usage.TokenUsage.Total.CachedInputTokens - p.cachedInputTokens
+		outputDelta := usage.TokenUsage.Total.OutputTokens - p.outputTokens
+		if inputDelta >= 0 && cachedInputDelta >= 0 && outputDelta >= 0 {
+			// The app-server protocol does not expose cache-write token counts,
+			// so cache writes remain zero until that telemetry becomes available.
+			p.totalCostUSD += computeCostForContext(
+				p.model,
+				inputDelta,
+				cachedInputDelta,
+				0,
+				outputDelta,
+				usage.TokenUsage.Last.InputTokens,
+			)
+		}
 		p.inputTokens = usage.TokenUsage.Total.InputTokens
 		p.cachedInputTokens = usage.TokenUsage.Total.CachedInputTokens
 		p.outputTokens = usage.TokenUsage.Total.OutputTokens
@@ -1659,19 +1672,41 @@ func (p *Protocol) SystemPromptForTest() string {
 	return p.opts.SystemPrompt
 }
 
-func computeCost(model string, inputTokens, cachedInputTokens, outputTokens int) float64 {
+func computeCost(model string, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens int) float64 {
+	return computeCostForContext(model, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, inputTokens)
+}
+
+func computeCostForContext(model string, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, contextInputTokens int) float64 {
 	r, ok := lookupRate(model)
 	if !ok {
 		return 0
 	}
-	if cachedInputTokens < 0 {
-		cachedInputTokens = 0
-	}
+	inputTokens = max(inputTokens, 0)
+	cachedInputTokens = max(cachedInputTokens, 0)
+	cacheWriteTokens = max(cacheWriteTokens, 0)
+	outputTokens = max(outputTokens, 0)
 	if cachedInputTokens > inputTokens {
 		cachedInputTokens = inputTokens
 	}
-	uncachedInputTokens := inputTokens - cachedInputTokens
-	return (float64(uncachedInputTokens)/1_000_000)*r.inputPerMToken +
-		(float64(cachedInputTokens)/1_000_000)*r.cachedInputPerMToken +
-		(float64(outputTokens)/1_000_000)*r.outputPerMToken
+	inputRate := r.inputPerMToken
+	cachedInputRate := r.cachedInputPerMToken
+	cacheWriteRate := r.cacheWritePerMToken
+	outputRate := r.outputPerMToken
+	if contextInputTokens > longContextInputThreshold && r.longInputPerMToken > 0 {
+		inputRate = r.longInputPerMToken
+		cachedInputRate = r.longCachedInputPerMToken
+		cacheWriteRate = r.longCacheWritePerMToken
+		outputRate = r.longOutputPerMToken
+	}
+	if cacheWriteRate == 0 {
+		cacheWriteTokens = 0
+	} else if cacheWriteTokens > inputTokens-cachedInputTokens {
+		cacheWriteTokens = inputTokens - cachedInputTokens
+	}
+	uncachedInputTokens := inputTokens - cachedInputTokens - cacheWriteTokens
+
+	return (float64(uncachedInputTokens)/1_000_000)*inputRate +
+		(float64(cachedInputTokens)/1_000_000)*cachedInputRate +
+		(float64(cacheWriteTokens)/1_000_000)*cacheWriteRate +
+		(float64(outputTokens)/1_000_000)*outputRate
 }

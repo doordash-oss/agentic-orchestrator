@@ -153,7 +153,7 @@ Self-check before sending every question. If any answer is "no" and the free-for
 }
 
 func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
-	return computeCost(model, int(inputTokens), 0, int(outputTokens))
+	return computeCost(model, int(inputTokens), 0, 0, int(outputTokens))
 }
 
 func (p *Provider) ContextWindowForModel(model string) int {

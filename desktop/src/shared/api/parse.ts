@@ -88,6 +88,23 @@ export const OwnerSchema = z.object({
   version: z.string().optional(),
 });
 
+export const BuildIdentitySchema = z.object({
+  version: z.string(),
+  revision: z.string().optional(),
+});
+
+export type BuildIdentity = z.output<typeof BuildIdentitySchema>;
+
+export const CompatibilityDeclarationSchema = z.object({
+  api_version: z.string(),
+  schema_version: z.number().int(),
+  min_client_schema: z.number().int(),
+  runtime_policy: z.string(),
+  server_build: BuildIdentitySchema,
+});
+
+export type CompatibilityDeclaration = z.output<typeof CompatibilityDeclarationSchema>;
+
 export const HealthResponseSchema = z.object({
   api_version: z.string(),
   status: z.string(),
@@ -96,6 +113,7 @@ export const HealthResponseSchema = z.object({
   started_at: z.string(),
   owner: OwnerSchema,
   server_time: z.string(),
+  compatibility: CompatibilityDeclarationSchema,
 });
 
 export type HealthResponse = z.output<typeof HealthResponseSchema>;
@@ -105,3 +123,6 @@ export type HealthResponse = z.output<typeof HealthResponseSchema>;
 type HealthDTO = components['schemas']['HealthResponse'];
 const _healthAssignable = (value: HealthResponse): HealthDTO => value;
 void _healthAssignable;
+type CompatibilityDTO = components['schemas']['CompatibilityDeclaration'];
+const _compatibilityAssignable = (value: CompatibilityDeclaration): CompatibilityDTO => value;
+void _compatibilityAssignable;

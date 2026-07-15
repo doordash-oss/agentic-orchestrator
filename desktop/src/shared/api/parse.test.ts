@@ -12,6 +12,13 @@ const healthFixture = {
   started_at: '2026-07-14T00:00:00Z',
   owner: { pid: 123, started_at: '2026-07-14T00:00:00Z' },
   server_time: '2026-07-14T00:00:01Z',
+  compatibility: {
+    api_version: 'v1',
+    schema_version: 1,
+    min_client_schema: 1,
+    runtime_policy: 'loopback-bearer-v1',
+    server_build: { version: 'v0.9.0' },
+  },
 };
 
 function failure(fn: () => unknown): { code: string; message: string; remediation?: string } {

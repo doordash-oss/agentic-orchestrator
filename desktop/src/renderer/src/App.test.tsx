@@ -99,7 +99,7 @@ describe('App readiness gating', () => {
       readiness: readySnapshot(),
     });
     render(<App />);
-    await waitFor(() => expect(screen.getByText(/1 repository available/i)).toBeInTheDocument());
+    expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
   });
 

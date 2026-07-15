@@ -887,3 +887,347 @@ body {
   opacity: 0.6;
   cursor: default;
 }
+
+/* --- Workspace tabs ---------------------------------------------------------- */
+
+.workspace {
+  width: min(720px, 100%);
+}
+
+.tab-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--color-hairline);
+  padding-bottom: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.tab-strip__entry {
+  display: inline-flex;
+  align-items: center;
+}
+
+.tab-strip__tab {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius) var(--radius) 0 0;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-strip__tab[aria-selected='true'] {
+  color: var(--color-text);
+  border-color: var(--color-hairline);
+  border-bottom-color: var(--color-panel);
+  margin-bottom: -1px;
+}
+
+.tab-strip__close {
+  background: transparent;
+  border: 0;
+  color: var(--color-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: var(--space-1);
+  border-radius: var(--radius);
+}
+
+.tab-strip__close:hover {
+  color: var(--color-danger);
+}
+
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* --- Feature list (Home) ------------------------------------------------------- */
+
+.feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: 1px solid var(--color-hairline);
+  padding-top: var(--space-4);
+}
+
+.feature-list__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.feature-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+
+.feature-list__facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.feature-list__name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.feature-list__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+/* --- Feature cockpit ------------------------------------------------------------ */
+
+.cockpit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cockpit__loading {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.cockpit__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.cockpit__identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cockpit__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+}
+
+.cockpit__facts {
+  margin: 0;
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.cockpit__fact dt {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.cockpit__fact dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.cockpit__stale {
+  margin: 0;
+  color: var(--color-accent);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.cockpit__ready {
+  margin: 0;
+  align-self: flex-start;
+  color: var(--color-success);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+
+.cockpit__announcement {
+  margin: 0;
+  min-height: 1.2em;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.cockpit__setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.cockpit__progress {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  counter-reset: task;
+}
+
+.task-row {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.task-row[data-status='failed'] {
+  border-color: var(--color-danger);
+}
+
+.task-row__state {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.task-row__state[data-status='done'] {
+  color: var(--color-success);
+}
+
+.task-row__state[data-status='running'] {
+  color: var(--color-accent);
+}
+
+.task-row__state[data-status='failed'] {
+  color: var(--color-danger);
+}
+
+.task-row__label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.task-row__meta {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.task-row__meta code {
+  font-family: var(--font-mono);
+  color: var(--color-muted);
+}
+
+.task-row__error {
+  color: var(--color-danger);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.task-row__diagnostics-detail {
+  margin: var(--space-2) 0 0;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.cockpit__actions {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--color-hairline);
+  padding-top: var(--space-4);
+}
+
+.cockpit__action {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.cockpit__action-reason {
+  color: var(--color-muted);
+  font-size: 11px;
+  max-width: 260px;
+}
+
+.cockpit__start {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+}
+
+.cockpit__start:disabled {
+  color: var(--color-muted);
+  background: transparent;
+  border-color: var(--color-hairline);
+  cursor: default;
+}
+
+.cockpit__missing {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.cockpit__missing-message {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* Narrow layouts: stack the cockpit header and tab strip vertically. */
+@media (max-width: 480px) {
+  .cockpit__facts {
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .feature-list__item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

@@ -40,9 +40,8 @@ describe('ReadinessGate first snapshot', () => {
   it('sends an already-ready runtime straight to the main view without the wizard', async () => {
     installAgenticoMock({ readiness: readySnapshot() });
     render(<ReadinessGate />);
-    await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent(/1 repository available/i),
-    );
+    expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
+    expect(await screen.findByRole('form', { name: /create a feature/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
   });
 
@@ -89,9 +88,7 @@ describe('ReadinessGate gating', () => {
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /initialize repository/i }));
 
-    await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent(/1 repository available/i),
-    );
+    expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
     expect(mock.api.initRepository).toHaveBeenCalledWith({
       path: '/work/space/new-repo',
       consent: true,

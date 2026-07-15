@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { ReadinessSnapshot } from '../../../shared/ipc';
+import { WorkspaceShell } from '../features/WorkspaceShell';
 import { deriveWizardState } from '../wizard/deriveWizardState';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { SetupWizard } from './wizard/SetupWizard';
@@ -62,7 +63,7 @@ export function ReadinessGate() {
 
   const derived = deriveWizardState(state.snapshot);
   if (derived.complete) {
-    return <WorkspaceHome snapshot={state.snapshot} />;
+    return <WorkspaceShell />;
   }
 
   return (
@@ -70,37 +71,5 @@ export function ReadinessGate() {
       snapshot={state.snapshot}
       onSnapshot={(snapshot) => setState({ phase: 'loaded', snapshot })}
     />
-  );
-}
-
-interface WorkspaceHomeProps {
-  snapshot: ReadinessSnapshot;
-}
-
-function WorkspaceHome({ snapshot }: WorkspaceHomeProps) {
-  // STUB(Phase 1 Task 5): creation flow — this readiness-gated main view
-  // gains the feature dashboard and the new-feature wizard in Task 5.
-  const repositories = snapshot.repositories.filter((repository) => repository.valid);
-  return (
-    <section className="shell-card setup-home" aria-label="Workspace">
-      <header className="shell-card__identity">
-        <h1 className="shell-card__title">Agentico</h1>
-        <span className="shell-card__version">runtime ready</span>
-      </header>
-      <p className="shell-card__status" role="status" aria-live="polite">
-        <span className="shell-card__status-icon" aria-hidden="true">
-          ●
-        </span>
-        <span className="shell-card__status-label" data-status="ready">
-          Ready
-        </span>
-        <span className="shell-card__status-detail">
-          {repositories.length === 1
-            ? '1 repository available.'
-            : `${repositories.length} repositories available.`}{' '}
-          Feature creation arrives in the next milestone.
-        </span>
-      </p>
-    </section>
   );
 }

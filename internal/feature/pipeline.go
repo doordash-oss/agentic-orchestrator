@@ -115,15 +115,15 @@ func (p PipelineProfile) NextPhase(current Phase) (Phase, bool) {
 }
 
 // EffortLevel returns the provider-agnostic effort level for this pipeline profile.
-// Medium → Medium, Large → High, Moonshot → Max.
+// Medium → Medium; Large and Moonshot → High.
 func (p PipelineProfile) EffortLevel() llm.EffortLevel {
 	switch p {
 	case PipelineMedium:
 		return llm.EffortMedium
-	case PipelineLarge:
+	case PipelineLarge, PipelineMoonshot:
 		return llm.EffortHigh
-	default: // PipelineMoonshot
-		return llm.EffortMax
+	default:
+		return llm.EffortHigh
 	}
 }
 

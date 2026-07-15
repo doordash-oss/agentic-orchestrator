@@ -427,7 +427,7 @@ func TestPipelineEffortLevel(t *testing.T) {
 	}{
 		{PipelineMedium, "medium"},
 		{PipelineLarge, "high"},
-		{PipelineMoonshot, "max"},
+		{PipelineMoonshot, "high"},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.profile), func(t *testing.T) {

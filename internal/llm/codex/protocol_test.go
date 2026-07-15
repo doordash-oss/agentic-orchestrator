@@ -839,7 +839,7 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	if msg.Result == nil {
 		t.Fatal("Result = nil")
 	}
-	const want = 6.20 // 600K full input at $5/M + 400K cached at $0.50/M + 100K output at $30/M
+	const want = 10.90 // Long context: 600K at $10/M + 400K cached at $1/M + 100K output at $45/M
 	if diff := msg.Result.TotalCostUSD - want; diff < -0.001 || diff > 0.001 {
 		t.Fatalf("TotalCostUSD = %.6f, want %.2f", msg.Result.TotalCostUSD, want)
 	}
@@ -848,6 +848,57 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	}
 	if msg.Result.Usage.CacheReadInputTokens != 400_000 {
 		t.Fatalf("Result.Usage.CacheReadInputTokens = %d, want 400000", msg.Result.Usage.CacheReadInputTokens)
+	}
+}
+
+func TestTurnCompletedAccumulatesShortAndLongContextRates(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "gpt-5.6-luna"})
+
+	updates := []map[string]interface{}{
+		{
+			"total": map[string]interface{}{
+				"inputTokens": 200_000, "cachedInputTokens": 20_000,
+				"outputTokens": 10_000, "totalTokens": 210_000,
+			},
+			"last": map[string]interface{}{
+				"inputTokens": 200_000, "cachedInputTokens": 20_000,
+				"outputTokens": 10_000, "totalTokens": 210_000,
+			},
+		},
+		{
+			"total": map[string]interface{}{
+				"inputTokens": 300_000, "cachedInputTokens": 30_000,
+				"outputTokens": 20_000, "totalTokens": 320_000,
+			},
+			"last": map[string]interface{}{
+				"inputTokens": 300_000, "cachedInputTokens": 30_000,
+				"outputTokens": 20_000, "totalTokens": 320_000,
+			},
+		},
+	}
+	for _, tokenUsage := range updates {
+		params, err := json.Marshal(map[string]interface{}{
+			"threadId":   "thread-1",
+			"turnId":     "turn-1",
+			"tokenUsage": tokenUsage,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := p.parseNotification("thread/tokenUsage/updated", params); !ok {
+			t.Fatal("token usage notification ok = false, want true")
+		}
+	}
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok || msg.Result == nil {
+		t.Fatal("turn completed did not return a result")
+	}
+	// First update uses short-context rates ($0.242); the 100K/10K/10K
+	// deltas in the second update use long-context rates ($0.272).
+	const want = 0.514
+	if diff := msg.Result.TotalCostUSD - want; diff < -0.001 || diff > 0.001 {
+		t.Fatalf("TotalCostUSD = %.6f, want %.3f", msg.Result.TotalCostUSD, want)
 	}
 }
 

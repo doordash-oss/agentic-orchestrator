@@ -240,6 +240,14 @@ type Session struct {
 	// hang.
 	keepAliveOnTruncatedResult bool
 
+	// liveBackgroundTasks tracks background subagents (Task tool) that have
+	// started but not yet emitted their terminal task_notification. A
+	// loop-managed session with live entries stays up after an end_turn
+	// Result: the agent yielded to wait for its tasks, and the CLI will
+	// re-invoke it when they complete. Keyed by task_id (tool_use_id
+	// fallback). Guarded by mu.
+	liveBackgroundTasks map[string]struct{}
+
 	// askUserAutoPick optionally answers confidence-qualified AskUserQuestion
 	// bundles before they enter pending TUI routing.
 	askUserAutoPick *ports.AskUserAutoPickConfig
@@ -1045,6 +1053,11 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				}
 			}
 
+			// Track subagent (Task tool) lifecycle so shouldShutdownOnResult
+			// and the loop waiter can tell an agent that yielded for running
+			// background tasks apart from one that deliberately stopped.
+			s.observeBackgroundTasks(msg)
+
 			// Notify subagent (Task tool) lifecycle callback. These messages
 			// are the main signal that a Task() call is still alive while the
 			// main agent is blocked waiting for it to return, so we surface
@@ -1777,6 +1790,53 @@ func (s *Session) Wait() {
 	<-s.done
 }
 
+// observeBackgroundTasks maintains liveBackgroundTasks from subagent (Task
+// tool) lifecycle messages. task_started and task_progress mark a task live
+// (progress covers tasks whose start predates this session's stream);
+// task_notification is the terminal event and removes it.
+func (s *Session) observeBackgroundTasks(msg llm.SDKMessage) {
+	key := ""
+	live := false
+	switch {
+	case msg.TaskStarted != nil:
+		key, live = backgroundTaskKey(msg.TaskStarted.TaskID, msg.TaskStarted.ToolUseID), true
+	case msg.TaskProgress != nil:
+		key, live = backgroundTaskKey(msg.TaskProgress.TaskID, msg.TaskProgress.ToolUseID), true
+	case msg.TaskNotification != nil:
+		key = backgroundTaskKey(msg.TaskNotification.TaskID, msg.TaskNotification.ToolUseID)
+	default:
+		return
+	}
+	if key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if live {
+		if s.liveBackgroundTasks == nil {
+			s.liveBackgroundTasks = make(map[string]struct{})
+		}
+		s.liveBackgroundTasks[key] = struct{}{}
+		return
+	}
+	delete(s.liveBackgroundTasks, key)
+}
+
+func backgroundTaskKey(taskID, toolUseID string) string {
+	if taskID != "" {
+		return taskID
+	}
+	return toolUseID
+}
+
+// LiveBackgroundTaskCount returns the number of background subagents that
+// have started but not yet reached their terminal task_notification.
+func (s *Session) LiveBackgroundTaskCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.liveBackgroundTasks)
+}
+
 // shouldShutdownOnResult reports whether this session's underlying CLI should
 // be torn down after a Result message. Single-shot autonomous sessions need
 // wrapper cleanup (stdin close + SIGTERM/SIGKILL watchdog) to unstick a
@@ -1791,11 +1851,18 @@ func (s *Session) shouldShutdownOnResult(result *llm.ResultMessage) bool {
 	name := s.providerName
 	turnMode := s.turnMode
 	keepAliveOnTruncatedResult := s.keepAliveOnTruncatedResult
+	liveBackgroundTasks := len(s.liveBackgroundTasks)
 	s.mu.Unlock()
 	if turnMode == ports.TurnModeInteractive {
 		return false
 	}
 	if keepAliveOnTruncatedResult && result.IsTurnTruncated() {
+		return false
+	}
+	// An end_turn with background subagents still running is the agent
+	// yielding until their notifications arrive — the CLI re-invokes it when
+	// they complete, so the process must stay up for the loop waiter.
+	if keepAliveOnTruncatedResult && liveBackgroundTasks > 0 {
 		return false
 	}
 	return name != "codex"

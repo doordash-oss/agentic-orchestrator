@@ -68,7 +68,7 @@ Choose a **pipeline profile** that controls how many phases your feature runs th
 |---------|--------|--------|
 | **Medium** | Plan → Implement → Review → Publish | Medium |
 | **Large** | KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish | High |
-| **Moonshot** | Same as Large, with maximum rigor | Max |
+| **Moonshot** | Same as Large, with maximum rigor | High |
 
 ### Step 4 — Review
 

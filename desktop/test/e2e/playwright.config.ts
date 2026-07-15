@@ -1,5 +1,5 @@
 /**
- * Packaged E2E journeys (Phase 1 Task 6b): Playwright drives the REAL
+ * Packaged E2E journeys: Playwright drives the real
  * unsigned package produced by `npm run package:verify` — the unpacked app
  * recorded in dist/package-verification.json — with the real bundled Go
  * server. Provider CLIs are the only stubbed boundary (config

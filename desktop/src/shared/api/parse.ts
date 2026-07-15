@@ -65,7 +65,7 @@ export function validateWithSchema<Schema extends z.ZodType>(
   return result.data;
 }
 
-// --- Runtime schemas for the responses Phase 1 consumes -------------------
+// --- Runtime response schemas ---------------------------------------------
 // Each schema is type-checked below against the generated OpenAPI types so it
 // cannot drift from api/openapi.yaml without failing `npm run check`.
 
@@ -190,8 +190,8 @@ export const RuntimeConfigWorkspaceSchema = z.object({
 export type RuntimeConfigWorkspace = z.output<typeof RuntimeConfigWorkspaceSchema>;
 
 // --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
-// Lenient subsets: z.object tolerates and strips the many fields Phase 1
-// does not consume yet.
+// Lenient subsets: z.object tolerates and strips fields this view does not
+// consume yet.
 
 export const ServerSetupTaskSchema = z.object({
   key: z.string(),

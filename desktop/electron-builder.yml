@@ -1,4 +1,4 @@
-# Unsigned development packaging (Phase 1 Task 6): universal macOS DMG plus
+# Unsigned development packaging: universal macOS DMG plus
 # Linux AppImage/deb. Signing, notarization, publishing, and update delivery
 # are all explicitly out of scope — no publish config may be added here
 # without a release-engineering task.

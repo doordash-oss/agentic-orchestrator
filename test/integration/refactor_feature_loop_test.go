@@ -284,8 +284,7 @@ func TestRefactorFeatureLoop_Integration_3RepoCrossRepoEdit(t *testing.T) {
 		}
 	}
 
-	// Verify the testing-contract.yaml is planned (mixes baseline + plan
-	// rows, repos tagged).
+	// Verify the testing-contract.yaml contains only plan-declared rows.
 	contract, err := agent.ReadTestingContract(filepath.Join(flatDir, "testing-contract.yaml"))
 	if err != nil {
 		t.Fatalf("read contract: %v", err)
@@ -298,14 +297,11 @@ func TestRefactorFeatureLoop_Integration_3RepoCrossRepoEdit(t *testing.T) {
 		gotPerRepoSource[item.Repo][item.Source]++
 	}
 	for _, repo := range []string{"repoA", "repoB"} {
-		if gotPerRepoSource[repo]["baseline"] == 0 {
-			t.Errorf("repo %s missing baseline rows; got %v", repo, gotPerRepoSource[repo])
-		}
 		if gotPerRepoSource[repo]["plan"] == 0 {
 			t.Errorf("repo %s missing plan-source rows (planned mode); got %v", repo, gotPerRepoSource[repo])
 		}
 	}
-	if gotPerRepoSource["repoC"]["plan"] > 0 || gotPerRepoSource["repoC"]["baseline"] > 0 {
+	if gotPerRepoSource["repoC"]["plan"] > 0 {
 		t.Errorf("contract leaked repoC into plan-staged items: %v", gotPerRepoSource["repoC"])
 	}
 

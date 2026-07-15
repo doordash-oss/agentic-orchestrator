@@ -443,7 +443,7 @@ func TestRunRefactorFeatureLoop_FullWorkspaceMounted(t *testing.T) {
 
 // TestRunRefactorFeatureLoop_PlannedTestingContractEmitted verifies the
 // loop persists a *planned* (not plan-less) testing contract whose items
-// include both per-repo baseline rows AND plan-source rows tagged `repo:`.
+// include only plan-source rows tagged `repo:`.
 func TestRunRefactorFeatureLoop_PlannedTestingContractEmitted(t *testing.T) {
 	stateDir := t.TempDir()
 	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-contract", []string{testRepoNameAPI, testRepoNameWeb})
@@ -477,9 +477,6 @@ func TestRunRefactorFeatureLoop_PlannedTestingContractEmitted(t *testing.T) {
 		gotPerRepo[item.Repo][item.Source]++
 	}
 	for _, repo := range []string{testRepoNameAPI, testRepoNameWeb} {
-		if gotPerRepo[repo]["baseline"] == 0 {
-			t.Errorf("repo %s missing baseline rows; got %v", repo, gotPerRepo[repo])
-		}
 		if gotPerRepo[repo]["plan"] == 0 {
 			t.Errorf("repo %s missing plan-source rows (planned mode should include them); got %v", repo, gotPerRepo[repo])
 		}

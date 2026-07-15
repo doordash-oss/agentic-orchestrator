@@ -34,6 +34,13 @@ Use the roadmap only as optional scope context when the approved intent or exit 
 
 Reuse last-phase evidence when it still proves current behavior, especially when no later fix or review iteration changed the relevant surface. Reuse is appropriate when the evidence was produced against the current repo HEADs, covers the acceptance journey you care about, and is concrete enough to trust.
 
+Harness-classified `inherited_failure` evidence is not a regression: it shows
+the same declared command failed at the phase-start base commit and candidate.
+Treat it as context unless the feature should have fixed that behavior.
+Likewise, a `waived` row is satisfied only when its testing-contract item
+contains a user-authorized waiver; do not ask an implementer to override or
+recreate that decision.
+
 If existing evidence is not enough, validate directly. Missing earlier evidence is not a blocking issue by itself.
 
 ## Subagent Guidance

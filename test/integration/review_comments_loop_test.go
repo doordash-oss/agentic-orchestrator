@@ -306,7 +306,7 @@ func TestReviewCommentsLoop_Integration_3RepoTwoWithComments(t *testing.T) {
 		t.Errorf("testing-contract.yaml missing at flat dir: %v", err)
 	}
 
-	// Verify the testing-contract.yaml is plan-less (only baseline rows).
+	// Verify the plan-less contract contains no guessed commands.
 	contract, err := agent.ReadTestingContract(filepath.Join(flatDir, "testing-contract.yaml"))
 	if err != nil {
 		t.Fatalf("read contract: %v", err)
@@ -316,15 +316,8 @@ func TestReviewCommentsLoop_Integration_3RepoTwoWithComments(t *testing.T) {
 			t.Errorf("plan-source item leaked into plan-less review-comments contract: %+v", item)
 		}
 	}
-	gotRepoSet := map[string]bool{}
-	for _, item := range contract.Items {
-		gotRepoSet[item.Repo] = true
-	}
-	if !gotRepoSet["repoA"] || !gotRepoSet["repoB"] {
-		t.Errorf("contract missing per-repo baseline rows for staged subset; got repos = %v", gotRepoSet)
-	}
-	if gotRepoSet["repoC"] {
-		t.Errorf("contract leaked repoC into plan-less review-comments items")
+	if len(contract.Items) != 0 {
+		t.Errorf("plan-less review-comments contract contains guessed items: %+v", contract.Items)
 	}
 
 	// Combined resolutions JSON at the flat root, with one entry per

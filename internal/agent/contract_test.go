@@ -34,8 +34,8 @@ func TestContractRegistryImplementerLookup(t *testing.T) {
 	if contract.Role != RoleImplementer {
 		t.Fatalf("Lookup(PhaseImplement, RoleImplementer).Role = %q, want %q", contract.Role, RoleImplementer)
 	}
-	if len(contract.Required) != 2 {
-		t.Fatalf("Lookup(PhaseImplement, RoleImplementer) required artifacts = %d, want 2", len(contract.Required))
+	if len(contract.Required) != 1 {
+		t.Fatalf("Lookup(PhaseImplement, RoleImplementer) required artifacts = %d, want 1", len(contract.Required))
 	}
 }
 
@@ -504,12 +504,7 @@ func TestContractRegistryImplementer(t *testing.T) {
 	iterDir := t.TempDir()
 	artifactDir := filepath.Dir(iterDir)
 	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeValidProgress(t, progressPath, reportPath, StateSuccess)
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
+	writeValidProgress(t, progressPath, "", StateSuccess)
 
 	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
 	if err != nil {
@@ -518,8 +513,8 @@ func TestContractRegistryImplementer(t *testing.T) {
 	if len(violations) != 0 {
 		t.Fatalf("Validate() violations = %v, want none", violations)
 	}
-	if !out.OK || out.Progress == nil || out.VerificationReport == nil {
-		t.Fatalf("Validate() outcome = %+v, want parsed progress and verification report", out)
+	if !out.OK || out.Progress == nil || out.VerificationReport != nil {
+		t.Fatalf("Validate() outcome = %+v, want parsed progress only", out)
 	}
 }
 
@@ -534,10 +529,8 @@ func TestContractRegistryImplementerReportsMissingArtifacts(t *testing.T) {
 		t.Fatal("Validate() OK = true, want false")
 	}
 	got := JoinProtocolViolations(violations)
-	for _, want := range []string{"progress.md", "verification-report.yaml"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("JoinProtocolViolations() = %q, want %q", got, want)
-		}
+	if !strings.Contains(got, "progress.md") {
+		t.Fatalf("JoinProtocolViolations() = %q, want progress.md", got)
 	}
 }
 
@@ -564,113 +557,6 @@ func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
 	got := JoinProtocolViolations(violations)
 	if !strings.Contains(got, "progress.md") || !strings.Contains(got, "Iteration State") {
 		t.Fatalf("JoinProtocolViolations() = %q, want progress.md Iteration State violation", got)
-	}
-}
-
-func TestContractRegistryImplementerReportsMalformedVerificationReport(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeValidProgress(t, progressPath, reportPath, StateSuccess)
-	if err := os.WriteFile(reportPath, []byte(":\n  :"), 0o644); err != nil {
-		t.Fatalf("write malformed verification report: %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := JoinProtocolViolations(violations)
-	if !strings.Contains(got, "verification-report.yaml") {
-		t.Fatalf("JoinProtocolViolations() = %q, want verification-report.yaml", got)
-	}
-}
-
-func TestContractRegistryImplementerReportsRejectedVerificationReport(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeValidProgress(t, progressPath, reportPath, StateSuccess)
-	report := BuildVerificationReportStub([]RequiredVerificationItem{
-		{Name: "Relevant tests pass", Requirement: "go test ./..."},
-	})
-	if err := WriteVerificationReport(reportPath, report); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := JoinProtocolViolations(violations)
-	if !strings.Contains(got, "verification-report.yaml") || !strings.Contains(got, "not_run") {
-		t.Fatalf("JoinProtocolViolations() = %q, want verification-report.yaml not_run violation", got)
-	}
-}
-
-func TestContractRegistryImplementerRejectsMissingEvidenceFile(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
-	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(artifactDir, "plan.md"), "collapsed")
-	if err := WriteTestingContract(contractPath, contract); err != nil {
-		t.Fatalf("WriteTestingContract() error = %v", err)
-	}
-
-	writeValidProgress(t, progressPath, reportPath, StateSuccess)
-	report := passedArtifactReportForTest(&contract, contractPath)
-	setArtifactEvidenceForTest(&report, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/missing.png"})
-	if err := WriteVerificationReport(reportPath, report); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "screenshots/missing.png") {
-		t.Fatalf("Validate() = (%+v, %q), want missing evidence file violation", out, got)
-	}
-}
-
-func TestContractRegistryImplementerLoadsSiblingContractWhenReportPathMissing(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
-	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(artifactDir, "plan.md"), "collapsed")
-	if err := WriteTestingContract(contractPath, contract); err != nil {
-		t.Fatalf("WriteTestingContract() error = %v", err)
-	}
-
-	writeValidProgress(t, progressPath, reportPath, StateSuccess)
-	report := passedArtifactReportForTest(&contract, "")
-	setArtifactEvidenceForTest(&report, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/missing.png"})
-	if err := WriteVerificationReport(reportPath, report); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "screenshots/missing.png") {
-		t.Fatalf("Validate() = (%+v, %q), want sibling contract evidence-file violation", out, got)
 	}
 }
 
@@ -1161,7 +1047,7 @@ func writeTestingContractForFinalReview(t *testing.T, path string, revision int,
 		Items: []TestingContractItem{
 			{
 				ID:      itemID,
-				Source:  testingContractBaselineSource,
+				Source:  testingContractPlanSource,
 				Repo:    TestingContractCrossRepoTag,
 				Name:    "Relevant tests pass",
 				Command: command,
@@ -1183,6 +1069,7 @@ func writeTestingContractForFinalReview(t *testing.T, path string, revision int,
 
 func writeValidProgress(t *testing.T, path string, reportPath string, state IterationState) {
 	t.Helper()
+	_ = reportPath
 	body := fmt.Sprintf(`# Iteration Progress
 
 ## Iteration Handoff
@@ -1206,15 +1093,10 @@ deferrals: []
 closed_deferrals: []
 `+"```"+`
 
-## Verification Report
-
-- **Path**: %s
-- **Summary**: registry test
-
 ## Iteration State
 
 %s
-`, reportPath, state.String())
+`, state.String())
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write progress: %v", err)
 	}

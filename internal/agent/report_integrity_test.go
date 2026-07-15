@@ -837,3 +837,27 @@ func reportGateDetailsForTest(result ReportGateResult) string {
 	}
 	return b.String()
 }
+
+func TestValidateVerificationReportRejectsForgedWaiverAndAcceptsContractWaiver(t *testing.T) {
+	contract := TestingContract{Version: 1, Revision: 1, Items: []TestingContractItem{{
+		ID: "check", Source: testingContractPlanSource, Name: "check", Command: "go test ./...",
+		Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
+	report.Results[0].Status = VerificationStatusWaived
+	report.Results[0].EvidenceData.Summary = "claimed waiver"
+
+	result := ValidateVerificationReport(&report, nil, &contract, true)
+	if !result.Rejected || !strings.Contains(reportGateDetailsForTest(result), "no user-authorized waiver") {
+		t.Fatalf("forged waiver result = %+v, want policy violation", result)
+	}
+
+	contract.Items[0].Disposition = TestingContractItemDisposition{
+		Status: TestingContractDispositionWaived, Reason: "user approved", ChangedBy: "user",
+	}
+	report = BuildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
+	result = ValidateVerificationReport(&report, nil, &contract, true)
+	if result.Rejected {
+		t.Fatalf("authorized waiver rejected: %+v", result.Findings)
+	}
+}

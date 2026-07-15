@@ -19,8 +19,8 @@
 // stay/fail together) is enforced via AtomicPhaseStamp.
 //
 // The loop intentionally does NOT carry RepoName: cwd is the feature state
-// dir, --add-dir mounts every Feature.Repos worktree, and the testing
-// contract is a feature-level artifact with `repo:`-tagged baseline rows.
+// dir, --add-dir mounts every Feature.Repos worktree, and the latest
+// harness-generated verification evidence is available as review context.
 // Cycle-specific divergence vs phase implement (review-first, fix-second
 // instead of fix-first, review-second) is expressed in the loop body, not
 // by parameterising the phase-implement kernel.

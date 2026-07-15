@@ -21,6 +21,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -199,6 +200,9 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 		if !rec.AllAnswered() {
 			return errors.New("cannot resume: every question must have a non-empty answer before resume")
 		}
+		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+			return err
+		}
 		resumeRepos := []string{d.RepoName}
 		// Clear the paused-gate fields but preserve Count, PlanPath, and
 		// Type so the restart seam reuses the existing cycle record. Set
@@ -271,7 +275,9 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 // handleFeatureNeedUserInputDecision implements the original single-repo /
 // feature-scoped gate flow. Resume validates answers, clears the pending
 // gate pointer, transitions the feature back to StatusImplementing, and
-// re-dispatches the implement phase so the next iteration becomes N+1.
+// re-dispatches the paused implementation. Harness verification capability
+// gates resume the same implementation iteration; agent-authored decision
+// gates resume implementation work in the next iteration.
 // Abort routes through markFailedWithEvent(FailureNeedUserInput).
 func (o *Orchestrator) handleFeatureNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -294,6 +300,9 @@ func (o *Orchestrator) handleFeatureNeedUserInputDecision(featureID string, d Ne
 		}
 		if !rec.AllAnswered() {
 			return errors.New("cannot resume: every question must have a non-empty answer before resume")
+		}
+		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+			return err
 		}
 		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 			ff.PendingNeedUserInputPath = ""
@@ -354,4 +363,34 @@ func (o *Orchestrator) handleFeatureNeedUserInputDecision(featureID string, d Ne
 	default:
 		return fmt.Errorf("unknown need-user-input decision %q (want resume|abort)", d.Decision)
 	}
+}
+
+func (o *Orchestrator) applyTrustedVerificationDecision(featureID, gatePath string, rec agent.NeedUserInputRecord) error {
+	if rec.VerificationDecision == nil {
+		return nil
+	}
+	contractPath := filepath.Clean(strings.TrimSpace(rec.VerificationDecision.ContractPath))
+	stateRoot, err := filepath.Abs(o.stateDir())
+	if err != nil {
+		return fmt.Errorf("resolve state root for verification decision: %w", err)
+	}
+	absContract, err := filepath.Abs(contractPath)
+	if err != nil {
+		return fmt.Errorf("resolve verification contract path: %w", err)
+	}
+	rel, err := filepath.Rel(stateRoot, absContract)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("verification decision contract %q is outside state root %q", absContract, stateRoot)
+	}
+	if filepath.Base(absContract) != "testing-contract.yaml" {
+		return fmt.Errorf("verification decision contract has unexpected filename %q", filepath.Base(absContract))
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) == 0 || parts[0] != featureID {
+		return fmt.Errorf("verification decision contract %q is not scoped to feature %q", absContract, featureID)
+	}
+	if filepath.Base(filepath.Clean(gatePath)) != agent.NeedUserInputArtifactName {
+		return fmt.Errorf("verification decision came from a non-canonical gate artifact")
+	}
+	return agent.ApplyNeedUserVerificationDecision(rec)
 }

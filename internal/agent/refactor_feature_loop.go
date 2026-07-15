@@ -25,9 +25,8 @@
 //
 //   - Triggered by user prompt; the orchestrator stamps RefactorPrompt and
 //     RefactorCount, then dispatches the loop.
-//   - Planned: TestingContractCompiler runs in normal (planned) mode emitting
-//     baseline + plan-source items + cross-repo items, every item tagged
-//     with `repo:`.
+//   - Planned: TestingContractCompiler emits only plan-declared commands and
+//     semantic evidence requirements, every item tagged with `repo:`.
 //   - One Claude session per iteration with `--add-dir` for every
 //     Feature.Repos worktree (and the state dir). Cross-repo edits are
 //     first-class — a Task tagged `**Repo:** repo-a` and another tagged
@@ -91,6 +90,7 @@ type RefactorFeatureLoopConfig struct {
 	SkillsDir                  string
 	GuidelinesDir              string
 	Observer                   *observe.Observer
+	CommandRunner              ports.CommandRunner
 
 	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
 	// for the refactor cycle's sessions (refactor-plan step + the inner
@@ -392,9 +392,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		}, fmt.Errorf("refactor feature loop: reading plan: %w", readErr)
 	}
 
-	// Step 3 — compile and persist the planned testing contract. Per-repo
-	// baseline rows + plan-source rows tagged `repo:` for each staged repo,
-	// plus any cross-repo verification rows extracted from the plan.
+	// Step 3 — compile and persist the plan-declared testing contract.
 	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
 	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{
 		Repos:     stagedRepos,
@@ -448,6 +446,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		GuidelinesDir:              cfg.GuidelinesDir,
 		FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
 		Observer:                   cfg.Observer,
+		CommandRunner:              cfg.CommandRunner,
 		// Refactor cycles run the per-iteration review gate so the
 		// reviewer can attest the cross-repo edits landed cleanly before
 		// AtomicPhaseStamp marks the staged subset AwaitingFinalReview.
@@ -564,16 +563,13 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 
 // refactorExitCriteria returns the refactor cycle's exit criteria. The
 // agent reads this from the implement prompt's `## Exit Criteria` section
-// to know when it can emit SUCCESS. Cycle-specific verification — every
-// plan-staged Task addressed, build/test/lint passes on every touched repo,
-// and any `cross-repo` verification commands all pass — lives here so the
-// iteration loop's reviewer can attest it via the verification report.
+// to know when it can emit SUCCESS. Agentico executes plan-declared final
+// verification after the implementation handoff.
 func refactorExitCriteria(f *feature.Feature) string {
 	base := "Every Task in the refactor plan is addressed (file edits committed " +
-		"or explicitly dismissed in the plan), the build, test, and lint commands " +
-		"pass on every touched repo, the per-repo baseline rows in the testing " +
-		"contract are attested in `verification-report.yaml`, and any " +
-		"`cross-repo` verification rows pass. No commit history beyond what " +
+		"or explicitly dismissed in the plan), focused development tests cover " +
+		"the changed behavior, and all agent-owned semantic evidence exists. " +
+		"No commit history beyond what " +
 		"the plan declares plus follow-on import / wiring updates."
 	if f != nil && f.ExitCriteria != "" {
 		// Honor a feature-level override if the user/profile set one;

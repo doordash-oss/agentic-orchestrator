@@ -164,7 +164,8 @@ func (o *Orchestrator) startFeatureRefactor(
 		FinishOrViolateNudge: pr.FinishOrViolateNudgeForModel(f.Models.Implementation) &&
 			pr.FinishOrViolateNudgeForModel(f.Models.Planning) &&
 			pr.FinishOrViolateNudgeForModel(f.Models.Review),
-		Observer: pr.Observer,
+		Observer:      pr.Observer,
+		CommandRunner: pr.CommandRunner,
 	}
 	_ = hintRepoName // diagnostic only under the unified flow.
 

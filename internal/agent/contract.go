@@ -453,7 +453,7 @@ func newestPhaseMarkdownArtifact(dir string) string {
 }
 
 func validateProgressArtifact(iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
-	parsed, err := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, err := ParseProgressMd(path)
 	if err != nil {
 		return nil, err
 	}

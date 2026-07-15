@@ -66,7 +66,6 @@ func TestImplementRoleSpecShape(t *testing.T) {
 		conditional bool
 	}{
 		{name: "progress", root: "phase_dir", path: "progress.md", presence: ArtifactRequired},
-		{name: "verification_report", root: "iteration_dir", path: "verification-report.yaml", presence: ArtifactRequired},
 		{name: "need_user_input", root: "iteration_dir", path: "need-user-input.yaml", presence: ArtifactConditional, conditional: true},
 	}
 	for _, tt := range checks {
@@ -93,8 +92,8 @@ func TestImplementRoleSpecDerivesContractPaths(t *testing.T) {
 	if contract.Role != RoleImplementer {
 		t.Fatalf("spec.Contract().Role = %q, want %q", contract.Role, RoleImplementer)
 	}
-	if len(contract.Required) != 2 {
-		t.Fatalf("spec.Contract().Required length = %d, want 2", len(contract.Required))
+	if len(contract.Required) != 1 {
+		t.Fatalf("spec.Contract().Required length = %d, want 1", len(contract.Required))
 	}
 	if len(contract.Conditional) != 1 {
 		t.Fatalf("spec.Contract().Conditional length = %d, want 1", len(contract.Conditional))
@@ -102,8 +101,7 @@ func TestImplementRoleSpecDerivesContractPaths(t *testing.T) {
 
 	iterDir := filepath.Join(t.TempDir(), "phase-01", "implement", "iteration-02")
 	wantPaths := map[string]string{
-		"progress":            filepath.Join(filepath.Dir(iterDir), "progress.md"),
-		"verification_report": filepath.Join(iterDir, "verification-report.yaml"),
+		"progress": filepath.Join(filepath.Dir(iterDir), "progress.md"),
 	}
 	for _, artifact := range contract.Required {
 		if got, want := artifact.ResolvePath(iterDir), wantPaths[artifact.Name]; got != want {
@@ -794,7 +792,7 @@ func TestSkillOutputFilesMatchRoleSpec(t *testing.T) {
 	}
 }
 
-func TestImplementSkillDiscoversTestingContractFromVerificationReport(t *testing.T) {
+func TestImplementSkillDiscoversTestingContractDirectly(t *testing.T) {
 	path := repoRootPath(t, "skills", "implement", "SKILL.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -802,15 +800,13 @@ func TestImplementSkillDiscoversTestingContractFromVerificationReport(t *testing
 	}
 	content := string(data)
 	for _, want := range []string{
-		"{iteration_dir}/verification-report.yaml",
-		"`contract_path`",
+		"{phase_dir}/../testing-contract.yaml",
+		"owner: agent",
+		"Never create or edit `verification-report.yaml`",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("skills/implement/SKILL.md missing %q", want)
 		}
-	}
-	if strings.Contains(content, "{phase_dir}/testing-contract.yaml") {
-		t.Fatalf("skills/implement/SKILL.md still points testing-contract discovery at phase_dir")
 	}
 }
 
@@ -824,11 +820,9 @@ func TestImplementSkillDocumentsEvidenceFiles(t *testing.T) {
 	for _, want := range []string{
 		"`screenshots/`",
 		"`behaviors/`",
-		"`evidence.primary`",
-		"`evidence.attachments[]`",
-		"`passed`, `failed`, and `pending_human`",
-		"`blocked`, `not_run`, and `waived`",
-		"`blocked_reason`",
+		"expected_evidence.path",
+		"Never create or edit `verification-report.yaml`",
+		"Never create placeholder evidence",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("skills/implement/SKILL.md missing evidence-file guidance %q", want)

@@ -695,6 +695,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),

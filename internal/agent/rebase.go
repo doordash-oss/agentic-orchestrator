@@ -74,12 +74,12 @@ func BuildRebasePlan(baseBranch, prURL string, conflictFiles []string) string {
 	b.WriteString("After the rebase is fully complete:\n\n")
 	b.WriteString("#### Automated Verification:\n")
 	fmt.Fprintf(&b, "- [ ] No conflict markers remain: `grep -rn %q . --include=\"*.go\" --include=\"*.ts\" --include=\"*.js\" --include=\"*.py\" | head -20`\n", conflictMarkerPattern)
-	writeGenericProjectVerificationChecklist(&b)
+	b.WriteString("\n")
 
 	b.WriteString("## Success Criteria\n\n")
 	fmt.Fprintf(&b, "- The rebase onto origin/%s is complete (no rebase in progress)\n", baseBranch)
 	b.WriteString("- No conflict markers in any files\n")
-	b.WriteString("- The code compiles and all tests pass\n\n")
+	b.WriteString("- The branch contains no unresolved conflict markers\n\n")
 
 	if prURL != "" {
 		fmt.Fprintf(&b, "## PR Reference\n\nExisting PR: %s\n\n", prURL)

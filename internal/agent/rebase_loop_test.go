@@ -620,15 +620,8 @@ func TestRunRebaseLoop_PlanLessTestingContractEmitted(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read contract: %v", readErr)
 	}
-	gotPerRepo := map[string]int{}
-	for _, item := range contract.Items {
-		if item.Source == testingContractPlanSource {
-			t.Errorf("plan-source item leaked into plan-less rebase contract: %+v", item)
-		}
-		gotPerRepo[item.Repo]++
-	}
-	if gotPerRepo[testRepoNameAPI] == 0 || gotPerRepo[testRepoNameWeb] == 0 {
-		t.Errorf("expected per-repo baseline rows for api+web; got %v", gotPerRepo)
+	if len(contract.Items) != 0 {
+		t.Errorf("initial plan-less rebase contract should be empty; got %+v", contract.Items)
 	}
 }
 
@@ -935,7 +928,6 @@ func TestRebasePlanMultiRepoFormatting(t *testing.T) {
 		"do not push",
 		"The orchestrator runs Final\nReview and applies publish policy after approval",
 		wantProgressPathTemplate,
-		wantVerificationReportPathTemplate,
 		wantPhaseCompletePathTemplate,
 		"Do not place `progress.md` under `{iteration_dir}`",
 		"## Repo: `api`",
@@ -984,7 +976,6 @@ func TestRebaseSkillDocumentsStandardImplementHandoff(t *testing.T) {
 	content := string(data)
 	for _, want := range []string{
 		wantProgressPathTemplate,
-		wantVerificationReportPathTemplate,
 		wantPhaseCompletePathTemplate,
 	} {
 		if !strings.Contains(content, want) {

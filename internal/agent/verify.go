@@ -22,8 +22,17 @@ import (
 // VerificationStep represents a single automated verification command
 // extracted from a plan's "Automated Verification" section.
 type VerificationStep struct {
-	Description string // Human-readable description (e.g., "Unit tests pass")
-	Command     string // Executable command (e.g., "go test ./...")
+	Description  string // Human-readable description (e.g., "Unit tests pass")
+	Command      string // Executable command (e.g., "go test ./...")
+	Capabilities []VerificationCapability
+}
+
+// VerificationCapability is explicit plan metadata for an environmental
+// prerequisite. It is deliberately declared rather than inferred from test
+// output so arbitrary failures cannot be mislabeled as authorization blocks.
+type VerificationCapability struct {
+	Name  string
+	Probe string
 }
 
 // ManualVerificationStep represents one manual check extracted from a plan's
@@ -265,11 +274,29 @@ func parseChecklistItem(line string) (VerificationStep, bool) {
 
 	commandWithBackticks := line[chosen[0]:chosen[1]]
 	description := extractDescription(line, commandWithBackticks)
+	description = strings.TrimSpace(verificationCapabilityRE.ReplaceAllString(description, ""))
+	description = strings.TrimSpace(strings.TrimSuffix(description, ":"))
 
 	return VerificationStep{
-		Description: description,
-		Command:     command,
+		Description:  description,
+		Command:      command,
+		Capabilities: parseVerificationCapabilities(line),
 	}, true
+}
+
+var verificationCapabilityRE = regexp.MustCompile(`\[agentico capability:\s*([^;\]]+)\s*;\s*probe:\s*([^\]]+)\]`)
+
+func parseVerificationCapabilities(line string) []VerificationCapability {
+	matches := verificationCapabilityRE.FindAllStringSubmatch(line, -1)
+	out := make([]VerificationCapability, 0, len(matches))
+	for _, match := range matches {
+		name := strings.TrimSpace(match[1])
+		probe := strings.TrimSpace(match[2])
+		if name != "" && probe != "" {
+			out = append(out, VerificationCapability{Name: name, Probe: probe})
+		}
+	}
+	return out
 }
 
 func parseManualChecklistItem(line string) (ManualVerificationStep, bool) {

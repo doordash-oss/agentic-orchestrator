@@ -221,7 +221,7 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 				})
 			}
 
-		case VerificationStatusFailed, VerificationStatusBlocked, VerificationStatusWaived:
+		case VerificationStatusFailed, VerificationStatusInheritedFailure, VerificationStatusBlocked, VerificationStatusWaived:
 			// Honest declarations. The LLM reviewer assesses severity. The
 			// gate does not block here except for policy/schema checks above.
 
@@ -231,7 +231,7 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 				CheckName: name,
 				Category:  GateCategorySchema,
 				Kind:      KindUnknownStatus,
-				Detail:    fmt.Sprintf("status %q is not one of passed, failed, blocked, waived, not_run, pending_human", string(c.Status)),
+				Detail:    fmt.Sprintf("status %q is not one of passed, failed, inherited_failure, blocked, waived, not_run, pending_human", string(c.Status)),
 			})
 		}
 	}
@@ -268,7 +268,7 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 		}
 		status := NormalizeStatus(c.Status)
 		switch status {
-		case VerificationStatusPassed, VerificationStatusFailed, VerificationStatusPendingHuman:
+		case VerificationStatusPassed, VerificationStatusFailed, VerificationStatusInheritedFailure, VerificationStatusPendingHuman:
 		default:
 			continue
 		}
@@ -576,6 +576,14 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 						Detail:    "status is blocked but the bound contract item does not allow blocked results",
 					})
 				}
+			}
+			if NormalizeStatus(checks[i].Status) == VerificationStatusWaived && !IsTestingContractItemWaived(item) {
+				result.Findings = append(result.Findings, ReportGateFinding{
+					CheckName: checkDisplayName(&checks[i]),
+					Category:  GateCategorySchema,
+					Kind:      KindPolicyViolation,
+					Detail:    "status is waived but the bound contract has no user-authorized waiver for this item",
+				})
 			}
 			if substituteID := strings.TrimSpace(checks[i].SubstituteItemID); substituteID != "" {
 				if !item.Policy.AllowSubstitution {

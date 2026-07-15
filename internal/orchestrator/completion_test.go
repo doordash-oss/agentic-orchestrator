@@ -2278,7 +2278,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations
 			FinalStatus: finalStatusFailed,
 			LastError:   "one repo hit iteration cap",
 			RepoStatuses: map[string]string{
-				repoName: "max_iterations",
+				repoName:  "max_iterations",
 				repoNameB: finalStatusFailed,
 			},
 		},

@@ -11,7 +11,7 @@ The harness has detected one or more conflicting branches across this feature's 
 - `cwd` is the feature state dir.
 - `--add-dir` mounts the feature workspace selected by the orchestrator. The target/conflict subset is listed in the rebase plan; additional mounted repos are validation context and may be edited only when verification proves the cross-repo change is necessary.
 - The rebase plan at `## Handoff Contract → Plan path` lists each conflicted repo with its rebase target ref, PR URL, and any in-progress conflict files.
-- The testing contract is **plan-less**: per-repo baseline rows (build/test/lint) only, no plan-source rows.
+- The generated plan declares the exact conflict-marker check. Agentico executes it after handoff; no language-specific project commands are guessed.
 
 ## Per-repo dispatch
 
@@ -46,25 +46,21 @@ Dispatch one Task agent per behind repo. Each agent:
 
 Stop after the rebase is clean and verification is complete. Do not run any push command. The orchestrator runs Final Review and applies publish policy after approval.
 
-### Step 4 — Verify
+### Step 4 — Development checks
 
-Run the testing contract's baseline rows and any feature-level verification needed for mounted repos. Each repo's contract items are tagged `repo: <name>`; dispatch Task agents as useful to run that repo's `build`/`test`/`lint` commands and record results in `verification-report.yaml`.
-
-Conflicts surfaced during rebase that span repos (e.g. a shared dependency version bump) get attested under `additional_checks:`.
+Inspect each rebased worktree for a clean status and unresolved conflicts. Agentico runs the plan-declared final command after handoff.
 
 ### Step 5 — Iteration handoff
 
-Emit `progress.md` and `verification-report.yaml` per the standard handoff contract (see [implement skill](../implement/SKILL.md) for the exact schema). Cycle-specific guidance:
+Emit `progress.md` per the standard handoff contract (see [implement skill](../implement/SKILL.md) for the exact schema). Cycle-specific guidance:
 
 - Standard handoff paths:
   - `progress.md`: `{phase_dir}/progress.md`
-  - `verification-report.yaml`: `{iteration_dir}/verification-report.yaml`
   - `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.
   - `phase_complete`: `{iteration_dir}/phase_complete`
 - Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.
 - `## Iteration Handoff → Completed this iteration` — one bullet per repo rebased (e.g., `- api: rebased onto origin/main, verified; not pushed`).
 - `## Iteration Handoff → Remaining from the plan` — repos NOT yet rebased (empty when every behind repo is done).
-- `## Verification Report → Summary` — must agree with the YAML tally.
 - `## Iteration State` — exactly one of:
   - `SUCCESS` — every target repo is rebased, no rebase is in progress, conflict markers are gone, and the feature verification checks passed. Do not require or report a push.
   - `RETRY` — partial progress (e.g., one repo rebased cleanly, another hit a non-trivial conflict you want to revisit with fresh context). The next iteration starts from your `progress.md`.
@@ -88,5 +84,4 @@ Emit `progress.md` and `verification-report.yaml` per the standard handoff contr
 - Every target repo's branch sits on top of `<base>` (verified via `git log --oneline | head` showing the upstream commits before your branch's commits).
 - `git status` is clean in each rebased worktree (no rebase in progress, no conflict markers).
 - The remote PR branches are not pushed by this cycle.
-- The testing contract's baseline rows passed in `verification-report.yaml`.
-- One standard handoff at the cycle artifact root/iteration pair: `progress.md` at `{phase_dir}/progress.md`, `verification-report.yaml` at `{iteration_dir}/verification-report.yaml` — no per-repo subdir.
+- One standard `progress.md` handoff at `{phase_dir}/progress.md` — no per-repo subdir.

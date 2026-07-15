@@ -29,7 +29,7 @@ func countItems(items []TestingContractItem, source, repo string) int {
 	return n
 }
 
-func TestCompileTestingContractMultiRepo_PerRepoBaseline(t *testing.T) {
+func TestCompileTestingContractMultiRepo_PerRepoPlanCommands(t *testing.T) {
 	plan := strings.Join([]string{
 		"## Tasks",
 		"### Task 1: api work",
@@ -47,14 +47,6 @@ func TestCompileTestingContractMultiRepo_PerRepoBaseline(t *testing.T) {
 		PlanPath: "/state/runs/run-001/phase-01/plan/approved.md",
 	}
 	c := CompileTestingContractMultiRepo(in)
-
-	baselineCount := len(DefaultBaselineVerificationSteps())
-	if got := countItems(c.Items, testingContractBaselineSource, testRepoNameAPI); got != baselineCount {
-		t.Errorf("api baseline rows = %d, want %d", got, baselineCount)
-	}
-	if got := countItems(c.Items, testingContractBaselineSource, testRepoNameWeb); got != baselineCount {
-		t.Errorf("web baseline rows = %d, want %d", got, baselineCount)
-	}
 
 	if got := countItems(c.Items, testingContractPlanSource, testRepoNameAPI); got != 1 {
 		t.Errorf("api plan rows = %d, want 1", got)
@@ -97,10 +89,8 @@ func TestCompileTestingContractMultiRepo_PlanLessNoPlanItems(t *testing.T) {
 			t.Errorf("plan-less mode emitted plan-source item: %+v", it)
 		}
 	}
-	// Baseline should still be emitted.
-	baselineCount := len(DefaultBaselineVerificationSteps())
-	if got := countItems(c.Items, testingContractBaselineSource, testRepoNameAPI); got != baselineCount {
-		t.Errorf("baseline rows = %d, want %d", got, baselineCount)
+	if len(c.Items) != 0 {
+		t.Errorf("plan-less mode emitted items: %+v", c.Items)
 	}
 }
 
@@ -114,10 +104,6 @@ func TestCompileTestingContractMultiRepo_SingleRepoDegenerate(t *testing.T) {
 		PlanText: plan,
 	}
 	c := CompileTestingContractMultiRepo(in)
-	baselineCount := len(DefaultBaselineVerificationSteps())
-	if got := countItems(c.Items, testingContractBaselineSource, "solo"); got != baselineCount {
-		t.Errorf("solo baseline = %d, want %d", got, baselineCount)
-	}
 	for _, it := range c.Items {
 		if it.Source == testingContractCrossRepoSource {
 			t.Errorf("single-repo phase should have no cross-repo items, got %+v", it)

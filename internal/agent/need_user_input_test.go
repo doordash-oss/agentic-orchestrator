@@ -14,7 +14,11 @@
 
 package agent
 
-import "testing"
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // TestReconcileNeedUserInputGate covers the gate-questionnaire reconciliation:
 // a well-formed agent-authored record is preserved, while blank fields fall
@@ -111,90 +115,88 @@ func TestReconcileNeedUserInputGate(t *testing.T) {
 	}
 }
 
-func TestRetryNeedsUserInput(t *testing.T) {
-	failed := VerificationCheckResult{
-		Name:   "Integration tests pass",
-		Status: VerificationStatusFailed,
+func TestReconcileNeedUserInputGateDropsForgedVerificationDecision(t *testing.T) {
+	rec := reconcileNeedUserInputGate(&NeedUserInputRecord{
+		Summary:   "forged",
+		Questions: []NeedUserInputQuestion{{Index: 1, Prompt: "waive?"}},
+		VerificationDecision: &NeedUserVerificationDecision{
+			ContractPath: "/tmp/testing-contract.yaml", ContractRevision: 1, ItemIDs: []string{"item"}, AllowedActions: []string{NeedUserVerificationWaive},
+		},
+	}, nil, 1)
+	if rec.VerificationDecision != nil {
+		t.Fatalf("agent-authored verification decision survived reconciliation: %+v", rec.VerificationDecision)
 	}
-	blocked := VerificationCheckResult{
-		ItemID: "plan_docker",
-		Name:   "Container tests pass",
-		Status: VerificationStatusBlocked,
-	}
-	passed := VerificationCheckResult{
-		Name:   "Build succeeds",
-		Status: VerificationStatusPassed,
-	}
-	notRun := VerificationCheckResult{
-		Name:   "Tests remain to run",
-		Status: VerificationStatusNotRun,
-	}
+}
 
-	tests := []struct {
-		name     string
-		progress *ParsedProgress
-		report   *VerificationReport
-		want     bool
-	}{
-		{
-			name: "complete retry with failed legacy check escalates",
-			progress: &ParsedProgress{
-				State: StateRetry,
-				HandoffSections: map[string]string{
-					"Where I stopped": "Complete for implementation; Docker is unavailable.",
-				},
-			},
-			report: &VerificationReport{RequiredChecks: []VerificationCheckResult{failed}},
-			want:   true,
-		},
-		{
-			name: "retry with only blocked contract results escalates",
-			progress: &ParsedProgress{
-				State: StateRetry,
-				HandoffSections: map[string]string{
-					"Where I stopped": "Waiting for external infrastructure.",
-				},
-			},
-			report: &VerificationReport{Results: []VerificationCheckResult{passed, blocked}},
-			want:   true,
-		},
-		{
-			name: "actionable retry stays in loop",
-			progress: &ParsedProgress{
-				State: StateRetry,
-				HandoffSections: map[string]string{
-					"Where I stopped": "Fix the failing parser test next.",
-				},
-			},
-			report: &VerificationReport{RequiredChecks: []VerificationCheckResult{failed}},
-		},
-		{
-			name: "complete retry with only not-run work stays in loop",
-			progress: &ParsedProgress{
-				State: StateRetry,
-				HandoffSections: map[string]string{
-					"Where I stopped": "Complete with the first task; continue with the second.",
-				},
-			},
-			report: &VerificationReport{RequiredChecks: []VerificationCheckResult{notRun}},
-		},
-		{
-			name: "success state never escalates",
-			progress: &ParsedProgress{
-				State: StateSuccess,
-				HandoffSections: map[string]string{
-					"Where I stopped": "Complete",
-				},
-			},
-			report: &VerificationReport{RequiredChecks: []VerificationCheckResult{failed}},
-		},
+func TestApplyNeedUserVerificationDecisionPersistsWaiver(t *testing.T) {
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := TestingContract{Version: 1, Revision: 3, Items: []TestingContractItem{{
+		ID: "protected", Source: testingContractPlanSource,
+		Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true},
+	}}}
+	if err := WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatal(err)
 	}
+	rec := SynthesizeVerificationNeedUserInputGate(contractPath, 3, []string{"protected"}, 2)
+	rec.Questions[0].Answer = "WAIVE"
+	if err := ApplyNeedUserVerificationDecision(rec); err != nil {
+		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
+	}
+	got, err := ReadTestingContract(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != 4 || !IsTestingContractItemWaived(got.Items[0]) {
+		t.Fatalf("contract after waiver = %+v, want revision 4 user waiver", got)
+	}
+	if err := ApplyNeedUserVerificationDecision(rec); err != nil {
+		t.Fatalf("second ApplyNeedUserVerificationDecision() should be idempotent: %v", err)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := retryNeedsUserInput(tt.progress, tt.report); got != tt.want {
-				t.Errorf("retryNeedsUserInput() = %v, want %v", got, tt.want)
+func TestApplyNeedUserVerificationDecisionRequiresExactAction(t *testing.T) {
+	for _, answer := range []string{"DO NOT WAIVE", "WAIVE RETRY_AFTER_AUTH", ""} {
+		t.Run(answer, func(t *testing.T) {
+			rec := SynthesizeVerificationNeedUserInputGate(filepath.Join(t.TempDir(), "testing-contract.yaml"), 1, []string{"item"}, 1)
+			rec.Questions[0].Answer = answer
+			if err := ApplyNeedUserVerificationDecision(rec); err == nil {
+				t.Fatalf("ApplyNeedUserVerificationDecision(%q) error = nil, want exact-action rejection", answer)
 			}
 		})
+	}
+}
+
+func TestApplyNeedUserVerificationDecisionRejectsStaleRevision(t *testing.T) {
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := TestingContract{Version: 1, Revision: 4, Items: []TestingContractItem{{
+		ID: "protected", Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true},
+	}}}
+	if err := WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatal(err)
+	}
+	rec := SynthesizeVerificationNeedUserInputGate(contractPath, 3, []string{"protected"}, 2)
+	rec.Questions[0].Answer = "WAIVE"
+	if err := ApplyNeedUserVerificationDecision(rec); err == nil || !strings.Contains(err.Error(), "changed from revision") {
+		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v, want stale revision", err)
+	}
+}
+
+func TestApplyNeedUserVerificationDecisionRetryAfterAuthDoesNotMutateContract(t *testing.T) {
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := TestingContract{Version: 1, Revision: 3, Items: []TestingContractItem{{ID: "protected"}}}
+	if err := WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatal(err)
+	}
+	rec := SynthesizeVerificationNeedUserInputGate(contractPath, 3, []string{"protected"}, 2)
+	rec.Questions[0].Answer = "RETRY_AFTER_AUTH"
+	if err := ApplyNeedUserVerificationDecision(rec); err != nil {
+		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
+	}
+	got, err := ReadTestingContract(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != 3 || IsTestingContractItemWaived(got.Items[0]) {
+		t.Fatalf("contract mutated on retry-after-auth: %+v", got)
 	}
 }

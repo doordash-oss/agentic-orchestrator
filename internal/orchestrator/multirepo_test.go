@@ -245,7 +245,7 @@ func TestStartMultiRepoImplementation_HandlePhaseCompletionError_MarksFeatureFai
 		TerminalResult: &agent.OrchestratorResult{
 			FinalStatus: "all_passed",
 			RepoStatuses: map[string]string{
-				repoName: reviewStatusPassed,
+				repoName:  reviewStatusPassed,
 				repoNameB: reviewStatusPassed,
 			},
 		},
@@ -441,7 +441,7 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 		TerminalResult: &agent.OrchestratorResult{
 			FinalStatus: "need_user_input",
 			RepoStatuses: map[string]string{
-				repoName: "need_user_input",
+				repoName:  "need_user_input",
 				repoNameB: reviewStatusPassed,
 			},
 			LastError: "waiting for user input: repo-a",

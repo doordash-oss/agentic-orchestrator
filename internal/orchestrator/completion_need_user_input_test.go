@@ -60,7 +60,7 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 			{Name: repoName}, {Name: repoNameB}, {Name: repoNameC},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			repoName: {},
+			repoName:  {},
 			repoNameB: {},
 			repoNameC: {},
 		},

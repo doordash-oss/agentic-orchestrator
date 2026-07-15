@@ -165,23 +165,17 @@ func TestPhaseImplementUnified_3Repo_CrossRepoVerification(t *testing.T) {
 		}
 	}
 
-	// Per-repo baseline rows (one set per declared repo).
+	// Per-repo plan-declared rows (one set per declared repo).
 	for _, name := range wantRepos {
-		hasBaseline := false
 		hasPlan := false
 		for _, it := range contract.Items {
 			if it.Repo != name {
 				continue
 			}
 			switch it.Source {
-			case "baseline":
-				hasBaseline = true
 			case "plan":
 				hasPlan = true
 			}
-		}
-		if !hasBaseline {
-			t.Errorf("contract missing baseline row for repo %q", name)
 		}
 		if !hasPlan {
 			t.Errorf("contract missing plan-source row for repo %q (Task should contribute one)", name)

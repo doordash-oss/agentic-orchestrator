@@ -27,9 +27,8 @@ import (
 )
 
 const (
-	testingContractVersion                   = 1
+	testingContractVersion                   = 2
 	testingContractInitialRev                = 1
-	testingContractBaselineSource            = "baseline"
 	testingContractPlanSource                = "plan"
 	testingContractManualSource              = "manual"
 	testingContractVisualSource              = "visual"
@@ -52,26 +51,53 @@ const (
 )
 
 type TestingContractSource struct {
-	PlanPath        string `yaml:"plan_path,omitempty"`
-	BaselineProfile string `yaml:"baseline_profile,omitempty"`
+	PlanPath string `yaml:"plan_path,omitempty"`
 }
 
 type TestingContractExpectedEvidence struct {
 	Kind    string `yaml:"kind,omitempty"`
 	Matcher string `yaml:"matcher,omitempty"`
+	Path    string `yaml:"path,omitempty"`
+}
+
+// TestingContractRun is an opaque, language-agnostic command owned by the
+// deterministic verification executor. Cwd is relative to the item's repo
+// worktree; Timeout uses time.ParseDuration syntax.
+type TestingContractRun struct {
+	Shell   string `yaml:"shell"`
+	Cwd     string `yaml:"cwd,omitempty"`
+	Timeout string `yaml:"timeout,omitempty"`
+}
+
+// TestingContractCapability is an explicitly declared prerequisite. Probe is
+// executed before Run; a non-zero probe result is a capability block rather
+// than an implementation failure.
+type TestingContractCapability struct {
+	Name      string `yaml:"name"`
+	Probe     string `yaml:"probe"`
+	OnMissing string `yaml:"on_missing,omitempty"`
 }
 
 type TestingContractItemPolicy struct {
 	Required          bool `yaml:"required"`
 	AllowSubstitution bool `yaml:"allow_substitution"`
 	AllowBlocked      bool `yaml:"allow_blocked"`
+	AllowWaiver       bool `yaml:"allow_waiver"`
 }
 
 type TestingContractChange struct {
-	ItemID       string `yaml:"item_id"`
-	Supersedes   string `yaml:"supersedes,omitempty"`
-	ChangeReason string `yaml:"change_reason"`
-	ChangedBy    string `yaml:"changed_by"`
+	ItemID           string `yaml:"item_id"`
+	Action           string `yaml:"action,omitempty"`
+	Supersedes       string `yaml:"supersedes,omitempty"`
+	SubstituteItemID string `yaml:"substitute_item_id,omitempty"`
+	ChangeReason     string `yaml:"change_reason"`
+	ChangedBy        string `yaml:"changed_by"`
+}
+
+type TestingContractItemDisposition struct {
+	Status    string `yaml:"status,omitempty"`
+	Reason    string `yaml:"reason,omitempty"`
+	ChangedBy string `yaml:"changed_by,omitempty"`
 }
 
 type TestingContract struct {
@@ -80,6 +106,7 @@ type TestingContract struct {
 	PhaseType     string                  `yaml:"phase_type,omitempty"`
 	Scope         string                  `yaml:"scope"`
 	GeneratedFrom TestingContractSource   `yaml:"generated_from"`
+	BaseCommits   map[string]string       `yaml:"base_commits,omitempty"`
 	Items         []TestingContractItem   `yaml:"items"`
 	Changes       []TestingContractChange `yaml:"changes,omitempty"`
 }
@@ -87,6 +114,7 @@ type TestingContract struct {
 type TestingContractItem struct {
 	ID     string `yaml:"id"`
 	Source string `yaml:"source"`
+	Owner  string `yaml:"owner"`
 	// Repo is the unified-flow target for this item. Values are a repo
 	// name from Feature.Repos, or TestingContractCrossRepoTag for items
 	// that span repos. Empty for legacy single-repo contracts compiled
@@ -95,27 +123,27 @@ type TestingContractItem struct {
 	Repo             string                          `yaml:"repo,omitempty"`
 	Name             string                          `yaml:"name"`
 	Command          string                          `yaml:"command"`
+	Run              *TestingContractRun             `yaml:"run,omitempty"`
+	Capabilities     []TestingContractCapability     `yaml:"capabilities,omitempty"`
 	ExpectedEvidence TestingContractExpectedEvidence `yaml:"expected_evidence"`
 	Policy           TestingContractItemPolicy       `yaml:"policy"`
+	Disposition      TestingContractItemDisposition  `yaml:"disposition,omitempty"`
 }
+
+const (
+	TestingContractChangeWaive       = "waive"
+	TestingContractDispositionWaived = "waived"
+	TestingContractOwnerHarness      = "harness"
+	TestingContractOwnerAgent        = "agent"
+)
 
 func CompileTestingContract(planText, planPath, phaseType string) TestingContract {
-	return CompileTestingContractWithBaseline(planText, planPath, phaseType, testingContractBaselineName, DefaultBaselineVerificationSteps())
-}
-
-func CompileTestingContractWithBaseline(planText, planPath, phaseType, baselineProfile string, baselineSteps []VerificationStep) TestingContract {
 	contract := TestingContract{
-		Version:   testingContractVersion,
-		Revision:  testingContractInitialRev,
-		PhaseType: strings.TrimSpace(phaseType),
-		Scope:     testingContractScope(planPath),
-		GeneratedFrom: TestingContractSource{
-			PlanPath:        strings.TrimSpace(planPath),
-			BaselineProfile: strings.TrimSpace(baselineProfile),
-		},
-	}
-	if contract.GeneratedFrom.BaselineProfile == "" {
-		contract.GeneratedFrom.BaselineProfile = testingContractBaselineName
+		Version:       testingContractVersion,
+		Revision:      testingContractInitialRev,
+		PhaseType:     strings.TrimSpace(phaseType),
+		Scope:         testingContractScope(planPath),
+		GeneratedFrom: TestingContractSource{PlanPath: strings.TrimSpace(planPath)},
 	}
 
 	seen := make(map[string]bool)
@@ -130,10 +158,12 @@ func CompileTestingContractWithBaseline(planText, planPath, phaseType, baselineP
 			name = command
 		}
 		contract.Items = append(contract.Items, TestingContractItem{
-			ID:      testingContractItemID(source, command),
-			Source:  source,
-			Name:    name,
-			Command: command,
+			ID:           testingContractItemID(source, command),
+			Source:       source,
+			Name:         name,
+			Command:      command,
+			Run:          testingContractRunFor(source, command),
+			Capabilities: testingContractCapabilitiesFor(step),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    testingContractEvidenceKind,
 				Matcher: testingContractEvidenceMatcher,
@@ -187,9 +217,6 @@ func CompileTestingContractWithBaseline(planText, planPath, phaseType, baselineP
 		})
 	}
 
-	for _, step := range baselineSteps {
-		add(testingContractBaselineSource, step)
-	}
 	for _, step := range ParsePlanVerification(planText) {
 		add(testingContractPlanSource, step)
 	}
@@ -203,6 +230,7 @@ func CompileTestingContractWithBaseline(planText, planPath, phaseType, baselineP
 		addEvidence(testingContractBehavioralSource, testingContractBehavioralKind, step)
 	}
 
+	finalizeTestingContractOwnership(&contract)
 	return contract
 }
 
@@ -235,15 +263,114 @@ func ReviseTestingContract(contract *TestingContract, changes []TestingContractC
 		if strings.TrimSpace(change.ChangedBy) == "" {
 			return nil, fmt.Errorf("revising testing contract: changed_by is required for %q", itemID)
 		}
-		revised.Changes = append(revised.Changes, TestingContractChange{
-			ItemID:       itemID,
-			Supersedes:   strings.TrimSpace(change.Supersedes),
-			ChangeReason: strings.TrimSpace(change.ChangeReason),
-			ChangedBy:    strings.TrimSpace(change.ChangedBy),
-		})
+		action := strings.ToLower(strings.TrimSpace(change.Action))
+		if action != "" && action != TestingContractChangeWaive {
+			return nil, fmt.Errorf("revising testing contract: unsupported action %q for %q", action, itemID)
+		}
+		if action == TestingContractChangeWaive {
+			idx := testingContractItemIndex(revised.Items, itemID)
+			if idx < 0 || !revised.Items[idx].Policy.AllowWaiver {
+				return nil, fmt.Errorf("revising testing contract: item %q does not allow waiver", itemID)
+			}
+			revised.Items[idx].Disposition = TestingContractItemDisposition{
+				Status:    TestingContractDispositionWaived,
+				Reason:    strings.TrimSpace(change.ChangeReason),
+				ChangedBy: strings.TrimSpace(change.ChangedBy),
+			}
+		}
+		normalized := TestingContractChange{
+			ItemID:           itemID,
+			Action:           action,
+			Supersedes:       strings.TrimSpace(change.Supersedes),
+			SubstituteItemID: strings.TrimSpace(change.SubstituteItemID),
+			ChangeReason:     strings.TrimSpace(change.ChangeReason),
+			ChangedBy:        strings.TrimSpace(change.ChangedBy),
+		}
+		if testingContractHasChange(revised.Changes, normalized) {
+			continue
+		}
+		revised.Changes = append(revised.Changes, normalized)
 	}
-	revised.Revision++
+	if len(revised.Changes) != len(contract.Changes) {
+		revised.Revision++
+	}
 	return &revised, nil
+}
+
+func testingContractItemIndex(items []TestingContractItem, itemID string) int {
+	for i := range items {
+		if items[i].ID == itemID {
+			return i
+		}
+	}
+	return -1
+}
+
+func testingContractHasChange(changes []TestingContractChange, want TestingContractChange) bool {
+	for _, change := range changes {
+		if change == want {
+			return true
+		}
+	}
+	return false
+}
+
+func IsTestingContractItemWaived(item TestingContractItem) bool {
+	return strings.EqualFold(strings.TrimSpace(item.Disposition.Status), TestingContractDispositionWaived) &&
+		strings.EqualFold(strings.TrimSpace(item.Disposition.ChangedBy), "user")
+}
+
+// ReconcileTestingContract refreshes plan-derived item definitions while
+// preserving phase-scoped base anchors and durable amendments for stable item
+// IDs. A changed item set advances the revision exactly once.
+func ReconcileTestingContract(existing *TestingContract, fresh TestingContract) TestingContract {
+	if existing == nil {
+		return fresh
+	}
+	merged := fresh
+	merged.BaseCommits = make(map[string]string, len(existing.BaseCommits))
+	for repo, commit := range existing.BaseCommits {
+		merged.BaseCommits[repo] = commit
+	}
+	unchangedIDs := make(map[string]bool, len(merged.Items))
+	for i := range merged.Items {
+		if oldIdx := testingContractItemIndex(existing.Items, merged.Items[i].ID); oldIdx >= 0 {
+			if testingContractItemDefinitionEqual(existing.Items[oldIdx], merged.Items[i]) {
+				merged.Items[i].Disposition = existing.Items[oldIdx].Disposition
+				unchangedIDs[merged.Items[i].ID] = true
+			}
+		}
+	}
+	for _, change := range existing.Changes {
+		if unchangedIDs[change.ItemID] {
+			merged.Changes = append(merged.Changes, change)
+		}
+	}
+	merged.Revision = existing.Revision
+	if !testingContractDefinitionsEqual(existing.Items, fresh.Items) {
+		merged.Revision++
+	}
+	return merged
+}
+
+func testingContractDefinitionsEqual(a, b []TestingContractItem) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !testingContractItemDefinitionEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func testingContractItemDefinitionEqual(left, right TestingContractItem) bool {
+	left.Disposition = TestingContractItemDisposition{}
+	right.Disposition = TestingContractItemDisposition{}
+	leftYAML, _ := yaml.Marshal(left)
+	rightYAML, _ := yaml.Marshal(right)
+	return string(leftYAML) == string(rightYAML)
 }
 
 func WriteTestingContract(path string, contract TestingContract) error {
@@ -304,23 +431,22 @@ func ReadTestingContract(path string) (*TestingContract, error) {
 			contract.Items[i].Policy = defaultTestingContractPolicy(contract.Items[i].Source)
 		}
 	}
+	finalizeTestingContractOwnership(&contract)
 	return &contract, nil
 }
 
 func defaultTestingContractPolicy(source string) TestingContractItemPolicy {
 	switch strings.TrimSpace(source) {
-	case testingContractBaselineSource:
-		return TestingContractItemPolicy{Required: true}
 	case testingContractPlanSource:
-		return TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true}
+		return TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true, AllowWaiver: true}
 	case testingContractManualSource:
-		return TestingContractItemPolicy{Required: true, AllowBlocked: true}
+		return TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}
 	case testingContractVisualSource, testingContractBehavioralSource:
-		return TestingContractItemPolicy{Required: true, AllowBlocked: true}
+		return TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}
 	case testingContractCrossRepoSource:
-		return TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true}
+		return TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true, AllowWaiver: true}
 	default:
-		return TestingContractItemPolicy{Required: true}
+		return TestingContractItemPolicy{Required: true, AllowWaiver: true}
 	}
 }
 
@@ -328,20 +454,16 @@ func defaultTestingContractPolicy(source string) TestingContractItemPolicy {
 // Repos is the phase-declared repo set (typically PhaseScopeResult.Repos).
 // PlanText is the phase plan markdown (parsed for per-Task tags + per-Task
 // Automated Verification sections). PlanPath is recorded in
-// GeneratedFrom.PlanPath for provenance. PhaseType, BaselineProfile, and
-// BaselineSteps mirror the existing CompileTestingContractWithBaseline shape.
+// GeneratedFrom.PlanPath for provenance.
 //
 // PlanLess, when true, suppresses plan-source items entirely (used by the
-// rebase and review-comments cycles where there is no phase plan). The
-// per-repo baseline rows are still emitted.
+// rebase and review-comments cycles where there is no phase plan).
 type MultiRepoContractInput struct {
-	Repos           []string
-	PlanText        string
-	PlanPath        string
-	PhaseType       string
-	BaselineProfile string
-	BaselineSteps   []VerificationStep
-	PlanLess        bool
+	Repos     []string
+	PlanText  string
+	PlanPath  string
+	PhaseType string
+	PlanLess  bool
 	// CrossRepoSteps are verification commands authored by the planner
 	// under a top-level "#### Cross-Repo Verification:" heading. The
 	// compiler emits these as `cross-repo` items separately from per-Task
@@ -353,36 +475,25 @@ type MultiRepoContractInput struct {
 // carries a `repo:` field. Used by the unified phase implementer.
 //
 // Emission order:
-//  1. Per-repo baseline rows, one set of (build/test/lint) per phase-declared
-//     repo (skipped when PlanLess is false-but-no-baseline-steps; PlanLess
-//     mode still emits baseline rows because rebase/review-comments still
-//     need build/test/lint coverage).
-//  2. Plan-source rows: one row per (Task.Repo, command) pair found in the
+//  1. Plan-source rows: one row per (Task.Repo, command) pair found in the
 //     plan's per-Task Automated Verification sections, plus the legacy
 //     top-level Automated Verification block (which inherits from each
 //     phase-declared repo when no Task tag scopes it). Skipped when PlanLess.
-//  3. Cross-repo rows: one row per CrossRepoSteps entry, tagged
+//  2. Cross-repo rows: one row per CrossRepoSteps entry, tagged
 //     `repo: cross-repo`.
-//  4. Manual rows: one row per top-level Manual Verification bullet,
+//  3. Manual rows: one row per top-level Manual Verification bullet,
 //     tagged to the lone repo or `repo: cross-repo` for multi-repo phases.
 //
-// Item IDs are derived from (source + repo + command) so a baseline row in
-// repo A and an identical baseline row in repo B do not collide. Duplicate
+// Item IDs are derived from (source + repo + command). Duplicate
 // (source, repo, command) tuples are deduplicated; a cross-repo command
 // that also appears in a per-Task block is emitted only as cross-repo.
 func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract {
 	contract := TestingContract{
-		Version:   testingContractVersion,
-		Revision:  testingContractInitialRev,
-		PhaseType: strings.TrimSpace(in.PhaseType),
-		Scope:     testingContractScope(in.PlanPath),
-		GeneratedFrom: TestingContractSource{
-			PlanPath:        strings.TrimSpace(in.PlanPath),
-			BaselineProfile: strings.TrimSpace(in.BaselineProfile),
-		},
-	}
-	if contract.GeneratedFrom.BaselineProfile == "" {
-		contract.GeneratedFrom.BaselineProfile = testingContractBaselineName
+		Version:       testingContractVersion,
+		Revision:      testingContractInitialRev,
+		PhaseType:     strings.TrimSpace(in.PhaseType),
+		Scope:         testingContractScope(in.PlanPath),
+		GeneratedFrom: TestingContractSource{PlanPath: strings.TrimSpace(in.PlanPath)},
 	}
 
 	seen := make(map[string]bool)
@@ -404,11 +515,13 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 			name = command
 		}
 		contract.Items = append(contract.Items, TestingContractItem{
-			ID:      testingContractItemIDWithRepo(source, repo, command),
-			Source:  source,
-			Repo:    repo,
-			Name:    name,
-			Command: command,
+			ID:           testingContractItemIDWithRepo(source, repo, command),
+			Source:       source,
+			Repo:         repo,
+			Name:         name,
+			Command:      command,
+			Run:          testingContractRunFor(source, command),
+			Capabilities: testingContractCapabilitiesFor(step),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    testingContractEvidenceKind,
 				Matcher: testingContractEvidenceMatcher,
@@ -465,19 +578,7 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		})
 	}
 
-	baseline := in.BaselineSteps
-	if baseline == nil {
-		baseline = DefaultBaselineVerificationSteps()
-	}
-
-	// 1) Per-repo baseline rows.
-	for _, repo := range repos {
-		for _, step := range baseline {
-			addItem(testingContractBaselineSource, repo, step)
-		}
-	}
-
-	// 2) Plan-source rows. Skipped when PlanLess.
+	// 1) Plan-source rows. Skipped when PlanLess.
 	if !in.PlanLess {
 		// Top-level "#### Automated Verification:" block (everything BEFORE
 		// the `## Tasks` heading). Each command is emitted once per
@@ -518,12 +619,12 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		}
 	}
 
-	// 3) Cross-repo rows.
+	// 2) Cross-repo rows.
 	for _, step := range in.CrossRepoSteps {
 		addItem(testingContractCrossRepoSource, TestingContractCrossRepoTag, step)
 	}
 
-	// 4) Manual, visual, and behavioral rows. These describe phase-level
+	// 3) Manual, visual, and behavioral rows. These describe phase-level
 	// observations/artifacts, so multi-repo phases carry them as cross-repo
 	// items instead of duplicating the same requirement for every repo.
 	if !in.PlanLess {
@@ -545,6 +646,7 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		}
 	}
 
+	finalizeTestingContractOwnership(&contract)
 	return contract
 }
 
@@ -625,6 +727,83 @@ func manualVerificationCommand(description string) string {
 
 func evidenceRequirementCommand(source, description string) string {
 	return strings.TrimSpace(source) + ": " + strings.TrimSpace(description)
+}
+
+func testingContractRunFor(source, command string) *TestingContractRun {
+	switch strings.TrimSpace(source) {
+	case testingContractPlanSource, testingContractCrossRepoSource:
+		return &TestingContractRun{Shell: strings.TrimSpace(command), Cwd: ".", Timeout: "10m"}
+	default:
+		return nil
+	}
+}
+
+func finalizeTestingContractOwnership(contract *TestingContract) {
+	if contract == nil {
+		return
+	}
+	runnable := make(map[string]bool)
+	for i := range contract.Items {
+		item := &contract.Items[i]
+		if item.Run != nil && strings.TrimSpace(item.Run.Shell) != "" {
+			item.Owner = TestingContractOwnerHarness
+			runnable[normalizeVerificationCommand(item.Run.Shell)] = true
+		} else {
+			item.Owner = TestingContractOwnerAgent
+		}
+	}
+	for i := range contract.Items {
+		item := &contract.Items[i]
+		if item.ExpectedEvidence.Matcher == testingContractCommandTranscriptMatcher {
+			commands := requiredBehavioralTranscriptCommands(item.Name)
+			allRunnable := len(commands) > 0
+			for _, command := range commands {
+				allRunnable = allRunnable && runnable[normalizeVerificationCommand(command)]
+			}
+			if allRunnable {
+				item.Owner = TestingContractOwnerHarness
+			}
+		}
+		item.ExpectedEvidence.Path = testingContractEvidencePath(*item)
+	}
+}
+
+func testingContractEvidencePath(item TestingContractItem) string {
+	switch {
+	case item.ExpectedEvidence.Matcher == testingContractCommandTranscriptMatcher && item.Owner == TestingContractOwnerHarness:
+		return filepath.ToSlash(filepath.Join("behaviors", "harness-"+safeEvidenceComponent(item.ID)+".log"))
+	case item.Source == testingContractManualSource || item.ExpectedEvidence.Kind == testingContractManualKind:
+		return filepath.ToSlash(filepath.Join("observations", safeEvidenceComponent(item.ID)+".md"))
+	case item.Source == testingContractVisualSource || item.ExpectedEvidence.Kind == testingContractVisualKind:
+		return filepath.ToSlash(filepath.Join("screenshots", safeEvidenceComponent(item.ID)+".png"))
+	case item.Source == testingContractBehavioralSource || item.ExpectedEvidence.Kind == testingContractBehavioralKind:
+		return filepath.ToSlash(filepath.Join("behaviors", safeEvidenceComponent(item.ID)+".log"))
+	default:
+		return ""
+	}
+}
+
+func testingContractRequiresCommandRunner(contract *TestingContract) bool {
+	if contract == nil {
+		return false
+	}
+	for _, item := range contract.Items {
+		if item.Owner == TestingContractOwnerHarness && item.Run != nil && strings.TrimSpace(item.Run.Shell) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func testingContractCapabilitiesFor(step VerificationStep) []TestingContractCapability {
+	if len(step.Capabilities) == 0 {
+		return nil
+	}
+	out := make([]TestingContractCapability, 0, len(step.Capabilities))
+	for _, capability := range step.Capabilities {
+		out = append(out, TestingContractCapability{Name: capability.Name, Probe: capability.Probe, OnMissing: "need_user_input"})
+	}
+	return out
 }
 
 func evidenceRequirementMatcher(source, description string) string {

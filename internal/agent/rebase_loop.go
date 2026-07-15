@@ -22,13 +22,8 @@
 //   - Triggered when any `Feature.Repos` branch is behind its base branch.
 //     Participating repos = the behind subset of `Feature.Repos`; the loop
 //     mounts only those worktrees via WorkspaceForRepos.
-//   - Plan-less: TestingContractCompiler runs in plan-less mode (only
-//     baseline + rebase-specific items, no plan-source items).
-//   - Cycle-specific verification — post-rebase `git status` cleanliness and
-//     a rebuild — is expressed in the loop body via the per-repo baseline
-//     contract rows; `clean working tree` and `no rebase in progress`
-//     verification items live in the rebase plan markdown so the agent
-//     attests them through the standard verification report.
+//   - The generated rebase plan declares the exact post-rebase verification
+//     commands. Agentico compiles and executes those commands after handoff.
 //   - One Claude session per iteration with `--add-dir` for every
 //     workspace repo (and the state dir). Coordinated conflict repair can
 //     mount the full feature repo set while stamping only the behind subset.
@@ -101,6 +96,7 @@ type RebaseLoopConfig struct {
 	SkillsDir                  string
 	GuidelinesDir              string
 	Observer                   *observe.Observer
+	CommandRunner              ports.CommandRunner
 
 	// SessionStartFunc overrides SessionManager.StartSession for callers
 	// that need to synchronize session startup with outer lifecycle state.
@@ -254,10 +250,8 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		return nil, fmt.Errorf("rebase loop: mkdir %s: %w", artifactDir, err)
 	}
 
-	// Compile and persist the plan-less testing contract once at loop
-	// entry. Per-repo baseline rows (build/test/lint) are emitted; no
-	// plan-source items. The contract is the binding the implement loop
-	// reads to seed each iteration's verification-report.yaml.
+	// Persist the cycle testing contract at loop entry. The implementation
+	// loop reconciles it with exact commands from the generated rebase plan.
 	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
 	if err := writeRebaseTestingContract(contractPath, repoNames, cfg.Feature); err != nil {
 		return nil, fmt.Errorf("rebase loop: testing contract: %w", err)
@@ -310,6 +304,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		SkillsDir:                  cfg.SkillsDir,
 		GuidelinesDir:              cfg.GuidelinesDir,
 		Observer:                   cfg.Observer,
+		CommandRunner:              cfg.CommandRunner,
 		SessionStartFunc:           rebaseSessionStartFunc(cfg, sm),
 		// Rebase cycles always run the per-iteration review gate so the
 		// reviewer can attest the rebase landed cleanly (no conflict
@@ -420,11 +415,8 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 	}
 }
 
-// writeRebaseTestingContract compiles and persists the plan-less rebase
-// testing contract: per-repo baseline rows tagged `repo: <name>`. No
-// plan-source items — the rebase cycle has no phase plan to inherit from.
-// The reviewer audits the verification report against these baseline rows
-// to confirm post-rebase build/test/lint pass.
+// writeRebaseTestingContract persists an initially empty cycle contract. The
+// implementation loop reconciles it with exact commands in the rebase plan.
 func writeRebaseTestingContract(path string, repos []string, _ *feature.Feature) error {
 	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{
 		Repos:    repos,
@@ -530,7 +522,6 @@ func standardImplementCycleCommunicationContract() string {
 	return "## Cycle Communication Contract\n\n" +
 		"This cycle is executed by the generic implementer role. Use the named output roots from the system prompt and the standard implement handoff artifact layout:\n\n" +
 		"- `progress.md`: `{phase_dir}/progress.md`\n" +
-		"- `verification-report.yaml`: `{iteration_dir}/verification-report.yaml`\n" +
 		"- `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.\n" +
 		"- `phase_complete`: `{iteration_dir}/phase_complete`\n\n" +
 		"Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.\n\n"

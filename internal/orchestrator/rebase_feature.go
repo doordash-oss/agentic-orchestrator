@@ -457,6 +457,7 @@ func (o *Orchestrator) rebaseLoopConfigForFeature(
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
+		CommandRunner:              pr.CommandRunner,
 		SessionStartFunc:           o.featureRebaseSessionStartFunc(f),
 		ResumeExistingCycle:        resumeExistingCycle,
 	}, nil

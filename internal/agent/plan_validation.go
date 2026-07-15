@@ -421,7 +421,10 @@ func frozenSectionsDigest(planPath string, frozen []string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-const maxPlanValidationAttempts = 10
+const (
+	maxPlanValidationAttempts                 = 10
+	maxValidatorInfrastructureSessionAttempts = 2
+)
 
 // DefaultMaxPlanAttempts is the exported default for TUI use (e.g. extending iterations).
 const DefaultMaxPlanAttempts = maxPlanValidationAttempts
@@ -658,7 +661,6 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	if err := os.MkdirAll(helperIterDir, 0o755); err != nil {
 		return ReviewFailed, "", ValidatorMarkers{}, fmt.Errorf("creating %s validator helper directory: %w", domain.Name, err)
 	}
-	RemovePhaseComplete(helperIterDir)
 
 	feedbackPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-feedback.md", domainLower))
 	parentFeedbackPath := filepath.Join(attemptDir, fmt.Sprintf("validation-%s-feedback.md", domainLower))
@@ -674,7 +676,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	logPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-output.txt", domainLower))
 	addDirs := cfg.AdditionalDirs
 	if len(addDirs) == 0 {
-		addDirs = []string{cfg.StateDir}
+		addDirs = []string{ActiveRunDir(cfg.StateDir, cfg.Feature)}
 	}
 	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domainLower, attempt)
 	helper := &PhaseRunner{
@@ -686,27 +688,39 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		Observer:       cfg.Observer,
 		BuildSessionFn: cfg.BuildSession,
 	}
-	helperResult, err := helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
-		SessionID:              reviewID,
-		FeatureID:              cfg.Feature.ID,
-		Phase:                  feature.PhasePlan,
-		ParentSpanCtx:          parentCtx,
-		Model:                  validatorModel,
-		Prompt:                 validationPrompt,
-		PromptPath:             promptPath,
-		FeedbackPath:           feedbackPath,
-		HelperIterDir:          helperIterDir,
-		Role:                   validatorSpec.Role,
-		WorkDir:                cfg.WorkDir,
-		RepoName:               cfg.RepoName,
-		AdditionalDirs:         addDirs,
-		LogPath:                logPath,
-		SystemPromptPrefix:     "validation-" + domainLower,
-		CompletionAskingClause: cfg.AskingClause,
-		EffortLevel:            cfg.EffortLevel,
-		Kind:                   ports.KindValidator,
-		Label:                  domain.Name,
-	})
+	var helperResult *ReviewHelperResult
+	var err error
+	for sessionAttempt := 1; sessionAttempt <= maxValidatorInfrastructureSessionAttempts; sessionAttempt++ {
+		// Infrastructure retries stay inside the same plan attempt. Clear any
+		// synthetic artifacts from the failed session and use a distinct session
+		// ID so lifecycle bookkeeping cannot alias the completed process.
+		RemovePhaseComplete(helperIterDir)
+		_ = os.Remove(feedbackPath)
+		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+			SessionID:              retrySessionID(reviewID, sessionAttempt),
+			FeatureID:              cfg.Feature.ID,
+			Phase:                  feature.PhasePlan,
+			ParentSpanCtx:          parentCtx,
+			Model:                  validatorModel,
+			Prompt:                 validationPrompt,
+			PromptPath:             promptPath,
+			FeedbackPath:           feedbackPath,
+			HelperIterDir:          helperIterDir,
+			Role:                   validatorSpec.Role,
+			WorkDir:                cfg.WorkDir,
+			RepoName:               cfg.RepoName,
+			AdditionalDirs:         addDirs,
+			LogPath:                logPath,
+			SystemPromptPrefix:     "validation-" + domainLower,
+			CompletionAskingClause: cfg.AskingClause,
+			EffortLevel:            cfg.EffortLevel,
+			Kind:                   ports.KindValidator,
+			Label:                  domain.Name,
+		})
+		if err == nil || isProtocolViolationError(err) {
+			break
+		}
+	}
 	if err != nil {
 		feedback := ""
 		markers := ValidatorMarkers{}
@@ -1302,6 +1316,7 @@ func clearValidatorStatuses(cfg PlanLoopConfig) {
 func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) (ReviewStatus, string, error) {
 	var b strings.Builder
 	hasError := false
+	var validatorErrors []error
 	approvedCount := 0
 	nitsCount := 0
 	changesCount := 0
@@ -1317,6 +1332,7 @@ func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) 
 		case r.Error != nil:
 			verdict = "ERROR"
 			hasError = true
+			validatorErrors = append(validatorErrors, fmt.Errorf("%s validator: %w", r.Domain, r.Error))
 		case r.Status == ReviewApproved:
 			approvedCount++
 		case r.Status == ReviewChangesRequested:
@@ -1359,7 +1375,7 @@ func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) 
 		}
 	}
 
-	return overallStatus, b.String(), nil
+	return overallStatus, b.String(), errors.Join(validatorErrors...)
 }
 
 // validatorWeight returns the display weight for a validator domain.
@@ -1501,7 +1517,7 @@ roadmapAttemptLoop:
 
 			addDirs := cfg.AdditionalDirs
 			if len(addDirs) == 0 {
-				addDirs = []string{cfg.StateDir}
+				addDirs = []string{ActiveRunDir(cfg.StateDir, cfg.Feature)}
 			}
 			sessionAttempt := nextPlanSessionAttempt(artifactDir, attempt)
 			for {
@@ -1714,7 +1730,7 @@ roadmapAttemptLoop:
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: "FAILED"})
 			criticFeedback = fmt.Sprintf("Roadmap validation failed: %v", reviewErr)
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
-			continue
+			return &PlanLoopResult{FinalStatus: "failed", Iterations: attempt, LastError: reviewErr.Error()}, nil
 		}
 
 		switch reviewStatus {
@@ -1882,7 +1898,7 @@ phasePlanAttemptLoop:
 
 			addDirs := cfg.AdditionalDirs
 			if len(addDirs) == 0 {
-				addDirs = []string{cfg.StateDir}
+				addDirs = []string{ActiveRunDir(cfg.StateDir, cfg.Feature)}
 			}
 			sessionAttempt := nextPlanSessionAttempt(artifactDir, attempt)
 			for {
@@ -2102,7 +2118,7 @@ phasePlanAttemptLoop:
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: "FAILED"})
 			criticFeedback = fmt.Sprintf("Phase plan validation failed: %v", reviewErr)
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
-			continue
+			return &PlanLoopResult{FinalStatus: "failed", Iterations: attempt, LastError: reviewErr.Error()}, nil
 		}
 
 		switch reviewStatus {

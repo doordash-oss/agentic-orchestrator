@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,6 +94,79 @@ func TestBuildImplementPromptMinimal(t *testing.T) {
 	}
 	if strings.Contains(prompt, "## Handoff Contract") {
 		t.Error("Handoff Contract section should be owned by the implement skill and system prompt")
+	}
+}
+
+func TestRunImplementationLoop_GrantsOnlyActiveRunState(t *testing.T) {
+	tmpDir := t.TempDir()
+	featureStateDir := filepath.Join(tmpDir, "state", "feature-a")
+	sealedRunDir := filepath.Join(featureStateDir, "runs", "run-004")
+	activeRunDir := filepath.Join(featureStateDir, "runs", "run-005")
+	artifactDir := filepath.Join(activeRunDir, "phase-01", "implement")
+	repoDir := filepath.Join(tmpDir, "repo")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{sealedRunDir, artifactDir, repoDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+	planPath := filepath.Join(activeRunDir, "phase-01", "plan", "phase-plan.md")
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(plan dir) error = %v", err)
+	}
+	if err := os.WriteFile(planPath, []byte("# Plan\nImplement something\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plan) error = %v", err)
+	}
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
+	buildSession, captured := capturingBuildSession(agentScript, "")
+	f := &feature.Feature{
+		ID:        "feature-a",
+		ActiveRun: 5,
+		RunCount:  5,
+		Repos:     []feature.FeatureRepo{{Name: "repo-a", Path: repoDir}},
+	}
+	sm := session.NewManager(make(chan interface{}, 100))
+	defer sm.Shutdown()
+
+	result, err := RunImplementationLoop(ImplementConfig{
+		Feature:                    f,
+		WorkDir:                    activeRunDir,
+		PlanPath:                   planPath,
+		MaxIterations:              1,
+		MaxConsecFails:             3,
+		MaxConsecNoProgress:        3,
+		ExitCriteria:               "Implementation completes",
+		Model:                      "implementer",
+		ArtifactDir:                artifactDir,
+		StateDir:                   featureStateDir,
+		AdditionalDirs:             []string{repoDir},
+		DangerouslySkipPermissions: true,
+		BuildSession:               buildSession,
+		SkipIterationReview:        true,
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, finalStatusReviewPassed)
+	}
+	if len(*captured) == 0 {
+		t.Fatal("BuildSession was not called")
+	}
+	grants := (*captured)[0].AdditionalDirs
+	for _, want := range []string{activeRunDir, repoDir} {
+		if !slices.Contains(grants, want) {
+			t.Fatalf("AdditionalDirs = %v, missing grant %q", grants, want)
+		}
+	}
+	for _, forbidden := range []string{featureStateDir, sealedRunDir} {
+		if slices.Contains(grants, forbidden) {
+			t.Fatalf("AdditionalDirs = %v, must not grant predecessor scope %q", grants, forbidden)
+		}
 	}
 }
 

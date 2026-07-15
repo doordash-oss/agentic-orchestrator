@@ -44,7 +44,8 @@ import (
 //
 //   - PhaseScope correctly identifies the lone repo as the phase scope.
 //   - The inner ImplementConfig sees the cross-repo workspace shape:
-//     cwd = state dir (NOT repo dir), AdditionalDirs includes the repo,
+//     cwd = active run dir (NOT feature root or repo dir), AdditionalDirs
+//     includes the repo,
 //     ArtifactDir is at the flat phase level (no per-repo subdir).
 //   - AtomicPhaseStamp transitions the single repo to
 //     "awaiting_final_review".
@@ -118,22 +119,25 @@ func TestPhaseImplementUnified_1Repo_EndToEnd(t *testing.T) {
 	// verify that the unification cross-cuts (workspace setup, scope, atomic
 	// stamp) are correct for the N=1 degenerate case.
 	stubImpl := func(c agent.ImplementConfig, _ ports.SessionManager) (*agent.LoopResult, error) {
-		// The unified flow MUST set cwd to the state dir (NOT the repo
-		// dir) and pass the repo via --add-dir. This is the load-bearing
-		// invariant that distinguishes the unified flow from the legacy
-		// per-repo flow.
+		// The unified flow MUST set cwd to the active run dir (NOT the feature
+		// root or repo dir) and pass the repo via --add-dir. This keeps sealed
+		// predecessor runs outside the agent's granted state scope.
 		stateDirAbs, _ := filepath.Abs(filepath.Join(stateDir, f.ID))
+		activeRunDir := agent.ActiveRunDir(stateDir, f)
 		repoAAbs, _ := filepath.Abs(repoA)
-		if c.WorkDir != stateDirAbs {
-			t.Errorf("ImplementConfig.WorkDir = %q, want state dir %q (unified flow uses state dir as cwd)", c.WorkDir, stateDirAbs)
+		if c.WorkDir != activeRunDir {
+			t.Errorf("ImplementConfig.WorkDir = %q, want active run dir %q", c.WorkDir, activeRunDir)
 		}
-		// AdditionalDirs must NOT contain stateDir (already at WorkDir;
-		// the loop filters it out via additionalDirsExcludingStateDir).
+		if c.RunDir != activeRunDir {
+			t.Errorf("ImplementConfig.RunDir = %q, want active run dir %q", c.RunDir, activeRunDir)
+		}
+		// AdditionalDirs must NOT contain the feature state dir or active run
+		// dir (already at WorkDir and RunDir).
 		// AdditionalDirs MUST contain the repo path.
 		hasRepo := false
 		for _, d := range c.AdditionalDirs {
-			if d == stateDirAbs {
-				t.Errorf("ImplementConfig.AdditionalDirs leaked state dir %q (should be excluded)", d)
+			if d == stateDirAbs || d == activeRunDir {
+				t.Errorf("ImplementConfig.AdditionalDirs leaked state scope %q (should be excluded)", d)
 			}
 			if d == repoAAbs {
 				hasRepo = true

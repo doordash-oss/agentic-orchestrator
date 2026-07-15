@@ -47,6 +47,7 @@ type ImplementConfig struct {
 	ReviewModel         string
 	ArtifactDir         string // base dir for iteration artifacts
 	StateDir            string // feature state directory for PID files
+	RunDir              string // active run directory granted to the agent; empty derives from Feature.ActiveRun
 
 	// AdditionalDirs are extra directories to pass as --add-dir flags to the
 	// claude CLI, giving the agent file-system access beyond WorkDir and StateDir.
@@ -378,9 +379,18 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				permRepoName = cfg.Feature.Repos[0].Name
 			}
 
-			// Build command + session opts via BuildSession. The additional dirs
-			// list includes the state dir + any upstream repo dirs.
-			dirs := append([]string{cfg.StateDir}, cfg.AdditionalDirs...)
+			// Build command + session opts via BuildSession. Only the active run
+			// state is granted; the containing feature state directory also holds
+			// sealed predecessor runs and must remain orchestrator-private.
+			runDir := cfg.RunDir
+			if runDir == "" {
+				runNumber := cfg.Feature.ActiveRun
+				if runNumber <= 0 {
+					runNumber = 1
+				}
+				runDir = filepath.Join(cfg.StateDir, "runs", feature.RunDirName(runNumber))
+			}
+			dirs := append([]string{runDir}, cfg.AdditionalDirs...)
 			command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
 				Model:                          cfg.Model,
 				Prompt:                         prompt,

@@ -80,6 +80,7 @@ type Protocol struct {
 	turnID             string
 	model              string
 	approvalPolicy     string
+	dangerFullAccess   bool
 	inputTokens        int
 	cachedInputTokens  int
 	outputTokens       int
@@ -98,18 +99,19 @@ type Protocol struct {
 
 // NewProtocol creates a new Codex protocol handler.
 func NewProtocol(opts llm.ProtocolOpts) *Protocol {
-	policy := opts.ApprovalPolicy
+	policy := strings.TrimSpace(opts.ApprovalPolicy)
 	if policy == "" {
-		if opts.DSP {
-			policy = "never"
-		} else {
-			policy = "on-request"
-		}
+		// DSP controls the sandbox boundary, not the approval-policy enum.
+		// Managed Codex installations may require on-request even when the
+		// sandbox itself is danger-full-access; sending never is rejected by
+		// those installations before the first turn starts.
+		policy = "on-request"
 	}
 	return &Protocol{
-		opts:           opts,
-		model:          llm.StripModelContextWindow(opts.Model),
-		approvalPolicy: policy,
+		opts:             opts,
+		model:            llm.StripModelContextWindow(opts.Model),
+		approvalPolicy:   policy,
+		dangerFullAccess: opts.DSP,
 	}
 }
 
@@ -309,7 +311,7 @@ func (p *Protocol) startThread() error {
 	id := int(nextID.Add(1))
 
 	sandbox := SandboxModeWorkspaceWrite
-	if p.approvalPolicy == "never" {
+	if p.dangerFullAccess {
 		sandbox = SandboxModeDangerFullAccess
 	}
 
@@ -339,6 +341,8 @@ func (p *Protocol) startTurn(userPrompt string) error {
 	threadID := p.threadID
 	systemPrompt := p.opts.SystemPrompt
 	writableRoots := append([]string(nil), p.opts.WritableRoots...)
+	policy := p.approvalPolicy
+	dangerFullAccess := p.dangerFullAccess
 	p.mu.Unlock()
 
 	model := p.model
@@ -355,7 +359,7 @@ func (p *Protocol) startTurn(userPrompt string) error {
 		WritableRoots: writableRoots,
 		NetworkAccess: true,
 	}
-	if p.approvalPolicy == "never" {
+	if dangerFullAccess {
 		sandboxPolicy = &SandboxPolicy{
 			Type:          "dangerFullAccess",
 			NetworkAccess: true,
@@ -373,7 +377,7 @@ func (p *Protocol) startTurn(userPrompt string) error {
 		Params: TurnStartParams{
 			ThreadID:       threadID,
 			Input:          input,
-			ApprovalPolicy: p.approvalPolicy,
+			ApprovalPolicy: policy,
 			SandboxPolicy:  sandboxPolicy,
 			CollaborationMode: &CollaborationMode{
 				Mode:     "default",
@@ -392,6 +396,7 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 	policy := p.approvalPolicy
 	model := p.model
 	writableRoots := append([]string(nil), p.opts.WritableRoots...)
+	dangerFullAccess := p.dangerFullAccess
 	p.mu.Unlock()
 
 	if policy == "" {
@@ -403,7 +408,7 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 		WritableRoots: writableRoots,
 		NetworkAccess: true,
 	}
-	if policy == "never" {
+	if dangerFullAccess {
 		sandbox = &SandboxPolicy{
 			Type:          "dangerFullAccess",
 			NetworkAccess: true,
@@ -535,6 +540,9 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (llm.
 	if err := json.Unmarshal(result, &threadResult); err == nil && threadResult.Thread.ID != "" {
 		p.mu.Lock()
 		p.threadID = threadResult.Thread.ID
+		if effectivePolicy := strings.TrimSpace(threadResult.ApprovalPolicy); effectivePolicy != "" {
+			p.approvalPolicy = effectivePolicy
+		}
 		if p.threadReady != nil {
 			select {
 			case <-p.threadReady:

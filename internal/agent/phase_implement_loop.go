@@ -54,8 +54,8 @@ type PhaseImplementLoopResult struct {
 
 // RunPhaseImplementLoop runs the unified phase-implement loop for the feature.
 //
-// Single Claude session per iteration. Cwd at the feature state dir; --add-dir
-// for every Feature.Repos worktree (and the state dir). Per-repo Task
+// Single Claude session per iteration. Cwd at the active run dir; --add-dir
+// for every Feature.Repos worktree (and the active run). Per-repo Task
 // sub-agents are dispatched by prompt scope, not cwd — the existing
 // main-vs-sub split (≤3 files / ≤50 lines stays in main; everything else
 // delegated) is preserved by the implement skill prompt.
@@ -109,8 +109,8 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		}, nil
 	}
 
-	// Build the cross-repo workspace. Cwd at the feature state dir, with
-	// --add-dir for every Feature.Repos worktree (and the state dir).
+	// Build the cross-repo workspace. Cwd at the active run dir, with
+	// --add-dir for every Feature.Repos worktree (and the active run).
 	stateDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
 	workspace, err := BuildWorkspace(cfg.Feature, stateDir)
 	if err != nil {
@@ -148,6 +148,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		ReviewModel:                cfg.ReviewModel,
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
+		RunDir:                     runDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,
@@ -270,11 +271,11 @@ func resolveUnifiedPhaseImplementDir(f *feature.Feature, runDir string) string {
 	return filepath.Join(base, "implement")
 }
 
-// additionalDirsExcludingStateDir filters out the state-dir entry that
-// BuildWorkspace puts at AdditionalDirs[0] — the state dir is already passed
-// to ImplementConfig.StateDir, and BuildImplementPrompt prepends it to the
-// AdditionalDirs slice unconditionally. Without this filter the agent would
-// see the state dir twice in --add-dir.
+// additionalDirsExcludingStateDir filters out the workspace cwd entry that
+// BuildWorkspace puts at AdditionalDirs[0]. The active run is passed separately
+// through ImplementConfig.RunDir; without this filter the agent would see it
+// twice in --add-dir. The legacy stateDir comparison keeps manually constructed
+// WorkspaceSetup values compatible.
 func additionalDirsExcludingStateDir(ws WorkspaceSetup, stateDir string) []string {
 	out := make([]string, 0, len(ws.AdditionalDirs))
 	abs, _ := filepath.Abs(stateDir)

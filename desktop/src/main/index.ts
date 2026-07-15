@@ -6,7 +6,9 @@
 import path from 'node:path';
 import { BrowserWindow, app, dialog, ipcMain, nativeTheme, session } from 'electron';
 import { createRuntimeGateway } from './gateway/wiring';
+import { EventStreamSupervisor } from './gateway/events';
 import type { RuntimeGateway } from './gateway/runtimeGateway';
+import { FeatureService } from './features';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
 import {
   installSecurityPolicies,
@@ -123,6 +125,36 @@ void app.whenReady().then(() => {
     },
   });
 
+  const features = new FeatureService({
+    transport: gateway,
+    readReadiness: () => setup.getReadiness(),
+  });
+
+  // Main-process SSE consumption: runs only while the gateway is ready and
+  // forwards schema-validated invalidation metadata to the app window.
+  const eventSupervisor = new EventStreamSupervisor({
+    source: gateway,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    log: (line) => console.warn(`[agentico-events] ${line}`),
+    onPush: (event) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send(IPC_EVENTS.appEvent, event);
+        }
+      }
+    },
+  });
+  gateway.subscribe((state) => {
+    if (state.status === 'ready') {
+      eventSupervisor.start();
+    } else {
+      eventSupervisor.stop();
+    }
+  });
+  app.on('before-quit', () => {
+    eventSupervisor.stop();
+  });
+
   const services: IpcServices = {
     getConnectionStatus: () => gateway.getState(),
     retryConnection: () => gateway.retry(),
@@ -136,6 +168,11 @@ void app.whenReady().then(() => {
     addWorkspaceRoot: (rootPath) => setup.addWorkspaceRoot(rootPath),
     initRepository: (request) => setup.initRepository(request),
     listRepositories: () => setup.listRepositories(),
+    listFeatures: () => features.listFeatures(),
+    getFeature: (featureId) => features.getFeature(featureId),
+    createFeature: (input) => features.createFeature(input),
+    dispatchFeatureSetup: (featureId) => features.dispatchSetup(featureId),
+    getCreationDefaults: () => features.creationDefaults(),
   };
   registerIpcHandlers(ipcMain, trusted, services);
 

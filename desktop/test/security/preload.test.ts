@@ -23,12 +23,18 @@ describe('preload surface', () => {
     expect(name).toBe('agentico');
     expect(Object.keys(api as object).sort()).toEqual([
       'addWorkspaceRoot',
+      'createFeature',
+      'dispatchFeatureSetup',
       'getConnectionStatus',
+      'getCreationDefaults',
+      'getFeature',
       'getReadiness',
       'getSettings',
       'getThemePreference',
       'initRepository',
+      'listFeatures',
       'listRepositories',
+      'onAppEvent',
       'onConnectionChanged',
       'pickWorkspaceDirectory',
       'refreshReadiness',
@@ -104,5 +110,34 @@ describe('preload surface', () => {
       'agentico:connection:changed',
       expect.any(Function),
     );
+  });
+
+  it('validates pushed app events fail-closed and never forwards foreign fields', () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      onAppEvent(cb: (e: unknown) => void): () => void;
+    };
+    const cb = vi.fn();
+    const unsubscribe = api.onAppEvent(cb);
+    expect(on).toHaveBeenCalledWith('agentico:events:app', expect.any(Function));
+    const listener = on.mock.calls[0]![1] as (event: unknown, payload: unknown) => void;
+
+    const valid = { type: 'invalidated', kind: 'feature.updated', featureId: 'abcd1234' };
+    listener({}, valid);
+    expect(cb).toHaveBeenCalledWith(valid);
+
+    cb.mockClear();
+    // Domain payloads, token-shaped fields, and polluted objects are dropped.
+    listener({}, { ...valid, summary: 'setup finished' });
+    listener({}, { ...valid, token: 'tok-leak' });
+    listener({}, { type: 'invalidated', kind: 'bad kind with spaces' });
+    listener({}, JSON.parse('{"__proto__": {}, "type": "invalidated", "kind": "x"}'));
+    listener({}, { type: 'status', stream: 'exploded' });
+    expect(cb).not.toHaveBeenCalled();
+
+    listener({}, { type: 'status', stream: 'stale' });
+    expect(cb).toHaveBeenCalledWith({ type: 'status', stream: 'stale' });
+
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('agentico:events:app', expect.any(Function));
   });
 });

@@ -14,6 +14,11 @@ import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sani
 import {
   IPC_CHANNELS,
   type ConnectionState,
+  type CreateFeatureInput,
+  type CreateFeatureResult,
+  type CreationDefaults,
+  type FeatureSnapshot,
+  type FeatureSummaryView,
   type InitRepositoryRequest,
   type IpcChannel,
   type IpcEnvelope,
@@ -22,6 +27,7 @@ import {
   type RepositoryState,
   type Settings,
   type SettingsPatch,
+  type SetupDispatchResult,
   type ThemeInfo,
   type ThemePreference,
   ipcContracts,
@@ -41,6 +47,11 @@ export interface IpcServices {
   addWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
   listRepositories(): Promise<RepositoryState[]>;
+  listFeatures(): Promise<FeatureSummaryView[]>;
+  getFeature(featureId: string): Promise<FeatureSnapshot>;
+  createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult>;
+  dispatchFeatureSetup(featureId: string): Promise<SetupDispatchResult>;
+  getCreationDefaults(): Promise<CreationDefaults>;
 }
 
 export interface IpcMainLike {
@@ -99,6 +110,11 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.workspaceInitRepository]: (request: InitRepositoryRequest) =>
       services.initRepository(request),
     [IPC_CHANNELS.repositoriesList]: () => services.listRepositories(),
+    [IPC_CHANNELS.featuresList]: () => services.listFeatures(),
+    [IPC_CHANNELS.featuresGet]: (featureId: string) => services.getFeature(featureId),
+    [IPC_CHANNELS.featuresCreate]: (input: CreateFeatureInput) => services.createFeature(input),
+    [IPC_CHANNELS.featuresSetup]: (featureId: string) => services.dispatchFeatureSetup(featureId),
+    [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

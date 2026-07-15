@@ -53,6 +53,24 @@ function makeServices(): IpcServices {
     addWorkspaceRoot: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     initRepository: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     listRepositories: vi.fn(() => Promise.resolve([])),
+    listFeatures: vi.fn(() => Promise.resolve([])),
+    getFeature: vi.fn(() =>
+      Promise.resolve({
+        id: 'abcd1234ef567890',
+        name: 'Feature',
+        slug: 'feature',
+        status: 'Created',
+        currentPhase: 'Plan',
+        repos: [],
+        createdAt: '2026-07-14T10:00:00Z',
+        actions: [],
+      }),
+    ),
+    createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
+    dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
+    getCreationDefaults: vi.fn(() =>
+      Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
+    ),
   };
 }
 

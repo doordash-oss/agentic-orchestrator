@@ -120,7 +120,40 @@ describe('SettingsStore', () => {
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: false, lastRepositoryPathHint: null },
+      tabs: { open: [], activeFeatureId: null },
     });
+  });
+
+  it('persists tab identity/presentation prefs and restores them on reload', () => {
+    const store = makeStore();
+    store.update({
+      tabs: {
+        open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
+        activeFeatureId: 'abcd1234ef567890',
+      },
+    });
+    expect(makeStore().get().tabs).toEqual({
+      open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
+      activeFeatureId: 'abcd1234ef567890',
+    });
+  });
+
+  it('rejects tab entries carrying server-domain state beyond identity/presentation', () => {
+    const store = makeStore();
+    expect(() =>
+      store.update({
+        tabs: {
+          open: [
+            {
+              featureId: 'abcd1234ef567890',
+              titleHint: 'Search',
+              status: 'Created',
+            } as never,
+          ],
+          activeFeatureId: null,
+        },
+      }),
+    ).toThrow(SafeErrorException);
   });
 
   it('persists wizard presentation prefs and loads pre-wizard files with defaults', () => {

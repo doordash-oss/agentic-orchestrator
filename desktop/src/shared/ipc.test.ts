@@ -10,6 +10,7 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
   defaultSettings,
+  defaultTabsPrefs,
   defaultWizardPrefs,
   ipcContracts,
 } from './ipc';
@@ -113,6 +114,7 @@ describe('SettingsSchema', () => {
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: true, lastRepositoryPathHint: '/work/repo' },
+      tabs: { open: [{ featureId: 'abcd1234', titleHint: 'Search' }], activeFeatureId: null },
     };
     expect(SettingsSchema.parse(doc)).toEqual(doc);
   });
@@ -124,7 +126,11 @@ describe('SettingsSchema', () => {
       window: {},
       theme: 'system',
     };
-    expect(SettingsSchema.parse(doc)).toEqual({ ...doc, wizard: defaultWizardPrefs() });
+    expect(SettingsSchema.parse(doc)).toEqual({
+      ...doc,
+      wizard: defaultWizardPrefs(),
+      tabs: defaultTabsPrefs(),
+    });
   });
 });
 

@@ -18,6 +18,11 @@ export const IPC_CHANNELS = {
   workspaceAddRoot: 'agentico:workspace:add-root',
   workspaceInitRepository: 'agentico:workspace:init-repository',
   repositoriesList: 'agentico:repositories:list',
+  featuresList: 'agentico:features:list',
+  featuresGet: 'agentico:features:get',
+  featuresCreate: 'agentico:features:create',
+  featuresSetup: 'agentico:features:setup',
+  creationDefaults: 'agentico:creation:defaults',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -269,6 +274,141 @@ export const InitRepositoryRequestSchema = z.strictObject({
 
 export type InitRepositoryRequest = z.output<typeof InitRepositoryRequestSchema>;
 
+// --- Features (renderer-facing views of authoritative server snapshots) -----
+// The renderer never receives raw server payloads; the main process maps
+// them into these strict shapes. Anything foreign — in particular anything
+// token- or path-shaped beyond the declared fields — fails validation.
+
+/**
+ * Server feature identifiers are short lowercase hex strings; the schema
+ * additionally confines them to the character class the gateway's API-path
+ * allowlist accepts, so a malicious id can never smuggle path segments.
+ */
+export const FeatureIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9_-]+$/i);
+
+export type FeatureId = z.output<typeof FeatureIdSchema>;
+
+/** Durable-setup lifecycle states (server SetupStatus). */
+export const FEATURE_SETUP_STATUSES = ['queued', 'running', 'done', 'failed'] as const;
+export const FeatureSetupStatusSchema = z.enum(FEATURE_SETUP_STATUSES);
+export type FeatureSetupStatus = z.output<typeof FeatureSetupStatusSchema>;
+
+export const SetupTaskViewSchema = z.strictObject({
+  key: z.string().min(1),
+  kind: z.string(),
+  /** Display label; the main process falls back to the key. */
+  label: z.string().min(1),
+  repo: z.string().optional(),
+  status: FeatureSetupStatusSchema,
+  branch: z.string().optional(),
+  attempt: z.number().int().nonnegative(),
+  /** Server-redacted safe failure summary. */
+  error: z.string().optional(),
+});
+
+export type SetupTaskView = z.output<typeof SetupTaskViewSchema>;
+
+export const FeatureSetupViewSchema = z.strictObject({
+  status: FeatureSetupStatusSchema,
+  attempt: z.number().int().nonnegative(),
+  /** Tasks in the server-owned execution order. */
+  tasks: z.array(SetupTaskViewSchema),
+  lastError: z.string().optional(),
+});
+
+export type FeatureSetupView = z.output<typeof FeatureSetupViewSchema>;
+
+export const FeatureActionViewSchema = z.strictObject({
+  id: z.string().min(1),
+  enabled: z.boolean(),
+  disabledReasons: z.array(z.strictObject({ code: z.string(), message: z.string() })),
+});
+
+export type FeatureActionView = z.output<typeof FeatureActionViewSchema>;
+
+export const FeatureSummaryViewSchema = z.strictObject({
+  id: FeatureIdSchema,
+  name: z.string(),
+  status: z.string(),
+  currentPhase: z.string(),
+  repos: z.array(z.string()),
+  createdAt: z.string(),
+});
+
+export type FeatureSummaryView = z.output<typeof FeatureSummaryViewSchema>;
+
+export const FeatureSnapshotSchema = z.strictObject({
+  id: FeatureIdSchema,
+  name: z.string(),
+  slug: z.string(),
+  status: z.string(),
+  currentPhase: z.string(),
+  pipeline: z.string().optional(),
+  description: z.string().optional(),
+  repos: z.array(z.string()),
+  createdAt: z.string(),
+  setup: FeatureSetupViewSchema.optional(),
+  /** The authoritative server action catalogue (setup/start/…). */
+  actions: z.array(FeatureActionViewSchema),
+  failure: z
+    .strictObject({ type: z.string().optional(), message: z.string().optional() })
+    .optional(),
+});
+
+export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
+
+// --- Feature creation ---------------------------------------------------------
+
+/** The narrow Phase 1 creation input, validated at both IPC boundaries. */
+export const CreateFeatureInputSchema = z.strictObject({
+  name: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((value) => value.trim() !== '', { message: 'A feature name is required.' }),
+  description: z.string().max(10000),
+  /** Repository keys from server workspace discovery. */
+  repoKeys: z.array(z.string().min(1).max(200)).min(1).max(32),
+  /** Branch choice: reuse the current branch instead of a feature branch. */
+  useCurrentBranch: z.boolean(),
+});
+
+export type CreateFeatureInput = z.output<typeof CreateFeatureInputSchema>;
+
+export const CreateFeatureResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+});
+
+export type CreateFeatureResult = z.output<typeof CreateFeatureResultSchema>;
+
+export const SetupDispatchResultSchema = z.strictObject({
+  result: z.string(),
+});
+
+export type SetupDispatchResult = z.output<typeof SetupDispatchResultSchema>;
+
+/**
+ * Fresh server-provided creation context: discovered repositories with
+ * eligibility, and the defaults the creation contract applies server-side.
+ */
+export const CreationDefaultsSchema = z.strictObject({
+  repositories: z.array(RepositoryStateSchema),
+  defaults: z.strictObject({
+    pipeline: z.string().optional(),
+    inquireness: z.string().optional(),
+    /** Per-phase default models, for read-only display. */
+    models: z.array(z.strictObject({ phase: z.string(), model: z.string() })),
+    /** Server default branch choice: false ⇒ new feature branch. */
+    useCurrentBranch: z.boolean(),
+  }),
+});
+
+export type CreationDefaults = z.output<typeof CreationDefaultsSchema>;
+
 // --- Theme ------------------------------------------------------------------
 
 export const ThemePreferenceSchema = z.enum(['light', 'dark', 'system']);
@@ -310,6 +450,31 @@ export function defaultWizardPrefs(): WizardPrefs {
   return { collapsedHelp: false, lastRepositoryPathHint: null };
 }
 
+/**
+ * Open feature tabs: strictly identity plus presentation. The title is a
+ * *hint* used only until the authoritative feature loads; feature state,
+ * setup progress, and any other server-domain data are never stored here.
+ */
+export const FeatureTabSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  titleHint: z.string().max(200),
+});
+
+export type FeatureTab = z.output<typeof FeatureTabSchema>;
+
+export const TabsPrefsSchema = z.strictObject({
+  /** Open feature tabs in display order. */
+  open: z.array(FeatureTabSchema).max(50),
+  /** Active tab; null means the Home tab. */
+  activeFeatureId: FeatureIdSchema.nullable(),
+});
+
+export type TabsPrefs = z.output<typeof TabsPrefsSchema>;
+
+export function defaultTabsPrefs(): TabsPrefs {
+  return { open: [], activeFeatureId: null };
+}
+
 export const SettingsSchema = z.strictObject({
   schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION),
   runtime: z.strictObject({
@@ -321,6 +486,7 @@ export const SettingsSchema = z.strictObject({
   }),
   theme: ThemePreferenceSchema,
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
+  tabs: TabsPrefsSchema.default(defaultTabsPrefs()),
 });
 
 export type Settings = z.output<typeof SettingsSchema>;
@@ -330,6 +496,7 @@ export const SettingsPatchSchema = z.strictObject({
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }).optional(),
   theme: ThemePreferenceSchema.optional(),
   wizard: WizardPrefsSchema.optional(),
+  tabs: TabsPrefsSchema.optional(),
 });
 
 export type SettingsPatch = z.output<typeof SettingsPatchSchema>;
@@ -341,6 +508,7 @@ export function defaultSettings(): Settings {
     window: {},
     theme: 'system',
     wizard: defaultWizardPrefs(),
+    tabs: defaultTabsPrefs(),
   };
 }
 
@@ -402,6 +570,26 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([]),
     response: z.array(RepositoryStateSchema),
   },
+  [IPC_CHANNELS.featuresList]: {
+    request: z.tuple([]),
+    response: z.array(FeatureSummaryViewSchema),
+  },
+  [IPC_CHANNELS.featuresGet]: {
+    request: z.tuple([FeatureIdSchema]),
+    response: FeatureSnapshotSchema,
+  },
+  [IPC_CHANNELS.featuresCreate]: {
+    request: z.tuple([CreateFeatureInputSchema]),
+    response: CreateFeatureResultSchema,
+  },
+  [IPC_CHANNELS.featuresSetup]: {
+    request: z.tuple([FeatureIdSchema]),
+    response: SetupDispatchResultSchema,
+  },
+  [IPC_CHANNELS.creationDefaults]: {
+    request: z.tuple([]),
+    response: CreationDefaultsSchema,
+  },
 };
 
 // --- The narrow window API the preload exposes -------------------------------
@@ -420,4 +608,10 @@ export interface AgenticoApi {
   addWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
   listRepositories(): Promise<RepositoryState[]>;
+  listFeatures(): Promise<FeatureSummaryView[]>;
+  getFeature(featureId: string): Promise<FeatureSnapshot>;
+  createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult>;
+  dispatchFeatureSetup(featureId: string): Promise<SetupDispatchResult>;
+  getCreationDefaults(): Promise<CreationDefaults>;
+  onAppEvent(listener: (event: AppEvent) => void): () => void;
 }

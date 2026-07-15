@@ -1,0 +1,208 @@
+/**
+ * Security posture of the feature-creation IPC surface: spoofed senders are
+ * rejected on every new op, creation input and feature ids are validated at
+ * the schema layer before any service runs, responses that violate their
+ * strict schemas fail closed, and the local tabs settings section can never
+ * store server-domain state beyond identity/presentation.
+ */
+import { describe, expect, it, vi } from 'vitest';
+import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
+import type { TrustedSender } from '../../src/main/security';
+import { IPC_CHANNELS, defaultSettings } from '../../src/shared/ipc';
+
+const trusted: TrustedSender = {
+  webContentsId: 1,
+  allowedOrigins: new Set(['file://']),
+};
+
+const goodEvent = {
+  sender: { id: 1 },
+  senderFrame: { url: 'file:///app/out/renderer/index.html' },
+};
+const foreignEvent = {
+  sender: { id: 66 },
+  senderFrame: { url: 'https://evil.example.com/' },
+};
+
+function snapshot() {
+  return {
+    id: 'abcd1234ef567890',
+    name: 'Search revamp',
+    slug: 'search-revamp',
+    status: 'Created',
+    currentPhase: 'Plan',
+    repos: ['repo-a'],
+    createdAt: '2026-07-14T10:00:00Z',
+    actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+  };
+}
+
+function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
+  return {
+    getConnectionStatus: vi.fn(() => ({
+      status: 'ready' as const,
+      stage: 'ready' as const,
+      detail: 'ok',
+      ownership: 'external' as const,
+    })),
+    retryConnection: vi.fn(() => ({
+      status: 'ready' as const,
+      stage: 'ready' as const,
+      detail: 'ok',
+      ownership: 'external' as const,
+    })),
+    getSettings: vi.fn(() => defaultSettings()),
+    updateSettings: vi.fn(() => defaultSettings()),
+    getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
+    setTheme: vi.fn((preference) => ({ preference, resolved: 'dark' as const })),
+    getReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
+    refreshReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
+    pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
+    addWorkspaceRoot: vi.fn(() => Promise.reject(new Error('unused'))),
+    initRepository: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRepositories: vi.fn(() => Promise.resolve([])),
+    listFeatures: vi.fn(() => Promise.resolve([])),
+    getFeature: vi.fn(() => Promise.resolve(snapshot())),
+    createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
+    dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
+    getCreationDefaults: vi.fn(() =>
+      Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
+    ),
+    ...overrides,
+  };
+}
+
+function register(services = makeServices()) {
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>();
+  const ipcMain = {
+    handle: vi.fn((channel: string, listener: never) => {
+      handlers.set(channel, listener as (event: unknown, ...args: unknown[]) => Promise<unknown>);
+    }),
+  };
+  registerIpcHandlers(ipcMain, trusted, services);
+  return { handlers, services };
+}
+
+interface Envelope {
+  ok: boolean;
+  value?: unknown;
+  error?: { code: string; message: string };
+}
+
+const validInput = {
+  name: 'Search revamp',
+  description: '',
+  repoKeys: ['repo-a'],
+  useCurrentBranch: false,
+};
+
+describe('feature IPC security', () => {
+  it('rejects untrusted senders on every feature/creation channel', async () => {
+    const { handlers, services } = register();
+    for (const channel of [
+      IPC_CHANNELS.featuresList,
+      IPC_CHANNELS.featuresGet,
+      IPC_CHANNELS.featuresCreate,
+      IPC_CHANNELS.featuresSetup,
+      IPC_CHANNELS.creationDefaults,
+    ]) {
+      const result = (await handlers.get(channel)!(foreignEvent, validInput)) as Envelope;
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('E_UNTRUSTED_SENDER');
+    }
+    expect(services.createFeature).not.toHaveBeenCalled();
+    expect(services.getFeature).not.toHaveBeenCalled();
+    expect(services.dispatchFeatureSetup).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid creation input at the schema layer before any service runs', async () => {
+    const { handlers, services } = register();
+    const create = handlers.get(IPC_CHANNELS.featuresCreate)!;
+    for (const bad of [
+      { ...validInput, name: '' },
+      { ...validInput, name: '   ' },
+      { ...validInput, repoKeys: [] },
+      { ...validInput, extra: 'field' },
+      { ...validInput, useCurrentBranch: 'yes' },
+      'not-an-object',
+    ]) {
+      const result = (await create(goodEvent, bad)) as Envelope;
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    }
+    expect(services.createFeature).not.toHaveBeenCalled();
+  });
+
+  it('rejects feature ids that could smuggle path segments', async () => {
+    const { handlers, services } = register();
+    for (const channel of [IPC_CHANNELS.featuresGet, IPC_CHANNELS.featuresSetup]) {
+      for (const bad of ['../other', 'id/with/slash', 'id?a=1', 'id#f', '', 'id name']) {
+        const result = (await handlers.get(channel)!(goodEvent, bad)) as Envelope;
+        expect(result.ok).toBe(false);
+        expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+      }
+    }
+    expect(services.getFeature).not.toHaveBeenCalled();
+    expect(services.dispatchFeatureSetup).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a feature snapshot carries token-shaped fields', async () => {
+    const services = makeServices({
+      getFeature: vi.fn(() => Promise.resolve({ ...snapshot(), authToken: 'tok-leak-9' } as never)),
+    });
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.featuresGet)!(
+      goodEvent,
+      'abcd1234ef567890',
+    )) as Envelope;
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(JSON.stringify(result)).not.toContain('tok-leak-9');
+  });
+
+  it('fails closed on prototype-polluting creation payloads', async () => {
+    const { handlers, services } = register();
+    const payload = JSON.parse(
+      '{"name":"x","description":"","repoKeys":["r"],"useCurrentBranch":false,"__proto__":{"polluted":true}}',
+    );
+    const result = (await handlers.get(IPC_CHANNELS.featuresCreate)!(
+      goodEvent,
+      payload,
+    )) as Envelope;
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_UNSAFE_PAYLOAD');
+    expect(services.createFeature).not.toHaveBeenCalled();
+  });
+
+  it('rejects a tabs settings patch carrying feature/domain state', async () => {
+    const { handlers, services } = register();
+    const update = handlers.get(IPC_CHANNELS.settingsUpdate)!;
+    for (const tabs of [
+      // Domain fields on a tab entry beyond identity/presentation.
+      {
+        open: [{ featureId: 'abcd1234', titleHint: 'x', status: 'Created' }],
+        activeFeatureId: null,
+      },
+      // Snapshot-shaped storage.
+      { open: [{ featureId: 'abcd1234', titleHint: 'x' }], activeFeatureId: null, snapshot: {} },
+      // Identity that is not a confined feature id.
+      { open: [{ featureId: '../etc', titleHint: 'x' }], activeFeatureId: null },
+    ]) {
+      const result = (await update(goodEvent, { tabs })) as Envelope;
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    }
+    expect(services.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('accepts a tabs patch limited to identity and presentation', async () => {
+    const { handlers } = register();
+    const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
+      tabs: {
+        open: [{ featureId: 'abcd1234ef567890', titleHint: 'Search revamp' }],
+        activeFeatureId: 'abcd1234ef567890',
+      },
+    })) as Envelope;
+    expect(result.ok).toBe(true);
+  });
+});

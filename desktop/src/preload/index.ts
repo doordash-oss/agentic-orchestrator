@@ -6,12 +6,15 @@
  */
 import { contextBridge, ipcRenderer } from 'electron';
 import {
+  AppEventSchema,
   ConnectionStateSchema,
   IPC_CHANNELS,
   IPC_EVENTS,
   IpcEnvelopeSchema,
   type AgenticoApi,
+  type AppEvent,
   type ConnectionState,
+  type CreateFeatureInput,
   type InitRepositoryRequest,
   type SettingsPatch,
   type ThemePreference,
@@ -63,6 +66,28 @@ const api: AgenticoApi = {
   initRepository: (request: InitRepositoryRequest) =>
     call(IPC_CHANNELS.workspaceInitRepository, request),
   listRepositories: () => call(IPC_CHANNELS.repositoriesList),
+  listFeatures: () => call(IPC_CHANNELS.featuresList),
+  getFeature: (featureId: string) => call(IPC_CHANNELS.featuresGet, featureId),
+  createFeature: (input: CreateFeatureInput) => call(IPC_CHANNELS.featuresCreate, input),
+  dispatchFeatureSetup: (featureId: string) => call(IPC_CHANNELS.featuresSetup, featureId),
+  getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),
+  onAppEvent: (listener: (event: AppEvent) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return; // drop unsafe events silently — fail closed
+      }
+      const event = AppEventSchema.safeParse(payload);
+      if (event.success) {
+        listener(event.data);
+      }
+    };
+    ipcRenderer.on(IPC_EVENTS.appEvent, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.appEvent, wrapped);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('agentico', api);

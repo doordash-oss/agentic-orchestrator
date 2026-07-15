@@ -189,6 +189,111 @@ export const RuntimeConfigWorkspaceSchema = z.object({
 
 export type RuntimeConfigWorkspace = z.output<typeof RuntimeConfigWorkspaceSchema>;
 
+// --- Features (GET/POST /api/v1/features, GET /api/v1/features/{id}) --------
+// Lenient subsets: z.object tolerates and strips the many fields Phase 1
+// does not consume yet.
+
+export const ServerSetupTaskSchema = z.object({
+  key: z.string(),
+  kind: z.string(),
+  label: z.string().optional(),
+  repo: z.string().optional(),
+  status: z.string(),
+  branch: z.string().optional(),
+  attempt: z.number().int().optional(),
+  last_error: z.string().optional(),
+});
+
+export type ServerSetupTask = z.output<typeof ServerSetupTaskSchema>;
+
+export const ServerSetupSchema = z.object({
+  status: z.string(),
+  attempt: z.number().int().optional(),
+  tasks: z.record(z.string(), ServerSetupTaskSchema).optional(),
+  task_order: z.array(z.string()).optional(),
+  last_error: z.string().optional(),
+});
+
+export type ServerSetup = z.output<typeof ServerSetupSchema>;
+
+export const ServerActionSchema = z.object({
+  id: z.string(),
+  enabled: z.boolean(),
+  disabled_reasons: z.array(z.object({ code: z.string(), message: z.string() })).optional(),
+});
+
+export const ServerFeatureSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  status: z.string(),
+  current_phase: z.string(),
+  repos: z.array(z.string()),
+  created_at: z.string(),
+});
+
+export type ServerFeatureSummary = z.output<typeof ServerFeatureSummarySchema>;
+
+export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
+  description: z.string().optional(),
+  pipeline: z.string().optional(),
+  active_run_detail: z
+    .object({
+      setup: ServerSetupSchema.optional(),
+    })
+    .optional(),
+  actions: z.array(ServerActionSchema),
+  failure: z.object({ type: z.string().optional(), message: z.string().optional() }).optional(),
+});
+
+export type ServerFeatureDetail = z.output<typeof ServerFeatureDetailSchema>;
+
+export const FeatureListResponseSchema = z.object({
+  api_version: z.string(),
+  features: z.array(ServerFeatureSummarySchema),
+});
+
+export type FeatureListResponse = z.output<typeof FeatureListResponseSchema>;
+
+export const FeatureDetailResponseSchema = z.object({
+  api_version: z.string(),
+  feature: ServerFeatureDetailSchema,
+});
+
+export type FeatureDetailResponse = z.output<typeof FeatureDetailResponseSchema>;
+
+/** Shared shape of create/setup action responses (FeatureActionResult). */
+export const FeatureActionResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.string(),
+  feature_id: z.string(),
+});
+
+export type FeatureActionResponse = z.output<typeof FeatureActionResponseSchema>;
+
+// --- Runtime config (GET /api/v1/config/runtime) — creation-defaults subset --
+
+export const ServerModelDefaultsSchema = z.object({
+  inquiry: z.string().optional(),
+  research: z.string().optional(),
+  planning: z.string().optional(),
+  implementation: z.string().optional(),
+  review: z.string().optional(),
+  utilities: z.string().optional(),
+  kb_build: z.string().optional(),
+});
+
+export const RuntimeConfigCreationSchema = z.object({
+  api_version: z.string(),
+  feature_defaults: z.object({
+    models: ServerModelDefaultsSchema,
+    inquireness: z.string().optional(),
+    pipeline: z.string().optional(),
+  }),
+});
+
+export type RuntimeConfigCreation = z.output<typeof RuntimeConfigCreationSchema>;
+
 // --- Structured server error bodies (ErrorResponse) -------------------------
 // Lenient on purpose: error paths must degrade gracefully, never fail open.
 
@@ -196,6 +301,24 @@ export const ServerErrorResponseSchema = z.object({
   error: z.object({
     code: z.string(),
     message: z.string(),
+  }),
+});
+
+/**
+ * Error body including the structured `target` payload the server attaches
+ * to 409 `not_ready` creation rejections (outstanding readiness issues).
+ */
+export const ServerErrorWithIssuesSchema = z.object({
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    target: z
+      .object({
+        issues: z
+          .array(z.object({ code: z.string(), message: z.string(), remedy: z.string().optional() }))
+          .optional(),
+      })
+      .optional(),
   }),
 });
 
@@ -215,3 +338,25 @@ void _readinessAssignable;
 type RuntimeConfigDTO = components['schemas']['RuntimeConfigResponse'];
 const _runtimeConfigSubset = (value: RuntimeConfigDTO): RuntimeConfigWorkspace => value;
 void _runtimeConfigSubset;
+// Reverse guards for the feature subsets: every parsed field must exist on
+// the generated types with a compatible shape.
+type FeatureListDTO = components['schemas']['FeatureListResponse'];
+const _featureListSubset = (value: FeatureListDTO): FeatureListResponse => value;
+void _featureListSubset;
+type FeatureDetailResponseDTO = components['schemas']['FeatureDetailResponse'];
+const _featureDetailSubset = (value: FeatureDetailResponseDTO): FeatureDetailResponse => value;
+void _featureDetailSubset;
+type SetupDTO = components['schemas']['Setup'];
+const _setupSubset = (value: SetupDTO): ServerSetup => value;
+void _setupSubset;
+type SetupTaskDTO = components['schemas']['SetupTask'];
+const _setupTaskSubset = (value: SetupTaskDTO): ServerSetupTask => value;
+void _setupTaskSubset;
+type CreateFeatureResponseDTO = components['schemas']['CreateFeatureResponse'];
+const _createFeatureSubset = (value: CreateFeatureResponseDTO): FeatureActionResponse => value;
+void _createFeatureSubset;
+type FeatureSetupResponseDTO = components['schemas']['FeatureSetupResponse'];
+const _featureSetupSubset = (value: FeatureSetupResponseDTO): FeatureActionResponse => value;
+void _featureSetupSubset;
+const _runtimeConfigCreationSubset = (value: RuntimeConfigDTO): RuntimeConfigCreation => value;
+void _runtimeConfigCreationSubset;

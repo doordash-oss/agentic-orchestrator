@@ -42,9 +42,9 @@ export function ConsentDialog({ path, busy, onConfirm, onCancel }: ConsentDialog
           <p>This folder is not a git repository yet:</p>
           <code className="consent-dialog__path">{path}</code>
           <p>
-            If you continue, the Agentico runtime will initialize a git repository there — the
-            equivalent of running <code>git init</code> in that folder. A <code>.git</code>{' '}
-            directory is created; existing files are left untouched and no commits are made.
+            The folder must be empty. If you continue, the Agentico runtime initializes a git
+            repository there — the equivalent of running <code>git init</code> in that folder — and
+            creates an initial empty commit so the repository is ready to use.
           </p>
           <p>
             If you cancel, nothing is created and you can pick a different folder or an existing

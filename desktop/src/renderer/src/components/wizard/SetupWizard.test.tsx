@@ -152,7 +152,8 @@ describe('SetupWizard repository step', () => {
     const dialog = await screen.findByRole('dialog', { name: /initialize a new repository/i });
     expect(dialog).toHaveTextContent(/git init/);
     expect(dialog).toHaveTextContent('/work/space/plain');
-    expect(dialog).toHaveTextContent(/no commits are made/i);
+    expect(dialog).toHaveTextContent(/folder must be empty/i);
+    expect(dialog).toHaveTextContent(/initial empty commit/i);
     expect(mock.api.initRepository).not.toHaveBeenCalled();
   });
 

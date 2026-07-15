@@ -375,3 +375,37 @@ func carryForwardRoadmapPhaseFrontend(old map[int]bool, target Phase, targetRoad
 	}
 	return out
 }
+
+// restoreTargetPhaseFrontendFromCarriedPlan fills a missing target-phase
+// frontend marker from the approved phase plan that was copied into the new
+// run. This repairs runs created before target-phase markers were retained
+// during partial rewinds.
+func restoreTargetPhaseFrontendFromCarriedPlan(frontend map[int]bool, newRunDir string, targetRoadmapPhase int) (map[int]bool, error) {
+	if targetRoadmapPhase <= 0 {
+		return frontend, nil
+	}
+	if _, ok := frontend[targetRoadmapPhase]; ok {
+		return frontend, nil
+	}
+	planPath := filepath.Join(newRunDir, fmt.Sprintf("phase-%02d", targetRoadmapPhase), "plan", "phase-plan.md")
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return frontend, nil
+		}
+		return nil, fmt.Errorf("reading carried phase plan metadata: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(strings.ToLower(line), "**frontend:**") {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(line[len("**Frontend:**"):]), "`")
+		if frontend == nil {
+			frontend = make(map[int]bool)
+		}
+		frontend[targetRoadmapPhase] = strings.EqualFold(value, "true")
+		return frontend, nil
+	}
+	return frontend, nil
+}

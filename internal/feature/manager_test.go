@@ -6397,6 +6397,52 @@ func TestRewindWithRequest_PartialRetainsTargetPhaseFrontend(t *testing.T) {
 	}
 }
 
+func TestRewindWithRequest_PartialRestoresMissingTargetPhaseFrontendFromPlan(t *testing.T) {
+	mgr := newTestManager(t)
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
+	})
+	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
+	planPath := filepath.Join(run1Dir, "phase-01", "plan", "phase-plan.md")
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
+		t.Fatalf("mkdir phase plan: %v", err)
+	}
+	if err := os.WriteFile(planPath, []byte("## Metadata\n\n**Frontend:** true\n"), 0o644); err != nil {
+		t.Fatalf("write phase plan: %v", err)
+	}
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 2
+		ff.TotalRoadmapPhases = 2
+		ff.Artifacts = map[string]string{
+			"plan":         planPath,
+			"phase-1-plan": planPath,
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	mgr.Worktrees = mocks.NewMockWorktreeOperator()
+	mgr.Branches = nil
+	mgr.PRs = nil
+
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 1,
+	}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+
+	got, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.RoadmapPhaseFrontend(1) {
+		t.Error("RoadmapPhaseFrontend(1) = false, want restored from carried phase plan")
+	}
+}
+
 func TestRewindToPhase_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
 	mgr := newTestManager(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{

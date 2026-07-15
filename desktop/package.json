@@ -22,9 +22,9 @@
     "package:verify": "node scripts/package-build.mjs && node scripts/verify-package.mjs"
   },
   "devDependencies": {
+    "@fontsource/atkinson-hyperlegible": "^5.2.8",
+    "@fontsource/barlow-condensed": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7",
-    "@fontsource/ibm-plex-sans": "^5.2.8",
-    "@fontsource/space-grotesk": "^5.2.10",
     "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

@@ -839,6 +839,7 @@ export interface components {
         ActionBaseResponse: components["schemas"]["JSONResponse"];
         ActionResponse: components["schemas"]["ActionBaseResponse"] & {
             create_feature_response?: components["schemas"]["CreateFeatureResponse"];
+            feature_setup_response?: components["schemas"]["FeatureSetupResponse"];
             feature_start_response?: components["schemas"]["FeatureStartResponse"];
             feature_stop_response?: components["schemas"]["FeatureStopResponse"];
             feature_restart_response?: components["schemas"]["FeatureRestartResponse"];
@@ -868,6 +869,8 @@ export interface components {
             shutdown_response?: components["schemas"]["ShutdownResponse"];
         };
         CreateFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        /** @description Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state. */
+        FeatureSetupResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         FeatureStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             phase?: string;
             session_ids?: string[];
@@ -1620,7 +1623,7 @@ export interface components {
         ReviewID: string;
         LogID: string;
         SessionID: string;
-        FeatureAction: "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "review-comments" | "review-decision" | "refactor" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "review-comments" | "review-decision" | "refactor" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete";
         FeatureSubaction: "description" | "fetch" | "finish" | "restart";
         Offset: number;
         Limit: number;

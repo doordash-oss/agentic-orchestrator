@@ -35,8 +35,20 @@ export function readVerification(): PackageVerification | null {
   }
 }
 
-/** The executable the journeys launch; throws when global-setup did not run. */
+/**
+ * The executable the journeys launch; throws when global-setup did not run.
+ * AGENTICO_E2E_EXECUTABLE points a run at a different install of the same
+ * verified build (extracted AppImage payload, dpkg-installed deb) — the
+ * journeys' identity assertions still cross-check it against the manifest.
+ */
 export function packagedExecutable(): string {
+  const override = process.env['AGENTICO_E2E_EXECUTABLE'];
+  if (override !== undefined && override !== '') {
+    if (!fs.existsSync(override)) {
+      throw new Error(`AGENTICO_E2E_EXECUTABLE does not exist: ${override}`);
+    }
+    return override;
+  }
   const verification = readVerification();
   if (verification === null || !fs.existsSync(verification.unpacked_app)) {
     throw new Error(

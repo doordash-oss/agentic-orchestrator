@@ -38,9 +38,18 @@ import {
   waitFor,
 } from '../helpers/world';
 
+/**
+ * Platform- (and install-variant-) qualified evidence name: macOS runs the
+ * unpacked DMG payload; Linux runs cover the unpacked dir plus the AppImage
+ * and installed deb via AGENTICO_E2E_VARIANT (see test/e2e/linux/).
+ */
+const RUN_NAME = `first-launch-${
+  process.env['AGENTICO_E2E_VARIANT'] ?? (process.platform === 'darwin' ? 'macos' : 'linux')
+}`;
+
 test('first launch: wizard-gated creation tracer bullet reaches Ready to start', async ({}, testInfo) => {
   const transcript = new Transcript(
-    'first-launch-macos',
+    RUN_NAME,
     'Journey 1 — first launch creation tracer bullet (packaged app, real bundled server)',
   );
   const world = createWorld('first-launch', { auth: { loggedIn: false }, authDelaySeconds: 6 });
@@ -55,7 +64,7 @@ test('first launch: wizard-gated creation tracer bullet reaches Ready to start',
   let handle: AppHandle | null = null;
   try {
     transcript.section('Launch: connection shell, app-owned server');
-    handle = await launchApp(world, testInfo, { traceName: 'first-launch-macos' });
+    handle = await launchApp(world, testInfo, { traceName: RUN_NAME });
     transcript.step('launched the verified unpacked packaged app via Playwright _electron.launch');
 
     // The stub delays its first auth probe, holding the gateway in

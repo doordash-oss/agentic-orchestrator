@@ -35,10 +35,10 @@ import (
 // TestRefactorFeatureLoop_Integration_3RepoCrossRepoEdit exercises the
 // unified refactor cycle end-to-end against three real git repos:
 //
-//   - repoA: target of the cross-repo Task — receives the new shared
-//     config package.
-//   - repoB: target of the cross-repo Task — updates its imports to
-//     reference repoA's new shared package.
+//   - repoA: target of the upstream Task — receives the new shared config
+//     package.
+//   - repoB: target of the dependent Task — updates its imports to reference
+//     repoA's new shared package.
 //   - repoC: NOT in the refactor plan; stays out of the staged subset.
 //     Status preserved.
 //
@@ -129,8 +129,8 @@ func TestRefactorFeatureLoop_Integration_3RepoCrossRepoEdit(t *testing.T) {
 	}
 	f = loaded
 
-	// Stub refactor-plan: writes a synthetic plan that tags repoA and
-	// repoB (cross-repo Task dispatch). repoC is intentionally untagged
+	// Stub refactor-plan: writes a synthetic plan with one Task for repoA and
+	// one Task for repoB. repoC is intentionally untagged
 	// so PhaseScope stages only the two named repos.
 	plan := "# Refactor: extract shared config\n\n" +
 		"## Tasks\n\n" +

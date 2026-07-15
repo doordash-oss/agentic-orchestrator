@@ -22,8 +22,9 @@ import (
 
 // PlanTask is one `### Task N:` block parsed out of a phase-plan markdown.
 // Heading is the literal heading line (e.g. "### Task 1: Wire the helper").
-// Repo is the value of the `**Repo:** <name>` tag immediately under the
-// heading, or "" when the plan omits the tag (single-repo phases).
+// Repos contains every `**Repo:** <name>` tag in the task. Valid multi-repo
+// phase plans and all refactor plans declare exactly one; retaining every tag
+// lets validation reject ambiguous ownership instead of silently choosing one.
 // Body is the slice of source lines that fall under this task — including
 // the Repo tag line, blanks, and trailing content — up to (but not
 // including) the next `### ` or `## ` heading. Lines preserve trailing
@@ -31,7 +32,7 @@ import (
 // byte-stable.
 type PlanTask struct {
 	Heading string
-	Repo    string
+	Repos   []string
 	Body    []string
 }
 
@@ -47,7 +48,7 @@ var repoTagRE = regexp.MustCompile("(?i)^\\*\\*Repo:\\*\\*\\s*`?([\\w.\\-]+)`?\\
 
 // ParsePlanTasks scans a phase-plan markdown and returns every Task block
 // in the `## Tasks` section (the first such section; any later one is
-// ignored). Tasks without a `**Repo:**` tag get Repo == "".
+// ignored). Tasks without a `**Repo:**` tag get an empty Repos slice.
 //
 // Section-end detection, task-heading detection, and Repo-tag matching all
 // honor fenced code blocks: ` ``` ` / ` ~~~ ` / ` ```` ` openers suppress
@@ -112,9 +113,9 @@ func ParsePlanTasks(planMarkdown string) []PlanTask {
 			continue
 		}
 		current.Body = append(current.Body, ln)
-		if !fence.inside() && current.Repo == "" {
+		if !fence.inside() {
 			if m := repoTagRE.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
-				current.Repo = m[1]
+				current.Repos = append(current.Repos, m[1])
 			}
 		}
 	}
@@ -180,8 +181,8 @@ func PlanTaskRepos(planMarkdown string) []string {
 	tasks := ParsePlanTasks(planMarkdown)
 	seen := make(map[string]bool, len(tasks))
 	for _, t := range tasks {
-		if t.Repo != "" {
-			seen[t.Repo] = true
+		for _, repo := range t.Repos {
+			seen[repo] = true
 		}
 	}
 	if len(seen) == 0 {

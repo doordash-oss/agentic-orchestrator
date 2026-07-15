@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,275 @@ func TestExecuteTestingContractClassifiesInheritedFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteTestingContractClassifiesRepoPrefixedPathAsContractError(t *testing.T) {
+	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("translated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := TestingContract{Version: 2, Revision: 1, BaseCommits: map[string]string{"repo": commit}, Items: []TestingContractItem{{
+		ID: "bad-path", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "README is translated", Command: "grep -q translated repo/README.md",
+		Run:    &TestingContractRun{Shell: "grep -q translated repo/README.md", Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, contractPath)
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 1 || len(out.InheritedItems) != 0 {
+		t.Fatalf("outcome = %+v, want one contract error and no inherited failure", out)
+	}
+	if got := out.Report.Results[0]; got.Status != VerificationStatusFailed || got.Notes != VerificationClassificationContractError {
+		t.Fatalf("result = %+v, want failed contract_error", got)
+	}
+	if got := out.ContractErrors[0].Suggestion; got != `Replace "repo/README.md" with "README.md".` {
+		t.Fatalf("suggestion = %q, want repo-relative correction", got)
+	}
+}
+
+func TestExecuteTestingContractAllowsExistingNestedDirectoryNamedLikeRepo(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "repo", "README.md"), []byte("nested\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "nested", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "nested README", Command: "grep -q nested repo/README.md",
+		Run:    &TestingContractRun{Shell: "grep -q nested repo/README.md", Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 0 || out.Report.Results[0].Status != VerificationStatusPassed {
+		t.Fatalf("outcome = %+v, want real nested repo path to pass", out)
+	}
+}
+
+func TestExecuteTestingContractDoesNotTreatQuotedRepoTextAsPath(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("See repo/README.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := "grep -qF 'See repo/README.md' README.md"
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "quoted", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "quoted path text", Command: command, Run: &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 0 || out.Report.Results[0].Status != VerificationStatusPassed {
+		t.Fatalf("outcome = %+v, want quoted repo/path content to pass", out)
+	}
+}
+
+func TestExecuteTestingContractDoesNotTreatUnquotedRepoTextAsPathWhenCommandPasses(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("repo/README.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := "grep -qF repo/README.md README.md"
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "content", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "path text", Command: command, Run: &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 0 || out.Report.Results[0].Status != VerificationStatusPassed {
+		t.Fatalf("outcome = %+v, want successful content assertion to pass", out)
+	}
+}
+
+func TestExecuteTestingContractClassifiesQuotedRepoPrefixedOperandAsContractError(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("translated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := `grep -q translated "repo/README.md"`
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "quoted-operand", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "quoted operand", Command: command, Run: &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 1 || !strings.Contains(out.ContractErrors[0].Suggestion, "README.md") {
+		t.Fatalf("outcome = %+v, want quoted bad operand contract error", out)
+	}
+}
+
+func TestExecuteTestingContractClassifiesRedundantRepoCDAsContractError(t *testing.T) {
+	repo := t.TempDir()
+	command := "cd repo && make test"
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "redundant-cd", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "repo tests", Command: command, Run: &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 1 || !strings.Contains(out.ContractErrors[0].Suggestion, "Remove the `cd repo`") {
+		t.Fatalf("outcome = %+v, want redundant cd contract error", out)
+	}
+}
+
+func TestExecuteTestingContractClassifiesInvalidShellAsContractError(t *testing.T) {
+	repo := t.TempDir()
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "syntax", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "invalid shell", Command: "if then", Run: &TestingContractRun{Shell: "if then", Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 1 || out.Report.Results[0].Notes != VerificationClassificationContractError {
+		t.Fatalf("outcome = %+v, want invalid shell contract error", out)
+	}
+}
+
+func TestExecuteTestingContractClassifiesCommandNotFoundAsContractError(t *testing.T) {
+	repo := t.TempDir()
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "missing-command", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "missing command", Command: "agentico-command-that-does-not-exist", Run: &TestingContractRun{Shell: "agentico-command-that-does-not-exist", Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 1 || out.Report.Results[0].Notes != VerificationClassificationContractError {
+		t.Fatalf("outcome = %+v, want command-not-found contract error", out)
+	}
+}
+
+func TestExecuteTestingContractClassifiesDeletedCommandAsRegression(t *testing.T) {
+	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
+	if err := os.Remove(filepath.Join(repo, "check.sh")); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := TestingContract{Version: 2, Revision: 1, BaseCommits: map[string]string{"repo": commit}, Items: []TestingContractItem{{
+		ID: "deleted-command", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "check script", Command: "./check.sh", Run: &TestingContractRun{Shell: "./check.sh", Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, contractPath)
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 0 || len(out.RegressionItems) != 1 {
+		t.Fatalf("outcome = %+v, want deleted candidate command classified as regression", out)
+	}
+}
+
+func TestExecuteTestingContractDoesNotTreatProgramExit127AsSetupError(t *testing.T) {
+	repo := t.TempDir()
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "exit-127", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "program failure", Command: "exit 127", Run: &TestingContractRun{Shell: "exit 127", Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 0 || out.Report.Results[0].Notes != VerificationClassificationUnclassified {
+		t.Fatalf("outcome = %+v, want deliberate exit 127 to remain an ordinary failure", out)
+	}
+}
+
+func TestExecuteTestingContractMissingRepoExecutableRemainsImplementationFailure(t *testing.T) {
+	repo := t.TempDir()
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "missing-output", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "new CLI exists", Command: "./bin/new-cli --help", Run: &TestingContractRun{Shell: "./bin/new-cli --help", Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 0 || len(out.InheritedItems) != 0 || out.Report.Results[0].Notes != VerificationClassificationUnclassified {
+		t.Fatalf("outcome = %+v, want missing promised repo executable left for implementation review", out)
+	}
+}
+
+func TestResolveAndValidateVerificationCwdRejectsInvalidLocations(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	filePath := filepath.Join(root, "file")
+	if err := os.WriteFile(filePath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(root, "outside-link")
+	if err := os.Symlink(outside, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		relative string
+		wantErr  bool
+	}{
+		{name: "root", relative: "."},
+		{name: "absolute", relative: outside, wantErr: true},
+		{name: "lexical escape", relative: "../outside", wantErr: true},
+		{name: "missing", relative: "missing", wantErr: true},
+		{name: "file", relative: "file", wantErr: true},
+		{name: "symlink escape", relative: "outside-link", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cwd, err := resolveVerificationCwd(root, tc.relative)
+			if err == nil && validateVerificationCwd(root, cwd) != "" {
+				err = errors.New(validateVerificationCwd(root, cwd))
+			}
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resolve/validate cwd = (%q, %v), wantErr=%v", cwd, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestExecuteTestingContractClassifiesRegressionAgainstPassingBase(t *testing.T) {
 	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
 	if err := os.WriteFile(filepath.Join(repo, "check.sh"), []byte("#!/bin/sh\necho new-failure >&2\nexit 9\n"), 0o755); err != nil {
@@ -99,19 +369,12 @@ func TestExecuteTestingContractDeclaredCapabilityBlocksWithoutRunningCheck(t *te
 	repo := t.TempDir()
 	marker := filepath.Join(repo, "ran")
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
-	contract := TestingContract{Version: 1, Revision: 1, Items: []TestingContractItem{
-		{
-			ID: "auth", Source: testingContractPlanSource, Repo: "repo", Name: "protected check", Command: "touch ran",
-			Run:          &TestingContractRun{Shell: "touch ran"},
-			Capabilities: []TestingContractCapability{{Name: "Okta session", Probe: "exit 1"}},
-			Policy:       TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true},
-		},
-		{
-			ID: "behavior", Source: testingContractBehavioralSource, Repo: "repo", Name: "Capture command output from `touch ran`", Command: "behavioral: transcript",
-			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractBehavioralKind, Matcher: testingContractCommandTranscriptMatcher},
-			Policy:           TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true},
-		},
-	}}
+	contract := TestingContract{Version: 1, Revision: 1, Items: []TestingContractItem{{
+		ID: "auth", Source: testingContractPlanSource, Repo: "repo", Name: "protected check", Command: "touch ran",
+		Run:          &TestingContractRun{Shell: "touch ran"},
+		Capabilities: []TestingContractCapability{{Name: "Okta session", Probe: "exit 1"}},
+		Policy:       TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true},
+	}}}
 	finalizeTestingContractOwnership(&contract)
 	report := BuildContractVerificationReportStub(&contract, contractPath)
 
@@ -122,11 +385,30 @@ func TestExecuteTestingContractDeclaredCapabilityBlocksWithoutRunningCheck(t *te
 	if got := out.Report.Results[0].Status; got != VerificationStatusBlocked {
 		t.Fatalf("status = %q, want blocked", got)
 	}
-	if len(out.BlockedItems) != 2 || out.Report.Results[1].Status != VerificationStatusBlocked {
-		t.Fatalf("BlockedItems/results = %v/%+v, want command and dependent transcript blocked", out.BlockedItems, out.Report.Results)
+	if len(out.BlockedItems) != 1 {
+		t.Fatalf("BlockedItems = %v, want protected command blocked", out.BlockedItems)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("protected check ran despite failed capability probe: stat err = %v", err)
+	}
+}
+
+func TestExecuteTestingContractMalformedCapabilityProbeIsContractError(t *testing.T) {
+	repo := t.TempDir()
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "bad-probe", Source: testingContractPlanSource, Repo: "repo", Name: "protected check", Command: "printf ok",
+		Run:          &TestingContractRun{Shell: "printf ok"},
+		Capabilities: []TestingContractCapability{{Name: "Okta session", Probe: "if then"}},
+		Policy:       TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 1 || len(out.BlockedItems) != 0 || out.Report.Results[0].Status != VerificationStatusFailed {
+		t.Fatalf("outcome = %+v, want malformed probe failed as contract error without user block", out)
 	}
 }
 
@@ -144,39 +426,6 @@ func TestExecuteTestingContractHonorsUserWaiver(t *testing.T) {
 	}
 	if got := out.Report.Results[0].Status; got != VerificationStatusWaived {
 		t.Fatalf("status = %q, want waived", got)
-	}
-}
-
-func TestExecuteTestingContractSynthesizesBehavioralCommandTranscript(t *testing.T) {
-	repo := t.TempDir()
-	iterationDir := t.TempDir()
-	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
-	command := "printf hello"
-	contract := TestingContract{Version: 1, Revision: 1, Items: []TestingContractItem{
-		{ID: "run", Source: testingContractPlanSource, Repo: "repo", Name: "run", Command: command, Run: &TestingContractRun{Shell: command}, Policy: TestingContractItemPolicy{Required: true}},
-		{ID: "behavior", Source: testingContractBehavioralSource, Repo: "repo", Name: "Capture command output from `printf hello`", Command: "behavioral: transcript", ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractBehavioralKind, Matcher: testingContractCommandTranscriptMatcher}, Policy: TestingContractItemPolicy{Required: true}},
-	}}
-	finalizeTestingContractOwnership(&contract)
-	report := BuildContractVerificationReportStub(&contract, contractPath)
-
-	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, iterationDir, repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
-	if err != nil {
-		t.Fatalf("ExecuteTestingContract() error = %v", err)
-	}
-	if got := out.Report.Results[1].Status; got != VerificationStatusPassed {
-		t.Fatalf("behavior status = %q, want passed", got)
-	}
-	primary := out.Report.Results[1].EvidenceData.Primary
-	data, err := os.ReadFile(filepath.Join(iterationDir, filepath.FromSlash(primary)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "COMMAND: printf hello") || !strings.Contains(string(data), "EXIT CODE: 0") || !strings.Contains(string(data), "hello") {
-		t.Fatalf("transcript = %q, want command, exit, and output", data)
-	}
-	gate := ValidateVerificationReportWithContext(out.Report, nil, true, VerificationReportValidationContext{Contract: &contract, IterationDir: iterationDir})
-	if gate.Rejected {
-		t.Fatalf("harness transcript rejected: %+v", gate.Findings)
 	}
 }
 

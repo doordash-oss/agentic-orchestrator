@@ -26,16 +26,13 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-// TestPhaseImplementUnified_3Repo_CrossRepoVerification is the slice-2
-// acceptance test for the "phase atomicity + cross-repo verification"
-// invariants on a 3-repo phase:
+// TestPhaseImplementUnified_3Repo_ScopedVerification is the acceptance test
+// for phase atomicity and explicitly scoped verification on a 3-repo phase:
 //
 //   - PhaseScope reads `**Repo:** repo-a/repo-b/repo-c` Task tags from a
 //     planned-mode plan and produces the deduplicated, sorted repo set.
-//   - CompileTestingContractMultiRepo emits per-repo baseline rows + plan-
-//     source rows tagged with `repo: <name>` for each declared repo, plus
-//     `repo: cross-repo` rows for the planner's `## Cross-Repo Verification`
-//     entries.
+//   - CompileTestingContractMultiRepo emits each explicitly scoped plan
+//     command once in its declared repository.
 //   - RunPhaseImplementLoop dispatches the iteration successfully and
 //     AtomicPhaseStamp transitions all three repos atomically to
 //     "awaiting_final_review" in one Modify write (phase atomicity:
@@ -44,7 +41,7 @@ import (
 // The test uses real on-disk plan + state, real PhaseScope/contract
 // compiler, and a stub RunImplementFn (the loop kernel is unit-tested
 // elsewhere).
-func TestPhaseImplementUnified_3Repo_CrossRepoVerification(t *testing.T) {
+func TestPhaseImplementUnified_3Repo_ScopedVerification(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -61,10 +58,10 @@ func TestPhaseImplementUnified_3Repo_CrossRepoVerification(t *testing.T) {
 
 	store := feature.NewStore(stateDir)
 	f := &feature.Feature{
-		ID:            "phase-3repo-xrepo",
-		Name:          "3-repo cross-repo verification",
-		Slug:          "phase-3repo-xrepo",
-		Description:   "Phase plan with three Tasks plus cross-repo verification",
+		ID:            "phase-3repo-scoped",
+		Name:          "3-repo scoped verification",
+		Slug:          "phase-3repo-scoped",
+		Description:   "Phase plan with one scoped verification command per repository",
 		Status:        feature.StatusImplementing,
 		ActiveRun:     1,
 		RunCount:      1,
@@ -90,11 +87,8 @@ func TestPhaseImplementUnified_3Repo_CrossRepoVerification(t *testing.T) {
 	}
 	f = loaded
 
-	// Plan with three Tasks (one per repo) plus a cross-repo verification
-	// section. The implementer's Tasks tag with `**Repo:** <name>`; the
-	// `## Cross-Repo Verification` block declares verification commands
-	// that exercise more than one repo at once and must compile to
-	// `repo: cross-repo` items.
+	// Plan with three Tasks (one per repo) and one explicitly scoped command
+	// for each repository.
 	planDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "implement")
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
 		t.Fatalf("mkdir plan: %v", err)
@@ -104,21 +98,17 @@ func TestPhaseImplementUnified_3Repo_CrossRepoVerification(t *testing.T) {
 		"### Task 1: API work\n\n" +
 		"**Repo:** repo-a\n\n" +
 		"Update the API handlers.\n\n" +
-		"#### Automated Verification:\n" +
-		"- [ ] api tests: `go test ./api/...`\n\n" +
 		"### Task 2: Web work\n\n" +
 		"**Repo:** repo-b\n\n" +
 		"Update the web client.\n\n" +
-		"#### Automated Verification:\n" +
-		"- [ ] web tests: `npm test`\n\n" +
 		"### Task 3: Infra work\n\n" +
 		"**Repo:** repo-c\n\n" +
 		"Update the infra config.\n\n" +
-		"#### Automated Verification:\n" +
-		"- [ ] infra tests: `terraform validate`\n\n" +
-		"## Cross-Repo Verification\n\n" +
-		"- e2e smoke: `scripts/e2e.sh`\n" +
-		"- contract test: `scripts/contract-test.sh`\n"
+		"## Success Criteria\n\n" +
+		"### Automated Verification\n" +
+		"- [ ] [repo: repo-a] API tests: `go test ./api/...`\n" +
+		"- [ ] [repo: repo-b] Web tests: `npm test`\n" +
+		"- [ ] [repo: repo-c] Infra tests: `terraform validate`\n"
 	planPath := filepath.Join(planDir, "plan.md")
 	if err := os.WriteFile(planPath, []byte(planText), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
@@ -137,25 +127,12 @@ func TestPhaseImplementUnified_3Repo_CrossRepoVerification(t *testing.T) {
 		t.Errorf("PhaseScope.Repos = %v, want %v", scope.Repos, wantRepos)
 	}
 
-	// --- Part B: TestingContractCompiler emits per-repo baseline +
-	// plan-source items + `cross-repo` items, every item tagged with
-	// `repo:`.
-	//
-	// CrossRepoSteps are synthesized directly here. Production cross-
-	// repo extraction from the plan body is not yet wired (the
-	// implement/refactor loops construct MultiRepoContractInput without
-	// CrossRepoSteps today); the unit tests at testing_contract_multirepo_test.go
-	// pass them in directly via this same shape.
-	crossRepoSteps := []agent.VerificationStep{
-		{Description: "e2e smoke", Command: "scripts/e2e.sh"},
-		{Description: "contract test", Command: "scripts/contract-test.sh"},
-	}
+	// --- Part B: TestingContractCompiler emits each scoped command once. ---
 	contract := agent.CompileTestingContractMultiRepo(agent.MultiRepoContractInput{
-		Repos:          scope.Repos,
-		PlanText:       planText,
-		PlanPath:       planPath,
-		PhaseType:      "tracer-bullet",
-		CrossRepoSteps: crossRepoSteps,
+		Repos:     scope.Repos,
+		PlanText:  planText,
+		PlanPath:  planPath,
+		PhaseType: "tracer-bullet",
 	})
 
 	// Every item must carry a `repo:` field — the unification invariant.
@@ -180,21 +157,6 @@ func TestPhaseImplementUnified_3Repo_CrossRepoVerification(t *testing.T) {
 		if !hasPlan {
 			t.Errorf("contract missing plan-source row for repo %q (Task should contribute one)", name)
 		}
-	}
-
-	// Cross-repo rows: one per cross-repo verification command, tagged
-	// `repo: cross-repo`.
-	crossRepoCount := 0
-	for _, it := range contract.Items {
-		if it.Source == "cross-repo" {
-			if it.Repo != agent.TestingContractCrossRepoTag {
-				t.Errorf("cross-repo item has repo = %q, want %q", it.Repo, agent.TestingContractCrossRepoTag)
-			}
-			crossRepoCount++
-		}
-	}
-	if crossRepoCount != 2 {
-		t.Errorf("cross-repo item count = %d, want 2", crossRepoCount)
 	}
 
 	// --- Part C: RunPhaseImplementLoop dispatches and AtomicPhaseStamp

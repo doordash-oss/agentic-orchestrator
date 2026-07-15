@@ -18,8 +18,8 @@
 // → roadmap → per-phase plans → implement, scoped to a single repo) is
 // replaced by RunRefactorFeatureLoop: a single planned cycle that runs the
 // refactor-plan step once and then drives the iterative implement loop with
-// `--add-dir` for every Feature.Repos worktree, supporting cross-repo Tasks
-// natively.
+// `--add-dir` for every Feature.Repos worktree, supporting cross-repo cycles
+// composed of explicitly sequenced single-repo Tasks.
 //
 // Topology:
 //
@@ -47,6 +47,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
@@ -147,7 +148,7 @@ type RefactorFeatureLoopResult struct {
 // RunRefactorFeatureLoop drives the unified refactor cycle. Cwd at the
 // feature state dir; --add-dir mounts every Feature.Repos worktree (and
 // the state dir). The agent reads the refactor-plan, dispatches per-repo
-// Task fan-out for the edits (cross-repo Tasks are first-class), runs
+// Task fan-out for the edits (each Task owns exactly one repo), runs
 // build/test/lint against each touched repo, commits, and emits the
 // standard handoff.
 //
@@ -277,6 +278,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 	}
 
 	var planPath string
+	var scope PhaseScopeResult
 	for {
 		if err := RemovePhaseCompleteMarker(artifactDir); err != nil {
 			_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, err.Error())
@@ -287,6 +289,31 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 			}, fmt.Errorf("refactor feature loop: prepare plan attempt: %w", err)
 		}
 		candidate, planErr := planRunner(artifactDir)
+		if planErr == nil && candidate != "" {
+			candidateScope, scopeErr := PhaseScope(cfg.Feature, candidate)
+			if scopeErr != nil {
+				errMsg := scopeErr.Error()
+				_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+				return &RefactorFeatureLoopResult{
+					FinalStatus: "failed",
+					LastError:   errMsg,
+					ArtifactDir: artifactDir,
+				}, fmt.Errorf("refactor feature loop: scoping plan: %w", scopeErr)
+			}
+			if !candidateScope.ScopeOK() {
+				violations := make([]ProtocolViolation, 0, len(candidateScope.Issues))
+				for _, issue := range candidateScope.Issues {
+					reason := issue.Message
+					if issue.Task != "" {
+						reason = strings.TrimSpace(issue.Task) + ": " + reason
+					}
+					violations = append(violations, ProtocolViolation{Artifact: "refactor-plan.md", Reason: reason})
+				}
+				planErr = newProtocolViolationError(RoleRefactorPlanStep, artifactDir, violations)
+			} else {
+				scope = candidateScope
+			}
+		}
 		if planErr != nil {
 			if isProtocolViolationError(planErr) {
 				decision := DecideProtocolRetry(
@@ -362,25 +389,10 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		}, fmt.Errorf("%s", errMsg)
 	}
 
-	// Step 2 — derive the staged repo subset from the produced plan via
-	// PhaseScope. Empty Repos slice means "every Feature.Repos entry"
-	// (placeholder plan / single-repo untagged).
-	scope, err := PhaseScope(cfg.Feature, planPath)
-	if err != nil {
-		return &RefactorFeatureLoopResult{
-			FinalStatus: "failed",
-			LastError:   err.Error(),
-			ArtifactDir: artifactDir,
-		}, fmt.Errorf("refactor feature loop: scoping plan: %w", err)
-	}
+	// Step 2 — use the validated plan scope captured before the planner's
+	// protocol gate succeeded. Invalid or ambiguous ownership never reaches
+	// implementation and never broadens to every feature repo.
 	stagedRepos := scope.Repos
-	if len(stagedRepos) == 0 {
-		stagedRepos = make([]string, 0, len(cfg.Feature.Repos))
-		for _, r := range cfg.Feature.Repos {
-			stagedRepos = append(stagedRepos, r.Name)
-		}
-		sort.Strings(stagedRepos)
-	}
 
 	// Read plan text once for testing-contract compilation.
 	planBytes, readErr := os.ReadFile(planPath)
@@ -624,8 +636,8 @@ type refactorPlanStepInput struct {
 
 // runRefactorPlanStep launches a single Claude session to author the
 // refactor plan markdown and waits for `phase_complete`. The plan markdown
-// is expected to follow the phase-plan format (per-Task `**Repo:** <name>`
-// tags, `## Tasks` section, optional cross-repo verification block) so
+// is expected to follow the phase-plan format (one `**Repo:** <name>` per
+// Task, a `## Tasks` section, and repo-scoped verification commands) so
 // PhaseScope and CompileTestingContractMultiRepo can consume it directly.
 //
 // On success it returns the absolute path to refactor-plan.md inside

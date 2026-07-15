@@ -227,6 +227,16 @@ func TestParsePlanVerificationDeclaresCapabilityProbe(t *testing.T) {
 	}
 }
 
+func TestParsePlanVerificationDeclaresRepoScope(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] [repo: web] Frontend tests: `npm test`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Repo != "web" || steps[0].Description != "Frontend tests" || steps[0].Command != "npm test" {
+		t.Fatalf("step = %+v, want parsed repo scope removed from description", steps[0])
+	}
+}
+
 func TestParsePlanManualVerification(t *testing.T) {
 	plan := "## Success Criteria\n\n" +
 		"### Manual Verification\n" +

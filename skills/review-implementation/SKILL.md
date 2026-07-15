@@ -17,7 +17,6 @@ You are running with your working directory set to the feature state directory a
 - **Single review unit**: one `review-feedback.md` per iteration, covering every repo the phase touched. There is no per-repo review.
 - **Phase atomicity**: either every phase-declared repo passes review or all fail together. Never approve a partial-phase shipment.
 - **Cross-repo coherence**: when the implementer's changes in repo A depend on changes in repo B (or vice-versa), evaluate them holistically. A change in repo A that compiles and tests on its own but breaks repo B's build/contract is a Critical finding.
-- **Cross-repo verification items**: items tagged `repo: cross-repo` in the testing contract exercise more than one repo. Treat them with the same evidence rigor as per-repo items; a missing or `not_run` cross-repo item is a Critical finding.
 
 ## Scope Review
 

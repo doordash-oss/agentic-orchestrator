@@ -43,9 +43,9 @@ Workers validate the code they change. They do not author final verification res
 
 For every testing-contract item with `owner: agent`, write exactly the relative file named by `expected_evidence.path` under `{iteration_dir}`:
 
-- `manual_observation`: a concise Markdown record of what was inspected, the observed result, and enough concrete detail for review.
+- `manual_observation`: one concise Markdown record covering the contract's consolidated semantic checklist, the observed result, and enough concrete detail for review.
 - `visual_artifact`: the actual image at the specified `screenshots/` path.
-- `behavioral_artifact`: the actual trace, log, or other artifact at the specified `behaviors/` path.
+- `behavioral_artifact`: one actual trace, recording, or interaction log covering the contract's consolidated primary-journey checklist at the specified `behaviors/` path.
 
 Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required semantic evidence needs unavailable authorization, hardware, a human judgment, or an external environment, emit `NEED_USER_INPUT` and name the missing capability. Never create placeholder evidence.
 

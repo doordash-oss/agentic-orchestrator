@@ -2887,6 +2887,173 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 	}
 }
 
+func TestImplementLoopHarnessContractErrorRoutesPlanRevisionKeepsSameIteration(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-contract-revision")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("translated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runVerificationTestCommand(t, runner, workDir, "git add README.md")
+	runVerificationTestCommand(t, runner, workDir, "git commit -qm base")
+
+	planPath := filepath.Join(artifactDir, "plan.md")
+	badPlan := "### Automated Verification\n- [ ] Stable waived check: `printf stable`\n- [ ] README translated: `grep -q translated repo/README.md`\n"
+	if err := os.WriteFile(planPath, []byte(badPlan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	f := &feature.Feature{
+		ID: "test-contract-revision", Name: "Contract Revision", Slug: "contract-revision",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, captured := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: false, PhaseType: "collapsed",
+	}
+	contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName)
+	if !ok {
+		t.Fatal("resolveImplementationContractPath() returned ok=false")
+	}
+	seededContract := compileImplementationTestingContract(cfg, badPlan)
+	for i := range seededContract.Items {
+		if seededContract.Items[i].Command == "printf stable" {
+			seededContract.Items[i].Disposition = TestingContractItemDisposition{
+				Status: TestingContractDispositionWaived, Reason: "user-approved stable exception", ChangedBy: "user",
+			}
+		}
+	}
+	if err := WriteTestingContract(contractPath, seededContract); err != nil {
+		t.Fatalf("seed testing contract: %v", err)
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "plan_revision_required" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want same-iteration plan_revision_required", result)
+	}
+	if !strings.Contains(result.PlanRevisionFeedback, "repo/README.md") || !strings.Contains(result.PlanRevisionFeedback, "README.md") {
+		t.Fatalf("PlanRevisionFeedback = %q, want bad path and correction", result.PlanRevisionFeedback)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("BuildSession calls = %d, want implementer only (no reviewer)", len(*captured))
+	}
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if _, err := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("meta.yaml exists after contract repair route; resume would consume an iteration: %v", err)
+	}
+
+	goodPlan := "### Automated Verification\n- [ ] Stable waived check: `printf stable`\n- [ ] README translated: `grep -q translated README.md`\n"
+	if err := os.WriteFile(planPath, []byte(goodPlan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
+	}
+	if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
+		t.Fatalf("resumed result = %+v, want iteration-1 review_passed", resumed)
+	}
+	if len(*captured) != 2 {
+		t.Fatalf("BuildSession calls after resume = %d, want original implementer plus reviewer only", len(*captured))
+	}
+	reconciledContract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		t.Fatalf("ReadTestingContract() error = %v", err)
+	}
+	waiverPreserved := false
+	for _, item := range reconciledContract.Items {
+		if item.Command == "printf stable" {
+			waiverPreserved = IsTestingContractItemWaived(item)
+		}
+	}
+	if !waiverPreserved {
+		t.Fatal("stable user waiver was lost while repairing another verification command")
+	}
+}
+
+func TestImplementLoopUnscopedMultiRepoVerificationRoutesPlanRevisionBeforeImplementer(t *testing.T) {
+	tmpDir := t.TempDir()
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "unscoped-multi")
+	for _, dir := range []string{artifactDir, stateDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := strings.Join([]string{
+		"## Tasks",
+		"### Task 1: API", "**Repo:** api",
+		"### Task 2: Web", "**Repo:** web",
+		"## Success Criteria",
+		"### Automated Verification",
+		"- [ ] Tests pass: `make test`",
+	}, "\n")
+	planPath := filepath.Join(tmpDir, "phase-plan.md")
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "unscoped-multi", Name: "Unscoped Multi", Status: feature.StatusImplementing,
+		Repos: []feature.FeatureRepo{{Name: "api", Path: t.TempDir()}, {Name: "web", Path: t.TempDir()}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildCalls := 0
+	result, err := RunImplementationLoop(ImplementConfig{
+		Feature: f, FeatureStore: store, PlanPath: planPath, ArtifactDir: artifactDir, StateDir: stateDir,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		BuildSession: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			buildCalls++
+			return nil, nil, nil, errors.New("implementer must not start")
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "plan_revision_required" || !strings.Contains(result.PlanRevisionFeedback, "[repo: <name>]") {
+		t.Fatalf("result = %+v, want scoped plan revision", result)
+	}
+	if buildCalls != 0 {
+		t.Fatalf("BuildSession calls = %d, want plan repaired before implementer starts", buildCalls)
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-01")); !os.IsNotExist(err) {
+		t.Fatalf("iteration directory exists before plan repair: %v", err)
+	}
+}
+
 func TestImplementLoopSkipReviewRoutesHarnessRegressionToRetry(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")

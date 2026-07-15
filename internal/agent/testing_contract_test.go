@@ -151,6 +151,7 @@ func TestCompileTestingContract_ManualVerificationItems(t *testing.T) {
 		"- [ ] Agent tests pass: `go test ./internal/agent/... -count=1`",
 		"### Manual Verification",
 		"- [ ] Create a feature from the TUI and observe it reaches PlanReady.",
+		"- [ ] Confirm the status copy is understandable to a user.",
 		"- [ ] None required: this marker should be ignored.",
 	}, "\n")
 
@@ -166,17 +167,44 @@ func TestCompileTestingContract_ManualVerificationItems(t *testing.T) {
 	if manual == nil {
 		t.Fatalf("missing manual contract item in %+v", contract.Items)
 	}
-	if manual.Name != "Create a feature from the TUI and observe it reaches PlanReady." {
+	wantName := "Complete the phase manual verification checklist:\n- Create a feature from the TUI and observe it reaches PlanReady.\n- Confirm the status copy is understandable to a user."
+	if manual.Name != wantName {
 		t.Fatalf("manual name = %q", manual.Name)
 	}
-	if manual.Command != "manual: Create a feature from the TUI and observe it reaches PlanReady." {
+	if manual.Command != "manual: "+wantName {
 		t.Fatalf("manual command = %q", manual.Command)
+	}
+	manualCount := 0
+	for i := range contract.Items {
+		if contract.Items[i].Source == testingContractManualSource {
+			manualCount++
+		}
+	}
+	if manualCount != 1 {
+		t.Fatalf("manual item count = %d, want one consolidated artifact", manualCount)
 	}
 	if manual.ExpectedEvidence.Kind != testingContractManualKind {
 		t.Fatalf("manual evidence kind = %q", manual.ExpectedEvidence.Kind)
 	}
 	if manual.Policy != defaultTestingContractPolicy(testingContractManualSource) {
 		t.Fatalf("manual policy = %+v", manual.Policy)
+	}
+}
+
+func TestCompileTestingContract_ConsolidatesBehavioralEvidence(t *testing.T) {
+	plan := "### Behavioral Evidence\n- [ ] Capture the primary journey trace.\n- [ ] Record the resulting state transition.\n"
+	contract := CompileTestingContract(plan, "/tmp/phase/plan.md", "collapsed")
+	var behavioral []TestingContractItem
+	for _, item := range contract.Items {
+		if item.Source == testingContractBehavioralSource {
+			behavioral = append(behavioral, item)
+		}
+	}
+	if len(behavioral) != 1 {
+		t.Fatalf("behavioral items = %+v, want one consolidated artifact", behavioral)
+	}
+	if !strings.Contains(behavioral[0].Name, "primary journey trace") || !strings.Contains(behavioral[0].Name, "state transition") {
+		t.Fatalf("behavioral name = %q, want both checklist requirements", behavioral[0].Name)
 	}
 }
 

@@ -33,7 +33,6 @@ const (
 	testingContractManualSource              = "manual"
 	testingContractVisualSource              = "visual"
 	testingContractBehavioralSource          = "behavioral"
-	testingContractCrossRepoSource           = "cross-repo"
 	testingContractEvidenceKind              = "command_result"
 	testingContractEvidenceMatcher           = "exit_code_zero"
 	testingContractManualKind                = "manual_observation"
@@ -41,12 +40,8 @@ const (
 	testingContractVisualKind                = "visual_artifact"
 	testingContractBehavioralKind            = "behavioral_artifact"
 	testingContractEvidenceFileExistsMatcher = "file_exists"
-	testingContractCommandTranscriptMatcher  = "command_transcript"
-	// TestingContractCrossRepoTag is the value put on `repo:` for items
-	// that exercise more than one repo. The unified-flow implementer
-	// dispatches such items to the main session (no per-repo Task
-	// sub-agent), and the verification report cross-checks coverage
-	// across all repos.
+	// TestingContractCrossRepoTag is the value put on `repo:` for phase-level
+	// evidence items that span more than one repository.
 	TestingContractCrossRepoTag = "cross-repo"
 )
 
@@ -211,7 +206,7 @@ func CompileTestingContract(planText, planPath, phaseType string) TestingContrac
 			Command: command,
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
-				Matcher: evidenceRequirementMatcher(source, description),
+				Matcher: testingContractEvidenceFileExistsMatcher,
 			},
 			Policy: defaultTestingContractPolicy(source),
 		})
@@ -220,13 +215,13 @@ func CompileTestingContract(planText, planPath, phaseType string) TestingContrac
 	for _, step := range ParsePlanVerification(planText) {
 		add(testingContractPlanSource, step)
 	}
-	for _, step := range ParsePlanManualVerification(planText) {
+	if step, ok := consolidatedManualVerification(ParsePlanManualVerification(planText)); ok {
 		addManual(step)
 	}
 	for _, step := range ParsePlanVisualEvidence(planText) {
 		addEvidence(testingContractVisualSource, testingContractVisualKind, step)
 	}
-	for _, step := range ParsePlanBehavioralEvidence(planText) {
+	if step, ok := consolidatedBehavioralEvidence(ParsePlanBehavioralEvidence(planText)); ok {
 		addEvidence(testingContractBehavioralSource, testingContractBehavioralKind, step)
 	}
 
@@ -450,8 +445,6 @@ func defaultTestingContractPolicy(source string) TestingContractItemPolicy {
 		return TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}
 	case testingContractVisualSource, testingContractBehavioralSource:
 		return TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}
-	case testingContractCrossRepoSource:
-		return TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true, AllowWaiver: true}
 	default:
 		return TestingContractItemPolicy{Required: true, AllowWaiver: true}
 	}
@@ -471,29 +464,20 @@ type MultiRepoContractInput struct {
 	PlanPath  string
 	PhaseType string
 	PlanLess  bool
-	// CrossRepoSteps are verification commands authored by the planner
-	// under a top-level "#### Cross-Repo Verification:" heading. The
-	// compiler emits these as `cross-repo` items separately from per-Task
-	// commands. May be nil.
-	CrossRepoSteps []VerificationStep
 }
 
 // CompileTestingContractMultiRepo emits a phase contract whose every item
 // carries a `repo:` field. Used by the unified phase implementer.
 //
 // Emission order:
-//  1. Plan-source rows: one row per (Task.Repo, command) pair found in the
-//     plan's per-Task Automated Verification sections, plus the legacy
-//     top-level Automated Verification block (which inherits from each
-//     phase-declared repo when no Task tag scopes it). Skipped when PlanLess.
-//  2. Cross-repo rows: one row per CrossRepoSteps entry, tagged
-//     `repo: cross-repo`.
-//  3. Manual rows: one row per top-level Manual Verification bullet,
-//     tagged to the lone repo or `repo: cross-repo` for multi-repo phases.
+//  1. Plan-source rows: top-level multi-repo commands use their explicit
+//     `[repo: <name>]` scope; single-repo commands inherit the sole repo.
+//     Per-task commands inherit their Task repo. Skipped when PlanLess.
+//  2. Manual, visual, and behavioral rows: phase-level evidence is tagged to
+//     the lone repo or `repo: cross-repo` for multi-repo phases.
 //
 // Item IDs are derived from (source + repo + command). Duplicate
-// (source, repo, command) tuples are deduplicated; a cross-repo command
-// that also appears in a per-Task block is emitted only as cross-repo.
+// (source, repo, command) tuples are deduplicated.
 func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract {
 	contract := TestingContract{
 		Version:       testingContractVersion,
@@ -579,7 +563,7 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 			Command: command,
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
-				Matcher: evidenceRequirementMatcher(source, description),
+				Matcher: testingContractEvidenceFileExistsMatcher,
 			},
 			Policy: defaultTestingContractPolicy(source),
 		})
@@ -587,14 +571,16 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 
 	// 1) Plan-source rows. Skipped when PlanLess.
 	if !in.PlanLess {
-		// Top-level "#### Automated Verification:" block (everything BEFORE
-		// the `## Tasks` heading). Each command is emitted once per
-		// phase-declared repo since the unified flow runs verification in
-		// every selected worktree.
+		// Top-level commands are explicitly repo-scoped in multi-repo plans.
+		// A single-repo plan may omit the scope and inherit its sole repo.
 		preTasks, perTaskBodies := splitPlanForVerification(in.PlanText)
 		topSteps := ParsePlanVerification(preTasks)
 		for _, step := range topSteps {
-			for _, repo := range repos {
+			repo := strings.TrimSpace(step.Repo)
+			if repo == "" && len(repos) == 1 {
+				repo = repos[0]
+			}
+			if repo != "" {
 				addItem(testingContractPlanSource, repo, step)
 			}
 		}
@@ -602,36 +588,23 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		// Per-Task Automated Verification blocks. Each Task with a `**Repo:** <name>`
 		// tag contributes commands tagged to that repo only.
 		for _, tb := range perTaskBodies {
-			repo := strings.TrimSpace(tb.repo)
 			steps := ParsePlanVerification(tb.body)
-			if len(steps) == 0 {
-				continue
-			}
-			if repo == "" {
-				// Untagged tasks in a single-repo phase: route to the lone
-				// repo. In multi-repo phases the structural validator
-				// rejects untagged tasks; if any sneak through here we
-				// emit them once per declared repo so coverage is not
-				// silently dropped.
-				for _, r := range repos {
-					for _, step := range steps {
-						addItem(testingContractPlanSource, r, step)
-					}
-				}
-				continue
-			}
 			for _, step := range steps {
-				addItem(testingContractPlanSource, repo, step)
+				repo := strings.TrimSpace(step.Repo)
+				if repo == "" {
+					repo = strings.TrimSpace(tb.repo)
+				}
+				if repo == "" && len(repos) == 1 {
+					repo = repos[0]
+				}
+				if repo != "" {
+					addItem(testingContractPlanSource, repo, step)
+				}
 			}
 		}
 	}
 
-	// 2) Cross-repo rows.
-	for _, step := range in.CrossRepoSteps {
-		addItem(testingContractCrossRepoSource, TestingContractCrossRepoTag, step)
-	}
-
-	// 3) Manual, visual, and behavioral rows. These describe phase-level
+	// 2) Manual, visual, and behavioral rows. These describe phase-level
 	// observations/artifacts, so multi-repo phases carry them as cross-repo
 	// items instead of duplicating the same requirement for every repo.
 	if !in.PlanLess {
@@ -642,13 +615,13 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		case len(repos) == 1:
 			phaseRepo = repos[0]
 		}
-		for _, step := range ParsePlanManualVerification(in.PlanText) {
+		if step, ok := consolidatedManualVerification(ParsePlanManualVerification(in.PlanText)); ok {
 			addManualItem(phaseRepo, step)
 		}
 		for _, step := range ParsePlanVisualEvidence(in.PlanText) {
 			addEvidenceItem(testingContractVisualSource, phaseRepo, testingContractVisualKind, step)
 		}
-		for _, step := range ParsePlanBehavioralEvidence(in.PlanText) {
+		if step, ok := consolidatedBehavioralEvidence(ParsePlanBehavioralEvidence(in.PlanText)); ok {
 			addEvidenceItem(testingContractBehavioralSource, phaseRepo, testingContractBehavioralKind, step)
 		}
 	}
@@ -659,9 +632,9 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 
 // splitPlanForVerification splits the plan text into the content outside the
 // first `## Tasks` section and per-Task bodies. This lets the contract compiler
-// distinguish top-level Automated Verification blocks (which fan out across
-// every phase-declared repo, including the new `## Success Criteria` section)
-// from per-Task blocks (which inherit the Task's `**Repo:** <name>` tag).
+// distinguish top-level Automated Verification blocks (whose commands carry
+// explicit multi-repo scopes) from per-Task blocks (which inherit from the
+// Task's `**Repo:** <name>` tag).
 //
 // Returns the pre-tasks markdown and a slice of (repo, body) records — one
 // per Task in the first `## Tasks` section. The body excludes the heading
@@ -705,10 +678,14 @@ func splitPlanForVerification(planText string) (string, []struct {
 		body string
 	}, 0, len(tasks))
 	for _, t := range tasks {
+		repo := ""
+		if len(t.Repos) == 1 {
+			repo = t.Repos[0]
+		}
 		out = append(out, struct {
 			repo string
 			body string
-		}{repo: t.Repo, body: strings.Join(t.Body, "\n")})
+		}{repo: repo, body: strings.Join(t.Body, "\n")})
 	}
 	return outsideTasks, out
 }
@@ -732,13 +709,59 @@ func manualVerificationCommand(description string) string {
 	return "manual: " + strings.TrimSpace(description)
 }
 
+func consolidatedManualVerification(steps []ManualVerificationStep) (ManualVerificationStep, bool) {
+	descriptions := make([]string, 0, len(steps))
+	for _, step := range steps {
+		descriptions = append(descriptions, step.Description)
+	}
+	description, ok := consolidatedChecklist("Complete the phase manual verification checklist:", descriptions)
+	if !ok {
+		return ManualVerificationStep{}, false
+	}
+	return ManualVerificationStep{Description: description}, true
+}
+
+func consolidatedBehavioralEvidence(steps []EvidenceRequirement) (EvidenceRequirement, bool) {
+	descriptions := make([]string, 0, len(steps))
+	for _, step := range steps {
+		descriptions = append(descriptions, step.Description)
+	}
+	description, ok := consolidatedChecklist("Capture one phase behavioral evidence bundle covering:", descriptions)
+	if !ok {
+		return EvidenceRequirement{}, false
+	}
+	return EvidenceRequirement{Description: description}, true
+}
+
+func consolidatedChecklist(title string, descriptions []string) (string, bool) {
+	clean := make([]string, 0, len(descriptions))
+	for _, description := range descriptions {
+		if description = strings.TrimSpace(description); description != "" {
+			clean = append(clean, description)
+		}
+	}
+	if len(clean) == 0 {
+		return "", false
+	}
+	if len(clean) == 1 {
+		return clean[0], true
+	}
+	var b strings.Builder
+	b.WriteString(title)
+	for _, description := range clean {
+		b.WriteString("\n- ")
+		b.WriteString(description)
+	}
+	return b.String(), true
+}
+
 func evidenceRequirementCommand(source, description string) string {
 	return strings.TrimSpace(source) + ": " + strings.TrimSpace(description)
 }
 
 func testingContractRunFor(source, command string) *TestingContractRun {
 	switch strings.TrimSpace(source) {
-	case testingContractPlanSource, testingContractCrossRepoSource:
+	case testingContractPlanSource:
 		return &TestingContractRun{Shell: strings.TrimSpace(command), Cwd: ".", Timeout: "10m"}
 	default:
 		return nil
@@ -749,27 +772,12 @@ func finalizeTestingContractOwnership(contract *TestingContract) {
 	if contract == nil {
 		return
 	}
-	runnable := make(map[string]bool)
 	for i := range contract.Items {
 		item := &contract.Items[i]
 		if item.Run != nil && strings.TrimSpace(item.Run.Shell) != "" {
 			item.Owner = TestingContractOwnerHarness
-			runnable[normalizeVerificationCommand(item.Run.Shell)] = true
 		} else {
 			item.Owner = TestingContractOwnerAgent
-		}
-	}
-	for i := range contract.Items {
-		item := &contract.Items[i]
-		if item.ExpectedEvidence.Matcher == testingContractCommandTranscriptMatcher {
-			commands := requiredBehavioralTranscriptCommands(item.Name)
-			allRunnable := len(commands) > 0
-			for _, command := range commands {
-				allRunnable = allRunnable && runnable[normalizeVerificationCommand(command)]
-			}
-			if allRunnable {
-				item.Owner = TestingContractOwnerHarness
-			}
 		}
 		item.ExpectedEvidence.Path = testingContractEvidencePath(*item)
 	}
@@ -777,8 +785,6 @@ func finalizeTestingContractOwnership(contract *TestingContract) {
 
 func testingContractEvidencePath(item TestingContractItem) string {
 	switch {
-	case item.ExpectedEvidence.Matcher == testingContractCommandTranscriptMatcher && item.Owner == TestingContractOwnerHarness:
-		return filepath.ToSlash(filepath.Join("behaviors", "harness-"+safeEvidenceComponent(item.ID)+".log"))
 	case item.Source == testingContractManualSource || item.ExpectedEvidence.Kind == testingContractManualKind:
 		return filepath.ToSlash(filepath.Join("observations", safeEvidenceComponent(item.ID)+".md"))
 	case item.Source == testingContractVisualSource || item.ExpectedEvidence.Kind == testingContractVisualKind:
@@ -811,50 +817,6 @@ func testingContractCapabilitiesFor(step VerificationStep) []TestingContractCapa
 		out = append(out, TestingContractCapability{Name: capability.Name, Probe: capability.Probe, OnMissing: "need_user_input"})
 	}
 	return out
-}
-
-func evidenceRequirementMatcher(source, description string) string {
-	if source == testingContractBehavioralSource && len(requiredBehavioralTranscriptCommands(description)) > 0 {
-		return testingContractCommandTranscriptMatcher
-	}
-	return testingContractEvidenceFileExistsMatcher
-}
-
-// requiredBehavioralTranscriptCommands returns the executable backtick spans
-// from behavioral requirements that explicitly ask for command output. Other
-// behavioral artifacts remain file-existence checks because their semantics
-// are intentionally assessed by the reviewer.
-func requiredBehavioralTranscriptCommands(description string) []string {
-	normalized := strings.ToLower(strings.TrimSpace(description))
-	if !strings.Contains(normalized, "command output") &&
-		!strings.Contains(normalized, "command transcript") &&
-		!strings.Contains(normalized, "stdout") &&
-		!strings.Contains(normalized, "stderr") {
-		return nil
-	}
-
-	spans := findBacktickSpans(description)
-	commands := make([]string, 0, len(spans))
-	seen := make(map[string]bool, len(spans))
-	for _, span := range spans {
-		command := strings.TrimSpace(description[span[2]:span[3]])
-		if !looksLikeShellCommand(command) {
-			continue
-		}
-		key := normalizeVerificationCommand(command)
-		if key == "" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		commands = append(commands, command)
-	}
-	if len(commands) == 0 && len(spans) == 1 {
-		command := strings.TrimSpace(description[spans[0][2]:spans[0][3]])
-		if command != "" {
-			commands = append(commands, command)
-		}
-	}
-	return commands
 }
 
 func normalizeVerificationCommand(command string) string {

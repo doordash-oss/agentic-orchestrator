@@ -106,7 +106,7 @@ func PhaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 
 	tagged := make(map[string]bool)
 	for _, t := range tasks {
-		if t.Repo == "" {
+		if len(t.Repos) == 0 {
 			if multiRepo {
 				issues = append(issues, PhaseScopeIssue{
 					Code:    "untagged-task",
@@ -116,15 +116,24 @@ func PhaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 			}
 			continue
 		}
-		if !known[t.Repo] {
+		if len(t.Repos) > 1 {
 			issues = append(issues, PhaseScopeIssue{
-				Code:    "repo-not-in-feature",
-				Message: fmt.Sprintf("task tagged repo %q is not in Feature.Repos", t.Repo),
+				Code:    "multiple-repo-tags",
+				Message: "task has multiple '**Repo:** <name>' tags; split cross-repo work into one task per repo",
 				Task:    strings.TrimSpace(t.Heading),
 			})
 			continue
 		}
-		tagged[t.Repo] = true
+		repo := t.Repos[0]
+		if !known[repo] {
+			issues = append(issues, PhaseScopeIssue{
+				Code:    "repo-not-in-feature",
+				Message: fmt.Sprintf("task tagged repo %q is not in Feature.Repos", repo),
+				Task:    strings.TrimSpace(t.Heading),
+			})
+			continue
+		}
+		tagged[repo] = true
 	}
 
 	var repos []string

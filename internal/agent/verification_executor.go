@@ -38,6 +38,7 @@ const (
 	VerificationClassificationInherited         = "inherited_failure"
 	VerificationClassificationUnclassified      = "unclassified_failure"
 	VerificationClassificationMissingCapability = "missing_capability"
+	VerificationClassificationContractError     = "contract_error"
 )
 
 // VerificationExecutionOutcome is the deterministic portion of the
@@ -49,6 +50,18 @@ type VerificationExecutionOutcome struct {
 	BlockedItems    []string
 	RegressionItems []string
 	InheritedItems  []string
+	ContractErrors  []VerificationContractError
+}
+
+// VerificationContractError is a planner-authored command defect. It is kept
+// separate from capability blocks so users are never asked to waive a command
+// that did not execute meaningfully.
+type VerificationContractError struct {
+	ItemID     string
+	Repo       string
+	Cwd        string
+	Reason     string
+	Suggestion string
 }
 
 type verificationRunRecord struct {
@@ -97,8 +110,6 @@ func ExecuteTestingContract(
 		report = &stub
 	}
 	out := &VerificationExecutionOutcome{Report: report}
-	machineRuns := make(map[string][]capturedVerificationRun)
-	blockedCommands := make(map[string]bool)
 	report.ContractPath = strings.TrimSpace(contractPath)
 	report.ContractRevision = contract.Revision
 
@@ -131,7 +142,18 @@ func ExecuteTestingContract(
 		}
 		cwd, err := resolveVerificationCwd(workDir, item.Run.Cwd)
 		if err != nil {
-			return nil, fmt.Errorf("verification item %s: %w", item.ID, err)
+			recordVerificationContractError(out, report, idx, item, workDir, err.Error(), "Use a cwd relative to the tagged repository root.")
+			continue
+		}
+		if reason := validateVerificationCwd(workDir, cwd); reason != "" {
+			recordVerificationContractError(out, report, idx, item, cwd, reason, "Use an existing directory inside the tagged repository worktree.")
+			continue
+		}
+		if reason, preflightErr := preflightVerificationShell(ctx, runner, item.Run.Shell, cwd); preflightErr != nil {
+			return nil, fmt.Errorf("preflight verification item %s: %w", item.ID, preflightErr)
+		} else if reason != "" {
+			recordVerificationContractError(out, report, idx, item, cwd, reason, "Fix the shell command in the phase plan before verification runs.")
+			continue
 		}
 
 		blocked := false
@@ -140,7 +162,26 @@ func ExecuteTestingContract(
 			if probe == "" {
 				continue
 			}
+			if reason, preflightErr := preflightVerificationShell(ctx, runner, probe, cwd); preflightErr != nil {
+				return nil, fmt.Errorf("preflight capability probe for verification item %s: %w", item.ID, preflightErr)
+			} else if reason != "" {
+				recordVerificationContractError(out, report, idx, item, cwd,
+					"invalid capability probe: "+strings.TrimPrefix(reason, "invalid verification shell syntax: "),
+					"Fix the capability probe in the phase plan before verification runs.")
+				blocked = true
+				break
+			}
 			run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s")
+			if runErr != nil {
+				var exitCoder interface{ ExitCode() int }
+				if !errors.As(runErr, &exitCoder) && !errors.Is(runErr, context.DeadlineExceeded) {
+					recordVerificationContractError(out, report, idx, item, cwd,
+						"capability probe shell failed to start: "+runErr.Error(),
+						"Fix the capability probe in the phase plan before verification runs.")
+					blocked = true
+					break
+				}
+			}
 			if runErr == nil {
 				run.record.Classification = "capability_available"
 			} else {
@@ -157,7 +198,6 @@ func ExecuteTestingContract(
 				report.Results[idx] = machineContractResult(item, VerificationStatusBlocked, run,
 					fmt.Sprintf("missing declared capability %q", name))
 				out.BlockedItems = append(out.BlockedItems, item.ID)
-				blockedCommands[normalizeVerificationCommand(item.Run.Shell)] = true
 				blocked = true
 				break
 			}
@@ -173,21 +213,47 @@ func ExecuteTestingContract(
 				return nil, err
 			}
 			report.Results[idx] = machineContractResult(item, VerificationStatusPassed, candidate, "")
-			machineRuns[normalizeVerificationCommand(item.Run.Shell)] = append(machineRuns[normalizeVerificationCommand(item.Run.Shell)], candidate)
 			continue
 		}
+		if repo != nil {
+			if defect, ok := repoScopedVerificationFailure(item.Run.Shell, repo.Name, cwd, candidate); ok {
+				candidate.record.Classification = VerificationClassificationContractError
+				if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
+					return nil, err
+				}
+				recordVerificationRunContractError(out, report, idx, item, candidate, defect.reason, defect.suggestion)
+				continue
+			}
+		}
+		candidateContractReason := verificationRuntimeContractError(candidateErr, candidate)
 
 		classification := VerificationClassificationUnclassified
 		status := VerificationStatusFailed
 		note := classification
 		var baseline *capturedVerificationRun
+		baselineAttempted := false
 		if repo != nil {
 			baseCommit := strings.TrimSpace(contract.BaseCommits[repo.Name])
 			if baseCommit != "" {
+				baselineAttempted = true
 				baseRun, baseErr := runVerificationAtBase(ctx, runner, contractPath, item, *repo, baseCommit)
 				if baseRun != nil {
 					baseline = baseRun
-					if baseErr != nil && sameVerificationFailure(candidate, *baseRun) {
+					baselineContractReason := verificationRuntimeContractError(baseErr, *baseRun)
+					if baseErr != nil && sameVerificationFailure(candidate, *baseRun) && candidateContractReason != "" && baselineContractReason != "" {
+						candidate.record.Classification = VerificationClassificationContractError
+						candidate.record.BaselineRunID = baseRun.record.RunID
+						if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
+							return nil, err
+						}
+						recordVerificationRunContractError(out, report, idx, item, candidate,
+							candidateContractReason,
+							"Correct the executable command or declare its prerequisite as an explicit capability probe.")
+						continue
+					}
+					if baseErr != nil && sameVerificationFailure(candidate, *baseRun) && repoLocalExecutableSetupFailure(candidate) {
+						note = VerificationClassificationUnclassified + ": repository-scoped executable is unavailable"
+					} else if baseErr != nil && sameVerificationFailure(candidate, *baseRun) {
 						classification = VerificationClassificationInherited
 						status = VerificationStatusInheritedFailure
 						out.InheritedItems = append(out.InheritedItems, item.ID)
@@ -200,6 +266,15 @@ func ExecuteTestingContract(
 				}
 			}
 		}
+		if classification == VerificationClassificationUnclassified && !baselineAttempted && candidateContractReason != "" {
+			candidate.record.Classification = VerificationClassificationContractError
+			if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
+				return nil, err
+			}
+			recordVerificationRunContractError(out, report, idx, item, candidate, candidateContractReason,
+				"Correct the executable command or declare its prerequisite as an explicit capability probe.")
+			continue
+		}
 		if classification != VerificationClassificationUnclassified {
 			note = classification
 		}
@@ -211,46 +286,12 @@ func ExecuteTestingContract(
 			return nil, err
 		}
 		report.Results[idx] = machineContractResult(item, status, candidate, note)
-		machineRuns[normalizeVerificationCommand(item.Run.Shell)] = append(machineRuns[normalizeVerificationCommand(item.Run.Shell)], candidate)
-	}
-	markBlockedBehavioralDependencies(contract, report, blockedCommands, &out.BlockedItems)
-	if err := synthesizeBehavioralCommandEvidence(contract, report, iterationDir, machineRuns); err != nil {
-		return nil, err
 	}
 	sort.Strings(out.BlockedItems)
 	sort.Strings(out.RegressionItems)
 	sort.Strings(out.InheritedItems)
+	sort.Slice(out.ContractErrors, func(i, j int) bool { return out.ContractErrors[i].ItemID < out.ContractErrors[j].ItemID })
 	return out, nil
-}
-
-func markBlockedBehavioralDependencies(contract *TestingContract, report *VerificationReport, blockedCommands map[string]bool, blockedItems *[]string) {
-	if len(blockedCommands) == 0 {
-		return
-	}
-	indexes := make(map[string]int, len(report.Results))
-	for i := range report.Results {
-		indexes[report.Results[i].ItemID] = i
-	}
-	for _, item := range contract.Items {
-		if item.Owner != TestingContractOwnerHarness || item.ExpectedEvidence.Matcher != testingContractCommandTranscriptMatcher {
-			continue
-		}
-		blocked := false
-		for _, command := range requiredBehavioralTranscriptCommands(item.Name) {
-			blocked = blocked || blockedCommands[normalizeVerificationCommand(command)]
-		}
-		if !blocked {
-			continue
-		}
-		if idx, ok := indexes[item.ID]; ok {
-			result := contractResultStub(item)
-			result.Status = VerificationStatusBlocked
-			result.BlockedReason = "a required harness command is blocked by a missing declared capability"
-			result.EvidenceData.Summary = result.BlockedReason
-			report.Results[idx] = result
-		}
-		*blockedItems = append(*blockedItems, item.ID)
-	}
 }
 
 func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) VerificationCheckResult {
@@ -283,74 +324,6 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 	return result
 }
 
-func synthesizeBehavioralCommandEvidence(contract *TestingContract, report *VerificationReport, iterationDir string, runs map[string][]capturedVerificationRun) error {
-	if strings.TrimSpace(iterationDir) == "" || len(runs) == 0 {
-		return nil
-	}
-	indexes := make(map[string]int, len(report.Results))
-	for i := range report.Results {
-		indexes[report.Results[i].ItemID] = i
-	}
-	for _, item := range contract.Items {
-		if item.ExpectedEvidence.Matcher != testingContractCommandTranscriptMatcher {
-			continue
-		}
-		commands := requiredBehavioralTranscriptCommands(item.Name)
-		if len(commands) == 0 {
-			continue
-		}
-		var transcript strings.Builder
-		hasFailed := false
-		hasInherited := false
-		allPresent := true
-		for _, command := range commands {
-			commandRuns := runs[normalizeVerificationCommand(command)]
-			if len(commandRuns) == 0 {
-				allPresent = false
-				break
-			}
-			for _, run := range commandRuns {
-				fmt.Fprintf(&transcript, "COMMAND: %s\nEXIT CODE: %d\nOUTPUT:\n%s%s\n", command, run.record.ExitCode, run.stdout, run.stderr)
-				if run.record.Classification == VerificationClassificationInherited {
-					hasInherited = true
-				} else if run.record.ExitCode != 0 {
-					hasFailed = true
-				}
-			}
-		}
-		if !allPresent {
-			continue
-		}
-		status := VerificationStatusPassed
-		if hasFailed {
-			status = VerificationStatusFailed
-		} else if hasInherited {
-			status = VerificationStatusInheritedFailure
-		}
-		behaviorDir := filepath.Join(iterationDir, "behaviors")
-		if err := os.MkdirAll(behaviorDir, 0o755); err != nil {
-			return err
-		}
-		rel := strings.TrimSpace(item.ExpectedEvidence.Path)
-		if rel == "" {
-			return fmt.Errorf("behavioral harness item %s has no canonical evidence path", item.ID)
-		}
-		if err := os.WriteFile(filepath.Join(iterationDir, filepath.FromSlash(rel)), []byte(transcript.String()), 0o644); err != nil {
-			return err
-		}
-		idx, ok := indexes[item.ID]
-		if !ok {
-			continue
-		}
-		summary := "harness-generated command transcript from machine-owned runs"
-		report.Results[idx] = contractResultStub(item)
-		report.Results[idx].Status = status
-		report.Results[idx].Evidence = summary
-		report.Results[idx].EvidenceData = VerificationEvidence{Summary: summary, Primary: rel}
-	}
-	return nil
-}
-
 func contractResultStub(item TestingContractItem) VerificationCheckResult {
 	return VerificationCheckResult{ItemID: item.ID, Name: item.Name, Requirement: item.Command, Command: item.Command, Mode: verificationModeForContractItem(item), Status: VerificationStatusNotRun}
 }
@@ -380,6 +353,54 @@ func machineContractResult(item TestingContractItem, status VerificationRunStatu
 			return ""
 		}(),
 	}
+}
+
+func recordVerificationContractError(out *VerificationExecutionOutcome, report *VerificationReport, resultIndex int, item TestingContractItem, cwd, reason, suggestion string) {
+	contractErr := VerificationContractError{
+		ItemID: item.ID, Repo: strings.TrimSpace(item.Repo), Cwd: strings.TrimSpace(cwd),
+		Reason: strings.TrimSpace(reason), Suggestion: strings.TrimSpace(suggestion),
+	}
+	out.ContractErrors = append(out.ContractErrors, contractErr)
+	result := contractResultStub(item)
+	result.Status = VerificationStatusFailed
+	result.Notes = VerificationClassificationContractError
+	result.Evidence = contractErr.Reason
+	result.EvidenceData.Summary = contractErr.Reason
+	report.Results[resultIndex] = result
+}
+
+func recordVerificationRunContractError(out *VerificationExecutionOutcome, report *VerificationReport, resultIndex int, item TestingContractItem, run capturedVerificationRun, reason, suggestion string) {
+	recordVerificationContractError(out, report, resultIndex, item, run.record.Cwd, reason, suggestion)
+	result := machineContractResult(item, VerificationStatusFailed, run, VerificationClassificationContractError)
+	result.Notes = VerificationClassificationContractError
+	result.EvidenceData.Summary += ": " + strings.TrimSpace(reason)
+	report.Results[resultIndex] = result
+}
+
+// VerificationContractPlanRevisionFeedback renders all command defects in one
+// revision request so the planner repairs the contract once and the harness can
+// resume the already-completed implementation iteration.
+func VerificationContractPlanRevisionFeedback(contractErrors []VerificationContractError) string {
+	errs := append([]VerificationContractError(nil), contractErrors...)
+	sort.Slice(errs, func(i, j int) bool { return errs[i].ItemID < errs[j].ItemID })
+	var b strings.Builder
+	b.WriteString("## Verification Contract Errors\n\n")
+	b.WriteString("The implementation completed, but these planner-authored commands could not execute meaningfully. Repair every command without changing implementation scope. Repo-scoped commands run from the tagged repository root.\n")
+	for _, contractErr := range errs {
+		fmt.Fprintf(&b, "\n- `%s`", contractErr.ItemID)
+		if contractErr.Repo != "" {
+			fmt.Fprintf(&b, " repo `%s`", contractErr.Repo)
+		}
+		if contractErr.Cwd != "" {
+			fmt.Fprintf(&b, " cwd `%s`", contractErr.Cwd)
+		}
+		fmt.Fprintf(&b, ": %s", contractErr.Reason)
+		if contractErr.Suggestion != "" {
+			fmt.Fprintf(&b, " %s", contractErr.Suggestion)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func verificationItemWorkDir(item TestingContractItem, workspaceDir string, repos []feature.FeatureRepo) (*feature.FeatureRepo, string, error) {
@@ -421,6 +442,119 @@ func resolveVerificationCwd(root, relative string) (string, error) {
 		return "", fmt.Errorf("run cwd escapes repository: %q", relative)
 	}
 	return filepath.Join(root, clean), nil
+}
+
+func validateVerificationCwd(root, cwd string) string {
+	info, err := os.Stat(cwd)
+	if err != nil {
+		return fmt.Sprintf("verification cwd %q is unavailable: %v", cwd, err)
+	}
+	if !info.IsDir() {
+		return fmt.Sprintf("verification cwd %q is not a directory", cwd)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Sprintf("verification repository root %q cannot be resolved: %v", root, err)
+	}
+	resolvedCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return fmt.Sprintf("verification cwd %q cannot be resolved: %v", cwd, err)
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedCwd)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Sprintf("verification cwd %q escapes repository root %q", cwd, root)
+	}
+	return ""
+}
+
+type repoPrefixedCommandPath struct {
+	prefixed string
+	relative string
+}
+
+func repoPrefixedCommandPaths(command, repoName string) []repoPrefixedCommandPath {
+	repoName = strings.TrimSpace(repoName)
+	if repoName == "" {
+		return nil
+	}
+	pattern := regexp.MustCompile(`(?:^|[^A-Za-z0-9._+@%/-])((?:\./)?` + regexp.QuoteMeta(repoName) + `/([A-Za-z0-9._+@%/-]+))`)
+	matches := pattern.FindAllStringSubmatch(command, -1)
+	out := make([]repoPrefixedCommandPath, 0, len(matches))
+	for _, match := range matches {
+		if len(match) == 3 {
+			out = append(out, repoPrefixedCommandPath{prefixed: match[1], relative: match[2]})
+		}
+	}
+	return out
+}
+
+type verificationCommandDefect struct {
+	reason     string
+	suggestion string
+}
+
+func repoScopedVerificationFailure(command, repoName, cwd string, run capturedVerificationRun) (verificationCommandDefect, bool) {
+	repoName = strings.TrimSpace(repoName)
+	if repoName == "" {
+		return verificationCommandDefect{}, false
+	}
+	missingDiagnostic := func(value string) bool {
+		return failureOutputReferencesPath(run.stderr, value)
+	}
+	cdPattern := regexp.MustCompile(`(?:^|[\s;&|])cd[\t ]+(?:--[\t ]+)?["']?(?:\./)?` + regexp.QuoteMeta(repoName) + `["']?(?:[\t ]|[;&|]|$)`)
+	if cdPattern.MatchString(command) {
+		if _, err := os.Stat(filepath.Join(cwd, repoName)); os.IsNotExist(err) && missingDiagnostic(repoName) {
+			return verificationCommandDefect{
+				reason:     fmt.Sprintf("command changes into repository %q even though it already runs from that repository root", repoName),
+				suggestion: fmt.Sprintf("Remove the `cd %s` wrapper and run the command directly.", repoName),
+			}, true
+		}
+	}
+	for _, match := range repoPrefixedCommandPaths(command, repoName) {
+		prefixed := strings.TrimPrefix(match.prefixed, "./")
+		if _, err := os.Stat(filepath.Join(cwd, filepath.FromSlash(prefixed))); err == nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(cwd, filepath.FromSlash(match.relative))); err == nil && missingDiagnostic(match.prefixed) {
+			return verificationCommandDefect{
+				reason: fmt.Sprintf("command path %q is repository-prefixed even though the command already runs from repository %q",
+					match.prefixed, repoName),
+				suggestion: fmt.Sprintf("Replace %q with %q.", match.prefixed, match.relative),
+			}, true
+		}
+	}
+	return verificationCommandDefect{}, false
+}
+
+func failureOutputReferencesPath(output, path string) bool {
+	path = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(path), "./"))
+	if path == "" {
+		return false
+	}
+	for _, line := range strings.Split(strings.ToLower(output), "\n") {
+		if strings.Contains(line, path) && outputContainsAny(line,
+			"no such file", "not found", "cannot cd", "can't cd", "cannot access", "does not exist") {
+			return true
+		}
+	}
+	return false
+}
+
+func preflightVerificationShell(ctx context.Context, runner ports.CommandRunner, command, cwd string) (string, error) {
+	var stderr bytes.Buffer
+	_, err := runner.Run(ctx, "/bin/sh", []string{"-n", "-c", command}, ports.CommandOpts{Dir: cwd, Stderr: &stderr})
+	if err == nil {
+		return "", nil
+	}
+	var exitCoder interface{ ExitCode() int }
+	if !errors.As(err, &exitCoder) {
+		return "", fmt.Errorf("shell syntax checker failed to start: %w", err)
+	}
+	detail := strings.TrimSpace(redactVerificationOutput(stderr.String()))
+	if detail == "" {
+		detail = err.Error()
+	}
+	return "invalid verification shell syntax: " + detail, nil
 }
 
 func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner, itemID, kind, command, cwd, timeoutText string) (capturedVerificationRun, error) {
@@ -473,6 +607,54 @@ func commandExitCode(err error) int {
 		return exitCoder.ExitCode()
 	}
 	return 1
+}
+
+func verificationRuntimeContractError(err error, run capturedVerificationRun) string {
+	if err == nil || errors.Is(err, context.DeadlineExceeded) || run.record.ExitCode == 124 {
+		return ""
+	}
+	var exitCoder interface{ ExitCode() int }
+	if errors.As(err, &exitCoder) {
+		if repoLocalExecutableSetupFailure(run) {
+			return ""
+		}
+		switch exitCoder.ExitCode() {
+		case 126:
+			if outputContainsAny(run.stderr, "permission denied", "cannot execute", "not executable") {
+				return "verification command is not executable"
+			}
+		case 127:
+			if outputContainsAny(run.stderr, "not found", "no such file or directory") {
+				return "verification command was not found"
+			}
+		default:
+			return ""
+		}
+		return ""
+	}
+	return "verification shell failed to start: " + err.Error()
+}
+
+func repoLocalExecutableSetupFailure(run capturedVerificationRun) bool {
+	if run.record.ExitCode != 126 && run.record.ExitCode != 127 {
+		return false
+	}
+	if !outputContainsAny(run.stderr, "permission denied", "cannot execute", "not executable", "not found", "no such file or directory") {
+		return false
+	}
+	return repoLocalExecutableCommandRE.MatchString(strings.TrimSpace(run.record.Command))
+}
+
+var repoLocalExecutableCommandRE = regexp.MustCompile(`(?:^|[;&|][;&|]?[\t ]*)(?:env[\t ]+(?:[A-Za-z_][A-Za-z0-9_]*=[^\t ]+[\t ]+)*)?["']?((?:\.{1,2}/|[A-Za-z0-9._-]+/)[^\t ;&|"']+)`)
+
+func outputContainsAny(output string, values ...string) bool {
+	output = strings.ToLower(output)
+	for _, value := range values {
+		if strings.Contains(output, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, contractPath string, item TestingContractItem, repo feature.FeatureRepo, commit string) (*capturedVerificationRun, error) {

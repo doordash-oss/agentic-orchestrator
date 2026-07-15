@@ -56,17 +56,17 @@ func TestCompileTestingContractMultiRepo_PerRepoPlanCommands(t *testing.T) {
 	}
 }
 
-func TestCompileTestingContractMultiRepo_CrossRepoSteps(t *testing.T) {
+func TestCompileTestingContractMultiRepo_ExplicitTopLevelRepoScopes(t *testing.T) {
 	in := MultiRepoContractInput{
 		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
-		PlanText: "## Tasks\n### Task 1\n**Repo:** `api`\n",
-		CrossRepoSteps: []VerificationStep{
-			{Description: "End-to-end smoke", Command: "scripts/e2e.sh"},
-		},
+		PlanText: "### Automated Verification\n- [ ] [repo: api] API tests: `go test ./...`\n- [ ] [repo: web] Web tests: `npm test`\n",
 	}
 	c := CompileTestingContractMultiRepo(in)
-	if got := countItems(c.Items, testingContractCrossRepoSource, TestingContractCrossRepoTag); got != 1 {
-		t.Errorf("cross-repo rows = %d, want 1", got)
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameAPI); got != 1 {
+		t.Errorf("api rows = %d, want 1", got)
+	}
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameWeb); got != 1 {
+		t.Errorf("web rows = %d, want 1", got)
 	}
 }
 
@@ -105,8 +105,8 @@ func TestCompileTestingContractMultiRepo_SingleRepoDegenerate(t *testing.T) {
 	}
 	c := CompileTestingContractMultiRepo(in)
 	for _, it := range c.Items {
-		if it.Source == testingContractCrossRepoSource {
-			t.Errorf("single-repo phase should have no cross-repo items, got %+v", it)
+		if it.Repo != "solo" {
+			t.Errorf("single-repo command repo = %q, want solo", it.Repo)
 		}
 	}
 }
@@ -122,9 +122,6 @@ func TestCompileTestingContractMultiRepo_EveryItemTagged(t *testing.T) {
 	in := MultiRepoContractInput{
 		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
-		CrossRepoSteps: []VerificationStep{
-			{Description: "smoke", Command: "scripts/e2e.sh"},
-		},
 	}
 	c := CompileTestingContractMultiRepo(in)
 	for _, it := range c.Items {
@@ -148,10 +145,11 @@ func TestCompileTestingContractMultiRepo_DistinctIDsPerRepo(t *testing.T) {
 	}
 }
 
-func TestCompileTestingContractMultiRepo_TopLevelVerificationFanOut(t *testing.T) {
+func TestCompileTestingContractMultiRepo_TopLevelVerificationUsesExplicitScopes(t *testing.T) {
 	plan := strings.Join([]string{
 		"#### Automated Verification:",
-		"- [ ] cross check: `make verify`",
+		"- [ ] [repo: api] api check: `go test ./...`",
+		"- [ ] [repo: web] web check: `npm test`",
 	}, "\n")
 	in := MultiRepoContractInput{
 		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
@@ -159,14 +157,14 @@ func TestCompileTestingContractMultiRepo_TopLevelVerificationFanOut(t *testing.T
 	}
 	c := CompileTestingContractMultiRepo(in)
 	if got := countItems(c.Items, testingContractPlanSource, testRepoNameAPI); got != 1 {
-		t.Errorf("api plan rows = %d, want 1 (top-level fanned to api)", got)
+		t.Errorf("api plan rows = %d, want 1 explicitly scoped command", got)
 	}
 	if got := countItems(c.Items, testingContractPlanSource, testRepoNameWeb); got != 1 {
-		t.Errorf("web plan rows = %d, want 1 (top-level fanned to web)", got)
+		t.Errorf("web plan rows = %d, want 1 explicitly scoped command", got)
 	}
 }
 
-func TestCompileTestingContractMultiRepo_SuccessCriteriaVerificationFanOut(t *testing.T) {
+func TestCompileTestingContractMultiRepo_SuccessCriteriaVerificationDoesNotFanOut(t *testing.T) {
 	plan := strings.Join([]string{
 		"## Overview",
 		"Do the slice.",
@@ -177,17 +175,17 @@ func TestCompileTestingContractMultiRepo_SuccessCriteriaVerificationFanOut(t *te
 		"Do api work.",
 		"## Success Criteria",
 		"### Automated Verification",
-		"- [ ] Full suite passes: `make verify`",
+		"- [ ] [repo: api] API suite passes: `go test ./...`",
 	}, "\n")
 	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
 		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 	})
 	if got := countItems(c.Items, testingContractPlanSource, testRepoNameAPI); got != 1 {
-		t.Errorf("api plan rows = %d, want 1 (success criteria fanned to api)", got)
+		t.Errorf("api plan rows = %d, want 1 explicitly scoped command", got)
 	}
-	if got := countItems(c.Items, testingContractPlanSource, testRepoNameWeb); got != 1 {
-		t.Errorf("web plan rows = %d, want 1 (success criteria fanned to web)", got)
+	if got := countItems(c.Items, testingContractPlanSource, testRepoNameWeb); got != 0 {
+		t.Errorf("web plan rows = %d, want no accidental fan-out", got)
 	}
 }
 

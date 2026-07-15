@@ -36,9 +36,8 @@ import (
 //   - "need_user_input":  iteration emitted NEED_USER_INPUT — feature-scoped
 //     pause gate; NeedUserInputPath points to the persisted gate
 //     artifact at the phase-iteration dir.
-//   - "plan_revision_required": implementation review found missing visual or
-//     behavioral evidence coverage that must be repaired by revising the
-//     phase plan before another implementation attempt.
+//   - "plan_revision_required": implementation found a phase-plan contract
+//     defect that must be repaired before another implementation attempt.
 //
 // PhaseRepos is the deduplicated, sorted list of repo names declared by the
 // phase plan's `**Repo:** <name>` Task tags (single-repo phases get

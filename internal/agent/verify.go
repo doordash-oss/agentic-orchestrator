@@ -24,6 +24,7 @@ import (
 type VerificationStep struct {
 	Description  string // Human-readable description (e.g., "Unit tests pass")
 	Command      string // Executable command (e.g., "go test ./...")
+	Repo         string // Explicit [repo: <name>] scope for multi-repo phase commands.
 	Capabilities []VerificationCapability
 }
 
@@ -275,16 +276,27 @@ func parseChecklistItem(line string) (VerificationStep, bool) {
 	commandWithBackticks := line[chosen[0]:chosen[1]]
 	description := extractDescription(line, commandWithBackticks)
 	description = strings.TrimSpace(verificationCapabilityRE.ReplaceAllString(description, ""))
+	description = strings.TrimSpace(verificationRepoRE.ReplaceAllString(description, ""))
 	description = strings.TrimSpace(strings.TrimSuffix(description, ":"))
 
 	return VerificationStep{
 		Description:  description,
 		Command:      command,
+		Repo:         parseVerificationRepo(line),
 		Capabilities: parseVerificationCapabilities(line),
 	}, true
 }
 
 var verificationCapabilityRE = regexp.MustCompile(`\[agentico capability:\s*([^;\]]+)\s*;\s*probe:\s*([^\]]+)\]`)
+var verificationRepoRE = regexp.MustCompile(`(?i)\[repo:\s*([^\]]+)\]`)
+
+func parseVerificationRepo(line string) string {
+	match := verificationRepoRE.FindStringSubmatch(line)
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(strings.Trim(match[1], "`"))
+}
 
 func parseVerificationCapabilities(line string) []VerificationCapability {
 	matches := verificationCapabilityRE.FindAllStringSubmatch(line, -1)
@@ -343,9 +355,18 @@ func isManualNoneRequired(description string) bool {
 }
 
 func isNoneRequiredDescription(description string) bool {
+	marker, _ := noneRequiredMarker(description)
+	return marker
+}
+
+func noneRequiredMarker(description string) (marker bool, valid bool) {
 	normalized := strings.TrimSpace(description)
 	normalized = strings.Trim(normalized, "`*_ ")
-	return strings.HasPrefix(strings.ToLower(normalized), "none required:")
+	const prefix = "none required:"
+	if !strings.HasPrefix(strings.ToLower(normalized), prefix) {
+		return false, false
+	}
+	return true, strings.TrimSpace(normalized[len(prefix):]) != ""
 }
 
 // findBacktickSpans scans a line for backtick-delimited spans, treating any

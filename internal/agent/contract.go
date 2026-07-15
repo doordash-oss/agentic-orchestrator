@@ -301,6 +301,24 @@ func validatePhasePlanMarkdownArtifact(iterDir string, path string, _ *Outcome) 
 func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
 	var violations []ProtocolViolation
 	success := extractMarkdownSection(planText, "## Success Criteria")
+	for _, heading := range []string{"### Automated Verification", "### Manual Verification"} {
+		if !hasMarkdownHeading(success, heading) {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "phase plan markdown",
+				Reason:   fmt.Sprintf("phase plan markdown is missing top-level `%s` under `## Success Criteria`", heading),
+			})
+			continue
+		}
+		var reason string
+		if heading == "### Automated Verification" {
+			reason = validateAutomatedVerificationSection(success)
+		} else {
+			reason = validateManualVerificationSection(success)
+		}
+		if reason != "" {
+			violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: reason})
+		}
+	}
 	for _, heading := range []string{"### Visual Evidence", "### Behavioral Evidence"} {
 		if !hasMarkdownHeading(success, heading) {
 			violations = append(violations, ProtocolViolation{
@@ -317,17 +335,109 @@ func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
 		}
 	}
 	violations = append(violations, taskScopedEvidenceViolations(planText)...)
+	violations = append(violations, verificationScopeViolations(planText, success)...)
+	return violations
+}
+
+func validateAutomatedVerificationSection(successCriteria string) string {
+	const heading = "### Automated Verification"
+	body := extractMarkdownSection(successCriteria, heading)
+	requirements, noneMarkers, invalidNoneMarkers := countEvidenceChecklistItems(body)
+	switch {
+	case invalidNoneMarkers > 0:
+		return "phase plan markdown `### Automated Verification` must give every `None required:` item a concrete reason"
+	case noneMarkers == 1 && requirements == 0:
+		return ""
+	case noneMarkers > 0:
+		return "phase plan markdown `### Automated Verification` must contain executable checklist commands or exactly one `None required: <reason>` checklist item, not both"
+	case requirements == 0:
+		return "phase plan markdown `### Automated Verification` must contain executable checklist commands or exactly one `None required: <reason>` checklist item"
+	}
+	parsed := ParsePlanVerification(heading + "\n" + body)
+	if len(parsed) != requirements {
+		return "phase plan markdown `### Automated Verification` checklist items must each end with one complete executable command in backticks"
+	}
+	return ""
+}
+
+func validateManualVerificationSection(successCriteria string) string {
+	const heading = "### Manual Verification"
+	body := extractMarkdownSection(successCriteria, heading)
+	requirements, noneMarkers, invalidNoneMarkers := countEvidenceChecklistItems(body)
+	switch {
+	case invalidNoneMarkers > 0:
+		return "phase plan markdown `### Manual Verification` must give every `None required:` item a concrete reason"
+	case noneMarkers == 1 && requirements == 0:
+		return ""
+	case noneMarkers > 0:
+		return "phase plan markdown `### Manual Verification` must contain one consolidated checklist requirement or exactly one `None required: <reason>` checklist item, not both"
+	case requirements == 1:
+		for _, line := range strings.Split(body, "\n") {
+			description, ok := parseChecklistDescription(strings.TrimSpace(line))
+			if ok && !isNoneRequiredDescription(description) && strings.Contains(description, "`") {
+				return "phase plan markdown `### Manual Verification` must describe semantic judgment without executable backtick commands"
+			}
+		}
+		return ""
+	case requirements > 1:
+		return "phase plan markdown `### Manual Verification` must use a single consolidated requirement so the implementer produces one semantic observation artifact"
+	default:
+		return "phase plan markdown `### Manual Verification` must contain one consolidated checklist requirement or exactly one `None required: <reason>` checklist item"
+	}
+}
+
+func verificationScopeViolations(planText, successCriteria string) []ProtocolViolation {
+	tasks := ParsePlanTasks(planText)
+	repos := make(map[string]bool)
+	var violations []ProtocolViolation
+	for _, task := range tasks {
+		if len(task.Repos) > 1 {
+			violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: fmt.Sprintf(
+				"%s declares multiple `**Repo:**` tags; split cross-repo work into one task per repo", strings.TrimSpace(task.Heading))})
+		}
+		for _, declaredRepo := range task.Repos {
+			repo := strings.TrimSpace(declaredRepo)
+			repos[repo] = true
+		}
+	}
+	for _, task := range tasks {
+		taskRepo := ""
+		if len(task.Repos) == 1 {
+			taskRepo = strings.TrimSpace(task.Repos[0])
+		}
+		for _, step := range ParsePlanVerification(strings.Join(task.Body, "\n")) {
+			if step.Repo != "" && taskRepo != "" && step.Repo != taskRepo {
+				violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: fmt.Sprintf(
+					"verification command scoped to repo %q appears under a task scoped to repo %q", step.Repo, taskRepo)})
+			}
+		}
+	}
+	for _, step := range ParsePlanVerification(successCriteria) {
+		repo := strings.TrimSpace(step.Repo)
+		if len(repos) > 1 && repo == "" {
+			violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: "multi-repo phase automated verification must scope every command with `[repo: <name>]`"})
+			continue
+		}
+		if repo != "" && len(repos) > 0 && !repos[repo] {
+			violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: fmt.Sprintf(
+				"verification command references repo %q, which is not assigned to any phase task", repo)})
+		}
+	}
 	return violations
 }
 
 func validateEvidenceSectionBody(successCriteria, heading string) string {
 	body := extractMarkdownSection(successCriteria, heading)
-	requirements, noneMarkers := countEvidenceChecklistItems(body)
+	requirements, noneMarkers, invalidNoneMarkers := countEvidenceChecklistItems(body)
 	switch {
+	case invalidNoneMarkers > 0:
+		return fmt.Sprintf("phase plan markdown `%s` must give every `None required:` item a concrete reason", heading)
 	case noneMarkers == 1 && requirements == 0:
 		return ""
 	case noneMarkers > 0:
 		return fmt.Sprintf("phase plan markdown `%s` must contain checklist requirements or exactly one `None required: <reason>` checklist item, not both", heading)
+	case heading == "### Behavioral Evidence" && requirements > 1:
+		return "phase plan markdown `### Behavioral Evidence` must use one consolidated primary-journey artifact rather than separate paperwork files"
 	case requirements > 0:
 		return ""
 	default:
@@ -335,7 +445,7 @@ func validateEvidenceSectionBody(successCriteria, heading string) string {
 	}
 }
 
-func countEvidenceChecklistItems(body string) (requirements int, noneMarkers int) {
+func countEvidenceChecklistItems(body string) (requirements int, noneMarkers int, invalidNoneMarkers int) {
 	lines := strings.Split(body, "\n")
 	var fence fenceState
 	for _, line := range lines {
@@ -349,13 +459,17 @@ func countEvidenceChecklistItems(body string) (requirements int, noneMarkers int
 		if !ok {
 			continue
 		}
-		if isNoneRequiredDescription(description) {
-			noneMarkers++
+		if marker, valid := noneRequiredMarker(description); marker {
+			if valid {
+				noneMarkers++
+			} else {
+				invalidNoneMarkers++
+			}
 			continue
 		}
 		requirements++
 	}
-	return requirements, noneMarkers
+	return requirements, noneMarkers, invalidNoneMarkers
 }
 
 func taskScopedEvidenceViolations(planText string) []ProtocolViolation {
@@ -414,7 +528,31 @@ func validateRefactorPlanMarkdownArtifact(iterDir string, path string, out *Outc
 		return []ProtocolViolation{{Artifact: "refactor-plan.md", Reason: "refactor-plan.md is empty"}}, nil
 	}
 	out.PlanMarkdownPath = path
-	return nil, nil
+	planText := string(data)
+	violations := verificationScopeViolations(planText, extractMarkdownSection(planText, "## Success Criteria"))
+	for _, task := range ParsePlanTasks(planText) {
+		if len(task.Repos) != 1 {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "refactor-plan.md",
+				Reason: fmt.Sprintf("%s must declare exactly one `**Repo:** <name>` tag; split cross-repo work into one task per repo",
+					strings.TrimSpace(task.Heading)),
+			})
+		}
+	}
+	var fence fenceState
+	for _, line := range strings.Split(planText, "\n") {
+		if fence.update(line) || fence.inside() {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") && strings.Contains(strings.ToLower(trimmed), "cross-repo verification") {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "refactor-plan.md",
+				Reason:   "unsupported Cross-Repo Verification section; put each command in Automated Verification and scope it to one runnable repository",
+			})
+		}
+	}
+	return violations, nil
 }
 
 func validateKnowledgeBaseIndexArtifact(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {

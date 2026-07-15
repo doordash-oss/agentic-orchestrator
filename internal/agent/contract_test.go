@@ -219,6 +219,110 @@ func TestContractRegistryPlanPhasePlannerReportsMissingEvidenceSections(t *testi
 	}
 }
 
+func TestContractRegistryPlanPhasePlannerReportsMissingAutomatedVerification(t *testing.T) {
+	plan := strings.Replace(validPhasePlanText(), "### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n", "", 1)
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "### Automated Verification") {
+		t.Fatalf("Validate() = (%+v, %q), want missing automated verification violation", out, got)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerAllowsJustifiedNoAutomatedVerification(t *testing.T) {
+	plan := strings.Replace(validPhasePlanText(), "- [ ] Tests pass: `go test ./...`", "- [ ] None required: documentation-only change with no executable behavior.", 1)
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !out.OK || len(violations) != 0 {
+		t.Fatalf("Validate() = (%+v, %v), want justified no-automation plan accepted", out, violations)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerRejectsUnscopedMultiRepoCommand(t *testing.T) {
+	plan := strings.Replace(validPhasePlanText(), "### Task 1: Build the slice\n", "### Task 1: Build the slice\n\n**Repo:** api\n", 1)
+	plan = strings.Replace(plan, "## Success Criteria", "### Task 2: Build the client\n\n**Repo:** web\n\n#### What to build\n\nBuild it.\n\n#### Acceptance criteria\n\n- [ ] It works.\n\n#### Blocked by\n\nNone - can start immediately.\n\n## Success Criteria", 1)
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "[repo: <name>]") {
+		t.Fatalf("Validate() = (%+v, %q), want explicit multi-repo verification scope violation", out, got)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerAcceptsScopedMultiRepoCommands(t *testing.T) {
+	plan := strings.Replace(validPhasePlanText(), "### Task 1: Build the slice\n", "### Task 1: Build the slice\n\n**Repo:** api\n", 1)
+	plan = strings.Replace(plan, "## Success Criteria", "### Task 2: Build the client\n\n**Repo:** web\n\n#### What to build\n\nBuild it.\n\n#### Acceptance criteria\n\n- [ ] It works.\n\n#### Blocked by\n\nNone - can start immediately.\n\n## Success Criteria", 1)
+	plan = strings.Replace(plan, "- [ ] Tests pass: `go test ./...`", "- [ ] [repo: api] API tests pass: `go test ./...`\n- [ ] [repo: web] Web tests pass: `npm test`", 1)
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !out.OK || len(violations) != 0 {
+		t.Fatalf("Validate() = (%+v, %v), want scoped multi-repo verification accepted", out, violations)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerRejectsEmptyNoneReasonAndManualCommand(t *testing.T) {
+	plan := strings.Replace(validPhasePlanText(), "- [ ] Tests pass: `go test ./...`", "- [ ] None required:", 1)
+	plan = strings.Replace(plan, "- [ ] None required: internal-only test fixture.", "- [ ] Inspect by running `make test`.", 1)
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "concrete reason") || !strings.Contains(got, "without executable backtick commands") {
+		t.Fatalf("Validate() = (%+v, %q), want empty None reason and disguised manual command rejected", out, got)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerRejectsMultipleManualArtifacts(t *testing.T) {
+	plan := strings.Replace(validPhasePlanText(),
+		"- [ ] None required: internal-only test fixture.",
+		"- [ ] Inspect the primary journey.\n- [ ] Inspect the same journey again.", 1)
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "single consolidated") {
+		t.Fatalf("Validate() = (%+v, %q), want consolidated manual evidence violation", out, got)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerRejectsMultipleBehavioralArtifacts(t *testing.T) {
+	plan := strings.Replace(validPhasePlanText(),
+		"- [ ] None required: automated tests provide the artifact.",
+		"- [ ] Capture the primary journey trace.\n- [ ] Capture a second log for the same journey.", 1)
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "one consolidated primary-journey artifact") {
+		t.Fatalf("Validate() = (%+v, %q), want consolidated behavioral evidence violation", out, got)
+	}
+}
+
 func TestContractRegistryPlanPhasePlannerReportsTaskScopedEvidenceSections(t *testing.T) {
 	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
 		PlanText: "# Phase 1 Plan\n\n" +
@@ -314,6 +418,50 @@ func TestContractRegistryRefactorPlanStepReportsEmptyPlan(t *testing.T) {
 	got := JoinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "refactor-plan.md") || !strings.Contains(got, "empty") {
 		t.Fatalf("Validate() = (%+v, %q), want empty refactor-plan.md", out, got)
+	}
+}
+
+func TestContractRegistryRefactorPlanStepRejectsUnsupportedCrossRepoVerification(t *testing.T) {
+	refactorDir := t.TempDir()
+	plan := validRefactorPlanText() + "\n## Cross-Repo Verification\n\n- [ ] Smoke: `scripts/e2e.sh`\n"
+	if err := os.WriteFile(filepath.Join(refactorDir, "refactor-plan.md"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, violations, err := Validate(feature.PhasePlan, RoleRefactorPlanStep, refactorDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "unsupported Cross-Repo Verification") {
+		t.Fatalf("Validate() = (%+v, %q), want unsupported cross-repo verification rejected", out, got)
+	}
+}
+
+func TestContractRegistryRefactorPlanStepRequiresExactlyOneRepoPerTask(t *testing.T) {
+	refactorDir := t.TempDir()
+	tests := map[string]string{
+		"missing":  "# Refactor: test\n\n## Tasks\n\n### Task 1: unowned\n\nTouch files.\n",
+		"multiple": "# Refactor: test\n\n## Tasks\n\n### Task 1: ambiguous\n\n**Repo:** api\n**Repo:** web\n",
+	}
+	for name, plan := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(refactorDir, name, "refactor-plan.md")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, violations, err := Validate(feature.PhasePlan, RoleRefactorPlanStep, filepath.Dir(path))
+			if err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			got := JoinProtocolViolations(violations)
+			if out.OK || !strings.Contains(got, "exactly one `**Repo:** <name>` tag") {
+				t.Fatalf("Validate() = (%+v, %q), want exactly-one-repo rejection", out, got)
+			}
+		})
 	}
 }
 

@@ -140,9 +140,9 @@ type ImplementConfig struct {
 //
 // FinalStatus values:
 //   - "review_passed":     iteration emitted SUCCESS and the review gate APPROVED.
-//   - "plan_revision_required": review rejected missing visual/behavioral
-//     evidence coverage with structured requirements that must go through
-//     phase-plan revision.
+//   - "plan_revision_required": implementation found a phase-plan contract
+//     defect with structured requirements that must go through phase-plan
+//     revision.
 //   - "max_iterations":    hit cfg.MaxIterations without a passing review.
 //   - "safety_rail":       no-progress / consecutive-failure rail tripped.
 //   - "interrupted":       shutdown / feature stopped while running.
@@ -155,8 +155,8 @@ type LoopResult struct {
 	Iterations  int
 	LastError   string
 
-	// PlanRevisionFeedback carries reviewer-authored missing-evidence
-	// requirements when FinalStatus == "plan_revision_required".
+	// PlanRevisionFeedback carries phase-plan repair requirements when
+	// FinalStatus == "plan_revision_required".
 	PlanRevisionFeedback string
 
 	// NeedUserInputPath is the absolute path of the persisted gate
@@ -278,6 +278,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			testingContractPath string
 			contractFingerprint string
 		)
+		planContent := readPlanContent(cfg.PlanPath)
+		if violations := verificationScopeViolations(planContent, extractMarkdownSection(planContent, "## Success Criteria")); len(violations) > 0 {
+			cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "plan_revision_required")
+			return &LoopResult{
+				FinalStatus:          "plan_revision_required",
+				Iterations:           i,
+				PlanRevisionFeedback: verificationScopePlanRevisionFeedback(violations),
+			}, nil
+		}
 
 		if skipImplement {
 			// Resume point: implement phase already finished in the prior run.
@@ -287,7 +296,11 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			iterDir = filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", i))
 			agentStatus = agentStatusSuccess
 			madeProgress, _ = pt.Check(progressPath)
-			testingContractPath, _ = resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName)
+			var prepareErr error
+			testingContractPath, contractFingerprint, prepareErr = prepareImplementationTestingContract(cfg, planContent)
+			if prepareErr != nil {
+				return nil, prepareErr
+			}
 		} else {
 			// Read help answers from the latest feature state
 			helpAnswers := ""
@@ -303,33 +316,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if createErr != nil {
 				return nil, fmt.Errorf("creating iteration dir: %w", createErr)
 			}
-			planContent := readPlanContent(cfg.PlanPath)
-			if contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName); ok {
-				testingContractPath = contractPath
-				contract := compileImplementationTestingContract(cfg, planContent)
-				if existing, readErr := ReadTestingContract(contractPath); readErr == nil {
-					contract = ReconcileTestingContract(existing, contract)
-				} else if !os.IsNotExist(readErr) {
-					return nil, fmt.Errorf("reading existing testing contract: %w", readErr)
-				}
-				if testingContractRequiresCommandRunner(&contract) && cfg.CommandRunner == nil {
-					return nil, errors.New("implementation testing contract contains harness-owned commands but CommandRunner is not configured")
-				}
-				if cfg.CommandRunner != nil && cfg.Feature != nil {
-					resolver := func(worktreePath string) (string, error) {
-						return resolveTestingContractWorktreeHEADWithRunner(cfg.CommandRunner, worktreePath)
-					}
-					if err := EnsureTestingContractBaseCommits(&contract, cfg.Feature.Repos, resolver); err != nil {
-						return nil, fmt.Errorf("anchoring testing contract baseline: %w", err)
-					}
-				}
-				if err := WriteTestingContract(contractPath, contract); err != nil {
-					return nil, fmt.Errorf("writing testing contract: %w", err)
-				}
-				contractFingerprint, createErr = Fingerprint(contractPath)
-				if createErr != nil {
-					return nil, fmt.Errorf("fingerprinting testing contract: %w", createErr)
-				}
+			testingContractPath, contractFingerprint, createErr = prepareImplementationTestingContract(cfg, planContent)
+			if createErr != nil {
+				return nil, createErr
 			}
 			// Build prompt
 			prompt := BuildImplementPrompt(
@@ -635,6 +624,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				continue
 			}
 			parsed := outcome.Progress
+			if harnessVerification != nil && len(harnessVerification.ContractErrors) > 0 {
+				consecutiveFailures = 0
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "plan_revision_required")
+				return &LoopResult{
+					FinalStatus:          "plan_revision_required",
+					Iterations:           i,
+					PlanRevisionFeedback: VerificationContractPlanRevisionFeedback(harnessVerification.ContractErrors),
+				}, nil
+			}
 			if harnessVerification != nil {
 				gate := ValidateVerificationReportWithContext(harnessVerification.Report, nil, true, VerificationReportValidationContext{
 					IterationDir: iterDir,
@@ -1210,6 +1208,48 @@ func resolveImplementationContractPath(stateDir string, f *feature.Feature, repo
 		return "", false
 	}
 	return CycleTestingContractPath(stateDir, f, repoName, cycleType), true
+}
+
+func prepareImplementationTestingContract(cfg ImplementConfig, planContent string) (string, string, error) {
+	contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName)
+	if !ok {
+		return "", "", nil
+	}
+	contract := compileImplementationTestingContract(cfg, planContent)
+	if existing, err := ReadTestingContract(contractPath); err == nil {
+		contract = ReconcileTestingContract(existing, contract)
+	} else if !os.IsNotExist(err) {
+		return "", "", fmt.Errorf("reading existing testing contract: %w", err)
+	}
+	if testingContractRequiresCommandRunner(&contract) && cfg.CommandRunner == nil {
+		return "", "", errors.New("implementation testing contract contains harness-owned commands but CommandRunner is not configured")
+	}
+	if cfg.CommandRunner != nil && cfg.Feature != nil {
+		resolver := func(worktreePath string) (string, error) {
+			return resolveTestingContractWorktreeHEADWithRunner(cfg.CommandRunner, worktreePath)
+		}
+		if err := EnsureTestingContractBaseCommits(&contract, cfg.Feature.Repos, resolver); err != nil {
+			return "", "", fmt.Errorf("anchoring testing contract baseline: %w", err)
+		}
+	}
+	if err := WriteTestingContract(contractPath, contract); err != nil {
+		return "", "", fmt.Errorf("writing testing contract: %w", err)
+	}
+	fingerprint, err := Fingerprint(contractPath)
+	if err != nil {
+		return "", "", fmt.Errorf("fingerprinting testing contract: %w", err)
+	}
+	return contractPath, fingerprint, nil
+}
+
+func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) string {
+	var b strings.Builder
+	b.WriteString("## Verification Scope Errors\n\n")
+	b.WriteString("Repair the phase plan's command scopes without changing implementation scope. Multi-repo commands require `[repo: <name>]` and run from that repository root.\n")
+	for _, violation := range violations {
+		fmt.Fprintf(&b, "\n- %s\n", violation.Reason)
+	}
+	return b.String()
 }
 
 func compileImplementationTestingContract(cfg ImplementConfig, planContent string) TestingContract {

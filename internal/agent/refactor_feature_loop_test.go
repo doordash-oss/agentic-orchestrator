@@ -483,11 +483,11 @@ func TestRunRefactorFeatureLoop_PlannedTestingContractEmitted(t *testing.T) {
 	}
 }
 
-// TestRunRefactorFeatureLoop_CrossRepoTaskDispatch is the headline
-// regression for cross-repo dispatch: a plan with one Task tagged Repo: api and
-// another tagged Repo: web produces both repos in the staged subset and lands
-// cross-repo edits in one iteration.
-func TestRunRefactorFeatureLoop_CrossRepoTaskDispatch(t *testing.T) {
+// TestRunRefactorFeatureLoop_MultiRepoTaskDispatch is the headline regression
+// for coordinated dispatch: a plan with one Task tagged Repo: api and another
+// tagged Repo: web produces both repos in the staged subset and lands the
+// related edits in one iteration.
+func TestRunRefactorFeatureLoop_MultiRepoTaskDispatch(t *testing.T) {
 	stateDir := t.TempDir()
 	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-cross-repo", []string{testRepoNameAPI, testRepoNameWeb, "shared"})
 
@@ -735,6 +735,69 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationTripsAfterBudget(t *tes
 	loaded, _ := store.Load(f.ID)
 	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleFailed {
 		t.Fatalf("ActiveCycle = %+v, want failed", loaded.ActiveCycle)
+	}
+}
+
+func TestRunRefactorFeatureLoop_RejectedScopeNeverReachesImplementation(t *testing.T) {
+	tests := map[string]string{
+		"foreign":  "# Refactor\n\n## Tasks\n\n### Task 1: foreign\n**Repo:** other\n",
+		"multiple": "# Refactor\n\n## Tasks\n\n### Task 1: ambiguous\n**Repo:** api\n**Repo:** web\n",
+		"mixed":    "# Refactor\n\n## Tasks\n\n### Task 1: valid\n**Repo:** api\n\n### Task 2: foreign\n**Repo:** other\n",
+	}
+	for name, plan := range tests {
+		t.Run(name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-invalid-scope-"+name, []string{testRepoNameAPI, testRepoNameWeb})
+			result, err := RunRefactorFeatureLoop(RefactorFeatureLoopConfig{
+				Feature:           f,
+				FeatureStore:      store,
+				StateDir:          stateDir,
+				Prompt:            "change only owned repos",
+				MaxConsecFails:    1,
+				RunRefactorPlanFn: stubRefactorPlanFn(plan),
+				RunImplementFn: func(ImplementConfig, ports.SessionManager) (*LoopResult, error) {
+					t.Fatal("implementation must not run with rejected phase scope")
+					return nil, nil
+				},
+			}, nil)
+			if err != nil {
+				t.Fatalf("RunRefactorFeatureLoop() error = %v, want terminal protocol result", err)
+			}
+			if result.FinalStatus != BoundedHelperStatusProtocolViolation || len(result.Repos) != 0 {
+				t.Fatalf("result = %+v, want protocol violation with no staged repos", result)
+			}
+		})
+	}
+}
+
+func TestRunRefactorFeatureLoop_RejectedScopeCanRecoverWithinPlannerBudget(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-scope-recovery", []string{testRepoNameAPI, testRepoNameWeb})
+	calls := 0
+	implemented := false
+	result, err := RunRefactorFeatureLoop(RefactorFeatureLoopConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       stateDir,
+		Prompt:         "change api only",
+		MaxConsecFails: 2,
+		RunRefactorPlanFn: func(stagedDir string) (string, error) {
+			calls++
+			if calls == 1 {
+				return stubRefactorPlanFn("# Refactor\n\n## Tasks\n\n### Task 1: foreign\n**Repo:** other\n")(stagedDir)
+			}
+			return stubRefactorPlanFn(refactorPlanSingleRepo)(stagedDir)
+		},
+		RunImplementFn: func(ImplementConfig, ports.SessionManager) (*LoopResult, error) {
+			implemented = true
+			return &LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunRefactorFeatureLoop() error = %v", err)
+	}
+	if calls != 2 || !implemented || result.FinalStatus != finalStatusReviewPassed || !reflect.DeepEqual(result.Repos, []string{testRepoNameAPI}) {
+		t.Fatalf("calls=%d implemented=%v result=%+v, want one plan repair then implementation", calls, implemented, result)
 	}
 }
 

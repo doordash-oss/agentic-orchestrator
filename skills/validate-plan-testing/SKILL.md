@@ -40,9 +40,11 @@ The plan may contain a **"Human Decisions"** section that records questions the 
 Evaluate the plan against these five dimensions:
 
 For per-phase plans, collapse these dimensions into a concise check:
-- Top-level `### Automated Verification` exists and each bullet names an executable command.
+- Top-level `### Automated Verification` exists and contains executable commands, or one justified `None required` item when the phase has no meaningful executable behavior.
 - Each task's acceptance criteria describe observable, testable behavior.
-- User-facing or hard-to-automate behavior has `### Manual Verification`, or a justified `None required` bullet.
+- Irreducible semantic judgment has at most one consolidated `### Manual Verification` item; outcomes already covered by commands or evidence artifacts are not repeated as self-attestation.
+- Primary-journey evidence has at most one consolidated `### Behavioral Evidence` item and never duplicates command transcripts already captured by the harness.
+- Multi-repo commands each declare `[repo: <name>]`; all commands are repo-relative because the harness runs them from that repository root.
 - Critical failure modes named by the roadmap or phase goal are represented in acceptance criteria or success criteria.
 
 ### 1. Coverage Adequacy
@@ -108,3 +110,4 @@ Do NOT request changes for:
 - Exhaustive edge case enumeration — the per-phase planner determines fine-grained test coverage
 - Tests for topics the plan explicitly defers or delegates to per-phase planning
 - Missing a separate testing-strategy section in a per-phase plan
+- A documentation-only phase using a justified `None required` automated-verification item with proportionate semantic or rendered review

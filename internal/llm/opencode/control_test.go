@@ -130,7 +130,7 @@ func permissionRequestLine(t *testing.T, id int, kind, title string, rawInput ma
 	})
 }
 
-// TestParseLine_PermissionRequestsSurfaceAsControl proves each Phase 2 permission
+// TestParseLine_PermissionRequestsSurfaceAsControl proves each permission
 // surface (shell, edit, web fetch/search, external directory) becomes a shared
 // can_use_tool control request carrying a stable request id, a normalized tool
 // name, and raw input detail the existing permission UI/cache can use — instead

@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -82,6 +83,45 @@ func TestRunBoundedHelper_SuccessWithoutPhaseComplete(t *testing.T) {
 	}
 	if result.Usage.InputTokens != 11 || result.Usage.OutputTokens != 7 {
 		t.Errorf("result.Usage = %+v, want input=11 output=7", result.Usage)
+	}
+}
+
+func TestIsRetryableProviderNetworkFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		err    error
+		want   bool
+	}{
+		{
+			name:   "dns lookup failure in provider transcript",
+			output: `{"result":"API Error: Unable to connect to API (ENOTFOUND)"}`,
+			err:    errors.New("running review helper: helper returned an error result"),
+			want:   true,
+		},
+		{
+			name: "connection reset in runner error",
+			err:  errors.New("running review helper: ECONNRESET"),
+			want: true,
+		},
+		{
+			name:   "implementation failure is not retried",
+			output: "review completed with a critical finding",
+			err:    errors.New("running review helper: helper returned an error result"),
+			want:   false,
+		},
+		{
+			name: "nil error is not retried",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRetryableProviderNetworkFailure(tt.output, tt.err); got != tt.want {
+				t.Errorf("isRetryableProviderNetworkFailure(%q, %v) = %t, want %t", tt.output, tt.err, got, tt.want)
+			}
+		})
 	}
 }
 

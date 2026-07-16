@@ -14,7 +14,12 @@
  *    redacted diagnostics and a manual retry path.
  */
 import { SafeErrorException, safeError, toSafeError, redactText } from '../../shared/errors';
-import { isConnectionErrorState, type ConnectionState } from '../../shared/ipc';
+import {
+  isConnectionErrorState,
+  SESSION_ID_SEGMENT_PATTERN,
+  type ConnectionDiagnostics,
+  type ConnectionState,
+} from '../../shared/ipc';
 import { z } from 'zod';
 import { evaluateCompatibility } from './compatibility';
 import { evaluateDiscoveryFile, type DiscoveryDeps, type DiscoveryRecord } from './discovery';
@@ -63,6 +68,10 @@ export interface GatewayTimeouts {
    * than the probe bound because readiness refresh re-probes provider CLIs.
    */
   apiRequestMs: number;
+  /** Initial delay before automatically relaunching an app-owned crash. */
+  crashRestartInitialMs: number;
+  /** Rolling crash-budget and healthy-reset window. */
+  crashWindowMs: number;
 }
 
 const DEFAULT_TIMEOUTS: GatewayTimeouts = {
@@ -71,6 +80,8 @@ const DEFAULT_TIMEOUTS: GatewayTimeouts = {
   pollIntervalMs: 250,
   shutdownGraceMs: 5000,
   apiRequestMs: 30000,
+  crashRestartInitialMs: 250,
+  crashWindowMs: 60000,
 };
 
 export interface GatewayDeps {
@@ -95,7 +106,11 @@ export interface GatewayDeps {
   sleep(ms: number): Promise<void>;
   /** Local redacted diagnostics sink (never crosses IPC unfiltered). */
   log(line: string): void;
+  /** Redacted child-output snapshot. A second IPC-safe scrub is applied before display. */
+  readDiagnosticLines?(): readonly string[];
   timeouts?: Partial<GatewayTimeouts>;
+  /** Injectable monotonic-enough wall clock for deterministic supervision tests. */
+  now?(): number;
 }
 
 /**
@@ -137,6 +152,10 @@ export class RuntimeGateway {
   private busy = false;
   private shuttingDown = false;
   private generation = 0;
+  private crashAttempts: number[] = [];
+  private readySince: number | null = null;
+  private recoveryPending = false;
+  private launchCommandContext: string | null = null;
 
   constructor(private readonly deps: GatewayDeps) {
     this.timeouts = { ...DEFAULT_TIMEOUTS, ...deps.timeouts };
@@ -163,7 +182,7 @@ export class RuntimeGateway {
    * pass an `/api/v1/...` path and receive status + parsed JSON body only.
    */
   async apiRequest(path: string, init: ApiRequestInit = {}): Promise<HttpResult> {
-    if (!/^\/api\/v1(\/[a-z0-9_-]+)*$/i.test(path)) {
+    if (!isAllowedApiPath(path)) {
       throw new SafeErrorException(
         safeError('E_BAD_API_PATH', 'The requested API path is not allowed.'),
       );
@@ -217,10 +236,48 @@ export class RuntimeGateway {
     return openSse(`${this.baseUrl}/api/v1/events${suffix}`, { token: this.token });
   }
 
+  /** Opens one authenticated session stream using only its transcript-row cursor. */
+  async openSessionOutputStream(
+    sessionId: string,
+    options: { from?: number } = {},
+  ): Promise<SseStream> {
+    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
+      throw new SafeErrorException(
+        safeError(
+          'E_NOT_CONNECTED',
+          'The app is not connected to an Agentico runtime.',
+          'Wait for the connection to become ready, then retry.',
+        ),
+      );
+    }
+    if (!SESSION_ID_PATTERN.test(sessionId)) {
+      throw new SafeErrorException(safeError('E_BAD_SESSION_ID', 'The session ID is not allowed.'));
+    }
+    const openSse = this.deps.openSse;
+    if (openSse === undefined) {
+      throw new SafeErrorException(
+        safeError('E_SSE_UNAVAILABLE', 'This build has no event-stream transport wired.'),
+      );
+    }
+    const query = new URLSearchParams();
+    if (options.from !== undefined) {
+      if (!Number.isSafeInteger(options.from) || options.from < 0) {
+        throw new SafeErrorException(
+          safeError('E_BAD_TRANSCRIPT_CURSOR', 'The transcript cursor is not allowed.'),
+        );
+      }
+      query.set('from', String(options.from));
+    }
+    const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+    return openSse(`${this.baseUrl}/api/v1/sessions/${sessionId}/output/stream${suffix}`, {
+      token: this.token,
+    });
+  }
+
   /** Runs one full connect cycle. Safe to call repeatedly. */
-  async start(): Promise<void> {
+  async start(): Promise<boolean> {
     if (this.busy || this.shuttingDown || this.state.status === 'ready') {
-      return;
+      return false;
     }
     this.busy = true;
     const generation = ++this.generation;
@@ -239,12 +296,64 @@ export class RuntimeGateway {
     } finally {
       this.busy = false;
     }
+    return true;
   }
 
   /** Manual retry from any terminal state; a healthy connection is untouched. */
   async retry(): Promise<ConnectionState> {
+    if (this.state.status === 'crashed' && !this.recoveryPending) {
+      this.crashAttempts = [];
+    }
     await this.start();
     return this.state;
+  }
+
+  /**
+   * Verifies a stale global stream before dropping an externally owned
+   * connection. This never signals, restarts, or adopts the external process.
+   */
+  async handleGlobalStreamStale(): Promise<void> {
+    if (
+      this.state.status !== 'ready' ||
+      this.state.ownership !== 'external' ||
+      this.baseUrl === null
+    ) {
+      return;
+    }
+    const baseUrl = this.baseUrl;
+    let healthy = false;
+    try {
+      const result = await this.deps.fetchJson(`${baseUrl}/api/v1/health`, {
+        timeoutMs: this.timeouts.healthProbeMs,
+      });
+      const probe = ProbeHealthSchema.safeParse(result.body);
+      healthy = result.status === 200 && probe.success && probe.data.status === 'ok';
+    } catch {
+      healthy = false;
+    }
+    if (
+      healthy ||
+      this.state.status !== 'ready' ||
+      this.state.ownership !== 'external' ||
+      this.baseUrl !== baseUrl
+    ) {
+      return;
+    }
+    this.generation += 1;
+    this.token = null;
+    this.baseUrl = null;
+    this.readySince = null;
+    this.setState({
+      status: 'error',
+      stage: 'connect',
+      detail: 'The externally managed runtime is no longer reachable.',
+      ownership: 'external',
+      error: {
+        code: 'E_EXTERNAL_SERVER_LOST',
+        message: 'The externally managed Agentico runtime stopped responding.',
+        remediation: 'Restart it from where it was started, then use Retry.',
+      },
+    });
   }
 
   /**
@@ -254,6 +363,7 @@ export class RuntimeGateway {
    */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.recoveryPending = false;
     this.generation += 1; // invalidate in-flight connect work
     await this.stopChild();
     this.token = null;
@@ -266,6 +376,7 @@ export class RuntimeGateway {
     await this.stopChild(); // never leave a stray child from an earlier cycle
     this.token = null;
     this.baseUrl = null;
+    this.launchCommandContext = null;
 
     this.setState({
       status: 'resolving-runtime',
@@ -412,6 +523,7 @@ export class RuntimeGateway {
       ownership: 'external',
       serverBuild: verdict.serverBuild,
     });
+    this.readySince = this.now();
     return 'attached';
   }
 
@@ -445,6 +557,7 @@ export class RuntimeGateway {
     }
 
     const args = ['server', '--config', selected.configPath, '--state-dir', selected.stateDir];
+    this.launchCommandContext = 'bundled agentico server --config [path] --state-dir [path]';
     let child: ServerChildLike;
     try {
       child = this.deps.spawnServer(resolved.path, args);
@@ -461,6 +574,7 @@ export class RuntimeGateway {
           message: safe.message,
           remediation: 'Check that the application files are intact and executable, then retry.',
         },
+        ...this.ownedDiagnosticsField(),
       });
       return;
     }
@@ -494,6 +608,7 @@ export class RuntimeGateway {
           message: verdict.reason,
           remediation: 'Reinstall the application so the bundled runtime matches the app.',
         },
+        ...this.ownedDiagnosticsField(),
       });
       return;
     }
@@ -511,6 +626,7 @@ export class RuntimeGateway {
           message: 'The launched runtime did not publish an auth token in its discovery record.',
           remediation: 'Retry. If this persists, reinstall the application.',
         },
+        ...this.ownedDiagnosticsField(),
       });
       return;
     }
@@ -529,6 +645,7 @@ export class RuntimeGateway {
       return;
     }
     if (!authenticated) {
+      const diagnostics = this.ownedDiagnosticsField();
       this.token = null;
       await this.stopChild();
       this.setState({
@@ -541,6 +658,7 @@ export class RuntimeGateway {
           message: 'The launched runtime rejected its own published credentials.',
           remediation: 'Retry. If this persists, reinstall the application.',
         },
+        ...diagnostics,
       });
       return;
     }
@@ -552,6 +670,7 @@ export class RuntimeGateway {
       ownership: 'app-owned',
       serverBuild: verdict.serverBuild,
     });
+    this.readySince = this.now();
   }
 
   private async waitForOwnedServer(
@@ -579,6 +698,7 @@ export class RuntimeGateway {
             message: 'The bundled runtime exited during startup.',
             remediation: 'Retry. Local diagnostics were recorded for this launch attempt.',
           },
+          ...this.ownedDiagnosticsField(),
         });
         return null;
       }
@@ -620,6 +740,7 @@ export class RuntimeGateway {
         message: 'The launched runtime did not become healthy within the startup bound.',
         remediation: 'Retry. If this persists, inspect the runtime log in the runtime directory.',
       },
+      ...this.ownedDiagnosticsField(),
     });
     return null;
   }
@@ -644,8 +765,14 @@ export class RuntimeGateway {
       // Startup-phase exits are reported by the launch loop with more context.
       return;
     }
+    const diagnostics = this.ownedDiagnosticsField();
     this.token = null;
     this.baseUrl = null;
+    const now = this.now();
+    if (this.readySince !== null && now - this.readySince >= this.timeouts.crashWindowMs) {
+      this.crashAttempts = [];
+    }
+    this.readySince = null;
     this.setState({
       status: 'crashed',
       stage: 'connect',
@@ -654,9 +781,91 @@ export class RuntimeGateway {
       error: {
         code: 'E_SERVER_CRASHED',
         message: 'The app-managed Agentico runtime exited unexpectedly.',
-        remediation: 'Retry to start it again. Local diagnostics were recorded.',
+        remediation:
+          'Agentico will try to restart it automatically. Local diagnostics were recorded.',
       },
+      ...diagnostics,
     });
+    this.scheduleAutomaticRecovery();
+  }
+
+  /** Relaunches at most three times in the rolling crash window. */
+  private scheduleAutomaticRecovery(): void {
+    if (this.recoveryPending || this.shuttingDown) {
+      return;
+    }
+    const now = this.now();
+    this.crashAttempts = this.crashAttempts.filter(
+      (attemptedAt) => now - attemptedAt < this.timeouts.crashWindowMs,
+    );
+    if (this.crashAttempts.length >= 3) {
+      this.setState({
+        status: 'crashed',
+        stage: 'connect',
+        detail: 'The app-managed runtime stopped repeatedly.',
+        ownership: 'none',
+        error: {
+          code: 'E_SERVER_CRASH_LOOP',
+          message: 'Three automatic restart attempts failed within one minute.',
+          remediation:
+            'Inspect the redacted local diagnostics, then use Retry to start a fresh cycle.',
+        },
+        ...this.ownedDiagnosticsField(),
+      });
+      return;
+    }
+    const attempt = this.crashAttempts.length;
+    this.crashAttempts.push(now);
+    this.recoveryPending = true;
+    const delay = this.timeouts.crashRestartInitialMs * 2 ** attempt;
+    void this.deps
+      .sleep(delay)
+      .then(async () => {
+        if (this.shuttingDown) {
+          this.recoveryPending = false;
+          return;
+        }
+        this.recoveryPending = false;
+        const started = await this.start();
+        if (!started) {
+          this.crashAttempts.pop();
+          return;
+        }
+        if (this.state.status !== 'ready' && !this.shuttingDown) {
+          this.setState({
+            status: 'crashed',
+            stage: 'connect',
+            detail: 'The app-managed runtime could not be recovered.',
+            ownership: 'none',
+            error: {
+              code: 'E_SERVER_CRASHED',
+              message: 'The automatic runtime restart did not reach a healthy state.',
+              remediation: 'Agentico will retry within the bounded crash budget.',
+            },
+            ...this.ownedDiagnosticsField(),
+          });
+          this.scheduleAutomaticRecovery();
+        }
+      })
+      .catch((err: unknown) => {
+        this.recoveryPending = false;
+        this.crashAttempts.pop();
+        const safe = toSafeError(err, 'E_RECOVERY_DELAY');
+        this.deps.log(`automatic recovery delay failed: ${safe.message}`);
+        if (this.shuttingDown) return;
+        this.setState({
+          status: 'crashed',
+          stage: 'connect',
+          detail: 'Automatic recovery could not be scheduled.',
+          ownership: 'none',
+          error: {
+            code: 'E_SERVER_CRASHED',
+            message: 'The automatic runtime restart could not be scheduled.',
+            remediation: 'Use Retry to start a fresh supervised cycle.',
+          },
+          ...this.ownedDiagnosticsField(),
+        });
+      });
   }
 
   private releaseChild(): void {
@@ -705,6 +914,10 @@ export class RuntimeGateway {
     return generation !== this.generation || this.shuttingDown;
   }
 
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
   private setState(next: ConnectionState): void {
     const sanitized = this.sanitizeState(next);
     this.state = sanitized;
@@ -728,6 +941,16 @@ export class RuntimeGateway {
     return {
       ...state,
       detail: scrub(state.detail),
+      ...(!('diagnostics' in state) || state.diagnostics === undefined
+        ? {}
+        : {
+            diagnostics: {
+              commandContext: scrub(state.diagnostics.commandContext).slice(0, 256),
+              logTail: state.diagnostics.logTail
+                .slice(-20)
+                .map((line) => this.scrubDiagnosticLine(scrub(line)).slice(0, 512)),
+            },
+          }),
       error: {
         code: state.error.code,
         message: scrub(state.error.message),
@@ -737,6 +960,66 @@ export class RuntimeGateway {
       },
     };
   }
+
+  private ownedDiagnosticsField(): { diagnostics?: ConnectionDiagnostics } {
+    if (this.launchCommandContext === null) return {};
+    const lines = this.deps.readDiagnosticLines?.() ?? [];
+    return {
+      diagnostics: {
+        commandContext: this.launchCommandContext,
+        logTail: lines.slice(-20).map((line) => this.scrubDiagnosticLine(line).slice(0, 512)),
+      },
+    };
+  }
+
+  /** Removes generic absolute paths in addition to shared token/user-path redaction. */
+  private scrubDiagnosticLine(line: string): string {
+    let out = redactText(line);
+    if (this.token !== null && this.token.length > 0) {
+      out = out.split(this.token).join('[redacted]');
+    }
+    return out
+      .replace(/[A-Za-z]:\\[^\s"']+/g, '[path]')
+      .replace(/(^|[\s("'=])\/(?!\/)[^\s"']+/g, '$1[path]');
+  }
+}
+
+const SESSION_ID_PATTERN = new RegExp(`^${SESSION_ID_SEGMENT_PATTERN}$`, 'i');
+const QUERYLESS_API_PATH_PATTERN = /^\/api\/v1(\/[a-z0-9_-]+)*$/i;
+const QUERYLESS_SESSION_API_PATH_PATTERN = new RegExp(
+  `^/api/v1/sessions/${SESSION_ID_SEGMENT_PATTERN}(?:/[a-z0-9_-]+)*$`,
+  'i',
+);
+const SESSION_TRANSCRIPT_PATH_PATTERN = new RegExp(
+  `^/api/v1/sessions/${SESSION_ID_SEGMENT_PATTERN}/transcript$`,
+  'i',
+);
+
+function isAllowedApiPath(path: string): boolean {
+  const parts = path.split('?');
+  const pathname = parts[0] ?? '';
+  if (pathname.split('/').some((segment) => segment === '.' || segment === '..')) return false;
+  if (parts.length === 1) {
+    return (
+      QUERYLESS_API_PATH_PATTERN.test(pathname) || QUERYLESS_SESSION_API_PATH_PATTERN.test(pathname)
+    );
+  }
+  if (parts.length !== 2 || !SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)) {
+    return false;
+  }
+  const rawQuery = parts[1] ?? '';
+  if (rawQuery === '') return false;
+  const seen = new Set<string>();
+  for (const [key, value] of new URLSearchParams(rawQuery)) {
+    if (seen.has(key) || !/^\d+$/.test(value)) return false;
+    seen.add(key);
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed)) return false;
+    if (key === 'offset' && parsed >= 0) continue;
+    if (key === 'limit' && parsed >= 1 && parsed <= 500) continue;
+    return false;
+  }
+  return seen.size > 0;
 }
 
 function trimBase(baseUrl: string): string {

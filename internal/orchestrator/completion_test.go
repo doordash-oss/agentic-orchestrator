@@ -1935,9 +1935,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_NotPublish
 // Multi-repo all_passed, publishable, auto-publish on (>1 repos, non-roadmap)
 // → tryCompleteAndEmit fires (which calls TryCompletePublish). When
 // TryCompletePublish returns (false, nil) — the common "not all repos published
-// yet" resume case — the handler MUST fall back to MarkCodeReady so Init() and
-// StartPhaseMsg can continue the remaining repo publishes on restart. Mirrors
-// app.go:3761-3774.
+// yet" resume case — the handler MUST fall back to MarkCodeReady so recovery
+// can continue the remaining repo publishes on restart.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublish_PartialPublishFallsBackToCodeReady(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-ap",
@@ -2252,8 +2251,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceUsesLatestI
 
 // Multi-repo failed with at least one repo reporting FinalStatus="max_iterations"
 // must surface FailureMaxIterations (not FailureInfrastructure). The restart
-// handler in the TUI (restartPhaseCmd at app.go:8941) only grows the iteration
-// budget when FailureType == FailureMaxIterations — losing that signal would
+// restart handler only grows the iteration budget when FailureType equals
+// FailureMaxIterations; losing that signal would
 // silently revert to the default cap on resume. Regression guard for the
 // fix in completion.go:onMultiRepoImplementDone's "failed" branch.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations_Preserved(t *testing.T) {
@@ -2407,8 +2406,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIteratio
 
 // Roadmap-final multi-repo auto-publish routes through Publish(featureID) so
 // PublishStarted/PublishCompleted events + hooks fire, and per-repo errors
-// propagate to callers instead of being silently swallowed. Mirrors
-// app.go:3749-3759 + the OnPublishStarted/OnPublishCompleted contract.
+// propagate to callers instead of being silently swallowed.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_RoutesThroughPublish(t *testing.T) {
 	f := &feature.Feature{
 		ID:                  "feat-multi-rf",
@@ -2729,7 +2727,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_PerPhaseApproved_EmitsFeatureAd
 // plan artifact (feature stuck in StatusImplementing with a
 // "plan phase did not produce an artifact" failure). All pipelines — Medium
 // included — must advance to phase 1 planning from the top-level roadmap
-// approval, matching master's TUI handlePlanLoopDone behavior.
+// approval, preserving the top-level roadmap advancement invariant.
 func TestOrchestrator_HandlePhaseCompletion_Plan_MediumRoadmapApproved_AdvancesToPhase1(t *testing.T) {
 	roadmapPath := writeTempFile(t, "roadmap.md",
 		"# Roadmap\n\n## Phase 1: Do the thing\n\n### Goal\nShip.\n")

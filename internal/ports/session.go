@@ -61,7 +61,7 @@ func (s SessionStatus) String() string {
 	}
 }
 
-// SessionKind classifies a session by its role so the TUI and observer layer
+// SessionKind classifies a session by its role so the desktop app and observer layer
 // can label, group, and filter sessions uniformly. It is purely informational —
 // lifecycle behavior is unchanged.
 type SessionKind int
@@ -151,7 +151,7 @@ const (
 )
 
 // AskUserAutoPickConfig carries the narrow session-layer policy context for
-// deciding whether an AskUserQuestion bundle can be answered before TUI
+// deciding whether an AskUserQuestion bundle can be answered before desktop app
 // routing. LoadInquireness is called for each incoming bundle so live config
 // edits affect the next decision.
 type AskUserAutoPickConfig struct {
@@ -228,7 +228,10 @@ type SessionBuildNoticeContext struct {
 // ports package so orchestrator / agent code can construct session options
 // without importing internal/session.
 type SessionOpts struct {
-	PIDDir        string
+	PIDDir string
+	// RunNumber identifies the feature run that owns the session. Zero is reserved
+	// for non-feature sessions such as workspace chat.
+	RunNumber     int
 	Iteration     int
 	PermHandler   PermissionHandler
 	InitialPrompt string
@@ -258,7 +261,7 @@ type SessionOpts struct {
 	// continuation set this so the continuation is not racing a post-Result
 	// stdin shutdown.
 	KeepAliveOnTruncatedResult bool
-	// Kind classifies the session for TUI/observer purposes. Defaults to
+	// Kind classifies the session for desktop app and observer purposes. Defaults to
 	// KindPhase when the zero value is used.
 	Kind SessionKind
 	// TurnMode controls whether Result ends the whole session or just the
@@ -345,7 +348,7 @@ type AttachConsumerRegistrar interface {
 	RegisterAttachConsumer() func()
 }
 
-// SessionView is the read-oriented interface external packages (TUI, agent)
+// SessionView is the read-oriented interface external packages (desktop app, agent)
 // use to observe a session.
 type SessionView interface {
 	ID() string

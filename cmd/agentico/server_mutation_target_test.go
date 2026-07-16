@@ -506,6 +506,48 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 	assertJSONDoesNotContain(t, result, "Please use the existing migration path.")
 }
 
+func TestServerMutationTargetSendHelpAnswersFeatureHelpQueueWhenNoSessionIsActive(t *testing.T) {
+	store, _, f := newMutationTestFeature(t, "help queue via REST", feature.CreateOptions{}, feature.StatusImplementing, feature.PhaseImplement)
+	requestedAt := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.HelpQueue = []feature.HelpRequest{{
+			Question: "Which packaged evidence path should continue?",
+			Time:     requestedAt,
+			Pending:  true,
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed help queue: %v", err)
+	}
+	target := serverMutationTarget{store: store}
+
+	result, err := target.SendHelp(serverruntime.HelpAnswerRequest{
+		FeatureID: f.ID,
+		Message:   "Continue from the feature cockpit.",
+	})
+	if err != nil {
+		t.Fatalf("SendHelp() error = %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if len(loaded.HelpQueue) != 1 {
+		t.Fatalf("HelpQueue length = %d, want 1", len(loaded.HelpQueue))
+	}
+	if loaded.HelpQueue[0].Pending {
+		t.Fatal("HelpQueue[0].Pending = true, want false")
+	}
+	if got := loaded.HelpQueue[0].Answer; got != "Continue from the feature cockpit." {
+		t.Fatalf("HelpQueue[0].Answer = %q, want cockpit reply", got)
+	}
+	if result.FeatureID != f.ID || result.SessionID != "" || result.Result != resultSent {
+		t.Fatalf("SendHelp() result = %+v; want feature-scoped sent", result)
+	}
+	assertJSONDoesNotContain(t, result, "Continue from the feature cockpit.")
+}
+
 func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSubagents(t *testing.T) {
 	runtimeRoot := t.TempDir()
 	stateDir := filepath.Join(runtimeRoot, "features")
@@ -1831,7 +1873,7 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 			ID:        202,
 			Type:      ports.CommentTypeReview,
 			RepoName:  testRepoAName,
-			Path:      "internal/tui/api_app.go",
+			Path:      "internal/server/read_model.go",
 			Line:      42,
 			Body:      "use the previewed set",
 			UserLogin: testReviewerLogin,

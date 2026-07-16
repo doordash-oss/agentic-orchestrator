@@ -177,7 +177,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	}
 
 	// Mark mid-flight phase status at the feature level so observers and
-	// the TUI can surface "implementing" without per-repo lying.
+	// the desktop app can surface "implementing" without per-repo lying.
 	setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "implementing")
 	defer setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "")
 

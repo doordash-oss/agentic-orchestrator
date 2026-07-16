@@ -426,7 +426,7 @@ const (
 	maxValidatorInfrastructureSessionAttempts = 2
 )
 
-// DefaultMaxPlanAttempts is the exported default for TUI use (e.g. extending iterations).
+// DefaultMaxPlanAttempts is the exported default for desktop app use (e.g. extending iterations).
 const DefaultMaxPlanAttempts = maxPlanValidationAttempts
 
 // PlanLoopConfig holds configuration for the planning loop with validation.
@@ -836,7 +836,7 @@ func runGroundingPreCheck(cfg PlanLoopConfig, attempt int, attemptDir, planArtif
 	}
 	// resolveUnifiedWorkDir sets cfg.WorkDir to the parent of every repo's
 	// worktree (so the Claude session's cwd can see siblings via --add-dir).
-	// Plan-row references like `docs/keybindings.md` are repo-relative, so
+	// Plan-row references like `docs/desktop/parity-matrix.md` are repo-relative, so
 	// resolving them against the worktree-parent would mis-locate every row
 	// by one directory. Pass each repo's worktree path explicitly along with
 	// its name; the gate accepts a bare-path row when the file exists under
@@ -857,7 +857,7 @@ func runGroundingPreCheck(cfg PlanLoopConfig, attempt int, attemptDir, planArtif
 	feedbackPath := filepath.Join(attemptDir, "validation-grounding-feedback.md")
 	_ = os.WriteFile(feedbackPath, []byte(feedback), 0o644)
 	// Also write the same text to validation-grounding-output.txt so the
-	// review log readers / TUI surface a coherent transcript even though no
+	// review log readers / desktop app surface a coherent transcript even though no
 	// LLM session ran. Including the attempt number keeps grep-friendly with
 	// the LLM-written outputs.
 	outputPath := filepath.Join(attemptDir, "validation-grounding-output.txt")
@@ -1208,7 +1208,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 
 	results := make([]ValidatorResult, len(validators))
 
-	// Initialize validator statuses for TUI display
+	// Initialize validator statuses for desktop app display
 	setValidatorStatuses(cfg, validators, nil)
 
 	// Sticky-approval short-circuit: for each validator whose axis already
@@ -1313,7 +1313,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 	return results, aggStatus, aggFeedback, aggErr
 }
 
-// setValidatorStatuses initializes the validator status map for TUI display.
+// setValidatorStatuses initializes the validator status map for desktop app display.
 func setValidatorStatuses(cfg PlanLoopConfig, validators []validatorDomain, results []ValidatorResult) {
 	if cfg.Feature == nil {
 		return
@@ -1325,7 +1325,7 @@ func setValidatorStatuses(cfg PlanLoopConfig, validators []validatorDomain, resu
 	setMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID, names)
 }
 
-// updateValidatorStatus updates a single validator's status for TUI display.
+// updateValidatorStatus updates a single validator's status for desktop app display.
 func updateValidatorStatus(cfg PlanLoopConfig, domain string, status ReviewStatus, err error) {
 	if cfg.Feature == nil {
 		return
@@ -1583,6 +1583,7 @@ roadmapAttemptLoop:
 				}
 				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 				sessOpts.PermCacheScope = cfg.RepoName
+				sessOpts.RunNumber = cfg.Feature.ActiveRun
 
 				sessionID := planAttemptSessionID(fmt.Sprintf("%s-roadmap-%02d", cfg.Feature.ID, attempt), sessionAttempt)
 				planSessionCtx := cfg.PhaseSpanCtx.Child()
@@ -1968,6 +1969,7 @@ phasePlanAttemptLoop:
 				}
 				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 				sessOpts.PermCacheScope = cfg.RepoName
+				sessOpts.RunNumber = cfg.Feature.ActiveRun
 
 				sessionID := planAttemptSessionID(fmt.Sprintf("%s-phase-%02d-plan-%02d", cfg.Feature.ID, cfg.Phase.Number, attempt), sessionAttempt)
 				planSessionCtx := cfg.PlanLoopConfig.PhaseSpanCtx.Child()

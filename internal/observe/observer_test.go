@@ -1016,7 +1016,7 @@ func TestValidatorCompletedEmitsEvent(t *testing.T) {
 	}
 }
 
-func TestNilObserverPhase4MethodsAreNoOps(t *testing.T) {
+func TestNilObserverLifecycleMethodsAreNoOps(t *testing.T) {
 	var obs *Observer
 	sc := SpanContext{TraceID: "test", SpanID: "test", FeatureID: "test"}
 
@@ -1027,7 +1027,7 @@ func TestNilObserverPhase4MethodsAreNoOps(t *testing.T) {
 	obs.ValidatorCompleted(sc, "Architecture", "APPROVED", 2*time.Second)
 }
 
-func TestDisabledObserverPhase4MethodsAreNoOps(t *testing.T) {
+func TestDisabledObserverLifecycleMethodsAreNoOps(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "disabled_phase4_feat"
 	obs := New(false, stateDir, false, "", false, "agentic")
@@ -1549,7 +1549,7 @@ func TestRecoveryActionEmitsEvent(t *testing.T) {
 	}
 }
 
-func TestNilObserverPhase5MethodsAreNoOps(t *testing.T) {
+func TestNilObserverPermissionMethodsAreNoOps(t *testing.T) {
 	var obs *Observer
 	sc := SpanContext{TraceID: "test", SpanID: "test", FeatureID: "test"}
 
@@ -1566,7 +1566,7 @@ func TestNilObserverPhase5MethodsAreNoOps(t *testing.T) {
 	obs.RecoveryAction(sc, "restart", "plan", false)
 }
 
-func TestDisabledObserverPhase5MethodsAreNoOps(t *testing.T) {
+func TestDisabledObserverPermissionMethodsAreNoOps(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "disabled_phase5_feat"
 	obs := New(false, stateDir, false, "", false, "agentic")
@@ -1909,7 +1909,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 // TestEmit_ZeroRunNumber_OmittedInJSONL asserts that when SpanContext.RunNumber
 // is zero (pre-migration callers or tests that do not opt in) the emitted
 // JSONL line has NO "run_number" key — omitempty preserves byte-compat with
-// pre-Phase-4 consumers.
+// consumers that do not supply run context.
 func TestEmit_ZeroRunNumber_OmittedInJSONL(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "zero_run_omit_feat"
@@ -1971,11 +1971,11 @@ func TestSpanContext_WithRunPropagatesThroughChild(t *testing.T) {
 	}
 }
 
-// TestObserve_Disabled_StillNoOp_PhaseFour extends the existing disabled-observer
+// TestObserve_Disabled_StillNoOpForAllEmitters extends the disabled-observer
 // regression: a disabled Observer writes no events.jsonl AND no
-// observe-summary.yaml even when Phase 4's typed emitters, Emit escape hatch,
+// observe-summary.yaml even when typed emitters, the Emit escape hatch,
 // and WriteFeatureSummary are all invoked.
-func TestObserve_Disabled_StillNoOp_PhaseFour(t *testing.T) {
+func TestObserve_Disabled_StillNoOpForAllEmitters(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "disabled_phase4"
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0755); err != nil {

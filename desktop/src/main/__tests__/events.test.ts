@@ -207,6 +207,7 @@ function makeSupervisorHarness(script: Array<ScriptedConnection | Error>) {
   const logs: string[] = [];
   const sleeps: number[] = [];
   const openCalls: Array<{ afterSeq?: number; epoch?: string }> = [];
+  const staleSignals: number[] = [];
   let openCount = 0;
   let release: (() => void) | null = null;
 
@@ -251,6 +252,9 @@ function makeSupervisorHarness(script: Array<ScriptedConnection | Error>) {
     },
     log: (line) => logs.push(line),
     onPush: (event) => pushes.push(event),
+    onStale: () => {
+      staleSignals.push(staleSignals.length + 1);
+    },
     backoff: { initialMs: 10, maxMs: 40 },
   });
 
@@ -260,6 +264,7 @@ function makeSupervisorHarness(script: Array<ScriptedConnection | Error>) {
     logs,
     sleeps,
     openCalls,
+    staleSignals,
     settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
   };
 }
@@ -290,6 +295,7 @@ describe('EventStreamSupervisor', () => {
       featureId: 'feat1234',
     });
     expect(harness.pushes).toContainEqual({ type: 'status', stream: 'stale' });
+    expect(harness.staleSignals.length).toBeGreaterThan(0);
   });
 
   it('every emitted push validates against the strict renderer event schema', async () => {

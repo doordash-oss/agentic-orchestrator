@@ -11,10 +11,10 @@
 #   not_expect_read: skill names the agent should NOT read (pass = none read)
 
 cases:
-  - name: "tui_implementation"
+  - name: "desktop_ui_implementation"
     max_turns: 2
     prompt: |
-      You are working on the Agentic TUI (built with Bubbletea in Go).
+      You are working on the Agentic Electron desktop app (React and TypeScript).
       Implement a new dashboard widget that shows feature progress as a
       bar chart with color-coded status indicators.
 

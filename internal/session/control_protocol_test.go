@@ -265,7 +265,7 @@ func TestHandleControlRequest_AskUserQuestion_NeverAutoApproved(t *testing.T) {
 	}}
 
 	if handled := s.tryHandleControlRequest(msg); handled {
-		t.Fatal("tryHandleControlRequest AskUserQuestion = true, want false so TUI answers it")
+		t.Fatal("tryHandleControlRequest AskUserQuestion = true, want false so desktop app answers it")
 	}
 }
 
@@ -311,7 +311,7 @@ func TestAcceptEditsHandler_AutoApproves(t *testing.T) {
 	}
 }
 
-func TestAcceptEditsHandler_DefersToTUI(t *testing.T) {
+func TestAcceptEditsHandler_DefersToClient(t *testing.T) {
 	handler := &AcceptEditsHandler{}
 	deferred := []string{"Bash", "EnterWorktree", "ExitWorktree", "CronCreate", "SomeUnknownTool"}
 	for _, tool := range deferred {
@@ -321,13 +321,13 @@ func TestAcceptEditsHandler_DefersToTUI(t *testing.T) {
 				t.Fatalf("error: %v", err)
 			}
 			if decision.Behavior != "" {
-				t.Errorf("AcceptEditsHandler.CanUseTool(%s) = %q, want empty (defer to TUI)", tool, decision.Behavior)
+				t.Errorf("AcceptEditsHandler.CanUseTool(%s) = %q, want empty (defer to desktop app)", tool, decision.Behavior)
 			}
 		})
 	}
 }
 
-func TestAcceptEditsHandler_BashDeferredToTUI_Session(t *testing.T) {
+func TestAcceptEditsHandler_BashDeferredToClientSession(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure session routing, no subprocess or shared state.
 	s := NewSession("bash-defer", "feat-1", feature.PhaseImplement)
@@ -342,7 +342,7 @@ func TestAcceptEditsHandler_BashDeferredToTUI_Session(t *testing.T) {
 	}}
 
 	if handled := s.tryHandleControlRequest(msg); handled {
-		t.Fatal("tryHandleControlRequest Bash with AcceptEditsHandler = true, want false so TUI decides it")
+		t.Fatal("tryHandleControlRequest Bash with AcceptEditsHandler = true, want false so desktop app decides it")
 	}
 }
 

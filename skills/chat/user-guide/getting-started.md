@@ -1,138 +1,114 @@
 # Getting Started with Agentic Orchestrator
 
-Agentic Orchestrator is a Go TUI (binary name: `agentico`) that drives the **KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish** lifecycle for AI-assisted development. It runs AI agent sessions in isolated git worktrees so you can work on multiple features concurrently without branch conflicts.
+Agentic Orchestrator is an Electron desktop application for supervising the **KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish** lifecycle. It runs AI agent sessions in isolated git worktrees so multiple features can progress without sharing branches or state.
+
+The desktop app is the primary interface. `agentico` is the local server and administration CLI; running `agentico` starts the loopback server in the foreground and does **not** open the desktop app. A packaged desktop app launches and supervises its matched bundled server automatically.
 
 ## Prerequisites
 
-- **Go 1.25+** — for building from source
-- **At least one provider CLI** — Claude, Codex, and OpenCode are co-equal backends; install whichever you use (one is enough to run the whole workflow):
-  - **`claude` CLI >= 2.1.81** — Anthropic Claude Code (`npm install -g @anthropic-ai/claude-code`), authenticate with `claude auth login`
-  - **`codex` CLI >= 0.116.0** — OpenAI Codex (`npm install -g @openai/codex`), authenticate with `codex login`
-  - **`opencode` CLI >= 1.17.9** — OpenCode (`curl -fsSL https://opencode.ai/install | bash`), authenticate with `opencode auth login`; selected with the explicit `opencode:<backend/model>` form
-- **`gh` CLI** — used for creating pull requests during the Publish phase
-- **git** — worktree and branch operations
+- **At least one provider CLI** — Claude, Codex, and OpenCode are co-equal backends; one ready provider is enough:
+  - **`claude` CLI >= 2.1.81** — authenticate with `claude auth login`
+  - **`codex` CLI >= 0.116.0** — authenticate with `codex login`
+  - **`opencode` CLI >= 1.17.9** — authenticate with `opencode auth login`
+- **`gh` CLI** — used when the Publish phase creates pull requests
+- **git** — used for branches and worktrees
+- **Go 1.25+** — required only to build the server CLI from source
 
 ## Installation
 
-Install the latest release:
+Install the desktop package for your platform from the project’s GitHub Releases page, then open **Agentic Orchestrator** from the operating system. The desktop package contains the matched `agentico` server.
+
+For headless use or development, install the standalone server CLI:
 
 ```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 ```
 
-Or build from source. The GitHub repository rename is still pending, so the
-clone URL still uses the current GitHub path:
+To build from source:
 
 ```bash
 git clone https://github.com/doordash-oss/agentic-orchestrator.git
-cd agentic
+cd agentic-orchestrator
 go build -o bin/agentico ./cmd/agentico
 ```
 
-## First Launch
+Run `agentico` or `agentico server` only when you want a foreground server. See [Configuration](configuration.md#launch-flags) for its flags.
 
-Run `agentico` to start the TUI. On the very first launch, Agentic Orchestrator walks you through workspace setup:
+## First Desktop Launch
 
-1. **Welcome screen** — displays the Agentic Orchestrator logo and a brief introduction. Press `Enter` to begin setup or `Esc` to skip.
-2. **Directory picker** — a Miller-columns browser lets you navigate your filesystem and select a workspace root directory. Agentic Orchestrator scans the selected directory for git repositories.
-3. **Confirmation** — shows the selected workspace root and the number of git repos found. Press `a` to add another workspace root, or `Enter` to continue to the dashboard.
+The first-launch setup is a gated desktop flow backed by fresh server readiness data:
 
-Agentic Orchestrator creates:
-- A config file at `~/.agentic-orchestrator/config.yaml`
-- A state directory at `~/.agentic-orchestrator/features/`
-- A worktrees directory at `~/.agentic-orchestrator/worktrees/`
+1. **Providers** — install and sign in to a provider in its own external terminal flow, then select **Check again**. The desktop app never handles provider credentials.
+2. **Models** — the runtime verifies that usable models are available.
+3. **Workspace** — select **Choose workspace folder…**. The runtime stores the workspace root and discovers repositories beneath it.
+4. **Repository** — select an existing repository. If you choose a plain directory, the app asks for explicit consent before initializing it as a git repository.
 
-If a legacy `~/.agentic-workflow/` directory already exists from a previous
-install, it is reused in place as the runtime parent so existing data keeps
-working without a manual copy.
+When every readiness gate passes, the app opens the **Home** workspace. Fresh installs create runtime data under `~/.agentic-orchestrator/`. If `~/.agentic-workflow/` already exists, Agentico reuses that parent in place.
 
-When multiple LLM providers are detected (e.g., Claude, Codex, and OpenCode CLIs are installed), Agentic Orchestrator does not ask you to pick a preferred one. The detected providers are treated as co-equal, and each phase defaults to the best available model for that role across every provider — you can override any phase later. See [Configuration → Provider Selection](configuration.md#provider-selection) for installing, authenticating, and troubleshooting each provider.
+## Create a Feature
 
-## Creating Your First Feature
+The **Features** list appears first on Home so work needing intervention stays prominent. The **New feature** form appears below it.
 
-From the TUI dashboard, press `n` to open the feature creation wizard. The wizard has four steps:
+1. Enter a **Name** and optional **Description**.
+2. Select one or more currently discovered **Repositories**.
+3. Choose **New feature branch (server default)** or **Use each repository's current branch**.
+4. Review the read-only **Server defaults** summary, then select **Create feature**.
 
-### Step 1 — What
+The current desktop form uses the runtime’s pipeline, model, and inquireness defaults. Editing those defaults, per-feature checkpoints, models, risk, or exit criteria in the desktop app is not delivered yet; edit `config.yaml` before creation when those values must differ.
 
-Enter a **feature name** and a **brief description** of what you want to build or fix.
+Creation opens a feature tab and starts durable setup. The tab shows setup tasks, attempts, safe errors, and a server-authorized **Retry setup** control when setup fails. Retry continues the same feature and re-runs only unfinished setup tasks.
 
-### Step 2 — Where
+## Start and Watch Work
 
-Select one or more **repositories** to work in from your workspace. Use `Space` to toggle repos on/off. You can also browse for additional directories or create a new repo. If a selected repo is on a non-default branch, Agentic Orchestrator asks which branch to use.
+After setup completes, the feature tab shows **Ready to start**. Select **Start** only when the runtime action catalogue enables it; if Start is disabled, the reasons shown beside it come from the server.
 
-### Step 3 — Pipeline
+Once the runtime reports an active run, the same tab updates in place with:
 
-Choose a **pipeline profile** that controls how many phases your feature runs through:
+- a phase spine and authoritative feature status;
+- a **Signal trace** that backfills the current session and then receives live output;
+- expandable groups for routine tool, task, progress, and file activity;
+- a **Validated source** inspector for the selected trace entry; and
+- a connecting, live, stale, resetting, or unavailable stream status.
 
-| Profile | Phases | Effort |
-|---------|--------|--------|
-| **Medium** | Plan → Implement → Review → Publish | Medium |
-| **Large** | KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish | High |
-| **Moonshot** | Same as Large, with maximum rigor | High |
+The timeline follows new output while you are at the newest entry. Scrolling back preserves your reading position and reveals **Jump to live**. Select an entry to inspect its validated source record; select **Close raw inspector** to clear the inspector.
 
-### Step 4 — Review
+The only workspace-tab shortcuts currently implemented are Left Arrow and Right Arrow while focus is on a tab. Other actions use the labeled desktop controls.
 
-A summary screen lets you fine-tune settings before creating the feature:
+## Stop Work
 
-- **Risk level** — low, medium, or high (cycles with `←`/`→`)
-- **Models** — per-phase model selection (research, planning, implementation, review, KB build)
-- **Inquireness** — how often the harness surfaces planning questions (none, medium, high)
-- **Checkpoints** — toggle review gates (inquiry, research, design, plan, manual publish)
-- **Exit criteria** — success criteria included in implementation prompts
+When the server action catalogue authorizes Stop, select **Stop** in the feature tab. The impact dialog names the feature, active phase, and affected live-session count.
 
-Press `Shift+G` to create the feature. It enters the pipeline and progresses through phases automatically.
+- **Keep running** or Escape closes the dialog without changing the feature.
+- **Confirm stop** asks the runtime to stop the feature and waits for authoritative refreshed state.
 
-## Basic Workflow
+Validated transcript content remains available after the stream finishes. Stop does not expose Resume, Retry phase, Rewind, or post-publish actions; those desktop capabilities are pending.
 
-### Monitoring Progress
+## Current Desktop Scope
 
-The dashboard shows all features organized into three sections: **In Progress**, **Published**, and **Completed**. Navigate with `j`/`k` or arrow keys. Press `Tab` to switch between the feature list (left panel) and the detail view (right panel).
+The current Electron app delivers first-launch readiness, the intervention-first Home list, feature creation and durable setup, server-authorized Start/Stop, live transcript history, raw inspection, reconnect/reset presentation, theme selection, and app-owned server recovery.
 
-### Watching Live Work
-
-Press `a` on a running feature to watch its live agent session. You can follow the AI work in real time and interact with it. Stop watching with `Ctrl+]` or `Esc` (on Nordic keyboards: `Ctrl+X` or `Esc`).
-
-### Message Filtering
-
-While watching, press `Ctrl+F` to cycle through message filter modes: **All** (everything), **No Tools** (hides tool use and thinking), **Text Only** (only assistant text and user messages).
-
-### Handling Permission Prompts
-
-When the agent needs to run a command or access a file, permission prompts surface in the TUI. Press `y` to allow or choose from the permission menu. Use `Shift+A` to approve and remember the permission for future use.
-
-### Stopping and Resuming
-
-Press `s` to stop a running feature. It can be resumed later with `r` — Agentic Orchestrator tracks progress and picks up where it left off. Use `Shift+R` from the dashboard to resume all interrupted features at once.
+These workflow-engine capabilities do **not** yet have Electron controls: permission decisions, planning questions and review gates, phase resume/retry/rewind, artifact browsing or editing, runtime configuration editing, post-publish actions, notifications, tray behavior, signing, and in-app updates. Do not use terminal-era shortcuts for them; wait for a labeled desktop control in a later release.
 
 ## State Directory
 
-Agentic Orchestrator stores all state under `~/.agentic-orchestrator/` on fresh
-installs. Existing installs that already have a `~/.agentic-workflow/`
-directory continue using that legacy parent in place — no copy or migration
-runs automatically:
+Fresh installs use:
 
-```
+```text
 ~/.agentic-orchestrator/
-  config.yaml              # Main configuration
-  features/<id>/           # Per-feature state and artifacts
-    feature.yaml           # Feature metadata and current state
-    knowledgebase/         # KB Build phase outputs
-    inquire/               # Inquiry phase outputs
-    research/              # Research phase outputs
-    design/            # Design phase outputs (directory name retained for legacy state compatibility)
-    plan/                  # Plan artifacts (roadmap, phase plans)
-    implement/             # Implementation logs and reports
-    review/                # Review feedback
-  worktrees/<slug>/        # Isolated git worktrees per feature
+  config.yaml              # Runtime configuration
+  features/<id>/           # Feature state and run artifacts
+  worktrees/<slug>/        # Isolated feature worktrees
   skills/                  # Reconciled skill definitions
   guidelines/              # Reconciled guideline definitions
   permissions/             # Cached permission rules
-  agentico.log             # Redirected stderr/log output while the TUI is running
+  agentico.log             # Runtime log output
 ```
+
+Existing installs with `~/.agentic-workflow/` retain the same layout beneath that parent; no automatic copy or migration runs.
 
 ## Next Steps
 
-- Learn about the full [Feature Lifecycle](feature-lifecycle.md) and state machine
-- Explore [TUI Navigation](tui-navigation.md) for all keybindings and views
-- Customize your setup in [Configuration](configuration.md)
-- Review [Verification](verification.md) before contributing changes from source
+- Learn the engine states and the currently exposed controls in [Feature Lifecycle](feature-lifecycle.md).
+- Review the runtime schema in [Configuration](configuration.md).
+- Understand current permission behavior and desktop limitations in [Permissions](permissions.md).
+- Review [Verification](verification.md) before contributing source changes.

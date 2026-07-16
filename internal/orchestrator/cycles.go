@@ -47,17 +47,18 @@ type RepoCycleLoopResultInput struct {
 // post-publish cycle. Rebase is feature-level only; callers must use
 // StartFeatureRebase for that flow.
 //
-// Ports startRepoCycleImplementCmd (app.go:6659-6784).
+// The cycle state remains persisted per repository even though one loop may
+// aggregate work across several repositories.
 func (o *Orchestrator) StartRepoCycleImplement(
 	featureID, repoName string,
 	cycleType feature.RepoCycleType,
 	planContent string,
 ) (string, error) {
 	if cycleType == feature.CycleReviewComments {
-		// The repoName from the TUI is purely a hint — the loop aggregates
+		// The repoName from the caller is purely a hint — the loop aggregates
 		// unaddressed comments across every Feature.Repos PR. planContent is
 		// ignored; the loop builds the aggregated plan from the per-repo
-		// `comments.json` artifacts the TUI already saved before dispatch.
+		// `comments.json` artifacts already saved before dispatch.
 		_ = planContent
 		return o.startFeatureReviewComments(featureID, repoName)
 	}
@@ -71,7 +72,7 @@ func (o *Orchestrator) StartRepoCycleImplement(
 // calls FailRepoCycle; on success routes through per-repo Final Review
 // before cycle completion.
 //
-// Ports handleRepoCycleLoopDone (app.go:6787-6801).
+// Result handling routes through the persisted cycle type.
 func (o *Orchestrator) HandleRepoCycleLoopDone(
 	featureID string,
 	input RepoCycleLoopResultInput,
@@ -306,8 +307,8 @@ func (o *Orchestrator) StartCycleFinalReview(featureID string) error {
 		return o.failCycleAcrossRepos(featureID, "load feature: "+err.Error())
 	}
 
-	// Mark every active cycle entry as reviewing so the TUI surfaces the
-	// FR phase. Mirrors the legacy per-repo MarkRepoCycleReviewing call
+	// Mark every active cycle entry as reviewing so clients surface the final
+	// review phase. Preserve the per-repo MarkRepoCycleReviewing contract
 	// for every Feature.Repos that has an active cycle.
 	for _, repo := range f.Repos {
 		if rc, ok := f.RepoCycles[repo.Name]; ok && rc != nil {
@@ -378,8 +379,8 @@ func (o *Orchestrator) handleCycleFinalReviewDone(
 
 // failCycleAcrossRepos marks every Feature.Repos cycle entry failed with
 // the provided error message. Used when the feature-level FR cannot
-// dispatch (load feature, missing phase runner, etc.) so the legacy
-// per-repo TUI surface (RepoCycles[name].LastError != "") clears.
+// dispatch (load feature, missing phase runner, etc.) so the per-repo API
+// surface (RepoCycles[name].LastError != "") clears.
 func (o *Orchestrator) failCycleAcrossRepos(featureID, errMsg string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -397,8 +398,7 @@ func (o *Orchestrator) failCycleAcrossRepos(featureID, errMsg string) error {
 // to the cycle-type-specific finalization. Rebase completion is owned by the
 // feature-level rebase publish policy.
 //
-// Ports completeRebaseRepoCycleCmd (app.go:6870-6901) and
-// completeReviewCommentsRepoCycleCmd (app.go:6944-6982).
+// Review-comment and refactor cycles use their own finalization policies.
 func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -475,7 +475,7 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 // post-publish cycle. It routes to StartRepoCycleImplement (which runs an
 // autonomous implementation loop) or StartRefactorCycle.
 //
-// Callers (including the TUI) should use this method rather than dispatching
+// Callers should use this method rather than dispatching
 // directly so cycle-type routing stays in one place.
 func (o *Orchestrator) DispatchRepoCycle(
 	featureID, repoName string,
@@ -495,8 +495,8 @@ func (o *Orchestrator) DispatchRepoCycle(
 }
 
 // StartRefactorCycle launches the feature-level refactor cycle. The per-repo
-// entry shape is preserved for the TUI (Manager.StartRefactor /
-// app.startRefactorCmd) — repoName is treated as a hint, the loop mounts every
+// entry shape is preserved for API compatibility: repoName is treated as a hint,
+// the loop mounts every
 // Feature.Repos worktree, and the refactor-plan step's `**Repo:** <name>` tags
 // determine the staged subset.
 //
@@ -504,10 +504,8 @@ func (o *Orchestrator) DispatchRepoCycle(
 // on the same feature, and dispatches the loop in a background goroutine. The
 // inner loop owns RefactorCount increment, ActiveCycle stamping, and
 // the refactor-plan + iterative implement state machine. Result routing
-// flows through handleFeatureRefactorDone, which mirrors the legacy
-// HandleRefactorCycleLoopDone surface so per-repo TUI rendering keeps working.
-//
-// Ports startRefactorCmd (app.go).
+// flows through handleFeatureRefactorDone, preserving the per-repo
+// HandleRefactorCycleLoopDone contract.
 func (o *Orchestrator) StartRefactorCycle(
 	featureID, repoName, prompt string,
 	evidence ...RefactorEvidence,
@@ -519,7 +517,7 @@ func (o *Orchestrator) StartRefactorCycle(
 // StartRefactorCycle, it does NOT increment RefactorCount — it reuses the
 // existing refactor directory and count from the prior attempt.
 //
-// Ports restartRepoCycleRefactorCmd (app.go:7092-7184).
+// Existing cycle metadata supplies the restart context.
 func (o *Orchestrator) RestartRefactorCycle(
 	featureID, repoName, prompt string,
 	evidence ...RefactorEvidence,
@@ -536,7 +534,7 @@ func (o *Orchestrator) RestartRefactorCycle(
 // any refactor changes, pull-rebases, pushes, clears RefactorPrompt, and
 // completes the cycle. Failures call FailRepoCycle.
 //
-// Ports completeRefactorRepoCycleCmd (app.go:7209-7252).
+// Completion preserves the same commit, rebase, push, and lifecycle ordering.
 func (o *Orchestrator) CompleteRefactorRepoCycle(featureID, repoName string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -567,7 +565,7 @@ func (o *Orchestrator) CompleteRefactorRepoCycle(featureID, repoName string) err
 
 	if o.deps.Rebaser != nil {
 		if prr := o.deps.Rebaser.PullRebase(workDir, branch); prr.Outcome != ports.PullRebaseSuccess {
-			// Log-equivalent: swallow failure like TUI logPhaseError path.
+			// Rebase failure is non-fatal here; the subsequent push reports failure.
 			_ = prr.Err
 		}
 	}
@@ -594,8 +592,7 @@ func (o *Orchestrator) CompleteRefactorRepoCycle(featureID, repoName string) err
 // CycleRefactor cycle — running, reviewing, or paused on a NEED_USER_INPUT
 // gate. Paused refactor cycles still own the shared feature-level
 // RefactorPrompt/RefactorCount, so they must remain exclusive the same way
-// as the running/reviewing states. Mirrors the TUI's hasRunningRefactorCycle
-// helper at app.go:7503.
+// as the running/reviewing states.
 func hasRunningRefactor(f *feature.Feature) bool {
 	if f == nil {
 		return false

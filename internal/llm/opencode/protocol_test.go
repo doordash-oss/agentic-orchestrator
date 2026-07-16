@@ -1090,7 +1090,7 @@ func TestFailClosedControlNeverSatisfiesPhase(t *testing.T) {
 }
 
 // TestParseLine_FailClosedControlIsStickyOverLaterPromptSuccess proves the exact
-// ordering the Phase 1 contract forbids: a fail-closed control event emits a
+// ordering the protocol contract forbids: a fail-closed control event emits a
 // terminal error, and a LATER prompt end_turn response — which OpenCode may
 // still send after we reject the control request — must NOT be converted into a
 // success. The first terminal result is sticky, so the session can never observe

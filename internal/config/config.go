@@ -16,7 +16,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,21 +24,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// validKeyboardLayouts defines the set of accepted keyboard_layout values.
-// An empty string means "use default (US) behaviour".
-var validKeyboardLayouts = map[string]bool{
-	"":       true,
-	"us":     true,
-	"nordic": true,
-}
-
 type Config struct {
 	Defaults        DefaultsConfig            `yaml:"defaults"`
 	Repos           map[string]RepoConfig     `yaml:"repos"`
 	WorkspaceRoots  []string                  `yaml:"workspace_roots,omitempty"`
 	DiscoveredRepos map[string]RepoConfig     `yaml:"-"` // in-memory only, never persisted
 	Notifications   NotificationConfig        `yaml:"notifications,omitempty"`
-	UI              UIConfig                  `yaml:"ui,omitempty"`
 	Observability   ObservabilityConfig       `yaml:"observability,omitempty"`
 	Providers       map[string]ProviderConfig `yaml:"providers,omitempty"`
 }
@@ -82,15 +72,7 @@ func (o *ObservabilityConfig) UnmarshalYAML(value *yaml.Node) error {
 	return value.Decode((*plain)(o))
 }
 
-type UIConfig struct {
-	CollapsedSections []string `yaml:"collapsed_sections,omitempty"`
-	KeyboardLayout    string   `yaml:"keyboard_layout,omitempty"`
-}
-
 type NotificationConfig struct {
-	// TerminalBundleID overrides the auto-detected terminal app bundle ID
-	// used by terminal-notifier's -activate flag. Example: "com.googlecode.iterm2"
-	TerminalBundleID string `yaml:"terminal_bundle_id,omitempty"`
 	// MuteFeatureInput suppresses notifications when an agent is waiting for
 	// manual feature input. Other notification types are unaffected.
 	MuteFeatureInput bool `yaml:"mute_feature_input,omitempty"`
@@ -437,11 +419,6 @@ func applyDefaults(cfg *Config) {
 		cfg.Observability.OTelServiceName = "agentico"
 	}
 
-	// Validate keyboard layout; reset to empty (default) if unrecognised.
-	if !validKeyboardLayouts[cfg.UI.KeyboardLayout] {
-		log.Printf("config: unknown keyboard_layout %q, falling back to default", cfg.UI.KeyboardLayout)
-		cfg.UI.KeyboardLayout = ""
-	}
 }
 
 // ExpandHome expands a leading "~" or "~/" in a path to the user's home directory.

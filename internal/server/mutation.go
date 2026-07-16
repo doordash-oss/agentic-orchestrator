@@ -235,7 +235,6 @@ type ChatStartRequest struct {
 type RuntimeConfigMutationRequest struct {
 	Defaults       RuntimeDefaultsMutation `json:"defaults,omitempty"`
 	WorkspaceRoots *[]string               `json:"workspace_roots,omitempty"`
-	UI             *config.UIConfig        `json:"ui,omitempty"`
 	Notifications  *NotificationConfigDTO  `json:"notifications,omitempty"`
 }
 

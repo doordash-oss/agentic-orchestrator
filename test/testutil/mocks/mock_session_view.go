@@ -28,7 +28,7 @@ import (
 // All identity and state fields are set via exported struct fields.
 // Interaction methods record their calls for assertion.
 //
-// Type boundaries follow the post-Phase-5 layout:
+// Type boundaries reflect package ownership:
 //   - llm.*: SDKMessage, ResultMessage, Usage, ControlRequestMessage
 //   - session.*: SessionStatus, MessageLog, QAPair
 type MockSessionView struct {
@@ -53,7 +53,7 @@ type MockSessionView struct {
 	EffectiveEffortVal llm.EffortLevel
 	EffortSourceVal    llm.EffortSource
 
-	// Data — types from internal/llm (moved in Phase 5)
+	// Data — types from internal/llm
 	CostVal                   *llm.ResultMessage
 	LatestUsageVal            *llm.Usage
 	AccumulatedUsageVal       llm.Usage

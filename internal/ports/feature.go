@@ -28,7 +28,7 @@ type FeatureStore interface {
 	List() ([]*feature.Feature, error)
 	Delete(id string) error
 
-	// Run persistence. Added in Phase 1 (runs-first state layout).
+	// Run persistence.
 	CreateRun(featureID string, r *feature.Run) error
 	LoadRun(featureID string, runNumber int) (*feature.Run, error)
 	SaveRun(featureID string, r *feature.Run) error
@@ -45,7 +45,6 @@ type FeatureStore interface {
 	// When deletions cause max(run_number on disk) < ActiveRun, rolls
 	// ActiveRun and RunCount back to max(run_number on disk) and rewrites
 	// feature.yaml atomically. Returns the sorted list of deleted run numbers.
-	// Added in Phase 3.
 	CleanupOrphanRuns(id string) ([]int, error)
 }
 

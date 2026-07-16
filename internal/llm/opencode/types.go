@@ -27,8 +27,8 @@ type Request struct {
 }
 
 // ErrorResponse is an outbound JSON-RPC 2.0 error response to a server-initiated
-// (agent->client) request. Phase 1 fails closed by replying with this whenever
-// OpenCode asks the client for a capability the tracer does not implement.
+// (agent-to-client) request. Agentico fails closed with this response whenever
+// OpenCode asks for a client capability that is not implemented.
 type ErrorResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
@@ -176,7 +176,7 @@ type PromptParams struct {
 	Prompt    []ContentBlock `json:"prompt"`
 }
 
-// ContentBlock is an ACP content block. Phase 1 only sends text blocks.
+// ContentBlock is an ACP content block. Agentico sends only text blocks.
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
@@ -294,8 +294,8 @@ type ToolCallLocation struct {
 
 // requestPermissionMethod is the ACP method OpenCode uses to ask the client to
 // approve a tool action or answer a user-facing question. It is the single
-// control surface Phase 2 supports; client filesystem and terminal requests
-// (fs/*, terminal/*) and unknown methods still fail closed.
+// supported control surface; client filesystem and terminal requests (fs/*,
+// terminal/*) and unknown methods still fail closed.
 const requestPermissionMethod = "session/request_permission"
 
 // RequestPermissionParams is the params object of a session/request_permission

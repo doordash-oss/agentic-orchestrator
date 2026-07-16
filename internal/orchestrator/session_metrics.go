@@ -38,7 +38,7 @@ type attachDropObserver struct {
 // Manager.SetAttachDropReporter leaves the session untouched — preserving
 // the "reporter is optional" contract. A nil feature store is treated the
 // same as a nil observer because we cannot stamp the run number without it
-// and surfacing the drop with RunNumber:0 post-Phase-4 would be misleading.
+// and surfacing the drop with RunNumber:0 would be misleading.
 func newAttachDropObserver(obs *observe.Observer, fs ports.FeatureStore) *attachDropObserver {
 	if obs == nil || fs == nil {
 		return nil

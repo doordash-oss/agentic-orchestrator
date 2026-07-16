@@ -484,6 +484,11 @@ func (o *Orchestrator) featureRebaseSessionStartFunc(f *feature.Feature) func(st
 		env []string,
 		opts ...*ports.SessionOpts,
 	) (ports.SessionHandle, error) {
+		if len(opts) == 0 || opts[0] == nil {
+			opts = []*ports.SessionOpts{{RunNumber: f.ActiveRun}}
+		} else {
+			opts[0].RunNumber = f.ActiveRun
+		}
 		var handle ports.SessionHandle
 		err := o.runFeatureRebaseExternalStep(featureID, func() error {
 			var startErr error
@@ -889,7 +894,7 @@ func (o *Orchestrator) handleFeatureCycleDone(
 
 	default:
 		// max_iterations / safety_rail / failed: surface error per repo
-		// so the TUI can present the failed cycle.
+		// so the desktop app can present the failed cycle.
 		errMsg := errPrefix + ": " + finalStatus
 		if lastError != "" {
 			errMsg = errPrefix + ": " + lastError

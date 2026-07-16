@@ -29,9 +29,8 @@ import (
 )
 
 // isTerminalForCompletion returns true when the feature is in a terminal
-// state that completion handlers must short-circuit on. Mirrors the stale
-// completion guard present in every TUI completion handler (app.go:2927,
-// 3560, 3688, 3806).
+// state that completion handlers must short-circuit on. Every completion path
+// uses this guard so late session results cannot overwrite a terminal state.
 func isTerminalForCompletion(f *feature.Feature) bool {
 	return f != nil && (f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed)
 }
@@ -60,8 +59,8 @@ var finalReviewRootOrchestrationArtifacts = []string{
 	"meta.yaml",
 }
 
-// resolveActiveCycleType replicates app.go:9744-9767. It consults the
-// explicit ActiveCycleType field first, then falls back to legacy signals.
+// resolveActiveCycleType consults the explicit ActiveCycleType field first,
+// then falls back to persisted compatibility signals.
 // Only used by completion handlers that route through cycle-aware paths.
 func resolveActiveCycleType(f *feature.Feature) feature.RepoCycleType {
 	if f == nil {
@@ -98,8 +97,8 @@ func formatSingleShotProtocolViolationError(role agent.Role, dir string, violati
 }
 
 // markFailedWithEvent transitions the feature to StatusFailed via lifecycle
-// and emits FeatureFailed. Mirrors app.go:markFailedObserved, minus the
-// external observer concerns (those are upstream of the orchestrator port).
+// and emits FeatureFailed. External observer concerns remain upstream of the
+// orchestrator port.
 //
 // Fires OnFeatureSummaryNeeded at the tail (after OnFeatureFailed) so
 // downstream observers can persist observe-summary.yaml for the terminal
@@ -128,7 +127,7 @@ func (o *Orchestrator) markFailedWithEvent(featureID, failureType, errMsg string
 	return nil
 }
 
-// MarkFailed is the public wrapper for markFailedWithEvent. TUI and other
+// MarkFailed is the public wrapper for markFailedWithEvent. API callers and other
 // callers route terminal-failure transitions through this method so the
 // FeatureFailed event / OnFeatureFailed / OnFeatureSummaryNeeded hooks fire
 // from a single orchestrator-owned emission site.
@@ -140,8 +139,7 @@ func (o *Orchestrator) MarkFailed(featureID, failureType, errMsg string) error {
 // KB completion
 // ---------------------------------------------------------------------------
 
-// onKBCompleted handles a per-repo KB completion signal. Mirrors
-// app.go:2816-2860 for success and app.go:2748-2806 for failure.
+// onKBCompleted handles a per-repo KB completion signal.
 //
 // Success path:
 //  1. Stale-completion guard on feature status != StatusBuildingKB.
@@ -382,8 +380,7 @@ func findRepo(f *feature.Feature, name string) (feature.FeatureRepo, bool) {
 // ---------------------------------------------------------------------------
 
 // onArtifactPhaseCompleted handles completion for the three interactive
-// artifact phases (inquire, research, design). Mirrors
-// app.go:2861-2913.
+// artifact phases (inquire, research, design).
 //
 //  1. Validate phase_complete and the registry-owned markdown artifact
 //     contract for the phase output dir.
@@ -607,8 +604,7 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 // Plan loop completion
 // ---------------------------------------------------------------------------
 
-// onPlanLoopDone handles the result of a plan loop (including per-phase
-// plan loops). Mirrors app.go:2922-3002.
+// onPlanLoopDone handles the result of a plan loop, including per-phase loops.
 func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopResult) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -674,10 +670,9 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 	//
 	// All pipelines (Medium, Large, Moonshot) produce a roadmap as their
 	// top-level plan artifact and advance to phase 1 from here. Even if the
-	// roadmap file is missing or fails to parse, we still take the roadmap-
-	// advance path so the feature lands in Planning with CurrentRoadmapPhase=1
-	// (mirroring the original TUI handlePlanLoopDone which always called
-	// AdvanceRoadmapPhase on CurrentRoadmapPhase==0).
+	// roadmap file is missing or fails to parse, we still advance the newly
+	// approved top-level roadmap so the feature lands in Planning with
+	// CurrentRoadmapPhase=1.
 	if f.CurrentRoadmapPhase == 0 {
 		if roadmapPath := o.resolveArtifactPath(f, "roadmap"); roadmapPath != "" {
 			if data, readErr := os.ReadFile(roadmapPath); readErr == nil {
@@ -719,11 +714,9 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 		startedPhase, started, err := o.startPhase(featureID, feature.PhasePlan)
 		if err != nil {
-			// Swallow the "no roadmap artifact found" error: the caller observes
-			// AdvanceRoadmapPhase's state mutation, and the TUI re-dispatches
-			// PhasePlan via startPhasePlanCmd. This mirrors the original TUI
-			// handlePlanLoopDone which did not propagate a startPhase failure up
-			// to the caller. Other dispatch errors still propagate.
+			// If the roadmap artifact is absent after state advancement, preserve
+			// the advanced state so the next start attempt can recover. Other
+			// dispatch errors still propagate.
 			if strings.Contains(err.Error(), "no roadmap artifact") {
 				return nil
 			}
@@ -822,7 +815,6 @@ func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseComplet
 }
 
 // onMultiRepoImplementDone handles an agent.OrchestratorResult completion.
-// Mirrors app.go:3683-3802.
 func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.OrchestratorResult) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -850,8 +842,8 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		// gate path and transition the feature into StatusNeedUserInput so
 		// the decision dispatcher (handleFeatureNeedUserInputDecision)
 		// finds it paused. Do NOT emit PhaseCompleted — the phase is
-		// paused, not done — and surface NeedUserInputRequired so the TUI
-		// opens the questionnaire.
+		// paused, not done — and surface NeedUserInputRequired so clients can
+		// open the questionnaire.
 		if result.NeedUserInputPath != "" {
 			if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 				ff.PendingNeedUserInputPath = result.NeedUserInputPath
@@ -1138,8 +1130,8 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 	// Non-roadmap, multi-repo auto-publish: now that every touched repo is
 	// past review, try to complete the feature-level publish. If the feature
 	// is not yet fully published (e.g. a repo publish failed or is still
-	// pending), fall back to MarkCodeReady so Init() and StartPhaseMsg
-	// resume paths can recover partially-published features.
+	// pending), fall back to MarkCodeReady so startup and resume paths can
+	// recover partially published features.
 	//
 	// When tryCompleteAndEmit reports published==true, the feature-level
 	// publish has just completed as a direct consequence of this handler

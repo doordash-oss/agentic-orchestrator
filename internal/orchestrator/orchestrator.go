@@ -129,7 +129,7 @@ type NeedUserInputDecision struct {
 }
 
 // ReviewDecision describes a user decision from a review gate or menu.
-// The TUI collects these via its review-editor flow and hands them to the
+// Clients collect these through a review flow and hand them to the
 // orchestrator for downstream state transitions and dispatch.
 type ReviewDecision struct {
 	Decision    string // "proceed" | "iterate"
@@ -470,7 +470,7 @@ func (o *Orchestrator) emitEvent(ev ports.Event) {
 // emitEventBlocking sends an event on the channel, blocking until the
 // consumer drains it. Used for critical lifecycle signals (PhaseCompleted,
 // ReviewRequired, PublishCompleted, FeatureCompleted, FeatureFailed) that the
-// TUI / downstream consumers must not miss. Selects on doneCh so a full
+// downstream consumers must not miss. Selects on doneCh so a full
 // buffer at shutdown does not deadlock the emitter goroutine.
 func (o *Orchestrator) emitEventBlocking(ev ports.Event) {
 	select {
@@ -619,8 +619,7 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 }
 
 // startKB orchestrates the KB phase: per-repo freshness check, conditional
-// skip, per-repo fan-out with mixed-fresh handling. Mirrors app.go:5357-5399
-// and app.go:5402-5426.
+// skip, and per-repo fan-out with mixed-fresh handling.
 //
 // Idempotent for recovery resume: when the feature is already StatusBuildingKB
 // (a crashed KB session was recovered via RecoveryResume), StartKnowledgeBase
@@ -1003,7 +1002,7 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 		return PhaseStartResult{}, errors.New("research phase did not produce an artifact; cannot proceed to design")
 	}
 	// QA file paths from inquire/research specifically (design's own qa
-	// doesn't exist yet — matches app.go:5577-5582).
+	// does not exist yet).
 	var qaFilePaths []string
 	baseDir := o.stateDir()
 	if baseDir != "" {
@@ -1071,7 +1070,7 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 }
 
 // startRoadmapPhasePlan starts per-phase planning for the current roadmap
-// phase. Mirrors app.go:5672-5758. Conditionally transitions via
+// phase. It conditionally transitions via
 // StartPlanning only if the feature is not already StatusPlanning.
 func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Feature) (PhaseStartResult, error) {
 	if f.Status != feature.StatusPlanning {
@@ -1138,9 +1137,8 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 // startImplement starts the Implementation phase. Resolves plan path through
 // the cascade, initializes repo impl tracking, persists the execution plan
 // fallback, and then delegates engine invocation and result routing to
-// StartMultiRepoImplementation — which is the single code path for
-// multi-repo implementation runs (both fresh starts and recovery relaunches).
-// Mirrors app.go:5775-5907.
+// StartMultiRepoImplementation — the single code path for multi-repo
+// implementation runs, including fresh starts and recovery relaunches.
 //
 // Idempotent for recovery resume: when the feature is already
 // StatusImplementing (e.g. a PTY session crashed mid-implement and recovery
@@ -1199,7 +1197,7 @@ func (o *Orchestrator) startImplement(featureID string) (PhaseStartResult, error
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
 
-// startPublish is a thin dispatcher mirroring app.go:1197-1224. Returns
+// startPublish is a thin dispatcher. It returns
 // PhaseNoOp when the feature is not publishable or auto-publish is disabled;
 // delegates to o.Publish otherwise.
 func (o *Orchestrator) startPublish(featureID string) (PhaseStartResult, error) {
@@ -1473,8 +1471,7 @@ func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeat
 }
 
 // HandlePhaseCompletion dispatches a phase-completion result to the
-// appropriate per-phase handler. Mirrors app.go:2737-2910 (the multi-message
-// fanout in the TUI's Update loop).
+// appropriate per-phase handler.
 //
 // Active-cycle handling: completion handlers observing f.ActiveCycleType != ""
 // take the cycle-active early-return path — minimum mutation, emit
@@ -1575,7 +1572,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 		// "needs_human_review" and the reviewer subsequently approves via the
 		// gate, TotalRoadmapPhases is still 0 and downstream roadmap sequencing
 		// (CurrentRoadmapPhase < TotalRoadmapPhases checks, phase-plan vs legacy
-		// plan routing) would be wrong. Mirrors app.go:3167-3191.
+		// plan routing) would be wrong.
 		o.persistRoadmapPhaseCount(featureID, f)
 		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
@@ -1619,7 +1616,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 // (phase.go:RunPhasePlanning), so we must promote 0 to the default before
 // adding 3 — otherwise the effective budget after iterate drops from the
 // default (10) to just 3, and on the phase-plan path may not extend at all.
-// Mirrors the TUI's promotion at app.go:3149-3155.
+// The explicit promotion prevents a small override from lowering the budget.
 //
 // Plan-attempt meta invalidation fires unconditionally — regardless of
 // d.Roadmap / d.PhasePlan. The planner short-circuits on any APPROVED
@@ -1666,8 +1663,8 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 }
 
 // ProceedFromRewindReview confirms a rewind that has already been performed
-// and dispatches the target phase. The TUI invokes Lifecycle.RewindToPhase
-// directly (rewindCmd) BEFORE opening the rewind-artifact-review session, so
+// and dispatches the target phase. The caller invokes Lifecycle.RewindToPhase
+// before opening the rewind-artifact-review session, so
 // by the time the user picks "Proceed with rewind" the active run is already
 // the freshly forked one with PendingReviewPhase=&target and IsRewind=true.
 // This method clears that gate, reads back description-review.md if the user
@@ -1676,8 +1673,8 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 // StartRoadmapPhaseImplementation for partial roadmap phase rewinds), and
 // starts the target phase.
 //
-// `target` MUST be the effective target phase (post-escalation) — typically
-// the value the TUI received from RewindDoneMsg.TargetPhase. Escalation
+// `target` MUST be the effective target phase returned to the caller after
+// escalation. Escalation
 // (e.g. Medium-upgraded features escalating pre-plan rewinds to KB) was
 // resolved by the original RewindToPhase call and persisted onto the new run.
 //
@@ -1773,8 +1770,7 @@ func (o *Orchestrator) clearReviewGate(featureID string) error {
 // persistRoadmapPhaseCount resolves the roadmap artifact, parses it, and
 // writes TotalRoadmapPhases into feature state. Best-effort: if the roadmap
 // file can't be resolved or parsed, TotalRoadmapPhases is left untouched so
-// the existing value (whatever it is) continues to drive sequencing. Mirrors
-// the TUI helper behaviour in app.go:3171-3184.
+// the existing value continues to drive sequencing.
 func (o *Orchestrator) persistRoadmapPhaseCount(featureID string, f *feature.Feature) {
 	roadmapPath := o.resolveArtifactPath(f, "roadmap")
 	if roadmapPath == "" {
@@ -1796,9 +1792,8 @@ func (o *Orchestrator) persistRoadmapPhaseCount(featureID string, f *feature.Fea
 
 // writePlanAttemptChangesRequested invalidates the latest completed plan
 // attempt so the next planner run treats the artifact as rejected and starts
-// a new attempt. This mirrors the TUI's roadmap-reject path
-// (app.go:3283-3297): find the latest attempt via LatestCompletedPlanAttempt
-// and overwrite its meta.yaml with a CHANGES_REQUESTED entry.
+// a new attempt: find the latest attempt via LatestCompletedPlanAttempt and
+// overwrite its meta.yaml with a CHANGES_REQUESTED entry.
 //
 // The planner's resume logic short-circuits when the latest attempt has
 // ReviewStatus == "APPROVED" (in RunRoadmapPlanningLoop and
@@ -1833,7 +1828,7 @@ func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phas
 		candidates = append(candidates, o.phasePlanDirForFeature(f, f.CurrentRoadmapPhase))
 	} else {
 		// Refactor-aware roadmap dir: matches the path RunRoadmapPlanningLoop
-		// reads from during a refactor cycle (mirrors TUI at app.go:3279-3282).
+		// reads from during a refactor cycle.
 		roadmapDir := agent.RoadmapDir(baseDir, f)
 		if f.RefactorPrefix() != "" {
 			roadmapDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "roadmap")
@@ -1881,8 +1876,7 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 	}
 	if next == feature.PhasePublish {
 		// Publish dispatch is owned by completion handlers, not the generic
-		// next-phase pathway. Matches TUI semantics where startPhaseCmd(Publish)
-		// returns nil.
+		// next-phase pathway.
 		return nil
 	}
 
@@ -2126,7 +2120,7 @@ func (o *Orchestrator) Shutdown() error {
 // restart, KB-failure propagation) without also triggering lifecycle
 // deletion.
 //
-// Keeping this policy in the orchestrator prevents TUI call sites from
+// Keeping this policy in the orchestrator prevents client call sites from
 // duplicating session-stop rules.
 func (o *Orchestrator) StopFeatureSessions(featureID string) {
 	if o.deps.Sessions == nil {
@@ -2142,7 +2136,7 @@ func (o *Orchestrator) StopFeatureSessions(featureID string) {
 
 // Delete stops any active sessions for the feature and removes it via the
 // lifecycle. Synchronous (caller learns the outcome via the returned error);
-// no ports.Event is emitted, matching the TUI's legacy delete semantics.
+// no ports.Event is emitted because deletion is synchronously acknowledged.
 func (o *Orchestrator) Delete(featureID string) error {
 	o.StopFeatureSessions(featureID)
 	if err := o.deps.Lifecycle.Delete(featureID); err != nil {

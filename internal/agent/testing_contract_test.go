@@ -188,7 +188,7 @@ func TestCompileTestingContract_ManualVerificationItems(t *testing.T) {
 		"### Automated Verification",
 		"- [ ] Agent tests pass: `go test ./internal/agent/... -count=1`",
 		"### Manual Verification",
-		"- [ ] Create a feature from the TUI and observe it reaches PlanReady.",
+		"- [ ] Create a feature from the desktop app and observe it reaches PlanReady.",
 		"- [ ] Confirm the status copy is understandable to a user.",
 		"- [ ] None required: this marker should be ignored.",
 	}, "\n")
@@ -205,7 +205,7 @@ func TestCompileTestingContract_ManualVerificationItems(t *testing.T) {
 	if manual == nil {
 		t.Fatalf("missing manual contract item in %+v", contract.Items)
 	}
-	wantName := "Complete the phase manual verification checklist:\n- Create a feature from the TUI and observe it reaches PlanReady.\n- Confirm the status copy is understandable to a user."
+	wantName := "Complete the phase manual verification checklist:\n- Create a feature from the desktop app and observe it reaches PlanReady.\n- Confirm the status copy is understandable to a user."
 	if manual.Name != wantName {
 		t.Fatalf("manual name = %q", manual.Name)
 	}

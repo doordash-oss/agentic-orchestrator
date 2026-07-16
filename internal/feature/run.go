@@ -115,7 +115,7 @@ type Run struct {
 
 	// Cycle state (moved from Feature).
 	// ActiveCycleType is the feature-level cycle type marker. Kept alongside
-	// ActiveCycle for the TUI's per-repo rendering surface (RepoCycles map
+	// ActiveCycle for the desktop app's per-repo rendering surface (RepoCycles map
 	// below) which still consults the legacy field.
 	ActiveCycleType RepoCycleType `yaml:"active_cycle_type,omitempty"`
 	RefactorPrompt  string        `yaml:"refactor_prompt,omitempty"`
@@ -130,8 +130,8 @@ type Run struct {
 	// per-repo orchestration signal lives in RepoStates (Touched, PRURL,
 	// LastError); the unified phase-implement loop owns mid-flight state at
 	// the feature level (Run.CurrentPhaseStatus). RepoCycles is the per-repo
-	// cycle rendering surface read by the TUI; the unified cycle loops mirror
-	// their per-repo entries here so existing TUI badges keep working.
+	// cycle rendering surface read by the desktop app; the unified cycle loops mirror
+	// their per-repo entries here so existing desktop app badges keep working.
 	RepoCycles map[string]*RepoCycleState `yaml:"repo_cycles,omitempty"`
 	RepoStates map[string]*RepoState      `yaml:"repo_states,omitempty"`
 	// RebaseOperation tracks transient feature-level rebase progress while a

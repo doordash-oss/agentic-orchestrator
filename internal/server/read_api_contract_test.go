@@ -585,9 +585,9 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 	t.Parallel()
 
 	store, f := seedReadFeature(t)
-	longQuestion := "Should TUI/UI label names that match what is displayed on screen, including In Progress, Published, Watch, Answer, Approve, and Publish as PR, be translated into the target language or kept in English so the reader can map the README back to the live interface without losing important workflow context?"
-	longLabel := "Translate visible TUI labels too, including every status badge, button label, and action description that directly corresponds to on-screen text"
-	longDescription := "Translate all prose including TUI labels. The README is a localized document, and describing what the screen says in English breaks immersion even though the reader can still match the workflow by position, status, and surrounding context."
+	longQuestion := "Should desktop app label names that match what is displayed on screen, including In Progress, Published, Watch, Answer, Approve, and Publish as PR, be translated into the target language or kept in English so the reader can map the README back to the live interface without losing important workflow context?"
+	longLabel := "Translate visible desktop app labels too, including every status badge, button label, and action description that directly corresponds to on-screen text"
+	longDescription := "Translate all prose including desktop app labels. The README is a localized document, and describing what the screen says in English breaks immersion even though the reader can still match the workflow by position, status, and surrounding context."
 	input, err := json.Marshal(map[string]any{
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: longQuestion,
@@ -662,7 +662,7 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: question,
 			headerFieldKey:   "Orthography",
-			"multiSelect":    false,
+			"multi_select":   true,
 			optionsFieldKey: []map[string]any{
 				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0]},
 				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1]},
@@ -674,7 +674,7 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: question,
 			headerFieldKey:   "Orthography",
-			"multiSelect":    false,
+			"multi_select":   true,
 			optionsFieldKey: []map[string]any{
 				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0], confidenceFieldKey: 0.72},
 				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1], confidenceFieldKey: 0.21},
@@ -725,7 +725,11 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 	if len(questions) != 1 {
 		t.Fatalf("ask_user questions length = %d; want 1", len(questions))
 	}
-	options := questions[0].(map[string]any)[optionsFieldKey].([]any)
+	questionDTO := questions[0].(map[string]any)
+	if got := questionDTO["multi_select"]; got != true {
+		t.Fatalf("ask_user multi_select = %v; want true in %+v", got, questionDTO)
+	}
+	options := questionDTO[optionsFieldKey].([]any)
 	want := []float64{0.72, 0.21, 0.07}
 	if len(options) != len(want) {
 		t.Fatalf("ask_user options length = %d; want %d", len(options), len(want))
@@ -1169,6 +1173,93 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	if got, want := stringFieldFromJSON(t, permissions["requests"], requestIDKey), []string{"old-perm", "new-perm"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("permissions requests order = %v; want %v", got, want)
 	}
+	assertControlsHaveWaitingSince(t, prompts["ask_user_questions"])
+	assertControlsHaveWaitingSince(t, permissions["requests"])
+	assertGatesHaveWaitingSince(t, prompts["need_user_inputs"])
+}
+
+func TestPromptAndPermissionSnapshotsExposeStableWaitingSince(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	legacyGatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	writeFile(t, legacyGatePath, "questions: []\n")
+	legacyGateTime := time.Date(2026, 6, 13, 12, 2, 0, 0, time.UTC)
+	if err := os.Chtimes(legacyGatePath, legacyGateTime, legacyGateTime); err != nil {
+		t.Fatalf("Chtimes(%q) error = %v", legacyGatePath, err)
+	}
+	f.PendingNeedUserInputPath = legacyGatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(%s) error = %v", f.ID, err)
+	}
+
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id: "waiting-since-permission", featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
+			pending: []*llm.ControlRequestMessage{pendingReadControl("permission-waiting-since", toolNameBash, `{}`)},
+		},
+		&fakeSessionView{
+			id: "waiting-since-question", featureID: f.ID, phase: feature.PhasePlan, status: ports.SessionWaitingHelp,
+			pending: []*llm.ControlRequestMessage{pendingReadControl("question-waiting-since", toolNameAskUserQuestion, `{"questions":[{"question":"Which option?"}]}`)},
+		},
+	}}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
+
+	firstPrompts := getJSONMap(t, handler, apiPathPrompts)
+	secondPrompts := getJSONMap(t, handler, apiPathPrompts)
+	firstPermissions := getJSONMap(t, handler, apiPathPermissions)
+	secondPermissions := getJSONMap(t, handler, apiPathPermissions)
+
+	firstGate := firstPrompts["need_user_inputs"].([]any)[0].(map[string]any)
+	gateWaitingSince, err := time.Parse(time.RFC3339Nano, firstGate["waiting_since"].(string))
+	if err != nil {
+		t.Fatalf("Parse(waiting_since) error = %v", err)
+	}
+	if !gateWaitingSince.Equal(legacyGateTime) {
+		t.Fatalf("legacy gate waiting_since = %v; want %v", gateWaitingSince, legacyGateTime)
+	}
+	if got, want := secondPrompts["need_user_inputs"].([]any)[0].(map[string]any)["waiting_since"], firstGate["waiting_since"]; got != want {
+		t.Fatalf("gate waiting_since changed across snapshots: got %v; want %v", got, want)
+	}
+
+	assertStableControlWaitingSince(t, firstPrompts["ask_user_questions"], secondPrompts["ask_user_questions"])
+	assertStableControlWaitingSince(t, firstPermissions["requests"], secondPermissions["requests"])
+}
+
+func assertStableControlWaitingSince(t *testing.T, first, second any) {
+	t.Helper()
+	firstRequests := first.([]any)
+	secondRequests := second.([]any)
+	if len(firstRequests) != 1 || len(secondRequests) != 1 {
+		t.Fatalf("control request lengths = %d and %d; want 1", len(firstRequests), len(secondRequests))
+	}
+	firstWaitingSince := firstRequests[0].(map[string]any)["waiting_since"]
+	if firstWaitingSince == nil || firstWaitingSince == "" {
+		t.Fatalf("control request waiting_since = %v; want timestamp", firstWaitingSince)
+	}
+	if got := secondRequests[0].(map[string]any)["waiting_since"]; got != firstWaitingSince {
+		t.Fatalf("control request waiting_since changed across snapshots: got %v; want %v", got, firstWaitingSince)
+	}
+}
+
+func assertControlsHaveWaitingSince(t *testing.T, requests any) {
+	t.Helper()
+	for _, request := range requests.([]any) {
+		if got := request.(map[string]any)["waiting_since"]; got == nil || got == "" {
+			t.Fatalf("control request waiting_since = %v; want timestamp", got)
+		}
+	}
+}
+
+func assertGatesHaveWaitingSince(t *testing.T, gates any) {
+	t.Helper()
+	for _, gate := range gates.([]any) {
+		if got := gate.(map[string]any)["waiting_since"]; got == nil || got == "" {
+			t.Fatalf("need user input gate waiting_since = %v; want timestamp", got)
+		}
+	}
 }
 
 func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testing.T) {
@@ -1203,7 +1294,7 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 		&fakeSessionView{
 			id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
 			pending: []*llm.ControlRequestMessage{
-				pendingReadControl(fixturePermissionRequestID, toolNameBash, `{"command":"go test ./internal/tui"}`),
+				pendingReadControl(fixturePermissionRequestID, toolNameBash, `{"command":"go test ./internal/server"}`),
 			},
 		},
 	}}
@@ -1217,11 +1308,11 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 		t.Fatalf("permissions requests length = %d; want 1", len(requests))
 	}
 	request := requests[0].(map[string]any)
-	if got, want := request["summary"], "go test ./internal/tui"; got != want {
+	if got, want := request["summary"], "go test ./internal/server"; got != want {
 		t.Fatalf("permission summary = %v; want %q", got, want)
 	}
 	input := request["input"].(map[string]any)
-	if got, want := input["command"], "go test ./internal/tui"; got != want {
+	if got, want := input["command"], "go test ./internal/server"; got != want {
 		t.Fatalf("permission input.command = %v; want %q", got, want)
 	}
 }
@@ -1229,7 +1320,7 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 func TestPermissionSnapshotIncludesRememberPreview(t *testing.T) {
 	t.Parallel()
 
-	input := json.RawMessage(`{"command":"go test ./internal/tui -run TestAPIApp"}`)
+	input := json.RawMessage(`{"command":"go test ./internal/server -run TestAPIApp"}`)
 	store, f := seedReadFeature(t)
 	sess := &fakeSessionView{
 		id: "sess-remember", featureID: f.ID, phase: feature.PhaseImplement,
@@ -1406,7 +1497,7 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
 			id: "sess-running", featureID: f.ID, phase: feature.PhaseImplement,
-			kind: ports.KindPhase, status: ports.SessionRunning, startedAt: now.Add(-2 * time.Minute),
+			kind: ports.KindPhase, status: ports.SessionRunning, startedAt: now.Add(-2 * time.Minute), runNumber: 3,
 		},
 		&fakeSessionView{
 			id: "sess-completed", featureID: f.ID, phase: feature.PhasePlan,
@@ -1433,6 +1524,26 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 	wantIDs := []string{"sess-completed", "sess-running", "sess-failed"}
 	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
 		t.Fatalf("session order = %v; want %v", gotIDs, wantIDs)
+	}
+	if got := rawSessions[1].(map[string]any)["run_number"]; got != float64(3) {
+		t.Fatalf("running session run_number = %v; want 3", got)
+	}
+}
+
+func TestSessionListOmitsUnavailableContextPercentage(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	unavailable := -1
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		id: "sess-restored", featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, contextPct: &unavailable,
+	}}}
+
+	body := getJSONMap(t, NewHandler(opts), apiPathSessions)
+	session := body["sessions"].([]any)[0].(map[string]any)
+	if got, present := session["context_percentage"]; present {
+		t.Fatalf("context_percentage = %v; want omitted when usage is unavailable", got)
 	}
 }
 
@@ -2177,8 +2288,9 @@ func cloneFeatureForReadTest(t *testing.T, store *feature.Store, base *feature.F
 
 func pendingReadControl(requestID, toolName, input string) *llm.ControlRequestMessage {
 	return &llm.ControlRequestMessage{
-		Type:      transcriptTypeControlRequest,
-		RequestID: requestID,
+		Type:         transcriptTypeControlRequest,
+		RequestID:    requestID,
+		WaitingSince: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
 		Request: llm.ControlRequest{
 			Subtype:  controlSubtypeCanUseTool,
 			ToolName: toolName,
@@ -2541,6 +2653,7 @@ func (m fakeSessionManager) IsShuttingDown() bool { return false }
 type fakeSessionView struct {
 	id             string
 	featureID      string
+	runNumber      int
 	phase          feature.Phase
 	repoName       string
 	kind           ports.SessionKind
@@ -2557,10 +2670,12 @@ type fakeSessionView struct {
 	log            ports.MessageLog
 	pending        []*llm.ControlRequestMessage
 	permCacheScope string
+	contextPct     *int
 }
 
 func (s *fakeSessionView) ID() string                  { return s.id }
 func (s *fakeSessionView) FeatureID() string           { return s.featureID }
+func (s *fakeSessionView) RunNumber() int              { return s.runNumber }
 func (s *fakeSessionView) Phase() feature.Phase        { return s.phase }
 func (s *fakeSessionView) RepoName() string            { return s.repoName }
 func (s *fakeSessionView) PermCacheScope() string      { return s.permCacheScope }
@@ -2603,9 +2718,14 @@ func (s *fakeSessionView) LastControlRequest() *llm.ControlRequestMessage {
 func (s *fakeSessionView) PendingControlRequests() []*llm.ControlRequestMessage {
 	return append([]*llm.ControlRequestMessage(nil), s.pending...)
 }
-func (s *fakeSessionView) QALog() []ports.QAPair           { return nil }
-func (s *fakeSessionView) LogFilePath() string             { return s.logPath }
-func (s *fakeSessionView) ContextPercentage() int          { return 42 }
+func (s *fakeSessionView) QALog() []ports.QAPair { return nil }
+func (s *fakeSessionView) LogFilePath() string   { return s.logPath }
+func (s *fakeSessionView) ContextPercentage() int {
+	if s.contextPct != nil {
+		return *s.contextPct
+	}
+	return 42
+}
 func (s *fakeSessionView) ErrorDetail() string             { return "" }
 func (s *fakeSessionView) ExitCodeDetail() string          { return "" }
 func (s *fakeSessionView) LastStdoutAt() time.Time         { return s.StartedAt() }

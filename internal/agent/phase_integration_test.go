@@ -801,7 +801,7 @@ func TestRunResearch_GlobalBashRulesAutoApproveAcrossProviders(t *testing.T) {
 						t.Fatal("expected SUCCESS result event from provider registry path")
 					}
 					if sawBashPrompt {
-						t.Fatal("expected seeded global Bash rule to auto-approve before reaching the TUI")
+						t.Fatal("expected seeded global Bash rule to auto-approve before reaching the desktop app")
 					}
 					return
 				}

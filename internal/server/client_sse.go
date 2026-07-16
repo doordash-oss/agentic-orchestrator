@@ -356,7 +356,7 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 
 // fetchFullSnapshot re-pulls the read-model state the dashboard depends on
 // for its feature list and attention badges. Used when snapshot_required is
-// set, e.g. on (re)connect, so a TUI catches state that changed while it was
+// set, e.g. on (re)connect, so a desktop app catches state that changed while it was
 // not subscribed — most notably a session resumed into WaitingHelp whose
 // pending question is otherwise never announced via an event.
 func (c *Client) fetchFullSnapshot(ctx context.Context) (RefreshSnapshot, error) {

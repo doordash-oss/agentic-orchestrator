@@ -15,12 +15,16 @@
 package session
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -32,12 +36,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// SDKEventMsg carries a structured SDK message from a session to the TUI.
+// SDKEventMsg carries a structured SDK message from a session to the desktop app.
 //
 // Consumers SHOULD read FeatureID and Phase directly. Never re-derive
 // identity from SessionID — the session manager captures both values at
 // emission time, and string-parsing the SessionID is brittle (every new
-// session role would otherwise need an extra case in the TUI's parser,
+// session role would otherwise need an extra case in the desktop app's parser,
 // and an omitted case silently routes the event to the default phase
 // and a bogus feature directory).
 type SDKEventMsg struct {
@@ -102,6 +106,18 @@ func NewManager(eventCh chan interface{}) *Manager {
 	}
 }
 
+// NewRecoveringManager constructs a manager and restores live sessions whose
+// durable process and transcript metadata survived an abrupt server exit.
+func NewRecoveringManager(eventCh chan interface{}, stateDir string) *Manager {
+	m := NewManager(eventCh)
+	if stateDir != "" {
+		if err := m.restoreLiveSessions(stateDir); err != nil {
+			log.Printf("session-manager: restore live sessions: %v", err)
+		}
+	}
+	return m
+}
+
 // SetAttachDropReporter installs an AttachDropReporter on the Manager.
 // Subsequent sessions started via StartSession will forward attachCh
 // drop events (critical-message timeouts) to this reporter. Safe to
@@ -139,12 +155,13 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	// The subprocess spawn and protocol handshake below can take many seconds
 	// (up to codexHandshakeTimeout). They run WITHOUT the manager lock so they
 	// never block readers — ActiveSessions feeds live-preview/prompts/sessions,
-	// and stalling those during a resume is what makes the TUI's refresh time
+	// and stalling those during a resume is what makes the desktop app's refresh time
 	// out. The session is registered (made visible to readers) only once it is
 	// fully started below.
 	s := NewSession(id, featureID, phase)
 	if len(opts) > 0 && opts[0] != nil {
 		s.pidDir = opts[0].PIDDir
+		s.runNumber = opts[0].RunNumber
 		s.iteration = opts[0].Iteration
 		if opts[0].PermHandler != nil {
 			s.permHandler = opts[0].PermHandler
@@ -172,6 +189,16 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.effortSource = opts[0].EffortSource
 		s.askUserAutoPick = opts[0].AskUserAutoPick
 		s.watchdog = newSessionWatchdog(s, opts[0].Watchdog)
+		if s.pidDir != "" {
+			sum := sha256.Sum256([]byte(id))
+			s.transcriptPath = filepath.Join(s.pidDir, fmt.Sprintf("session-transcript-%x.jsonl", sum[:8]))
+			if err := os.MkdirAll(s.pidDir, 0o755); err != nil {
+				return nil, fmt.Errorf("creating transcript directory: %w", err)
+			}
+			if err := os.Remove(s.transcriptPath); err != nil && !os.IsNotExist(err) {
+				return nil, fmt.Errorf("resetting transcript: %w", err)
+			}
+		}
 		// Set log file before Start() so the read goroutine can write from
 		// the first line. This avoids a race with fast sessions (codex)
 		// where readMessages exits before SetLogFile is called.
@@ -291,6 +318,111 @@ func isChildExitedWriteError(err error) bool {
 	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)
 }
 
+func (m *Manager) restoreLiveSessions(stateDir string) error {
+	pidFiles, err := FindPIDFiles(stateDir)
+	if err != nil {
+		return err
+	}
+	for _, pf := range pidFiles {
+		if pf.ManagerID == "" || pf.FeatureID == "" || pf.Transcript == "" || !isProcessRunning(pf.PID) {
+			continue
+		}
+		transcriptPath, ok := pathWithin(stateDir, pf.Transcript)
+		if !ok {
+			log.Printf("session-manager: skip session %q with transcript outside state directory", pf.ManagerID)
+			continue
+		}
+		phase, ok := persistedPhase(pf.Phase)
+		if !ok {
+			log.Printf("session-manager: skip session %q with unknown phase %q", pf.ManagerID, pf.Phase)
+			continue
+		}
+		messages, err := readPersistedTranscript(transcriptPath)
+		if err != nil {
+			log.Printf("session-manager: skip session %q: %v", pf.ManagerID, err)
+			continue
+		}
+		s := NewSession(pf.ManagerID, pf.FeatureID, phase)
+		s.runNumber = pf.RunNumber
+		s.iteration = pf.Iteration
+		s.repoName = pf.RepoName
+		s.workDir = pf.WorkDir
+		s.startedAt = pf.StartedAt
+		s.providerName = pf.Provider
+		s.kind = pf.Kind
+		s.label = pf.Label
+		s.pidDir = pf.Dir
+		s.transcriptPath = transcriptPath
+		s.recoveredPID = pf.PID
+		for _, msg := range messages {
+			s.messageLog.Append(msg)
+		}
+		m.sessions[s.id] = s
+	}
+	return nil
+}
+
+func pathWithin(root, candidate string) (string, bool) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return candidateAbs, true
+}
+
+func persistedPhase(name string) (feature.Phase, bool) {
+	for _, phase := range []feature.Phase{
+		feature.PhaseResearch, feature.PhasePlan, feature.PhaseImplement,
+		feature.PhasePublish, feature.PhaseReview, feature.PhaseKnowledgeBase,
+		feature.PhaseInquire, feature.PhaseDesign, feature.PhaseFinalReview,
+	} {
+		if phase.String() == name {
+			return phase, true
+		}
+	}
+	return 0, false
+}
+
+func readPersistedTranscript(path string) ([]llm.SDKMessage, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening transcript: %w", err)
+	}
+	defer f.Close()
+
+	var messages []llm.SDKMessage
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		var record persistedTranscriptRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			log.Printf("session-manager: skip malformed transcript row in %s: %v", path, err)
+			continue
+		}
+		msg := record.Message.sdkMessage()
+		switch {
+		case record.Index == len(messages):
+			messages = append(messages, msg)
+		case record.Index >= 0 && record.Index < len(messages):
+			messages[record.Index] = msg
+		default:
+			log.Printf("session-manager: skip out-of-order transcript row %d in %s", record.Index, path)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading transcript: %w", err)
+	}
+	return messages, nil
+}
+
 func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase feature.Phase, msg llm.SDKMessage) {
 	// Route messages to session status.
 	s.mu.Lock()
@@ -346,7 +478,7 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 	}
 	s.mu.Unlock()
 
-	// Forward to TUI event channel (non-blocking to avoid goroutine accumulation).
+	// Forward to desktop app event channel (non-blocking to avoid goroutine accumulation).
 	if m.eventCh != nil {
 		assertEmissionIdentity(id, featureID, phase)
 		sdkEvt := SDKEventMsg{
@@ -360,7 +492,7 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		select {
 		case m.eventCh <- sdkEvt:
 		default:
-			// Channel full — drop the event. The TUI will catch up on the
+			// Channel full — drop the event. The desktop app will catch up on the
 			// next message. This prevents unbounded goroutine accumulation
 			// under high-volume partial-message streaming.
 		}

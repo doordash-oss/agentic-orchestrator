@@ -6,5 +6,7 @@ test contract.
 | Tier | Command | Current Wall Time | Notes |
 |------|---------|-------------------|-------|
 | Fast suite | `make test-fast` | 23s, target <=30s | Everyday short-mode package check before handoff. |
-| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Opt-in observer-backed TUI integration coverage. |
-
+| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Server process-launch and API lifecycle coverage. |
+| Desktop static checks | `npm run check` | 8s | TypeScript, ESLint, Prettier, and desktop OpenAPI drift. |
+| Desktop unit/component/security tests | `npm test && npm run test:security` | 4s | Vitest renderer, main-process, shared IPC, and security projects. |
+| Desktop packaged E2E | `npm run package:verify && npm run test:e2e:packaged` | Native CI host | Packaged Electron journeys against the bundled server; Phase 3 adds `attention-inbox.spec.ts` and `attention-resolution.spec.ts` for the global attention inbox and all blocking prompt classes. |

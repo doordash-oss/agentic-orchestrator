@@ -3,10 +3,11 @@
  *
  * Freshness contract: dist/package-verification.json must exist, its
  * unpacked_app must exist, and the identity's server_revision must match the
- * current git HEAD (a package built from other code would silently test the
- * wrong build). Anything else triggers one `npm run package:verify`, which
- * rebuilds and re-inspects the native package. CI runs package:verify right
- * before this suite, so the check passes without a second build there.
+ * current git HEAD and newer than any local source edit (a package built from
+ * other code would silently test the wrong build). Anything else triggers one
+ * `npm run package:verify`, which rebuilds and re-inspects the native package.
+ * CI runs package:verify right before this suite, so the check passes without
+ * a second build there.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,13 +26,13 @@ export default function globalSetup(): void {
     stdio: 'inherit',
     timeout: 15 * 60_000,
   });
-  const remaining = stalenessReason();
+  const remaining = stalenessReason({ includeLocalChanges: false });
   if (remaining !== null) {
     throw new Error(`package:verify did not produce a fresh package: ${remaining}`);
   }
 }
 
-function stalenessReason(): string | null {
+function stalenessReason({ includeLocalChanges = true } = {}): string | null {
   const verification = readVerification();
   if (verification === null) {
     return 'dist/package-verification.json is missing or unreadable';
@@ -46,6 +47,9 @@ function stalenessReason(): string | null {
       `but HEAD is ${head.slice(0, 12)}`
     );
   }
+  if (includeLocalChanges && hasChangesNewerThan(verification.verified_at)) {
+    return 'the worktree has changes newer than the verified package';
+  }
   return null;
 }
 
@@ -58,4 +62,33 @@ function gitHead(): string | null {
   } catch {
     return null; // not a git checkout — trust the existing verified package
   }
+}
+
+function hasChangesNewerThan(verifiedAt: string): boolean {
+  const verifiedAtMs = Date.parse(verifiedAt);
+  if (Number.isNaN(verifiedAtMs)) return true;
+
+  try {
+    const repository = path.dirname(desktopDir);
+    const changed = [
+      ...gitPaths(repository, ['diff', '--name-only', '-z', 'HEAD', '--']),
+      ...gitPaths(repository, ['ls-files', '--others', '--exclude-standard', '-z']),
+    ];
+    return changed.some((file) => {
+      try {
+        return fs.statSync(path.join(repository, file)).mtimeMs > verifiedAtMs;
+      } catch {
+        // Deleted paths are already captured by a package rebuilt from this checkout.
+        return false;
+      }
+    });
+  } catch {
+    return true;
+  }
+}
+
+function gitPaths(repository: string, args: string[]): string[] {
+  return execFileSync('git', args, { cwd: repository, encoding: 'utf8' })
+    .split('\0')
+    .filter((file) => file.length > 0);
 }

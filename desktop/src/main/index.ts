@@ -12,6 +12,8 @@ import { resolveTestUserDataDir } from './testHooks';
 import { EventStreamSupervisor } from './gateway/events';
 import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
+import { AttentionService } from './attention';
+import { SessionService } from './serverClient';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
 import {
   installSecurityPolicies,
@@ -61,6 +63,9 @@ function createMainWindow(settings: SettingsStore, gateway: RuntimeGateway): voi
     ...(bounds !== undefined ? { x: bounds.x, y: bounds.y } : {}),
     minWidth: 400,
     minHeight: 480,
+    ...(process.env['AGENTICO_E2E_ALLOW_LARGE_WINDOW'] === '1'
+      ? { enableLargerThanScreen: true }
+      : {}),
     show: false,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#16181D' : '#F5F6F7',
     webPreferences: mainWindowWebPreferences(
@@ -145,6 +150,8 @@ void app.whenReady().then(() => {
     transport: gateway,
     readReadiness: () => setup.getReadiness(),
   });
+  const sessions = new SessionService(gateway);
+  const attention = new AttentionService(gateway);
 
   // Main-process SSE consumption: runs only while the gateway is ready and
   // forwards schema-validated invalidation metadata to the app window.
@@ -152,6 +159,7 @@ void app.whenReady().then(() => {
     source: gateway,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     log: (line) => console.warn(`[agentico-events] ${line}`),
+    onStale: () => gateway.handleGlobalStreamStale(),
     onPush: (event) => {
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) {
@@ -165,10 +173,12 @@ void app.whenReady().then(() => {
       eventSupervisor.start();
     } else {
       eventSupervisor.stop();
+      sessions.cancelAll();
     }
   });
   app.on('before-quit', () => {
     eventSupervisor.stop();
+    sessions.cancelAll();
   });
 
   const services: IpcServices = {
@@ -188,6 +198,18 @@ void app.whenReady().then(() => {
     getFeature: (featureId) => features.getFeature(featureId),
     createFeature: (input) => features.createFeature(input),
     dispatchFeatureSetup: (featureId) => features.dispatchSetup(featureId),
+    dispatchFeatureAction: (request) => features.dispatchAction(request),
+    getAttention: () => attention.getSnapshot(),
+    answerPermission: (request) => attention.answerPermission(request),
+    answerQuestions: (request) => attention.answerQuestions(request),
+    sendHelp: (request) => attention.sendHelp(request),
+    saveGateDraft: (request) => attention.saveGateDraft(request),
+    resolveGate: (request) => attention.resolveGate(request),
+    listSessions: () => sessions.list(),
+    getSession: (sessionId) => sessions.get(sessionId),
+    getSessionTranscript: (request) => sessions.transcript(request),
+    openSessionOutput: (request, emit) => sessions.subscribe(request, emit),
+    cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
     getCreationDefaults: () => features.creationDefaults(),
   };
   registerIpcHandlers(ipcMain, trusted, services);

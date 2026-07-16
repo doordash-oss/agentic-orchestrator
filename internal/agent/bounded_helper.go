@@ -147,10 +147,14 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 	if err != nil {
 		return nil, fmt.Errorf("running bounded helper: building session: %w", err)
 	}
-	if sessOpts != nil && cfg.EffectiveEffort != "" {
+	if sessOpts == nil {
+		sessOpts = &ports.SessionOpts{}
+	}
+	if cfg.EffectiveEffort != "" {
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
 	}
+	sessOpts.RunNumber = cfg.ParentSpanCtx.RunNumber
 
 	return pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
 		sessionID:        cfg.SessionID,
@@ -291,7 +295,8 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			result != nil &&
 			result.Status == BoundedHelperStatusFailed &&
 			(isRetryableInfrastructureSessionFailure(sess, ExtractSessionCost(sess), time.Since(sessionStart)) ||
-				errors.Is(err, errHelperReturnedErrorResult))
+				errors.Is(err, errHelperReturnedErrorResult) ||
+				isRetryableProviderNetworkFailure(result.Output, err))
 		return result, err, retryable
 	}
 
@@ -390,6 +395,30 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			return finish(result, err)
 		}
 	}
+}
+
+// isRetryableProviderNetworkFailure recognizes transient provider transport
+// failures after a helper has already consumed context. Those sessions do not
+// meet the no-work infrastructure retry rule, but their output cannot produce
+// a valid handoff and a fresh bounded attempt is safe.
+func isRetryableProviderNetworkFailure(output string, err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(output + " " + err.Error())
+	for _, marker := range []string{
+		"unable to connect to api",
+		"enotfound",
+		"econnreset",
+		"econnrefused",
+		"eai_again",
+		"etimedout",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // boundedHelperTurnClass classifies why the just-ended turn stopped, for the

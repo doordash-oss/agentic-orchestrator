@@ -37,4 +37,19 @@ describe('RedactedLogBuffer', () => {
     buffer.append('value late-secret here\n');
     expect(buffer.snapshot().join('\n')).not.toContain('late-secret');
   });
+
+  it('retroactively scrubs retained and partial output when discovery reveals a secret', () => {
+    const buffer = new RedactedLogBuffer(10);
+    buffer.append('printed-before-discovery\npartial-before-discovery');
+    buffer.addSecret('before-discovery');
+    const snapshot = buffer.snapshot().join('\n');
+    expect(snapshot).not.toContain('before-discovery');
+    expect(snapshot).toContain('[redacted]');
+  });
+
+  it('includes a bounded final partial line in diagnostic snapshots', () => {
+    const buffer = new RedactedLogBuffer(2);
+    buffer.append('complete one\ncomplete two\nlast partial');
+    expect(buffer.snapshot()).toEqual(['complete two', 'last partial']);
+  });
 });

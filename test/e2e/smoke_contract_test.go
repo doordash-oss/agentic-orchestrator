@@ -38,7 +38,7 @@ func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"go test ./cmd/agentico -run '^TestRunArgsLaunchesClientServerByDefault$'",
+		"go test ./cmd/agentico -run '^TestRunArgsLaunchesServerByDefault$'",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("smoke.sh must run %q", want)

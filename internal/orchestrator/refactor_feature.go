@@ -18,7 +18,7 @@
 // iterative implement loop over explicitly scoped single-repo Tasks.
 //
 // The legacy per-repo lifecycle plumbing (StartRepoCycle / FailRepoCycle /
-// CompleteRepoCycle / RefactorPrompt) is preserved as a façade so the TUI
+// CompleteRepoCycle / RefactorPrompt) is preserved as a façade so the desktop app
 // event chain keeps working unchanged.
 package orchestrator
 
@@ -42,7 +42,7 @@ type RefactorEvidence struct {
 }
 
 // startFeatureRefactor launches the unified refactor cycle. The repoName
-// argument from the legacy per-repo TUI dispatch is treated as a hint
+// argument from the legacy per-repo desktop app dispatch is treated as a hint
 // only — the loop mounts every Feature.Repos worktree and stages the
 // repos that the refactor-plan's `**Repo:** <name>` tags select. Returns
 // "" + nil on successful dispatch (no stable session ID; the inner loop
@@ -50,7 +50,7 @@ type RefactorEvidence struct {
 //
 // Mirrors startFeatureReviewComments in shape: the
 // orchestrator stamps RefactorCount + RefactorPrompt synchronously, opens
-// per-repo cycle entries for the legacy TUI rendering paths, then runs
+// per-repo cycle entries for the legacy desktop app rendering paths, then runs
 // the agent loop in a background goroutine tracked by cycleWG.
 func (o *Orchestrator) startFeatureRefactor(
 	featureID, hintRepoName, prompt string,
@@ -86,7 +86,7 @@ func (o *Orchestrator) startFeatureRefactor(
 	}
 
 	// Bump RefactorCount synchronously, stash the prompt, and clear any
-	// stale plan artifact pointer in one Modify so the TUI sees the
+	// stale plan artifact pointer in one Modify so the desktop app sees the
 	// updated state immediately when this method returns. The loop's own
 	// Modify (inside RunRefactorFeatureLoop) re-reads the count; the
 	// double-bump is avoided by pre-incrementing here and having the
@@ -106,7 +106,7 @@ func (o *Orchestrator) startFeatureRefactor(
 	}
 
 	// Open per-repo cycle entries for every Feature.Repos. The refactor loop
-	// is feature-level, but TUI rendering still reads RepoCycles[name].Status
+	// is feature-level, but desktop app rendering still reads RepoCycles[name].Status
 	// while the loop is running.
 	for i := range f.Repos {
 		_ = o.deps.Lifecycle.StartRepoCycle(featureID, f.Repos[i].Name, feature.CycleRefactor)
@@ -270,7 +270,7 @@ func uniqueRefactorEvidencePath(dir, name string) string {
 }
 
 // handleFeatureRefactorDone routes the unified refactor loop's result
-// back into the per-repo legacy plumbing so the TUI's existing event
+// back into the per-repo legacy plumbing so the desktop app's existing event
 // chain (RefactorCycleLoopDoneMsg via the shared HandleRefactorCycleLoopDone
 // pathway) keeps working. On success: per-repo CompleteRefactorRepoCycle
 // commits + pushes each touched repo's branch and clears the cycle entry.

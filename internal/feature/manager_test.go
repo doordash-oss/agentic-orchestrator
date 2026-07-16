@@ -3366,7 +3366,7 @@ func TestRewindToPhase_ClearsRepoImpl(t *testing.T) {
 // the Medium-rewind-to-Plan fix. Medium pipelines have no inquire /
 // research / design phases, so rewinding to Plan (the first phase of
 // the Medium pipeline) previously left the feature with no artifact the
-// rewind-review session could display — the TUI aborted with "no artifact
+// rewind-review session could display — the desktop app aborted with "no artifact
 // found for the previous phase" and the user could not attach to review.
 //
 // Treating PhasePlan as "first phase of the pipeline" for Medium mirrors

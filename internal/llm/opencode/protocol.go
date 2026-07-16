@@ -37,7 +37,7 @@ var nextID atomic.Int64
 const requestedProtocolVersion = 1
 
 // jsonRPCMethodNotSupported is the JSON-RPC error code used when Agentico
-// declines an agent->client request it does not implement during Phase 1.
+// declines an agent-to-client request it does not implement.
 const jsonRPCMethodNotSupported = -32601
 
 // Protocol implements llm.Protocol for the OpenCode ACP (Agent Client Protocol)
@@ -473,7 +473,7 @@ func (p *Protocol) malformedStdout(detail string) ([]llm.SDKMessage, error) {
 // protocol stdout line.
 func malformedStdoutDiagnostic(detail string) string {
 	return fmt.Sprintf(
-		"OpenCode emitted malformed JSON-RPC on stdout (%s). The Phase 1 tracer requires clean newline-delimited JSON-RPC on stdout; corrupt protocol output is treated as a failed session. Failing closed.",
+		"OpenCode emitted malformed JSON-RPC on stdout (%s). The protocol requires clean newline-delimited JSON-RPC on stdout; corrupt protocol output is treated as a failed session. Failing closed.",
 		detail,
 	)
 }
@@ -1437,8 +1437,7 @@ func (p *Protocol) SendUserMessage(text string) error {
 func (p *Protocol) RespondToHook(string) error { return nil }
 
 // RespondToControl and RespondToAskUser are implemented in control.go: they
-// answer the Phase 2 permission and question surfaces back through the ACP
-// protocol.
+// answer permission and question requests through the ACP protocol.
 
 // Interrupt cancels the in-flight turn using the ACP session/cancel
 // notification, which OpenCode answers by completing the pending session/prompt

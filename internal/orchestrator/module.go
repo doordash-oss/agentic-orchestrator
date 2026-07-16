@@ -59,7 +59,7 @@ type worktreeManagerParams struct {
 // Module provides the Orchestrator via fx. It also registers an OnStop hook
 // so fx.Shutdown propagates to Orchestrator.Shutdown — this is the ONLY site
 // where lifecycle shutdown is registered; keeping it co-located with the
-// provider prevents double-registration in TUI/CLI wiring.
+// provider prevents double-registration in API and CLI wiring.
 var Module = fx.Module("orchestrator",
 	// Expose the git.WorktreeManager as the feature.WorktreeOps / ports.WorktreeOperator.
 	// This is wired here (not in feature.Module) so feature does not import git.

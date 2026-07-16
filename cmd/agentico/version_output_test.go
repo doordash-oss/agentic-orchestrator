@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
+	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 )
 
 // TestRunArgsVersionPrintsVersionLine pins the --version/-v contract that
-// desktop package verification parses: the exact tui.VersionLine() banner on
-// stdout, exit 0, no launcher/server/updater side effects.
+// desktop package verification parses: the exact buildinfo.VersionLine() banner
+// on stdout, exit 0, with no server/updater side effects.
 func TestRunArgsVersionPrintsVersionLine(t *testing.T) {
 	for _, flag := range []string{"--version", "-v"} {
 		var stdout, stderr bytes.Buffer
@@ -31,17 +31,13 @@ func TestRunArgsVersionPrintsVersionLine(t *testing.T) {
 			[]string{flag},
 			&stdout,
 			&stderr,
-			func(string, string, bool, []string, bool) int {
-				t.Fatalf("%s must not launch the client", flag)
-				return 1
-			},
 			failingServerLauncher(t),
 			failingUpdater(t),
 		)
 		if code != 0 {
 			t.Fatalf("runArgs(%s) code = %d, want 0", flag, code)
 		}
-		if got, want := stdout.String(), tui.VersionLine()+"\n"; got != want {
+		if got, want := stdout.String(), buildinfo.VersionLine()+"\n"; got != want {
 			t.Fatalf("runArgs(%s) stdout = %q, want %q", flag, got, want)
 		}
 		if stderr.Len() != 0 {

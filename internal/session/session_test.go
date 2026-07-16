@@ -1279,7 +1279,7 @@ echo "stderr content" >&2
 
 // TestSessionResultDeliveredUnderBackpressure reproduces the AMA-chat hang:
 // when the CLI streams many messages faster than the consumer drains them,
-// the Result message — which is the only in-band signal the TUI uses to
+// the Result message — which is the only in-band signal the desktop app uses to
 // clear its "Thinking…" state — must not be dropped. The session's
 // forwarder uses a bounded blocking send for Result so the consumer
 // eventually receives it even if partials are dropped under load.
@@ -1680,7 +1680,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("ask-user-test", "feat-1", feature.PhaseResearch)
-	// No permHandler — AskUserQuestion is always surfaced to TUI
+	// No permHandler — AskUserQuestion is always surfaced to desktop app
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -2437,7 +2437,7 @@ func TestSession_AttachDropReporterSilentWithoutReporter(t *testing.T) {
 }
 
 // TestSession_DrainerExitsOnCloseWithFullAttachChAndRingItems reproduces
-// the shutdown hang seen when a session crashes with the TUI detached:
+// the shutdown hang seen when a session crashes with the desktop app detached:
 // attachCh stays full (no consumer), the streamRing still has buffered
 // deltas, and the drainer must still exit so readMessages' cleanup
 // <-drainerDone does not deadlock. Without this guarantee the feature
@@ -2447,7 +2447,7 @@ func TestSession_DrainerExitsOnCloseWithFullAttachChAndRingItems(t *testing.T) {
 
 	// Saturate attachCh beyond the drainer's reserve so the reserve
 	// check would short-circuit the inner drain loop in normal
-	// operation. No consumer is attached — this models a detached TUI.
+	// operation. No consumer is attached — this models a detached desktop app.
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "filler"}
 	}

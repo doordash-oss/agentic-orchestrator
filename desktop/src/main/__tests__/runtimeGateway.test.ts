@@ -9,6 +9,7 @@ import type { ChildExit } from '../gateway/serverProcess';
 import {
   RuntimeGateway,
   type GatewayDeps,
+  type GatewayTimeouts,
   type ServerChildLike,
   type SelectedRuntime,
 } from '../gateway/runtimeGateway';
@@ -121,7 +122,9 @@ interface EnvOptions {
   /** invoked right after spawn; defaults to publishing a launch discovery record */
   onSpawn?: (env: Env, child: FakeChild) => void;
   spawnError?: Error;
-  timeouts?: Partial<{ launchReadyMs: number; pollIntervalMs: number; shutdownGraceMs: number }>;
+  timeouts?: Partial<GatewayTimeouts>;
+  now?: () => number;
+  diagnosticLines?: readonly string[];
 }
 
 function makeEnv(options: EnvOptions = {}): Env {
@@ -191,6 +194,8 @@ function makeEnv(options: EnvOptions = {}): Env {
     registerSecret: (secret) => env.secrets.push(secret),
     sleep: () => Promise.resolve(),
     log: (line) => env.logs.push(line),
+    readDiagnosticLines: () => options.diagnosticLines ?? [],
+    ...(options.now === undefined ? {} : { now: options.now }),
     timeouts: { pollIntervalMs: 1, launchReadyMs: 20, shutdownGraceMs: 50, ...options.timeouts },
   };
 
@@ -459,6 +464,193 @@ describe('RuntimeGateway launch', () => {
 });
 
 describe('RuntimeGateway supervision', () => {
+  it('surfaces only bounded, path- and token-redacted app-owned crash diagnostics', async () => {
+    const diagnosticLines = Array.from(
+      { length: 25 },
+      (_, index) =>
+        `line ${String(index)} ${LAUNCH_TOKEN} /private/runtime/secret-${String(index)} ${'x'.repeat(600)}`,
+    );
+    const env = makeEnv({ diagnosticLines });
+    await env.gateway.start();
+    env.spawned[0]!.emitExit(1, null);
+
+    const state = env.gateway.getState();
+    expect(state.status).toBe('crashed');
+    if (state.status !== 'crashed') throw new Error('expected crash state');
+    expect(state.diagnostics?.commandContext).toBe(
+      'bundled agentico server --config [path] --state-dir [path]',
+    );
+    expect(state.diagnostics?.logTail).toHaveLength(20);
+    expect(state.diagnostics?.logTail[0]).toContain('line 5');
+    expect(state.diagnostics?.logTail.every((line) => line.length <= 512)).toBe(true);
+    const rendered = JSON.stringify(state.diagnostics);
+    expect(rendered).not.toContain(LAUNCH_TOKEN);
+    expect(rendered).not.toContain('/private/runtime');
+    expect(rendered).toContain('[redacted]');
+    expect(rendered).toContain('[path]');
+  });
+
+  it('drops a lost external runtime after stale-stream verification without taking ownership', async () => {
+    const health = { [EXTERNAL_BASE]: healthBody() as Record<string, unknown> | Error };
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()), health });
+    await env.gateway.start();
+    expect(env.gateway.getState()).toMatchObject({ status: 'ready', ownership: 'external' });
+
+    health[EXTERNAL_BASE] = new Error('connection refused');
+    await env.gateway.handleGlobalStreamStale();
+
+    const state = env.gateway.getState();
+    expect(state).toMatchObject({ status: 'error', ownership: 'external' });
+    expect(requireError(state).code).toBe('E_EXTERNAL_SERVER_LOST');
+    expect(env.spawnCalls).toHaveLength(0);
+    expect(env.gateway.hasOwnedChild()).toBe(false);
+    await expect(env.gateway.apiRequest('/api/v1/readiness')).rejects.toMatchObject({
+      safe: { code: 'E_NOT_CONNECTED' },
+    });
+  });
+
+  it('keeps an external connection when stale-stream verification finds it healthy', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    await env.gateway.handleGlobalStreamStale();
+    expect(env.gateway.getState()).toMatchObject({ status: 'ready', ownership: 'external' });
+    expect(env.spawnCalls).toHaveLength(0);
+  });
+
+  it('automatically relaunches an app-owned runtime after an unexpected ready-state exit', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+
+    env.setDiscovery(null);
+    env.spawned[0]!.emitExit(1, null);
+
+    await vi.waitFor(() => {
+      expect(env.spawnCalls).toHaveLength(2);
+      expect(env.gateway.getState().status).toBe('ready');
+    });
+    expectNoTokenLeak(env);
+  });
+
+  it('lands in a retryable crashed state when the recovery delay rejects', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+    env.deps.sleep = vi.fn(() => Promise.reject(new Error('timer unavailable')));
+
+    env.spawned[0]!.emitExit(1, null);
+
+    await vi.waitFor(() => {
+      expect(env.logs).toContainEqual(
+        expect.stringContaining('automatic recovery delay failed: timer unavailable'),
+      );
+    });
+    expect(env.gateway.getState()).toMatchObject({
+      status: 'crashed',
+      detail: 'Automatic recovery could not be scheduled.',
+      error: {
+        code: 'E_SERVER_CRASHED',
+        remediation: 'Use Retry to start a fresh supervised cycle.',
+      },
+    });
+  });
+
+  it('does not stomp or charge a manual retry when automatic recovery finds it busy', async () => {
+    const env = makeEnv({ timeouts: { crashRestartInitialMs: 10 } });
+    await env.gateway.start();
+
+    let releaseRecoveryDelay = (): void => undefined;
+    const recoveryDelay = new Promise<void>((resolve) => {
+      releaseRecoveryDelay = resolve;
+    });
+    const sleep = vi.fn((_delay: number) => recoveryDelay);
+    env.deps.sleep = sleep;
+    env.setDiscovery(null);
+    env.spawned[0]!.emitExit(1, null);
+
+    const originalFetchJson = env.deps.fetchJson;
+    let releaseHealth = (_result: Awaited<ReturnType<GatewayDeps['fetchJson']>>): void => undefined;
+    const pendingHealth = new Promise<Awaited<ReturnType<GatewayDeps['fetchJson']>>>((resolve) => {
+      releaseHealth = resolve;
+    });
+    env.deps.fetchJson = (url, options) =>
+      url === `${LAUNCH_BASE}/api/v1/health` ? pendingHealth : originalFetchJson(url, options);
+
+    const retry = env.gateway.retry();
+    await vi.waitFor(() => expect(env.spawnCalls).toHaveLength(2));
+    releaseRecoveryDelay();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(env.gateway.getState().status).not.toBe('crashed');
+    expect(sleep).toHaveBeenCalledTimes(1);
+
+    releaseHealth({
+      status: 200,
+      body: healthBody({ owner: { pid: 777, started_at: '2026-07-14T00:00:02Z' } }),
+    });
+    await retry;
+    expect(env.gateway.getState().status).toBe('ready');
+
+    const nextRecoveryDelay = new Promise<void>(() => undefined);
+    sleep.mockImplementation((_delay: number) => nextRecoveryDelay);
+    env.setDiscovery(null);
+    env.spawned.at(-1)!.emitExit(1, null);
+    expect(sleep.mock.calls.map(([delay]) => delay)).toStrictEqual([10, 10]);
+  });
+
+  it('stops after three automatic restart attempts in the rolling crash window', async () => {
+    let launches = 0;
+    const env = makeEnv({
+      health: { [LAUNCH_BASE]: healthBody() },
+      onSpawn: (innerEnv, child) => {
+        launches += 1;
+        innerEnv.alive.add(child.pid ?? -1);
+        if (launches === 1) {
+          innerEnv.setDiscovery(
+            JSON.stringify(
+              discoveryRecord({ base_url: LAUNCH_BASE, auth_token: LAUNCH_TOKEN, pid: child.pid }),
+            ),
+          );
+        } else {
+          innerEnv.setDiscovery(null);
+          child.emitExit(1, null);
+        }
+      },
+    });
+    await env.gateway.start();
+    env.setDiscovery(null);
+    env.spawned[0]!.emitExit(1, null);
+
+    await vi.waitFor(() => {
+      expect(env.spawnCalls).toHaveLength(4);
+      expect(requireError(env.gateway.getState()).code).toBe('E_SERVER_CRASH_LOOP');
+    });
+    expect(env.gateway.hasOwnedChild()).toBe(false);
+  });
+
+  it('resets the restart budget after one healthy minute', async () => {
+    let now = 1_000;
+    const env = makeEnv({ now: () => now });
+    await env.gateway.start();
+
+    for (let expectedSpawns = 2; expectedSpawns <= 4; expectedSpawns += 1) {
+      env.setDiscovery(null);
+      env.spawned.at(-1)!.emitExit(1, null);
+      await vi.waitFor(() => {
+        expect(env.spawnCalls).toHaveLength(expectedSpawns);
+        expect(env.gateway.getState().status).toBe('ready');
+      });
+    }
+
+    now += 60_001;
+    env.setDiscovery(null);
+    env.spawned.at(-1)!.emitExit(1, null);
+    await vi.waitFor(() => {
+      expect(env.spawnCalls).toHaveLength(5);
+      expect(env.gateway.getState().status).toBe('ready');
+    });
+  });
+
   it('marks an unexpected exit after ready as crashed with a retry path', async () => {
     const env = makeEnv();
     await env.gateway.start();
@@ -545,6 +737,60 @@ describe('RuntimeGateway apiRequest', () => {
     expect(call?.url).toBe(`${EXTERNAL_BASE}/api/v1/readiness`);
     expect(call?.token).toBe(EXTERNAL_TOKEN);
     expectNoTokenLeak(env);
+  });
+
+  it('allows only bounded transcript pagination query parameters', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    env.deps.fetchJson = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: { api_version: 'v1', cursor: { total: 0, start: 0, end: 0 }, messages: [] },
+      }),
+    );
+
+    await expect(
+      env.gateway.apiRequest('/api/v1/sessions/session-1/transcript?offset=0&limit=500'),
+    ).resolves.toMatchObject({ status: 200 });
+    expect(env.deps.fetchJson).toHaveBeenCalledWith(
+      `${EXTERNAL_BASE}/api/v1/sessions/session-1/transcript?offset=0&limit=500`,
+      expect.objectContaining({ token: EXTERNAL_TOKEN }),
+    );
+  });
+
+  it('accepts dotted session IDs for authenticated reads and output streams', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    const streamCalls: Array<{ url: string; token: string }> = [];
+    env.deps.openSse = (url, options) => {
+      streamCalls.push({ url, token: options.token });
+      return Promise.resolve({
+        status: 200,
+        lines: (async function* () {})(),
+        close: () => undefined,
+      });
+    };
+    await env.gateway.start();
+    env.deps.fetchJson = vi.fn(() =>
+      Promise.resolve({ status: 200, body: { api_version: 'v1', id: 'session.a-1' } }),
+    );
+
+    await expect(env.gateway.apiRequest('/api/v1/sessions/session.a-1')).resolves.toMatchObject({
+      status: 200,
+    });
+    await expect(env.gateway.openSessionOutputStream('session.a-1')).resolves.toMatchObject({
+      status: 200,
+    });
+
+    expect(env.deps.fetchJson).toHaveBeenCalledWith(
+      `${EXTERNAL_BASE}/api/v1/sessions/session.a-1`,
+      expect.objectContaining({ token: EXTERNAL_TOKEN }),
+    );
+    expect(streamCalls).toStrictEqual([
+      {
+        url: `${EXTERNAL_BASE}/api/v1/sessions/session.a-1/output/stream`,
+        token: EXTERNAL_TOKEN,
+      },
+    ]);
   });
 
   it('rejects paths outside /api/v1 and traversal shapes fail-closed', async () => {

@@ -92,9 +92,8 @@ func Lookup(phase feature.Phase, role Role) (RoleContract, bool) {
 
 // Validate checks the registered contract for a phase and role.
 //
-// STUB(Phase 1): validators receive only iterDir; later phases may introduce
-// IterationContext for plan-path, repo, state-dir, axis, and helper-dir
-// resolution.
+// Validators receive only iterDir. The registry can later accept richer
+// context for plan-path, repo, state-dir, axis, and helper-dir resolution.
 func Validate(phase feature.Phase, role Role, iterDir string) (Outcome, []ProtocolViolation, error) {
 	contract, ok := Lookup(phase, role)
 	if !ok {

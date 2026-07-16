@@ -2,11 +2,17 @@ import { vi } from 'vitest';
 import type {
   AgenticoApi,
   AppEvent,
+  AttentionItem,
   ConnectionState,
   CreationDefaults,
   FeatureSnapshot,
+  FeatureActionRequest,
   FeatureSummaryView,
   ReadinessSnapshot,
+  SessionDetail,
+  SessionOutputEvent,
+  SessionSummary,
+  SessionTranscript,
   Settings,
   ThemeInfo,
 } from '../../../shared/ipc';
@@ -112,6 +118,7 @@ export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): Featu
     description: 'Improve search.',
     repos: ['repo-a'],
     createdAt: '2026-07-14T10:00:00Z',
+    activeRun: 1,
     setup: {
       status: 'running',
       attempt: 1,
@@ -168,7 +175,19 @@ export interface AgenticoMock {
     getFeature: ReturnType<typeof vi.fn>;
     createFeature: ReturnType<typeof vi.fn>;
     dispatchFeatureSetup: ReturnType<typeof vi.fn>;
+    dispatchFeatureAction: ReturnType<typeof vi.fn>;
+    listSessions: ReturnType<typeof vi.fn>;
+    getSession: ReturnType<typeof vi.fn>;
+    getSessionTranscript: ReturnType<typeof vi.fn>;
+    openSessionOutput: ReturnType<typeof vi.fn>;
+    cancelSessionOutput: ReturnType<typeof vi.fn>;
     getCreationDefaults: ReturnType<typeof vi.fn>;
+    getAttention: ReturnType<typeof vi.fn>;
+    answerPermission: ReturnType<typeof vi.fn>;
+    answerQuestions: ReturnType<typeof vi.fn>;
+    sendHelp: ReturnType<typeof vi.fn>;
+    saveGateDraft: ReturnType<typeof vi.fn>;
+    resolveGate: ReturnType<typeof vi.fn>;
   };
   /** Push a connection change to every subscribed listener. */
   emitConnection(state: ConnectionState): void;
@@ -176,6 +195,8 @@ export interface AgenticoMock {
   /** Push a validated app event (invalidation/stream status) to listeners. */
   emitAppEvent(event: AppEvent): void;
   appEventListenerCount(): number;
+  emitSessionOutput(event: SessionOutputEvent): void;
+  sessionOutputListenerCount(): number;
 }
 
 export function installAgenticoMock(
@@ -187,6 +208,10 @@ export function installAgenticoMock(
     features?: FeatureSummaryView[];
     feature?: FeatureSnapshot;
     defaults?: CreationDefaults;
+    sessions?: SessionSummary[];
+    session?: SessionDetail;
+    transcript?: SessionTranscript;
+    attention?: { items: AttentionItem[] };
   } = {},
 ): AgenticoMock {
   const connection: ConnectionState = overrides.connection ?? {
@@ -203,6 +228,8 @@ export function installAgenticoMock(
 
   const listeners = new Set<(state: ConnectionState) => void>();
   const appEventListeners = new Set<(event: AppEvent) => void>();
+  const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
+  const sessions = overrides.sessions ?? [];
 
   const api = {
     getConnectionStatus: vi.fn(() => Promise.resolve(connection)),
@@ -228,6 +255,43 @@ export function installAgenticoMock(
     getFeature: vi.fn(() => Promise.resolve(feature)),
     createFeature: vi.fn(() => Promise.resolve({ featureId: feature.id })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
+    dispatchFeatureAction: vi.fn(({ featureId, action }: FeatureActionRequest) =>
+      Promise.resolve({ featureId, action, result: 'started', sessionIds: [] }),
+    ),
+    getAttention: vi.fn(() => Promise.resolve(overrides.attention ?? { items: [] })),
+    answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    answerQuestions: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
+    resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
+    listSessions: vi.fn(() => Promise.resolve(sessions)),
+    getSession: vi.fn((sessionId: string) => {
+      if (overrides.session !== undefined) return Promise.resolve(overrides.session);
+      const summary = sessions.find((entry) => entry.id === sessionId);
+      if (summary === undefined) return Promise.reject(new Error('not_found: session not found'));
+      return Promise.resolve({
+        ...summary,
+        transcriptCursor: { total: 0, start: 0, end: 0 },
+        pendingControlCount: 0,
+        canAttach: false,
+        logAvailable: false,
+      });
+    }),
+    getSessionTranscript: vi.fn(({ sessionId }: { sessionId: string }) =>
+      Promise.resolve(
+        overrides.transcript ?? {
+          sessionId,
+          cursor: { total: 0, start: 0, end: 0 },
+          messages: [],
+        },
+      ),
+    ),
+    openSessionOutput: vi.fn(() => Promise.resolve({ subscriptionId: 'subscription-1' })),
+    cancelSessionOutput: vi.fn(() => Promise.resolve(true)),
+    onSessionOutput: vi.fn((listener: (event: SessionOutputEvent) => void) => {
+      sessionOutputListeners.add(listener);
+      return () => sessionOutputListeners.delete(listener);
+    }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
     onAppEvent: vi.fn((listener: (event: AppEvent) => void) => {
       appEventListeners.add(listener);
@@ -247,5 +311,9 @@ export function installAgenticoMock(
       for (const listener of appEventListeners) listener(event);
     },
     appEventListenerCount: () => appEventListeners.size,
+    emitSessionOutput: (event) => {
+      for (const listener of sessionOutputListeners) listener(event);
+    },
+    sessionOutputListenerCount: () => sessionOutputListeners.size,
   };
 }

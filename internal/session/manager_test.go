@@ -60,7 +60,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	}
 
 	// Drain events in a separate goroutine. Assert FeatureID/Phase are
-	// populated on every SDKEventMsg and on the SessionDoneMsg so the TUI
+	// populated on every SDKEventMsg and on the SessionDoneMsg so the desktop app
 	// never needs to reverse-engineer identity from SessionID.
 	var received atomic.Int64
 	var badEvents atomic.Int64
@@ -157,6 +157,89 @@ func TestSessionStatusTransitions(t *testing.T) {
 	if s.status != SessionDone {
 		t.Errorf("expected SessionDone to not be reset, got %v", s.status)
 	}
+}
+
+func TestNewManagerRestoresLiveSessionTranscript(t *testing.T) {
+	stateDir := t.TempDir()
+	logPath := filepath.Join(stateDir, "output.txt")
+	scriptPath := filepath.Join(stateDir, "live.sh")
+	script := `#!/bin/bash
+echo '{"type":"system","subtype":"init","session_id":"provider-session","model":"test"}'
+echo '{"type":"assistant","subtype":"partial","message":{"role":"assistant","content":[{"type":"text","text":"draft"}]}}'
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"before restart"}]}}'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing session script: %v", err)
+	}
+
+	original := NewManager(nil)
+	t.Cleanup(original.Shutdown)
+	sess, err := original.StartSession(
+		"feature-1-implement", "feature-1", feature.PhaseImplement,
+		[]string{"bash", scriptPath}, stateDir, nil,
+		&SessionOpts{PIDDir: stateDir, RunNumber: 3, LogPath: logPath, ProviderName: "fixture"},
+	)
+	if err != nil {
+		t.Fatalf("starting live session: %v", err)
+	}
+	waitForMessageCount(t, sess, 2)
+	pidFile, err := ReadPIDFile(filepath.Join(stateDir, PIDFileName("")))
+	if err != nil {
+		t.Fatalf("reading live session metadata: %v", err)
+	}
+	transcript, err := os.OpenFile(pidFile.Transcript, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("opening persisted transcript: %v", err)
+	}
+	if _, err := transcript.WriteString(`{"index":`); err != nil {
+		_ = transcript.Close()
+		t.Fatalf("appending interrupted transcript row: %v", err)
+	}
+	if err := transcript.Close(); err != nil {
+		t.Fatalf("closing persisted transcript: %v", err)
+	}
+
+	restarted := NewRecoveringManager(nil, stateDir)
+	restored := restarted.FeatureSessions("feature-1")
+	if len(restored) != 1 {
+		t.Fatalf("restored session count = %d, want 1", len(restored))
+	}
+	if got := restored[0].ID(); got != "feature-1-implement" {
+		t.Fatalf("restored session ID = %q, want feature-1-implement", got)
+	}
+	if got := restored[0].Phase(); got != feature.PhaseImplement {
+		t.Fatalf("restored phase = %s, want Implement", got)
+	}
+	if got := restored[0].MessageLog().Len(); got != 2 {
+		t.Fatalf("restored transcript rows = %d, want 2", got)
+	}
+	if got := restored[0].MessageLog().AssistantText(); !strings.Contains(got, "before restart") {
+		t.Fatalf("restored transcript = %q, want assistant output", got)
+	}
+	if got := restarted.GetSession("feature-1-implement"); got == nil {
+		t.Fatal("GetSession did not return the restored session")
+	}
+	if err := restarted.StopSession("feature-1-implement"); err != nil {
+		t.Fatalf("stopping restored session: %v", err)
+	}
+	select {
+	case <-sess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("original session did not observe restored-session stop")
+	}
+}
+
+func waitForMessageCount(t *testing.T, sess SessionView, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if sess.MessageLog().Len() >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("message count = %d, want at least %d", sess.MessageLog().Len(), want)
 }
 
 func TestResetWaitingStatus_JSONProtocol(t *testing.T) {
@@ -453,7 +536,7 @@ loop:
 // assistant partial by the Codex protocol) does NOT reset the session status
 // from SessionWaitingPermission to SessionRunning while a control request is
 // still pending. This was the root cause of a stuck-session bug where the
-// TUI's permission menu recovery failed because the status was prematurely
+// desktop app's permission menu recovery failed because the status was prematurely
 // reset, causing the user to respond via chat (SendUserMessage) instead of
 // RespondToControl — leaving the approval request unanswered forever.
 func TestWaitingPermissionNotClobberedByAssistantPartial(t *testing.T) {
@@ -482,7 +565,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 
 	sess, err := sm.StartSession("perm-clobber-test", "feat-1", feature.PhaseImplement,
 		[]string{"bash", scriptPath}, tmpDir, nil,
-		// No PermHandler → control_request is deferred to TUI (not auto-handled)
+		// No PermHandler → control_request is deferred to desktop app (not auto-handled)
 	)
 	if err != nil {
 		t.Fatalf("starting session: %v", err)
@@ -552,7 +635,7 @@ func (p *blockingHandshakeProtocol) Handshake(ctx context.Context) error {
 // TestStartSessionDoesNotBlockReadersDuringHandshake guards against StartSession
 // holding the manager lock across the (potentially multi-second) protocol
 // handshake. When it did, ActiveSessions() — which feeds live-preview/prompts/
-// sessions — blocked for the whole handshake, timing out the TUI during a
+// sessions — blocked for the whole handshake, timing out the desktop app during a
 // resume.
 func TestStartSessionDoesNotBlockReadersDuringHandshake(t *testing.T) {
 	eventCh := make(chan interface{}, 64)

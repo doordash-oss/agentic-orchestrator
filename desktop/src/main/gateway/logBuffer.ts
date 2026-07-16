@@ -26,6 +26,12 @@ export class RedactedLogBuffer {
   addSecret(secret: string): void {
     if (secret.length > 0) {
       this.secrets.push(secret);
+      // Discovery may reveal the credential after the child already printed
+      // it. Scrub retained data immediately so a later snapshot cannot leak it.
+      for (let index = 0; index < this.lines.length; index += 1) {
+        this.lines[index] = this.redact(this.lines[index] ?? '');
+      }
+      this.partial = this.redact(this.partial);
     }
   }
 
@@ -41,7 +47,9 @@ export class RedactedLogBuffer {
 
   /** The redacted retained lines, oldest first. */
   snapshot(): string[] {
-    return [...this.lines];
+    const snapshot = [...this.lines];
+    if (this.partial !== '') snapshot.push(this.redact(this.partial));
+    return snapshot.slice(-this.maxLines);
   }
 
   private push(line: string): void {

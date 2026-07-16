@@ -201,14 +201,14 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		return nil, fmt.Errorf("refactor feature loop: workspace setup: %w", err)
 	}
 
-	// Stamp ActiveCycle = {Type: refactor, Status: running} so the TUI
+	// Stamp ActiveCycle = {Type: refactor, Status: running} so the desktop app
 	// can render the active cycle row. Persist the prompt too so a
 	// crashed/interrupted run can be resumed by simply re-launching
 	// against the same feature record.
 	//
 	// RefactorCount is NOT incremented here under the unified flow: the
 	// orchestrator's startFeatureRefactor entry bumped it synchronously
-	// (so the TUI sees the new count when its dispatch returns). The
+	// (so the desktop app sees the new count when its dispatch returns). The
 	// loop adopts the on-disk count as its working count. When invoked
 	// without an orchestrator pre-bump (e.g. unit tests), the count
 	// starts at 0 and we bump it here so the loop still produces a
@@ -246,7 +246,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		return nil, fmt.Errorf("refactor feature loop: mkdir %s: %w", artifactDir, err)
 	}
 
-	// Mid-flight phase status surfaced to the TUI (mirrors phase-implement
+	// Mid-flight phase status surfaced to the desktop app (mirrors phase-implement
 	// / FR / rebase / review-comments loop conventions). Cleared via defer
 	// so a panic still resets it.
 	setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "refactor-planning")
@@ -620,7 +620,7 @@ planRevisionLoop:
 		// max_iterations / safety_rail / failed all map to a cycle
 		// failure: every staged repo transitions to failed (LastError set); the
 		// feature stays at its prior cycle entry but ActiveCycle.Status
-		// flips to "failed" so the TUI surfaces the cycle row in red.
+		// flips to "failed" so the desktop app surfaces the cycle row in red.
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     stagedRepos,
@@ -666,7 +666,7 @@ func refactorExitCriteria(f *feature.Feature) string {
 }
 
 // markActiveCycleFailedRefactor flips Feature.ActiveCycle.Status to
-// "failed" so the TUI surfaces the cycle row in red. ActiveCycle stays
+// "failed" so the desktop app surfaces the cycle row in red. ActiveCycle stays
 // populated so the user can see which cycle failed and trigger a restart.
 func markActiveCycleFailedRefactor(store ports.FeatureStore, featureID, lastError string) error {
 	if store == nil {
@@ -777,6 +777,7 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		sessOpts.EffectiveEffort = in.PlanningEffectiveEffort
 		sessOpts.EffortSource = in.PlanningEffortSource
 	}
+	sessOpts.RunNumber = in.Feature.ActiveRun
 	if in.FinishOrViolateNudge {
 		sessOpts.TurnMode = ports.TurnModeInteractive
 	}

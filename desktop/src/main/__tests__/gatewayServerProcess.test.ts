@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { RedactedLogBuffer } from '../gateway/logBuffer';
-import { ManagedServerProcess, type ChildProcessLike } from '../gateway/serverProcess';
+import {
+  DEFAULT_STOP_TIMEOUT_MS,
+  ManagedServerProcess,
+  type ChildProcessLike,
+} from '../gateway/serverProcess';
 
 class FakeChild extends EventEmitter implements ChildProcessLike {
   pid: number | undefined = 1234;
@@ -80,6 +84,12 @@ describe('ManagedServerProcess', () => {
     await managed.stop({ timeoutMs: 200 });
     expect(child.killed).toEqual(['SIGTERM']);
     expect(managed.exited).toBe(true);
+  });
+
+  it('leaves room for the bundled server to reap provider process groups', () => {
+    // Session.Stop permits two five-second cleanup stages before the Go
+    // server exits; Electron must not preempt that owner-side reaping.
+    expect(DEFAULT_STOP_TIMEOUT_MS).toBeGreaterThan(10_000);
   });
 
   it('stop() escalates to SIGKILL after the grace period', async () => {

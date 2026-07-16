@@ -143,6 +143,21 @@ export function ConnectionShell() {
           {failure.error.remediation !== undefined ? (
             <p className="shell-card__error-remediation">{failure.error.remediation}</p>
           ) : null}
+          {'diagnostics' in failure && failure.diagnostics !== undefined ? (
+            <details className="shell-card__diagnostics">
+              <summary>App runtime diagnostics</summary>
+              <p>
+                <strong>Command:</strong> <code>{failure.diagnostics.commandContext}</code>
+              </p>
+              {failure.diagnostics.logTail.length > 0 ? (
+                <pre aria-label="Redacted runtime log tail">
+                  {failure.diagnostics.logTail.join('\n')}
+                </pre>
+              ) : (
+                <p>No runtime output was captured.</p>
+              )}
+            </details>
+          ) : null}
           <button type="button" className="shell-card__retry" onClick={retry}>
             Retry
           </button>

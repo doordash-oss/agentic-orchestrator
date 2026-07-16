@@ -56,7 +56,11 @@ export interface StopOptions {
   timeoutMs?: number;
 }
 
-const DEFAULT_STOP_TIMEOUT_MS = 5000;
+// The bundled Go server gives each managed provider process up to two
+// five-second stages (graceful EOF, then SIGTERM) before it escalates to
+// SIGKILL. Leave enough room for that cleanup to reap the whole provider
+// process group before Electron is allowed to kill the server itself.
+export const DEFAULT_STOP_TIMEOUT_MS = 15_000;
 
 export class ManagedServerProcess {
   private readonly listeners = new Set<(info: ChildExit) => void>();

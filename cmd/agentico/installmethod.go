@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
+	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 )
 
 // installMethod is how the running binary was installed, which decides the
@@ -209,7 +209,7 @@ type installInputs struct {
 func gatherInstallInputs() installInputs {
 	return installInputs{
 		buildInfoVersion: buildInfoMainVersion(),
-		injectedVersion:  tui.InjectedVersion(),
+		injectedVersion:  buildinfo.InjectedVersion(),
 		binaryDir:        normalizeDir(resolveBinaryDir()),
 		goBinDir:         normalizeDir(resolveGoBinDir(os.Getenv, os.UserHomeDir)),
 		homebrew:         isHomebrewBinary(resolveBinaryPath()),

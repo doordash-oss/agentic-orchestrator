@@ -46,11 +46,11 @@ $AGENTICO --version | grep -q "agentico"
 echo "PASS: version flag works"
 
 # 4. First-run config generation
-# Skipped: `init` subcommand is not implemented; config is auto-created by the TUI on first run.
+# Skipped: `init` subcommand is not implemented; setup is owned by the desktop app.
 
-# 5. Feature management is TUI-only; creation/listing coverage lives in
-# TUI/orchestrator tests and the launch-contract fixture.
-echo "PASS: feature management is TUI-only"
+# 5. Feature management is API-driven; creation/listing coverage lives in
+# server contract and Electron tests.
+echo "PASS: feature management is API-driven"
 
 # 6. Roadmap skill definitions exist (migrated from commands/ to skills/)
 for tmpl in create-roadmap plan-phase revise-roadmap revise-phase-plan \
@@ -68,9 +68,9 @@ if [ -d "commands" ]; then
 fi
 echo "PASS: commands/ directory correctly removed"
 
-# 8. Default launch smoke: plain agentico starts the API-backed TUI path.
-go test ./cmd/agentico -run '^TestRunArgsLaunchesClientServerByDefault$' -race -timeout 120s
-echo "PASS: default API-backed TUI launch (TestRunArgsLaunchesClientServerByDefault)"
+# 8. Default launch smoke: plain agentico starts the foreground server path.
+go test ./cmd/agentico -run '^TestRunArgsLaunchesServerByDefault$' -race -timeout 120s
+echo "PASS: default foreground server launch (TestRunArgsLaunchesServerByDefault)"
 
 echo ""
 echo "PASS: all smoke tests passed"

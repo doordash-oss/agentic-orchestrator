@@ -68,7 +68,7 @@ func (o *Orchestrator) onSingleRepoNeedUserInput(featureID string, result *agent
 // Routing:
 //   - non-empty RepoName + matching RepoCycleState[RepoName].Status ==
 //     RepoCycleNeedUserInput → cycle-scoped gate (post-publish).
-//   - otherwise → feature-scoped gate. The TUI may forward a stale RepoName
+//   - otherwise → feature-scoped gate. The desktop app may forward a stale RepoName
 //     from its repo-tab focus context for a phase-implement pause; the
 //     feature-level handler ignores it. Phase-implement NEED_USER_INPUT is
 //     always feature-scoped through Feature.PendingNeedUserInputPath.

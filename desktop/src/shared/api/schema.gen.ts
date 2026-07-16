@@ -767,7 +767,6 @@ export interface components {
             feature_defaults: components["schemas"]["FeatureDefaults"];
             repos: components["schemas"]["ConfigRepo"][];
             workspace_roots?: string[];
-            ui: unknown;
             notifications: components["schemas"]["NotificationConfig"];
             observability: components["schemas"]["Observability"];
             providers: string[];
@@ -1256,6 +1255,8 @@ export interface components {
             input_notifications?: string;
             iteration?: number;
             summary?: string;
+            /** Format: date-time */
+            waiting_since: string;
             questions?: components["schemas"]["NeedUserInputQuestion"][];
         };
         NeedUserInputQuestion: {
@@ -1345,6 +1346,7 @@ export interface components {
         SessionSummary: {
             id: string;
             feature_id: string;
+            run_number: number;
             phase: string;
             repo?: string;
             kind: string;
@@ -1389,6 +1391,8 @@ export interface components {
             phase?: string;
             tool_name: string;
             status: string;
+            /** Format: date-time */
+            waiting_since: string;
             summary?: string;
             input?: {
                 [key: string]: unknown;

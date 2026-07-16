@@ -601,7 +601,6 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 		FeatureDefaults: featureDefaultsDTO(cfg.Defaults),
 		Repos:           repos,
 		WorkspaceRoots:  append([]string(nil), cfg.WorkspaceRoots...),
-		UI:              cfg.UI,
 		Notifications: NotificationConfigDTO{
 			MuteFeatureInput: cfg.Notifications.MuteFeatureInput,
 		},
@@ -937,6 +936,7 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 		CycleType:          string(cycleType),
 		InputNotifications: string(feature.NormalizeInputNotificationsMode(inputNotifications)),
 		Iteration:          iteration,
+		WaitingSince:       gateFileTime(gatePath),
 	}
 	rec, err := agent.ReadNeedUserInputRecord(gatePath)
 	if err != nil {
@@ -944,6 +944,9 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 	}
 	if dto.Iteration == 0 {
 		dto.Iteration = rec.Iteration
+	}
+	if !rec.WaitingSince.IsZero() {
+		dto.WaitingSince = rec.WaitingSince
 	}
 	dto.Summary = strings.TrimSpace(rec.Summary)
 	dto.Questions = make([]NeedUserInputQuestionDTO, 0, len(rec.Questions))
@@ -1051,7 +1054,7 @@ func gateFileTime(path string) time.Time {
 	if err != nil {
 		return time.Time{}
 	}
-	return info.ModTime()
+	return info.ModTime().UTC()
 }
 
 func beforeByKnownTime(a, b time.Time) bool {
@@ -1094,13 +1097,14 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 		return ControlRequestDTO{}
 	}
 	dto := ControlRequestDTO{
-		RequestID: req.RequestID,
-		SessionID: sess.ID(),
-		FeatureID: sess.FeatureID(),
-		Phase:     sess.Phase().String(),
-		ToolName:  req.Request.ToolName,
-		Status:    controlRequestStatusPending,
-		Summary:   safeControlSummary(req),
+		RequestID:    req.RequestID,
+		SessionID:    sess.ID(),
+		FeatureID:    sess.FeatureID(),
+		Phase:        sess.Phase().String(),
+		ToolName:     req.Request.ToolName,
+		Status:       controlRequestStatusPending,
+		WaitingSince: req.WaitingSince,
+		Summary:      safeControlSummary(req),
 	}
 	if req.Request.ToolName == toolNameAskUserQuestion {
 		dto.Questions = safeAskUserQuestions(sess, req)
@@ -1261,10 +1265,11 @@ func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestionDTO {
 	}
 	var envelope struct {
 		Questions []struct {
-			Question    string `json:"question"`
-			Header      string `json:"header"`
-			MultiSelect bool   `json:"multiSelect"`
-			Options     []struct {
+			Question         string `json:"question"`
+			Header           string `json:"header"`
+			MultiSelect      bool   `json:"multiSelect"`
+			MultiSelectSnake bool   `json:"multi_select"`
+			Options          []struct {
 				Label       string   `json:"label"`
 				Description string   `json:"description"`
 				Confidence  *float64 `json:"confidence"`
@@ -1279,7 +1284,7 @@ func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestionDTO {
 		question := AskUserQuestionDTO{
 			Question:    safeDisplayText(rawQuestion.Question, askUserQuestionDisplayLimit),
 			Header:      safeDisplayText(rawQuestion.Header, askUserHeaderDisplayLimit),
-			MultiSelect: rawQuestion.MultiSelect,
+			MultiSelect: rawQuestion.MultiSelect || rawQuestion.MultiSelectSnake,
 		}
 		for _, rawOption := range rawQuestion.Options {
 			option := AskUserOptionDTO{

@@ -1333,11 +1333,6 @@ components:
               type: array
               items:
                 type: string
-            ui:
-              x-go-type: config.UIConfig
-              x-go-type-import:
-                path: github.com/doordash-oss/agentic-orchestrator/internal/config
-                name: config
             notifications:
               $ref: "#/components/schemas/NotificationConfig"
             observability:
@@ -2520,7 +2515,7 @@ components:
           type: string
     NeedUserInputGate:
       type: object
-      required: [open]
+      required: [open, waiting_since]
       properties:
         feature_id:
           type: string
@@ -2538,6 +2533,9 @@ components:
           type: integer
         summary:
           type: string
+        waiting_since:
+          type: string
+          format: date-time
         questions:
           type: array
           items:
@@ -2751,6 +2749,7 @@ components:
       required:
         - id
         - feature_id
+        - run_number
         - phase
         - kind
         - status
@@ -2761,6 +2760,9 @@ components:
           type: string
         feature_id:
           type: string
+        run_number:
+          type: integer
+          minimum: 0
         phase:
           type: string
         repo:
@@ -2838,7 +2840,7 @@ components:
           type: string
     ControlRequest:
       type: object
-      required: [request_id, tool_name, status]
+      required: [request_id, tool_name, status, waiting_since]
       properties:
         request_id:
           type: string
@@ -2852,6 +2854,9 @@ components:
           type: string
         status:
           type: string
+        waiting_since:
+          type: string
+          format: date-time
         summary:
           type: string
         input:

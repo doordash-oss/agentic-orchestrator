@@ -302,7 +302,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 		}
 
-		// Update iteration counter so the TUI dashboard reflects progress
+		// Update iteration counter so the desktop app dashboard reflects progress
 		if cfg.FeatureStore != nil {
 			_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
 				f.CurrentIteration = i
@@ -477,6 +477,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 			// Merge iteration-specific fields into session opts
 			sessOpts.Iteration = i
+			sessOpts.RunNumber = cfg.Feature.ActiveRun
 			sessOpts.PermCacheScope = permRepoName
 			// Capture provider stderr so silent process deaths are diagnosable.
 			sessOpts.StderrPath = filepath.Join(iterDir, "stderr.log")
@@ -579,7 +580,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Grace period: a bare `sm.IsShuttingDown()` check races against how
 			// shutdown signals reach us. When the user presses Ctrl+C, SIGINT
 			// propagates through the process group, killing the agent CLI
-			// *before* the TUI unwinds and main.go calls sm.Shutdown(). The
+			// *before* the desktop app unwinds and main.go calls sm.Shutdown(). The
 			// session dies, waitForStatus returns FAILED, and this check would
 			// run with IsShuttingDown still false — committing a FAILED meta
 			// that makes the next run advance to iteration N+1 instead of
@@ -640,7 +641,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Read output from message log
 			output := sess.MessageLog().Text()
 
-			// Append iteration output to aggregate log so the TUI log viewer works
+			// Append iteration output to aggregate log so the desktop app log viewer works
 			appendIterationLog(aggregateLogPath, i, output)
 
 			// Build iteration metadata from the logical agent result, not
@@ -2010,7 +2011,7 @@ func statusFromResult(result *llm.ResultMessage) string {
 }
 
 // appendIterationLog appends a single iteration's output to the aggregate log
-// at the well-known path that the TUI log viewer reads.
+// at the well-known path that the desktop app log viewer reads.
 func appendIterationLog(path string, iteration int, output string) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -2093,7 +2094,7 @@ func readPlanContent(planPath string) string {
 }
 
 // setReviewingGate persists the ReviewingGate flag on the feature so the
-// TUI dashboard can reflect that the review gate is currently running.
+// desktop app dashboard can reflect that the review gate is currently running.
 func setReviewingGate(cfg ImplementConfig, reviewing bool) {
 	if cfg.FeatureStore == nil {
 		return
@@ -2107,10 +2108,11 @@ func setReviewingGate(cfg ImplementConfig, reviewing bool) {
 // shutdownDetectionGrace bounds how long waitForShutdownIntent will wait for
 // sm.IsShuttingDown() to flip true after a session died. When the user presses
 // Ctrl+C, SIGINT hits the agent CLI child first (via the process group) and
-// the session's Done() channel fires before bubbletea has unwound and main.go
+// the session's Done() channel fires before desktop app has unwound and main.go
 // has called sm.Shutdown(). A short wait here absorbs that race; anything
 // longer would delay real agent failures (API errors, auth expiry, etc.).
-// 500ms is empirically enough for tea.Quit → main.go → sm.Shutdown() to land.
+// 500ms is empirically enough for the desktop/server shutdown path to call
+// sm.Shutdown().
 const shutdownDetectionGrace = 500 * time.Millisecond
 
 // shutdownChecker is the narrow interface waitForShutdownIntent needs; any

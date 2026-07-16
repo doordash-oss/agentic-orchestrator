@@ -39,8 +39,7 @@ id_ed25519*
 
 # Claude
 .claude/
-/agentic
-/bin/agentic
+/agentico
 
 # Node / desktop app
 node_modules/

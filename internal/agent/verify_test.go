@@ -241,7 +241,7 @@ func TestParsePlanVerificationDeclaresRepoScope(t *testing.T) {
 func TestParsePlanManualVerification(t *testing.T) {
 	plan := "## Success Criteria\n\n" +
 		"### Manual Verification\n" +
-		"- [ ] Create a feature from the TUI and observe it reaches PlanReady.\n" +
+		"- [ ] Create a feature from the desktop app and observe it reaches PlanReady.\n" +
 		"- [x] Run the smoke command against a real workspace.\n" +
 		"\n" +
 		"```markdown\n" +
@@ -253,7 +253,7 @@ func TestParsePlanManualVerification(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d manual steps, want 2: %+v", len(got), got)
 	}
-	if got[0].Description != "Create a feature from the TUI and observe it reaches PlanReady." {
+	if got[0].Description != "Create a feature from the desktop app and observe it reaches PlanReady." {
 		t.Fatalf("first manual step = %q", got[0].Description)
 	}
 	if got[1].Description != "Run the smoke command against a real workspace." {

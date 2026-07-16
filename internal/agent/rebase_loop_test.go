@@ -189,7 +189,7 @@ func TestRunRebaseLoop_RetryLandsAfterConflictResolutionIteration(t *testing.T) 
 
 // TestRunRebaseLoop_MaxIterationsTrip exercises the safety-rail trip:
 // inner loop returns max_iterations. The rebase loop stamps every staged
-// repo "failed"; ActiveCycle.Status flips to "failed" so the TUI
+// repo "failed"; ActiveCycle.Status flips to "failed" so the desktop app
 // can surface the failure row.
 func TestRunRebaseLoop_MaxIterationsTrip(t *testing.T) {
 	stateDir := t.TempDir()
@@ -238,7 +238,7 @@ func TestRunRebaseLoop_MaxIterationsTrip(t *testing.T) {
 	}
 
 	if loaded.ActiveCycle == nil {
-		t.Fatal("ActiveCycle = nil, want non-nil with Status=failed (TUI must surface the failure)")
+		t.Fatal("ActiveCycle = nil, want non-nil with Status=failed (desktop app must surface the failure)")
 	}
 	if loaded.ActiveCycle.Status != feature.RepoCycleFailed {
 		t.Errorf("ActiveCycle.Status = %q, want failed", loaded.ActiveCycle.Status)
@@ -857,7 +857,7 @@ func TestRunRebaseLoop_ResumeExistingCycleReusesArtifactDir(t *testing.T) {
 
 // TestRunRebaseLoop_ActiveCycleSetAtEntry verifies the cycle entry stamp:
 // before the inner loop runs, ActiveCycle is stamped {Type: rebase,
-// Status: running} so the TUI and observers can see the active cycle.
+// Status: running} so the desktop app and observers can see the active cycle.
 // Use a custom RunImplementFn that loads the persisted feature mid-call
 // to assert the stamp.
 func TestRunRebaseLoop_ActiveCycleSetAtEntry(t *testing.T) {

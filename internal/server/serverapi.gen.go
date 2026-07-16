@@ -888,16 +888,17 @@ type Context struct {
 
 // ControlRequest defines model for ControlRequest.
 type ControlRequest struct {
-	FeatureID string                     `json:"feature_id,omitempty"`
-	Input     map[string]interface{}     `json:"input,omitempty"`
-	Phase     string                     `json:"phase,omitempty"`
-	Questions []AskUserQuestion          `json:"questions,omitempty"`
-	Remember  *PermissionRememberPreview `json:"remember,omitempty"`
-	RequestID string                     `json:"request_id"`
-	SessionID string                     `json:"session_id,omitempty"`
-	Status    string                     `json:"status"`
-	Summary   string                     `json:"summary,omitempty"`
-	ToolName  string                     `json:"tool_name"`
+	FeatureID    string                     `json:"feature_id,omitempty"`
+	Input        map[string]interface{}     `json:"input,omitempty"`
+	Phase        string                     `json:"phase,omitempty"`
+	Questions    []AskUserQuestion          `json:"questions,omitempty"`
+	Remember     *PermissionRememberPreview `json:"remember,omitempty"`
+	RequestID    string                     `json:"request_id"`
+	SessionID    string                     `json:"session_id,omitempty"`
+	Status       string                     `json:"status"`
+	Summary      string                     `json:"summary,omitempty"`
+	ToolName     string                     `json:"tool_name"`
+	WaitingSince time.Time                  `json:"waiting_since"`
 }
 
 // Cost defines model for Cost.
@@ -1270,6 +1271,7 @@ type NeedUserInputGate struct {
 	RepoName           string                  `json:"repo_name,omitempty"`
 	Scope              string                  `json:"scope,omitempty"`
 	Summary            string                  `json:"summary,omitempty"`
+	WaitingSince       time.Time               `json:"waiting_since"`
 }
 
 // NeedUserInputQuestion defines model for NeedUserInputQuestion.
@@ -1670,7 +1672,6 @@ type RuntimeConfigResponse struct {
 	Providers       []string           `json:"providers"`
 	Repos           []ConfigRepo       `json:"repos"`
 	Runtime         RuntimeIdentity    `json:"runtime"`
-	UI              config.UIConfig    `json:"ui"`
 	WorkspaceRoots  []string           `json:"workspace_roots,omitempty"`
 }
 
@@ -1724,6 +1725,7 @@ type SessionDetail struct {
 	Phase            string           `json:"phase"`
 	Provider         string           `json:"provider,omitempty"`
 	Repo             string           `json:"repo,omitempty"`
+	RunNumber        int              `json:"run_number"`
 	SafeError        string           `json:"safe_error,omitempty"`
 	StartedAt        time.Time        `json:"started_at"`
 	Status           string           `json:"status"`
@@ -1771,6 +1773,7 @@ type SessionSummary struct {
 	Phase        string    `json:"phase"`
 	Provider     string    `json:"provider,omitempty"`
 	Repo         string    `json:"repo,omitempty"`
+	RunNumber    int       `json:"run_number"`
 	StartedAt    time.Time `json:"started_at"`
 	Status       string    `json:"status"`
 	TurnState    string    `json:"turn_state,omitempty"`

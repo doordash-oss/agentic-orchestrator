@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
-import type { ElectronApplication, Page, TestInfo } from '@playwright/test';
+import type { ElectronApplication, Locator, Page, TestInfo } from '@playwright/test';
 import { packagedExecutable } from './packaged';
 import { minimalEnv, type JourneyWorld } from './world';
 
@@ -30,6 +30,41 @@ export interface LaunchOptions {
   executablePath?: string;
   /** Trace zip base name; defaults to the journey file name. */
   traceName?: string;
+}
+
+export interface CreateFeatureOptions {
+  name: string;
+  description?: string;
+  repoPatterns: RegExp[];
+  waitForReady?: boolean;
+  beforeSubmit?(): void | Promise<void>;
+}
+
+/** Creates a feature through the focused form and returns its opened cockpit. */
+export async function createFeatureViaForm(
+  handle: AppHandle,
+  {
+    name,
+    description = '',
+    repoPatterns,
+    waitForReady = false,
+    beforeSubmit,
+  }: CreateFeatureOptions,
+): Promise<Locator> {
+  await handle.page.getByRole('button', { name: 'New feature' }).click();
+  await expect(handle.page.getByRole('form', { name: 'Create a feature' })).toBeVisible();
+  await handle.page.locator('#feature-name').fill(name);
+  if (description !== '') await handle.page.locator('#feature-description').fill(description);
+  for (const repoPattern of repoPatterns) {
+    await handle.page.getByRole('checkbox', { name: repoPattern }).check();
+  }
+  await beforeSubmit?.();
+  await handle.page.getByRole('button', { name: 'Create feature' }).click();
+  const cockpit = handle.page.getByLabel(`Feature ${name}`);
+  await expect(cockpit).toBeVisible({ timeout: 30_000 });
+  if (waitForReady)
+    await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
+  return cockpit;
 }
 
 export async function launchApp(
@@ -96,8 +131,19 @@ export async function closeApp(handle: AppHandle): Promise<void> {
 
 /** Writes app logs alongside the test output (and returns the joined text). */
 export function persistAppLogs(handle: AppHandle, name: string): string {
-  const joined = handle.logs.join('');
-  fs.writeFileSync(handle.testInfo.outputPath(`${name}.log`), joined);
+  const emitted = handle.logs.join('');
+  const joined =
+    emitted === ''
+      ? '[evidence] The packaged app and bundled server emitted no stdout/stderr lines.\n'
+      : emitted;
+  const fileName = `${name}.log`;
+  fs.writeFileSync(handle.testInfo.outputPath(fileName), joined);
+  const dir = evidenceDir();
+  if (dir !== null) {
+    const target = path.join(dir, 'behaviors');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, fileName), joined);
+  }
   return joined;
 }
 
@@ -143,7 +189,7 @@ export async function setWindowSize(
   await handle.app.evaluate(
     ({ BrowserWindow }, size) => {
       const window = BrowserWindow.getAllWindows()[0];
-      window?.setSize(size.width, size.height);
+      window?.setContentSize(size.width, size.height);
     },
     { width, height },
   );

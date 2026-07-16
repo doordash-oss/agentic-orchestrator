@@ -75,7 +75,7 @@ func TestMissingEvidenceReviewerSkillDocumentsPerPhaseRules(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Missing Visual / Behavioral Evidence Safety Net",
-		"rendered UI, TUI screens, web/mobile/native views, CLI output",
+		"rendered UI, terminal interface screens, web/mobile/native views, CLI output",
 		"Existing",
 		"Do not",
 		"MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>",

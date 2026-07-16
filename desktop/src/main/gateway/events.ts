@@ -252,6 +252,8 @@ export interface EventSupervisorDeps {
   log(line: string): void;
   /** Receives schema-valid pushes destined for the renderer. */
   onPush(event: AppEvent): void;
+  /** Lets the gateway verify whether a stale stream means the server was lost. */
+  onStale?(): void | Promise<void>;
   backoff?: { initialMs: number; maxMs: number };
 }
 
@@ -336,6 +338,10 @@ export class EventStreamSupervisor {
         return;
       }
       this.emit({ type: 'status', stream: 'stale' });
+      await this.deps.onStale?.();
+      if (!this.active(generation)) {
+        return;
+      }
       await this.deps.sleep(delay);
       delay = Math.min(delay * 2, this.backoff.maxMs);
     }

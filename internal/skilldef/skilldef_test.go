@@ -427,15 +427,6 @@ func TestReconcileSkills(t *testing.T) {
 		t.Error("chat/user-guide/feature-lifecycle.md missing expected content")
 	}
 
-	tuiNavPath := filepath.Join(skillsDir, "chat", "user-guide", "tui-navigation.md")
-	tnData, err := os.ReadFile(tuiNavPath)
-	if err != nil {
-		t.Fatalf("reading chat/user-guide/tui-navigation.md: %v", err)
-	}
-	if !strings.Contains(string(tnData), "Dashboard") {
-		t.Error("chat/user-guide/tui-navigation.md missing expected content")
-	}
-
 	configPath := filepath.Join(skillsDir, "chat", "user-guide", "configuration.md")
 	cfgData, err := os.ReadFile(configPath)
 	if err != nil {
@@ -618,11 +609,6 @@ func TestReconcileSkills_NonSkillMdFiles(t *testing.T) {
 			wantSub: "Pipeline Profiles",
 		},
 		{
-			name:    "tui navigation topic",
-			path:    filepath.Join(skillsDir, "chat", "user-guide", "tui-navigation.md"),
-			wantSub: "Dashboard",
-		},
-		{
 			name:    "configuration topic",
 			path:    filepath.Join(skillsDir, "chat", "user-guide", "configuration.md"),
 			wantSub: "config.yaml",
@@ -720,7 +706,6 @@ func TestReconcileSkills_SubdirectoryStructure(t *testing.T) {
 		wantSub string
 	}{
 		{"feature-lifecycle.md", "Pipeline Profiles"},
-		{"tui-navigation.md", "Dashboard"},
 		{"configuration.md", "config.yaml"},
 		{"post-publish.md", "Rebase"},
 		{"permissions.md", "Allow & Remember"},

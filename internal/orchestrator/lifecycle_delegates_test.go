@@ -30,8 +30,8 @@ import (
 
 // TestOrchestrator_EnterReviewGate_SetsStatusAndPendingPhase
 // ---------------------------------------------------------------------------
-// EnterReviewGate replaces triggerReviewGateCmd's Store.Modify. It flips the
-// status to the NeedsReview variant and records the target phase so the UI
+// EnterReviewGate flips the status to the NeedsReview variant and records the
+// target phase so clients
 // can render the review editor on a later tick.
 // ---------------------------------------------------------------------------
 
@@ -205,7 +205,7 @@ func TestOrchestrator_ExtendFailedPhaseBudget_NotFailedIsNoOp(t *testing.T) {
 // ---------------------------------------------------------------------------
 // CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
 // reads each cycle's plan file from disk, clears the cycle state via
-// Lifecycle.ClearRepoCycles, and returns restart descriptors the TUI dispatches.
+// Lifecycle.ClearRepoCycles, and returns restart descriptors for the caller.
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *testing.T) {
@@ -399,8 +399,8 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 // TestOrchestrator_RestartPhase_PublishedWithRepoCycles_ReturnsRestartList
 // ---------------------------------------------------------------------------
 // For a Published feature with RepoCycles, RestartPhase clears the cycles
-// and returns RestartDispatchRepoCycles with per-cycle descriptors the TUI
-// must fan out.
+// and returns RestartDispatchRepoCycles with per-cycle descriptors for the
+// caller to relaunch.
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_RestartPhase_PublishedWithRepoCycles_ReturnsRestartList(t *testing.T) {
@@ -621,8 +621,8 @@ func TestOrchestrator_RestartPhase_InterruptedFeature_KeepsStatus(t *testing.T) 
 // (e.g. wakeKBWaiters' allFresh path before the startPhase fix dropped the
 // PhaseSkipped recursion) must be recoverable via Restart. Pre-fix the default
 // branch attempted Created → Interrupted, which is not in
-// validTransitions[StatusCreated], so RestartPhase errored out and the TUI
-// silently swallowed the failure — pressing 'r' did nothing.
+// validTransitions[StatusCreated], so RestartPhase returned an error and the
+// restart did not occur.
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t *testing.T) {
@@ -795,8 +795,8 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseResearch_ReturnsInquireArtif
 // roadmap feature whose CurrentRoadmapPhase > 0 must resolve the per-phase
 // plan (<state>/<featureID>/phase-NN/plan/*.md), not the generic "plan"
 // artifact. Roadmap phase plans are written under phase-NN/plan by
-// RunPhasePlanningLoop (see internal/agent/plan_validation.go) and the TUI's
-// startPlanReviewSessionCmd uses the same phase-%d-plan key.
+// RunPhasePlanningLoop (see internal/agent/plan_validation.go); the production
+// resolver uses the same phase-%d-plan key.
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_ReturnsPhasePlan(t *testing.T) {
@@ -1097,8 +1097,8 @@ func TestOrchestrator_ResolveRewindReviewContext_PartialImplementMissingPhasePla
 // and dispatch a fresh KB phase the user never asked for; subsequent "r"
 // presses then killed the new sessions and started more, etc. The
 // busy-guard makes RestartPhase return ErrFeatureBusy whenever any session
-// for the feature is still active, so the only side effect of an "r" press
-// during a stop is the TUI surfacing a "wait" hint.
+// for the feature is still active, so the caller can surface a wait hint
+// without starting another phase.
 // ---------------------------------------------------------------------------
 func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 	f := &feature.Feature{

@@ -53,7 +53,7 @@ func failingServerLauncher(t *testing.T) serverLauncher {
 	}
 }
 
-// --- Task 1: parser surface for `update` ------------------------------------
+// --- Update command parser surface -----------------------------------------
 
 func TestParseLaunchArgsUpdateSurface(t *testing.T) {
 	tests := []struct {
@@ -112,7 +112,7 @@ func TestParseLaunchArgsCheckFlagOutsideUpdateRejects(t *testing.T) {
 	}
 }
 
-// --- Task 1: router dispatch through the injectable seam --------------------
+// --- Update routing through the injectable seam ----------------------------
 
 func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 	tests := []struct {
@@ -133,7 +133,6 @@ func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 					launchCalled = true
 					return 0
 				},
-				failingServerLauncher(t),
 				func(checkOnly bool, _, _ io.Writer) int {
 					updateCalled = true
 					gotCheck = checkOnly
@@ -144,7 +143,7 @@ func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 				t.Fatal("update seam was not invoked")
 			}
 			if launchCalled {
-				t.Fatal("TUI launcher was invoked on the update path; it must not be")
+				t.Fatal("server launcher was invoked on the update path; it must not be")
 			}
 			if gotCheck != tt.wantCheck {
 				t.Errorf("checkOnly = %v, want %v", gotCheck, tt.wantCheck)
@@ -156,7 +155,7 @@ func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 	}
 }
 
-func TestRunArgsDefaultStillLaunchesClientServerNotUpdate(t *testing.T) {
+func TestRunArgsDefaultStillLaunchesServerNotUpdate(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var launchCalled, updateCalled bool
 	code := runArgs(nil, &stdout, &stderr,
@@ -164,11 +163,10 @@ func TestRunArgsDefaultStillLaunchesClientServerNotUpdate(t *testing.T) {
 			launchCalled = true
 			return 0
 		},
-		failingServerLauncher(t),
 		func(bool, io.Writer, io.Writer) int { updateCalled = true; return 1 },
 	)
 	if !launchCalled {
-		t.Fatal("default mode must launch the client/server flow")
+		t.Fatal("default mode must launch the server")
 	}
 	if updateCalled {
 		t.Fatal("default mode must not invoke the update seam")
@@ -199,7 +197,7 @@ func TestGithubBaseURL(t *testing.T) {
 	})
 }
 
-// --- Task 2: version normalization & slug derivation ------------------------
+// --- Version normalization and repository slug derivation ------------------
 
 func TestNormalizeVersion(t *testing.T) {
 	cases := map[string]string{
@@ -260,7 +258,7 @@ func TestSlugFromModulePath(t *testing.T) {
 	}
 }
 
-// --- Task 2: real GitHub fetch logic against an in-process httptest server ---
+// --- GitHub release lookup against an in-process HTTP server ----------------
 
 // releasesServer returns an httptest server serving the GitHub releases list
 // endpoint for the given slug with the supplied release payload.
@@ -360,7 +358,7 @@ func TestGithubFetchLatestStableTag(t *testing.T) {
 	})
 }
 
-// --- Task 2: end-to-end --check / bare update behavior (hermetic) -----------
+// --- Hermetic check-only and bare update behavior --------------------------
 
 // fakeFetch returns a fetchLatest function that always yields tag/err.
 func fakeFetch(tag string, err error) func(context.Context, string) (string, error) {
@@ -496,7 +494,7 @@ func TestRunUpdateWith(t *testing.T) {
 	})
 }
 
-// --- Task 2: dev-build refusal (network-free) -------------------------------
+// --- Network-free development-build refusal --------------------------------
 
 func TestRunUpdateWithDevBuildBareRefuses(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -545,7 +543,7 @@ func TestRunUpdateWithDevBuildCheckReports(t *testing.T) {
 	}
 }
 
-// --- Task 3: real method + would-do-action reporting for non-dev branches ---
+// --- Install method and planned-action reporting ---------------------------
 
 func TestRunUpdateWithCheckReportsMethodAndAction(t *testing.T) {
 	tests := []struct {
@@ -625,7 +623,7 @@ func TestModuleSlugDerivedFromBuildInfo(t *testing.T) {
 	}
 }
 
-// --- Phase 3: real go-install re-install behind the runner seam -------------
+// --- Go-install re-install behind the runner seam ---------------------------
 
 const testMainPkg = "github.com/doordash-oss/agentic-orchestrator/cmd/agentico"
 
@@ -838,7 +836,7 @@ func TestRunUpdateWithHomebrewFailure(t *testing.T) {
 	}
 }
 
-// Task 1: bare go-install with an update available re-runs `go install` of the
+// A bare go-install update re-runs `go install` of the
 // command's own main package pinned to the resolved tag, augments GOBIN to the
 // running binary's directory, prints the old → new transition, and exits 0.
 func TestRunUpdateWithGoInstallSuccess(t *testing.T) {
@@ -935,7 +933,7 @@ func TestMainPackagePathDerivedFromBuildInfo(t *testing.T) {
 	}
 }
 
-// --- Phase 3 / Task 2: clear failure surfacing through the runner seam ------
+// --- Clear failure surfacing through the runner seam ------------------------
 
 // Toolchain absent (the runner surfaces exec.ErrNotFound): a clear
 // toolchain-not-found message to stderr, non-zero exit, and no success line.
@@ -1007,7 +1005,7 @@ func TestRunUpdateWithGoInstallTimeout(t *testing.T) {
 	}
 }
 
-// --- Phase 4: tarball update — fetch, verify, extract, atomic swap ----------
+// --- Tarball update: fetch, verify, extract, atomic swap ---------------------
 
 // makeTarGz builds an in-memory .tar.gz containing the given name→content files
 // as regular 0755 entries, fabricating a goreleaser-style release archive
@@ -1315,7 +1313,7 @@ func TestTarballUpdaterGithubTokenAuth(t *testing.T) {
 	})
 }
 
-// --- Phase 4: tarball update helper units -----------------------------------
+// --- Tarball update helper units --------------------------------------------
 
 func TestProjectNameFromSlug(t *testing.T) {
 	cases := map[string]string{
@@ -1461,7 +1459,7 @@ func TestSwapBinaryFailsClosedOnBadDir(t *testing.T) {
 	}
 }
 
-// --- Phase 5: tarball robustness — pre-flight writability + macOS re-sign ----
+// --- Tarball robustness: pre-flight writability and macOS re-sign -----------
 
 // failingTarball returns a tarballUpdater that fails the test if invoked. It
 // guards the pre-flight: an unwritable target must abort before the download
@@ -1498,7 +1496,7 @@ func newTarballSuccessDeps(t *testing.T) (updateDeps, string) {
 	return deps, target
 }
 
-// --- Task 1: pre-flight writability check -----------------------------------
+// --- Tarball target writability pre-flight ---------------------------------
 
 // checkDirWritable performs the swap's own temp-create + rename probe: a
 // writable directory succeeds, a nonexistent one fails, and an empty path (the
@@ -1620,7 +1618,7 @@ func TestRunUpdateWithTarballPreflightWritableProceeds(t *testing.T) {
 	}
 }
 
-// --- Task 2: best-effort macOS ad-hoc re-sign -------------------------------
+// --- Best-effort macOS ad-hoc re-sign --------------------------------------
 
 // After a successful darwin swap, codesign -s - is invoked against the resolved
 // binary path through the runner seam, mirroring the system-install step; the

@@ -36,7 +36,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
+	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 )
 
 const (
@@ -206,7 +206,7 @@ func runUpdate(checkOnly bool, stdout, stderr io.Writer) int {
 	// writability probe, and the darwin re-sign all target the same path.
 	binPath := resolveBinaryPath()
 	return runUpdateWith(ctx, checkOnly, stdout, stderr, updateDeps{
-		currentVersion: tui.GetVersion(),
+		currentVersion: buildinfo.Version(),
 		method:         gatherInstallMethod,
 		slug:           moduleSlug,
 		fetchLatest:    githubFetchLatestStableTag(http.DefaultClient, githubBaseURL()),

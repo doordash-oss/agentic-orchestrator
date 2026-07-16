@@ -21,27 +21,42 @@ describe('preload surface', () => {
     expect(exposeInMainWorld).toHaveBeenCalledTimes(1);
     const [name, api] = exposeInMainWorld.mock.calls[0]!;
     expect(name).toBe('agentico');
-    expect(Object.keys(api as object).sort()).toEqual([
-      'addWorkspaceRoot',
-      'createFeature',
-      'dispatchFeatureSetup',
-      'getConnectionStatus',
-      'getCreationDefaults',
-      'getFeature',
-      'getReadiness',
-      'getSettings',
-      'getThemePreference',
-      'initRepository',
-      'listFeatures',
-      'listRepositories',
-      'onAppEvent',
-      'onConnectionChanged',
-      'pickWorkspaceDirectory',
-      'refreshReadiness',
-      'retryConnection',
-      'setThemePreference',
-      'updateSettings',
-    ]);
+    expect(Object.keys(api as object).sort()).toEqual(
+      [
+        'addWorkspaceRoot',
+        'answerPermission',
+        'answerQuestions',
+        'createFeature',
+        'dispatchFeatureSetup',
+        'dispatchFeatureAction',
+        'getConnectionStatus',
+        'getAttention',
+        'getCreationDefaults',
+        'getFeature',
+        'getReadiness',
+        'getSession',
+        'getSessionTranscript',
+        'getSettings',
+        'getThemePreference',
+        'initRepository',
+        'listFeatures',
+        'listRepositories',
+        'listSessions',
+        'onAppEvent',
+        'onConnectionChanged',
+        'onSessionOutput',
+        'openSessionOutput',
+        'cancelSessionOutput',
+        'pickWorkspaceDirectory',
+        'refreshReadiness',
+        'resolveGate',
+        'retryConnection',
+        'saveGateDraft',
+        'sendHelp',
+        'setThemePreference',
+        'updateSettings',
+      ].sort(),
+    );
   });
 
   it('exposes no generic invoke, send, require, or process handles', () => {
@@ -139,5 +154,37 @@ describe('preload surface', () => {
 
     unsubscribe();
     expect(removeListener).toHaveBeenCalledWith('agentico:events:app', expect.any(Function));
+  });
+
+  it('validates session output events and removes the exact listener on cleanup', () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      onSessionOutput(cb: (event: unknown) => void): () => void;
+    };
+    const cb = vi.fn();
+    const unsubscribe = api.onSessionOutput(cb);
+    expect(on).toHaveBeenCalledWith('agentico:sessions:output', expect.any(Function));
+    const listener = on.mock.calls.find(
+      ([channel]) => channel === 'agentico:sessions:output',
+    )?.[1] as (event: unknown, payload: unknown) => void;
+    const valid = {
+      subscriptionId: 'sub-1',
+      type: 'record',
+      sessionId: 'session-1',
+      index: 4,
+      message: { index: 4, role: 'assistant', type: 'text', text: '<script>x</script>' },
+    };
+    listener({}, valid);
+    expect(cb).toHaveBeenCalledWith(valid);
+    cb.mockClear();
+    listener({}, { ...valid, accessToken: 'leak' });
+    listener(
+      {},
+      JSON.parse(
+        '{"subscriptionId":"sub-1","type":"done","sessionId":"session-1","nextIndex":5,"__proto__":{}}',
+      ),
+    );
+    expect(cb).not.toHaveBeenCalled();
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('agentico:sessions:output', listener);
   });
 });

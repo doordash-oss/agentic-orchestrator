@@ -220,7 +220,7 @@ type RepoCycleState struct {
 }
 
 // PendingUserInputCycle is a flat projection of a paused per-repo cycle gate
-// surfaced for TUI/orchestrator routing. Returned by Feature.PendingUserInputCycles.
+// surfaced for desktop app and orchestrator routing. Returned by Feature.PendingUserInputCycles.
 type PendingUserInputCycle struct {
 	RepoName  string
 	CycleType RepoCycleType
@@ -235,7 +235,7 @@ const SchemaVersionCurrent = 7
 // CycleState tracks the feature-level active post-publish cycle (rebase,
 // review-comments, refactor). One cycle is active at a time per
 // feature regardless of how many repos it touches.
-// Run.RepoCycles persists alongside CycleState as the per-repo TUI rendering
+// Run.RepoCycles persists alongside CycleState as the per-repo desktop app rendering
 // surface; the unified cycle loops mirror their per-repo entries there so
 // existing per-repo badges keep working.
 type CycleState struct {
@@ -738,7 +738,7 @@ type Feature struct {
 	// for the currently active rebase harness / smart rebase / Final Review.
 	// Persisted on Run.RebaseOperation.
 	RebaseOperation *RebaseOperationState `yaml:"-"`
-	// RepoCycles is the per-repo cycle rendering surface kept for the TUI's
+	// RepoCycles is the per-repo cycle rendering surface kept for the desktop app's
 	// existing per-repo badge/spinner paths; the unified cycle loops mirror
 	// their per-repo entries here so legacy renderers keep working.
 	RepoCycles                      map[string]*RepoCycleState `yaml:"-"`
@@ -1104,7 +1104,7 @@ func (f *Feature) AnyRoadmapPhaseFrontend() bool {
 // ActiveCycleType returns the feature's active post-publish cycle type.
 // For per-repo cycle inspection, callers should consult RepoCycles[name].Type
 // directly; this accessor preserves the feature-level view used by recovery
-// and TUI rendering paths.
+// and desktop app rendering paths.
 func (f *Feature) ActiveCycleType() RepoCycleType { return f.Run().ActiveCycleType }
 
 // SetActiveCycleType sets the feature-level active cycle type.
@@ -1175,9 +1175,8 @@ func (f *Feature) EffectivePipeline() PipelineProfile {
 }
 
 // HasActiveRepoCycles reports whether any repo has a running, reviewing, or
-// need-user-input-paused cycle. Mirrors the predicate used by
-// tui.hasActiveRepoCycles and by Manager.HasActiveRepoCycles so callers on a
-// loaded *Feature do not need to round-trip through the store. Paused
+// need-user-input-paused cycle. It matches Manager.HasActiveRepoCycles so
+// callers on a loaded *Feature do not need to round-trip through the store. Paused
 // (need_user_input) cycles count as active because the feature still has
 // outstanding post-publish work waiting on the user.
 func (f *Feature) HasActiveRepoCycles() bool {

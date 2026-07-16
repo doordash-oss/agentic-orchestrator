@@ -587,7 +587,7 @@ func TestRunRefactorFeatureLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 }
 
 // TestRunRefactorFeatureLoop_ActiveCycleSetAtEntry verifies the cycle
-// entry stamp lands BEFORE the inner loop runs, so the TUI and observers
+// entry stamp lands BEFORE the inner loop runs, so the desktop app and observers
 // see ActiveCycle = {Type: refactor, Status: running} mid-flight.
 func TestRunRefactorFeatureLoop_ActiveCycleSetAtEntry(t *testing.T) {
 	stateDir := t.TempDir()

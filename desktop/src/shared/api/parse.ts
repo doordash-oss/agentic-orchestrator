@@ -178,6 +178,82 @@ export const ReadinessResponseSchema = z.object({
 
 export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
 
+// --- Blocking attention (GET /api/v1/prompts, /api/v1/permissions) ---------
+// These responses are deliberately bounded before they are translated to the
+// renderer. Tool input remains data (never HTML or a navigable URL).
+
+const AttentionTextSchema = z.string().max(64 * 1024);
+const AttentionIDSchema = z.string().min(1).max(200);
+
+export const ServerAskUserOptionSchema = z.object({
+  label: z.string().max(200).optional(),
+  description: AttentionTextSchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+});
+export const ServerAskUserQuestionSchema = z.object({
+  question: AttentionTextSchema.optional(),
+  header: z.string().max(500).optional(),
+  multi_select: z.boolean().optional(),
+  options: z.array(ServerAskUserOptionSchema).max(100).optional(),
+});
+export const ServerRememberPreviewSchema = z.object({
+  pattern: z.string().max(4096),
+  scope: z.string().max(4096),
+  scope_display: z.string().max(4096),
+});
+export const ServerControlRequestSchema = z.object({
+  request_id: AttentionIDSchema,
+  session_id: AttentionIDSchema.optional(),
+  feature_id: AttentionIDSchema.optional(),
+  phase: z.string().max(200).optional(),
+  tool_name: z.string().max(500),
+  status: z.string().max(100),
+  summary: AttentionTextSchema.optional(),
+  input: z.record(z.string().max(200), z.unknown()).optional(),
+  questions: z.array(ServerAskUserQuestionSchema).max(100).optional(),
+  remember: ServerRememberPreviewSchema.optional(),
+  waiting_since: z.string().max(100).optional(),
+});
+export const ServerHelpQueueSchema = z.object({
+  feature_id: AttentionIDSchema,
+  session_id: AttentionIDSchema.optional(),
+  question: AttentionTextSchema,
+  pending: z.boolean(),
+  time: z.string().max(100).optional(),
+});
+export const ServerNeedUserInputGateSchema = z.object({
+  feature_id: AttentionIDSchema.optional(),
+  open: z.boolean(),
+  scope: z.string().max(100).optional(),
+  repo_name: z.string().max(500).optional(),
+  cycle_type: z.string().max(200).optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  summary: AttentionTextSchema.optional(),
+  questions: z
+    .array(
+      z.object({
+        index: z.number().int().nonnegative().optional(),
+        prompt: AttentionTextSchema.optional(),
+        answer: AttentionTextSchema.optional(),
+      }),
+    )
+    .max(100)
+    .optional(),
+  waiting_since: z.string().max(100).optional(),
+});
+export const PromptSnapshotResponseSchema = z.object({
+  api_version: z.string(),
+  ask_user_questions: z.array(ServerControlRequestSchema).max(1000),
+  help_queue: z.array(ServerHelpQueueSchema).max(1000),
+  need_user_inputs: z.array(ServerNeedUserInputGateSchema).max(1000),
+});
+export const PermissionSnapshotResponseSchema = z.object({
+  api_version: z.string(),
+  requests: z.array(ServerControlRequestSchema).max(1000),
+});
+export type ServerPromptSnapshot = z.output<typeof PromptSnapshotResponseSchema>;
+export type ServerPermissionSnapshot = z.output<typeof PermissionSnapshotResponseSchema>;
+
 // --- Runtime config (GET /api/v1/config/runtime) — workspace-roots subset ---
 // Only the fields the desktop setup flow consumes; the full response has
 // many more, which z.object tolerates and strips.
@@ -230,6 +306,13 @@ export const ServerFeatureSummarySchema = z.object({
   current_phase: z.string(),
   repos: z.array(z.string()),
   created_at: z.string(),
+  active_run: z.number().int().nonnegative(),
+  run_count: z.number().int().nonnegative(),
+  progress: z.object({ current_phase_status: z.string().optional() }),
+  warnings: z
+    .array(z.object({ code: z.string(), message: z.string() }))
+    .max(100)
+    .optional(),
 });
 
 export type ServerFeatureSummary = z.output<typeof ServerFeatureSummarySchema>;
@@ -270,6 +353,131 @@ export const FeatureActionResponseSchema = z.object({
 });
 
 export type FeatureActionResponse = z.output<typeof FeatureActionResponseSchema>;
+
+export const ServerFeatureOperationalActionResponseSchema = FeatureActionResponseSchema.extend({
+  phase: z.string().optional(),
+  session_ids: z.array(z.string()).max(100).optional(),
+});
+
+// --- Sessions ---------------------------------------------------------------
+
+const ServerUsageSchema = z.object({
+  input_tokens: z.number().int().nonnegative().optional(),
+  output_tokens: z.number().int().nonnegative().optional(),
+  cost_usd: z.number().nonnegative().optional(),
+});
+
+export const ServerSessionSummarySchema = z.object({
+  id: z.string(),
+  feature_id: z.string(),
+  run_number: z.number().int().nonnegative(),
+  phase: z.string(),
+  repo: z.string().optional(),
+  kind: z.string(),
+  label: z.string().optional(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  status: z.string(),
+  turn_state: z.string().optional(),
+  started_at: z.string(),
+  iteration: z.number().int().nonnegative().optional(),
+  context_percentage: z.number().int().optional(),
+  usage: ServerUsageSchema,
+});
+export type ServerSessionSummary = z.output<typeof ServerSessionSummarySchema>;
+
+export const ServerTranscriptCursorSchema = z.object({
+  total: z.number().int().nonnegative(),
+  start: z.number().int().nonnegative(),
+  end: z.number().int().nonnegative(),
+});
+
+const ServerFileChangeSchema = z.object({
+  path: z.string().optional(),
+  old_path: z.string().optional(),
+  operation: z.string().optional(),
+  detail: z.string().optional(),
+  added_lines: z.number().int().nonnegative().optional(),
+  removed_lines: z.number().int().nonnegative().optional(),
+  has_diff_patch: z.boolean().optional(),
+});
+
+const ServerToolCallSchema = z.object({
+  summary: z.string().optional(),
+  prompt: z.string().optional(),
+});
+
+const ServerTaskSchema = z.object({
+  id: z.string().optional(),
+  tool_use_id: z.string().optional(),
+  description: z.string().optional(),
+  task_type: z.string().optional(),
+  prompt: z.string().optional(),
+  last_tool_name: z.string().optional(),
+  status: z.string().optional(),
+  summary: z.string().optional(),
+  output_file: z.string().optional(),
+});
+
+export const ServerTranscriptMessageSchema = z.object({
+  index: z.number().int().nonnegative(),
+  block_index: z.number().int().nonnegative().optional(),
+  role: z.string(),
+  type: z.string(),
+  text: z
+    .string()
+    .max(1024 * 1024)
+    .optional(),
+  tool: z.string().optional(),
+  status: z.string().optional(),
+  redacted: z.boolean().optional(),
+  locally_appended: z.boolean().optional(),
+  auto_picked: z.boolean().optional(),
+  auto_pick_question: z.string().optional(),
+  auto_pick_confidence: z.number().optional(),
+  file_change: ServerFileChangeSchema.optional(),
+  tool_call: ServerToolCallSchema.optional(),
+  task: ServerTaskSchema.optional(),
+});
+export type ServerTranscriptMessage = z.output<typeof ServerTranscriptMessageSchema>;
+
+export const SessionListResponseSchema = z.object({
+  api_version: z.string(),
+  sessions: z.array(ServerSessionSummarySchema).max(1000),
+});
+
+export const SessionDetailResponseSchema = z.object({
+  api_version: z.string(),
+  session: ServerSessionSummarySchema.extend({
+    transcript_cursor: ServerTranscriptCursorSchema,
+    pending_controls: z.array(z.unknown()).max(1000),
+    initial_prompt: z
+      .string()
+      .max(1024 * 1024)
+      .optional(),
+    can_attach: z.boolean(),
+    log_available: z.boolean(),
+    safe_error: z
+      .string()
+      .max(1024 * 1024)
+      .optional(),
+  }),
+});
+export type ServerSessionDetail = z.output<typeof SessionDetailResponseSchema>['session'];
+
+export const TranscriptResponseSchema = z.object({
+  api_version: z.string(),
+  cursor: ServerTranscriptCursorSchema,
+  messages: z.array(ServerTranscriptMessageSchema).max(500),
+});
+
+export const SessionOutputChunkSchema = z.object({
+  api_version: z.string(),
+  session_id: z.string().optional(),
+  index: z.number().int().nonnegative(),
+  message: ServerTranscriptMessageSchema.optional(),
+  done: z.boolean().optional(),
+});
 
 // --- Runtime config (GET /api/v1/config/runtime) — creation-defaults subset --
 
@@ -358,5 +566,22 @@ void _createFeatureSubset;
 type FeatureSetupResponseDTO = components['schemas']['FeatureSetupResponse'];
 const _featureSetupSubset = (value: FeatureSetupResponseDTO): FeatureActionResponse => value;
 void _featureSetupSubset;
+type SessionListDTO = components['schemas']['SessionListResponse'];
+const _sessionListSubset = (value: SessionListDTO): z.output<typeof SessionListResponseSchema> =>
+  value;
+void _sessionListSubset;
+type SessionDetailDTO = components['schemas']['SessionDetailResponse'];
+const _sessionDetailSubset = (
+  value: SessionDetailDTO,
+): z.output<typeof SessionDetailResponseSchema> => value;
+void _sessionDetailSubset;
+type TranscriptDTO = components['schemas']['TranscriptResponse'];
+const _transcriptSubset = (value: TranscriptDTO): z.output<typeof TranscriptResponseSchema> =>
+  value;
+void _transcriptSubset;
+type OutputChunkDTO = components['schemas']['SessionOutputChunk'];
+const _outputChunkSubset = (value: OutputChunkDTO): z.output<typeof SessionOutputChunkSchema> =>
+  value;
+void _outputChunkSubset;
 const _runtimeConfigCreationSubset = (value: RuntimeConfigDTO): RuntimeConfigCreation => value;
 void _runtimeConfigCreationSubset;

@@ -2,14 +2,66 @@ import { describe, expect, it } from 'vitest';
 import { featureSnapshot } from '../test/agenticoMock';
 import {
   actionById,
+  dashboardState,
   featureBranch,
   fieldForCreationError,
   isReadyToStart,
+  orderDashboardFeatures,
   setupProgress,
   spineActiveIndex,
   spineStages,
   spineTone,
 } from './featureView';
+
+describe('intervention-first dashboard ordering', () => {
+  const snapshot = (id: string, status: string, createdAt: string, startEnabled = false) =>
+    featureSnapshot({
+      id,
+      name: id,
+      status,
+      createdAt,
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: startEnabled ? [{ id: 'start', enabled: true, disabledReasons: [] }] : [],
+    });
+
+  it('orders intervention, active, startable, and inactive buckets newest-first', () => {
+    const features = [
+      snapshot('done', 'Done', '2026-07-15T08:00:00Z'),
+      snapshot('start-old', 'Created', '2026-07-11T08:00:00Z', true),
+      snapshot('active', 'Implementing', '2026-07-10T08:00:00Z'),
+      snapshot('failed-old', 'Failed', '2026-07-12T08:00:00Z'),
+      snapshot('review', 'PlanNeedsReview', '2026-07-14T08:00:00Z'),
+      snapshot('input', 'NeedUserInput', '2026-07-13T08:00:00Z'),
+      snapshot('failed-new', 'Failed', '2026-07-15T08:00:00Z'),
+      snapshot('start-new', 'ImplementReady', '2026-07-14T08:00:00Z', true),
+    ];
+
+    expect(orderDashboardFeatures(features).map((feature) => feature.id)).toStrictEqual([
+      'failed-new',
+      'review',
+      'input',
+      'failed-old',
+      'active',
+      'start-new',
+      'start-old',
+      'done',
+    ]);
+  });
+
+  it('labels blocked and operational states without recreating start eligibility', () => {
+    expect(dashboardState(snapshot('failed', 'Failed', '2026-07-15T08:00:00Z'))).toStrictEqual({
+      bucket: 'intervention',
+      label: 'Failed',
+      tone: 'danger',
+    });
+    expect(
+      dashboardState(snapshot('review', 'ResearchNeedsReview', '2026-07-15T08:00:00Z')),
+    ).toStrictEqual({ bucket: 'intervention', label: 'Review needed', tone: 'attention' });
+    expect(
+      dashboardState(snapshot('ready', 'UnexpectedStatus', '2026-07-15T08:00:00Z', true)),
+    ).toStrictEqual({ bucket: 'startable', label: 'Ready to start', tone: 'ready' });
+  });
+});
 
 describe('spineStages', () => {
   it('prepends Setup to the medium profile phases', () => {
@@ -91,13 +143,22 @@ describe('setupProgress / featureBranch / actions', () => {
 });
 
 describe('isReadyToStart', () => {
-  it('requires Created status, completed setup, and a server-enabled start', () => {
+  it('uses only the server-enabled start action', () => {
     const ready = featureSnapshot({
       status: 'Created',
       setup: { status: 'done', attempt: 1, tasks: [] },
       actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
     });
     expect(isReadyToStart(ready)).toBe(true);
+    expect(
+      isReadyToStart(
+        featureSnapshot({
+          status: 'UnexpectedNewServerStatus',
+          setup: undefined,
+          actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+        }),
+      ),
+    ).toBe(true);
     expect(isReadyToStart(featureSnapshot())).toBe(false);
     expect(
       isReadyToStart(

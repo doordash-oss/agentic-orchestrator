@@ -675,7 +675,7 @@ func TestRunCodebaseIndexForRepo_FreshKBStaleIndex(t *testing.T) {
 	}
 
 	// This regression test verifies that RunCodebaseIndexForRepo builds the
-	// codebase index independently of KB freshness. The TUI calls it in every
+	// codebase index independently of KB freshness. The desktop app calls it in every
 	// KB path (including "all KBs fresh" and "no KB changes") to ensure the
 	// structural index is always up-to-date.
 

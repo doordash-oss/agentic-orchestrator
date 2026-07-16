@@ -5,6 +5,78 @@
  */
 import type { FeatureSnapshot, FeatureSetupView } from '../../../shared/ipc';
 
+export type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
+export type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
+
+export interface DashboardState {
+  bucket: DashboardBucket;
+  label: string;
+  tone: DashboardTone;
+}
+
+const ACTIVE_STATUSES = new Set([
+  'SettingUpWorktrees',
+  'BuildingKB',
+  'Inquiring',
+  'Researching',
+  'Designing',
+  'Planning',
+  'Implementing',
+  'Reviewing',
+  'FinalReviewing',
+]);
+
+const BUCKET_ORDER: Record<DashboardBucket, number> = {
+  intervention: 0,
+  active: 1,
+  startable: 2,
+  inactive: 3,
+};
+
+/** Human state and priority derived from server status and catalogue only. */
+export function dashboardState(snapshot: FeatureSnapshot): DashboardState {
+  if (snapshot.status === 'Failed') {
+    return { bucket: 'intervention', label: 'Failed', tone: 'danger' };
+  }
+  if (snapshot.status === 'Interrupted') {
+    return { bucket: 'intervention', label: 'Interrupted', tone: 'attention' };
+  }
+  if (snapshot.status.endsWith('NeedsReview')) {
+    return { bucket: 'intervention', label: 'Review needed', tone: 'attention' };
+  }
+  if (snapshot.status === 'NeedUserInput') {
+    return { bucket: 'intervention', label: 'Input needed', tone: 'attention' };
+  }
+  if (ACTIVE_STATUSES.has(snapshot.status) || snapshot.setup?.status === 'running') {
+    return { bucket: 'active', label: 'Active', tone: 'active' };
+  }
+  if (actionById(snapshot, 'start')?.enabled === true) {
+    return { bucket: 'startable', label: 'Ready to start', tone: 'ready' };
+  }
+  return { bucket: 'inactive', label: 'Inactive', tone: 'quiet' };
+}
+
+/** Stable deterministic sort; input order is never mutated. */
+export function orderDashboardFeatures(features: readonly FeatureSnapshot[]): FeatureSnapshot[] {
+  return features
+    .map((feature, index) => ({ feature, index }))
+    .sort((left, right) => {
+      const bucketDelta =
+        BUCKET_ORDER[dashboardState(left.feature).bucket] -
+        BUCKET_ORDER[dashboardState(right.feature).bucket];
+      if (bucketDelta !== 0) {
+        return bucketDelta;
+      }
+      const createdDelta = Date.parse(right.feature.createdAt) - Date.parse(left.feature.createdAt);
+      if (Number.isFinite(createdDelta) && createdDelta !== 0) {
+        return createdDelta;
+      }
+      const idDelta = left.feature.id.localeCompare(right.feature.id);
+      return idDelta === 0 ? left.index - right.index : idDelta;
+    })
+    .map(({ feature }) => feature);
+}
+
 export interface SpineStage {
   id: string;
   label: string;
@@ -78,13 +150,12 @@ export function actionById(
  * enables the (later-phase) start action. Purely derived — never stored.
  */
 export function isReadyToStart(snapshot: FeatureSnapshot): boolean {
-  if (snapshot.status !== 'Created') {
-    return false;
-  }
-  if (snapshot.setup !== undefined && snapshot.setup.status !== 'done') {
-    return false;
-  }
   return actionById(snapshot, 'start')?.enabled === true;
+}
+
+/** A timeline exists once the feature has moved beyond creation and setup. */
+export function showsRun(snapshot: FeatureSnapshot): boolean {
+  return !['Created', 'SettingUpWorktrees'].includes(snapshot.status);
 }
 
 /** The feature branch, surfaced from the server-owned setup task data. */

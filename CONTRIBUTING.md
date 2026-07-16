@@ -49,22 +49,18 @@ by named tier, with current timings captured in [docs/testing-baseline.md](docs/
 | Fast suite | `make test-fast` | 23s, target <=30s | Everyday local confidence check over all packages in short mode. |
 | E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Binary, CLI flags, and embedded skill layout smoke coverage. |
 | Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Lifecycle, state-machine, and protocol-violation coverage. |
-| E2E Go (TUI / teatest) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Full TUI and teatest behavior with the race detector. |
-| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Observer-backed TUI event and feature-span integration coverage. |
+| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Server process-launch and API behavior with the race detector. |
 | Race regression | `go test ./... -count=1 -race` | 158.82s | Extended all-package race/regression sweep. |
 | Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Live skill/guideline discovery against real LLM CLIs. |
 
 `go vet ./...` and `go build ./...` are still required pre-push gates. The
 race-enabled all-package sweep is the **Race regression** tier, not ordinary
-unit testing. The default tiers do not require build tags; the tagged
-**TUI observability** tier is the explicit opt-in gate for slower observer-backed
-TUI integration coverage. The fast target runs all packages in short mode with
+unit testing. The default tiers do not require build tags. The fast target runs all packages in short mode with
 the existing `testing.Short` guards.
 
 For new tests, follow the [Test isolation and parallelism](AGENTS.md#test-isolation-and-parallelism)
 rules in `AGENTS.md`. The `parallel-candidate` / `parallel-exempt` comments in
-`internal/feature` and `internal/session`, plus the `internal/tui`
-`parallel_safety_test.go` inventory, are the authoritative classification for
+`internal/feature` and `internal/session` are the authoritative classification for
 those packages and should be updated as part of authoring the test.
 
 ## Submitting a Pull Request

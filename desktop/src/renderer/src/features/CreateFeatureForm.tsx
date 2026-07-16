@@ -20,14 +20,16 @@ type DefaultsState =
 export interface CreateFeatureFormProps {
   /** Fired once the durable feature exists (whether or not dispatch worked). */
   onCreated(created: { featureId: string; name: string }): void;
+  onDirtyChange?(dirty: boolean): void;
 }
 
-export function CreateFeatureForm({ onCreated }: CreateFeatureFormProps) {
+export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFormProps) {
   const [state, setState] = useState<DefaultsState>({ phase: 'loading' });
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [repoKeys, setRepoKeys] = useState<readonly string[]>([]);
   const [useCurrentBranch, setUseCurrentBranch] = useState(false);
+  const [defaultUseCurrentBranch, setDefaultUseCurrentBranch] = useState(false);
   const [pending, setPending] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -37,6 +39,22 @@ export function CreateFeatureForm({ onCreated }: CreateFeatureFormProps) {
   const repoGroupRef = useRef<HTMLFieldSetElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
 
+  useEffect(() => {
+    onDirtyChange?.(
+      name.trim() !== '' ||
+        description !== '' ||
+        repoKeys.length > 0 ||
+        useCurrentBranch !== defaultUseCurrentBranch,
+    );
+  }, [
+    defaultUseCurrentBranch,
+    description,
+    name,
+    onDirtyChange,
+    repoKeys.length,
+    useCurrentBranch,
+  ]);
+
   const loadDefaults = useCallback(() => {
     setState({ phase: 'loading' });
     window.agentico
@@ -45,6 +63,7 @@ export function CreateFeatureForm({ onCreated }: CreateFeatureFormProps) {
         setState({ phase: 'loaded', defaults });
         // Prefill the server default branch choice.
         setUseCurrentBranch(defaults.defaults.useCurrentBranch);
+        setDefaultUseCurrentBranch(defaults.defaults.useCurrentBranch);
       })
       .catch((err: unknown) => setState({ phase: 'error', error: parseIpcError(err) }));
   }, []);

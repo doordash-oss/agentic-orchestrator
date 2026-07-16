@@ -62,7 +62,7 @@ type ReviewHelperConfig struct {
 	// BuildSessionOpts so the provider command receives the resolved level.
 	EffectiveEffort llm.EffortLevel
 	EffortSource    llm.EffortSource
-	// Kind classifies the helper session for TUI/observer purposes. Defaults to
+	// Kind classifies the helper session for desktop app and observer purposes. Defaults to
 	// KindReviewHelper when unset.
 	Kind ports.SessionKind
 	// Label is a short context-specific sub-label (validator domain, review
@@ -75,7 +75,7 @@ type ReviewHelperConfig struct {
 // Feedback holds the canonical body of the structured review-feedback.md
 // (verbatim if the LLM produced a clean file and satisfied completion;
 // deterministic CHANGES_REQUESTED protocol feedback otherwise). Output retains
-// the helper's stdout for log surfaces (TUI, debug) but is not part of the
+// the helper's stdout for log surfaces (desktop app, debug) but is not part of the
 // wire protocol — the file is.
 type ReviewHelperResult struct {
 	Output   string

@@ -42,7 +42,7 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	// Reconcile any orphan run directories before scanning for recovery items.
 	// Recovery decisions (resume/kill/skip) must observe a consistent run set;
 	// otherwise a stale committing:true run or run_number > ActiveRun leftover
-	// could steer the TUI toward a run that will be deleted a moment later.
+	// could steer the desktop app toward a run that will be deleted a moment later.
 	if o.deps.Store != nil {
 		if err := o.cleanupOrphanRuns(); err != nil {
 			return nil, fmt.Errorf("cleanup orphan runs: %w", err)

@@ -169,7 +169,7 @@ export interface TrustedSender {
 }
 
 export interface SenderLikeEvent {
-  sender: { id: number };
+  sender: { id: number; send?(channel: string, payload: unknown): void };
   senderFrame: { url: string } | null;
 }
 

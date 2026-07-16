@@ -55,7 +55,7 @@ var _ = fmt.Sprintf // keep fmt import used elsewhere in the package
 // criticalAttachSendTimeout is the default bound for blocking forward of Result
 // messages onto attachCh when an attach consumer is registered. Without it, a
 // stuck consumer would deadlock readMessages indefinitely; with it, the CLI
-// continues reading after the bound. 5s is long enough for any normal TUI
+// continues reading after the bound. 5s is long enough for any normal desktop app
 // event-loop hitch and short enough that a genuine deadlock surfaces quickly.
 // If no consumer is registered, a full attachCh is treated as headless
 // backpressure and the Result is dropped without waiting or logging. Result
@@ -80,9 +80,12 @@ var resultShutdownGrace = 5 * time.Second
 type Session struct {
 	id             string
 	featureID      string
+	runNumber      int
 	phase          feature.Phase
 	process        *exec.Cmd
 	logFile        *os.File
+	transcriptPath string
+	recoveredPID   int
 	status         SessionStatus
 	startedAt      time.Time
 	workDir        string
@@ -125,11 +128,11 @@ type Session struct {
 	permHandler                  PermissionHandler
 	permissionHandlerDisposeOnce sync.Once
 	// pendingControlRequests holds every control_request that has been
-	// surfaced to the TUI but not yet responded to, in arrival order.
+	// surfaced to the desktop app but not yet responded to, in arrival order.
 	// Multiple AskUserQuestion calls can be in flight concurrently when
 	// the LLM issues them as parallel tool uses in a single turn; this
 	// slice keeps each requestID first-class so neither the session nor
-	// the TUI silently drops one. LastControlRequest() returns the most
+	// the desktop app silently drops one. LastControlRequest() returns the most
 	// recently arrived entry to preserve the historical "single-slot"
 	// semantics callers depend on. Access guarded by mu.
 	pendingControlRequests []*llm.ControlRequestMessage
@@ -225,7 +228,7 @@ type Session struct {
 	// lastStdoutAt is the UnixNano of the most recent line read from the
 	// CLI subprocess stdout. It is updated in readMessages for every
 	// non-empty line — before routing, parsing, or filtering — so that the
-	// TUI can treat any raw stdout activity as evidence that the agent is
+	// desktop app can treat any raw stdout activity as evidence that the agent is
 	// making progress, even when the event would otherwise be dropped by
 	// the protocol (unknown message types, oversized buffers, filtered
 	// stream events). Read via LastStdoutAt().
@@ -267,7 +270,7 @@ type Session struct {
 	lifecycleCancel context.CancelFunc
 
 	// askUserAutoPick optionally answers confidence-qualified AskUserQuestion
-	// bundles before they enter pending TUI routing.
+	// bundles before they enter pending desktop app routing.
 	askUserAutoPick *ports.AskUserAutoPickConfig
 
 	// watchdog monitors provider-specific lifecycle stalls that do not surface
@@ -294,6 +297,7 @@ type AttachDropReporter interface {
 
 func (s *Session) ID() string           { return s.id }
 func (s *Session) FeatureID() string    { return s.featureID }
+func (s *Session) RunNumber() int       { return s.runNumber }
 func (s *Session) Phase() feature.Phase { return s.phase }
 func (s *Session) Process() *exec.Cmd   { return s.process }
 func (s *Session) StartedAt() time.Time { return s.startedAt }
@@ -421,7 +425,7 @@ func (s *Session) lastControlRequestLocked() *llm.ControlRequestMessage {
 }
 
 // PendingControlRequests returns a snapshot of every pending
-// control_request in arrival order. Used by the TUI to surface multiple
+// control_request in arrival order. Used by the desktop app to surface multiple
 // concurrent AskUserQuestion calls without losing any of them.
 func (s *Session) PendingControlRequests() []*llm.ControlRequestMessage {
 	s.mu.Lock()
@@ -435,17 +439,27 @@ func (s *Session) PendingControlRequests() []*llm.ControlRequestMessage {
 }
 
 // recordPendingControlRequestLocked appends cr to the pending list. Caller
-// must hold s.mu. If a duplicate requestID is already present the new
-// entry replaces the existing one in place to keep the list dedup'd.
+// must hold s.mu. If a duplicate requestID is already present, the new entry
+// replaces the existing one in place but preserves the first WaitingSince
+// stamp; otherwise a missing WaitingSince is stamped once on arrival.
 func (s *Session) recordPendingControlRequestLocked(cr *llm.ControlRequestMessage) {
 	if cr == nil {
 		return
 	}
 	for i, existing := range s.pendingControlRequests {
 		if existing != nil && existing.RequestID == cr.RequestID {
+			if cr.WaitingSince.IsZero() {
+				cr.WaitingSince = existing.WaitingSince
+			}
+			if cr.WaitingSince.IsZero() {
+				cr.WaitingSince = time.Now().UTC()
+			}
 			s.pendingControlRequests[i] = cr
 			return
 		}
+	}
+	if cr.WaitingSince.IsZero() {
+		cr.WaitingSince = time.Now().UTC()
 	}
 	s.pendingControlRequests = append(s.pendingControlRequests, cr)
 }
@@ -504,7 +518,7 @@ func (s *Session) LogFilePath() string {
 
 // LastStdoutAt returns the timestamp of the most recent non-empty line read
 // from the CLI subprocess stdout. Returns the zero time until the first line
-// arrives. Used by the TUI to detect ongoing agent activity independent of
+// arrives. Used by the desktop app to detect ongoing agent activity independent of
 // which parsed messages make it through the attachCh pipeline.
 func (s *Session) LastStdoutAt() time.Time {
 	ns := s.lastStdoutAt.Load()
@@ -670,7 +684,7 @@ func (s *Session) ensureStreamDrainer() {
 // for a response that never comes. When no consumer is attached
 // (headless run, or user has detached), the request stays parked in
 // controlCh until either a consumer attaches or the session is
-// shutting down. The TUI's attach path replays pending requests via
+// shutting down. The desktop app's attach path replays pending requests via
 // PendingControlRequests(), so a request emitted while detached is
 // surfaced the next time the user attaches — even if hours later.
 // The session's status reflects the wait (SessionWaitingPermission
@@ -786,8 +800,8 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 		return fmt.Errorf("creating stdout pipe: %w", err)
 	}
 
-	// Interactive sessions discard stderr by default to prevent provider TUI
-	// escape sequences from corrupting agentic's BubbleTea UI. When StderrPath
+	// Interactive sessions discard stderr by default to prevent provider desktop app
+	// escape sequences from corrupting structured session output. When StderrPath
 	// is set, capture stderr to a file for debugging.
 	if s.stderrPath != "" {
 		stderrFile, fileErr := os.Create(s.stderrPath)
@@ -809,13 +823,16 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 
 	// Write PID file if directory is configured
 	if s.pidDir != "" && cmd.Process != nil {
+		logPath := ""
+		if s.logFile != nil {
+			logPath = s.logFile.Name()
+		}
 		pf := PIDFile{
-			PID:       cmd.Process.Pid,
-			StartedAt: s.startedAt,
-			FeatureID: s.featureID,
-			Phase:     s.phase.String(),
-			Iteration: s.iteration,
-			RepoName:  s.repoName,
+			PID: cmd.Process.Pid, StartedAt: s.startedAt, FeatureID: s.featureID,
+			ManagerID: s.id, RunNumber: s.runNumber, Phase: s.phase.String(),
+			Iteration: s.iteration, RepoName: s.repoName, WorkDir: s.workDir,
+			LogPath: logPath, Transcript: s.transcriptPath, Provider: s.providerName,
+			Kind: s.kind, Label: s.label,
 		}
 		if err := WritePIDFile(s.pidDir, pf); err != nil {
 			_ = stdinPipe.Close()
@@ -926,7 +943,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		}
 
 		// Record raw stdout activity before any parsing or routing so that
-		// the TUI can detect ongoing work even for lines the protocol
+		// the desktop app can detect ongoing work even for lines the protocol
 		// filters out (unknown types, stream_event filtering, etc.).
 		s.lastStdoutAt.Store(time.Now().UnixNano())
 
@@ -988,7 +1005,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 
 			// Handle control requests: try to auto-handle synchronously.
 			// If handled (hook_callback, auto-approved tool), suppress the message
-			// so the TUI doesn't show a spurious permission prompt.
+			// so the desktop app doesn't show a spurious permission prompt.
 			if msg.ControlRequest != nil {
 				if s.tryHandleControlRequest(msg) {
 					// Auto-handled — don't forward to onMessage/attach/log.
@@ -1139,6 +1156,9 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			} else {
 				s.messageLog.Append(msg)
 			}
+			if err := s.persistTranscriptTail(); err != nil {
+				log.Printf("session %s: persist transcript: %v", s.id, err)
+			}
 
 			notifiedExternal := false
 
@@ -1200,7 +1220,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			}
 
 			// Forward to attach channel. Result and unhandled ControlRequest
-			// messages are critical — the TUI relies on them to clear the
+			// messages are critical — the desktop app relies on them to clear the
 			// "Thinking…" state and to surface permission/question prompts.
 			//
 			// ControlRequest takes the dedicated controlCh path (forwarder
@@ -1211,7 +1231,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			// rationale.
 			//
 			// Result still uses the bounded-blocking send onto attachCh:
-			// dropping a Result is recoverable (the TUI's spinner state
+			// dropping a Result is recoverable (the desktop app's spinner state
 			// snaps back on the next assistant message), and routing
 			// Results onto controlCh would couple two different timeouts
 			// onto a shared queue.
@@ -1279,9 +1299,9 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 
 // tryHandleControlRequest attempts to handle a control_request synchronously.
 // Returns true if the request was fully handled (response sent to CLI) and the
-// message should NOT be forwarded to the TUI/attach channel.
+// message should NOT be forwarded to the desktop app's session channel.
 // Returns false if the request needs user interaction (AskUserQuestion, deferred
-// permission) and must be surfaced to the TUI.
+// permission) and must be surfaced to the desktop app.
 func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 	req := msg.ControlRequest
 	if req == nil {
@@ -1303,7 +1323,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		return false
 	}
 
-	// AskUserQuestion normally surfaces to the TUI, except for allowlisted
+	// AskUserQuestion normally surfaces to the desktop app, except for allowlisted
 	// confidence-qualified creator questions that the session can answer safely.
 	if req.Request.ToolName == "AskUserQuestion" {
 		if s.tryAutoPickAskUser(req) {
@@ -1725,7 +1745,7 @@ func askUserAnswerKeysInPresentedOrder(questions json.RawMessage, answers map[st
 // goroutine that writes the control_response, so that re-attaching
 // before the write completes does not re-show the question. Other
 // concurrently pending requests (e.g. parallel AUQ calls) remain in the
-// pending list and stay visible to the TUI.
+// pending list and stay visible to the desktop app.
 func (s *Session) ClearPendingQuestion(requestID string) {
 	s.mu.Lock()
 	s.removePendingControlRequestLocked(requestID)
@@ -1839,9 +1859,26 @@ func (s *Session) Stop() error {
 	s.mu.Lock()
 	proc := s.process
 	w := s.stdin
+	recoveredPID := s.recoveredPID
+	pidDir := s.pidDir
+	repoName := s.repoName
 	s.mu.Unlock()
 
 	if proc == nil || proc.Process == nil {
+		if recoveredPID > 0 {
+			// Recovered sessions still own the original provider process group.
+			// Use the same bounded group termination as ordinary recovery so a
+			// child cannot survive after its group leader exits.
+			terminateProcessGroup(recoveredPID)
+			s.mu.Lock()
+			s.status = SessionDone
+			s.recoveredPID = 0
+			s.mu.Unlock()
+			s.CloseDone()
+			if pidDir != "" {
+				_ = RemovePIDFile(pidDir, repoName)
+			}
+		}
 		return nil
 	}
 
@@ -2019,13 +2056,23 @@ func (s *Session) CloseDone() {
 // SetLogFile sets the log file for writing session output.
 func (s *Session) SetLogFile(f *os.File) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.logFile = f
+	pidDir := s.pidDir
+	var pid int
+	if s.process != nil && s.process.Process != nil {
+		pid = s.process.Process.Pid
+	}
+	s.mu.Unlock()
+	if pidDir != "" && pid > 0 {
+		if err := WritePIDFile(pidDir, s.pidFile(pid, s.SessionID())); err != nil {
+			log.Printf("session %s: update PID file with log path: %v", s.id, err)
+		}
+	}
 }
 
 // logDebug writes a formatted debug message to the session's log file.
 // If no log file is set, the message is silently discarded. This avoids
-// writing to stderr which would corrupt the BubbleTea TUI.
+// writing to stderr which would corrupt structured session output.
 func (s *Session) logDebug(format string, args ...interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2044,8 +2091,13 @@ func (s *Session) IdleDuration() time.Duration {
 // IsActive returns true if the session is still running or waiting for input.
 func (s *Session) IsActive() bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.status == SessionRunning || s.status == SessionWaitingPermission || s.status == SessionWaitingHelp
+	active := s.status == SessionRunning || s.status == SessionWaitingPermission || s.status == SessionWaitingHelp
+	recoveredPID := s.recoveredPID
+	s.mu.Unlock()
+	if active && recoveredPID > 0 {
+		return isProcessRunning(recoveredPID)
+	}
+	return active
 }
 
 // SetStatus sets the session status under the mutex.
@@ -2175,16 +2227,114 @@ func (s *Session) updatePIDFileSessionID(pidDir, sessionID string) error {
 	repoName := s.repoName
 	s.mu.Unlock()
 
-	pf := PIDFile{
-		PID:       pid,
-		StartedAt: s.startedAt,
-		FeatureID: s.featureID,
-		Phase:     s.phase.String(),
-		Iteration: s.iteration,
-		SessionID: sessionID,
-		RepoName:  repoName,
-	}
+	pf := s.pidFile(pid, sessionID)
+	pf.RepoName = repoName
 	return WritePIDFile(pidDir, pf)
+}
+
+func (s *Session) pidFile(pid int, providerSessionID string) PIDFile {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	logPath := ""
+	if s.logFile != nil {
+		logPath = s.logFile.Name()
+	}
+	return PIDFile{
+		PID: pid, StartedAt: s.startedAt, FeatureID: s.featureID,
+		ManagerID: s.id, RunNumber: s.runNumber, Phase: s.phase.String(),
+		Iteration: s.iteration, SessionID: providerSessionID, RepoName: s.repoName,
+		WorkDir: s.workDir, LogPath: logPath, Transcript: s.transcriptPath,
+		Provider: s.providerName, Kind: s.kind, Label: s.label,
+	}
+}
+
+type persistedTranscriptRecord struct {
+	Index   int                 `json:"index"`
+	Message persistedSDKMessage `json:"message"`
+}
+
+// persistedSDKMessage mirrors llm.SDKMessage with persistence tags for fields
+// that are intentionally json:"-" on the live provider protocol shape.
+type persistedSDKMessage struct {
+	Type               string                       `json:"type"`
+	Subtype            string                       `json:"subtype,omitempty"`
+	Init               *llm.SystemInitMessage       `json:"init,omitempty"`
+	Assistant          *llm.AssistantMessage        `json:"assistant,omitempty"`
+	User               *llm.UserMessage             `json:"user,omitempty"`
+	Result             *llm.ResultMessage           `json:"result,omitempty"`
+	ControlRequest     *llm.ControlRequestMessage   `json:"control_request,omitempty"`
+	Status             *llm.StatusMessage           `json:"status,omitempty"`
+	ToolProgress       *llm.ToolProgressMessage     `json:"tool_progress,omitempty"`
+	HookStarted        *llm.HookStartedMessage      `json:"hook_started,omitempty"`
+	HookProgress       *llm.HookProgressMessage     `json:"hook_progress,omitempty"`
+	HookResponse       *llm.HookResponseMessage     `json:"hook_response,omitempty"`
+	RateLimit          *llm.RateLimitMessage        `json:"rate_limit,omitempty"`
+	Compact            *llm.CompactBoundaryMessage  `json:"compact,omitempty"`
+	FileReads          []llm.FileReadEvent          `json:"file_reads,omitempty"`
+	FileChanges        []llm.FileChangeEvent        `json:"file_changes,omitempty"`
+	TaskStarted        *llm.TaskStartedMessage      `json:"task_started,omitempty"`
+	TaskProgress       *llm.TaskProgressMessage     `json:"task_progress,omitempty"`
+	TaskNotification   *llm.TaskNotificationMessage `json:"task_notification,omitempty"`
+	UsageUpdate        *llm.Usage                   `json:"usage_update,omitempty"`
+	LocallyAppended    bool                         `json:"locally_appended,omitempty"`
+	AutoPicked         bool                         `json:"auto_picked,omitempty"`
+	AutoPickQuestion   string                       `json:"auto_pick_question,omitempty"`
+	AutoPickConfidence float64                      `json:"auto_pick_confidence,omitempty"`
+}
+
+func persistableSDKMessage(msg llm.SDKMessage) persistedSDKMessage {
+	return persistedSDKMessage{
+		Type: msg.Type, Subtype: msg.Subtype, Init: msg.Init, Assistant: msg.Assistant,
+		User: msg.User, Result: msg.Result, ControlRequest: msg.ControlRequest,
+		Status: msg.Status, ToolProgress: msg.ToolProgress, HookStarted: msg.HookStarted,
+		HookProgress: msg.HookProgress, HookResponse: msg.HookResponse, RateLimit: msg.RateLimit,
+		Compact: msg.Compact, FileReads: msg.FileReads, FileChanges: msg.FileChanges,
+		TaskStarted: msg.TaskStarted, TaskProgress: msg.TaskProgress,
+		TaskNotification: msg.TaskNotification, UsageUpdate: msg.UsageUpdate,
+		LocallyAppended: msg.LocallyAppended, AutoPicked: msg.AutoPicked,
+		AutoPickQuestion: msg.AutoPickQuestion, AutoPickConfidence: msg.AutoPickConfidence,
+	}
+}
+
+func (m persistedSDKMessage) sdkMessage() llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: m.Type, Subtype: m.Subtype, Init: m.Init, Assistant: m.Assistant,
+		User: m.User, Result: m.Result, ControlRequest: m.ControlRequest,
+		Status: m.Status, ToolProgress: m.ToolProgress, HookStarted: m.HookStarted,
+		HookProgress: m.HookProgress, HookResponse: m.HookResponse, RateLimit: m.RateLimit,
+		Compact: m.Compact, FileReads: m.FileReads, FileChanges: m.FileChanges,
+		TaskStarted: m.TaskStarted, TaskProgress: m.TaskProgress,
+		TaskNotification: m.TaskNotification, UsageUpdate: m.UsageUpdate,
+		LocallyAppended: m.LocallyAppended, AutoPicked: m.AutoPicked,
+		AutoPickQuestion: m.AutoPickQuestion, AutoPickConfidence: m.AutoPickConfidence,
+	}
+}
+
+func (s *Session) persistTranscriptTail() error {
+	s.mu.Lock()
+	path := s.transcriptPath
+	s.mu.Unlock()
+	if path == "" {
+		return nil
+	}
+	messages := s.messageLog.Messages()
+	if len(messages) == 0 {
+		return nil
+	}
+	record := persistedTranscriptRecord{Index: len(messages) - 1, Message: persistableSDKMessage(messages[len(messages)-1])}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshaling record: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening transcript: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("writing transcript: %w", err)
+	}
+	return nil
 }
 
 // AttachCh returns the channel for receiving messages in attach mode.

@@ -116,7 +116,7 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 	var publishConflict *PublishConflictError
 	if errors.As(cause, &publishConflict) {
 		// Publish already emitted PublishCompleted with the structured conflict;
-		// the TUI owns routing that into the rebase-resolution cycle.
+		// the desktop app owns routing that into the rebase-resolution cycle.
 		return
 	}
 	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&

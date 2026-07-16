@@ -21,7 +21,7 @@ import (
 	"testing"
 )
 
-// Guards live docs contract: API-backed TUI plus foreground server launch guidance.
+// Guards live docs contract: desktop app plus foreground server launch guidance.
 func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	docs := []string{"README.md"}
@@ -46,14 +46,23 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 		"feature create     Create a new feature",
 		"agentico feature create",
 		"`agentico feature create`",
-		"direct TUI",
-		"starts the direct TUI",
+		"direct desktop app",
+		"starts the direct desktop app",
 		"--name <name>",
 		"--repo <path>",
 		"--jira <ticket>",
 		"--checkpoint <gate>",
 		"--auto-publish",
 		"**From the CLI:**",
+		"Miller-columns",
+		"notifications.terminal_bundle_id",
+		"ui.keyboard_layout",
+		"ui.collapsed_sections",
+		"Shift+G",
+		"Shift+A",
+		"Ctrl+]",
+		"Ctrl+X",
+		"Ctrl+F",
 	}
 	for _, rel := range docs {
 		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
@@ -86,7 +95,7 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 			"--dangerously-skip-permissions",
 			"--help",
 			"--version",
-			// Phase 1 update surface: docs must advertise the new subcommand
+			// The update surface must advertise the installed subcommand
 			// and its check-only flag alongside the retained launch flags.
 			"agentico update",
 			"--check",
@@ -149,9 +158,6 @@ func TestUserFacingDocsAdvertiseRenamedProduct(t *testing.T) {
 		"CONTRIBUTING.md": {
 			"Agentic Orchestrator",
 			"agentico",
-		},
-		filepath.Join("docs", "keybindings.md"): {
-			"Agentic Orchestrator Keybinding Reference",
 		},
 	}
 
@@ -388,8 +394,7 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 		for _, want := range []string{
 			"`make test-fast`",
 			"23s, target <=30s",
-			"TUI observability",
-			"`go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1`",
+			"E2E Go (process-launch / API-driven)",
 		} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s missing fast-suite contract token %q", rel, want)
@@ -436,9 +441,7 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 	}
 	makefileText := string(makefile)
 	for _, want := range []string{
-		"go list ./...",
-		"go test $$core_pkgs -short -count=1 -parallel 32",
-		"go test $$ui_test_pkgs -short -count=1 -parallel 32",
+		"go test ./... -short -count=1 -parallel 32",
 	} {
 		if !strings.Contains(makefileText, want) {
 			t.Fatalf("Makefile test-fast missing all-package sharded sweep token %q", want)

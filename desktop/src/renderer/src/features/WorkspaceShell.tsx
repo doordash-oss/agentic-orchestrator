@@ -1,28 +1,63 @@
 /**
- * The readiness-gated main surface: a Home tab (feature creation + the
- * authoritative feature list) plus one persistent tab per open feature.
+ * The readiness-gated main surface: a Home tab (authoritative feature list
+ * plus one persistent tab per open feature. Feature creation is a focused,
+ * secondary flow reached from Home.
  * Local settings store ONLY tab identity and presentation (feature id,
  * title hint, order, active tab); every feature itself is always reloaded
  * from the server, so existing state survives app restarts without any
  * local domain cache.
  */
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { FeatureSummaryView, TabsPrefs } from '../../../shared/ipc';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type KeyboardEvent,
+  type SetStateAction,
+} from 'react';
+import type { AttentionItem, FeatureSnapshot, TabsPrefs } from '../../../shared/ipc';
 import { defaultTabsPrefs } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
+import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
+import { dashboardState, orderDashboardFeatures } from './featureView';
 
 type ListState =
   | { phase: 'loading' }
   | { phase: 'error'; error: WizardError }
-  | { phase: 'loaded'; features: FeatureSummaryView[] };
+  | { phase: 'loaded'; features: FeatureSnapshot[] };
 
-export function WorkspaceShell() {
+type CreationDestination = { kind: 'home' } | { kind: 'feature'; featureId: string };
+
+export function WorkspaceShell({
+  attentionItems = [],
+  refreshAttention = async () => [],
+  attentionDrafts,
+  setAttentionDrafts,
+  attentionJump = null,
+  onAttentionJumpHandled = () => {},
+}: {
+  attentionItems?: AttentionItem[];
+  refreshAttention?: () => Promise<AttentionItem[]>;
+  attentionDrafts?: AttentionDrafts;
+  setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
+  attentionJump?: string | null;
+  onAttentionJumpHandled?: () => void;
+}) {
   // null while the local tab prefs are being restored.
   const [tabs, setTabs] = useState<TabsPrefs | null>(null);
   const [list, setList] = useState<ListState>({ phase: 'loading' });
+  const [localAttentionDrafts, setLocalAttentionDrafts] = useState(emptyAttentionDrafts);
+  const activeAttentionDrafts = attentionDrafts ?? localAttentionDrafts;
+  const updateAttentionDrafts = setAttentionDrafts ?? setLocalAttentionDrafts;
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const newFeatureButtonRef = useRef<HTMLButtonElement | null>(null);
+  const handledAttentionJump = useRef<string | null>(null);
+  const listRequestRef = useRef(0);
+  const [view, setView] = useState<'home' | 'create'>('home');
 
   // Restore ONLY identity/presentation state locally; corrupt or missing
   // settings fall back to an empty tab strip.
@@ -46,10 +81,22 @@ export function WorkspaceShell() {
   }, []);
 
   const loadList = useCallback(() => {
+    const request = ++listRequestRef.current;
     window.agentico
       .listFeatures()
-      .then((features) => setList({ phase: 'loaded', features }))
-      .catch((err: unknown) => setList({ phase: 'error', error: parseIpcError(err) }));
+      .then((features) =>
+        Promise.all(features.map((feature) => window.agentico.getFeature(feature.id))),
+      )
+      .then((features) => {
+        if (request === listRequestRef.current) {
+          setList({ phase: 'loaded', features: orderDashboardFeatures(features) });
+        }
+      })
+      .catch((err: unknown) => {
+        if (request === listRequestRef.current) {
+          setList({ phase: 'error', error: parseIpcError(err) });
+        }
+      });
   }, []);
 
   // The Home feature list follows the authoritative server state: fetch on
@@ -119,6 +166,69 @@ export function WorkspaceShell() {
     [persist, tabs],
   );
 
+  const attentionByFeature = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of attentionItems) {
+      if (item.featureId === undefined) continue;
+      counts.set(item.featureId, (counts.get(item.featureId) ?? 0) + 1);
+    }
+    return counts;
+  }, [attentionItems]);
+  const featureLabel = useCallback(
+    (featureId: string | undefined): string => {
+      if (featureId === undefined) return 'Runtime';
+      const listed =
+        list.phase === 'loaded'
+          ? list.features.find((feature) => feature.id === featureId)?.name
+          : undefined;
+      if (listed !== undefined) return listed;
+      const tab = tabs?.open.find((entry) => entry.featureId === featureId);
+      if (tab !== undefined && tab.titleHint !== '') return tab.titleHint;
+      return 'Untitled feature';
+    },
+    [list, tabs],
+  );
+
+  useEffect(() => {
+    if (tabs === null) return;
+    const index =
+      tabs.activeFeatureId === null
+        ? 0
+        : tabs.open.findIndex((tab) => tab.featureId === tabs.activeFeatureId) + 1;
+    const tab = tabRefs.current[index];
+    if (tab !== null && tab !== undefined && typeof tab.scrollIntoView === 'function') {
+      tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [tabs]);
+
+  useEffect(() => {
+    if (attentionJump === null) {
+      handledAttentionJump.current = null;
+      return;
+    }
+    if (tabs === null || handledAttentionJump.current === attentionJump) return;
+    handledAttentionJump.current = attentionJump;
+    openFeature(attentionJump, featureLabel(attentionJump));
+    onAttentionJumpHandled();
+  }, [attentionJump, featureLabel, onAttentionJumpHandled, openFeature, tabs]);
+
+  const completeCreationExit = useCallback((destination: CreationDestination) => {
+    setTabs((current) => {
+      const base = current ?? defaultTabsPrefs();
+      const next = {
+        ...base,
+        activeFeatureId: destination.kind === 'home' ? null : destination.featureId,
+      };
+      window.agentico.updateSettings({ tabs: next }).catch(() => {});
+      return next;
+    });
+    setView('home');
+    if (destination.kind === 'home') {
+      requestAnimationFrame(() => newFeatureButtonRef.current?.focus());
+    }
+  }, []);
+  const creationGuard = useCreationGuard(completeCreationExit);
+
   if (tabs === null) {
     return (
       <section className="shell-card workspace" aria-label="Workspace">
@@ -149,74 +259,134 @@ export function WorkspaceShell() {
     }
   };
 
-  return (
-    <section className="shell-card workspace" aria-label="Workspace">
-      <header className="shell-card__identity">
-        <h1 className="shell-card__title">Agentico</h1>
-        <span className="shell-card__version">runtime ready</span>
-      </header>
+  const showHome = () => {
+    persist({ ...tabs, activeFeatureId: null });
+    setView('home');
+  };
 
-      <div className="tab-strip" role="tablist" aria-label="Workspace tabs">
-        <button
-          ref={(node) => {
-            tabRefs.current[0] = node;
-          }}
-          type="button"
-          role="tab"
-          id="tab-home"
-          aria-selected={active === null}
-          aria-controls="panel-home"
-          className="tab-strip__tab"
-          tabIndex={active === null ? 0 : -1}
-          onClick={() => persist({ ...tabs, activeFeatureId: null })}
-          onKeyDown={(event) => onTabKeyDown(event, 0)}
-        >
-          Home
-        </button>
-        {tabs.open.map((tab, index) => (
-          <span key={tab.featureId} className="tab-strip__entry">
-            <button
-              ref={(node) => {
-                tabRefs.current[index + 1] = node;
-              }}
-              type="button"
-              role="tab"
-              id={`tab-${tab.featureId}`}
-              aria-selected={active === tab.featureId}
-              aria-controls={`panel-${tab.featureId}`}
-              className="tab-strip__tab"
-              tabIndex={active === tab.featureId ? 0 : -1}
-              onClick={() => persist({ ...tabs, activeFeatureId: tab.featureId })}
-              onKeyDown={(event) => onTabKeyDown(event, index + 1)}
-            >
-              {tab.titleHint === '' ? tab.featureId : tab.titleHint}
-            </button>
-            <button
-              type="button"
-              className="tab-strip__close"
-              aria-label={`Close ${tab.titleHint === '' ? tab.featureId : tab.titleHint} tab`}
-              onClick={() => closeFeature(tab.featureId)}
-            >
-              <span aria-hidden="true">✕</span>
-            </button>
-          </span>
-        ))}
+  const activateFeatureTab = (featureId: string) => {
+    persist({ ...tabs, activeFeatureId: featureId });
+    setView('home');
+  };
+
+  const navigateHome = () => {
+    if (view === 'create') {
+      creationGuard.leave({ kind: 'home' });
+      return;
+    }
+    showHome();
+  };
+
+  const navigateFeature = (featureId: string) => {
+    if (view === 'create') {
+      creationGuard.leave({ kind: 'feature', featureId });
+      return;
+    }
+    activateFeatureTab(featureId);
+  };
+
+  return (
+    <section className="workspace" aria-label="Workspace">
+      <div className="tab-strip__rail">
+        <div className="tab-strip" role="tablist" aria-label="Workspace tabs">
+          <button
+            ref={(node) => {
+              tabRefs.current[0] = node;
+            }}
+            type="button"
+            role="tab"
+            id="tab-home"
+            aria-selected={active === null}
+            aria-controls="panel-home"
+            className="tab-strip__tab"
+            tabIndex={active === null ? 0 : -1}
+            onClick={navigateHome}
+            onKeyDown={(event) => onTabKeyDown(event, 0)}
+          >
+            Home
+          </button>
+          {tabs.open.map((tab, index) => (
+            <span key={tab.featureId} className="tab-strip__entry">
+              <button
+                ref={(node) => {
+                  tabRefs.current[index + 1] = node;
+                }}
+                type="button"
+                role="tab"
+                id={`tab-${tab.featureId}`}
+                aria-selected={active === tab.featureId}
+                aria-controls={`panel-${tab.featureId}`}
+                className="tab-strip__tab"
+                tabIndex={active === tab.featureId ? 0 : -1}
+                onClick={() => {
+                  navigateFeature(tab.featureId);
+                }}
+                onKeyDown={(event) => onTabKeyDown(event, index + 1)}
+              >
+                <span>{tab.titleHint === '' ? featureLabel(tab.featureId) : tab.titleHint}</span>
+                <AttentionBadge
+                  count={attentionByFeature.get(tab.featureId) ?? 0}
+                  label={`Blocking input for ${featureLabel(tab.featureId)}`}
+                />
+              </button>
+              <button
+                type="button"
+                className="tab-strip__close"
+                aria-label={`Close ${tab.titleHint === '' ? featureLabel(tab.featureId) : tab.titleHint} tab`}
+                onClick={() => closeFeature(tab.featureId)}
+              >
+                <span aria-hidden="true">✕</span>
+              </button>
+            </span>
+          ))}
+        </div>
+        <TabOverflowMenu
+          tabs={tabs}
+          attentionByFeature={attentionByFeature}
+          featureLabel={featureLabel}
+          onNavigateHome={navigateHome}
+          onNavigateFeature={navigateFeature}
+        />
       </div>
 
       {active === null ? (
         <div id="panel-home" role="tabpanel" aria-labelledby="tab-home" className="tab-panel">
-          <CreateFeatureForm
-            onCreated={({ featureId, name }) => {
-              openFeature(featureId, name);
-              loadList();
-            }}
-          />
-          <FeatureList
-            state={list}
-            openTabIds={tabs.open.map((tab) => tab.featureId)}
-            onOpen={openFeature}
-            onRetry={loadList}
-          />
+          {view === 'create' ? (
+            <CreationFlow
+              guard={creationGuard}
+              onCreated={({ featureId, name }) => {
+                creationGuard.reset();
+                openFeature(featureId, name);
+                loadList();
+                setView('home');
+              }}
+            />
+          ) : (
+            <>
+              <header className="home-surface__header">
+                <div>
+                  <p className="home-surface__eyebrow">Authoritative feature queue</p>
+                  <h1>Home</h1>
+                </div>
+                <button
+                  ref={newFeatureButtonRef}
+                  type="button"
+                  className="create-form__submit"
+                  onClick={() => setView('create')}
+                >
+                  New feature
+                </button>
+              </header>
+              <FeatureList
+                state={list}
+                openTabIds={tabs.open.map((tab) => tab.featureId)}
+                attentionByFeature={attentionByFeature}
+                onOpen={openFeature}
+                onRetry={loadList}
+                onCreate={() => setView('create')}
+              />
+            </>
+          )}
         </div>
       ) : (
         <div
@@ -231,6 +401,10 @@ export function WorkspaceShell() {
             titleHint={tabs.open.find((tab) => tab.featureId === active)?.titleHint ?? active}
             onClose={() => closeFeature(active)}
             onLoadedName={(name) => renameTab(active, name)}
+            attentionItems={attentionItems.filter((item) => item.featureId === active)}
+            refreshAttention={refreshAttention}
+            attentionDrafts={activeAttentionDrafts}
+            setAttentionDrafts={updateAttentionDrafts}
           />
         </div>
       )}
@@ -238,14 +412,204 @@ export function WorkspaceShell() {
   );
 }
 
+interface CreationGuard {
+  leave(destination?: CreationDestination): void;
+  reset(): void;
+  onDirtyChange(dirty: boolean): void;
+  discardOpen: boolean;
+  keepEditing(): void;
+  discard(): void;
+}
+
+function useCreationGuard(onExit: (destination: CreationDestination) => void): CreationGuard {
+  const [dirty, setDirty] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [pendingDestination, setPendingDestination] = useState<CreationDestination | null>(null);
+
+  const reset = useCallback(() => {
+    setDirty(false);
+    setDiscardOpen(false);
+    setPendingDestination(null);
+  }, []);
+  const leave = useCallback(
+    (destination: CreationDestination = { kind: 'home' }) => {
+      if (dirty) {
+        setPendingDestination(destination);
+        setDiscardOpen(true);
+        return;
+      }
+      reset();
+      onExit(destination);
+    },
+    [dirty, onExit, reset],
+  );
+  const discard = useCallback(() => {
+    const destination = pendingDestination ?? { kind: 'home' };
+    reset();
+    onExit(destination);
+  }, [onExit, pendingDestination, reset]);
+
+  return {
+    leave,
+    reset,
+    onDirtyChange: setDirty,
+    discardOpen,
+    keepEditing: () => setDiscardOpen(false),
+    discard,
+  };
+}
+
+function CreationFlow({
+  guard,
+  onCreated,
+}: {
+  guard: CreationGuard;
+  onCreated(created: { featureId: string; name: string }): void;
+}) {
+  return (
+    <section className="creation-flow" aria-label="New feature flow">
+      <header className="creation-flow__header">
+        <button type="button" className="setup-wizard__action" onClick={() => guard.leave()}>
+          Back to Home
+        </button>
+        <p>Feature definition</p>
+      </header>
+      <CreateFeatureForm onDirtyChange={guard.onDirtyChange} onCreated={onCreated} />
+      {guard.discardOpen ? (
+        <div className="impact-dialog__backdrop">
+          <div
+            className="impact-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Discard feature draft"
+          >
+            <h2>Discard this feature draft?</h2>
+            <p>Your entered feature details have not been created.</p>
+            <div className="impact-dialog__actions">
+              <button type="button" onClick={guard.keepEditing}>
+                Keep editing
+              </button>
+              <button type="button" className="cockpit__stop" onClick={guard.discard}>
+                Discard draft
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function TabOverflowMenu({
+  tabs,
+  attentionByFeature,
+  featureLabel,
+  onNavigateHome,
+  onNavigateFeature,
+}: {
+  tabs: TabsPrefs;
+  attentionByFeature: ReadonlyMap<string, number>;
+  featureLabel(featureId: string): string;
+  onNavigateHome(): void;
+  onNavigateFeature(featureId: string): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => {
+    setOpen(false);
+    requestAnimationFrame(() => buttonRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: MouseEvent) => {
+      if (
+        !menuRef.current?.contains(event.target as Node) &&
+        !buttonRef.current?.contains(event.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+    };
+    window.addEventListener('mousedown', dismiss);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', dismiss);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [close, open]);
+
+  const select = (navigate: () => void) => {
+    navigate();
+    close();
+  };
+  return (
+    <div className="tab-strip__overflow-wrap">
+      <button
+        ref={buttonRef}
+        type="button"
+        className="tab-strip__overflow"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-controls="workspace-tab-menu"
+        onClick={() => setOpen((current) => !current)}
+      >
+        Tabs <span aria-hidden="true">⌄</span>
+      </button>
+      {open ? (
+        <div
+          ref={menuRef}
+          id="workspace-tab-menu"
+          className="tab-strip__menu"
+          role="menu"
+          aria-label="Open features"
+        >
+          <button type="button" role="menuitem" onClick={() => select(onNavigateHome)}>
+            Home
+          </button>
+          {tabs.open.map((tab) => {
+            const count = attentionByFeature.get(tab.featureId) ?? 0;
+            return (
+              <button
+                key={tab.featureId}
+                type="button"
+                role="menuitem"
+                onClick={() => select(() => onNavigateFeature(tab.featureId))}
+              >
+                {tab.titleHint === '' ? featureLabel(tab.featureId) : tab.titleHint}
+                {count > 0 ? ` · ${count} pending` : ''}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 interface FeatureListProps {
   state: ListState;
   openTabIds: readonly string[];
+  attentionByFeature: ReadonlyMap<string, number>;
   onOpen(featureId: string, titleHint: string): void;
   onRetry(): void;
+  onCreate(): void;
 }
 
-function FeatureList({ state, openTabIds, onOpen, onRetry }: FeatureListProps) {
+function FeatureList({
+  state,
+  openTabIds,
+  attentionByFeature,
+  onOpen,
+  onRetry,
+  onCreate,
+}: FeatureListProps) {
   return (
     <section className="feature-list" aria-label="Existing features">
       <h2 className="setup-step__title">Features</h2>
@@ -263,28 +627,79 @@ function FeatureList({ state, openTabIds, onOpen, onRetry }: FeatureListProps) {
           </button>
         </div>
       ) : state.features.length === 0 ? (
-        <p className="setup-step__empty">No features exist yet. Create the first one above.</p>
+        <div className="feature-list__empty">
+          <p>No features exist yet. Create your first feature.</p>
+          <button type="button" className="setup-wizard__action" onClick={onCreate}>
+            Create a feature
+          </button>
+        </div>
       ) : (
         <ul className="feature-list__items">
-          {state.features.map((feature) => (
-            <li key={feature.id} className="feature-list__item">
-              <div className="feature-list__facts">
-                <span className="feature-list__name">{feature.name}</span>
-                <code className="feature-list__meta">
-                  {feature.status} · {feature.currentPhase} · {feature.repos.join(', ')}
-                </code>
-              </div>
-              <button
-                type="button"
-                className="setup-wizard__action"
-                onClick={() => onOpen(feature.id, feature.name)}
-              >
-                {openTabIds.includes(feature.id) ? 'Show tab' : 'Open'}
-              </button>
-            </li>
-          ))}
+          {state.features.map((feature) => {
+            const rowState = dashboardState(feature);
+            const attentionCount = attentionByFeature.get(feature.id) ?? 0;
+            return (
+              <li key={feature.id} className="feature-list__item" data-tone={rowState.tone}>
+                <span className="feature-list__signal" aria-hidden="true" />
+                <div className="feature-list__facts">
+                  <div className="feature-list__heading">
+                    <span className="feature-list__name">{feature.name}</span>
+                    <span className="feature-list__state" data-tone={rowState.tone}>
+                      <span aria-hidden="true">{rowState.bucket === 'active' ? '◉' : '◆'}</span>{' '}
+                      {rowState.label}
+                    </span>
+                    <AttentionBadge
+                      count={attentionCount}
+                      label={`Blocking input for ${feature.name}`}
+                    />
+                  </div>
+                  <dl className="feature-list__details">
+                    <div>
+                      <dt>Repository</dt>
+                      <dd>{feature.repos.join(', ')}</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{feature.status}</dd>
+                    </div>
+                    <div>
+                      <dt>Current phase</dt>
+                      <dd>{feature.currentPhase || 'Not started'}</dd>
+                    </div>
+                    <div>
+                      <dt>Priority</dt>
+                      <dd>
+                        {rowState.bucket === 'intervention' ? 'Intervention' : rowState.label}
+                      </dd>
+                    </div>
+                  </dl>
+                  {feature.failure?.message !== undefined ? (
+                    <p className="feature-list__failure">
+                      <span aria-hidden="true">!</span> {feature.failure.message}
+                    </p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="setup-wizard__action"
+                  onClick={() => onOpen(feature.id, feature.name)}
+                >
+                  {openTabIds.includes(feature.id) ? 'Show tab' : 'Open'}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
+  );
+}
+
+function AttentionBadge({ count, label }: { count: number; label: string }) {
+  if (count === 0) return null;
+  return (
+    <span className="attention-badge" role="status" aria-label={`${label}: ${count} pending`}>
+      {count}
+    </span>
   );
 }

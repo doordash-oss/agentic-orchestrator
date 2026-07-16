@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
+	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 )
 
 // --- Task 1: hand-rolled release-version predicate -------------------------
@@ -405,14 +405,14 @@ func TestGatherInstallMethodClassifiesTestBinaryAsDevBuild(t *testing.T) {
 
 // gatherInstallInputs must read real signals: a non-empty binary directory (the
 // executable always resolves under test) and the raw injected version straight
-// from the tui accessor, kept separate from the collapsed GetVersion.
+// from the legacy UI accessor, kept separate from the collapsed GetVersion.
 func TestGatherInstallInputsReadsRealSignals(t *testing.T) {
 	in := gatherInstallInputs()
 	if in.binaryDir == "" {
 		t.Error("gatherInstallInputs() binaryDir is empty; expected a resolved executable directory")
 	}
-	if in.injectedVersion != tui.InjectedVersion() {
-		t.Errorf("injectedVersion = %q, want raw tui.InjectedVersion() %q", in.injectedVersion, tui.InjectedVersion())
+	if in.injectedVersion != buildinfo.InjectedVersion() {
+		t.Errorf("injectedVersion = %q, want raw buildinfo.InjectedVersion() %q", in.injectedVersion, buildinfo.InjectedVersion())
 	}
 	if in.buildInfoVersion != "(devel)" {
 		t.Errorf("buildInfoVersion = %q, want %q for the test binary", in.buildInfoVersion, "(devel)")

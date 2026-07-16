@@ -12,11 +12,13 @@ afterEach(() => {
 export interface MatchMediaState {
   darkScheme: boolean;
   reducedMotion: boolean;
+  narrowCockpit: boolean;
 }
 
 export const matchMediaState: MatchMediaState = {
   darkScheme: true,
   reducedMotion: false,
+  narrowCockpit: false,
 };
 
 type Listener = (event: { matches: boolean }) => void;
@@ -29,6 +31,9 @@ export function dispatchMediaChange(query: string, matches: boolean): void {
   if (query.includes('prefers-reduced-motion')) {
     matchMediaState.reducedMotion = matches;
   }
+  if (query.includes('max-width: 900px')) {
+    matchMediaState.narrowCockpit = matches;
+  }
   for (const listener of listeners.get(query) ?? []) {
     listener({ matches });
   }
@@ -37,6 +42,7 @@ export function dispatchMediaChange(query: string, matches: boolean): void {
 function matchesFor(query: string): boolean {
   if (query.includes('prefers-color-scheme: dark')) return matchMediaState.darkScheme;
   if (query.includes('prefers-reduced-motion')) return matchMediaState.reducedMotion;
+  if (query.includes('max-width: 900px')) return matchMediaState.narrowCockpit;
   return false;
 }
 

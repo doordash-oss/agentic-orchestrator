@@ -292,9 +292,14 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 	if result := sess.Cost(); result != nil {
 		cost = result.TotalCostUSD
 	}
+	runNumber := 0
+	if runSession, ok := sess.(interface{ RunNumber() int }); ok {
+		runNumber = runSession.RunNumber()
+	}
 	return SessionSummaryDTO{
 		ID:           sess.ID(),
 		FeatureID:    sess.FeatureID(),
+		RunNumber:    runNumber,
 		Phase:        sess.Phase().String(),
 		Repo:         sess.RepoName(),
 		Kind:         sess.Kind().String(),
@@ -305,7 +310,7 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 		TurnState:    sessionTurnState(sess),
 		StartedAt:    sess.StartedAt(),
 		Iteration:    sess.Iteration(),
-		ContextPct:   sess.ContextPercentage(),
+		ContextPct:   max(sess.ContextPercentage(), 0),
 		Effort:       string(sess.EffectiveEffort()),
 		EffortSource: string(sess.EffortSource()),
 		Usage: UsageDTO{
@@ -320,6 +325,7 @@ func sessionDetailFromSummary(summary SessionSummaryDTO) SessionDetailDTO {
 	return SessionDetailDTO{
 		ID:           summary.ID,
 		FeatureID:    summary.FeatureID,
+		RunNumber:    summary.RunNumber,
 		Phase:        summary.Phase,
 		Repo:         summary.Repo,
 		Kind:         summary.Kind,

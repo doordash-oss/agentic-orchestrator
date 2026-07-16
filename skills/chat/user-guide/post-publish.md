@@ -1,104 +1,54 @@
 # Post-Publish Workflows
 
-After a feature reaches **CodeReady** or **Published** state, several actions are available for iterating on the code. These workflows let you make manual adjustments, rebase onto the latest main, address PR review feedback, or re-run the full pipeline.
+The Agentic Orchestrator runtime has workflows for continuing work after a feature reaches `CodeReady` or `Published`. The current Electron app does **not** expose controls for these workflows. This page explains their engine semantics for diagnosis and codebase exploration; it is not a set of desktop operating instructions.
 
-## Rebase (`b`)
+Do not use retired terminal shortcuts to start these actions. Rebase, review-comments, refactor, merge, Done, and worktree cleanup remain pending in the desktop parity matrix.
 
-Rebase updates the feature branch to incorporate the latest changes from the base branch.
+## Rebase
 
-### Starting a Rebase
+Rebase updates a feature branch against its base branch. For a publishable repository, the runtime fetches remote refs, determines the target, rebases, and updates the remote branch. A local-only repository uses its local base branch and does not push.
 
-Press `b` from the detail panel on a CodeReady or Published feature. When the feature spans 2+ repos, a cycle selector opens for per-repo rebase; for a single-repo feature the rebase dispatches directly without the selector.
+If conflicts occur, the runtime can build a conflict plan and run an implementation session to resolve it before continuing. Multi-repository features track this cycle per repository.
 
-### Flow
+**Electron status:** pending; no Rebase button or repository selector is currently available.
 
-For publishable (remote) features:
-1. Fetches the latest remote refs
-2. Determines the rebase target (PR base branch, repo base branch, or default branch)
-3. Checks if the feature branch is behind the target — if already up to date, reports so and stops
-4. Runs `git rebase` onto the remote target
-5. On success: **force-pushes** the rebased branch
+## Review Comments
 
-For non-publishable (local) features:
-1. Determines the local base branch
-2. Checks if behind — stops if up to date
-3. Runs `git rebase` onto the local target (no push)
+The review-comments cycle fetches unresolved pull-request feedback through `gh`, filters comments already handled in prior iterations, creates a resolution plan, runs an implementation session, updates the branch, replies with outcomes, and attempts to resolve inline threads.
 
-### Conflict Resolution
+If a required worktree was previously removed, the runtime can recreate it from durable feature state before the cycle.
 
-If the rebase encounters conflicts:
+**Electron status:** pending; no review-comments inbox or action is currently available.
 
-1. Agentic Orchestrator creates a **rebase plan** — a markdown document listing the conflict files and instructions for resolution
-2. An autonomous implementation session runs using the rebase plan, where the agent resolves conflicts and continues the rebase
-3. After resolution: commits any remaining changes and **force-pushes** (for publishable features)
+## Refactor
 
-## Review Comments (`g`)
+A refactor cycle accepts a new objective and sends an existing feature back through an appropriate planning and implementation path:
 
-Fetches PR review comments from GitHub and runs an autonomous session to address them.
+- Medium starts from planning.
+- Large and Moonshot include the earlier inquiry, research, and design work.
 
-### Starting
+The runtime retains the feature’s repository identity and publish state while tracking the refactor cycle per repository.
 
-Press `g` from the detail panel on a Published feature with a PR. When the feature spans 2+ repos, a cycle selector opens to choose which repo's review comments to address; for a single-repo feature the cycle dispatches directly without the selector.
+**Electron status:** pending; there is no refactor prompt, pipeline selector, or submit control in the current app.
 
-### Flow
+## Merge
 
-1. **Fetch** — retrieves all review comments from the PR via the `gh` CLI
-2. **Filter** — removes comments that were already addressed in previous iterations (tracked by comment ID)
-3. **Review plan** — builds a markdown plan listing each comment with its context
-4. **Implementation** — runs an autonomous agent session to address the comments
-5. **Commit and push** — commits changes with "Address review comments", pull-rebases, pushes
-6. **Reply** — posts replies to each comment on GitHub with the resolution (addressed with commit SHA, or dismissed with reason)
-7. **Resolve threads** — attempts to resolve review threads for inline comments
+For a non-publishable local repository, merge can commit remaining work, merge the feature branch into its local base branch, and mark the feature complete.
 
-If the worktree was previously cleaned, Agentic recreates it before starting.
+**Electron status:** pending; no Merge control is currently available.
 
-## Refactor (`Shift+F`)
+## Done
 
-Refactor re-runs the pipeline on a published or code-ready feature, letting the AI agent make deeper structural changes guided by your description.
+Marking a feature Done transitions its durable status and writes summary data such as timing, cost, and per-repository state after eligible work is complete.
 
-### Starting
+**Electron status:** pending; the current app can display a feature already reported as Done but cannot initiate the transition.
 
-Press `Shift+F` from the detail panel. A textarea appears where you describe the refactoring you want — submit with `Ctrl+S` or cancel with `Esc`. When the feature spans 2+ repos, a cycle selector first opens to choose which repo to refactor and each repo's refactor runs independently; for a single-repo feature the refactor dispatches directly without the selector.
+## Clean Worktree
 
-After submitting the prompt, a **pipeline selector** overlay appears so you can pick the profile for this refactor cycle — **Medium**, **Large** (default), or **Moonshot**. Navigate with `←`/`→` and confirm with `Enter`.
+Worktree cleanup removes an isolated feature worktree after it is no longer needed. Durable feature state remains, and a later engine workflow can recreate the worktree when supported.
 
-### Flow
+**Electron status:** pending; cleanup is manual outside the app in the current release. Confirm that no active session uses the worktree before changing it.
 
-The refactor transitions the feature back to an earlier pipeline phase based on the selected profile:
+## What the Current App Can Do
 
-- **Medium** — transitions to **PlanReady** and starts with planning
-- **Large / Moonshot** — transitions to **Inquiring** and runs the full inquiry → research → design → plan → implement cycle
-
-After implementation completes:
-1. Commits changes with "Apply refactor changes"
-2. For Published features with a PR: pull-rebases and pushes
-3. Returns to CodeReady or Published state
-
-## Merge (`Shift+M`)
-
-Merge is available only for **non-publishable features** (local repos with no remote) in the CodeReady state. It merges the feature branch into the local base branch.
-
-### Flow
-
-1. Commits any uncommitted changes with "Final changes before merge"
-2. Merges the feature branch into the base branch at the original repo path
-3. Marks the feature as Done
-
-## Done (`Shift+D`)
-
-Marks a feature as completed. Available from Published state, or from CodeReady state for non-publishable features.
-
-Not available while post-publish cycles (rebase, review comments, refactor) are still active.
-
-### What Happens
-
-1. Transitions the feature to **Done** status
-2. Writes a feature summary artifact (`observe-summary.yaml`) with timing data, cost data, and per-repo states
-
-## Clean Worktree (`c`)
-
-Removes the git worktree directory for a completed feature, freeing disk space. Available for features in **Published** or **Done** state that still have a worktree on disk.
-
-### Worktree Recreation
-
-If you later need to perform a post-publish action (rebase, review comments) on a feature whose worktree was cleaned, Agentic Orchestrator automatically recreates the worktree from the feature branch before starting the workflow.
+For a feature that has reached a terminal or post-implementation state, the Electron app can show its authoritative row on Home and open its feature tab. Current-run transcript content remains available when the runtime exposes it. Do not expect post-publish action controls, an artifact browser, a diff editor, or a pull-request review surface until those capabilities are marked delivered.

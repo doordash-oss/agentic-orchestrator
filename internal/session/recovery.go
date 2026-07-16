@@ -174,7 +174,7 @@ func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm
 			// of the implementation loop and its session ID must not be injected
 			// into the implement loop via --resume. A crashed review gate is
 			// handled by restarting the full implementation phase.
-			// The actual status transition is handled by the TUI via StartPhaseMsg.
+			// The next start request performs the status transition.
 			isReviewPhase := item.PIDFile.Phase == feature.PhaseReview.String()
 			// Allow resume metadata for Final Review but not for the
 			// per-iteration review gate.

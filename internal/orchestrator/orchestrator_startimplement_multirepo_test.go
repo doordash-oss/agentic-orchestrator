@@ -27,7 +27,7 @@ import (
 // These three tests drive the real StartFeature → startPhase(PhaseImplement)
 // → startImplement → StartMultiRepoImplementation → runMultiRepoImplFn →
 // phase supervisor → HandlePhaseCompletion chain. They exist to
-// prove Phase 6 put the new StartMultiRepoImplementation body on the hot
+// prove the StartMultiRepoImplementation body is on the hot
 // path (the R5 critic flag: "tests pass but production bypasses new code").
 // Each test overrides runMultiRepoImplFn with a spy and asserts the full
 // chain fires end-to-end.

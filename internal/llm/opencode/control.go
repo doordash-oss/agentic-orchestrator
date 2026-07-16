@@ -104,7 +104,7 @@ func (p *Protocol) buildPermissionControl(reqID string, pp RequestPermissionPara
 
 // normalizePermissionInput maps an ACP tool call to the normalized tool name and
 // input shape the existing permission UI and cache expect. Known kinds carry the
-// detail field the TUI renders (command for Bash, file_path for Write); unknown
+// detail field clients render (command for Bash, file_path for Write); unknown
 // kinds still surface as a permission prompt with a best-effort detail so the
 // user can decide rather than the tracer failing closed.
 func normalizePermissionInput(tc PermissionToolCall) (string, json.RawMessage) {

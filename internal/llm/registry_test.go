@@ -1275,7 +1275,7 @@ func TestRegistry_ProviderGroup(t *testing.T) {
 	})
 }
 
-// TestRegistry_CatalogDefaults_ProviderNeutralRanking proves Phase 6's
+// TestRegistry_CatalogDefaults_ProviderNeutralRanking proves the registry's
 // provider-neutral default selection: all providers compete as
 // peers under the same role-category and model-metadata rules. Any provider can win
 // any role when its catalog entry outranks the others, equal-ranked candidates

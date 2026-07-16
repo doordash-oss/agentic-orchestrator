@@ -101,6 +101,7 @@ export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): Wire
       logBuffer.append(`[gateway] ${redacted}\n`);
       warn(`[agentico-gateway] ${redacted}`);
     },
+    readDiagnosticLines: () => logBuffer.snapshot(),
   };
 
   return { gateway: new RuntimeGateway(deps), logBuffer };

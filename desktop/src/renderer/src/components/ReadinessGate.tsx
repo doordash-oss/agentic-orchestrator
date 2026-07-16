@@ -5,9 +5,10 @@
  * gate is unsatisfied, and the main view once everything passes. Mounted
  * fresh on every reconnect, so resume always starts from the server truth.
  */
-import { useCallback, useEffect, useState } from 'react';
-import type { ReadinessSnapshot } from '../../../shared/ipc';
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
+import type { AttentionItem, ReadinessSnapshot } from '../../../shared/ipc';
 import { WorkspaceShell } from '../features/WorkspaceShell';
+import type { AttentionDrafts } from '../features/AttentionInbox';
 import { deriveWizardState } from '../wizard/deriveWizardState';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { SetupWizard } from './wizard/SetupWizard';
@@ -17,7 +18,21 @@ type GateState =
   | { phase: 'error'; error: WizardError }
   | { phase: 'loaded'; snapshot: ReadinessSnapshot };
 
-export function ReadinessGate() {
+export function ReadinessGate({
+  attentionDrafts,
+  setAttentionDrafts,
+  attentionItems = [],
+  refreshAttention = async () => [],
+  attentionJump = null,
+  onAttentionJumpHandled = () => {},
+}: {
+  attentionDrafts?: AttentionDrafts;
+  setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
+  attentionItems?: AttentionItem[];
+  refreshAttention?: () => Promise<AttentionItem[]>;
+  attentionJump?: string | null;
+  onAttentionJumpHandled?: () => void;
+}) {
   const [state, setState] = useState<GateState>({ phase: 'loading' });
 
   const load = useCallback(() => {
@@ -63,7 +78,16 @@ export function ReadinessGate() {
 
   const derived = deriveWizardState(state.snapshot);
   if (derived.complete) {
-    return <WorkspaceShell />;
+    return (
+      <WorkspaceShell
+        attentionItems={attentionItems}
+        refreshAttention={refreshAttention}
+        attentionDrafts={attentionDrafts}
+        setAttentionDrafts={setAttentionDrafts}
+        attentionJump={attentionJump}
+        onAttentionJumpHandled={onAttentionJumpHandled}
+      />
+    );
   }
 
   return (

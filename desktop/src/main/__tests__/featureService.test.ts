@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FeatureSnapshotSchema, type ReadinessSnapshot } from '../../shared/ipc';
 import { FeatureService } from '../features';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
@@ -257,6 +257,53 @@ describe('FeatureService.dispatchSetup', () => {
   });
 });
 
+describe('FeatureService.dispatchAction', () => {
+  it('dispatches the exact start action once while concurrent callers share the flight', async () => {
+    let resolve!: (value: { status: number; body: unknown }) => void;
+    const request = vi.fn(
+      () =>
+        new Promise<{ status: number; body: unknown }>((done) => {
+          resolve = done;
+        }),
+    );
+    const { service } = makeService(request);
+    const input = { featureId: 'abcd1234ef567890', action: 'start' as const };
+    const first = service.dispatchAction(input);
+    const second = service.dispatchAction(input);
+    expect(request).toHaveBeenCalledOnce();
+    resolve({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        feature_id: input.featureId,
+        result: 'started',
+        phase: 'implement',
+        session_ids: ['session-1'],
+      },
+    });
+    await expect(first).resolves.toStrictEqual({
+      featureId: input.featureId,
+      action: 'start',
+      result: 'started',
+      phase: 'implement',
+      sessionIds: ['session-1'],
+    });
+    await expect(second).resolves.toStrictEqual(await first);
+    expect(request).toHaveBeenCalledWith(`/api/v1/features/${input.featureId}/actions/start`, {
+      method: 'POST',
+      body: {},
+    });
+  });
+
+  it('rejects every action outside the start/stop allowlist before transport', async () => {
+    const { service, calls } = makeService(() => ({ status: 200, body: {} }));
+    await expect(
+      service.dispatchAction({ featureId: 'abcd1234ef567890', action: 'delete' as never }),
+    ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe('FeatureService.getFeature', () => {
   it('maps the authoritative detail into the strict renderer snapshot', async () => {
     const { service } = makeService(() => ({ status: 200, body: detailBody() }));
@@ -358,6 +405,9 @@ describe('FeatureService.listFeatures', () => {
         currentPhase: 'Plan',
         repos: ['repo-a'],
         createdAt: '2026-07-14T10:00:00Z',
+        activeRun: 1,
+        runCount: 1,
+        warnings: [],
       },
     ]);
   });

@@ -22,7 +22,7 @@ import (
 
 // TestReconcileNeedUserInputGate covers the gate-questionnaire reconciliation:
 // a well-formed agent-authored record is preserved, while blank fields fall
-// back to the validated progress.md handoff so the TUI never shows an empty
+// back to the validated progress.md handoff so the desktop app never shows an empty
 // gate.
 func TestReconcileNeedUserInputGate(t *testing.T) {
 	progress := &ParsedProgress{

@@ -199,6 +199,34 @@ describe('ConnectionShell', () => {
     expect(mock.api.retryConnection).toHaveBeenCalledTimes(1);
   });
 
+  it('shows bounded app-runtime diagnostics behind a disclosure', async () => {
+    const mock = installAgenticoMock();
+    render(<ConnectionShell />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/resolving/i));
+    act(() => {
+      mock.emitConnection(
+        state({
+          status: 'crashed',
+          stage: 'connect',
+          detail: 'The app-managed runtime exited unexpectedly.',
+          error: { code: 'E_SERVER_CRASHED', message: 'exited' },
+          diagnostics: {
+            commandContext: 'bundled agentico server --config [path] --state-dir [path]',
+            logTail: ['startup failed at [path]', 'credential=[redacted]'],
+          },
+        }),
+      );
+    });
+
+    const disclosure = screen.getByText('App runtime diagnostics');
+    expect(disclosure).toBeInTheDocument();
+    await userEvent.click(disclosure);
+    expect(screen.getByText(/bundled agentico server/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Redacted runtime log tail')).toHaveTextContent(
+      /startup failed at \[path\]/,
+    );
+  });
+
   it('keeps the retry button reachable and focusable by keyboard', async () => {
     const mock = installAgenticoMock();
     render(<ConnectionShell />);

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,6 +34,7 @@ type NeedUserInputRecord struct {
 	Summary              string                        `yaml:"summary"`
 	Questions            []NeedUserInputQuestion       `yaml:"questions"`
 	Iteration            int                           `yaml:"iteration"`
+	WaitingSince         time.Time                     `yaml:"waiting_since,omitempty"`
 	VerificationDecision *NeedUserVerificationDecision `yaml:"verification_decision,omitempty"`
 }
 
@@ -209,6 +211,13 @@ func NeedUserInputPath(iterDir string) string {
 
 // WriteNeedUserInputRecord serialises rec as YAML and writes it to path.
 func WriteNeedUserInputRecord(path string, rec NeedUserInputRecord) error {
+	if rec.WaitingSince.IsZero() {
+		if info, err := os.Stat(path); err == nil {
+			rec.WaitingSince = info.ModTime().UTC()
+		} else {
+			rec.WaitingSince = time.Now().UTC()
+		}
+	}
 	data, err := yaml.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("marshal need-user-input: %w", err)

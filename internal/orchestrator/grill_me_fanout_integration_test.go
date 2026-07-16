@@ -372,7 +372,7 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 
 // promptTail returns the last 1500 bytes of a prompt for diagnostic display
 // when an assertion fails. Mirrors the helper in
-// internal/tui/grill_me_smoke_test.go.
+// internal/orchestrator/grill_me_fanout_integration_test.go.
 func promptTail(prompt string) string {
 	const tailBytes = 1500
 	if len(prompt) <= tailBytes {

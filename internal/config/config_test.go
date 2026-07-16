@@ -604,56 +604,6 @@ func TestUtilitiesModelRoundTrip(t *testing.T) {
 	}
 }
 
-func TestKeyboardLayoutNordic(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	content := []byte(`defaults:
-  models:
-    research: opus
-    planning: opus
-    implementation: opus
-    review: codex
-ui:
-  keyboard_layout: "nordic"
-`)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.UI.KeyboardLayout != "nordic" {
-		t.Errorf("expected keyboard_layout nordic, got %q", loaded.UI.KeyboardLayout)
-	}
-}
-
-func TestKeyboardLayoutInvalidResetsToEmpty(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	content := []byte(`defaults:
-  models:
-    research: opus
-    planning: opus
-    implementation: opus
-    review: codex
-ui:
-  keyboard_layout: "nordc"
-`)
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.UI.KeyboardLayout != "" {
-		t.Errorf("expected invalid keyboard_layout to be reset to empty, got %q", loaded.UI.KeyboardLayout)
-	}
-}
-
 // --- KBBuild field tests ---
 
 func TestNewDefaultKBBuild(t *testing.T) {

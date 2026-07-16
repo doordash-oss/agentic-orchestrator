@@ -36,9 +36,8 @@ func readFileSafe(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// publishRepo publishes a single repo's branch as a PR. Mirrors
-// app.go:5022-5154 (autoPublishRepoCmd) but runs synchronously and consumes
-// port interfaces instead of the package-level git helpers.
+// publishRepo publishes a single repo's branch as a PR. It runs synchronously
+// and consumes port interfaces instead of package-level git helpers.
 //
 // The caller is expected to have already verified IsPublishable + AutoPublish
 // conditions (startPublish for manual flows). Per-repo failures call
@@ -250,7 +249,6 @@ func (o *Orchestrator) applyCrossRefs(f *feature.Feature, justPublishedRepo, jus
 
 // buildCrossRefEntries builds per-repo CrossRefEntry values for the current
 // feature state, substituting the just-published URL for its own repo.
-// Mirrors app.go:5187-5207.
 func buildCrossRefEntries(f *feature.Feature, justPublishedRepo, justPublishedURL string) []ports.CrossRefEntry {
 	var entries []ports.CrossRefEntry
 	for _, repo := range f.Repos {

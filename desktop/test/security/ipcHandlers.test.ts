@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
 import type { TrustedSender } from '../../src/main/security';
-import { IPC_CHANNELS, defaultSettings } from '../../src/shared/ipc';
+import {
+  IPC_CHANNELS,
+  IPC_EVENTS,
+  defaultSettings,
+  type SessionOutputEvent,
+} from '../../src/shared/ipc';
 
 const trusted: TrustedSender = {
   webContentsId: 1,
@@ -63,11 +68,24 @@ function makeServices(): IpcServices {
         currentPhase: 'Plan',
         repos: [],
         createdAt: '2026-07-14T10:00:00Z',
+        activeRun: 1,
         actions: [],
       }),
     ),
     createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
+    dispatchFeatureAction: vi.fn(() => Promise.reject(new Error('unused'))),
+    getAttention: vi.fn(() => Promise.resolve({ items: [] })),
+    answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    answerQuestions: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
+    resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
+    listSessions: vi.fn(() => Promise.resolve([])),
+    getSession: vi.fn(() => Promise.reject(new Error('unused'))),
+    getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
+    openSessionOutput: vi.fn(() => 'sub-unused'),
+    cancelSessionOutput: vi.fn(() => false),
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
     ),
@@ -112,6 +130,21 @@ describe('registerIpcHandlers', () => {
     };
     expect(result.ok).toBe(true);
     expect(result.value.status).toBe('discovering');
+  });
+
+  it('invokes the required attention service instead of returning a fallback success', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.attentionAnswerPermission)!(goodEvent, {
+      requestId: 'perm-1',
+      decision: 'deny',
+    })) as { ok: boolean; value: { result: string } };
+
+    expect(result.ok).toBe(true);
+    expect(result.value.result).toBe('submitted');
+    expect(services.answerPermission).toHaveBeenCalledWith({
+      requestId: 'perm-1',
+      decision: 'deny',
+    });
   });
 
   it('rejects a connection state carrying token-shaped fields fail-closed', async () => {
@@ -194,5 +227,40 @@ describe('registerIpcHandlers', () => {
     expect(result.error?.code).toBe('E_INTERNAL');
     expect(result.error?.message).not.toContain('/Users/somebody');
     expect(result.error?.message).not.toContain('tok123');
+  });
+
+  it('does not send session output after the renderer is destroyed', async () => {
+    let emit!: (event: SessionOutputEvent) => void;
+    const services = makeServices();
+    services.openSessionOutput = vi.fn((_request, listener) => {
+      emit = listener;
+      return 'sub-fixed';
+    });
+    const send = vi.fn();
+    const sender = {
+      id: 1,
+      send,
+      isDestroyed: vi.fn(() => false),
+    };
+    const event = {
+      sender,
+      senderFrame: { url: 'file:///app/out/renderer/index.html' },
+    };
+    const { handlers } = register(services);
+
+    await expect(
+      handlers.get(IPC_CHANNELS.sessionsOutputOpen)!(event, {
+        sessionId: 'session-1',
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { subscriptionId: 'sub-fixed' } });
+    sender.isDestroyed.mockReturnValue(true);
+    emit({
+      subscriptionId: 'sub-fixed',
+      type: 'done',
+      sessionId: 'session-1',
+      nextIndex: 1,
+    });
+
+    expect(send).not.toHaveBeenCalledWith(IPC_EVENTS.sessionOutput, expect.anything());
   });
 });

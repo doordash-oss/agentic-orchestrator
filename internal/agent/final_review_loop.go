@@ -760,6 +760,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		sessOpts.EffectiveEffort = finalReviewFixEffectiveEffort(cfg)
 		sessOpts.EffortSource = finalReviewFixEffortSource(cfg)
 	}
+	sessOpts.RunNumber = cfg.Feature.ActiveRun
 	if cfg.FinishOrViolateNudge {
 		sessOpts.TurnMode = ports.TurnModeInteractive
 	}

@@ -14,7 +14,7 @@
 
 // Package orchestrator wires the feature-level review-comments cycle. One call
 // to startFeatureReviewComments aggregates the per-repo `comments.json`
-// artifacts the TUI saved across every Feature.Repos PR into one work list,
+// artifacts the desktop app saved across every Feature.Repos PR into one work list,
 // launches agent.RunReviewCommentsLoop, and translates the loop outcome into
 // the per-repo lifecycle surface used by downstream listeners.
 package orchestrator
@@ -33,12 +33,12 @@ import (
 
 // startFeatureReviewComments launches the unified review-comments cycle.
 // Aggregates unaddressed PR comments across every Feature.Repos PR (by
-// reading the per-repo `comments.json` artifacts the TUI saved when the
+// reading the per-repo `comments.json` artifacts the desktop app saved when the
 // user dispatched the cycle), builds the agent.ReviewCommentsLoopConfig,
 // and runs RunReviewCommentsLoop in a background goroutine tracked by
 // cycleWG.
 //
-// The hintRepoName argument is the repo the TUI initially dispatched
+// The hintRepoName argument is the repo the desktop app initially dispatched
 // from (the user picked one in the comments view). Under the unified
 // flow this is purely a hint — the loop aggregates every Feature.Repos
 // PR with unaddressed comments, including the hint repo. When no other
@@ -65,18 +65,18 @@ func (o *Orchestrator) startFeatureReviewComments(
 	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review, "")
 
 	// Aggregate comments across every Feature.Repos PR. Each repo's
-	// per-repo comments.json was saved by the TUI before dispatch
+	// per-repo comments.json was saved by the desktop app before dispatch
 	// (startReviewCommentsRepoCycleFromView). If a repo has no saved
 	// file or zero comments, it is silently skipped — only repos with
 	// at least one unaddressed comment enter the staged subset.
 	targets := o.aggregateReviewCommentTargets(f)
 	if len(targets) == 0 {
 		// Nothing to address. Surface as a clean error to the caller so
-		// the TUI can clear its "starting" status.
+		// the desktop app can clear its "starting" status.
 		return "", fmt.Errorf("review-comments: no unaddressed comments found for feature %s", featureID)
 	}
 
-	// Open per-repo cycle entries for every staged repo so existing TUI
+	// Open per-repo cycle entries for every staged repo so existing desktop app
 	// rendering paths (RepoCycles[name].Status == "running") light up while
 	// the feature-level review-comments loop runs.
 	for _, t := range targets {
@@ -89,7 +89,7 @@ func (o *Orchestrator) startFeatureReviewComments(
 		return "", fmt.Errorf("reload feature: %w", err)
 	}
 
-	// Stage the aggregated review plan synchronously so the TUI / tests
+	// Stage the aggregated review plan synchronously so the desktop app / tests
 	// can read it immediately after this method returns. The async
 	// loop's plan write below will overwrite with identical content —
 	// the operation is idempotent.
@@ -134,13 +134,13 @@ func (o *Orchestrator) startFeatureReviewComments(
 }
 
 // aggregateReviewCommentTargets walks every Feature.Repos entry and
-// loads the per-repo `comments.json` saved by the TUI. Repos with no
+// loads the per-repo `comments.json` saved by the desktop app. Repos with no
 // saved file or zero unaddressed comments are silently skipped.
 //
 // The returned slice carries one ReviewCommentsRepoTarget per repo with
 // at least one unaddressed comment, sorted by repo name for
 // deterministic plan output. Each target's PRURL is read from the
-// repo's RepoStates entry; mode is the per-repo mode the TUI saved.
+// repo's RepoStates entry; mode is the per-repo mode the desktop app saved.
 func (o *Orchestrator) aggregateReviewCommentTargets(
 	f *feature.Feature,
 ) []agent.ReviewCommentsRepoTarget {
@@ -214,7 +214,7 @@ func (o *Orchestrator) stageReviewCommentsPlanArtifacts(
 }
 
 // handleFeatureReviewCommentsDone routes the unified review-comments
-// loop's result back into the per-repo legacy plumbing so the TUI's
+// loop's result back into the per-repo legacy plumbing so the desktop app's
 // existing event chain keeps working. On success: commit + push each
 // staged repo's branch, dispatch comment replies via the Reviewer port,
 // then clear each per-repo cycle entry. On failure: per-repo

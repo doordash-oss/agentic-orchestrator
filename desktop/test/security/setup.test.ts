@@ -64,6 +64,18 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getFeature: vi.fn(() => Promise.reject(new Error('not_found: feature not found'))),
     createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
+    dispatchFeatureAction: vi.fn(() => Promise.reject(new Error('unused'))),
+    getAttention: vi.fn(() => Promise.resolve({ items: [] })),
+    answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    answerQuestions: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
+    resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
+    listSessions: vi.fn(() => Promise.resolve([])),
+    getSession: vi.fn(() => Promise.reject(new Error('unused'))),
+    getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
+    openSessionOutput: vi.fn(() => 'sub-unused'),
+    cancelSessionOutput: vi.fn(() => false),
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],

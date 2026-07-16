@@ -275,7 +275,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		return nil, fmt.Errorf("rebase loop: writing rebase plan: %w", err)
 	}
 
-	// Mid-flight phase status surfaced to the TUI (mirrors phase-implement /
+	// Mid-flight phase status surfaced to the desktop app (mirrors phase-implement /
 	// FR loop conventions). Cleared via defer so a panic still resets it.
 	setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "rebasing")
 	defer setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "")
@@ -432,7 +432,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		// surface conflict (LastError carries it) and leave for human
 		// resolution. Every staged repo transitions to failed (LastError set); the
 		// feature stays at its prior cycle entry but ActiveCycle.Status
-		// flips to "failed" so the TUI surfaces the rebase row in red.
+		// flips to "failed" so the desktop app surfaces the rebase row in red.
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     repoNames,
@@ -602,7 +602,7 @@ func clearActiveCycle(store ports.FeatureStore, featureID string) error {
 }
 
 // markActiveCycleFailed flips Feature.ActiveCycle.Status to "failed" so
-// the TUI surfaces the rebase row in red. ActiveCycle stays populated so
+// the desktop app surfaces the rebase row in red. ActiveCycle stays populated so
 // the user can see which cycle failed and trigger a restart.
 func markActiveCycleFailed(store ports.FeatureStore, featureID, lastError string) error {
 	if store == nil {

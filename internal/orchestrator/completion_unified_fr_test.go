@@ -65,8 +65,8 @@ func untrackedFinalReviewArtifactsRunner(t *testing.T, candidates []string) *moc
 
 // TestOrchestrator_StartFeature_InterruptedFinalReview_ReDispatchesFR is the
 // regression for: pressing [r] on a feature stuck at StatusInterrupted with
-// CurrentPhase=PhaseFinalReview was a silent no-op. The TUI's restart path
-// asks RestartPhase for the dispatch action and forwards via StartFeature.
+// CurrentPhase=PhaseFinalReview was a silent no-op. RestartPhase returns the
+// dispatch action and StartFeature executes it.
 // Before the fix, startPhase had no case for PhaseFinalReview and returned
 // "unknown phase 8" — the error was swallowed. Now startFinalReview re-runs
 // the deferred FR pass and advances through MarkCodeReady on success.

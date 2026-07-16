@@ -17,6 +17,7 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // SDKMessage is the envelope for all JSON messages from LLM CLI tools.
@@ -60,7 +61,7 @@ type SDKMessage struct {
 	// are NOT stored in the message log.
 	StreamDeltaType string `json:"-"`
 
-	// LocallyAppended is true for messages synthetically added by the TUI
+	// LocallyAppended is true for messages synthetically added by the desktop app
 	// (e.g. user-typed chat input in the attach view).
 	LocallyAppended bool `json:"-"`
 	// AutoPicked marks locally appended AskUserQuestion answers selected by
@@ -457,9 +458,10 @@ func (r *ResultMessage) IsTurnTruncated() bool {
 
 // ControlRequestMessage is a permission or hook callback request.
 type ControlRequestMessage struct {
-	Type      string         `json:"type"`
-	RequestID string         `json:"request_id"`
-	Request   ControlRequest `json:"request"`
+	Type         string         `json:"type"`
+	RequestID    string         `json:"request_id"`
+	Request      ControlRequest `json:"request"`
+	WaitingSince time.Time      `json:"-"`
 }
 
 // ControlRequest is the inner request payload.

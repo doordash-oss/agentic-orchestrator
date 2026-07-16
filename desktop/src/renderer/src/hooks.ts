@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ConnectionState, ThemeInfo, ThemePreference } from '../../shared/ipc';
 
 /** Subscribes to a media query reactively. */
-function useMediaQuery(query: string): boolean {
+export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
     const list = window.matchMedia(query);

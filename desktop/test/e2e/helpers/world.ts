@@ -31,6 +31,8 @@ export interface JourneyWorld {
   authStatePath: string;
   /** Marker file: while present the stub sleeps before answering auth. */
   authDelayPath: string;
+  /** One line per real stream-json provider session (catalog/auth probes excluded). */
+  providerInvocationLog: string;
 }
 
 export interface WorldOptions {
@@ -40,6 +42,10 @@ export interface WorldOptions {
   authDelaySeconds?: number;
   /** Pre-configure the workspace root so the wizard is already satisfied. */
   presetWorkspaceRoot?: boolean;
+  /** Emit deterministic Claude stream-json activity for a real workflow session. */
+  workflowProvider?: boolean;
+  /** Emit deterministic blocking-control requests for attention journeys. */
+  attentionProvider?: boolean;
 }
 
 const STUB_VERSION = '2.99.0 (Claude Code)';
@@ -59,8 +65,17 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
   const claudeStub = path.join(stubDir, 'claude-stub');
   const authStatePath = path.join(stubDir, 'claude-auth.json');
   const authDelayPath = path.join(stubDir, 'claude-auth-delay');
+  const providerInvocationLog = path.join(stubDir, 'workflow-invocations.log');
   const delaySeconds = options.authDelaySeconds ?? 0;
-  writeStubCli(claudeStub, authStatePath, authDelayPath, delaySeconds);
+  writeStubCli(
+    claudeStub,
+    authStatePath,
+    authDelayPath,
+    providerInvocationLog,
+    delaySeconds,
+    options.workflowProvider === true,
+    options.attentionProvider === true,
+  );
   writeAuthState(authStatePath, options.auth ?? { loggedIn: false });
   if (delaySeconds > 0) {
     // The journey deletes this marker once it has captured the connection
@@ -80,6 +95,7 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     claudeStub,
     authStatePath,
     authDelayPath,
+    providerInvocationLog,
   };
   writeRuntimeConfig(world, options.presetWorkspaceRoot === true);
   return world;
@@ -96,7 +112,10 @@ function writeStubCli(
   stubPath: string,
   authStatePath: string,
   authDelayPath: string,
+  providerInvocationLog: string,
   authDelaySeconds: number,
+  workflowProvider: boolean,
+  attentionProvider: boolean,
 ): void {
   const script = [
     '#!/bin/sh',
@@ -114,6 +133,95 @@ function writeStubCli(
     '    exit 0',
     '    ;;',
     'esac',
+    ...(workflowProvider
+      ? [
+          'is_stream=0',
+          'for arg in "$@"; do',
+          '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
+          'done',
+          'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
+          `printf 'session\\n' >> "${providerInvocationLog}"`,
+          `echo '{"type":"system","subtype":"init","session_id":"e2e-workflow-session"}'`,
+          `echo '{"type":"assistant","subtype":"partial","message":{"role":"assistant","content":[{"type":"text","text":"Backfill ready: inspecting the isolated workspace."}]}}'`,
+          `echo '{"type":"assistant","subtype":"partial","message":{"role":"assistant","content":[{"type":"text","text":"Backfill ready: isolated workspace inspected; live plan follows."}]}}'`,
+          `echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-e2e-1","name":"Read","input":{"file_path":"README.md"}},{"type":"tool_use","id":"tool-e2e-2","name":"TaskCreate","input":{"description":"Prove packaged live supervision"}}]}}'`,
+          'trap "exit 0" TERM INT HUP',
+          'i=1',
+          'while [ "$i" -le 240 ]; do',
+          `  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Live semantic update %03d — provider fixture remains supervised."}]}}\\n' "$i"`,
+          '  i=$((i + 1))',
+          '  sleep 0.02',
+          'done',
+          `echo '{"type":"system","subtype":"task_started","task_id":"task-e2e-1","tool_use_id":"tool-e2e-2","description":"Inspect packaged reconnect coverage","task_type":"local_agent","prompt":"Verify the supervised journey."}'`,
+          `echo '{"type":"system","subtype":"task_progress","task_id":"task-e2e-1","tool_use_id":"tool-e2e-2","description":"Checking replay-safe activity","last_tool_name":"Read"}'`,
+          `printf '%s\\n' '{"type":"tool_progress","tool_use_id":"tool-e2e-3","tool_name":"Write","data":"File: README.md\\nStatus: in_progress"}'`,
+          `echo '{"type":"system","subtype":"task_notification","task_id":"task-e2e-1","tool_use_id":"tool-e2e-2","status":"completed","summary":"Reconnect fixture ready"}'`,
+          '# Stay alive until the real server Stop action sends the Claude interrupt request.',
+          '# If the server crashes, its stdin pipe closes. Keep the orphan alive so the',
+          '# replacement server can recover the persisted process group and stop it.',
+          'while :; do',
+          '  if IFS= read -r input; then',
+          '    case "$input" in',
+          `      *'"subtype":"interrupt"'*)`,
+          `        echo '{"type":"result","subtype":"success","session_id":"e2e-workflow-session","total_cost_usd":0}'`,
+          '        exit 0',
+          '        ;;',
+          '    esac',
+          '  else',
+          '    sleep 1',
+          '  fi',
+          'done',
+        ]
+      : []),
+    ...(attentionProvider
+      ? [
+          'is_stream=0',
+          'for arg in "$@"; do',
+          '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
+          'done',
+          'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
+          `printf 'attention-session\\n' >> "${providerInvocationLog}"`,
+          'IFS= read -r _agentico_init || exit 1',
+          'IFS= read -r _agentico_prompt || exit 1',
+          `printf 'initial:%s\\n' "$_agentico_prompt" >> "${providerInvocationLog}"`,
+          'emit_request() {',
+          '  _json="$1"',
+          '  _id="$2"',
+          '  printf "%s\\n" "$_json"',
+          `  printf 'pending:%s\\n' "$_id" >> "${providerInvocationLog}"`,
+          '  if IFS= read -r _response; then',
+          `    printf 'response:%s:%s\\n' "$_id" "$_response" >> "${providerInvocationLog}"`,
+          '  else',
+          '    exit 0',
+          '  fi',
+          '}',
+          'case "$_agentico_prompt" in',
+          '  *"Phase 3 attention chat help"*)',
+          `    echo '{"type":"system","subtype":"init","session_id":"e2e-attention-chat"}'`,
+          `    echo '{"type":"result","subtype":"success","session_id":"e2e-attention-chat","total_cost_usd":0}'`,
+          `    printf 'chat-waiting\\n' >> "${providerInvocationLog}"`,
+          '    while :; do',
+          '      if IFS= read -r _help; then',
+          `      printf 'help-response:%s\\n' "$_help" >> "${providerInvocationLog}"`,
+          '        exit 0',
+          '      fi',
+          '      sleep 0.2',
+          '    done',
+          '    exit 0',
+          '    ;;',
+          'esac',
+          `echo '{"type":"system","subtype":"init","session_id":"e2e-attention-session"}'`,
+          `echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Attention fixture ready."}]}}'`,
+          `emit_request '{"type":"control_request","request_id":"perm-allow-once","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"printf allow-once"}}}' "perm-allow-once"`,
+          `emit_request '{"type":"control_request","request_id":"perm-stale","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"printf stale-resolution"}}}' "perm-stale"`,
+          `emit_request '{"type":"control_request","request_id":"perm-deny","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"printf deny-me"}}}' "perm-deny"`,
+          `emit_request '{"type":"control_request","request_id":"perm-remember","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"npm test -- --private-token=private-token"}}}' "perm-remember"`,
+          `emit_request '{"type":"control_request","request_id":"perm-remember-followup","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"npm test -- --private-token=private-token"}}}' "perm-remember-followup"`,
+          `emit_request '{"type":"control_request","request_id":"ask-bundle","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which verification tracks should be included?","header":"Verification tracks","multi_select":true,"options":[{"label":"Unit tests","description":"Exercise renderer and server contracts.","confidence":0.5},{"label":"Packaged smoke","description":"Drive the shipped Electron app.","confidence":0.5},{"label":"Manual note","description":"Record a supplemental operator note.","confidence":0.2}]},{"question":"Which note should be attached to the evidence bundle?","header":"Evidence note","options":[]}]}}}' "ask-bundle"`,
+          `echo '{"type":"result","subtype":"success","session_id":"e2e-attention-session","total_cost_usd":0}'`,
+          'exit 0',
+        ]
+      : []),
     'exit 1',
     '',
   ].join('\n');
@@ -254,6 +362,7 @@ export function minimalEnv(world?: JourneyWorld): Record<string, string> {
     PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
     TMPDIR: process.env['TMPDIR'] ?? os.tmpdir(),
     LANG: process.env['LANG'] ?? 'en_US.UTF-8',
+    AGENTICO_E2E_ALLOW_LARGE_WINDOW: '1',
   };
   if (world !== undefined) {
     env['HOME'] = world.home;

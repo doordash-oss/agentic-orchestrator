@@ -40,15 +40,23 @@ const (
 // scanning. Defined in ports so domain code can manipulate recovery items
 // without importing internal/session.
 type PIDFile struct {
-	PID         int       `yaml:"pid"`
-	StartedAt   time.Time `yaml:"started"`
-	FeatureID   string    `yaml:"feature"`
-	Phase       string    `yaml:"phase"`
-	Iteration   int       `yaml:"iteration"`
-	WorktreeDir string    `yaml:"worktree"`
-	SessionID   string    `yaml:"session_id,omitempty"`
-	RepoName    string    `yaml:"repo_name,omitempty"`
-	Dir         string    `yaml:"-"`
+	PID         int         `yaml:"pid"`
+	StartedAt   time.Time   `yaml:"started"`
+	FeatureID   string      `yaml:"feature"`
+	ManagerID   string      `yaml:"manager_session_id,omitempty"`
+	RunNumber   int         `yaml:"run_number,omitempty"`
+	Phase       string      `yaml:"phase"`
+	Iteration   int         `yaml:"iteration"`
+	WorktreeDir string      `yaml:"worktree"`
+	SessionID   string      `yaml:"session_id,omitempty"`
+	RepoName    string      `yaml:"repo_name,omitempty"`
+	WorkDir     string      `yaml:"work_dir,omitempty"`
+	LogPath     string      `yaml:"log_path,omitempty"`
+	Transcript  string      `yaml:"transcript_path,omitempty"`
+	Provider    string      `yaml:"provider,omitempty"`
+	Kind        SessionKind `yaml:"kind,omitempty"`
+	Label       string      `yaml:"label,omitempty"`
+	Dir         string      `yaml:"-"`
 }
 
 // RecoveryItem packages everything the orchestrator needs to make a

@@ -292,6 +292,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		sessOpts.EffectiveEffort = effectiveEffort
 		sessOpts.EffortSource = effortSource
 	}
+	sessOpts.RunNumber = f.ActiveRun
 	WriteDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, cfg.Prompt)
 	sessOpts.PermCacheScope = ""
 	sessionCtx := phaseCtx.Child()
@@ -567,6 +568,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		sessOpts.EffectiveEffort = kbEffectiveEffort
 		sessOpts.EffortSource = kbEffortSource
 	}
+	sessOpts.RunNumber = f.ActiveRun
 	if sessOpts.LogPath == "" {
 		sessOpts.LogPath = logPath
 	}
@@ -717,7 +719,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 	if pr.Config != nil && pr.Config.Defaults.MaxPhasePlanIterations > 0 {
 		maxAttempts = pr.Config.Defaults.MaxPhasePlanIterations
 	}
-	// Honor per-feature budget override (set by "iterate more" in the TUI).
+	// Honor per-feature budget override (set by "iterate more" in the desktop app).
 	if f.MaxPlanIterations > maxAttempts {
 		maxAttempts = f.MaxPlanIterations
 	}
@@ -1112,7 +1114,7 @@ func (pr *PhaseRunner) resolveLoopLimits(f *feature.Feature) (int, int, int) {
 // AskUserQuestion is still carved out in session.handleControlRequest.
 //
 // When skip is false (normal mode): auto-approve reads and file edits;
-// leave Bash and other tools for the TUI to prompt.
+// leave Bash and other tools for the desktop app to prompt.
 //
 // The returned handler is always wrapped in a SizeGuardHandler that denies
 // oversized Claude Write calls — see permission.SizeGuardHandler for the
@@ -1347,7 +1349,7 @@ type BuildSessionOpts struct {
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
-// Used by TUI components and loop configs that need to create sessions.
+// Used by desktop app components and loop configs that need to create sessions.
 type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
 var sessionWatchdogConfig = ports.SessionWatchdogConfig{
@@ -1627,7 +1629,7 @@ func currentAgenticoBinPath() string {
 
 // AskingClauseForModel returns the asking-questions clause for a given model.
 // Exported wrapper around the private askingQuestionsClauseForModel for use
-// by external callers (e.g. TUI).
+// by external callers (e.g. desktop app).
 func (pr *PhaseRunner) AskingClauseForModel(model string) string {
 	return pr.askingQuestionsClauseForModel(model)
 }

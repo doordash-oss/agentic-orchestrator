@@ -45,6 +45,27 @@ interface FeatureSnapshotLite {
   actions: { id: string; enabled: boolean; disabledReasons: { code: string; message: string }[] }[];
 }
 
+interface SessionSummaryLite {
+  id: string;
+  featureId: string;
+  phase: string;
+  status: string;
+}
+
+interface SessionTranscriptLite {
+  cursor: { start: number; end: number; total?: number };
+  messages: { index: number; role: string; type: string; text?: string }[];
+}
+
+interface AttentionItemLite {
+  kind: 'permission' | 'questions' | 'help' | 'gate';
+  id: string;
+  featureId?: string;
+  sessionId?: string;
+  repoName?: string;
+  cycleType?: string;
+}
+
 declare global {
   interface Window {
     agentico: {
@@ -53,6 +74,20 @@ declare global {
       refreshReadiness(): Promise<ReadinessLite>;
       listFeatures(): Promise<{ id: string; name: string; status: string }[]>;
       getFeature(featureId: string): Promise<FeatureSnapshotLite>;
+      listSessions(): Promise<SessionSummaryLite[]>;
+      getSessionTranscript(request: {
+        sessionId: string;
+        offset?: number;
+        limit?: number;
+      }): Promise<SessionTranscriptLite>;
+      getAttention(): Promise<{ items: AttentionItemLite[] }>;
+      answerPermission(input: {
+        requestId: string;
+        sessionId?: string;
+        decision: 'allow_once' | 'allow_remember' | 'deny';
+        rememberPattern?: string;
+        rememberScope?: string;
+      }): Promise<{ result: string; notice?: string; alreadyResolved?: boolean }>;
       createFeature(input: {
         name: string;
         description: string;

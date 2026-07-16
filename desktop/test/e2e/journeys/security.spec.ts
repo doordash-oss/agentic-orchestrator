@@ -38,22 +38,35 @@ import {
 /** Exactly the AgenticoApi surface from src/shared/ipc.ts — nothing more. */
 const EXPECTED_API_SURFACE = [
   'addWorkspaceRoot',
+  'answerPermission',
+  'answerQuestions',
+  'cancelSessionOutput',
   'createFeature',
+  'dispatchFeatureAction',
   'dispatchFeatureSetup',
+  'getAttention',
   'getConnectionStatus',
   'getCreationDefaults',
   'getFeature',
   'getReadiness',
+  'getSession',
+  'getSessionTranscript',
   'getSettings',
   'getThemePreference',
   'initRepository',
   'listFeatures',
   'listRepositories',
+  'listSessions',
   'onAppEvent',
   'onConnectionChanged',
+  'onSessionOutput',
+  'openSessionOutput',
   'pickWorkspaceDirectory',
   'refreshReadiness',
+  'resolveGate',
   'retryConnection',
+  'saveGateDraft',
+  'sendHelp',
   'setThemePreference',
   'updateSettings',
 ];
@@ -82,7 +95,7 @@ test('packaged security posture: no token in the renderer, locked-down window, c
       executablePath: roExecutable,
       traceName: 'security-posture',
     });
-    await expect(handle.page.getByRole('heading', { name: 'New feature' })).toBeVisible({
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
     transcript.step('app launched from the read-only root and reached the ready workspace');

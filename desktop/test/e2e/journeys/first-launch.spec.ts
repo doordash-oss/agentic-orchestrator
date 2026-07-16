@@ -18,6 +18,7 @@ import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
+  createFeatureViaForm,
   evidenceShot,
   evidenceShotBothThemes,
   launchApp,
@@ -28,6 +29,7 @@ import {
   type AppHandle,
 } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
+import { tailText } from '../helpers/runtime';
 import {
   createPlainFolder,
   createWorld,
@@ -150,34 +152,28 @@ test('first launch: wizard-gated creation reaches Ready to start', async ({}, te
     await expect(consent).toBeVisible();
     await evidenceShot(handle, 'repo-init-consent-dark');
     await consent.getByRole('button', { name: 'Initialize repository' }).click();
-    await expect(handle.page.getByRole('heading', { name: 'New feature' })).toBeVisible({
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 30_000,
     });
     await setTheme(handle, 'light');
     transcript.step(
-      'consented; server initialized the repository (git init + initial empty commit), rediscovered the workspace, and every wizard gate passed → workspace shell with the creation form',
+      'consented; server initialized the repository (git init + initial empty commit), rediscovered the workspace, and every wizard gate passed → Home with an explicit New feature entry point',
     );
 
     transcript.section('Create the feature (name/description/repo/branch)');
-    await handle.page.locator('#feature-name').fill('Tracer Bullet');
-    await handle.page
-      .locator('#feature-description')
-      .fill('First packaged end-to-end feature creation.');
-    await handle.page.getByRole('checkbox', { name: /demo-app/ }).check();
-    await expect(
-      handle.page.getByRole('radio', { name: 'New feature branch (server default)' }),
-    ).toBeChecked();
-    await handle.page.getByRole('button', { name: 'Create feature' }).click();
-
     transcript.section('Ordered setup tasks → Ready to start');
-    const cockpit = handle.page.getByLabel('Feature Tracer Bullet');
-    await expect(cockpit).toBeVisible({ timeout: 30_000 });
-    await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
+    const cockpit = await createFeatureViaForm(handle, {
+      name: 'Tracer Bullet',
+      description: 'First packaged end-to-end feature creation.',
+      repoPatterns: [/demo-app/],
+      waitForReady: true,
+    });
     await expect(cockpit.getByText('1 of 1 tasks complete')).toBeVisible();
     const worktreeTask = cockpit.locator('.task-row', { hasText: 'Worktree: demo-app' });
     await expect(worktreeTask).toContainText('Done');
-    await expect(cockpit.getByRole('button', { name: 'Start' })).toHaveCount(0);
-    await expect(cockpit.getByText("Starting isn't available in this version yet.")).toBeVisible();
+    await expect(cockpit.getByRole('button', { name: 'Start' })).toBeVisible();
+    await expect(cockpit.getByRole('button', { name: 'Start' })).toBeEnabled();
+    await expect(cockpit.getByText("Starting isn't available in this version yet.")).toHaveCount(0);
     await evidenceShotBothThemes(handle, 'ready-to-start');
 
     const features = await handle.page.evaluate(() => window.agentico.listFeatures());
@@ -261,7 +257,7 @@ test('first launch: wizard-gated creation reaches Ready to start', async ({}, te
 });
 
 function nonemptyLogExcerpt(logText: string, lines: number): string {
-  const excerpt = tail(logText, lines).trim();
+  const excerpt = tailText(logText, lines).trim();
   return excerpt === ''
     ? '[no app/server process output was emitted; PID lifecycle assertions verified shutdown]'
     : excerpt;
@@ -304,9 +300,4 @@ function findEntries(root: string, pattern: RegExp): string[] {
   };
   walk(root);
   return matches;
-}
-
-function tail(text: string, lines: number): string {
-  const all = text.split('\n');
-  return all.slice(Math.max(0, all.length - lines)).join('\n');
 }

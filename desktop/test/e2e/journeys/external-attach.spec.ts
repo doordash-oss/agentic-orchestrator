@@ -18,6 +18,7 @@ import {
 } from '../helpers/app';
 import { bundledServerBinary, packagedExecutable } from '../helpers/packaged';
 import { Transcript } from '../helpers/transcript';
+import { tailText } from '../helpers/runtime';
 import {
   createRepo,
   createWorld,
@@ -69,7 +70,7 @@ test('external compatible server: attach, never own, never stop', async ({}, tes
 
     transcript.section('Launch the app: it attaches instead of launching its own');
     handle = await launchApp(world, testInfo, { traceName: 'external-attach' });
-    await expect(handle.page.getByRole('heading', { name: 'New feature' })).toBeVisible({
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
     const connection = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
@@ -132,11 +133,6 @@ async function healthStatus(baseUrl: string): Promise<number> {
   } catch {
     return 0;
   }
-}
-
-function tailText(text: string, lines: number): string {
-  const all = text.split('\n');
-  return all.slice(Math.max(0, all.length - lines)).join('\n');
 }
 
 // Sanity: the discovery file itself must be owner-only on disk.

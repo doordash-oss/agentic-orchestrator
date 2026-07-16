@@ -86,7 +86,7 @@ export function createBuildIdentity(fields) {
 }
 
 /**
- * Parse `agentico --version` stdout, i.e. tui.VersionLine():
+ * Parse `agentico --version` stdout, i.e. buildinfo.VersionLine():
  * "agentico v<injected-version>" or
  * "agentico v<injected-version> (revision <full-sha>)".
  * Packaging injects the raw `git describe` output (which itself starts with

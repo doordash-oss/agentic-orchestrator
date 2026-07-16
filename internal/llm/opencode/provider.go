@@ -17,7 +17,7 @@
 // model catalog discovered from the local CLI through the same catalog,
 // discovery, context-window, and cost interfaces the other providers use, so
 // its backend models participate in routing, provider-grouped model lists, and
-// (from Phase 6) co-equal default selection. When live discovery has not yet
+// as a co-equal default selection. When live discovery has not yet
 // run, fails, or returns nothing, the provider degrades to a curated built-in
 // fallback catalog (the CatalogProvider/default-catalog path the shared startup
 // discovery relies on), so a ready OpenCode never advertises an empty model

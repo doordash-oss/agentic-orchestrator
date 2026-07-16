@@ -1,7 +1,12 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ConnectionStateSchema, type ConnectionState } from '../../shared/ipc';
+import {
+  ConnectionStateSchema,
+  defaultSettings,
+  type AttentionItem,
+  type ConnectionState,
+} from '../../shared/ipc';
 import App from './App';
 import { installAgenticoMock, readySnapshot } from './test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from './test/setup';
@@ -71,11 +76,54 @@ describe('App theming', () => {
 });
 
 describe('App readiness gating', () => {
+  it('uses the authoritative feature name in the global inbox', async () => {
+    const featureId = 'abcd1234ef567890';
+    const attention: AttentionItem = {
+      kind: 'permission',
+      id: 'permission-1',
+      featureId,
+      sessionId: 'session-1',
+      phase: 'Implement',
+      toolName: 'Bash',
+      summary: 'Inspect the build output',
+      input: { command: 'npm test' },
+      waitingSince: '2026-07-15T10:00:00.000Z',
+    };
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      settings: { ...defaultSettings(), tabs: { open: [], activeFeatureId: null } },
+      features: [
+        {
+          id: featureId,
+          name: 'Search revamp',
+          status: 'Created',
+          currentPhase: 'Plan',
+          repos: ['repo-a'],
+          createdAt: '2026-07-14T10:00:00Z',
+          activeRun: 1,
+          runCount: 1,
+          warnings: [],
+        },
+      ],
+      attention: { items: [attention] },
+    });
+    render(<App />);
+
+    await screen.findByRole('tab', { name: 'Home' });
+    await userEvent.click(
+      await screen.findByRole('button', { name: /Attention inbox, 1 pending/ }),
+    );
+    const inbox = screen.getByRole('complementary', { name: 'Attention inbox' });
+    await userEvent.click(within(inbox).getByRole('button', { name: /Permission.*Search revamp/ }));
+    expect(within(inbox).getByText('Search revamp')).toBeVisible();
+  });
+
   it('shows the connection shell — never the wizard — before the gateway is ready', async () => {
     const mock = installAgenticoMock();
     render(<App />);
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: /^agentico$/i })).toBeInTheDocument(),
+      expect(screen.getAllByRole('heading', { name: /^agentico$/i })).toHaveLength(2),
     );
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
     expect(mock.api.getReadiness).not.toHaveBeenCalled();

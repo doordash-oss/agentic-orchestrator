@@ -11,7 +11,7 @@
 //
 // Version/revision identity mirrors the Makefile: the raw `git describe
 // --tags --always --dirty` string is injected via
-// -X github.com/doordash-oss/agentic-orchestrator/internal/tui.version and
+// -X github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.version and
 // recorded as server_version; server_revision is the full HEAD SHA the Go
 // toolchain also stamps as vcs.revision. built_at prefers SOURCE_DATE_EPOCH,
 // falling back to the HEAD commit time, so identical trees produce identical
@@ -33,11 +33,12 @@ const repoRoot = dirname(desktopDir);
 const resourcesDir = join(desktopDir, 'resources');
 const binDir = join(resourcesDir, 'bin');
 
-const LDFLAGS_VERSION_SYMBOL = 'github.com/doordash-oss/agentic-orchestrator/internal/tui.version';
+const LDFLAGS_VERSION_SYMBOL =
+  'github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.version';
 // Injected explicitly (like the Makefile) because the Go toolchain does not
 // stamp vcs.revision when building from a linked git worktree.
 const LDFLAGS_REVISION_SYMBOL =
-  'github.com/doordash-oss/agentic-orchestrator/internal/tui.revision';
+  'github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.revision';
 /** electron-builder arch name -> GOARCH. */
 const GOARCH_BY_ARCH = { x64: 'amd64', arm64: 'arm64' };
 

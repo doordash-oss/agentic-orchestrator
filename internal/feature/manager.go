@@ -1035,7 +1035,7 @@ func (m *Manager) SetRepoCyclePlanPath(featureID, repoName, planPath string) err
 
 // AdvanceRoadmapPhase increments the current roadmap phase and transitions
 // the feature back to StatusPlanning for the next phase's plan creation.
-// Called by TUI when a phase's implementation review passes and more phases remain.
+// Called by desktop app when a phase's implementation review passes and more phases remain.
 func (m *Manager) AdvanceRoadmapPhase(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		// When called after roadmap approval, the feature is already in StatusPlanning

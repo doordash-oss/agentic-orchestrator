@@ -374,7 +374,7 @@ func TestReadinessRefreshReprobesAndUnblocksFeatureCreation(t *testing.T) {
 	}
 
 	// Plain GET must not re-probe: it reuses the cached probe result so the
-	// desktop client never pays a CLI probe per poll.
+	// desktop app never pays a CLI probe per poll.
 	authenticated.Store(true)
 	if snapshot := getReadinessSnapshot(t, handler); snapshot.Ready {
 		t.Fatal("GET readiness re-probed providers; want cached not-ready snapshot until refresh")

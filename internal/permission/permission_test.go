@@ -604,7 +604,7 @@ func TestCacheRememberAllowPatternPersistsBeforeMemory(t *testing.T) {
 	if !result.Persisted || result.AlreadyExisted {
 		t.Fatalf("result = %+v, want persisted new rule", result)
 	}
-	if _, ok := cache.Check(toolNameBash, `{"command":"go test ./internal/tui"}`, testRepoA); !ok {
+	if _, ok := cache.Check(toolNameBash, `{"command":"go test ./internal/server"}`, testRepoA); !ok {
 		t.Fatal("cache does not match remembered rule after persistence")
 	}
 	rules, err := store.Load(scopeFor(testRepoA))
@@ -653,7 +653,7 @@ func TestCacheRememberAllowPatternPersistenceErrorDoesNotMutateMemory(t *testing
 	if rules := cache.Rules(); len(rules) != 0 {
 		t.Fatalf("cache.Rules() = %+v, want empty after persistence error", rules)
 	}
-	if _, ok := cache.Check(toolNameBash, `{"command":"go test ./internal/tui"}`, testRepoA); ok {
+	if _, ok := cache.Check(toolNameBash, `{"command":"go test ./internal/server"}`, testRepoA); ok {
 		t.Fatal("cache matches remembered rule after persistence error")
 	}
 }
@@ -900,7 +900,7 @@ func TestCachingHandler_CacheMiss(t *testing.T) {
 		t.Fatalf("CanUseTool: %v", err)
 	}
 	if decision.Behavior != "" {
-		t.Errorf("behavior = %q, want empty (defer to TUI)", decision.Behavior)
+		t.Errorf("behavior = %q, want empty (defer to desktop app)", decision.Behavior)
 	}
 }
 
@@ -961,7 +961,7 @@ func TestSingleRepoPermissionScoping(t *testing.T) {
 		RepoName: permRepoName,
 	}
 
-	// Simulate "Allow & Remember" in the TUI (r keybinding).
+	// Simulate a remembered allow decision.
 	cache.RememberAllow(toolNameBash, testNpmTest, permRepoName)
 
 	// The rule should be scoped to "my-service", NOT to "".
@@ -1005,7 +1005,7 @@ func TestSingleRepoPermissionScoping(t *testing.T) {
 // TestGlobalScopeSessionRememberAllow is a regression test ensuring that
 // pressing "r" on a global-scope session (inquire, research, plan) stores
 // the rule under "" and that the session's CachingHandler — also scoped to
-// "" — immediately sees it. Previously, the TUI attach flow would
+// "" — immediately sees it. Previously, the desktop app attach flow would
 // reconstruct the scope from the feature's first repo name, causing rules
 // to be written under a repo name the global-scope handler would never
 // match.
@@ -1034,7 +1034,7 @@ func TestGlobalScopeSessionRememberAllow(t *testing.T) {
 		t.Errorf("before remember: behavior = %q, want empty (defer)", decision.Behavior)
 	}
 
-	// Simulate pressing "r" in the TUI attach view. The TUI now uses
+	// Simulate pressing "r" in the desktop app attach view. The desktop app now uses
 	// sess.PermCacheScope (which is "" for global-scope sessions) as the
 	// repoName argument to RememberAllow, matching the handler's scope.
 	cache.RememberAllow(toolNameBash, "go vet ./...", "" /* PermCacheScope = "" */)

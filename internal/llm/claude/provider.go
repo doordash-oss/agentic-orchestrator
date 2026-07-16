@@ -247,7 +247,7 @@ func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
 }
 
 // ModelCatalog returns the current catalog. Falls back to the hardcoded
-// defaults when nothing has been set, so callers (TUI, registry) always see
+// defaults when nothing has been set, so callers (desktop app, registry) always see
 // a populated catalog without needing an explicit seeding step.
 func (p *Provider) ModelCatalog() []llm.ModelInfo {
 	p.mu.RLock()

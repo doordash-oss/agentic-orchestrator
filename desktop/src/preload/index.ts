@@ -7,6 +7,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import {
   AppEventSchema,
+  SessionOutputEventSchema,
   ConnectionStateSchema,
   IPC_CHANNELS,
   IPC_EVENTS,
@@ -15,9 +16,13 @@ import {
   type AppEvent,
   type ConnectionState,
   type CreateFeatureInput,
+  type FeatureActionRequest,
   type InitRepositoryRequest,
   type SettingsPatch,
   type ThemePreference,
+  type SessionOutputOpenRequest,
+  type SessionOutputOpenResult,
+  type SessionOutputEvent,
 } from '../shared/ipc';
 import { assertNoPrototypePollution } from '../shared/sanitize';
 
@@ -70,6 +75,38 @@ const api: AgenticoApi = {
   getFeature: (featureId: string) => call(IPC_CHANNELS.featuresGet, featureId),
   createFeature: (input: CreateFeatureInput) => call(IPC_CHANNELS.featuresCreate, input),
   dispatchFeatureSetup: (featureId: string) => call(IPC_CHANNELS.featuresSetup, featureId),
+  dispatchFeatureAction: (request: FeatureActionRequest) =>
+    call(IPC_CHANNELS.featuresDispatchAction, request),
+  getAttention: () => call(IPC_CHANNELS.attentionGet),
+  answerPermission: (request) => call(IPC_CHANNELS.attentionAnswerPermission, request),
+  answerQuestions: (request) => call(IPC_CHANNELS.attentionAnswerQuestions, request),
+  sendHelp: (request) => call(IPC_CHANNELS.attentionSendHelp, request),
+  saveGateDraft: (request) => call(IPC_CHANNELS.attentionSaveGateDraft, request),
+  resolveGate: (request) => call(IPC_CHANNELS.attentionResolveGate, request),
+  listSessions: () => call(IPC_CHANNELS.sessionsList),
+  getSession: (sessionId: string) => call(IPC_CHANNELS.sessionsGet, sessionId),
+  getSessionTranscript: (request) => call(IPC_CHANNELS.sessionsTranscript, request),
+  openSessionOutput: (request: SessionOutputOpenRequest): Promise<SessionOutputOpenResult> =>
+    call(IPC_CHANNELS.sessionsOutputOpen, request),
+  cancelSessionOutput: (subscriptionId: string) =>
+    call<{ cancelled: boolean }>(IPC_CHANNELS.sessionsOutputCancel, { subscriptionId }).then(
+      ({ cancelled }) => cancelled,
+    ),
+  onSessionOutput: (listener: (event: SessionOutputEvent) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return;
+      }
+      const event = SessionOutputEventSchema.safeParse(payload);
+      if (event.success) listener(event.data);
+    };
+    ipcRenderer.on(IPC_EVENTS.sessionOutput, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.sessionOutput, wrapped);
+    };
+  },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),
   onAppEvent: (listener: (event: AppEvent) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {

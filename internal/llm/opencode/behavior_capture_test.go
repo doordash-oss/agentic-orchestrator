@@ -25,7 +25,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// Behavioral evidence capture (Phase 4).
+// Behavioral evidence capture for managed OpenCode sessions.
 //
 // These tests exercise the real managed-config generation and ACP protocol code
 // paths and write redacted behavioral logs to the directory named by

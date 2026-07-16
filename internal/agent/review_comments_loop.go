@@ -77,7 +77,7 @@ type ReviewCommentsRepoTarget struct {
 // ReviewCommentsLoopConfig holds configuration for the unified
 // review-comments cycle loop. Mirrors RebaseLoopConfig in shape but
 // carries the per-repo comment slices the orchestrator aggregated from
-// the per-repo `comments.json` artifacts the TUI saved.
+// the per-repo `comments.json` artifacts the desktop app saved.
 type ReviewCommentsLoopConfig struct {
 	Feature      *feature.Feature
 	FeatureStore ports.FeatureStore
@@ -85,7 +85,7 @@ type ReviewCommentsLoopConfig struct {
 
 	// RepoTargets is the resolved subset of Feature.Repos with at least
 	// one unaddressed PR comment. The orchestrator computes this by
-	// loading the per-repo `comments.json` artifacts saved by the TUI
+	// loading the per-repo `comments.json` artifacts saved by the desktop app
 	// when the user dispatched the cycle. Repos with no unaddressed
 	// comments are intentionally NOT in this slice — they are not
 	// staged for the AtomicPhaseStamp.
@@ -173,7 +173,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 
 	// Filter the input targets down to those that actually carry at
 	// least one comment — the orchestrator may pass a stale slice from
-	// a race where the TUI saved an empty `comments.json`.
+	// a race where the desktop app saved an empty `comments.json`.
 	staged := make([]ReviewCommentsRepoTarget, 0, len(cfg.RepoTargets))
 	for _, t := range cfg.RepoTargets {
 		if t.RepoName == "" || len(t.Comments) == 0 {
@@ -257,7 +257,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		return nil, fmt.Errorf("review-comments loop: writing plan: %w", err)
 	}
 
-	// Mid-flight phase status surfaced to the TUI (mirrors phase-implement
+	// Mid-flight phase status surfaced to the desktop app (mirrors phase-implement
 	// / FR / rebase loop conventions).
 	setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "addressing-review-comments")
 	defer setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "")
@@ -403,7 +403,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		// max_iterations / safety_rail / failed all map to a cycle
 		// failure: every staged repo transitions to failed (LastError set); the
 		// feature stays at its prior cycle entry but ActiveCycle.Status
-		// flips to "failed" so the TUI surfaces the cycle row in red.
+		// flips to "failed" so the desktop app surfaces the cycle row in red.
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     repoNames,
@@ -540,7 +540,7 @@ func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resol
 }
 
 // markActiveReviewCommentsCycleFailed flips Feature.ActiveCycle.Status to
-// "failed" so the TUI surfaces the cycle row in red. ActiveCycle stays
+// "failed" so the desktop app surfaces the cycle row in red. ActiveCycle stays
 // populated so the user can see which cycle failed and trigger a restart.
 func markActiveReviewCommentsCycleFailed(store ports.FeatureStore, featureID, lastError string) error {
 	if store == nil {

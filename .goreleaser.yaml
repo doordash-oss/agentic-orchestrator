@@ -15,7 +15,7 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/doordash-oss/agentic-orchestrator/internal/tui.version={{.Version}}
+      - -X github.com/doordash-oss/agentic-orchestrator/internal/buildinfo.version={{.Version}}
 
 archives:
   - formats: [tar.gz]
@@ -42,7 +42,7 @@ brews:
       branch: main
     directory: Formula
     homepage: "https://github.com/doordash-oss/agentic-orchestrator"
-    description: "Parallel agentic coding orchestrator TUI"
+    description: "Desktop-first parallel agentic coding orchestrator"
     license: "Apache-2.0"
     install: |
       bin.install "agentico"

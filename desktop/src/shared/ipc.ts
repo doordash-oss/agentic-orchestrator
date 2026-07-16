@@ -5,6 +5,10 @@
  */
 import { z } from 'zod';
 
+export const ATTENTION_ALREADY_RESOLVED_NOTICE =
+  'This item was already resolved. The inbox has been refreshed.';
+export const ATTENTION_SUBMITTED_NOTICE = 'Submitted. Waiting for the server snapshot...';
+
 export const IPC_CHANNELS = {
   connectionGetStatus: 'agentico:connection:get-status',
   connectionRetry: 'agentico:connection:retry',
@@ -22,6 +26,18 @@ export const IPC_CHANNELS = {
   featuresGet: 'agentico:features:get',
   featuresCreate: 'agentico:features:create',
   featuresSetup: 'agentico:features:setup',
+  featuresDispatchAction: 'agentico:features:dispatch-action',
+  attentionGet: 'agentico:attention:get',
+  attentionAnswerPermission: 'agentico:attention:answer-permission',
+  attentionAnswerQuestions: 'agentico:attention:answer-questions',
+  attentionSendHelp: 'agentico:attention:send-help',
+  attentionSaveGateDraft: 'agentico:attention:save-gate-draft',
+  attentionResolveGate: 'agentico:attention:resolve-gate',
+  sessionsList: 'agentico:sessions:list',
+  sessionsGet: 'agentico:sessions:get',
+  sessionsTranscript: 'agentico:sessions:transcript',
+  sessionsOutputOpen: 'agentico:sessions:output-open',
+  sessionsOutputCancel: 'agentico:sessions:output-cancel',
   creationDefaults: 'agentico:creation:defaults',
 } as const;
 
@@ -31,6 +47,7 @@ export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 export const IPC_EVENTS = {
   connectionChanged: 'agentico:connection:changed',
   appEvent: 'agentico:events:app',
+  sessionOutput: 'agentico:sessions:output',
 } as const;
 
 // --- Safe error shape crossing the boundary --------------------------------
@@ -121,6 +138,18 @@ const connectionStateBase = {
 
 const connectionStage = <T extends ConnectionStage>(stage: T) => z.literal(stage);
 
+/** Renderer-safe, bounded diagnostics for failures of the app-owned child only. */
+export const ConnectionDiagnosticsSchema = z.strictObject({
+  commandContext: z.string().max(256),
+  logTail: z.array(z.string().max(512)).max(20),
+});
+export type ConnectionDiagnostics = z.output<typeof ConnectionDiagnosticsSchema>;
+
+const connectionFailureContext = {
+  ...connectionStateBase,
+  diagnostics: ConnectionDiagnosticsSchema.optional(),
+} as const;
+
 /** Startup progress before any server exists to own or attach to. */
 const ConnectionIdleStateSchema = z.strictObject({
   status: z.literal('idle'),
@@ -195,14 +224,14 @@ const ConnectionResourcesMissingStateSchema = z.strictObject({
 const ConnectionLaunchFailedStateSchema = z.strictObject({
   status: z.literal('launch-failed'),
   stage: z.enum(['connect', 'wait-health', 'authenticate']),
-  ...connectionStateBase,
+  ...connectionFailureContext,
   ownership: ServerOwnershipSchema,
   error: SafeErrorSchema,
 });
 const ConnectionCrashedStateSchema = z.strictObject({
   status: z.literal('crashed'),
   stage: connectionStage('connect'),
-  ...connectionStateBase,
+  ...connectionFailureContext,
   ownership: ServerOwnershipSchema,
   error: SafeErrorSchema,
 });
@@ -466,6 +495,10 @@ export const FeatureSummaryViewSchema = z.strictObject({
   currentPhase: z.string(),
   repos: z.array(z.string()),
   createdAt: z.string(),
+  activeRun: z.number().int().nonnegative(),
+  runCount: z.number().int().nonnegative(),
+  phaseStatus: z.string().optional(),
+  warnings: z.array(z.strictObject({ code: z.string(), message: z.string() })).max(100),
 });
 
 export type FeatureSummaryView = z.output<typeof FeatureSummaryViewSchema>;
@@ -480,6 +513,7 @@ export const FeatureSnapshotSchema = z.strictObject({
   description: z.string().optional(),
   repos: z.array(z.string()),
   createdAt: z.string(),
+  activeRun: z.number().int().nonnegative(),
   setup: FeatureSetupViewSchema.optional(),
   /** The authoritative server action catalogue (setup/start/…). */
   actions: z.array(FeatureActionViewSchema),
@@ -489,6 +523,309 @@ export const FeatureSnapshotSchema = z.strictObject({
 });
 
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
+
+/** Renderer-visible operational actions are limited to the start/stop allowlist. */
+export const FeatureOperationalActionSchema = z.enum(['start', 'pause-stop']);
+export type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
+
+export const FeatureActionRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  action: FeatureOperationalActionSchema,
+});
+export type FeatureActionRequest = z.output<typeof FeatureActionRequestSchema>;
+
+export const FeatureActionResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  action: FeatureOperationalActionSchema,
+  result: z.string().max(500),
+  phase: z.string().max(200).optional(),
+  sessionIds: z.array(z.string().min(1).max(200)).max(100),
+});
+export type FeatureActionResult = z.output<typeof FeatureActionResultSchema>;
+
+// --- Blocking attention ----------------------------------------------------
+
+const AttentionIDSchema = z.string().min(1).max(200);
+const AttentionTextSchema = z.string().max(64 * 1024);
+export const AttentionOptionSchema = z.strictObject({
+  label: z.string().max(200),
+  description: AttentionTextSchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+});
+export const AttentionQuestionSchema = z.strictObject({
+  key: AttentionTextSchema,
+  header: z.string().max(500),
+  multiSelect: z.boolean(),
+  options: z.array(AttentionOptionSchema).max(100),
+});
+export const AttentionPermissionSchema = z.strictObject({
+  kind: z.literal('permission'),
+  id: AttentionIDSchema,
+  featureId: FeatureIdSchema.optional(),
+  sessionId: AttentionIDSchema.optional(),
+  phase: z.string().max(200).optional(),
+  toolName: z.string().max(500),
+  summary: AttentionTextSchema.optional(),
+  input: z.record(z.string().max(200), z.unknown()).optional(),
+  waitingSince: z.string().max(100),
+  remember: z
+    .strictObject({
+      pattern: z.string().max(4096),
+      scope: z.string().max(4096),
+      scopeDisplay: z.string().max(4096),
+    })
+    .optional(),
+});
+export const AttentionQuestionBundleSchema = z.strictObject({
+  kind: z.literal('questions'),
+  id: AttentionIDSchema,
+  featureId: FeatureIdSchema.optional(),
+  sessionId: AttentionIDSchema.optional(),
+  phase: z.string().max(200).optional(),
+  waitingSince: z.string().max(100),
+  questions: z.array(AttentionQuestionSchema).min(1).max(100),
+});
+export const AttentionHelpSchema = z.strictObject({
+  kind: z.literal('help'),
+  id: AttentionIDSchema,
+  featureId: FeatureIdSchema,
+  sessionId: AttentionIDSchema.optional(),
+  waitingSince: z.string().max(100),
+  prompt: AttentionTextSchema,
+});
+export const AttentionGateSchema = z.strictObject({
+  kind: z.literal('gate'),
+  id: z.string().min(1).max(1000),
+  featureId: FeatureIdSchema,
+  waitingSince: z.string().max(100),
+  scope: z.string().max(100).optional(),
+  repoName: z.string().max(500).optional(),
+  cycleType: z.string().max(200).optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  summary: AttentionTextSchema.optional(),
+  questions: z
+    .array(
+      z.strictObject({
+        index: z.number().int().nonnegative(),
+        prompt: AttentionTextSchema,
+        answer: AttentionTextSchema,
+      }),
+    )
+    .max(100),
+});
+export const AttentionItemSchema = z.discriminatedUnion('kind', [
+  AttentionPermissionSchema,
+  AttentionQuestionBundleSchema,
+  AttentionHelpSchema,
+  AttentionGateSchema,
+]);
+export type AttentionItem = z.output<typeof AttentionItemSchema>;
+export const AttentionSnapshotSchema = z.strictObject({
+  items: z.array(AttentionItemSchema).max(4000),
+});
+export type AttentionSnapshot = z.output<typeof AttentionSnapshotSchema>;
+export const PermissionDecisionRequestSchema = z.strictObject({
+  requestId: AttentionIDSchema,
+  sessionId: AttentionIDSchema.optional(),
+  decision: z.enum(['allow_once', 'allow_remember', 'deny']),
+  rememberPattern: z.string().max(4096).optional(),
+  rememberScope: z.string().max(4096).optional(),
+});
+export type PermissionDecisionRequest = z.output<typeof PermissionDecisionRequestSchema>;
+export const AskUserAnswerRequestSchema = z.strictObject({
+  requestId: AttentionIDSchema,
+  sessionId: AttentionIDSchema.optional(),
+  answers: z
+    .record(AttentionTextSchema, AttentionTextSchema)
+    .refine((answers) => Object.keys(answers).length > 0),
+});
+export type AskUserAnswerRequest = z.output<typeof AskUserAnswerRequestSchema>;
+export const HelpAnswerRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  sessionId: AttentionIDSchema.optional(),
+  message: AttentionTextSchema.refine((value) => value.trim() !== ''),
+});
+export type HelpAnswerRequest = z.output<typeof HelpAnswerRequestSchema>;
+export const GateTargetSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repoName: z.string().max(500).optional(),
+  cycleType: z.string().max(200).optional(),
+});
+export const GateDraftRequestSchema = GateTargetSchema.extend({
+  answers: z
+    .record(AttentionTextSchema, AttentionTextSchema)
+    .refine((answers) => Object.keys(answers).length > 0),
+});
+export type GateDraftRequest = z.output<typeof GateDraftRequestSchema>;
+export const GateResolutionRequestSchema = GateTargetSchema.extend({
+  decision: z.enum(['resume', 'abort']),
+});
+export type GateResolutionRequest = z.output<typeof GateResolutionRequestSchema>;
+export const AttentionActionResultSchema = z.strictObject({
+  result: z.string().max(500),
+  alreadyResolved: z.boolean().optional(),
+  notice: z.string().max(500).optional(),
+});
+export type AttentionActionResult = z.output<typeof AttentionActionResultSchema>;
+
+// --- Sessions and bounded transcript/output operations ---------------------
+
+/** Canonical safe URL-segment syntax for server-owned session identifiers. */
+export const SESSION_ID_SEGMENT_PATTERN = '[a-z0-9._-]{1,200}';
+
+export const SessionIdSchema = z.string().regex(new RegExp(`^${SESSION_ID_SEGMENT_PATTERN}$`, 'i'));
+export type SessionId = z.output<typeof SessionIdSchema>;
+
+const BoundedTextSchema = z.string().max(1024 * 1024);
+const OptionalBoundedTextSchema = BoundedTextSchema.optional();
+
+export const SessionUsageSchema = z.strictObject({
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  costUsd: z.number().nonnegative().optional(),
+});
+
+export const SessionSummarySchema = z.strictObject({
+  id: SessionIdSchema,
+  featureId: FeatureIdSchema,
+  runNumber: z.number().int().nonnegative(),
+  phase: z.string().max(200),
+  repo: z.string().max(500).optional(),
+  kind: z.string().max(200),
+  label: z.string().max(500).optional(),
+  provider: z.string().max(200).optional(),
+  model: z.string().max(500).optional(),
+  status: z.string().max(200),
+  turnState: z.string().max(200).optional(),
+  startedAt: z.string().max(100),
+  iteration: z.number().int().nonnegative().optional(),
+  contextPercentage: z.number().int().min(0).max(100).optional(),
+  usage: SessionUsageSchema,
+});
+export type SessionSummary = z.output<typeof SessionSummarySchema>;
+
+export const TranscriptCursorSchema = z.strictObject({
+  total: z.number().int().nonnegative(),
+  start: z.number().int().nonnegative(),
+  end: z.number().int().nonnegative(),
+});
+export type TranscriptCursor = z.output<typeof TranscriptCursorSchema>;
+
+export const FileChangeSchema = z.strictObject({
+  path: OptionalBoundedTextSchema,
+  oldPath: OptionalBoundedTextSchema,
+  operation: z.string().max(200).optional(),
+  detail: OptionalBoundedTextSchema,
+  addedLines: z.number().int().nonnegative().optional(),
+  removedLines: z.number().int().nonnegative().optional(),
+  hasDiffPatch: z.boolean().optional(),
+});
+
+export const ToolCallSchema = z.strictObject({
+  summary: OptionalBoundedTextSchema,
+  prompt: OptionalBoundedTextSchema,
+});
+
+export const TranscriptTaskSchema = z.strictObject({
+  id: z.string().max(500).optional(),
+  toolUseId: z.string().max(500).optional(),
+  description: OptionalBoundedTextSchema,
+  taskType: z.string().max(200).optional(),
+  prompt: OptionalBoundedTextSchema,
+  lastToolName: z.string().max(500).optional(),
+  status: z.string().max(200).optional(),
+  summary: OptionalBoundedTextSchema,
+  outputFile: OptionalBoundedTextSchema,
+});
+
+/** Original validated source record retained for semantic timeline/raw inspection. */
+export const TranscriptMessageSchema = z.strictObject({
+  index: z.number().int().nonnegative(),
+  blockIndex: z.number().int().nonnegative().optional(),
+  role: z.string().max(200),
+  type: z.string().max(200),
+  text: OptionalBoundedTextSchema,
+  tool: z.string().max(500).optional(),
+  status: z.string().max(200).optional(),
+  redacted: z.boolean().optional(),
+  locallyAppended: z.boolean().optional(),
+  autoPicked: z.boolean().optional(),
+  autoPickQuestion: OptionalBoundedTextSchema,
+  autoPickConfidence: z.number().min(0).max(1).optional(),
+  fileChange: FileChangeSchema.optional(),
+  toolCall: ToolCallSchema.optional(),
+  task: TranscriptTaskSchema.optional(),
+});
+export type TranscriptMessage = z.output<typeof TranscriptMessageSchema>;
+
+export const SessionDetailSchema = SessionSummarySchema.extend({
+  transcriptCursor: TranscriptCursorSchema,
+  pendingControlCount: z.number().int().nonnegative(),
+  initialPrompt: OptionalBoundedTextSchema,
+  canAttach: z.boolean(),
+  logAvailable: z.boolean(),
+  safeError: OptionalBoundedTextSchema,
+});
+export type SessionDetail = z.output<typeof SessionDetailSchema>;
+
+export const SessionTranscriptRequestSchema = z.strictObject({
+  sessionId: SessionIdSchema,
+  offset: z.number().int().nonnegative().optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+});
+export type SessionTranscriptRequest = z.output<typeof SessionTranscriptRequestSchema>;
+
+export const SessionTranscriptSchema = z.strictObject({
+  sessionId: SessionIdSchema,
+  cursor: TranscriptCursorSchema,
+  messages: z.array(TranscriptMessageSchema).max(500),
+});
+export type SessionTranscript = z.output<typeof SessionTranscriptSchema>;
+
+export const SessionOutputOpenRequestSchema = z.strictObject({
+  sessionId: SessionIdSchema,
+  /** Transcript row index, deliberately not global epoch/sequence. */
+  from: z.number().int().nonnegative().optional(),
+});
+export type SessionOutputOpenRequest = z.output<typeof SessionOutputOpenRequestSchema>;
+
+export const SubscriptionIdSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[a-z0-9-]+$/i);
+export const SessionOutputOpenResultSchema = z.strictObject({
+  subscriptionId: SubscriptionIdSchema,
+});
+export type SessionOutputOpenResult = z.output<typeof SessionOutputOpenResultSchema>;
+
+export const SessionOutputCancelRequestSchema = z.strictObject({
+  subscriptionId: SubscriptionIdSchema,
+});
+export const SessionOutputCancelResultSchema = z.strictObject({ cancelled: z.boolean() });
+
+export const SessionOutputEventSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    subscriptionId: SubscriptionIdSchema,
+    type: z.literal('record'),
+    sessionId: SessionIdSchema,
+    index: z.number().int().nonnegative(),
+    message: TranscriptMessageSchema,
+  }),
+  z.strictObject({
+    subscriptionId: SubscriptionIdSchema,
+    type: z.literal('done'),
+    sessionId: SessionIdSchema,
+    nextIndex: z.number().int().nonnegative(),
+  }),
+  z.strictObject({
+    subscriptionId: SubscriptionIdSchema,
+    type: z.literal('error'),
+    sessionId: SessionIdSchema,
+    error: SafeErrorSchema,
+  }),
+]);
+export type SessionOutputEvent = z.output<typeof SessionOutputEventSchema>;
 
 // --- Feature creation ---------------------------------------------------------
 
@@ -715,6 +1052,51 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([FeatureIdSchema]),
     response: SetupDispatchResultSchema,
   },
+  [IPC_CHANNELS.featuresDispatchAction]: {
+    request: z.tuple([FeatureActionRequestSchema]),
+    response: FeatureActionResultSchema,
+  },
+  [IPC_CHANNELS.attentionGet]: { request: z.tuple([]), response: AttentionSnapshotSchema },
+  [IPC_CHANNELS.attentionAnswerPermission]: {
+    request: z.tuple([PermissionDecisionRequestSchema]),
+    response: AttentionActionResultSchema,
+  },
+  [IPC_CHANNELS.attentionAnswerQuestions]: {
+    request: z.tuple([AskUserAnswerRequestSchema]),
+    response: AttentionActionResultSchema,
+  },
+  [IPC_CHANNELS.attentionSendHelp]: {
+    request: z.tuple([HelpAnswerRequestSchema]),
+    response: AttentionActionResultSchema,
+  },
+  [IPC_CHANNELS.attentionSaveGateDraft]: {
+    request: z.tuple([GateDraftRequestSchema]),
+    response: AttentionActionResultSchema,
+  },
+  [IPC_CHANNELS.attentionResolveGate]: {
+    request: z.tuple([GateResolutionRequestSchema]),
+    response: AttentionActionResultSchema,
+  },
+  [IPC_CHANNELS.sessionsList]: {
+    request: z.tuple([]),
+    response: z.array(SessionSummarySchema).max(1000),
+  },
+  [IPC_CHANNELS.sessionsGet]: {
+    request: z.tuple([SessionIdSchema]),
+    response: SessionDetailSchema,
+  },
+  [IPC_CHANNELS.sessionsTranscript]: {
+    request: z.tuple([SessionTranscriptRequestSchema]),
+    response: SessionTranscriptSchema,
+  },
+  [IPC_CHANNELS.sessionsOutputOpen]: {
+    request: z.tuple([SessionOutputOpenRequestSchema]),
+    response: SessionOutputOpenResultSchema,
+  },
+  [IPC_CHANNELS.sessionsOutputCancel]: {
+    request: z.tuple([SessionOutputCancelRequestSchema]),
+    response: SessionOutputCancelResultSchema,
+  },
   [IPC_CHANNELS.creationDefaults]: {
     request: z.tuple([]),
     response: CreationDefaultsSchema,
@@ -741,6 +1123,19 @@ export interface AgenticoApi {
   getFeature(featureId: string): Promise<FeatureSnapshot>;
   createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult>;
   dispatchFeatureSetup(featureId: string): Promise<SetupDispatchResult>;
+  dispatchFeatureAction(request: FeatureActionRequest): Promise<FeatureActionResult>;
+  getAttention(): Promise<AttentionSnapshot>;
+  answerPermission(request: PermissionDecisionRequest): Promise<AttentionActionResult>;
+  answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult>;
+  sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult>;
+  saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
+  resolveGate(request: GateResolutionRequest): Promise<AttentionActionResult>;
+  listSessions(): Promise<SessionSummary[]>;
+  getSession(sessionId: string): Promise<SessionDetail>;
+  getSessionTranscript(request: SessionTranscriptRequest): Promise<SessionTranscript>;
+  openSessionOutput(request: SessionOutputOpenRequest): Promise<SessionOutputOpenResult>;
+  cancelSessionOutput(subscriptionId: string): Promise<boolean>;
+  onSessionOutput(listener: (event: SessionOutputEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
   onAppEvent(listener: (event: AppEvent) => void): () => void;
 }

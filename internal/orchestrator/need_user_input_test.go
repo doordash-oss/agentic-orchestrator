@@ -105,7 +105,7 @@ func TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature(t *testi
 func TestHandleNeedUserInputDecision_StaleRepoNameRoutesToFeatureScope(t *testing.T) {
 	// Under SchemaVersionCurrent = 4 phase-implement NEED_USER_INPUT is
 	// feature-scoped. A non-empty RepoName that doesn't match a paused cycle
-	// is treated as a stale hint (the TUI's repo-tab focus context) and
+	// is treated as a stale presentation hint and
 	// routed to the feature-level handler, which validates against
 	// Feature.Status / Feature.PendingNeedUserInputPath. Here the feature is
 	// StatusImplementing (not paused), so the feature-level handler rejects

@@ -9,11 +9,16 @@ import {
   ReadinessSnapshotSchema,
   SettingsPatchSchema,
   SettingsSchema,
+  FeatureActionRequestSchema,
+  SessionIdSchema,
+  SessionTranscriptRequestSchema,
+  SessionOutputEventSchema,
   defaultSettings,
   defaultTabsPrefs,
   defaultWizardPrefs,
   ipcContracts,
 } from './ipc';
+import { assertNoPrototypePollution } from './sanitize';
 
 describe('IPC channel registry', () => {
   it('defines a zod request/response contract for every invokable channel', () => {
@@ -29,6 +34,66 @@ describe('IPC channel registry', () => {
     for (const channel of [...Object.values(IPC_CHANNELS), ...Object.values(IPC_EVENTS)]) {
       expect(channel.startsWith('agentico:')).toBe(true);
     }
+  });
+});
+
+describe('operational IPC schemas', () => {
+  it('allows only the start and stop feature actions', () => {
+    expect(
+      FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'start' }),
+    ).toStrictEqual({ featureId: 'abcd1234', action: 'start' });
+    expect(
+      FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'pause-stop' }),
+    ).toStrictEqual({ featureId: 'abcd1234', action: 'pause-stop' });
+    for (const action of ['delete', 'resume', 'retry', '../start']) {
+      expect(FeatureActionRequestSchema.safeParse({ featureId: 'abcd1234', action }).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it('bounds transcript windows and keeps row cursors distinct from global event cursors', () => {
+    expect(
+      SessionTranscriptRequestSchema.parse({ sessionId: 'session-1', offset: 4, limit: 100 }),
+    ).toStrictEqual({ sessionId: 'session-1', offset: 4, limit: 100 });
+    expect(
+      SessionTranscriptRequestSchema.safeParse({
+        sessionId: 'session-1',
+        offset: 0,
+        limit: 501,
+      }).success,
+    ).toBe(false);
+    expect(
+      SessionTranscriptRequestSchema.safeParse({
+        sessionId: 'session-1',
+        epoch: 'global-epoch',
+        seq: 9,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts dotted session IDs as one safe path segment', () => {
+    expect(SessionIdSchema.parse('session.a-1')).toBe('session.a-1');
+    expect(SessionIdSchema.safeParse('session/a-1').success).toBe(false);
+  });
+
+  it('rejects foreign and prototype-polluting output records', () => {
+    const valid = {
+      subscriptionId: 'sub-1',
+      type: 'record',
+      sessionId: 'session-1',
+      index: 2,
+      message: { index: 2, role: 'assistant', type: 'text', text: 'hello' },
+    };
+    expect(SessionOutputEventSchema.parse(valid)).toStrictEqual(valid);
+    expect(SessionOutputEventSchema.safeParse({ ...valid, token: 'secret' }).success).toBe(false);
+    expect(() =>
+      assertNoPrototypePollution(
+        JSON.parse(
+          '{"subscriptionId":"sub-1","type":"record","sessionId":"session-1","index":2,"message":{"index":2,"role":"assistant","type":"text","__proto__":{}}}',
+        ),
+      ),
+    ).toThrow();
   });
 });
 
@@ -53,6 +118,30 @@ describe('ConnectionStateSchema', () => {
       error: { code: 'E_INCOMPATIBLE_SERVER', message: 'nope', remediation: 'update' },
     };
     expect(ConnectionStateSchema.parse(state)).toEqual(state);
+  });
+
+  it('bounds app-owned failure diagnostics at the IPC boundary', () => {
+    const base = {
+      status: 'crashed',
+      stage: 'connect',
+      detail: 'The app-owned runtime stopped.',
+      ownership: 'none',
+      error: { code: 'E_SERVER_CRASHED', message: 'stopped' },
+      diagnostics: { commandContext: 'bundled agentico server', logTail: ['redacted line'] },
+    };
+    expect(ConnectionStateSchema.safeParse(base).success).toBe(true);
+    expect(
+      ConnectionStateSchema.safeParse({
+        ...base,
+        diagnostics: { ...base.diagnostics, logTail: Array.from({ length: 21 }, () => 'line') },
+      }).success,
+    ).toBe(false);
+    expect(
+      ConnectionStateSchema.safeParse({
+        ...base,
+        diagnostics: { ...base.diagnostics, logTail: ['x'.repeat(513)] },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects unknown statuses and extra fields fail-closed', () => {

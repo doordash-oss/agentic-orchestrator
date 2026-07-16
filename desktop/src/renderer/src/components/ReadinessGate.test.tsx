@@ -41,7 +41,8 @@ describe('ReadinessGate first snapshot', () => {
     installAgenticoMock({ readiness: readySnapshot() });
     render(<ReadinessGate />);
     expect(await screen.findByRole('tab', { name: 'Home' })).toBeInTheDocument();
-    expect(await screen.findByRole('form', { name: /create a feature/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New feature' })).toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: /create a feature/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
   });
 

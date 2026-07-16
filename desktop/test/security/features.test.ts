@@ -33,6 +33,7 @@ function snapshot() {
     currentPhase: 'Plan',
     repos: ['repo-a'],
     createdAt: '2026-07-14T10:00:00Z',
+    activeRun: 1,
     actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
   };
 }
@@ -65,6 +66,18 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getFeature: vi.fn(() => Promise.resolve(snapshot())),
     createFeature: vi.fn(() => Promise.resolve({ featureId: 'abcd1234ef567890' })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
+    dispatchFeatureAction: vi.fn(() => Promise.reject(new Error('unused'))),
+    getAttention: vi.fn(() => Promise.resolve({ items: [] })),
+    answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    answerQuestions: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
+    saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
+    resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
+    listSessions: vi.fn(() => Promise.resolve([])),
+    getSession: vi.fn(() => Promise.reject(new Error('unused'))),
+    getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
+    openSessionOutput: vi.fn(() => 'sub-unused'),
+    cancelSessionOutput: vi.fn(() => false),
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
     ),
@@ -104,6 +117,12 @@ describe('feature IPC security', () => {
       IPC_CHANNELS.featuresGet,
       IPC_CHANNELS.featuresCreate,
       IPC_CHANNELS.featuresSetup,
+      IPC_CHANNELS.featuresDispatchAction,
+      IPC_CHANNELS.sessionsList,
+      IPC_CHANNELS.sessionsGet,
+      IPC_CHANNELS.sessionsTranscript,
+      IPC_CHANNELS.sessionsOutputOpen,
+      IPC_CHANNELS.sessionsOutputCancel,
       IPC_CHANNELS.creationDefaults,
     ]) {
       const result = (await handlers.get(channel)!(foreignEvent, validInput)) as Envelope;
@@ -113,6 +132,25 @@ describe('feature IPC security', () => {
     expect(services.createFeature).not.toHaveBeenCalled();
     expect(services.getFeature).not.toHaveBeenCalled();
     expect(services.dispatchFeatureSetup).not.toHaveBeenCalled();
+  });
+
+  it('rejects broad feature actions and global cursors on session operations', async () => {
+    const { handlers, services } = register();
+    for (const action of ['delete', 'resume', 'retry', '../start']) {
+      const result = (await handlers.get(IPC_CHANNELS.featuresDispatchAction)!(goodEvent, {
+        featureId: 'abcd1234ef567890',
+        action,
+      })) as Envelope;
+      expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    }
+    const cursorResult = (await handlers.get(IPC_CHANNELS.sessionsOutputOpen)!(goodEvent, {
+      sessionId: 'session-1',
+      epoch: 'global',
+      seq: 9,
+    })) as Envelope;
+    expect(cursorResult.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.dispatchFeatureAction).not.toHaveBeenCalled();
+    expect(services.openSessionOutput).not.toHaveBeenCalled();
   });
 
   it('rejects invalid creation input at the schema layer before any service runs', async () => {

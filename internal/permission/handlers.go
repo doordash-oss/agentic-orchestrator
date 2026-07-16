@@ -110,7 +110,7 @@ func (h *AutoApproveHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.Pe
 }
 
 // AcceptEditsHandler auto-approves read-only tools and file edit/write tools,
-// but leaves everything else (Bash, Agent, etc.) for the TUI to prompt.
+// but leaves everything else (Bash, Agent, etc.) for the desktop app to prompt.
 // Returning an empty Behavior ("") signals that the handler declines to decide
 // and the request should be surfaced to the user.
 type AcceptEditsHandler struct{}
@@ -130,7 +130,7 @@ func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.
 		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 	}
 
-	// Everything else (Bash, etc.) — defer to TUI
+	// Everything else (Bash, etc.) — defer to desktop app
 	return ports.PermissionDecision{}, nil
 }
 

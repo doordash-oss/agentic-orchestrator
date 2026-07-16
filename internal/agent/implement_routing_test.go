@@ -371,7 +371,7 @@ func TestImplementLoop_Routing_NEED_USER_INPUT_MalformedGateTripsProtocolViolati
 // TestImplementLoop_Routing_NEED_USER_INPUT_StubGateBackfilledFromProgress
 // reproduces the real-world failure where the implementer emits a rich
 // progress.md (state note + numbered questions) but a blank need-user-input.yaml
-// stub. The persisted gate must be backfilled from progress.md so the TUI
+// stub. The persisted gate must be backfilled from progress.md so the desktop app
 // renders the actual summary and questions rather than an empty form.
 func TestImplementLoop_Routing_NEED_USER_INPUT_StubGateBackfilledFromProgress(t *testing.T) {
 	if testing.Short() {

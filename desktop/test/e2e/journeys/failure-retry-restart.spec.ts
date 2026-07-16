@@ -16,6 +16,7 @@ import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
+  createFeatureViaForm,
   evidenceShotBothThemes,
   launchApp,
   persistAppLogs,
@@ -53,30 +54,26 @@ test('partial setup failure, retry on the same feature, restart persistence', as
   try {
     transcript.section('Launch (already-ready runtime goes straight to the workspace)');
     handle = await launchApp(world, testInfo, { traceName: 'failure-retry-restart' });
-    await expect(handle.page.getByRole('heading', { name: 'New feature' })).toBeVisible({
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
-    await expect(handle.page.getByRole('checkbox', { name: /alpha/ })).toBeVisible();
-    await expect(handle.page.getByRole('checkbox', { name: /beta/ })).toBeVisible();
-
-    transcript.section('Invalidate the second repo after discovery, before dispatch');
-    // Deleting the ref behind HEAD leaves the repository discoverable
-    // (IsGitRepo passes) and creation valid (HEAD still symrefs main), but
-    // strips every commit — so exactly the second worktree task fails with
-    // the engine's safe "no commits yet" error.
     const mainRef = path.join(beta, '.git', 'refs', 'heads', 'main');
-    fs.rmSync(mainRef, { force: true });
-    fs.rmSync(path.join(beta, '.git', 'packed-refs'), { force: true });
-    transcript.step(`deleted \`${mainRef}\` (and packed-refs): beta now has an unborn HEAD`);
 
     transcript.section('Create the feature on both repos; setup fails partially');
-    await handle.page.locator('#feature-name').fill('Two Repo Feature');
-    await handle.page.getByRole('checkbox', { name: /alpha/ }).check();
-    await handle.page.getByRole('checkbox', { name: /beta/ }).check();
-    await handle.page.getByRole('button', { name: 'Create feature' }).click();
-
-    const cockpit = handle.page.getByLabel('Feature Two Repo Feature');
-    await expect(cockpit).toBeVisible({ timeout: 30_000 });
+    const cockpit = await createFeatureViaForm(handle, {
+      name: 'Two Repo Feature',
+      repoPatterns: [/alpha/, /beta/],
+      beforeSubmit: () => {
+        transcript.section('Invalidate the second repo after discovery, before dispatch');
+        // Deleting the ref behind HEAD leaves the repository discoverable
+        // (IsGitRepo passes) and creation valid (HEAD still symrefs main), but
+        // strips every commit — so exactly the second worktree task fails with
+        // the engine's safe "no commits yet" error.
+        fs.rmSync(mainRef, { force: true });
+        fs.rmSync(path.join(beta, '.git', 'packed-refs'), { force: true });
+        transcript.step(`deleted \`${mainRef}\` (and packed-refs): beta now has an unborn HEAD`);
+      },
+    });
     await expect(cockpit.getByText('setup failed')).toBeVisible({ timeout: 60_000 });
     const alphaTask = cockpit.locator('.task-row', { hasText: 'Worktree: alpha' });
     const betaTask = cockpit.locator('.task-row', { hasText: 'Worktree: beta' });
@@ -106,8 +103,9 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
     await expect(cockpit.getByText('2 of 2 tasks complete')).toBeVisible();
     await expect(cockpit.getByText('(attempt 2)')).toBeVisible();
-    await expect(cockpit.getByRole('button', { name: 'Start' })).toHaveCount(0);
-    await expect(cockpit.getByText("Starting isn't available in this version yet.")).toBeVisible();
+    await expect(cockpit.getByRole('button', { name: 'Start' })).toBeVisible();
+    await expect(cockpit.getByRole('button', { name: 'Start' })).toBeEnabled();
+    await expect(cockpit.getByText("Starting isn't available in this version yet.")).toHaveCount(0);
 
     const afterRetry = await handle.page.evaluate(
       (id) => window.agentico.getFeature(id),
@@ -141,10 +139,11 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     await expect(restoredCockpit).toBeVisible({ timeout: 60_000 });
     await expect(restoredCockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
     await expect(restoredCockpit.getByText('2 of 2 tasks complete')).toBeVisible();
-    await expect(restoredCockpit.getByRole('button', { name: 'Start' })).toHaveCount(0);
+    await expect(restoredCockpit.getByRole('button', { name: 'Start' })).toBeVisible();
+    await expect(restoredCockpit.getByRole('button', { name: 'Start' })).toBeEnabled();
     await expect(
       restoredCockpit.getByText("Starting isn't available in this version yet."),
-    ).toBeVisible();
+    ).toHaveCount(0);
 
     const restored = await handle.page.evaluate((id) => window.agentico.getFeature(id), featureId);
     expect(restored.id).toBe(featureId);

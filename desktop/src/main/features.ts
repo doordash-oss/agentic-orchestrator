@@ -4,12 +4,13 @@
  * renderer-facing views; nothing here caches server-domain data, reads
  * runtime files, or lets the renderer compose REST paths. Creating a feature
  * queues durable setup but does NOT dispatch it — callers must dispatch the
- * `setup` action afterwards, and success ends at the startable Created state
- * (Start itself is a later-phase action this service never invokes).
+ * `setup` action afterwards. Start and stop remain separate, explicitly
+ * allowlisted operations dispatched through `dispatchAction`.
  */
 import { redactText } from '../shared/errors';
 import {
   FeatureActionResponseSchema,
+  ServerFeatureOperationalActionResponseSchema,
   FeatureDetailResponseSchema,
   FeatureListResponseSchema,
   RuntimeConfigCreationSchema,
@@ -19,6 +20,7 @@ import {
 } from '../shared/api/parse';
 import {
   CreateFeatureInputSchema,
+  FeatureActionRequestSchema,
   FeatureIdSchema,
   FeatureSetupStatusSchema,
   type CreateFeatureInput,
@@ -26,6 +28,8 @@ import {
   type CreationDefaults,
   type FeatureSetupView,
   type FeatureSnapshot,
+  type FeatureActionRequest,
+  type FeatureActionResult,
   type FeatureSummaryView,
   type ReadinessSnapshot,
   type SetupDispatchResult,
@@ -62,6 +66,8 @@ const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 export class FeatureService {
+  private readonly actionFlights = new Map<string, Promise<FeatureActionResult>>();
+
   constructor(private readonly deps: FeatureServiceDeps) {}
 
   /**
@@ -142,7 +148,29 @@ export class FeatureService {
       currentPhase: feature.current_phase,
       repos: feature.repos,
       createdAt: feature.created_at,
+      activeRun: feature.active_run,
+      runCount: feature.run_count,
+      ...(feature.progress.current_phase_status === undefined
+        ? {}
+        : { phaseStatus: feature.progress.current_phase_status }),
+      warnings: (feature.warnings ?? []).map((warning) => ({
+        code: warning.code,
+        message: redactText(warning.message),
+      })),
     }));
+  }
+
+  /** Dispatches only allowlisted start/stop actions, single-flight per feature/action. */
+  async dispatchAction(request: FeatureActionRequest): Promise<FeatureActionResult> {
+    const input = validateWithSchema(request, FeatureActionRequestSchema);
+    const key = `${input.featureId}:${input.action}`;
+    const existing = this.actionFlights.get(key);
+    if (existing !== undefined) return existing;
+    const flight = this.runOperationalAction(input).finally(() => {
+      if (this.actionFlights.get(key) === flight) this.actionFlights.delete(key);
+    });
+    this.actionFlights.set(key, flight);
+    return flight;
   }
 
   async getFeature(featureId: string): Promise<FeatureSnapshot> {
@@ -165,6 +193,32 @@ export class FeatureService {
       foldTargetIssues: true,
     });
   }
+
+  private async runOperationalAction(input: FeatureActionRequest): Promise<FeatureActionResult> {
+    try {
+      const body = await this.api(`/api/v1/features/${input.featureId}/actions/${input.action}`, {
+        method: 'POST',
+        body: {},
+      });
+      const response = validateWithSchema(body, ServerFeatureOperationalActionResponseSchema);
+      return {
+        featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+        action: input.action,
+        result: response.result,
+        ...(response.phase === undefined || response.phase === '' ? {} : { phase: response.phase }),
+        sessionIds: response.session_ids ?? [],
+      };
+    } catch (error) {
+      // Re-read eligibility after a structured rejection. Keep the original
+      // actionable mutation error even when this best-effort refresh fails.
+      try {
+        await this.getFeature(input.featureId);
+      } catch {
+        // The renderer will next converge through its invalidation/resync path.
+      }
+      throw error;
+    }
+  }
 }
 
 /** Maps the validated server detail to the strict renderer-facing snapshot. */
@@ -184,6 +238,7 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       : { description: feature.description }),
     repos: feature.repos,
     createdAt: feature.created_at,
+    activeRun: feature.active_run,
     ...(setup === null ? {} : { setup }),
     actions: (feature.actions ?? []).map((action) => ({
       id: action.id,

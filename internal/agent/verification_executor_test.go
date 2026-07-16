@@ -764,10 +764,14 @@ func TestVerificationWriteDenialDetection(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			run := capturedVerificationRun{record: verificationRunRecord{ExitCode: 1}, stderr: tc.output}
-			if _, got := verificationWriteDenial(run, []string{root}); got != tc.want {
+			if _, _, got := verificationWriteDenial(run, []string{root}); got != tc.want {
 				t.Fatalf("verificationWriteDenial(%q) = %v, want %v", tc.output, got, tc.want)
 			}
 		})
+	}
+	run := capturedVerificationRun{record: verificationRunRecord{ExitCode: 1}, stderr: "open /Users/x/.m2/repository/a.pom: operation not permitted"}
+	if _, path, _ := verificationWriteDenial(run, []string{root}); path != "/Users/x/.m2/repository/a.pom" {
+		t.Fatalf("verificationWriteDenial denied path = %q, want the refused path", path)
 	}
 }
 

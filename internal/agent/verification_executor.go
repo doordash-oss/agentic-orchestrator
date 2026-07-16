@@ -122,6 +122,11 @@ func ExecuteTestingContract(
 	out := &VerificationExecutionOutcome{Report: report}
 	report.ContractPath = strings.TrimSpace(contractPath)
 	report.ContractRevision = contract.Revision
+	grantRoots := loadSandboxGrantRoots(contractPath)
+	userHome, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		userHome = ""
+	}
 
 	resultIndexes := make(map[string]int, len(report.Results))
 	for i := range report.Results {
@@ -154,7 +159,7 @@ func ExecuteTestingContract(
 			recordVerificationContractError(out, report, idx, item, "", workDirErr.Error(), "Tag the item with one repository from the feature scope.")
 			continue
 		}
-		writableRoots := verificationWritableRoots(itemWritableWorkRoots(item, workDir, repos)...)
+		writableRoots := verificationWritableRoots(append(itemWritableWorkRoots(item, workDir, repos), grantRoots...)...)
 		cwd, err := resolveVerificationCwd(workDir, item.Run.Cwd)
 		if err != nil {
 			recordVerificationContractError(out, report, idx, item, workDir, err.Error(), "Use a cwd relative to the tagged repository root.")
@@ -222,12 +227,45 @@ func ExecuteTestingContract(
 		}
 
 		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots)
+		// Sandbox self-expansion: an OS write denial on a grantable path is a
+		// harness limitation, not a finding. Grant the minimal root, retry,
+		// and persist so later runs (and baselines) start with it. Protected
+		// paths never grant and fall through to the environment gate below.
+		var grantedThisItem []string
+		for candidateErr != nil && len(grantedThisItem) < maxSandboxGrantsPerItem {
+			_, deniedPath, denied := verificationWriteDenial(candidate, writableRoots)
+			if !denied || deniedPath == "" {
+				break
+			}
+			root, grantable := sandboxGrantRootForDeniedPath(userHome, deniedPath)
+			if !grantable {
+				break
+			}
+			candidate.record.Classification = "sandbox_write_denied"
+			if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
+				return nil, err
+			}
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				break
+			}
+			if err := appendSandboxGrant(contractPath, sandboxGrant{Root: root, ItemID: item.ID, DeniedPath: deniedPath}); err != nil {
+				return nil, err
+			}
+			grantRoots = append(grantRoots, root)
+			grantedThisItem = append(grantedThisItem, root)
+			writableRoots = verificationWritableRoots(append(itemWritableWorkRoots(item, workDir, repos), grantRoots...)...)
+			candidate, candidateErr = captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots)
+		}
 		if candidateErr == nil {
 			candidate.record.Classification = VerificationClassificationPassed
 			if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
 				return nil, err
 			}
-			report.Results[idx] = machineContractResult(item, VerificationStatusPassed, candidate, "")
+			note := ""
+			if len(grantedThisItem) > 0 {
+				note = "passed after sandbox write grants: " + strings.Join(grantedThisItem, ", ")
+			}
+			report.Results[idx] = machineContractResult(item, VerificationStatusPassed, candidate, note)
 			continue
 		}
 		if repo != nil {
@@ -240,7 +278,7 @@ func ExecuteTestingContract(
 				continue
 			}
 		}
-		if detail, denied := verificationWriteDenial(candidate, writableRoots); denied {
+		if detail, _, denied := verificationWriteDenial(candidate, writableRoots); denied {
 			if err := recordEnvironmentLimitedBlock(out, report, idx, item, contractPath, &candidate,
 				"verification environment denies required writes: "+detail); err != nil {
 				return nil, err
@@ -709,6 +747,9 @@ func verificationWritableRoots(workRoots ...string) []string {
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		add(filepath.Join(home, "go"))
+		for _, root := range toolchainCacheRoots(home) {
+			add(root)
+		}
 	}
 	return roots
 }
@@ -785,7 +826,7 @@ var verificationWriteDenialPath = regexp.MustCompile(`/[^\s:'"]+`)
 // limit, not a code defect — so it must not masquerade as an inherited or
 // unclassified failure. Denials on writable paths are left alone: the sandbox
 // cannot be their cause.
-func verificationWriteDenial(run capturedVerificationRun, writableRoots []string) (string, bool) {
+func verificationWriteDenial(run capturedVerificationRun, writableRoots []string) (string, string, bool) {
 	roots := make([]string, 0, len(writableRoots)*2)
 	for _, root := range writableRoots {
 		if root = strings.TrimSpace(root); root == "" {
@@ -808,16 +849,21 @@ func verificationWriteDenial(run capturedVerificationRun, writableRoots []string
 		lower := strings.ToLower(line)
 		switch {
 		case strings.Contains(lower, "read-only file system"):
-			return strings.TrimSpace(line), true
+			for _, path := range verificationWriteDenialPath.FindAllString(line, -1) {
+				if !underRoot(filepath.Clean(path)) {
+					return strings.TrimSpace(line), filepath.Clean(path), true
+				}
+			}
+			return strings.TrimSpace(line), "", true
 		case strings.Contains(lower, "operation not permitted") || strings.Contains(lower, "permission denied"):
 			for _, path := range verificationWriteDenialPath.FindAllString(line, -1) {
 				if !underRoot(filepath.Clean(path)) {
-					return strings.TrimSpace(line), true
+					return strings.TrimSpace(line), filepath.Clean(path), true
 				}
 			}
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // envManagedVerificationTools are launchers that shell profiles typically put
@@ -882,7 +928,8 @@ func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, cont
 	if err != nil {
 		return nil, err
 	}
-	run, runErr := captureVerificationCommand(ctx, runner, item.ID, "baseline", item.Run.Shell, cwd, item.Run.Timeout, verificationWritableRoots(tmp))
+	run, runErr := captureVerificationCommand(ctx, runner, item.ID, "baseline", item.Run.Shell, cwd, item.Run.Timeout,
+		verificationWritableRoots(append([]string{tmp}, loadSandboxGrantRoots(contractPath)...)...))
 	run.record.Classification = "baseline"
 	run.record.BaseCommit = commit
 	run.record.RelCwd = strings.TrimSpace(item.Run.Cwd)

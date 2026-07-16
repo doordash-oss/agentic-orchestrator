@@ -904,17 +904,18 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					}
 					continue
 				}
-				meta.ReviewStatus = reviewStatus.String()
-				_ = am.WriteMeta(iterDir, meta)
-				_ = am.WriteSummary(summaryPath, meta)
-				consecutiveFailures = 0
-				// Review failed to run, treat as changes requested
-				if strings.TrimSpace(feedback) == "" {
-					feedback = fmt.Sprintf("Review failed to execute: %v", reviewErr)
-				}
-				reviewerFeedback = feedback
+				// The review never produced a verdict (helper/API failure) —
+				// that is not reviewer feedback, and dispatching it to the
+				// implementer would burn an iteration on unactionable text.
+				// Leave meta.yaml unwritten: phase_complete stays on disk, so
+				// on resume LatestIteration stops at i-1 and the skipImplement
+				// branch re-runs the review for this same iteration only.
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_error")
-				continue
+				return &LoopResult{
+					FinalStatus: "review_error",
+					Iterations:  i - 1,
+					LastError:   fmt.Sprintf("review did not complete: %v; resume to re-run the review for iteration %d", reviewErr, i),
+				}, nil
 			}
 
 			meta.ReviewStatus = reviewStatus.String()

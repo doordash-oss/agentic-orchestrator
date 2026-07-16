@@ -2895,6 +2895,92 @@ case "$_step" in
 	return b.String()
 }
 
+func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-review-park")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	runVerificationTestCommand(t, runner, workDir, "git commit --allow-empty -qm base")
+
+	planPath := filepath.Join(artifactDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("### Automated Verification\n- [ ] Check passes: `printf verified`\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.JSONLError("Unable to connect to API (ENOTFOUND)")+"\n")
+	f := &feature.Feature{
+		ID: "test-review-park", Name: "Review Park", Slug: "review-park",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, captured := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 3, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: false, PhaseType: "collapsed",
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_error" {
+		t.Fatalf("result = %+v, want review_error park when no axis produced a verdict", result)
+	}
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if !HasPhaseComplete(iterDir) {
+		t.Fatal("phase_complete missing; review-only resume would re-run the implementer")
+	}
+	if _, statErr := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(statErr) {
+		t.Fatalf("meta.yaml written for an unreviewed iteration; resume would advance to iteration 2: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(artifactDir, "iteration-02")); !os.IsNotExist(statErr) {
+		t.Fatal("iteration-02 exists; infra failure consumed an implementer iteration")
+	}
+	implementerSessions := len(*captured)
+	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, implementationReviewAxisSelection{Profile: f.EffectivePipeline()})
+	if implementerSessions != 1+len(axes) {
+		t.Fatalf("BuildSession calls = %d, want one implementer + %d review axes", implementerSessions, len(axes))
+	}
+
+	// Network restored: the same review script now approves. Resume must run
+	// review-only for the same iteration.
+	testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	resumed, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
+	}
+	if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
+		t.Fatalf("resumed result = %+v, want iteration-1 review_passed", resumed)
+	}
+	if got := len(*captured); got != implementerSessions+len(axes) {
+		t.Fatalf("BuildSession calls after resume = %d, want %d (review axes only, no second implementer)", got, implementerSessions+len(axes))
+	}
+}
+
 func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")

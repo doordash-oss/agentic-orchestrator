@@ -409,6 +409,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Merge iteration-specific fields into session opts
 			sessOpts.Iteration = i
 			sessOpts.PermCacheScope = permRepoName
+			// Capture provider stderr so silent process deaths are diagnosable.
+			sessOpts.StderrPath = filepath.Join(iterDir, "stderr.log")
 
 			// Start session in interactive mode
 			if cfg.Feature.CurrentRoadmapPhase > 0 {

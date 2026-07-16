@@ -1337,6 +1337,44 @@ func TestValidateManualVerificationSectionAllowsInlineCodeReferences(t *testing.
 	}
 }
 
+func TestValidateEvidenceSectionBodyParserAgreement(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		wantIn string
+	}{
+		{
+			name:   "command-only behavioral bullet rejected",
+			body:   "### Behavioral Evidence\n- [ ] `npx playwright test e2e/a.spec.ts`\n",
+			wantIn: "must include prose describing the evidence before the trailing executable command",
+		},
+		{
+			name: "behavioral bullet with prose and command still validates",
+			body: "### Behavioral Evidence\n- [ ] Checkout journey completes: `npx playwright test e2e/a.spec.ts`\n",
+		},
+		{
+			name:   "command-only visual bullet rejected",
+			body:   "### Visual Evidence\n- [ ] `npx playwright test e2e/a.spec.ts --screenshot`\n",
+			wantIn: "must include prose describing the evidence before the trailing executable command",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heading := "### Behavioral Evidence"
+			if strings.Contains(tt.body, "### Visual Evidence") {
+				heading = "### Visual Evidence"
+			}
+			got := validateEvidenceSectionBody("## Success Criteria\n\n"+tt.body, heading)
+			if tt.wantIn == "" && got != "" {
+				t.Fatalf("validateEvidenceSectionBody() = %q, want no violation", got)
+			}
+			if tt.wantIn != "" && !strings.Contains(got, tt.wantIn) {
+				t.Fatalf("validateEvidenceSectionBody() = %q, want to contain %q", got, tt.wantIn)
+			}
+		})
+	}
+}
+
 func TestValidateRefactorPlanMarkdownScopesTopLevelCommands(t *testing.T) {
 	iterDir := t.TempDir()
 	planPath := filepath.Join(iterDir, "refactor-plan.md")

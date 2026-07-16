@@ -500,3 +500,26 @@ func TestParseEvidenceChecklistItemNonTerminalCommandIsNotStripped(t *testing.T)
 		t.Fatalf("command = %q, want empty when prose follows the span", req.Command)
 	}
 }
+
+func TestParseEvidenceChecklistItemSizeTagAndTrailingCommand(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Home populated, dark theme [size: 1440x900]: `npx playwright test e2e/home.spec.ts`")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Width != 1440 || req.Height != 900 {
+		t.Fatalf("size = %dx%d, want 1440x900", req.Width, req.Height)
+	}
+	if req.Command != "npx playwright test e2e/home.spec.ts" {
+		t.Fatalf("command = %q", req.Command)
+	}
+	if req.Description != "Home populated, dark theme" {
+		t.Fatalf("description = %q, want size tag and command both stripped", req.Description)
+	}
+}
+
+func TestParseEvidenceChecklistItemCommandOnlyIsRejected(t *testing.T) {
+	_, ok := parseEvidenceChecklistItem("- [ ] `npx playwright test e2e/a.spec.ts`")
+	if ok {
+		t.Fatal("expected command-only bullet with no prose to be rejected")
+	}
+}

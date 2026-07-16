@@ -105,7 +105,7 @@ Do not request a screenshot merely to prove an invariant already covered by an a
 
 ### Behavioral Evidence
 
-- [ ] [One consolidated primary-journey artifact, such as a trace, recording, or interaction log.]
+- [ ] [Short description of the primary user journey]: `[packaged executable command that produces the artifact]`
 
 End each requirement with its packaged executable command in backticks; the harness runs it and preserves its evidence. Multiple requirements are allowed only when every item carries a command; without commands, use at most one consolidated requirement. Use `- [ ] None required: <reason>` only when the phase has no meaningful primary user journey artifact beyond automated verification. Keep behavioral evidence requirements here at the phase level; do not add per-task behavioral evidence sections.
 

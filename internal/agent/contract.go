@@ -466,6 +466,9 @@ func validateFrontendVisualEvidenceSection(successCriteria string) string {
 	body := extractMarkdownSection(successCriteria, heading)
 	requirements, _, _ := countEvidenceChecklistItems(body)
 	if requirements > 0 {
+		if evidenceBulletMissingProse(body) {
+			return evidenceBulletMissingProseMessage(heading)
+		}
 		return ""
 	}
 	return frontendVisualEvidenceRuleMessage()
@@ -485,6 +488,8 @@ func validateEvidenceSectionBody(successCriteria, heading string) string {
 		return ""
 	case noneMarkers > 0:
 		return fmt.Sprintf("phase plan markdown `%s` must contain checklist requirements or exactly one `None required: <reason>` checklist item, not both", heading)
+	case requirements > 0 && evidenceBulletMissingProse(body):
+		return evidenceBulletMissingProseMessage(heading)
 	case heading == "### Behavioral Evidence" && requirements > 1:
 		if behavioralItemsAllCarryCommands(body) {
 			return ""
@@ -514,6 +519,37 @@ func behavioralItemsAllCarryCommands(body string) bool {
 		saw = true
 	}
 	return saw
+}
+
+// evidenceBulletMissingProse reports whether body contains a checklist bullet
+// that countEvidenceChecklistItems counts as a requirement but that
+// parseEvidenceChecklistItem (the testing-contract compiler's parser) rejects
+// because stripping its trailing executable command leaves an empty
+// description. Such a bullet passes structural validation yet compiles to
+// zero contract rows, so evidence sections must reject it explicitly. Only
+// callers validating Visual/Behavioral Evidence sections use this — Manual
+// and Automated Verification never strip a trailing command out of the
+// description, so they cannot hit this mismatch.
+func evidenceBulletMissingProse(body string) bool {
+	var fence fenceState
+	for _, line := range strings.Split(body, "\n") {
+		if fence.update(line) || fence.inside() {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		description, ok := parseChecklistDescription(trimmed)
+		if !ok || isNoneRequiredDescription(description) {
+			continue
+		}
+		if _, ok := parseEvidenceChecklistItem(trimmed); !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func evidenceBulletMissingProseMessage(heading string) string {
+	return fmt.Sprintf("phase plan markdown `%s` checklist items must include prose describing the evidence before the trailing executable command; a bullet consisting only of `` `command` `` compiles to zero evidence rows in the testing contract", heading)
 }
 
 func countEvidenceChecklistItems(body string) (requirements int, noneMarkers int, invalidNoneMarkers int) {

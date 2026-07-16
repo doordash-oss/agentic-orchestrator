@@ -46,6 +46,8 @@ When an existing visual or behavioral row's scope is unsatisfiable or unauditabl
 
 The requirement text must say how to restructure the row in the phase plan — e.g. "split into one visual cell per surface/state/size/theme with [size: WxH] tags" or "give each journey its own item ending with its packaged Playwright command". The harness routes these to a phase-plan revision.
 
+`<item_id>` must be an existing visual or behavioral contract row ID (prefixed `visual_` or `behavioral_`); a marker with any other item ID is ignored by the harness.
+
 ## Review Rules
 
 The verification report is harness-generated from the bound testing contract; never ask the implementer to edit report rows or recreate harness dispositions.

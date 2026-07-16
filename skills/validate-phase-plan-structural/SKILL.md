@@ -81,7 +81,7 @@ Single-repo features may omit `**Repo:**`; multi-repo features must include it i
 - Visual evidence bullets are checklist items describing required visual artifacts, or exactly one `None required: <reason>` checklist item when no rendered surface is meaningful.
 - If `**Frontend:** true`, the Visual Evidence section must contain at least one real checklist visual evidence requirement. Reject `None required`, empty, or missing Visual Evidence for frontend phases; this is the frontend/visual-evidence rule.
 - Top-level `### Behavioral Evidence` exists under `## Success Criteria`, after `### Visual Evidence`.
-- Behavioral evidence contains at most one consolidated primary-journey artifact, or exactly one `None required: <reason>` checklist item when no primary user journey artifact is meaningful.
+- Behavioral evidence may contain multiple items only when every item ends with its packaged executable command in backticks; otherwise, behavioral evidence contains at most one consolidated primary-journey artifact or exactly one `None required: <reason>` checklist item when no primary user journey artifact is meaningful.
 - Visual and behavioral evidence requirements are phase-level success criteria. Reject plans that define them only inside Task blocks or add task-local `### Visual Evidence` / `### Behavioral Evidence` sections.
 
 ## Per-Task Repo Tagging

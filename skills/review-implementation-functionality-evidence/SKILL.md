@@ -40,6 +40,12 @@ or
 
 The requirement text must describe the evidence the phase plan should add, for example "Capture the updated setup wizard empty state" or "Record the create-project CLI journey through persisted config." Do not tell the implementer to edit the verification report directly. Missing evidence is repaired by phase-plan revision.
 
+When an existing visual or behavioral row's scope is unsatisfiable or unauditable as written (e.g. one row contracting an entire capture matrix, or a journey bundle no packaged command produces), do not send the implementer another lap against the same row. Emit exactly one marker per row:
+
+`INSUFFICIENT_EVIDENCE_REQUIREMENT <item_id>: <revised requirement>`
+
+The requirement text must say how to restructure the row in the phase plan — e.g. "split into one visual cell per surface/state/size/theme with [size: WxH] tags" or "give each journey its own item ending with its packaged Playwright command". The harness routes these to a phase-plan revision.
+
 ## Review Rules
 
 The verification report is harness-generated from the bound testing contract; never ask the implementer to edit report rows or recreate harness dispositions.

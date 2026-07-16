@@ -99,13 +99,15 @@ Use at most one requirement. It is reserved for irreducible semantic judgment an
 
 Use `- [ ] None required: <reason>` only when the phase has no meaningful rendered surface to capture and `**Frontend:** false`. If `**Frontend:** true`, include at least one real visual evidence checklist item. Keep visual evidence requirements here at the phase level; do not add per-task visual evidence sections.
 
+Give each item a `[size: WxH]` tag naming the capture window size; one checklist item per surface/state/size/theme cell.
+
 Do not request a screenshot merely to prove an invariant already covered by an automated command.
 
 ### Behavioral Evidence
 
 - [ ] [One consolidated primary-journey artifact, such as a trace, recording, or interaction log.]
 
-Use at most one requirement. It may cover a short checklist within one artifact, but must not become several files. Use `- [ ] None required: <reason>` only when the phase has no meaningful primary user journey artifact beyond automated verification. Keep behavioral evidence requirements here at the phase level; do not add per-task behavioral evidence sections.
+End each requirement with its packaged executable command in backticks; the harness runs it and preserves its evidence. Multiple requirements are allowed only when every item carries a command; without commands, use at most one consolidated requirement. Use `- [ ] None required: <reason>` only when the phase has no meaningful primary user journey artifact beyond automated verification. Keep behavioral evidence requirements here at the phase level; do not add per-task behavioral evidence sections.
 
 Do not request command transcripts here; command results already retain stdout, stderr, and run metadata.
 ````

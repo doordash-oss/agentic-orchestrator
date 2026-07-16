@@ -66,7 +66,8 @@ Keep verification minimal and non-overlapping:
 - Put every deterministic invariant in an executable command. The harness captures its exit code, stdout, stderr, and run metadata automatically.
 - Repo-scoped commands run from that repository root. In multi-repo phases, prefix every automated-verification description with `[repo: <name>]`; single-repo phases may omit it. Use paths such as `README.md` or `./internal/...`; never add `cd <repo>` or prefix paths with the repo name.
 - Use one consolidated Manual Verification item only for irreducible semantic judgment that commands, visual evidence, and behavioral evidence cannot prove. Do not restate automated checks.
-- Visual artifacts must add information that command results do not already capture. Use at most one consolidated Behavioral Evidence item covering the primary journey; never split it into multiple paperwork files.
+- Enumerate visual evidence as one checklist item per capture cell — surface/state/theme in prose plus a `[size: WxH]` tag (e.g. `- [ ] Home populated, dark theme [size: 1440x900]`). The harness validates each cell's file dimensions deterministically; a single item describing a whole capture matrix cannot be verified and will be rejected at review.
+- End every Behavioral Evidence item with its packaged executable command in backticks (e.g. `` - [ ] Primary journey trace bundle: `npx playwright test e2e/journey.spec.ts` ``). Command-backed items are executed by the harness, which exports `AGENTICO_EVIDENCE_DIR` for the spec to write its trace and named screenshots into. Multiple journey items are allowed when every item carries a command; prose-only behavioral evidence must stay a single consolidated item.
 
 ## Plan Template
 

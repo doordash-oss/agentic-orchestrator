@@ -680,23 +680,30 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						}
 					}
 				}
-				verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
-				beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract)
-				verifyCtx = WithVerificationProgress(verifyCtx, func(name, state string) {
-					updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state)
-				})
-				harnessVerification, readErr = ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
-				cancelVerify()
-				clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID)
-				if readErr != nil {
-					if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
-						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "interrupted")
-						return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+				if cached, cacheErr := ReadVerificationReport(reportPath); cacheErr == nil && cached != nil && cached.ContractRevision == contract.Revision {
+					// Stop/restart resume: the harness already executed this
+					// iteration's contract and persisted the report. Reuse
+					// it so resuming mid-review never re-runs the commands.
+					harnessVerification = ReconstructVerificationOutcome(cached)
+				} else {
+					verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
+					beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract)
+					verifyCtx = WithVerificationProgress(verifyCtx, func(name, state string) {
+						updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state)
+					})
+					harnessVerification, readErr = ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
+					cancelVerify()
+					clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID)
+					if readErr != nil {
+						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+							cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "interrupted")
+							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+						}
+						return nil, fmt.Errorf("executing testing contract: %w", readErr)
 					}
-					return nil, fmt.Errorf("executing testing contract: %w", readErr)
-				}
-				if readErr = WriteVerificationReport(reportPath, *harnessVerification.Report); readErr != nil {
-					return nil, fmt.Errorf("writing harness verification report: %w", readErr)
+					if readErr = WriteVerificationReport(reportPath, *harnessVerification.Report); readErr != nil {
+						return nil, fmt.Errorf("writing harness verification report: %w", readErr)
+					}
 				}
 			}
 			outcome, violations, validateErr := Validate(feature.PhaseImplement, RoleImplementer, iterDir)

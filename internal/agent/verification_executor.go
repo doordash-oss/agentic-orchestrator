@@ -483,6 +483,28 @@ func ExecuteTestingContract(
 	return out, nil
 }
 
+// ReconstructVerificationOutcome rebuilds the routing outcome from a
+// previously persisted report, so a stop/restart resume can reuse results
+// already on disk instead of re-executing every contract command.
+func ReconstructVerificationOutcome(report *VerificationReport) *VerificationExecutionOutcome {
+	out := &VerificationExecutionOutcome{Report: report}
+	for _, result := range report.Results {
+		switch result.Status {
+		case VerificationStatusBlocked:
+			out.BlockedItems = append(out.BlockedItems, result.ItemID)
+		case VerificationStatusInheritedFailure:
+			out.InheritedItems = append(out.InheritedItems, result.ItemID)
+		}
+		switch result.Notes {
+		case VerificationClassificationRegression:
+			out.RegressionItems = append(out.RegressionItems, result.ItemID)
+		case VerificationClassificationContractError:
+			out.ContractErrors = append(out.ContractErrors, VerificationContractError{ItemID: result.ItemID, Reason: result.Evidence})
+		}
+	}
+	return out
+}
+
 func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) VerificationCheckResult {
 	result := contractResultStub(item)
 	rel := strings.TrimSpace(item.ExpectedEvidence.Path)

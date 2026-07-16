@@ -2966,7 +2966,26 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 	}
 
 	// Network restored: the same review script now approves. Resume must run
-	// review-only for the same iteration.
+	// review-only for the same iteration, reuse the already-generated
+	// verification report instead of re-executing the contract, and skip
+	// axes that already produced a complete verdict.
+	contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), f, cfg.RepoName)
+	if !ok {
+		t.Fatal("no contract path resolved")
+	}
+	runsBefore := countContractEvidenceRuns(t, contractPath)
+	cachedAxis := axes[0]
+	cachedAxisDir := filepath.Join(iterDir, "review", implementationReviewAxisSlug(cachedAxis.Name))
+	if err := os.MkdirAll(cachedAxisDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cachedFeedback := FormatStructuredReviewFeedback(cachedAxis.Name+" Implementation Review", "- (none)", "- (none)", ReviewApproved)
+	if err := os.WriteFile(filepath.Join(cachedAxisDir, "review-feedback.md"), []byte(cachedFeedback), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachedAxisDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	resumed, err := RunImplementationLoop(cfg, sm)
@@ -2976,9 +2995,25 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 	if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
 		t.Fatalf("resumed result = %+v, want iteration-1 review_passed", resumed)
 	}
-	if got := len(*captured); got != implementerSessions+len(axes) {
-		t.Fatalf("BuildSession calls after resume = %d, want %d (review axes only, no second implementer)", got, implementerSessions+len(axes))
+	if got := len(*captured); got != implementerSessions+len(axes)-1 {
+		t.Fatalf("BuildSession calls after resume = %d, want %d (uncached review axes only)", got, implementerSessions+len(axes)-1)
 	}
+	if runsAfter := countContractEvidenceRuns(t, contractPath); runsAfter != runsBefore {
+		t.Fatalf("evidence runs after resume = %d, want %d (verification report must be reused, not re-executed)", runsAfter, runsBefore)
+	}
+}
+
+func countContractEvidenceRuns(t *testing.T, contractPath string) int {
+	t.Helper()
+	root := filepath.Join(filepath.Dir(contractPath), "verification-evidence")
+	runs := 0
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() && strings.HasPrefix(d.Name(), "run-") {
+			runs++
+		}
+		return nil
+	})
+	return runs
 }
 
 func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {

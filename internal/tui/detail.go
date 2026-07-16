@@ -1135,34 +1135,38 @@ func formatValidatorStatuses(statuses map[string]string) string {
 	return strings.Join(parts, "  ")
 }
 
-// formatVerificationStatuses renders per-command harness verification
-// progress inline, sorted by name. Example: "Go build ✓  npm test ⟳".
+// formatVerificationStatuses renders harness verification progress as one
+// compact line: completed/total, a failure count when non-zero, and the
+// command currently running. Example: "[3/9] ✗1 · Desktop unit tests ⟳".
 func formatVerificationStatuses(statuses map[string]string) string {
-	names := make([]string, 0, len(statuses))
-	for name := range statuses {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var parts []string
-	for _, name := range names {
-		short := name
-		if len(short) > 18 {
-			short = short[:17] + "…"
-		}
-		switch statuses[name] {
-		case "passed", "waived":
-			parts = append(parts, SuccessStyle.Render(short+" ✓"))
-		case "failed", "inherited_failure":
-			parts = append(parts, ErrorStyle.Render(short+" ✗"))
-		case "blocked":
-			parts = append(parts, WarningStyle.Render(short+" !"))
+	total := len(statuses)
+	done, failed := 0, 0
+	current := ""
+	for name, state := range statuses {
+		switch state {
 		case "running":
-			parts = append(parts, lipgloss.NewStyle().Foreground(colorInfo).Render(short+" ⟳"))
+			if current == "" || name < current {
+				current = name
+			}
+		case "pending":
 		default:
-			parts = append(parts, MutedStyle.Render(short+" ·"))
+			done++
+			if state == "failed" || state == "blocked" || state == "inherited_failure" {
+				failed++
+			}
 		}
 	}
-	return strings.Join(parts, "  ")
+	parts := []string{MutedStyle.Render(fmt.Sprintf("[%d/%d]", done, total))}
+	if failed > 0 {
+		parts = append(parts, ErrorStyle.Render(fmt.Sprintf("✗%d", failed)))
+	}
+	if current != "" {
+		if len(current) > 40 {
+			current = current[:39] + "…"
+		}
+		parts = append(parts, lipgloss.NewStyle().Foreground(colorInfo).Render(current+" ⟳"))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func formatPhaseStatus(f *feature.Feature) string {

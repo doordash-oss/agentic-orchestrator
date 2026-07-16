@@ -1456,16 +1456,23 @@ func TestRenderPhaseProgress_KBSubRows_RenderedForMultiRepo(t *testing.T) {
 	}
 }
 
-func TestFormatPhaseStatusVerifyingShowsCommandProgress(t *testing.T) {
+func TestFormatPhaseStatusVerifyingShowsCompactProgress(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing}
 	f.SetRun(&feature.Run{
 		CurrentPhaseStatus: "verifying",
-		ValidatorStatuses:  map[string]string{"Go build passes": "passed", "Desktop tests": "running"},
+		ValidatorStatuses: map[string]string{
+			"Go build passes": "passed",
+			"Desktop tests":   "running",
+			"Security tests":  "pending",
+		},
 	})
 	got := formatPhaseStatus(f)
-	if !strings.Contains(got, "verifying") || !strings.Contains(got, "Go build passes") {
-		t.Fatalf("formatPhaseStatus() = %q, want verifying with command names", got)
+	if !strings.Contains(got, "verifying") || !strings.Contains(got, "1/3") || !strings.Contains(got, "Desktop tests") {
+		t.Fatalf("formatPhaseStatus() = %q, want compact verifying [1/3] with the running command", got)
+	}
+	if strings.Contains(got, "Go build passes") || strings.Contains(got, "Security tests") {
+		t.Fatalf("formatPhaseStatus() = %q, want only the running command named, not one chip per command", got)
 	}
 }
 

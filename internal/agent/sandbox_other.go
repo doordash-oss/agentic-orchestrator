@@ -21,3 +21,10 @@ package agent
 func wrapHelperSandbox(command []string, _ string) ([]string, bool, func()) {
 	return command, false, func() {}
 }
+
+// wrapVerificationSandbox is a no-op on platforms without a supported
+// sandbox: verification commands run unsandboxed, and the run record marks
+// them as such.
+func wrapVerificationSandbox(command []string, _ []string) ([]string, bool, func()) {
+	return command, false, func() {}
+}

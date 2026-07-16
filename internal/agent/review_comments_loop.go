@@ -26,9 +26,8 @@
 //     unaddressed comment. Comments are aggregated across all PRs into
 //     the implement prompt, each tagged with `repo:` so the agent knows
 //     which worktree owns the fix.
-//   - Plan-less-aggregating: TestingContractCompiler runs in plan-less
-//     mode (per-repo baseline rows only, no plan-source items). No
-//     plan-phase step runs.
+//   - Plan-less-aggregating: no guessed project commands are added. The
+//     reviewer judges the resolution diff and structured resolution file.
 //   - One Claude session per iteration with `--add-dir` for every
 //     `Feature.Repos` worktree (and the state dir). The full workspace —
 //     not the subset — is mounted because review threads frequently
@@ -108,6 +107,7 @@ type ReviewCommentsLoopConfig struct {
 	SkillsDir                  string
 	GuidelinesDir              string
 	Observer                   *observe.Observer
+	CommandRunner              ports.CommandRunner
 
 	// RunImplementFn is a test seam: when non-nil, RunReviewCommentsLoop
 	// calls this instead of RunImplementationLoop so unit tests can drive
@@ -231,9 +231,8 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		return nil, fmt.Errorf("review-comments loop: mkdir %s: %w", artifactDir, err)
 	}
 
-	// Compile and persist the plan-less testing contract once at loop
-	// entry. Per-repo baseline rows (build/test/lint) only — no
-	// plan-source items.
+	// Persist an empty plan-less testing contract. Agentico does not guess
+	// language-specific project commands for review-comment edits.
 	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
 	if err := writeReviewCommentsTestingContract(contractPath, repoNames); err != nil {
 		return nil, fmt.Errorf("review-comments loop: testing contract: %w", err)
@@ -289,6 +288,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		SkillsDir:                  cfg.SkillsDir,
 		GuidelinesDir:              cfg.GuidelinesDir,
 		Observer:                   cfg.Observer,
+		CommandRunner:              cfg.CommandRunner,
 		// Run the per-iteration review gate so the reviewer can attest
 		// that every aggregated comment was either addressed (with code
 		// changes) or dismissed (with reasoning), and the build still
@@ -367,6 +367,26 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 			Repos:             repoNames,
 		}, nil
 
+	case "plan_revision_required":
+		// The review-comments plan is harness-authored: there is no planner
+		// session to revise it, so a verification contract defect is a
+		// harness/environment failure. Fail the cycle with the full
+		// feedback so the defect is actionable instead of silently dropped.
+		errMsg := cyclePlanRevisionFailure("review-comments", loopResult)
+		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
+			FeatureID: cfg.Feature.ID,
+			Repos:     repoNames,
+			Outcome:   PhaseOutcomeFailed,
+			LastError: errMsg,
+		})
+		_ = markActiveReviewCommentsCycleFailed(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+		return &ReviewCommentsLoopResult{
+			FinalStatus: "failed",
+			Iterations:  loopResult.Iterations,
+			LastError:   errMsg,
+			Repos:       repoNames,
+		}, nil
+
 	default:
 		// max_iterations / safety_rail / failed all map to a cycle
 		// failure: every staged repo transitions to failed (LastError set); the
@@ -388,10 +408,8 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 	}
 }
 
-// writeReviewCommentsTestingContract compiles and persists the plan-less
-// review-comments testing contract: per-repo baseline rows tagged
-// `repo: <name>`. No plan-source items — the cycle has no phase plan to
-// inherit from.
+// writeReviewCommentsTestingContract persists an empty plan-less contract.
+// Agentico does not guess language-specific project commands.
 func writeReviewCommentsTestingContract(path string, repos []string) error {
 	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{
 		Repos:    repos,
@@ -405,15 +423,11 @@ func writeReviewCommentsTestingContract(path string, repos []string) error {
 }
 
 // reviewCommentsExitCriteria returns the cycle's exit criteria. The
-// agent reads this from the implement prompt's `## Exit Criteria`
-// section. Cycle-specific verification — every aggregated comment has a
-// resolution entry, build/test/lint pass on every touched repo, and
-// each touched repo's branch is force-pushed — lives here so the
-// iteration loop's reviewer can attest it via the verification report.
+// agent reads this from the implement prompt's `## Exit Criteria` section.
 func reviewCommentsExitCriteria(resolutionsPath string) string {
 	return "Every aggregated PR review comment is either addressed (with " +
 		"corresponding code changes) or dismissed (with reasoning), captured " +
-		"as one entry per comment in `" + resolutionsPath + "`. The build, " +
+		"as one entry per comment in `" + resolutionsPath + "`. " +
 		"test, and lint commands pass on every touched repo. Each touched " +
 		"repo's feature branch is committed and pushed to its remote PR " +
 		"branch (when the feature is publishable). No comment from the " +
@@ -499,16 +513,9 @@ func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resol
 	b.WriteString("\n]\n```\n\n")
 	b.WriteString("Every comment listed in the per-repo sections above MUST appear exactly once in this file. The orchestrator reads this file post-cycle to dispatch per-PR comment replies and mark addressed comment IDs.\n\n")
 
-	b.WriteString("## Verification\n\n")
-	b.WriteString("Per-repo baseline (build/test/lint) is required for every touched repo. The plan-less testing contract at `testing-contract.yaml` enumerates the per-repo baseline rows you must attest in `verification-report.yaml`.\n\n")
-
-	b.WriteString("#### Automated Verification:\n")
-	writeGenericProjectVerificationChecklist(&b)
-
 	b.WriteString("## Success Criteria\n\n")
 	b.WriteString("- Every aggregated comment has a corresponding entry in the resolutions JSON.\n")
 	b.WriteString("- Addressed comments have real code changes in the named repo.\n")
-	b.WriteString("- Per-repo baseline rows pass on every touched repo.\n")
 	b.WriteString("- Each touched repo's branch is committed and pushed to its PR branch.\n\n")
 
 	b.WriteString("## Important Notes\n\n")

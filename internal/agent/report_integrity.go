@@ -19,7 +19,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -44,8 +43,6 @@ const (
 	// GateCategoryDeferral covers structured cross-phase commitment failures.
 	GateCategoryDeferral ReportGateCategory = "deferral"
 )
-
-var behavioralTranscriptExitCodeRE = regexp.MustCompile(`(?i)^\[?exit code:\s*(-?\d+)\]?$`)
 
 // ReportGateKind is a fine-grained finding type within a category. It
 // drives feedback consolidation: findings sharing the same Kind are
@@ -221,7 +218,7 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 				})
 			}
 
-		case VerificationStatusFailed, VerificationStatusBlocked, VerificationStatusWaived:
+		case VerificationStatusFailed, VerificationStatusInheritedFailure, VerificationStatusBlocked, VerificationStatusWaived:
 			// Honest declarations. The LLM reviewer assesses severity. The
 			// gate does not block here except for policy/schema checks above.
 
@@ -231,7 +228,7 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 				CheckName: name,
 				Category:  GateCategorySchema,
 				Kind:      KindUnknownStatus,
-				Detail:    fmt.Sprintf("status %q is not one of passed, failed, blocked, waived, not_run, pending_human", string(c.Status)),
+				Detail:    fmt.Sprintf("status %q is not one of passed, failed, inherited_failure, blocked, waived, not_run, pending_human", string(c.Status)),
 			})
 		}
 	}
@@ -268,7 +265,7 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 		}
 		status := NormalizeStatus(c.Status)
 		switch status {
-		case VerificationStatusPassed, VerificationStatusFailed, VerificationStatusPendingHuman:
+		case VerificationStatusPassed, VerificationStatusFailed, VerificationStatusInheritedFailure, VerificationStatusPendingHuman:
 		default:
 			continue
 		}
@@ -283,10 +280,7 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 			})
 			continue
 		}
-		primaryValid := validateEvidencePath(result, name, iterDir, root, "primary", c.EvidenceData.Primary)
-		if primaryValid && item.ExpectedEvidence.Matcher == testingContractCommandTranscriptMatcher {
-			validateBehavioralCommandTranscript(result, name, iterDir, c.EvidenceData.Primary, item)
-		}
+		validateEvidencePath(result, name, iterDir, root, "primary", c.EvidenceData.Primary)
 		for idx, attachment := range c.EvidenceData.Attachments {
 			field := fmt.Sprintf("attachments[%d]", idx)
 			validateEvidencePath(result, name, iterDir, root, field, attachment)
@@ -348,89 +342,6 @@ func validateEvidencePath(result *ReportGateResult, checkName, iterDir, root, fi
 		return false
 	}
 	return true
-}
-
-func validateBehavioralCommandTranscript(result *ReportGateResult, checkName, iterDir, rawPath string, item TestingContractItem) {
-	commands := requiredBehavioralTranscriptCommands(item.Name)
-	if len(commands) == 0 {
-		result.Findings = append(result.Findings, ReportGateFinding{
-			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
-			Detail:    "behavioral evidence expects an actual command transcript, but the testing-contract item names no parseable commands",
-		})
-		return
-	}
-
-	clean, detail := cleanEvidencePath(rawPath, "behaviors")
-	if detail != "" {
-		return
-	}
-	data, err := os.ReadFile(filepath.Join(iterDir, filepath.FromSlash(clean)))
-	if err != nil {
-		result.Findings = append(result.Findings, ReportGateFinding{
-			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
-			Detail:    fmt.Sprintf("behavioral evidence %q could not be read as an actual command transcript: %v", clean, err),
-		})
-		return
-	}
-
-	lines := strings.Split(string(data), "\n")
-	missing := make([]string, 0, len(commands))
-	for _, command := range commands {
-		if !hasBehavioralTranscriptBlock(lines, command) {
-			missing = append(missing, command)
-		}
-	}
-	if len(missing) > 0 {
-		result.Findings = append(result.Findings, ReportGateFinding{
-			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
-			Detail: fmt.Sprintf(
-				"behavioral evidence %q contains summaries instead of an actual command transcript for: %s; preserve a command header, exit code, and captured stdout/stderr for non-zero exits",
-				clean,
-				strings.Join(quoted(missing), ", "),
-			),
-		})
-	}
-}
-
-func hasBehavioralTranscriptBlock(lines []string, command string) bool {
-	normalizedCommand := normalizeVerificationCommand(command)
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !isBehavioralTranscriptCommandHeader(trimmed) || !strings.Contains(normalizeVerificationCommand(trimmed), normalizedCommand) {
-			continue
-		}
-
-		exitCode := ""
-		hasOutput := false
-		for j := i + 1; j < len(lines); j++ {
-			next := strings.TrimSpace(lines[j])
-			if isBehavioralTranscriptCommandHeader(next) {
-				break
-			}
-			if match := behavioralTranscriptExitCodeRE.FindStringSubmatch(next); match != nil {
-				exitCode = match[1]
-				continue
-			}
-			if exitCode != "" && next != "" && !strings.EqualFold(next, "OUTPUT:") {
-				hasOutput = true
-			}
-		}
-		if exitCode == "0" || (exitCode != "" && hasOutput) {
-			return true
-		}
-	}
-	return false
-}
-
-func isBehavioralTranscriptCommandHeader(line string) bool {
-	upper := strings.ToUpper(line)
-	return strings.HasPrefix(line, "$ ") || strings.HasPrefix(upper, "COMMAND:")
 }
 
 func cleanEvidencePath(raw, root string) (string, string) {
@@ -576,6 +487,14 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 						Detail:    "status is blocked but the bound contract item does not allow blocked results",
 					})
 				}
+			}
+			if NormalizeStatus(checks[i].Status) == VerificationStatusWaived && !IsTestingContractItemWaived(item) {
+				result.Findings = append(result.Findings, ReportGateFinding{
+					CheckName: checkDisplayName(&checks[i]),
+					Category:  GateCategorySchema,
+					Kind:      KindPolicyViolation,
+					Detail:    "status is waived but the bound contract has no user-authorized waiver for this item",
+				})
 			}
 			if substituteID := strings.TrimSpace(checks[i].SubstituteItemID); substituteID != "" {
 				if !item.Policy.AllowSubstitution {

@@ -457,6 +457,7 @@ func (o *Orchestrator) rebaseLoopConfigForFeature(
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
+		CommandRunner:              pr.CommandRunner,
 		SessionStartFunc:           o.featureRebaseSessionStartFunc(f),
 		ResumeExistingCycle:        resumeExistingCycle,
 	}, nil
@@ -519,12 +520,6 @@ func (o *Orchestrator) runRebaseFinalReviewAndPublishPolicy(
 
 	if err := o.runDeferredFinalReviewForRebase(featureID); err != nil {
 		if errors.Is(err, errFeatureRebaseStopped) || errors.Is(err, errFinalReviewInterrupted) {
-			return
-		}
-		if errors.Is(err, errPlanRevisionDispatched) {
-			if clearErr := o.clearFeatureRebaseOperationIfContinuing(featureID); clearErr != nil {
-				o.failChangedRebaseRepos(featureID, changed, fmt.Errorf("clear rebase operation after plan revision dispatch: %w", clearErr))
-			}
 			return
 		}
 		o.failChangedRebaseRepos(featureID, changed, fmt.Errorf("rebase final review failed: %w", err))

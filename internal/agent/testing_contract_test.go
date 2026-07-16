@@ -16,6 +16,7 @@ package agent
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -43,19 +44,15 @@ func TestCompileTestingContract(t *testing.T) {
 	if contract.GeneratedFrom.PlanPath != planPath {
 		t.Fatalf("CompileTestingContract() PlanPath = %q, want %q", contract.GeneratedFrom.PlanPath, planPath)
 	}
-	if contract.GeneratedFrom.BaselineProfile != testingContractBaselineName {
-		t.Fatalf("CompileTestingContract() BaselineProfile = %q, want %q", contract.GeneratedFrom.BaselineProfile, testingContractBaselineName)
-	}
-	baselineSteps := DefaultBaselineVerificationSteps()
-	if len(contract.Items) != len(baselineSteps)+2 {
-		t.Fatalf("CompileTestingContract() got %d items, want %d", len(contract.Items), len(baselineSteps)+2)
+	if len(contract.Items) != 2 {
+		t.Fatalf("CompileTestingContract() got %d items, want 2", len(contract.Items))
 	}
 
 	first := contract.Items[0]
-	if first.Source != testingContractBaselineSource {
-		t.Fatalf("CompileTestingContract() first item source = %q, want %q", first.Source, testingContractBaselineSource)
+	if first.Source != testingContractPlanSource {
+		t.Fatalf("CompileTestingContract() first item source = %q, want %q", first.Source, testingContractPlanSource)
 	}
-	if first.Policy != defaultTestingContractPolicy(testingContractBaselineSource) {
+	if first.Policy != defaultTestingContractPolicy(testingContractPlanSource) {
 		t.Fatalf("CompileTestingContract() first item policy = %+v", first.Policy)
 	}
 	if first.ExpectedEvidence.Kind != testingContractEvidenceKind {
@@ -64,8 +61,8 @@ func TestCompileTestingContract(t *testing.T) {
 	if first.ExpectedEvidence.Matcher != testingContractEvidenceMatcher {
 		t.Fatalf("CompileTestingContract() first item evidence matcher = %q, want %q", first.ExpectedEvidence.Matcher, testingContractEvidenceMatcher)
 	}
-	if got, want := first.ID, testingContractItemID(testingContractBaselineSource, baselineSteps[0].Command); got != want {
-		t.Fatalf("CompileTestingContract() baseline item ID = %q, want %q", got, want)
+	if got, want := first.ID, testingContractItemID(testingContractPlanSource, first.Command); got != want {
+		t.Fatalf("CompileTestingContract() plan item ID = %q, want %q", got, want)
 	}
 
 	var foundPlanItem bool
@@ -89,29 +86,100 @@ func TestCompileTestingContract(t *testing.T) {
 	}
 }
 
-func TestCompileTestingContractWithBaseline(t *testing.T) {
-	planPath := filepath.Join("/tmp", "runs", "run-001", "phase-01", "plan", "approved.md")
-	baseline := []VerificationStep{
-		{Description: "Build agentic", Command: "go build -o bin/agentic ./cmd/agentic"},
-		{Description: "Run targeted agent tests", Command: "go test ./internal/agent/... -race"},
-	}
-	plan := "#### Automated Verification:\n- [ ] Smoke passes: `bash test/e2e/smoke.sh`\n"
-
-	contract := CompileTestingContractWithBaseline(plan, planPath, "tdd-fill-in", "agentic-go", baseline)
-
-	if contract.GeneratedFrom.BaselineProfile != "agentic-go" {
-		t.Fatalf("CompileTestingContractWithBaseline() BaselineProfile = %q, want %q", contract.GeneratedFrom.BaselineProfile, "agentic-go")
-	}
-	if len(contract.Items) != 3 {
-		t.Fatalf("CompileTestingContractWithBaseline() got %d items, want 3", len(contract.Items))
-	}
-	for i, step := range baseline {
-		if got := contract.Items[i].Command; got != step.Command {
-			t.Fatalf("CompileTestingContractWithBaseline() baseline[%d] command = %q, want %q", i, got, step.Command)
+func TestCompileTestingContractMarksOnlyExplicitPlanCommandsRunnable(t *testing.T) {
+	plan := "### Automated Verification\n- [ ] Protected [agentico capability: Okta session; probe: okta auth status]: `make integration`\n"
+	contract := CompileTestingContract(plan, "/tmp/phase/plan.md", "collapsed")
+	planItems := 0
+	for _, item := range contract.Items {
+		if item.Source != testingContractPlanSource {
+			continue
 		}
-		if contract.Items[i].Source != testingContractBaselineSource {
-			t.Fatalf("CompileTestingContractWithBaseline() baseline[%d] source = %q, want %q", i, contract.Items[i].Source, testingContractBaselineSource)
+		planItems++
+		if item.Run == nil || item.Run.Shell != "make integration" {
+			t.Fatalf("plan item Run = %+v, want explicit command", item.Run)
 		}
+		if len(item.Capabilities) != 1 || item.Capabilities[0].Probe != "okta auth status" {
+			t.Fatalf("plan item Capabilities = %+v, want Okta probe", item.Capabilities)
+		}
+	}
+	if planItems != 1 {
+		t.Fatalf("plan items = %d, want 1 (assertions above would be vacuous)", planItems)
+	}
+}
+
+func TestReviseTestingContractRejectsNonUserWaiver(t *testing.T) {
+	contract := CompileTestingContract("### Automated Verification\n- [ ] Tests: `make test`\n", "/tmp/phase/plan.md", "collapsed")
+	itemID := ""
+	for _, item := range contract.Items {
+		if item.Source == testingContractPlanSource {
+			itemID = item.ID
+		}
+	}
+	if itemID == "" {
+		t.Fatal("compiled contract has no plan item")
+	}
+
+	tests := []struct {
+		name      string
+		changedBy string
+	}{
+		{name: "agent", changedBy: "agent"},
+		{name: "planner", changedBy: "planner"},
+		{name: "empty", changedBy: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ReviseTestingContract(&contract, []TestingContractChange{{
+				ItemID: itemID, Action: TestingContractChangeWaive,
+				ChangeReason: "self-waive attempt", ChangedBy: tt.changedBy,
+			}})
+			if err == nil || !strings.Contains(err.Error(), "changed_by") {
+				t.Fatalf("ReviseTestingContract() error = %v, want changed_by rejection", err)
+			}
+		})
+	}
+}
+
+func TestReconcileTestingContractPreservesWaiverAndBaseCommit(t *testing.T) {
+	fresh := CompileTestingContract("### Automated Verification\n- [ ] Tests: `make test`\n", "/tmp/phase/plan.md", "collapsed")
+	existing := fresh
+	existing.Revision = 2
+	existing.BaseCommits = map[string]string{"repo": "abc123"}
+	for i := range existing.Items {
+		if existing.Items[i].Source == testingContractPlanSource {
+			existing.Items[i].Disposition = TestingContractItemDisposition{Status: TestingContractDispositionWaived, Reason: "approved", ChangedBy: "user"}
+			existing.Changes = []TestingContractChange{{ItemID: existing.Items[i].ID, Action: TestingContractChangeWaive, ChangeReason: "approved", ChangedBy: "user"}}
+		}
+	}
+
+	merged := ReconcileTestingContract(&existing, fresh)
+	if merged.Revision != 2 || merged.BaseCommits["repo"] != "abc123" {
+		t.Fatalf("ReconcileTestingContract() metadata = revision %d bases %v", merged.Revision, merged.BaseCommits)
+	}
+	for _, item := range merged.Items {
+		if item.Source == testingContractPlanSource && !IsTestingContractItemWaived(item) {
+			t.Fatalf("waiver not preserved: %+v", item)
+		}
+	}
+}
+
+func TestReconcileTestingContractInvalidatesWaiverWhenRequirementChanges(t *testing.T) {
+	oldContract := CompileTestingContract("### Automated Verification\n- [ ] Protected [agentico capability: Okta; probe: okta status]: `make test`\n", "/tmp/phase/plan.md", "collapsed")
+	for i := range oldContract.Items {
+		if oldContract.Items[i].Source == testingContractPlanSource {
+			oldContract.Items[i].Disposition = TestingContractItemDisposition{Status: TestingContractDispositionWaived, Reason: "old exception", ChangedBy: "user"}
+			oldContract.Changes = []TestingContractChange{{ItemID: oldContract.Items[i].ID, Action: TestingContractChangeWaive, ChangeReason: "old exception", ChangedBy: "user"}}
+		}
+	}
+	fresh := CompileTestingContract("### Automated Verification\n- [ ] Protected [agentico capability: VPN; probe: vpn status]: `make test`\n", "/tmp/phase/plan.md", "collapsed")
+	merged := ReconcileTestingContract(&oldContract, fresh)
+	for _, item := range merged.Items {
+		if item.Source == testingContractPlanSource && IsTestingContractItemWaived(item) {
+			t.Fatalf("changed requirement retained stale waiver: %+v", item)
+		}
+	}
+	if len(merged.Changes) != 0 || merged.Revision != oldContract.Revision+1 {
+		t.Fatalf("merged changes/revision = %v/%d, want cleared changes and revision %d", merged.Changes, merged.Revision, oldContract.Revision+1)
 	}
 }
 
@@ -121,6 +189,7 @@ func TestCompileTestingContract_ManualVerificationItems(t *testing.T) {
 		"- [ ] Agent tests pass: `go test ./internal/agent/... -count=1`",
 		"### Manual Verification",
 		"- [ ] Create a feature from the TUI and observe it reaches PlanReady.",
+		"- [ ] Confirm the status copy is understandable to a user.",
 		"- [ ] None required: this marker should be ignored.",
 	}, "\n")
 
@@ -136,17 +205,44 @@ func TestCompileTestingContract_ManualVerificationItems(t *testing.T) {
 	if manual == nil {
 		t.Fatalf("missing manual contract item in %+v", contract.Items)
 	}
-	if manual.Name != "Create a feature from the TUI and observe it reaches PlanReady." {
+	wantName := "Complete the phase manual verification checklist:\n- Create a feature from the TUI and observe it reaches PlanReady.\n- Confirm the status copy is understandable to a user."
+	if manual.Name != wantName {
 		t.Fatalf("manual name = %q", manual.Name)
 	}
-	if manual.Command != "manual: Create a feature from the TUI and observe it reaches PlanReady." {
+	if manual.Command != "manual: "+wantName {
 		t.Fatalf("manual command = %q", manual.Command)
+	}
+	manualCount := 0
+	for i := range contract.Items {
+		if contract.Items[i].Source == testingContractManualSource {
+			manualCount++
+		}
+	}
+	if manualCount != 1 {
+		t.Fatalf("manual item count = %d, want one consolidated artifact", manualCount)
 	}
 	if manual.ExpectedEvidence.Kind != testingContractManualKind {
 		t.Fatalf("manual evidence kind = %q", manual.ExpectedEvidence.Kind)
 	}
 	if manual.Policy != defaultTestingContractPolicy(testingContractManualSource) {
 		t.Fatalf("manual policy = %+v", manual.Policy)
+	}
+}
+
+func TestCompileTestingContract_ConsolidatesBehavioralEvidence(t *testing.T) {
+	plan := "### Behavioral Evidence\n- [ ] Capture the primary journey trace.\n- [ ] Record the resulting state transition.\n"
+	contract := CompileTestingContract(plan, "/tmp/phase/plan.md", "collapsed")
+	var behavioral []TestingContractItem
+	for _, item := range contract.Items {
+		if item.Source == testingContractBehavioralSource {
+			behavioral = append(behavioral, item)
+		}
+	}
+	if len(behavioral) != 1 {
+		t.Fatalf("behavioral items = %+v, want one consolidated artifact", behavioral)
+	}
+	if !strings.Contains(behavioral[0].Name, "primary journey trace") || !strings.Contains(behavioral[0].Name, "state transition") {
+		t.Fatalf("behavioral name = %q, want both checklist requirements", behavioral[0].Name)
 	}
 }
 
@@ -250,7 +346,7 @@ func TestReviseTestingContract(t *testing.T) {
 }
 
 func TestReviseTestingContractRejectsInvalidChange(t *testing.T) {
-	contract := CompileTestingContract("", "/tmp/phase-01/plan.md", "tdd-fill-in")
+	contract := CompileTestingContract("### Automated Verification\n- [ ] Test: `make test`\n", "/tmp/phase-01/plan.md", "tdd-fill-in")
 
 	tests := []struct {
 		name   string
@@ -334,7 +430,7 @@ func TestTestingContractRoundTrip(t *testing.T) {
 		t.Fatalf("ReadTestingContract() len(Items) = %d, want %d", len(got.Items), len(revised.Items))
 	}
 	for i := range got.Items {
-		if got.Items[i] != revised.Items[i] {
+		if !reflect.DeepEqual(got.Items[i], revised.Items[i]) {
 			t.Fatalf("ReadTestingContract() Items[%d] = %+v, want %+v", i, got.Items[i], revised.Items[i])
 		}
 	}

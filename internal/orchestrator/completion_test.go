@@ -2080,6 +2080,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhase
 		RunCount:            1,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		MaxPlanIterations:   1,
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
 			{Name: "app", Path: "/tmp/app"},
@@ -2132,6 +2133,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhase
 
 	if f.Status != feature.StatusPlanning {
 		t.Fatalf("feature status = %v, want Planning after missing-evidence plan repair dispatch", f.Status)
+	}
+	if f.MaxPlanIterations < 2 {
+		t.Fatalf("MaxPlanIterations = %d, want a guaranteed repair attempt beyond approved attempt 1", f.MaxPlanIterations)
 	}
 	if captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second); len(captured) == 0 {
 		t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
@@ -2278,7 +2282,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations
 			FinalStatus: finalStatusFailed,
 			LastError:   "one repo hit iteration cap",
 			RepoStatuses: map[string]string{
-				repoName: "max_iterations",
+				repoName:  "max_iterations",
 				repoNameB: finalStatusFailed,
 			},
 		},

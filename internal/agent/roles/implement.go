@@ -54,17 +54,8 @@ var implementRoleSpec = RoleSpec{
 			RootName:     "phase_dir",
 			RelativePath: "progress.md",
 			Presence:     ArtifactRequired,
-			Description:  "structured progress markdown with iteration handoff, deferrals, verification summary, and iteration state",
+			Description:  "structured progress markdown with iteration handoff, deferrals, and iteration state",
 			Validate:     ValidatorProgress,
-		},
-		{
-			Name:         "verification_report",
-			DisplayPath:  "verification-report.yaml",
-			RootName:     "iteration_dir",
-			RelativePath: "verification-report.yaml",
-			Presence:     ArtifactRequired,
-			Description:  "verification report YAML recording required testing-contract results with evidence",
-			Validate:     ValidatorVerificationReport,
 		},
 		{
 			Name:         "need_user_input",

@@ -212,6 +212,32 @@ type VerificationStep struct {
 	}
 }
 
+func TestParsePlanVerificationDeclaresCapabilityProbe(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] Protected integration [agentico capability: Okta session; probe: okta auth status]: `make test-integration`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Command != "make test-integration" {
+		t.Fatalf("Command = %q, want make test-integration", steps[0].Command)
+	}
+	if steps[0].Description != "Protected integration" {
+		t.Fatalf("Description = %q, want capability metadata removed", steps[0].Description)
+	}
+	if len(steps[0].Capabilities) != 1 || steps[0].Capabilities[0].Name != "Okta session" || steps[0].Capabilities[0].Probe != "okta auth status" {
+		t.Fatalf("Capabilities = %+v, want declared Okta probe", steps[0].Capabilities)
+	}
+}
+
+func TestParsePlanVerificationDeclaresRepoScope(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] [repo: web] Frontend tests: `npm test`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Repo != "web" || steps[0].Description != "Frontend tests" || steps[0].Command != "npm test" {
+		t.Fatalf("step = %+v, want parsed repo scope removed from description", steps[0])
+	}
+}
+
 func TestParsePlanManualVerification(t *testing.T) {
 	plan := "## Success Criteria\n\n" +
 		"### Manual Verification\n" +

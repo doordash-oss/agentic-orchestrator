@@ -123,9 +123,9 @@ type OrchestratorResult struct {
 	// can read the questionnaire and answers.
 	NeedUserInputPath string
 	LastError         string
-	// PlanRevisionFeedback carries implementation-review missing-evidence
-	// requirements when FinalStatus == "plan_revision_required". Final Review
-	// must run its fix leg instead of returning this status.
+	// PlanRevisionFeedback carries phase-plan repair requirements when
+	// FinalStatus == "plan_revision_required". Final Review must run its fix
+	// leg instead of returning this status.
 	PlanRevisionFeedback string
 }
 

@@ -44,12 +44,13 @@ const (
 type VerificationRunStatus string
 
 const (
-	VerificationStatusPassed       VerificationRunStatus = "passed"
-	VerificationStatusFailed       VerificationRunStatus = "failed"
-	VerificationStatusBlocked      VerificationRunStatus = "blocked"
-	VerificationStatusWaived       VerificationRunStatus = "waived"
-	VerificationStatusNotRun       VerificationRunStatus = "not_run"
-	VerificationStatusPendingHuman VerificationRunStatus = "pending_human"
+	VerificationStatusPassed           VerificationRunStatus = "passed"
+	VerificationStatusFailed           VerificationRunStatus = "failed"
+	VerificationStatusInheritedFailure VerificationRunStatus = "inherited_failure"
+	VerificationStatusBlocked          VerificationRunStatus = "blocked"
+	VerificationStatusWaived           VerificationRunStatus = "waived"
+	VerificationStatusNotRun           VerificationRunStatus = "not_run"
+	VerificationStatusPendingHuman     VerificationRunStatus = "pending_human"
 )
 
 type VerificationEvidence struct {
@@ -290,6 +291,8 @@ func NormalizeStatus(s VerificationRunStatus) VerificationRunStatus {
 		return VerificationStatusPassed
 	case "fail", "failed", "failure", "error":
 		return VerificationStatusFailed
+	case "inherited_failure", "inherited", "pre_existing_failure", "pre-existing-failure":
+		return VerificationStatusInheritedFailure
 	case "blocked":
 		return VerificationStatusBlocked
 	case "waived", "waive":
@@ -351,13 +354,24 @@ func BuildContractVerificationReportStub(contract *TestingContract, contractPath
 	}
 	for _, item := range contract.Items {
 		mode := verificationModeForContractItem(item)
+		status := VerificationStatusNotRun
+		evidence := VerificationEvidence{}
+		notes := ""
+		if IsTestingContractItemWaived(item) {
+			status = VerificationStatusWaived
+			notes = strings.TrimSpace(item.Disposition.Reason)
+			evidence.Summary = "user-authorized waiver: " + notes
+		}
 		report.Results = append(report.Results, VerificationCheckResult{
-			ItemID:      item.ID,
-			Name:        item.Name,
-			Requirement: item.Command,
-			Command:     item.Command,
-			Mode:        mode,
-			Status:      VerificationStatusNotRun,
+			ItemID:       item.ID,
+			Name:         item.Name,
+			Requirement:  item.Command,
+			Command:      item.Command,
+			Mode:         mode,
+			Status:       status,
+			Evidence:     evidence.Summary,
+			EvidenceData: evidence,
+			Notes:        notes,
 		})
 	}
 	return report

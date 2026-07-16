@@ -106,7 +106,7 @@ func TestStartFeature_ImplementPhase_AllPassed_CompletesFeature(t *testing.T) {
 		TerminalResult: &agent.OrchestratorResult{
 			FinalStatus: "all_passed",
 			RepoStatuses: map[string]string{
-				repoName: reviewStatusPassed,
+				repoName:  reviewStatusPassed,
 				repoNameB: reviewStatusPassed,
 			},
 		},

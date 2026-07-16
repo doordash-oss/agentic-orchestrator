@@ -379,131 +379,6 @@ func TestValidateVerificationReportWithContext_EvidenceFiles(t *testing.T) {
 	}
 }
 
-func TestValidateVerificationReportWithContext_RejectsSummaryOnlyCommandTranscript(t *testing.T) {
-	iterDir := t.TempDir()
-	contract := compileCommandTranscriptContractForTest(iterDir)
-	foundBehavioral := false
-	for _, item := range contract.Items {
-		if item.Source != testingContractBehavioralSource {
-			continue
-		}
-		foundBehavioral = true
-		if item.ExpectedEvidence.Matcher != testingContractCommandTranscriptMatcher {
-			t.Fatalf("behavioral evidence matcher = %q, want %q; commands=%q", item.ExpectedEvidence.Matcher, testingContractCommandTranscriptMatcher, requiredBehavioralTranscriptCommands(item.Name))
-		}
-	}
-	if !foundBehavioral {
-		t.Fatal("compiled contract has no behavioral evidence item")
-	}
-
-	behaviorPath := filepath.Join(iterDir, "behaviors", "verification.log")
-	if err := os.MkdirAll(filepath.Dir(behaviorPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(behaviorPath, []byte(strings.Join([]string{
-		"Automated command results:",
-		"- dbaccess: `task lint` exited 201 because of existing findings.",
-		"- dbaccess: `task test-coverage` exited 201 because Docker is unavailable.",
-		"- agentic-orchestrator: `make test-fast` exited 0; all packages passed.",
-	}, "\n")), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	report := passedArtifactReportForTest(&contract, filepath.Join(iterDir, "testing-contract.yaml"))
-	setArtifactEvidenceForTest(&report, VerificationModeBehavioral, VerificationEvidence{
-		Summary: "verification.log records command outcomes",
-		Primary: "behaviors/verification.log",
-	})
-
-	result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
-		IterationDir: iterDir,
-		Contract:     &contract,
-	})
-	if !result.Rejected {
-		t.Fatal("ValidateVerificationReportWithContext() accepted hand-written command summaries as command transcripts")
-	}
-	if details := reportGateDetailsForTest(result); !strings.Contains(details, "actual command transcript") {
-		t.Fatalf("ValidateVerificationReportWithContext() details = %q, want actual command transcript guidance", details)
-	}
-}
-
-func TestValidateVerificationReportWithContext_AcceptsCommandTranscriptFormats(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{
-			name: "shell_capture",
-			content: strings.Join([]string{
-				"$ (cd /tmp/dbaccess && task lint)",
-				"[exit code: 201]",
-				"task: Failed to run task lint",
-				"$ (cd /tmp/dbaccess && task test-coverage)",
-				"[exit code: 201]",
-				"Docker is unavailable",
-				"$ (cd /tmp/agentic-orchestrator && make test-fast)",
-				"[exit code: 0]",
-			}, "\n"),
-		},
-		{
-			name: "labeled_capture",
-			content: strings.Join([]string{
-				"COMMAND: cd /tmp/dbaccess && task lint",
-				"EXIT CODE: 201",
-				"OUTPUT:",
-				"task: Failed to run task lint",
-				"COMMAND: cd /tmp/dbaccess && task test-coverage",
-				"EXIT CODE: 201",
-				"OUTPUT:",
-				"Docker is unavailable",
-				"COMMAND: cd /tmp/agentic-orchestrator && make test-fast",
-				"EXIT CODE: 0",
-				"OUTPUT:",
-			}, "\n"),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			iterDir := t.TempDir()
-			contract := compileCommandTranscriptContractForTest(iterDir)
-			behaviorPath := filepath.Join(iterDir, "behaviors", "verification.log")
-			if err := os.MkdirAll(filepath.Dir(behaviorPath), 0o755); err != nil {
-				t.Fatalf("MkdirAll() error = %v", err)
-			}
-			if err := os.WriteFile(behaviorPath, []byte(tt.content), 0o644); err != nil {
-				t.Fatalf("WriteFile() error = %v", err)
-			}
-
-			report := passedArtifactReportForTest(&contract, filepath.Join(iterDir, "testing-contract.yaml"))
-			setArtifactEvidenceForTest(&report, VerificationModeBehavioral, VerificationEvidence{
-				Summary: "complete combined stdout/stderr",
-				Primary: "behaviors/verification.log",
-			})
-			result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
-				IterationDir: iterDir,
-				Contract:     &contract,
-			})
-			if result.Rejected {
-				t.Fatalf("ValidateVerificationReportWithContext() rejected valid transcript: %+v", result.Findings)
-			}
-		})
-	}
-}
-
-func compileCommandTranscriptContractForTest(iterDir string) TestingContract {
-	return CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos: []string{"agentic-orchestrator", "dbaccess"},
-		PlanText: strings.Join([]string{
-			"## Success Criteria",
-			"### Behavioral Evidence",
-			"- [ ] Record the verification command output for `task lint`, `task test-coverage`, and `make test-fast`.",
-		}, "\n"),
-		PlanPath:  filepath.Join(iterDir, "plan.md"),
-		PhaseType: "collapsed",
-	})
-}
-
 func TestValidateVerificationReportWithContext_EvidenceFilesSkippedForBlockedRows(t *testing.T) {
 	iterDir := t.TempDir()
 	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(iterDir, "plan.md"), "collapsed")
@@ -836,4 +711,28 @@ func reportGateDetailsForTest(result ReportGateResult) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func TestValidateVerificationReportRejectsForgedWaiverAndAcceptsContractWaiver(t *testing.T) {
+	contract := TestingContract{Version: 1, Revision: 1, Items: []TestingContractItem{{
+		ID: "check", Source: testingContractPlanSource, Name: "check", Command: "go test ./...",
+		Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
+	report.Results[0].Status = VerificationStatusWaived
+	report.Results[0].EvidenceData.Summary = "claimed waiver"
+
+	result := ValidateVerificationReport(&report, nil, &contract, true)
+	if !result.Rejected || !strings.Contains(reportGateDetailsForTest(result), "no user-authorized waiver") {
+		t.Fatalf("forged waiver result = %+v, want policy violation", result)
+	}
+
+	contract.Items[0].Disposition = TestingContractItemDisposition{
+		Status: TestingContractDispositionWaived, Reason: "user approved", ChangedBy: "user",
+	}
+	report = BuildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
+	result = ValidateVerificationReport(&report, nil, &contract, true)
+	if result.Rejected {
+		t.Fatalf("authorized waiver rejected: %+v", result.Findings)
+	}
 }

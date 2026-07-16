@@ -51,13 +51,22 @@ A concise description of each vertical slice. Describe the end-to-end behavior, 
 
 Avoid specific file paths or code snippets — they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it here and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
 
-Write the plan to the output directory with a descriptive slug (e.g. `YYYY-MM-DD-phase-NN-plan.md`).
+Write the plan to `{artifact_dir}/phase-plan.md`.
 
 For multi-repo features, every `### Task N:` heading **must** be followed by a `**Repo:** <name>` tag whose value is in `Feature.Repos`. The unified phase implementer reads these tags as the single source of truth for which repos this phase touches and which sub-agent gets each Task. Single-repo features may omit tags (every Task implicitly belongs to the only repo); a single-repo plan may still tag Tasks for clarity but must not mix tagged and untagged Tasks. There is no separate `execution-order.yaml`.
 
 Set the mandatory plan metadata field `**Frontend:** true` when the phase adds or changes any user-facing UI surface. Otherwise set it to `false`. A `true` frontend flag must be paired with at least one real checklist item under the top-level `### Visual Evidence` section; never use `None required` for Visual Evidence when `**Frontend:** true`.
 
 Do not add a grounding table, file inventory, stub inventory, testing strategy section, or deferrals section. Exact file selection, code-level grounding, and implementation ceremony belong to the implementer.
+
+Derive verification from the phase and repository instead of interviewing the user about bookkeeping choices. Do not ask whether to include automated verification, how many manual checkboxes to create, whether an already-sequenced phase depends on its predecessor, or whether a fully specified task is AFK/HITL. Ask only when an unresolved product or scope decision would materially change the plan.
+
+Keep verification minimal and non-overlapping:
+
+- Put every deterministic invariant in an executable command. The harness captures its exit code, stdout, stderr, and run metadata automatically.
+- Repo-scoped commands run from that repository root. In multi-repo phases, prefix every automated-verification description with `[repo: <name>]`; single-repo phases may omit it. Use paths such as `README.md` or `./internal/...`; never add `cd <repo>` or prefix paths with the repo name.
+- Use one consolidated Manual Verification item only for irreducible semantic judgment that commands, visual evidence, and behavioral evidence cannot prove. Do not restate automated checks.
+- Visual artifacts must add information that command results do not already capture. Use at most one consolidated Behavioral Evidence item covering the primary journey; never split it into multiple paperwork files.
 
 ## Plan Template
 

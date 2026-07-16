@@ -54,6 +54,26 @@ func bwrapUsable() bool {
 	return bwrapUsableOnce.ok
 }
 
+// wrapVerificationSandbox runs a planner-authored verification command under
+// bubblewrap with the filesystem read-only except the given writable roots
+// (repo worktree, temp, build caches). Fails open when bubblewrap is
+// unavailable, matching wrapHelperSandbox.
+func wrapVerificationSandbox(command []string, writableRoots []string) ([]string, bool, func()) {
+	if !bwrapUsable() {
+		return command, false, func() {}
+	}
+	args := []string{"bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent"}
+	for _, root := range writableRoots {
+		real := root
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			real = resolved
+		}
+		args = append(args, "--bind", real, real)
+	}
+	args = append(args, "--")
+	return append(args, command...), true, func() {}
+}
+
 // wrapWithBwrap binds the whole filesystem read-write, then re-binds the
 // worktrees base read-only on top, so every other path (helper artifacts,
 // provider state, /tmp) stays writable. --die-with-parent ties the sandbox

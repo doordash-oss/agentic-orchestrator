@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,10 +30,26 @@ import (
 // `## Iteration State: NEED_USER_INPUT`. Gate scope lives in feature/cycle
 // state; this artifact only stores the user-facing questionnaire.
 type NeedUserInputRecord struct {
-	Summary   string                  `yaml:"summary"`
-	Questions []NeedUserInputQuestion `yaml:"questions"`
-	Iteration int                     `yaml:"iteration"`
+	Summary              string                        `yaml:"summary"`
+	Questions            []NeedUserInputQuestion       `yaml:"questions"`
+	Iteration            int                           `yaml:"iteration"`
+	VerificationDecision *NeedUserVerificationDecision `yaml:"verification_decision,omitempty"`
 }
+
+// NeedUserVerificationDecision is harness-authored decision context. It binds
+// a pause to a particular contract revision so a user answer cannot silently
+// waive a changed requirement.
+type NeedUserVerificationDecision struct {
+	ContractPath     string   `yaml:"contract_path"`
+	ContractRevision int      `yaml:"contract_revision"`
+	ItemIDs          []string `yaml:"item_ids"`
+	AllowedActions   []string `yaml:"allowed_actions"`
+}
+
+const (
+	NeedUserVerificationWaive          = "WAIVE"
+	NeedUserVerificationRetryAfterAuth = "RETRY_AFTER_AUTH"
+)
 
 // NeedUserInputQuestion is one prompt-and-answer pair the user fills in
 // before resuming.
@@ -57,6 +74,9 @@ func reconcileNeedUserInputGate(agentRec *NeedUserInputRecord, progress *ParsedP
 	if agentRec != nil {
 		rec = *agentRec
 	}
+	// Verification decisions are trusted only when synthesized by the
+	// harness. An implementer-authored gate cannot grant itself waiver power.
+	rec.VerificationDecision = nil
 	rec.Iteration = iteration
 	rec.Summary = strings.TrimSpace(rec.Summary)
 
@@ -95,121 +115,90 @@ func reconcileNeedUserInputGate(agentRec *NeedUserInputRecord, progress *ParsedP
 	return rec
 }
 
-// retryNeedsUserInput catches a RETRY handoff that has no actionable
-// continuation: every unresolved check is externally blocked, or the agent
-// says implementation is complete while required verification still fails.
-// Letting either state re-enter the implementation loop only repeats the same
-// checks, so the harness promotes it to a user decision gate.
-func retryNeedsUserInput(progress *ParsedProgress, report *VerificationReport) bool {
-	if progress == nil || progress.State != StateRetry || report == nil {
-		return false
+// SynthesizeVerificationNeedUserInputGate creates a same-iteration pause for
+// declared capability failures found by the deterministic executor.
+func SynthesizeVerificationNeedUserInputGate(contractPath string, revision int, itemIDs []string, iteration int) NeedUserInputRecord {
+	ids := append([]string(nil), itemIDs...)
+	sort.Strings(ids)
+	return NeedUserInputRecord{
+		Summary: fmt.Sprintf("Required verification is blocked for %d item(s) by a missing capability or environment limitation.", len(ids)),
+		Questions: []NeedUserInputQuestion{{
+			Index:  1,
+			Prompt: "Enter WAIVE to authorize waiving these blocked checks, or RETRY_AFTER_AUTH after making the required login/permission available.",
+		}},
+		Iteration: iteration,
+		VerificationDecision: &NeedUserVerificationDecision{
+			ContractPath: strings.TrimSpace(contractPath), ContractRevision: revision, ItemIDs: ids,
+			AllowedActions: []string{NeedUserVerificationWaive, NeedUserVerificationRetryAfterAuth},
+		},
 	}
-	blockers := retryBlockingChecks(report)
-	if len(blockers) == 0 {
-		return false
-	}
-	if retryHasOnlyExternalBlockers(blockers) {
-		return true
-	}
-	whereStopped := strings.ToLower(strings.TrimSpace(progress.HandoffSections["Where I stopped"]))
-	return declaresImplementationComplete(whereStopped)
 }
 
-func declaresImplementationComplete(whereStopped string) bool {
-	whereStopped = strings.TrimLeft(strings.TrimSpace(whereStopped), "-* ")
-	for _, prefix := range []string{"complete", "completed"} {
-		if whereStopped == prefix {
-			return true
-		}
-		if strings.HasPrefix(whereStopped, prefix+" ") ||
-			strings.HasPrefix(whereStopped, prefix+";") ||
-			strings.HasPrefix(whereStopped, prefix+".") ||
-			strings.HasPrefix(whereStopped, prefix+":") {
-			return true
-		}
-	}
-	return false
-}
-
-func retryBlockingChecks(report *VerificationReport) []VerificationCheckResult {
-	if report == nil {
+// ApplyNeedUserVerificationDecision applies a user-authorized waiver, or
+// leaves the contract unchanged for an after-auth retry. The caller must only
+// invoke this for a trusted harness-authored gate artifact.
+func ApplyNeedUserVerificationDecision(rec NeedUserInputRecord) error {
+	decision := rec.VerificationDecision
+	if decision == nil {
 		return nil
 	}
-	var blockers []VerificationCheckResult
-	for _, check := range reportChecks(report) {
-		switch NormalizeStatus(check.Status) {
-		case VerificationStatusFailed, VerificationStatusBlocked, VerificationStatusPendingHuman:
-			blockers = append(blockers, check)
-		}
+	action, err := needUserVerificationAction(rec)
+	if err != nil {
+		return err
 	}
-	return blockers
+	if action == NeedUserVerificationRetryAfterAuth {
+		return nil
+	}
+	contract, err := ReadTestingContract(decision.ContractPath)
+	if err != nil {
+		return fmt.Errorf("reading verification decision contract: %w", err)
+	}
+	if contract.Revision == decision.ContractRevision+1 && verificationWaiverAlreadyApplied(contract, decision.ItemIDs) {
+		return nil
+	}
+	if contract.Revision != decision.ContractRevision {
+		return fmt.Errorf("verification contract changed from revision %d to %d; review the updated requirements before resuming", decision.ContractRevision, contract.Revision)
+	}
+	changes := make([]TestingContractChange, 0, len(decision.ItemIDs))
+	for _, itemID := range decision.ItemIDs {
+		changes = append(changes, TestingContractChange{
+			ItemID: itemID, Action: TestingContractChangeWaive,
+			ChangeReason: "user authorized waiver at verification capability gate", ChangedBy: "user",
+		})
+	}
+	revised, err := ReviseTestingContract(contract, changes)
+	if err != nil {
+		return err
+	}
+	return WriteTestingContract(decision.ContractPath, *revised)
 }
 
-func retryHasOnlyExternalBlockers(blockers []VerificationCheckResult) bool {
-	if len(blockers) == 0 {
-		return false
+func needUserVerificationAction(rec NeedUserInputRecord) (string, error) {
+	if rec.VerificationDecision == nil {
+		return "", errors.New("verification gate has no decision context")
 	}
-	for _, blocker := range blockers {
-		switch NormalizeStatus(blocker.Status) {
-		case VerificationStatusBlocked, VerificationStatusPendingHuman:
-			continue
-		default:
+	if len(rec.Questions) != 1 {
+		return "", errors.New("verification gate must contain exactly one decision question")
+	}
+	action := strings.ToUpper(strings.TrimSpace(rec.Questions[0].Answer))
+	allowed := false
+	for _, candidate := range rec.VerificationDecision.AllowedActions {
+		allowed = allowed || action == strings.ToUpper(strings.TrimSpace(candidate))
+	}
+	if !allowed {
+		return "", fmt.Errorf("verification gate answer %q is not one of %s", action, strings.Join(rec.VerificationDecision.AllowedActions, ", "))
+	}
+	return action, nil
+}
+
+func verificationWaiverAlreadyApplied(contract *TestingContract, itemIDs []string) bool {
+	for _, itemID := range itemIDs {
+		idx := testingContractItemIndex(contract.Items, itemID)
+		if idx < 0 || !IsTestingContractItemWaived(contract.Items[idx]) {
 			return false
 		}
 	}
 	return true
-}
-
-func synthesizeRetryNeedUserInputGate(progress *ParsedProgress, report *VerificationReport, iteration int) NeedUserInputRecord {
-	blockers := retryBlockingChecks(report)
-	labels := make([]string, 0, len(blockers))
-	seenLabels := make(map[string]struct{}, len(blockers))
-	for _, blocker := range blockers {
-		label := strings.TrimSpace(blocker.Name)
-		if label == "" {
-			label = strings.TrimSpace(blocker.Requirement)
-		}
-		if label == "" {
-			label = strings.TrimSpace(blocker.ItemID)
-		}
-		if label != "" {
-			key := strings.ToLower(label)
-			if _, seen := seenLabels[key]; seen {
-				continue
-			}
-			seenLabels[key] = struct{}{}
-			labels = append(labels, label)
-		}
-	}
-	implementationComplete := false
-	if progress != nil {
-		whereStopped := strings.ToLower(strings.TrimSpace(progress.HandoffSections["Where I stopped"]))
-		implementationComplete = declaresImplementationComplete(whereStopped)
-	}
-	summary := "Required verification is externally blocked and cannot be resolved in the current session."
-	if implementationComplete {
-		summary = "Implementation is complete, but required verification remains unresolved."
-	}
-	if len(labels) > 0 {
-		if implementationComplete {
-			summary = fmt.Sprintf("Implementation is complete, but required verification remains unresolved: %s.", strings.Join(labels, "; "))
-		} else {
-			summary = fmt.Sprintf("Required verification is externally blocked and cannot be resolved in the current session: %s.", strings.Join(labels, "; "))
-		}
-	}
-	if progress != nil {
-		if remaining := strings.TrimSpace(progress.HandoffSections["Remaining from the plan"]); remaining != "" {
-			summary += " " + remaining
-		}
-	}
-	return NeedUserInputRecord{
-		Summary: summary,
-		Questions: []NeedUserInputQuestion{{
-			Index:  1,
-			Prompt: "Should Agentico revise or waive the blocking verification requirements, expand implementation scope to address them, or resume in an environment where they can pass?",
-		}},
-		Iteration: iteration,
-	}
 }
 
 // NeedUserInputPath returns the absolute path of the gate artifact for the
@@ -280,7 +269,7 @@ func buildPriorUserInputAnswers(artifactDir string) string {
 			continue
 		}
 		rec, err := ReadNeedUserInputRecord(filepath.Join(artifactDir, entry.Name(), NeedUserInputArtifactName))
-		if err != nil || !rec.AllAnswered() {
+		if err != nil || !rec.AllAnswered() || rec.VerificationDecision != nil {
 			continue
 		}
 

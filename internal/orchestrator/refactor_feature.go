@@ -15,7 +15,7 @@
 // Package orchestrator wires the feature-level refactor cycle. One call to
 // startFeatureRefactor invokes agent.RunRefactorFeatureLoop with --add-dir for
 // every Feature.Repos worktree, runs the refactor-plan step, then drives the
-// iterative implement loop. Cross-repo Tasks are first-class.
+// iterative implement loop over explicitly scoped single-repo Tasks.
 //
 // The legacy per-repo lifecycle plumbing (StartRepoCycle / FailRepoCycle /
 // CompleteRepoCycle / RefactorPrompt) is preserved as a façade so the TUI
@@ -164,7 +164,8 @@ func (o *Orchestrator) startFeatureRefactor(
 		FinishOrViolateNudge: pr.FinishOrViolateNudgeForModel(f.Models.Implementation) &&
 			pr.FinishOrViolateNudgeForModel(f.Models.Planning) &&
 			pr.FinishOrViolateNudgeForModel(f.Models.Review),
-		Observer: pr.Observer,
+		Observer:      pr.Observer,
+		CommandRunner: pr.CommandRunner,
 	}
 	_ = hintRepoName // diagnostic only under the unified flow.
 

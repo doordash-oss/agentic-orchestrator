@@ -1694,6 +1694,8 @@ func TestRepoCycleDirName(t *testing.T) {
 		{"review-comments count 1", CycleReviewComments, 1, "review-comments-1"},
 		{"review-comments count 5", CycleReviewComments, 5, "review-comments-5"},
 		{"review-comments count 0 fallback", CycleReviewComments, 0, "review-comments"},
+		{"refactor count 1", CycleRefactor, 1, "refactor-1"},
+		{"refactor count 0 fallback", CycleRefactor, 0, "refactor"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

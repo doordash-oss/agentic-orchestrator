@@ -192,7 +192,8 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		iterDir := latestFinalReviewIterationDir(t, artDir)
 		switch {
 		case strings.Contains(id, "-fix-01"):
-			markFinalReviewReportPassed(t, iterDir)
+			// verification-report.yaml is harness-owned; the fix session
+			// only completes its marker.
 			touchPhaseComplete(t, iterDir)
 		case strings.HasSuffix(id, "-01"), strings.HasSuffix(id, "-02"):
 			iteration := 1
@@ -274,28 +275,6 @@ func touchPhaseComplete(t *testing.T, iterDir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), nil, 0o644); err != nil {
 		t.Fatalf("touch %s: %v", PhaseCompleteFile, err)
-	}
-}
-
-func markFinalReviewReportPassed(t *testing.T, iterDir string) {
-	t.Helper()
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	report, err := ReadVerificationReport(reportPath)
-	if err != nil {
-		t.Fatalf("read final review verification report: %v", err)
-	}
-	markVerificationRowsPassed(report.Results)
-	markVerificationRowsPassed(report.RequiredChecks)
-	markVerificationRowsPassed(report.AdditionalChecks)
-	if err := WriteVerificationReport(reportPath, *report); err != nil {
-		t.Fatalf("write final review verification report: %v", err)
-	}
-}
-
-func markVerificationRowsPassed(rows []VerificationCheckResult) {
-	for i := range rows {
-		rows[i].Status = VerificationStatusPassed
-		rows[i].Evidence = "mock final review contract check passed"
 	}
 }
 
@@ -1530,42 +1509,6 @@ func TestRunFeatureFinalReviewLoop_FixMissingPhaseCompleteTripsProtocolViolation
 	}
 }
 
-func TestRunFeatureFinalReviewLoop_FixMissingVerificationReportTripsProtocolViolation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	result := runFinalReviewWithFixScript(t, func(artDir string) string {
-		return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-rm -f "$_d/verification-report.yaml"
-touch "$_d/phase_complete"`, artDir)
-	})
-
-	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
-		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
-	}
-	if !strings.Contains(result.LastError, "final_review_fixer @") ||
-		!strings.Contains(result.LastError, "verification-report.yaml") {
-		t.Fatalf("LastError = %q, want final_review_fixer verification-report violation", result.LastError)
-	}
-}
-
-func TestRunFeatureFinalReviewLoop_FixRejectedVerificationReportTripsProtocolViolation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	result := runFinalReviewWithFixScript(t, func(artDir string) string {
-		return testutil.TouchPhaseComplete(artDir)
-	})
-
-	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
-		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
-	}
-	if !strings.Contains(result.LastError, "final_review_fixer @") ||
-		!strings.Contains(result.LastError, "not_run") {
-		t.Fatalf("LastError = %q, want final_review_fixer not_run violation", result.LastError)
-	}
-}
-
 func TestRunFeatureFinalReviewLoop_ReviewerMissingPhaseCompleteTripsProtocolViolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -1863,4 +1806,101 @@ func sliceContains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestRunHarnessVerificationWritesFixIterationReport pins the harness-owned
+// final-fix model: after a fix session, the harness executes the phase
+// testing contract, seeds unchanged agent-owned evidence from the latest
+// implementation iteration, and writes the fix iteration's report itself.
+func TestRunHarnessVerificationWritesFixIterationReport(t *testing.T) {
+	t.Parallel()
+	stateBase := t.TempDir()
+	repoDir := t.TempDir()
+	store, f, _ := newFRTestFeature(t, stateBase, "fr-harness-verify", []string{"repo"})
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.CurrentRoadmapPhase = 1
+		ff.Repos = []feature.FeatureRepo{{Name: "repo", Path: repoDir, WorktreePath: repoDir}}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify feature: %v", err)
+	}
+	f, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+
+	contractPath := PhaseTestingContractPath(stateBase, f, 1)
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{
+		{
+			ID: "manual", Source: testingContractManualSource, Owner: TestingContractOwnerAgent, Repo: "repo",
+			Name: "observe", Command: "manual: observe",
+			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractManualKind, Path: "observations/manual.md"},
+			Policy:           TestingContractItemPolicy{Required: true},
+		},
+		{
+			ID: "cmd", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+			Name: "explicit", Command: "printf verified",
+			Run:    &TestingContractRun{Shell: "printf verified", Cwd: ".", Timeout: "30s"},
+			Policy: TestingContractItemPolicy{Required: true},
+		},
+	}}
+	if err := WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatalf("write contract: %v", err)
+	}
+
+	// Prior completed implementation iteration with agent-owned evidence.
+	runDir := ActiveRunDir(stateBase, f)
+	implementIterDir := filepath.Join(PhaseImplementDir(stateBase, f, 1), "iteration-01")
+	if err := os.MkdirAll(filepath.Join(implementIterDir, "observations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(implementIterDir, "observations", "manual.md"), []byte("observed in implement"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteVerificationReport(filepath.Join(implementIterDir, "verification-report.yaml"), BuildContractVerificationReportStub(&contract, contractPath)); err != nil {
+		t.Fatal(err)
+	}
+	am := &ArtifactManager{}
+	if err := am.WriteMeta(implementIterDir, IterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: ReviewApproved.String()}); err != nil {
+		t.Fatal(err)
+	}
+
+	fixIterDir := filepath.Join(runDir, feature.PhaseReview.DirName(), "iteration-01")
+	if err := os.MkdirAll(fixIterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &featureFinalReviewLoopState{
+		cfg: OrchestratorConfig{
+			Feature:       f,
+			FeatureStore:  store,
+			StateDir:      stateBase,
+			CommandRunner: NewExecCommandRunner(),
+		},
+		workspace:   WorkspaceSetup{Cwd: runDir},
+		stateDir:    filepath.Join(stateBase, f.ID),
+		artifactDir: filepath.Join(runDir, feature.PhaseReview.DirName()),
+	}
+	if err := s.runHarnessVerification(fixIterDir); err != nil {
+		t.Fatalf("runHarnessVerification() error = %v", err)
+	}
+
+	report, err := ReadVerificationReport(filepath.Join(fixIterDir, "verification-report.yaml"))
+	if err != nil {
+		t.Fatalf("read fix iteration report: %v", err)
+	}
+	statuses := map[string]VerificationRunStatus{}
+	for _, result := range report.Results {
+		statuses[result.ItemID] = NormalizeStatus(result.Status)
+	}
+	if statuses["cmd"] != VerificationStatusPassed {
+		t.Fatalf("harness item status = %q, want passed (report %+v)", statuses["cmd"], report.Results)
+	}
+	if statuses["manual"] != VerificationStatusPassed {
+		t.Fatalf("agent item status = %q, want passed via seeded evidence", statuses["manual"])
+	}
+	seeded, err := os.ReadFile(filepath.Join(fixIterDir, "observations", "manual.md"))
+	if err != nil || string(seeded) != "observed in implement" {
+		t.Fatalf("seeded evidence = (%q, %v), want carried forward from implement iteration", seeded, err)
+	}
 }

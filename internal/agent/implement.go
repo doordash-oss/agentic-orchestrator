@@ -16,6 +16,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,6 +80,11 @@ type ImplementConfig struct {
 	// previously remembered tool requests. Nil means no caching.
 	PermissionCache *permission.Cache
 
+	// CommandRunner executes harness-owned verification commands declared in
+	// the testing contract. It is required whenever the contract contains a
+	// harness-owned command.
+	CommandRunner ports.CommandRunner
+
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. In tests, provide a mock
 	// function. In production, set to PhaseRunner.BuildSession.
@@ -135,9 +141,9 @@ type ImplementConfig struct {
 //
 // FinalStatus values:
 //   - "review_passed":     iteration emitted SUCCESS and the review gate APPROVED.
-//   - "plan_revision_required": review rejected missing visual/behavioral
-//     evidence coverage with structured requirements that must go through
-//     phase-plan revision.
+//   - "plan_revision_required": implementation found a phase-plan contract
+//     defect with structured requirements that must go through phase-plan
+//     revision.
 //   - "max_iterations":    hit cfg.MaxIterations without a passing review.
 //   - "safety_rail":       no-progress / consecutive-failure rail tripped.
 //   - "interrupted":       shutdown / feature stopped while running.
@@ -150,8 +156,8 @@ type LoopResult struct {
 	Iterations  int
 	LastError   string
 
-	// PlanRevisionFeedback carries reviewer-authored missing-evidence
-	// requirements when FinalStatus == "plan_revision_required".
+	// PlanRevisionFeedback carries phase-plan repair requirements when
+	// FinalStatus == "plan_revision_required".
 	PlanRevisionFeedback string
 
 	// NeedUserInputPath is the absolute path of the persisted gate
@@ -276,16 +282,27 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		}
 
 		var (
-			iterDir      string
-			sessionID    string
-			agentStatus  string
-			duration     time.Duration
-			cost         SessionCost
-			madeProgress bool
-			exitCode     int
-			sess         ports.SessionHandle
-			waitResult   waitForStatusResult
+			iterDir             string
+			sessionID           string
+			agentStatus         string
+			duration            time.Duration
+			cost                SessionCost
+			madeProgress        bool
+			exitCode            int
+			sess                ports.SessionHandle
+			waitResult          waitForStatusResult
+			testingContractPath string
+			contractFingerprint string
 		)
+		planContent := readPlanContent(cfg.PlanPath)
+		if violations := verificationScopeViolations(planContent); len(violations) > 0 {
+			cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "plan_revision_required")
+			return &LoopResult{
+				FinalStatus:          "plan_revision_required",
+				Iterations:           i,
+				PlanRevisionFeedback: verificationScopePlanRevisionFeedback(violations),
+			}, nil
+		}
 
 		if skipImplement {
 			// Resume point: implement phase already finished in the prior run.
@@ -295,6 +312,11 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			iterDir = filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", i))
 			agentStatus = agentStatusSuccess
 			madeProgress, _ = pt.Check(progressPath)
+			var prepareErr error
+			testingContractPath, contractFingerprint, prepareErr = prepareImplementationTestingContract(cfg, planContent)
+			if prepareErr != nil {
+				return nil, prepareErr
+			}
 		} else {
 			// Read help answers from the latest feature state
 			helpAnswers := ""
@@ -310,28 +332,16 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if createErr != nil {
 				return nil, fmt.Errorf("creating iteration dir: %w", createErr)
 			}
-			planContent := readPlanContent(cfg.PlanPath)
-			requiredVerification := BuildRequiredVerification(planContent)
-			verificationReportPath := filepath.Join(iterDir, "verification-report.yaml")
-			testingContractPath := ""
-			if contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName); ok {
-				testingContractPath = contractPath
-				contract := compileImplementationTestingContract(cfg, planContent)
-				if err := WriteTestingContract(contractPath, contract); err != nil {
-					return nil, fmt.Errorf("writing testing contract: %w", err)
-				}
-				if err := WriteVerificationReportStubFromContract(verificationReportPath, contractPath, &contract); err != nil {
-					return nil, fmt.Errorf("writing contract verification report stub: %w", err)
-				}
-			} else if err := WriteVerificationReportStub(verificationReportPath, requiredVerification); err != nil {
-				return nil, fmt.Errorf("writing verification report stub: %w", err)
+			testingContractPath, contractFingerprint, createErr = prepareImplementationTestingContract(cfg, planContent)
+			if createErr != nil {
+				return nil, createErr
 			}
 			// Build prompt
 			prompt := BuildImplementPrompt(
 				cfg.PlanPath,
 				cfg.ExitCriteria,
 				progressPath,
-				verificationReportPath,
+				"",
 				testingContractPath,
 				reviewerFeedback,
 				helpAnswers,
@@ -495,7 +505,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						return false
 					},
 					FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-					MissingArtifacts:     []string{"progress.md", "verification-report.yaml"},
+					MissingArtifacts:     []string{"progress.md"},
 					EnableContextHandoff: true,
 					OnContextHandoff: func(snap contextSnapshot) {
 						cfg.Observer.ContextHandoffTriggered(
@@ -635,6 +645,55 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		}
 
 		if agentStatus == agentStatusSuccess {
+			var harnessVerification *VerificationExecutionOutcome
+			var verificationContract *TestingContract
+			preliminaryProgress, _ := ParseProgressMd(progressPath)
+			if preliminaryProgress != nil && preliminaryProgress.State == StateSuccess && strings.TrimSpace(testingContractPath) != "" {
+				if contractFingerprint != "" {
+					currentFingerprint, fingerprintErr := Fingerprint(testingContractPath)
+					if fingerprintErr != nil || currentFingerprint != contractFingerprint {
+						reason := "testing-contract.yaml was modified by the implementer; the contract is harness-owned"
+						if fingerprintErr != nil {
+							reason = fmt.Sprintf("testing-contract.yaml could not be verified after implementation: %v", fingerprintErr)
+						}
+						violations := []ProtocolViolation{{Artifact: "testing-contract.yaml", Reason: reason}}
+						lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
+						if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+							return done, nil
+						}
+						continue
+					}
+				}
+				contract, readErr := ReadTestingContract(testingContractPath)
+				if readErr != nil {
+					return nil, fmt.Errorf("reading testing contract for harness verification: %w", readErr)
+				}
+				verificationContract = contract
+				reportPath := filepath.Join(iterDir, "verification-report.yaml")
+				report := BuildContractVerificationReportStub(contract, testingContractPath)
+				verificationRepos := cfg.Feature.Repos
+				if strings.TrimSpace(cfg.RepoName) != "" {
+					verificationRepos = nil
+					for _, repo := range cfg.Feature.Repos {
+						if repo.Name == cfg.RepoName {
+							verificationRepos = append(verificationRepos, repo)
+						}
+					}
+				}
+				verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
+				harnessVerification, readErr = ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
+				cancelVerify()
+				if readErr != nil {
+					if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "interrupted")
+						return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+					}
+					return nil, fmt.Errorf("executing testing contract: %w", readErr)
+				}
+				if readErr = WriteVerificationReport(reportPath, *harnessVerification.Report); readErr != nil {
+					return nil, fmt.Errorf("writing harness verification report: %w", readErr)
+				}
+			}
 			outcome, violations, validateErr := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
 			if validateErr != nil {
 				return nil, fmt.Errorf("validating implementer contract: %w", validateErr)
@@ -647,31 +706,46 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				continue
 			}
 			parsed := outcome.Progress
+			if harnessVerification != nil && len(harnessVerification.ContractErrors) > 0 {
+				consecutiveFailures = 0
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "plan_revision_required")
+				return &LoopResult{
+					FinalStatus:          "plan_revision_required",
+					Iterations:           i,
+					PlanRevisionFeedback: VerificationContractPlanRevisionFeedback(harnessVerification.ContractErrors),
+				}, nil
+			}
+			if harnessVerification != nil {
+				gate := ValidateVerificationReportWithContext(harnessVerification.Report, nil, true, VerificationReportValidationContext{
+					IterationDir: iterDir,
+					Contract:     verificationContract,
+				})
+				if gate.Rejected {
+					gateViolations := reportGateViolations(gate)
+					lastErr := formatProtocolViolationError(RoleImplementer, iterDir, gateViolations)
+					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+						return done, nil
+					}
+					continue
+				}
+			}
+
+			if harnessVerification != nil && len(harnessVerification.BlockedItems) > 0 {
+				gatePath := NeedUserInputPath(iterDir)
+				rec := SynthesizeVerificationNeedUserInputGate(testingContractPath, harnessVerification.Report.ContractRevision, harnessVerification.BlockedItems, i)
+				if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
+					return nil, fmt.Errorf("persisting verification capability gate: %w", err)
+				}
+				consecutiveFailures = 0
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
+				return &LoopResult{FinalStatus: "need_user_input", Iterations: i, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil
+			}
 
 			// RETRY: skip the review gate entirely; the agent is telling
 			// us the iteration is intentionally partial. The next loop
 			// iteration starts fresh against the just-emitted progress.md
 			// (no reviewer feedback — RETRY is not a rejection).
 			if parsed.State == StateRetry {
-				if retryNeedsUserInput(parsed, outcome.VerificationReport) {
-					gatePath := NeedUserInputPath(iterDir)
-					rec := synthesizeRetryNeedUserInputGate(parsed, outcome.VerificationReport, i)
-					if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
-						return nil, fmt.Errorf("persisting escalated retry gate: %w", err)
-					}
-					meta.AgentStatus = "NEED_USER_INPUT"
-					meta.ReviewStatus = "skipped_need_user_input"
-					_ = am.WriteMeta(iterDir, meta)
-					_ = am.WriteSummary(summaryPath, meta)
-					consecutiveFailures = 0
-					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
-					return &LoopResult{
-						FinalStatus:       "need_user_input",
-						Iterations:        i,
-						LastError:         rec.Summary,
-						NeedUserInputPath: gatePath,
-					}, nil
-				}
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
 				_ = am.WriteMeta(iterDir, meta)
@@ -722,7 +796,29 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Fall through: SUCCESS — run the review gate.
 			if cfg.SkipIterationReview {
-				// Medium/Large: skip per-iteration review, rely on Final Review
+				// Medium/Large: skip per-iteration review, rely on Final Review.
+				// Deterministically classified regressions still route back to
+				// the implementer — with no per-iteration reviewer there is
+				// nobody else to act on a red harness report.
+				if harnessVerification != nil && len(harnessVerification.RegressionItems) > 0 {
+					meta.ReviewStatus = ReviewChangesRequested.String()
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					consecutiveFailures = 0
+					reviewerFeedback = fmt.Sprintf(
+						"Harness verification detected regressions: %s. These commands pass at the contract base commit but fail with your changes. See verification-report.yaml in the iteration directory for evidence; fix the regressions before declaring SUCCESS.",
+						strings.Join(harnessVerification.RegressionItems, ", "))
+					if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
+						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
+						return &LoopResult{
+							FinalStatus: "safety_rail",
+							Iterations:  i,
+							LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
+						}, nil
+					}
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
+					continue
+				}
 				meta.ReviewStatus = reviewStatusSkipped
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
@@ -1044,18 +1140,13 @@ func sessionErrFromLogicalAgentStatus(status string, sess ports.SessionView) err
 // using its own tools rather than receiving the full diff inline.
 //
 // Before invoking the LLM reviewer, a deterministic Report Integrity Gate
-// inspects verification-report.yaml for obvious over-claims (missing
-// required items, empty evidence on pass, pass-claims whose evidence text
-// describes failure). The deferral ledger gate runs against the parsed
+// validates the harness-generated verification report against its contract.
+// The deferral ledger gate runs against the parsed
 // progress.md (passed in by the caller after harness routing), since
 // deferrals now live in `## Deferrals` rather than the YAML report.
 // When either gate rejects, the LLM is skipped entirely and a structured
 // CHANGES_REQUESTED is returned.
 func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir string, parsed *ParsedProgress, reviewCtx observe.SpanContext) (ReviewStatus, string, error) {
-	// Read plan content only to extract required verification items.
-	planContent := readPlanContent(cfg.PlanPath)
-	requiredVerification := BuildRequiredVerification(planContent)
-
 	progressPath := filepath.Join(cfg.ArtifactDir, "progress.md")
 	verificationReportPath := filepath.Join(iterDir, "verification-report.yaml")
 	contractPath := ""
@@ -1084,12 +1175,12 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 		parsedClosedDeferrals = parsed.ClosedDeferrals
 	}
 
-	// Report Integrity Gate: deterministic pre-review. Malformed or missing
-	// reports degrade to the Functionality/Evidence axis (which treats them
-	// as Critical findings). The gate runs two
-	// passes — schema/hedge against verification-report.yaml, and
-	// deferral-ledger against the parsed progress.md — merged into a
-	// single Rejected verdict so the agent sees all failure modes at once.
+	// Report Integrity Gate: deterministic pre-review. The harness generates
+	// verification-report.yaml, so a missing or malformed report rejects the
+	// iteration before any review axis runs. The gate runs two passes —
+	// schema against verification-report.yaml, and deferral-ledger against
+	// the parsed progress.md — merged into a single Rejected verdict so the
+	// agent sees all failure modes at once.
 	var gateResult ReportGateResult
 	if report, err := ReadVerificationReport(verificationReportPath); err == nil {
 		boundContract := contract
@@ -1104,7 +1195,7 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 		} else if loaded != nil {
 			boundContract = loaded
 		}
-		schemaResult = MergeGateResults(schemaResult, ValidateVerificationReportWithContext(report, requiredVerification, true, VerificationReportValidationContext{
+		schemaResult = MergeGateResults(schemaResult, ValidateVerificationReportWithContext(report, nil, true, VerificationReportValidationContext{
 			IterationDir: iterDir,
 			Contract:     boundContract,
 		}))
@@ -1117,13 +1208,17 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 			return ReviewChangesRequested, feedback, nil
 		}
 	} else {
-		// No verification-report.yaml on disk: still run the deferral
-		// gate so a missing report doesn't accidentally bypass cross-
-		// phase commitment enforcement. The Functionality/Evidence axis
-		// flags the missing report as Critical separately.
+		// A SUCCESS handoff must have a harness-generated report before review.
+		gateResult.Findings = append(gateResult.Findings, ReportGateFinding{
+			Category: GateCategorySchema,
+			Kind:     KindMissingRequired,
+			Detail:   "harness-generated verification-report.yaml is missing",
+		})
+		gateResult.Rejected = true
 		deferralResult := ValidateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
-		if deferralResult.Rejected {
-			feedback := FormatGateFeedback(deferralResult)
+		gateResult = MergeGateResults(gateResult, deferralResult)
+		if gateResult.Rejected {
+			feedback := FormatGateFeedback(gateResult)
 			_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
 			cfg.Observer.ReviewCompleted(reviewCtx, iteration, "CHANGES_REQUESTED_GATE", 0)
 			return ReviewChangesRequested, feedback, nil
@@ -1159,7 +1254,6 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 		ProgressPath:           progressPath,
 		ContractPath:           contractPath,
 		VerificationReportPath: verificationReportPath,
-		RequiredVerification:   requiredVerification,
 		KnownCaveatsGateResult: gateResult,
 	})
 	if err != nil {
@@ -1187,6 +1281,48 @@ func resolveImplementationContractPath(stateDir string, f *feature.Feature, repo
 		return "", false
 	}
 	return CycleTestingContractPath(stateDir, f, repoName, cycleType), true
+}
+
+func prepareImplementationTestingContract(cfg ImplementConfig, planContent string) (string, string, error) {
+	contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName)
+	if !ok {
+		return "", "", nil
+	}
+	contract := compileImplementationTestingContract(cfg, planContent)
+	if existing, err := ReadTestingContract(contractPath); err == nil {
+		contract = ReconcileTestingContract(existing, contract)
+	} else if !os.IsNotExist(err) {
+		return "", "", fmt.Errorf("reading existing testing contract: %w", err)
+	}
+	if testingContractRequiresCommandRunner(&contract) && cfg.CommandRunner == nil {
+		return "", "", errors.New("implementation testing contract contains harness-owned commands but CommandRunner is not configured")
+	}
+	if cfg.CommandRunner != nil && cfg.Feature != nil {
+		resolver := func(worktreePath string) (string, error) {
+			return resolveTestingContractWorktreeHEADWithRunner(cfg.CommandRunner, worktreePath)
+		}
+		if err := EnsureTestingContractBaseCommits(&contract, cfg.Feature.Repos, resolver); err != nil {
+			return "", "", fmt.Errorf("anchoring testing contract baseline: %w", err)
+		}
+	}
+	if err := WriteTestingContract(contractPath, contract); err != nil {
+		return "", "", fmt.Errorf("writing testing contract: %w", err)
+	}
+	fingerprint, err := Fingerprint(contractPath)
+	if err != nil {
+		return "", "", fmt.Errorf("fingerprinting testing contract: %w", err)
+	}
+	return contractPath, fingerprint, nil
+}
+
+func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) string {
+	var b strings.Builder
+	b.WriteString("## Verification Scope Errors\n\n")
+	b.WriteString("Repair the phase plan's command scopes without changing implementation scope. Multi-repo commands require `[repo: <name>]` and run from that repository root.\n")
+	for _, violation := range violations {
+		fmt.Fprintf(&b, "\n- %s\n", violation.Reason)
+	}
+	return b.String()
 }
 
 func compileImplementationTestingContract(cfg ImplementConfig, planContent string) TestingContract {
@@ -1396,12 +1532,10 @@ Do this, in order:
 2. Write progress.md per skills/implement/SKILL.md's section schema:
    - ` + "`" + `## Iteration Handoff` + "`" + ` (Completed / Remaining / Where I stopped / Gotchas).
    - ` + "`" + `## Deferrals` + "`" + ` (a fenced YAML block; ` + "`" + `deferrals: []` + "`" + ` and ` + "`" + `closed_deferrals: []` + "`" + ` if you have nothing to declare).
-   - ` + "`" + `## Verification Report` + "`" + ` (cite the runtime path the prompt named).
    - ` + "`" + `## Iteration State` + "`" + ` set to ` + "`" + `RETRY` + "`" + ` so the harness skips review and starts the next iteration with no reviewer feedback.
 
-   (You are emitting RETRY here, so do NOT include the conditional ` + "`" + `## Questions for User` + "`" + ` section — it is reserved for ` + "`" + `NEED_USER_INPUT` + "`" + ` and must sit between ` + "`" + `## Verification Report` + "`" + ` and ` + "`" + `## Iteration State` + "`" + ` only when used.)
-3. Write verification-report.yaml at the runtime path with whatever results you have run; leave unrun checks as ` + "`" + `not_run` + "`" + `.
-4. Touch the phase_complete marker (per your system prompt) as your very last action and end your turn.`
+   (You are emitting RETRY here, so do NOT include the conditional ` + "`" + `## Questions for User` + "`" + ` section — it is reserved for ` + "`" + `NEED_USER_INPUT` + "`" + ` and must sit between ` + "`" + `## Deferrals` + "`" + ` and ` + "`" + `## Iteration State` + "`" + ` only when used.)
+3. Touch the phase_complete marker (per your system prompt) as your very last action and end your turn.`
 
 type contextSnapshot struct {
 	Pct            int
@@ -1916,6 +2050,32 @@ func waitForShutdownIntent(sm shutdownChecker, grace time.Duration) bool {
 // isFeatureInterrupted checks the feature store to determine if the feature
 // has been stopped by the user. Loops call this before starting new sessions
 // to avoid zombie iterations after the user presses 's' to stop.
+// verificationContext returns a context that cancels once the feature is
+// interrupted or failed, so a hung verification command cannot outlive a user
+// interrupt by its full declared timeout. The caller must call cancel.
+func verificationContext(store ports.FeatureStore, featureID string) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if store == nil {
+		return ctx, cancel
+	}
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if isFeatureInterrupted(store, featureID) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel
+}
+
 func isFeatureInterrupted(store ports.FeatureStore, featureID string) bool {
 	if store == nil {
 		return false

@@ -1084,6 +1084,10 @@ func RepoCycleDirName(cycleType RepoCycleType, count int) string {
 		if count > 0 {
 			return fmt.Sprintf("review-comments-%d", count)
 		}
+	case CycleRefactor:
+		if count > 0 {
+			return fmt.Sprintf("refactor-%d", count)
+		}
 	}
 	return string(cycleType)
 }

@@ -85,6 +85,10 @@ func cycleArtifactDirName(f *feature.Feature, repoName string, cycleType feature
 			if f.ReviewCommentsCount() > 0 {
 				return feature.RepoCycleDirName(cycleType, f.ReviewCommentsCount())
 			}
+		case feature.CycleRefactor:
+			if f.RefactorCount() > 0 {
+				return feature.RepoCycleDirName(cycleType, f.RefactorCount())
+			}
 		}
 		return string(cycleType)
 	}

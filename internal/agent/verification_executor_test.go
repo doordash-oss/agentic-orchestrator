@@ -843,6 +843,59 @@ func TestEnvManagedToolNotFound(t *testing.T) {
 	}
 }
 
+type envRecordingRunner struct {
+	envs [][]string
+}
+
+func (r *envRecordingRunner) Run(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
+	r.envs = append(r.envs, opts.Env)
+	return nil, nil
+}
+
+func TestExecuteTestingContractBehavioralRowExportsEvidenceDir(t *testing.T) {
+	iterDir := t.TempDir()
+	workDir := t.TempDir()
+	contract := &TestingContract{
+		Version: testingContractVersion, Revision: 1,
+		Items: []TestingContractItem{{
+			ID: "behavioral_abc123def456", Source: testingContractBehavioralSource,
+			Repo: "app", Name: "Primary journey", Command: "behavioral: Primary journey",
+			Run:              &TestingContractRun{Shell: "npx playwright test", Cwd: ".", Timeout: "1m"},
+			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractEvidenceKind, Matcher: testingContractEvidenceMatcher},
+			Policy:           TestingContractItemPolicy{Required: true},
+		}},
+	}
+	finalizeTestingContractOwnership(contract)
+	runner := &envRecordingRunner{}
+	repos := []feature.FeatureRepo{{Name: "app", Path: workDir}}
+	out, err := ExecuteTestingContract(context.Background(), runner, contract, nil,
+		filepath.Join(t.TempDir(), "testing-contract.yaml"), iterDir, "", repos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir := filepath.Join(iterDir, "behaviors", "behavioral_abc123def456")
+	if info, statErr := os.Stat(wantDir); statErr != nil || !info.IsDir() {
+		t.Fatalf("evidence dir not created: %v", statErr)
+	}
+	found := false
+	for _, env := range runner.envs {
+		for _, kv := range env {
+			if kv == "AGENTICO_EVIDENCE_DIR="+wantDir {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("AGENTICO_EVIDENCE_DIR was not exported to the behavioral command")
+	}
+	if got := out.Report.Results[0].Mode; got != VerificationModeBehavioral {
+		t.Fatalf("mode = %q, want behavioral", got)
+	}
+	if got := out.Report.Results[0].Status; got != VerificationStatusPassed {
+		t.Fatalf("status = %q, want passed", got)
+	}
+}
+
 func TestVerificationWritableRootsFiltersMissingDirs(t *testing.T) {
 	existing := t.TempDir()
 	roots := verificationWritableRoots(existing, filepath.Join(existing, "missing"), "")

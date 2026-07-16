@@ -199,7 +199,20 @@ func ExecuteTestingContract(
 			recordVerificationContractError(out, report, idx, item, "", workDirErr.Error(), "Tag the item with one repository from the feature scope.")
 			continue
 		}
-		writableRoots := verificationWritableRoots(append(itemWritableWorkRoots(item, workDir, repos), grantRoots...)...)
+		itemEnv, evidenceDir := verificationItemEnv(item, iterationDir)
+		if evidenceDir != "" {
+			if mkErr := os.MkdirAll(evidenceDir, 0o755); mkErr != nil {
+				itemEnv, evidenceDir = nil, ""
+			}
+		}
+		buildWritableRoots := func() []string {
+			roots := append(itemWritableWorkRoots(item, workDir, repos), grantRoots...)
+			if evidenceDir != "" {
+				roots = append(roots, evidenceDir)
+			}
+			return verificationWritableRoots(roots...)
+		}
+		writableRoots := buildWritableRoots()
 		cwd, err := resolveVerificationCwd(workDir, item.Run.Cwd)
 		if err != nil {
 			recordVerificationContractError(out, report, idx, item, workDir, err.Error(), "Use a cwd relative to the tagged repository root.")
@@ -231,7 +244,7 @@ func ExecuteTestingContract(
 				blocked = true
 				break
 			}
-			run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s", writableRoots, true)
+			run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s", writableRoots, true, nil)
 			if runErr != nil {
 				var exitCoder interface{ ExitCode() int }
 				if !errors.As(runErr, &exitCoder) && !errors.Is(runErr, context.DeadlineExceeded) {
@@ -267,7 +280,7 @@ func ExecuteTestingContract(
 		}
 
 		runSandboxed := !unsandboxedItems[item.ID]
-		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed)
+		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed, itemEnv)
 		// Sandbox self-expansion: an OS write denial on a grantable path is a
 		// harness limitation, not a finding. Grant the minimal root, retry,
 		// and persist so later runs (and baselines) start with it. Protected
@@ -294,8 +307,8 @@ func ExecuteTestingContract(
 			}
 			grantRoots = append(grantRoots, root)
 			grantedThisItem = append(grantedThisItem, root)
-			writableRoots = verificationWritableRoots(append(itemWritableWorkRoots(item, workDir, repos), grantRoots...)...)
-			candidate, candidateErr = captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed)
+			writableRoots = buildWritableRoots()
+			candidate, candidateErr = captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed, itemEnv)
 		}
 		if candidateErr == nil {
 			candidate.record.Classification = VerificationClassificationPassed
@@ -345,9 +358,9 @@ func ExecuteTestingContract(
 		// in for the regression confirmation below.
 		var ladderFailure *capturedVerificationRun
 		if candidate.record.Sandboxed && candidate.record.ExitCode != 124 && ctx.Err() == nil {
-			escalated, escalatedErr := captureVerificationCommand(ctx, runner, item.ID, "unsandboxed", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, false)
+			escalated, escalatedErr := captureVerificationCommand(ctx, runner, item.ID, "unsandboxed", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, false, itemEnv)
 			if escalatedErr == nil {
-				confirm, confirmErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, true)
+				confirm, confirmErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, true, itemEnv)
 				if confirmErr == nil {
 					candidate.record.Classification = VerificationClassificationFlaky
 					escalated.record.Classification = VerificationClassificationPassed
@@ -425,7 +438,7 @@ func ExecuteTestingContract(
 						// ladder's unsandboxed failure already re-observed the
 						// failure, so it stands in for the confirmation.
 						if ladderFailure == nil {
-							confirmation, confirmationErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed)
+							confirmation, confirmationErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed, itemEnv)
 							confirmation.record.BaselineRunID = baseRun.record.RunID
 							if confirmationErr == nil {
 								candidate.record.Classification = VerificationClassificationFlaky
@@ -552,7 +565,7 @@ func machineContractResult(item TestingContractItem, status VerificationRunStatu
 	summary := fmt.Sprintf("harness run %s: exit %d (%s)", run.record.RunID, run.record.ExitCode, run.record.Classification)
 	return VerificationCheckResult{
 		ItemID: item.ID, Name: item.Name, Requirement: item.Command, Command: item.Command,
-		Mode: VerificationModeCommand, Status: status, Evidence: summary,
+		Mode: verificationModeForContractItem(item), Status: status, Evidence: summary,
 		EvidenceData: VerificationEvidence{
 			ExitCode: &run.record.ExitCode, Summary: summary, Primary: run.record.StdoutPath,
 			Attachments: []string{run.record.StderrPath, filepath.Join(filepath.Dir(run.record.StdoutPath), "run.yaml")},
@@ -800,7 +813,7 @@ func preflightVerificationShell(ctx context.Context, runner ports.CommandRunner,
 	return "invalid verification shell syntax: " + detail, nil
 }
 
-func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner, itemID, kind, command, cwd, timeoutText string, writableRoots []string, useSandbox bool) (capturedVerificationRun, error) {
+func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner, itemID, kind, command, cwd, timeoutText string, writableRoots []string, useSandbox bool, extraEnv []string) (capturedVerificationRun, error) {
 	timeout := 10 * time.Minute
 	if parsed, err := time.ParseDuration(strings.TrimSpace(timeoutText)); err == nil && parsed > 0 {
 		timeout = parsed
@@ -819,7 +832,11 @@ func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner,
 			argv, sandboxed, cleanup = sandboxVerificationArgv(runner, argv, writableRoots)
 		}
 		defer cleanup()
-		_, runErr := runner.Run(runCtx, argv[0], argv[1:], ports.CommandOpts{Dir: cwd, Stdout: &stdout, Stderr: &stderr})
+		opts := ports.CommandOpts{Dir: cwd, Stdout: &stdout, Stderr: &stderr}
+		if len(extraEnv) > 0 {
+			opts.Env = append(os.Environ(), extraEnv...)
+		}
+		_, runErr := runner.Run(runCtx, argv[0], argv[1:], opts)
 		return runErr
 	}()
 	exitCode := commandExitCode(err)
@@ -831,6 +848,26 @@ func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner,
 		stdout: redactVerificationOutput(stdout.String()), stderr: redactVerificationOutput(stderr.String()),
 	}
 	return run, err
+}
+
+// verificationItemEnv points harness-executed evidence commands at an
+// iteration-owned directory so journey traces and screenshots land in
+// never-overwritten storage instead of a mutable test-results dir.
+func verificationItemEnv(item TestingContractItem, iterationDir string) ([]string, string) {
+	if strings.TrimSpace(iterationDir) == "" {
+		return nil, ""
+	}
+	var root string
+	switch item.Source {
+	case testingContractBehavioralSource:
+		root = "behaviors"
+	case testingContractVisualSource:
+		root = "screenshots"
+	default:
+		return nil, ""
+	}
+	dir := filepath.Join(iterationDir, root, safeEvidenceComponent(item.ID))
+	return []string{"AGENTICO_EVIDENCE_DIR=" + dir}, dir
 }
 
 // sandboxVerificationArgv wraps a planner-authored command in the platform
@@ -1052,7 +1089,7 @@ func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, cont
 		return nil, err
 	}
 	run, runErr := captureVerificationCommand(ctx, runner, item.ID, "baseline", item.Run.Shell, cwd, item.Run.Timeout,
-		verificationWritableRoots(append([]string{tmp}, loadSandboxGrantRoots(contractPath)...)...), useSandbox)
+		verificationWritableRoots(append([]string{tmp}, loadSandboxGrantRoots(contractPath)...)...), useSandbox, nil)
 	run.record.Classification = "baseline"
 	run.record.BaseCommit = commit
 	run.record.RelCwd = strings.TrimSpace(item.Run.Cwd)

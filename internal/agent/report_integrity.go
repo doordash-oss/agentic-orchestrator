@@ -15,6 +15,8 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path"
@@ -64,6 +66,7 @@ const (
 	KindEvidenceFile          ReportGateKind = "invalid_evidence_file"
 	KindDeferralUnclosed      ReportGateKind = "deferral_unclosed_due_this_phase"
 	KindDeferralMissingReason ReportGateKind = "deferral_missing_reason"
+	KindEvidenceIntegrity     ReportGateKind = "evidence_integrity"
 )
 
 // ReportGateFinding describes a single integrity issue found in a
@@ -280,7 +283,10 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 			})
 			continue
 		}
-		validateEvidencePath(result, name, iterDir, root, "primary", c.EvidenceData.Primary)
+		primaryOK := validateEvidencePath(result, name, iterDir, root, "primary", c.EvidenceData.Primary)
+		if primaryOK && status == VerificationStatusPassed && strings.TrimSpace(c.EvidenceData.Sha256) != "" {
+			verifyEvidenceDigest(result, name, iterDir, root, c.EvidenceData.Primary, c.EvidenceData.Sha256)
+		}
 		for idx, attachment := range c.EvidenceData.Attachments {
 			field := fmt.Sprintf("attachments[%d]", idx)
 			validateEvidencePath(result, name, iterDir, root, field, attachment)
@@ -345,6 +351,31 @@ func validateEvidencePath(result *ReportGateResult, checkName, iterDir, root, fi
 		return false
 	}
 	return true
+}
+
+// verifyEvidenceDigest re-reads a passed row's canonical evidence file and
+// compares it against the digest recorded at verification time, so a later
+// run cannot silently replace evidence after its pass mark was earned.
+func verifyEvidenceDigest(result *ReportGateResult, checkName, iterDir, root, rel, want string) {
+	clean, detail := cleanEvidencePath(rel, root)
+	if detail != "" {
+		return // path findings already reported by validateEvidencePath
+	}
+	data, err := os.ReadFile(filepath.Join(iterDir, filepath.FromSlash(clean)))
+	if err != nil {
+		result.Findings = append(result.Findings, ReportGateFinding{
+			CheckName: checkName, Category: GateCategorySchema, Kind: KindEvidenceIntegrity,
+			Detail: fmt.Sprintf("evidence file %q could not be re-read for digest verification: %v", clean, err),
+		})
+		return
+	}
+	sum := sha256.Sum256(data)
+	if !strings.EqualFold(hex.EncodeToString(sum[:]), strings.TrimSpace(want)) {
+		result.Findings = append(result.Findings, ReportGateFinding{
+			CheckName: checkName, Category: GateCategorySchema, Kind: KindEvidenceIntegrity,
+			Detail: fmt.Sprintf("evidence file %q changed after the harness verified it — its recorded digest no longer matches, so the passed status does not describe this file; re-run verification to re-earn the pass", clean),
+		})
+	}
 }
 
 func cleanEvidencePath(raw, root string) (string, string) {

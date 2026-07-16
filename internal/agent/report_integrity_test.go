@@ -15,6 +15,8 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -734,5 +736,52 @@ func TestValidateVerificationReportRejectsForgedWaiverAndAcceptsContractWaiver(t
 	result = ValidateVerificationReport(&report, nil, &contract, true)
 	if result.Rejected {
 		t.Fatalf("authorized waiver rejected: %+v", result.Findings)
+	}
+}
+
+func TestValidateVerificationReportRejectsChangedEvidence(t *testing.T) {
+	iterDir := t.TempDir()
+	path := filepath.Join(iterDir, "screenshots", "visual_abc123def456.png")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("original-bytes")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(original)
+	contract := &TestingContract{Version: testingContractVersion, Revision: 1, Items: []TestingContractItem{{
+		ID: "visual_abc123def456", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+		Name: "Home populated", Command: "visual: Home populated",
+		ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/visual_abc123def456.png"},
+		Policy:           TestingContractItemPolicy{Required: true},
+	}}}
+	report := &VerificationReport{Version: 2, ContractRevision: 1, Results: []VerificationCheckResult{{
+		ItemID: "visual_abc123def456", Name: "Home populated", Mode: VerificationModeVisual,
+		Status: VerificationStatusPassed,
+		EvidenceData: VerificationEvidence{
+			Summary: "captured", Primary: "screenshots/visual_abc123def456.png",
+			Sha256: hex.EncodeToString(sum[:]),
+		},
+	}}}
+	ctx := VerificationReportValidationContext{IterationDir: iterDir, Contract: contract}
+	if gate := ValidateVerificationReportWithContext(report, nil, true, ctx); gate.Rejected {
+		t.Fatalf("unchanged evidence must pass, got %+v", gate.Findings)
+	}
+	if err := os.WriteFile(path, []byte("clobbered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gate := ValidateVerificationReportWithContext(report, nil, true, ctx)
+	if !gate.Rejected {
+		t.Fatal("changed evidence must reject")
+	}
+	found := false
+	for _, f := range gate.Findings {
+		if f.Kind == KindEvidenceIntegrity {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a %s finding, got %+v", KindEvidenceIntegrity, gate.Findings)
 	}
 }

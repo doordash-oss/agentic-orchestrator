@@ -1284,6 +1284,9 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	if c, ok := prov.(boundedHelperSandboxProvider); ok {
 		sessOpts.UsesBoundedHelperSandbox = c.UsesBoundedHelperSandbox()
 	}
+	if c, ok := prov.(sessionResumeProvider); ok {
+		sessOpts.SupportsSessionResume = c.SupportsSessionResume()
+	}
 	return cmd, env, sessOpts, nil
 }
 

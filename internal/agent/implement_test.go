@@ -585,6 +585,49 @@ func TestWaitForStatus(t *testing.T) {
 		}
 	})
 
+	t.Run("done_before_status_ready_true_returns_SUCCESS", func(t *testing.T) {
+		sess := session.NewSession("test", "feat", feature.PhaseImplement)
+		sess.CloseDone()
+
+		got := waitForStatus(sess, nil, "", func() bool { return true })
+		if got != agentStatusSuccess {
+			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
+		}
+	})
+
+	t.Run("done_with_pending_FAILED_ready_true_returns_SUCCESS", func(t *testing.T) {
+		sess := session.NewSession("test", "feat", feature.PhaseImplement)
+		sess.SendStatus(agentStatusFailed)
+		sess.CloseDone()
+
+		got := waitForStatus(sess, nil, "", func() bool { return true })
+		if got != agentStatusSuccess {
+			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
+		}
+	})
+
+	t.Run("done_with_pending_FAILED_ready_false_returns_FAILED", func(t *testing.T) {
+		sess := session.NewSession("test", "feat", feature.PhaseImplement)
+		sess.SendStatus(agentStatusFailed)
+		sess.CloseDone()
+
+		got := waitForStatus(sess, nil, "", func() bool { return false })
+		if got != agentStatusFailed {
+			t.Errorf("waitForStatus() = %q, want FAILED", got)
+		}
+	})
+
+	t.Run("done_with_pending_API_ERROR_ready_true_returns_SUCCESS", func(t *testing.T) {
+		sess := session.NewSession("test", "feat", feature.PhaseImplement)
+		sess.SendStatus("API_ERROR")
+		sess.CloseDone()
+
+		got := waitForStatus(sess, nil, "", func() bool { return true })
+		if got != agentStatusSuccess {
+			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
+		}
+	})
+
 	t.Run("done_with_pending_API_ERROR_returns_FAILED", func(t *testing.T) {
 		sess := session.NewSession("test", "feat", feature.PhaseImplement)
 		sess.SendStatus("API_ERROR")
@@ -1557,6 +1600,199 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 	}
 	if sessionEnded[0].Status != "ok" || sessionEnded[0].Error != "" {
 		t.Fatalf("session.ended = status %q error %q, want ok with no error", sessionEnded[0].Status, sessionEnded[0].Error)
+	}
+}
+
+// crashResumeTestSession is a dead-process fake: it reports a terminal FAILED
+// status and exposes a provider-native session ID that a crash-resume attempt
+// can pass back via BuildSessionOpts.ResumeSessionID.
+type crashResumeTestSession struct {
+	*utilityTestSession
+	providerSessionID string
+}
+
+func (s *crashResumeTestSession) SessionID() string { return s.providerSessionID }
+
+func newCrashResumeLoopConfig(t *testing.T, artifactDir, stateDir, workDir, observeDir, featureID string) ImplementConfig {
+	t.Helper()
+	planPath := filepath.Join(artifactDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\nDo the thing.\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	f := &feature.Feature{
+		ID:            featureID,
+		Name:          "Crash Resume",
+		Slug:          "crash-resume",
+		Description:   "crash resume loop coverage",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		TraceID:       "trace-crash-resume",
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "agentic", Path: workDir}},
+	}
+	return ImplementConfig{
+		Feature:             f,
+		WorkDir:             workDir,
+		PlanPath:            planPath,
+		MaxIterations:       1,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "handoff parses",
+		Model:               "test-model",
+		ReviewModel:         "review-model",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		Observer:            observe.New(true, observeDir, false, "", false, "agentic"),
+		SkipIterationReview: true,
+	}
+}
+
+func crashResumeTestDirs(t *testing.T, featureID string) (artifactDir, stateDir, workDir, observeDir string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	artifactDir = filepath.Join(tmpDir, "artifacts")
+	stateDir = filepath.Join(tmpDir, "state")
+	workDir = filepath.Join(tmpDir, "work")
+	observeDir = filepath.Join(tmpDir, "observe")
+	for _, dir := range []string{artifactDir, stateDir, workDir, filepath.Join(observeDir, featureID)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	return artifactDir, stateDir, workDir, observeDir
+}
+
+func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
+	featureID := "crash-resume-001"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	var buildOpts []BuildSessionOpts
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildOpts = append(buildOpts, opts)
+		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+	}
+
+	var startIDs []string
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		startIDs = append(startIDs, id)
+		if len(startIDs) == 1 {
+			// First process dies mid-turn without writing the marker.
+			dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
+			dead.statusCh <- agentStatusFailed
+			return dead, nil
+		}
+		// The resumed process finishes the iteration.
+		iterDir := filepath.Join(artifactDir, "iteration-01")
+		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
+		if err := os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("complete\n"), 0o644); err != nil {
+			t.Fatalf("write phase_complete: %v", err)
+		}
+		resumed := newUtilityTestSession()
+		resumed.statusCh <- agentStatusSuccess
+		return resumed, nil
+	}
+
+	result, err := RunImplementationLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
+	}
+
+	if len(buildOpts) != 2 {
+		t.Fatalf("BuildSession calls = %d, want 2", len(buildOpts))
+	}
+	if buildOpts[0].ResumeSessionID != "" {
+		t.Errorf("first BuildSession ResumeSessionID = %q, want empty", buildOpts[0].ResumeSessionID)
+	}
+	if buildOpts[1].ResumeSessionID != "native-123" {
+		t.Errorf("resume BuildSession ResumeSessionID = %q, want native-123", buildOpts[1].ResumeSessionID)
+	}
+	if !strings.Contains(buildOpts[1].Prompt, crashResumeMessageFragment) {
+		t.Errorf("resume prompt = %q, want crash-resume message", buildOpts[1].Prompt)
+	}
+	if len(startIDs) != 2 || !strings.HasSuffix(startIDs[1], "-resume") {
+		t.Errorf("start session IDs = %v, want second with -resume suffix", startIDs)
+	}
+
+	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta.AgentStatus != agentStatusSuccess {
+		t.Fatalf("AgentStatus = %q, want %q", meta.AgentStatus, agentStatusSuccess)
+	}
+
+	events := readObserveEvents(t, observeDir, featureID)
+	if got := len(filterEventsByType(events, "session.ended")); got != 2 {
+		t.Errorf("session.ended events = %d, want 2 (dead session + resumed session)", got)
+	}
+}
+
+func TestImplementLoop_CrashResumeNotAttemptedWithoutCapability(t *testing.T) {
+	featureID := "crash-resume-002"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	buildCalls := 0
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildCalls++
+		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: false}, nil
+	}
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
+		dead.statusCh <- agentStatusFailed
+		return dead, nil
+	}
+
+	if _, err := RunImplementationLoop(cfg, nil); err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("BuildSession calls = %d, want 1 (no resume without capability)", buildCalls)
+	}
+	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta.AgentStatus != agentStatusFailed {
+		t.Fatalf("AgentStatus = %q, want FAILED", meta.AgentStatus)
+	}
+}
+
+func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
+	featureID := "crash-resume-003"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	buildCalls := 0
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildCalls++
+		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+	}
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		// Every process dies; the loop must resume at most once.
+		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
+		dead.statusCh <- agentStatusFailed
+		return dead, nil
+	}
+
+	if _, err := RunImplementationLoop(cfg, nil); err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if buildCalls != 2 {
+		t.Fatalf("BuildSession calls = %d, want 2 (initial + one resume)", buildCalls)
+	}
+	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta.AgentStatus != agentStatusFailed {
+		t.Fatalf("AgentStatus = %q, want FAILED", meta.AgentStatus)
 	}
 }
 

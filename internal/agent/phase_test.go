@@ -1324,6 +1324,7 @@ type captureProvider struct {
 	watchdog        bool
 	finishOrViolate bool
 	boundedSandbox  bool
+	sessionResume   bool
 	buildOpts       llm.CommandBuildOpts
 	protocolOpts    llm.ProtocolOpts
 }
@@ -1353,6 +1354,7 @@ func (p *captureProvider) ContextWindowForModel(string) int         { return p.c
 func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
 func (p *captureProvider) SupportsFinishOrViolateNudge() bool       { return p.finishOrViolate }
 func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
+func (p *captureProvider) SupportsSessionResume() bool              { return p.sessionResume }
 
 type captureProtocol struct{}
 
@@ -1488,6 +1490,36 @@ func TestBuildSession_SurfacesBoundedHelperCapabilities(t *testing.T) {
 			}
 			if sessOpts.UsesBoundedHelperSandbox != tc.sandbox {
 				t.Errorf("UsesBoundedHelperSandbox = %v, want %v", sessOpts.UsesBoundedHelperSandbox, tc.sandbox)
+			}
+		})
+	}
+}
+
+func TestBuildSession_SurfacesSessionResumeCapability(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name   string
+		resume bool
+	}{
+		{name: "capable provider", resume: true},
+		{name: "incapable provider", resume: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, sessionResume: tc.resume}
+			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
+			pr.Registry = newRegistryWithCaptureProvider(provider)
+			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+				Model:        "model-a[1M]",
+				Prompt:       "p",
+				SystemPrompt: "s",
+				WorkDir:      dir,
+				MarkerPath:   filepath.Join(dir, "phase_complete"),
+			})
+			if err != nil {
+				t.Fatalf("BuildSession() error: %v", err)
+			}
+			if sessOpts.SupportsSessionResume != tc.resume {
+				t.Errorf("SupportsSessionResume = %v, want %v", sessOpts.SupportsSessionResume, tc.resume)
 			}
 		})
 	}

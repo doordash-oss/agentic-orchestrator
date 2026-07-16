@@ -955,3 +955,10 @@ func atLeast(got, min [3]int) bool {
 	}
 	return true
 }
+
+func TestProviderSupportsSessionResume(t *testing.T) {
+	p := New()
+	if !p.SupportsSessionResume() {
+		t.Error("SupportsSessionResume() = false, want true")
+	}
+}

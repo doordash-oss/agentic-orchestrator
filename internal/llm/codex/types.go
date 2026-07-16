@@ -94,7 +94,12 @@ type SandboxPolicy struct {
 	NetworkAccess bool     `json:"networkAccess,omitempty"`
 }
 
-// ThreadStartResult is the response to thread/start.
+// ThreadResumeParams holds parameters for thread/resume.
+type ThreadResumeParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+// ThreadStartResult is the response to thread/start and thread/resume.
 type ThreadStartResult struct {
 	Thread         Thread `json:"thread"`
 	ApprovalPolicy string `json:"approvalPolicy,omitempty"`

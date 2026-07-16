@@ -372,7 +372,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Build command + session opts via BuildSession. Only the active run
 			// state is granted; the containing feature state directory also holds
-			// sealed predecessor runs and must remain orchestrator-private.
+			// sealed predecessor runs and must remain orchestrator-private. The opts
+			// are kept so a crash-resume attempt can rebuild the same session with
+			// ResumeSessionID set.
 			runDir := cfg.RunDir
 			if runDir == "" {
 				runNumber := cfg.Feature.ActiveRun
@@ -382,7 +384,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				runDir = filepath.Join(cfg.StateDir, "runs", feature.RunDirName(runNumber))
 			}
 			dirs := append([]string{runDir}, cfg.AdditionalDirs...)
-			command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
+			implBuildOpts := BuildSessionOpts{
 				Model:                          cfg.Model,
 				Prompt:                         prompt,
 				SystemPrompt:                   implProtocol,
@@ -396,7 +398,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				Phase:                          feature.PhaseImplement,
 				SystemPromptHasUsefulResources: true,
 				MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
-			})
+			}
+			command, env, sessOpts, buildErr := cfg.BuildSession(implBuildOpts)
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
@@ -461,39 +464,46 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			sess.SetLogFile(logFile)
 
+			// implWaitOptions builds the wait options for an implement session.
+			// Shared between the initial session and a crash-resume attempt so
+			// both waits apply the same readiness and handoff behavior.
+			implWaitOptions := func(sess ports.SessionHandle, sessionCtx observe.SpanContext, sessionID string) waitForStatusOptions {
+				return waitForStatusOptions{
+					ReadyCheck: func() bool {
+						if HasPhaseComplete(iterDir) {
+							// Agent completed its work — clear any stale question flag
+							// so we don't block on a question the agent already moved past.
+							sess.SetHasUnansweredQuestion(false)
+							return true
+						}
+						// No phase_complete yet — the agent is likely waiting for user input.
+						return false
+					},
+					FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+					MissingArtifacts:     []string{"progress.md", "verification-report.yaml"},
+					EnableContextHandoff: true,
+					OnContextHandoff: func(snap contextSnapshot) {
+						cfg.Observer.ContextHandoffTriggered(
+							sessionCtx,
+							"implement",
+							sessionID,
+							cfg.RepoName,
+							sess.ProviderName(),
+							i,
+							snap.Pct,
+							snap.ThresholdPct,
+							snap.TotalTokens,
+							snap.WindowTokens,
+							snap.BaselineTokens,
+						)
+					},
+				}
+			}
+
 			// Wait for status marker or session exit. If the SDK reports a
 			// non-truncated success without phase_complete, the iteration below
 			// records a protocol violation instead of waiting for user input.
-			waitResult = waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
-				ReadyCheck: func() bool {
-					if HasPhaseComplete(iterDir) {
-						// Agent completed its work — clear any stale question flag
-						// so we don't block on a question the agent already moved past.
-						sess.SetHasUnansweredQuestion(false)
-						return true
-					}
-					// No phase_complete yet — the agent is likely waiting for user input.
-					return false
-				},
-				FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-				MissingArtifacts:     []string{"progress.md", "verification-report.yaml"},
-				EnableContextHandoff: true,
-				OnContextHandoff: func(snap contextSnapshot) {
-					cfg.Observer.ContextHandoffTriggered(
-						implSessionCtx,
-						"implement",
-						sessionID,
-						cfg.RepoName,
-						sess.ProviderName(),
-						i,
-						snap.Pct,
-						snap.ThresholdPct,
-						snap.TotalTokens,
-						snap.WindowTokens,
-						snap.BaselineTokens,
-					)
-				},
-			})
+			waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))
 			agentStatus = waitResult.Status
 
 			// App shutdown should not serialize an in-flight iteration as FAILED.
@@ -514,6 +524,44 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
+			}
+
+			// Crash resume: the provider process died mid-turn without
+			// completing the iteration (a completed one is reclassified
+			// SUCCESS by the waiter). For providers that can resume their
+			// native session, give the same conversation one fresh process to
+			// finish or report state before charging the iteration as FAILED.
+			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume && !HasPhaseComplete(iterDir) {
+				if resumeID := providerSessionID(sess); resumeID != "" {
+					// Account the dead session before replacing it.
+					deadCost := ExtractSessionCost(sess)
+					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+					_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", deadCost, SessionCostMetadata{
+						SessionID:     sessionID,
+						ObserverPhase: "implement",
+						RepoName:      cfg.RepoName,
+					})
+					appendIterationLog(aggregateLogPath, i, sess.MessageLog().Text())
+
+					resumeSessionID := sessionID + "-resume"
+					resumeSess, resumeOpts, resumeErr := startCrashResumeSession(cfg, sm, implBuildOpts, resumeID, resumeSessionID, i, iterDir, permRepoName)
+					if resumeErr == nil {
+						sess, sessOpts = resumeSess, resumeOpts
+						sessionID = resumeSessionID
+						implSessionCtx = iterCtx.Child()
+						cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName)
+						implTracker.Install(sess, implSessionCtx, "implement", sessionID)
+
+						waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))
+						agentStatus = waitResult.Status
+						if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
+							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+						}
+						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+							return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
+						}
+					}
+				}
 			}
 
 			duration = time.Since(iterStart)
@@ -821,6 +869,58 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		Iterations:  cfg.MaxIterations,
 		LastError:   "reached maximum iteration count",
 	}, nil
+}
+
+// crashResumeMessageFragment is the stable fragment tests and log scans match
+// on; keep crashResumeMessage in sync with it.
+const crashResumeMessageFragment = "process terminated unexpectedly mid-turn"
+
+// crashResumeMessage is the prompt for a crash-resume session. The resumed
+// conversation already carries the full iteration context; this only explains
+// the process boundary and re-anchors the completion protocol.
+const crashResumeMessage = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. " +
+	"Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing " +
+	"required artifacts and the completion marker per your instructions; otherwise update progress and continue " +
+	"from where you left off."
+
+// providerSessionID returns the provider-native session identifier for a
+// session handle, "" when the handle does not expose one. SessionID is not
+// part of ports.SessionView, so it is probed as an optional interface.
+func providerSessionID(sess ports.SessionView) string {
+	if p, ok := sess.(interface{ SessionID() string }); ok {
+		return p.SessionID()
+	}
+	return ""
+}
+
+// startCrashResumeSession starts a fresh provider process that resumes the
+// provider-native session resumeID after the previous process died mid-turn.
+// The iteration's response.txt is opened in append mode so the dead session's
+// streamed output is preserved.
+func startCrashResumeSession(cfg ImplementConfig, sm ports.SessionManager, buildOpts BuildSessionOpts, resumeID, sessionID string, iteration int, iterDir, permScope string) (ports.SessionHandle, *ports.SessionOpts, error) {
+	buildOpts.ResumeSessionID = resumeID
+	buildOpts.Prompt = crashResumeMessage
+	command, env, sessOpts, err := cfg.BuildSession(buildOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("building crash-resume session: %w", err)
+	}
+	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
+	sessOpts.Iteration = iteration
+	sessOpts.PermCacheScope = permScope
+	sessOpts.StderrPath = filepath.Join(iterDir, "stderr-resume.log")
+
+	startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
+	sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhaseImplement, command, cfg.WorkDir, env, sessOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("starting crash-resume session: %w", err)
+	}
+	if logFile, logErr := os.OpenFile(filepath.Join(iterDir, "response.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); logErr == nil {
+		sess.SetLogFile(logFile)
+	}
+	return sess, sessOpts, nil
 }
 
 func formatProtocolViolationError(role Role, iterDir string, violations []ProtocolViolation) string {
@@ -1449,6 +1549,15 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	defer bgTicker.Stop()
 
 	handleStatus := func(status string, sessionDone bool) (string, bool) {
+		// A session that died or errored after completing its work product is
+		// a logical success: the completion marker is the protocol's "done"
+		// signal, and contract validation plus the review gate still arbitrate
+		// the artifacts. This salvages iterations whose provider process dies
+		// between writing the marker and exiting cleanly.
+		if isReady != nil && (status == agentStatusFailed || (status == agentStatusAPIError && sessionDone)) && isReady() {
+			_ = sess.Stop()
+			return agentStatusSuccess, true
+		}
 		if status == agentStatusAPIError {
 			if sessionDone {
 				return agentStatusFailed, true
@@ -1595,9 +1704,13 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 				doneCh = nil
 				continue
 			}
-			// Session exited without any status — treat as failure.
-			// A well-behaved agent emits a result message before exiting;
-			// absence of one means something went wrong.
+			// Session exited without any status — treat as failure unless the
+			// completion marker landed (same logical-success rule as
+			// handleStatus). A well-behaved agent emits a result message
+			// before exiting; absence of one means something went wrong.
+			if isReady != nil && isReady() {
+				return waitForStatusResult{Status: agentStatusSuccess, Handoff: handoff}
+			}
 			return waitForStatusResult{Status: agentStatusFailed, Handoff: handoff}
 
 		case status := <-sess.StatusCh():

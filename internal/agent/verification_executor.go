@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +27,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	_ "image/png"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -541,6 +544,25 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 		result.Evidence = fmt.Sprintf("required agent-owned evidence is empty at %s", rel)
 		result.EvidenceData.Summary = result.Evidence
 		return result
+	}
+	if item.Source == testingContractVisualSource || item.ExpectedEvidence.Kind == testingContractVisualKind {
+		cfg, _, decodeErr := image.DecodeConfig(bytes.NewReader(data))
+		if decodeErr != nil {
+			result.Status = VerificationStatusFailed
+			result.Evidence = fmt.Sprintf("required visual evidence at %s is not a decodable image: %v", rel, decodeErr)
+			result.EvidenceData.Summary = result.Evidence
+			return result
+		}
+		w, h := item.ExpectedEvidence.Width, item.ExpectedEvidence.Height
+		if w > 0 && h > 0 &&
+			!(cfg.Width == w && cfg.Height == h) &&
+			!(cfg.Width == 2*w && cfg.Height == 2*h) {
+			result.Status = VerificationStatusFailed
+			result.Evidence = fmt.Sprintf("visual evidence at %s is %dx%d but the contract requires %dx%d (or %dx%d at 2x)",
+				rel, cfg.Width, cfg.Height, w, h, 2*w, 2*h)
+			result.EvidenceData.Summary = result.Evidence
+			return result
+		}
 	}
 	result.Status = VerificationStatusPassed
 	result.Evidence = fmt.Sprintf("agent-owned evidence captured at %s", rel)

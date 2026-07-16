@@ -289,6 +289,9 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 }
 
 func evidenceFileRootForContractItem(item TestingContractItem) (string, bool) {
+	if item.Owner == TestingContractOwnerHarness {
+		return "", false
+	}
 	source := strings.TrimSpace(item.Source)
 	kind := strings.TrimSpace(item.ExpectedEvidence.Kind)
 	switch {

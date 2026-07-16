@@ -17,6 +17,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -910,5 +912,69 @@ func TestVerificationWritableRootsFiltersMissingDirs(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("verificationWritableRoots() = %v, want to include %q", roots, existing)
+	}
+}
+
+func writeTestPNG(t *testing.T, path string, w, h int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, image.NewRGBA(image.Rect(0, 0, w, h))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFinalizeAgentOwnedEvidenceVisualDimensions(t *testing.T) {
+	item := TestingContractItem{
+		ID: "visual_abc123def456", Source: testingContractVisualSource,
+		ExpectedEvidence: TestingContractExpectedEvidence{
+			Kind: testingContractVisualKind, Matcher: testingContractEvidenceFileExistsMatcher,
+			Path: "screenshots/visual_abc123def456.png", Width: 1440, Height: 900,
+		},
+	}
+	cases := []struct {
+		name string
+		w, h int
+		want VerificationRunStatus
+	}{
+		{"exact", 1440, 900, VerificationStatusPassed},
+		{"retina2x", 2880, 1800, VerificationStatusPassed},
+		{"wrongSize", 1440, 928, VerificationStatusFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			iterDir := t.TempDir()
+			writeTestPNG(t, filepath.Join(iterDir, "screenshots", "visual_abc123def456.png"), tc.w, tc.h)
+			result := finalizeAgentOwnedEvidence(item, iterDir)
+			if result.Status != tc.want {
+				t.Fatalf("status = %q (%s), want %q", result.Status, result.Evidence, tc.want)
+			}
+		})
+	}
+}
+
+func TestFinalizeAgentOwnedEvidenceVisualRejectsNonImage(t *testing.T) {
+	item := TestingContractItem{
+		ID: "visual_abc123def456", Source: testingContractVisualSource,
+		ExpectedEvidence: TestingContractExpectedEvidence{
+			Kind: testingContractVisualKind, Path: "screenshots/visual_abc123def456.png",
+		},
+	}
+	iterDir := t.TempDir()
+	path := filepath.Join(iterDir, "screenshots", "visual_abc123def456.png")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not a png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if result := finalizeAgentOwnedEvidence(item, iterDir); result.Status != VerificationStatusFailed {
+		t.Fatalf("status = %q, want failed for a non-image file", result.Status)
 	}
 }

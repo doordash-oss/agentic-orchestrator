@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -752,6 +753,40 @@ func TestExecuteTestingContractPassesFlakyCheckOnConfirmationRerun(t *testing.T)
 	result := out.Report.Results[0]
 	if result.Status != VerificationStatusPassed || !strings.Contains(result.Notes, "confirmation") {
 		t.Fatalf("result = %+v, want passed with a confirmation re-run note", result)
+	}
+}
+
+func TestExecuteTestingContractEmitsProgressUpdates(t *testing.T) {
+	repo := t.TempDir()
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{
+		{
+			ID: "ok", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+			Name: "prints ok", Command: "printf ok", Run: &TestingContractRun{Shell: "printf ok", Cwd: ".", Timeout: "30s"},
+			Policy: TestingContractItemPolicy{Required: true},
+		},
+		{
+			ID: "bad", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+			Name: "always fails", Command: "echo boom >&2; exit 1", Run: &TestingContractRun{Shell: "echo boom >&2; exit 1", Cwd: ".", Timeout: "30s"},
+			Policy: TestingContractItemPolicy{Required: true},
+		},
+	}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	var mu sync.Mutex
+	updates := map[string][]string{}
+	ctx := WithVerificationProgress(context.Background(), func(name, state string) {
+		mu.Lock()
+		updates[name] = append(updates[name], state)
+		mu.Unlock()
+	})
+	if _, err := ExecuteTestingContract(ctx, NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}}); err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if got := updates["prints ok"]; len(got) < 2 || got[0] != "running" || got[len(got)-1] != "passed" {
+		t.Fatalf("updates[prints ok] = %v, want running .. passed", got)
+	}
+	if got := updates["always fails"]; len(got) < 2 || got[0] != "running" || got[len(got)-1] != "failed" {
+		t.Fatalf("updates[always fails] = %v, want running .. failed", got)
 	}
 }
 

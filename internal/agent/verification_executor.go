@@ -95,6 +95,26 @@ type capturedVerificationRun struct {
 	stderr string
 }
 
+// VerificationProgress receives high-level execution updates: the item's
+// human-readable name and a state ("running", then the final report status).
+// It exists purely for user-facing progress; classification never depends on it.
+type VerificationProgress func(name, state string)
+
+type verificationProgressKey struct{}
+
+// WithVerificationProgress attaches a progress callback for
+// ExecuteTestingContract to invoke as contract items start and finish.
+func WithVerificationProgress(ctx context.Context, fn VerificationProgress) context.Context {
+	return context.WithValue(ctx, verificationProgressKey{}, fn)
+}
+
+func verificationProgressFromContext(ctx context.Context) VerificationProgress {
+	if fn, ok := ctx.Value(verificationProgressKey{}).(VerificationProgress); ok && fn != nil {
+		return fn
+	}
+	return func(string, string) {}
+}
+
 // ExecuteTestingContract runs only explicit contract run declarations. It
 // never guesses a project command from prose and never infers an auth problem
 // from arbitrary stderr: authorization is a block only when a declared
@@ -127,6 +147,19 @@ func ExecuteTestingContract(
 	if unsandboxedItems == nil {
 		unsandboxedItems = make(map[string]bool)
 	}
+	emitProgress := verificationProgressFromContext(ctx)
+	// The item currently marked "running" gets its final report status
+	// emitted when the next item starts (or after the loop): every outcome
+	// path finalizes report.Results before continuing, so the flush reads
+	// the settled status without instrumenting each branch.
+	lastProgressIdx := -1
+	flushProgress := func() {
+		if lastProgressIdx >= 0 {
+			result := report.Results[lastProgressIdx]
+			emitProgress(result.Name, string(result.Status))
+			lastProgressIdx = -1
+		}
+	}
 	userHome, homeErr := os.UserHomeDir()
 	if homeErr != nil {
 		userHome = ""
@@ -157,6 +190,9 @@ func ExecuteTestingContract(
 		if item.Run == nil || strings.TrimSpace(item.Run.Shell) == "" {
 			continue
 		}
+		flushProgress()
+		emitProgress(item.Name, "running")
+		lastProgressIdx = idx
 
 		repo, workDir, workDirErr := verificationItemWorkDir(item, workspaceDir, repos)
 		if workDirErr != nil {
@@ -439,6 +475,7 @@ func ExecuteTestingContract(
 		}
 		report.Results[idx] = machineContractResult(item, status, candidate, note)
 	}
+	flushProgress()
 	sort.Strings(out.BlockedItems)
 	sort.Strings(out.RegressionItems)
 	sort.Strings(out.InheritedItems)

@@ -1066,12 +1066,18 @@ func livePreviewHasValidationContext(f *feature.Feature, sess session.SessionVie
 	if f != nil && (f.ValidatingPlan || f.ReviewingGate) && len(f.ValidatorStatuses) > 0 {
 		return true
 	}
+	if f != nil && f.CurrentPhaseStatus == "verifying" && len(f.ValidatorStatuses) > 0 {
+		return true
+	}
 	return sess != nil && sess.Kind() == ports.KindValidator
 }
 
 func livePreviewValidationTarget(f *feature.Feature) string {
 	if f != nil && f.CurrentPhase == feature.PhaseImplement && f.ReviewingGate {
 		return "Reviewing implementation"
+	}
+	if f != nil && f.CurrentPhaseStatus == "verifying" {
+		return "Verifying implementation"
 	}
 	if f != nil && f.CurrentRoadmapPhase > 0 {
 		return fmt.Sprintf("Validating Phase %d plan", f.CurrentRoadmapPhase)
@@ -1218,9 +1224,9 @@ func livePreviewValidatorStatusStyle(status string) lipgloss.Style {
 
 func livePreviewValidatorStatusKind(status string) string {
 	switch strings.ToUpper(status) {
-	case validatorStatusApproved:
+	case validatorStatusApproved, "PASSED", "WAIVED":
 		return "approved"
-	case validatorStatusChangesRequested, "FAILED", "ERROR":
+	case validatorStatusChangesRequested, "FAILED", "ERROR", "BLOCKED":
 		return "failed"
 	default:
 		return "running"

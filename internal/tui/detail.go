@@ -1135,6 +1135,36 @@ func formatValidatorStatuses(statuses map[string]string) string {
 	return strings.Join(parts, "  ")
 }
 
+// formatVerificationStatuses renders per-command harness verification
+// progress inline, sorted by name. Example: "Go build ✓  npm test ⟳".
+func formatVerificationStatuses(statuses map[string]string) string {
+	names := make([]string, 0, len(statuses))
+	for name := range statuses {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var parts []string
+	for _, name := range names {
+		short := name
+		if len(short) > 18 {
+			short = short[:17] + "…"
+		}
+		switch statuses[name] {
+		case "passed", "waived":
+			parts = append(parts, SuccessStyle.Render(short+" ✓"))
+		case "failed", "inherited_failure":
+			parts = append(parts, ErrorStyle.Render(short+" ✗"))
+		case "blocked":
+			parts = append(parts, WarningStyle.Render(short+" !"))
+		case "running":
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorInfo).Render(short+" ⟳"))
+		default:
+			parts = append(parts, MutedStyle.Render(short+" ·"))
+		}
+	}
+	return strings.Join(parts, "  ")
+}
+
 func formatPhaseStatus(f *feature.Feature) string {
 	needsInput := countPendingHelp(f) > 0
 	if f.Status == feature.StatusFinalReviewing {
@@ -1155,6 +1185,9 @@ func formatPhaseStatus(f *feature.Feature) string {
 				return ReviewStyle.Render("reviewing: ") + formatValidatorStatuses(f.ValidatorStatuses)
 			}
 			return ReviewStyle.Render(fmt.Sprintf("reviewing [%d]", f.CurrentIteration))
+		}
+		if f.CurrentPhaseStatus == "verifying" && len(f.ValidatorStatuses) > 0 {
+			return ReviewStyle.Render("verifying: ") + formatVerificationStatuses(f.ValidatorStatuses)
 		}
 		return lipgloss.NewStyle().Foreground(colorInfo).Render(
 			fmt.Sprintf("iteration %d", f.CurrentIteration))

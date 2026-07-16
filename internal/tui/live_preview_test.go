@@ -1492,3 +1492,18 @@ func dashboardWithSelectedFeature(f *feature.Feature) DashboardModel {
 	m.syncPreview()
 	return m
 }
+
+func TestLivePreviewValidationContextDuringHarnessVerification(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		ValidatorStatuses:  map[string]string{"Go build passes": "running"},
+	})
+	if !livePreviewHasValidationContext(f, nil) {
+		t.Fatal("livePreviewHasValidationContext() = false, want true during harness verification")
+	}
+	if got := livePreviewValidationTarget(f); got != "Verifying implementation" {
+		t.Fatalf("livePreviewValidationTarget() = %q, want Verifying implementation", got)
+	}
+}

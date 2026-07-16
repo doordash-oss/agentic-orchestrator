@@ -1455,3 +1455,30 @@ func TestRenderPhaseProgress_KBSubRows_RenderedForMultiRepo(t *testing.T) {
 		t.Errorf("renderPhaseProgress() = %q, want worker name in KB sub-rows", got)
 	}
 }
+
+func TestFormatPhaseStatusVerifyingShowsCommandProgress(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		ValidatorStatuses:  map[string]string{"Go build passes": "passed", "Desktop tests": "running"},
+	})
+	got := formatPhaseStatus(f)
+	if !strings.Contains(got, "verifying") || !strings.Contains(got, "Go build passes") {
+		t.Fatalf("formatPhaseStatus() = %q, want verifying with command names", got)
+	}
+}
+
+func TestFormatPhaseStatusReviewingGateWinsOverStaleVerifying(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		ReviewingGate:      true,
+		ValidatorStatuses:  map[string]string{"Craft": "running"},
+	})
+	got := formatPhaseStatus(f)
+	if !strings.Contains(got, "reviewing") {
+		t.Fatalf("formatPhaseStatus() = %q, want reviewing to win over stale verifying status", got)
+	}
+}

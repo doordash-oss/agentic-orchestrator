@@ -681,8 +681,13 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					}
 				}
 				verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
+				beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract)
+				verifyCtx = WithVerificationProgress(verifyCtx, func(name, state string) {
+					updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state)
+				})
 				harnessVerification, readErr = ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
 				cancelVerify()
+				clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID)
 				if readErr != nil {
 					if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "interrupted")

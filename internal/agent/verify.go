@@ -48,6 +48,22 @@ type EvidenceRequirement struct {
 //   - [ ] `command`
 //   - [ ] Description (`command`)
 func ParsePlanVerification(planText string) []VerificationStep {
+	return parseVerificationSection(planText, isAutomatedVerificationHeader, parseChecklistItem)
+}
+
+// ParseCrossRepoVerification extracts cross-repo verification commands from a
+// plan's "Cross-Repo Verification" section. Accepts both checklist items
+// ("- [ ] Description: `command`") and plain bullets ("- Description: `command`")
+// so planner-authored ## Cross-Repo Verification blocks match production plans.
+func ParseCrossRepoVerification(planText string) []VerificationStep {
+	return parseVerificationSection(planText, isCrossRepoVerificationHeader, parseCrossRepoItem)
+}
+
+func parseVerificationSection(
+	planText string,
+	isSectionHeader func(string) bool,
+	parseItem func(string) (VerificationStep, bool),
+) []VerificationStep {
 	var steps []VerificationStep
 	lines := strings.Split(planText, "\n")
 	inSection := false
@@ -69,8 +85,7 @@ func ParsePlanVerification(planText string) []VerificationStep {
 			continue
 		}
 
-		// Detect start of an Automated Verification section
-		if isAutomatedVerificationHeader(trimmed) {
+		if isSectionHeader(trimmed) {
 			inSection = true
 			continue
 		}
@@ -81,13 +96,11 @@ func ParsePlanVerification(planText string) []VerificationStep {
 			continue
 		}
 
-		// Skip non-checklist lines within section
 		if !inSection {
 			continue
 		}
 
-		// Parse checklist items
-		if step, ok := parseChecklistItem(trimmed); ok {
+		if step, ok := parseItem(trimmed); ok {
 			steps = append(steps, step)
 		}
 	}
@@ -198,6 +211,15 @@ func isAutomatedVerificationHeader(line string) bool {
 	return automatedVerificationRe.MatchString(line)
 }
 
+// Cross-Repo Verification headers appear as ## / ### / #### with an optional
+// trailing colon — matching both the struct docs ("#### Cross-Repo Verification:")
+// and the multi-repo integration fixture ("## Cross-Repo Verification").
+var crossRepoVerificationRe = regexp.MustCompile(`^#{2,5}\s+Cross-Repo Verification`)
+
+func isCrossRepoVerificationHeader(line string) bool {
+	return crossRepoVerificationRe.MatchString(line)
+}
+
 var manualVerificationRe = regexp.MustCompile(`^#{2,5}\s+Manual Verification`)
 
 func isManualVerificationHeader(line string) bool {
@@ -248,7 +270,22 @@ func parseChecklistItem(line string) (VerificationStep, bool) {
 	if !strings.HasPrefix(line, "- [") {
 		return VerificationStep{}, false
 	}
+	return parseBacktickVerificationItem(line)
+}
 
+// parseCrossRepoItem accepts checklist items and plain markdown bullets so
+// Cross-Repo Verification sections authored either way yield VerificationSteps.
+func parseCrossRepoItem(line string) (VerificationStep, bool) {
+	if strings.HasPrefix(line, "- [") {
+		return parseBacktickVerificationItem(line)
+	}
+	if !strings.HasPrefix(line, "- ") {
+		return VerificationStep{}, false
+	}
+	return parseBacktickVerificationItem(line)
+}
+
+func parseBacktickVerificationItem(line string) (VerificationStep, bool) {
 	matches := findBacktickSpans(line)
 	if len(matches) == 0 {
 		return VerificationStep{}, false
@@ -420,6 +457,9 @@ func extractDescription(line, commandWithBackticks string) string {
 	desc := line
 	if idx := strings.Index(desc, "] "); idx >= 0 {
 		desc = desc[idx+2:]
+	} else if strings.HasPrefix(desc, "- ") {
+		// Plain markdown bullet (Cross-Repo Verification plans).
+		desc = strings.TrimSpace(desc[2:])
 	}
 	// Inverted format: command is the first non-whitespace content.
 	if strings.HasPrefix(strings.TrimLeft(desc, " \t"), commandWithBackticks) {

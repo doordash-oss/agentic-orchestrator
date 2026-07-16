@@ -78,6 +78,46 @@ func TestCompileTestingContractMultiRepo_CrossRepoSteps(t *testing.T) {
 	}
 }
 
+func TestCompileTestingContractMultiRepo_CrossRepoStepsFromPlan(t *testing.T) {
+	plan := strings.Join([]string{
+		"## Tasks",
+		"### Task 1: api work",
+		"**Repo:** `api`",
+		"#### Automated Verification:",
+		"- [ ] api tests: `go test ./api/... -count=1`",
+		"### Task 2: web work",
+		"**Repo:** `web`",
+		"#### Automated Verification:",
+		"- [ ] web tests: `npm test`",
+		"## Cross-Repo Verification",
+		"- e2e smoke: `scripts/e2e.sh`",
+		"- [ ] contract test: `scripts/contract-test.sh`",
+	}, "\n")
+	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
+		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
+		PlanText: plan,
+	})
+	if got := countItems(c.Items, testingContractCrossRepoSource, TestingContractCrossRepoTag); got != 2 {
+		t.Fatalf("cross-repo rows = %d, want 2", got)
+	}
+	wantCmds := map[string]bool{"scripts/e2e.sh": false, "scripts/contract-test.sh": false}
+	for _, it := range c.Items {
+		if it.Source != testingContractCrossRepoSource {
+			continue
+		}
+		if _, ok := wantCmds[it.Command]; !ok {
+			t.Errorf("unexpected cross-repo command %q", it.Command)
+			continue
+		}
+		wantCmds[it.Command] = true
+	}
+	for cmd, seen := range wantCmds {
+		if !seen {
+			t.Errorf("missing cross-repo command %q", cmd)
+		}
+	}
+}
+
 func TestCompileTestingContractMultiRepo_PlanLessNoPlanItems(t *testing.T) {
 	plan := strings.Join([]string{
 		"## Tasks",

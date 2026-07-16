@@ -342,10 +342,11 @@ type MultiRepoContractInput struct {
 	BaselineProfile string
 	BaselineSteps   []VerificationStep
 	PlanLess        bool
-	// CrossRepoSteps are verification commands authored by the planner
-	// under a top-level "#### Cross-Repo Verification:" heading. The
-	// compiler emits these as `cross-repo` items separately from per-Task
-	// commands. May be nil.
+	// CrossRepoSteps are verification commands authored by the planner under a
+	// top-level "Cross-Repo Verification" heading. When PlanLess is false the
+	// compiler also parses that heading from PlanText and merges the results
+	// here (callers may still pass steps explicitly for tests). Emitted as
+	// `cross-repo` items separately from per-Task commands. May be nil.
 	CrossRepoSteps []VerificationStep
 }
 
@@ -518,8 +519,14 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		}
 	}
 
-	// 3) Cross-repo rows.
-	for _, step := range in.CrossRepoSteps {
+	// 3) Cross-repo rows: explicit CrossRepoSteps (tests / callers) plus
+	// planner-authored "Cross-Repo Verification" sections parsed from the
+	// plan when PlanLess is false. Dedup via addItem keeps overlaps unique.
+	crossRepoSteps := append([]VerificationStep(nil), in.CrossRepoSteps...)
+	if !in.PlanLess {
+		crossRepoSteps = append(crossRepoSteps, ParseCrossRepoVerification(in.PlanText)...)
+	}
+	for _, step := range crossRepoSteps {
 		addItem(testingContractCrossRepoSource, TestingContractCrossRepoTag, step)
 	}
 

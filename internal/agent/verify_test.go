@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -375,5 +376,31 @@ func TestParseChecklistItem(t *testing.T) {
 				t.Errorf("command = %q, want %q", step.Command, tt.wantCmd)
 			}
 		})
+	}
+}
+
+func TestParseCrossRepoVerification(t *testing.T) {
+	plan := strings.Join([]string{
+		"## Tasks",
+		"### Task 1",
+		"**Repo:** api",
+		"## Cross-Repo Verification",
+		"- e2e smoke: `scripts/e2e.sh`",
+		"- [ ] contract test: `scripts/contract-test.sh`",
+		"## Manual Verification",
+		"- [ ] UI looks fine",
+	}, "\n")
+	got := ParseCrossRepoVerification(plan)
+	want := []VerificationStep{
+		{Description: "e2e smoke", Command: "scripts/e2e.sh"},
+		{Description: "contract test", Command: "scripts/contract-test.sh"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%+v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

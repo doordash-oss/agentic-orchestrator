@@ -664,6 +664,139 @@ func TestSandboxVerificationArgvOnlyWrapsHostRunner(t *testing.T) {
 	}
 }
 
+func TestExecuteTestingContractBlocksEnvironmentWriteDenial(t *testing.T) {
+	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho 'mkdir /agentico-denied/.m2: Operation not permitted' >&2\nexit 1\n")
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := executableContract(commit)
+	report := BuildContractVerificationReportStub(&contract, contractPath)
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.BlockedItems) != 1 || len(out.InheritedItems) != 0 || len(out.ContractErrors) != 0 {
+		t.Fatalf("outcome = %+v, want write denial blocked instead of inherited", out)
+	}
+	result := out.Report.Results[0]
+	if result.Status != VerificationStatusBlocked || !strings.Contains(result.BlockedReason, "/agentico-denied") {
+		t.Fatalf("result = %+v, want blocked with the denied path in the reason", result)
+	}
+}
+
+func TestExecuteTestingContractKeepsWriteDenialInsideWritableRootsAsFailure(t *testing.T) {
+	repo := t.TempDir()
+	command := `echo "touch $PWD/scratch: Operation not permitted" >&2; exit 1`
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "in-root-denial", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "denial inside worktree", Command: command, Run: &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.BlockedItems) != 0 || out.Report.Results[0].Notes != VerificationClassificationUnclassified {
+		t.Fatalf("outcome = %+v, want denial on a writable path to stay an ordinary failure", out)
+	}
+}
+
+func TestExecuteTestingContractBlocksMissingEnvManagedTool(t *testing.T) {
+	repo := t.TempDir()
+	command := "PATH=/var/empty devbox version"
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "env-tool", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "devbox check", Command: command, Run: &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.BlockedItems) != 1 || len(out.ContractErrors) != 0 {
+		t.Fatalf("outcome = %+v, want missing env-managed tool blocked instead of contract error", out)
+	}
+	result := out.Report.Results[0]
+	if result.Status != VerificationStatusBlocked || !strings.Contains(result.BlockedReason, "devbox") {
+		t.Fatalf("result = %+v, want blocked naming devbox", result)
+	}
+}
+
+func TestExecuteTestingContractPassesFlakyCheckOnConfirmationRerun(t *testing.T) {
+	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
+	flaky := "#!/bin/sh\nif [ -f flaky-marker ]; then exit 0; fi\ntouch flaky-marker\necho transient >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(repo, "check.sh"), []byte(flaky), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := executableContract(commit)
+	report := BuildContractVerificationReportStub(&contract, contractPath)
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.RegressionItems) != 0 {
+		t.Fatalf("RegressionItems = %v, want flake absorbed by the confirmation re-run", out.RegressionItems)
+	}
+	result := out.Report.Results[0]
+	if result.Status != VerificationStatusPassed || !strings.Contains(result.Notes, "confirmation") {
+		t.Fatalf("result = %+v, want passed with a confirmation re-run note", result)
+	}
+}
+
+func TestVerificationWriteDenialDetection(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{name: "read-only file system", output: "mkdir: cannot create directory '/home/x/.cargo': Read-only file system", want: true},
+		{name: "operation not permitted outside roots", output: "open /Users/x/.m2/repository/a.pom: operation not permitted", want: true},
+		{name: "permission denied inside roots", output: "touch: " + root + "/file: Permission denied", want: false},
+		{name: "marker without path", output: "operation not permitted", want: false},
+		{name: "unrelated failure", output: "assertion failed: want /etc/passwd entry", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			run := capturedVerificationRun{record: verificationRunRecord{ExitCode: 1}, stderr: tc.output}
+			if _, got := verificationWriteDenial(run, []string{root}); got != tc.want {
+				t.Fatalf("verificationWriteDenial(%q) = %v, want %v", tc.output, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnvManagedToolNotFound(t *testing.T) {
+	tests := []struct {
+		name     string
+		exitCode int
+		stderr   string
+		wantTool string
+	}{
+		{name: "bash format", exitCode: 127, stderr: "sh: devbox: command not found", wantTool: "devbox"},
+		{name: "dash format", exitCode: 127, stderr: "sh: 1: mise: not found", wantTool: "mise"},
+		{name: "zsh format", exitCode: 127, stderr: "zsh: command not found: asdf", wantTool: "asdf"},
+		{name: "wrapper script", exitCode: 127, stderr: "./run.sh: line 3: devbox: command not found", wantTool: "devbox"},
+		{name: "deliberate exit 127", exitCode: 127, stderr: ""},
+		{name: "unlisted tool", exitCode: 127, stderr: "sh: frobnicate: command not found"},
+		{name: "ordinary failure mentioning tool", exitCode: 1, stderr: "sh: devbox: command not found"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			run := capturedVerificationRun{record: verificationRunRecord{ExitCode: tc.exitCode}, stderr: tc.stderr}
+			tool, ok := envManagedToolNotFound(run)
+			if ok != (tc.wantTool != "") || tool != tc.wantTool {
+				t.Fatalf("envManagedToolNotFound(exit %d, %q) = (%q, %v), want %q", tc.exitCode, tc.stderr, tool, ok, tc.wantTool)
+			}
+		})
+	}
+}
+
 func TestVerificationWritableRootsFiltersMissingDirs(t *testing.T) {
 	existing := t.TempDir()
 	roots := verificationWritableRoots(existing, filepath.Join(existing, "missing"), "")

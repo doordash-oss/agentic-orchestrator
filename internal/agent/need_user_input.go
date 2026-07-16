@@ -121,7 +121,7 @@ func SynthesizeVerificationNeedUserInputGate(contractPath string, revision int, 
 	ids := append([]string(nil), itemIDs...)
 	sort.Strings(ids)
 	return NeedUserInputRecord{
-		Summary: fmt.Sprintf("Required verification is blocked by a missing declared capability for %d item(s).", len(ids)),
+		Summary: fmt.Sprintf("Required verification is blocked for %d item(s) by a missing capability or environment limitation.", len(ids)),
 		Questions: []NeedUserInputQuestion{{
 			Index:  1,
 			Prompt: "Enter WAIVE to authorize waiving these blocked checks, or RETRY_AFTER_AUTH after making the required login/permission available.",

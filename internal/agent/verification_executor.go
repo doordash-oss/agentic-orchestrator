@@ -39,6 +39,13 @@ const (
 	VerificationClassificationUnclassified      = "unclassified_failure"
 	VerificationClassificationMissingCapability = "missing_capability"
 	VerificationClassificationContractError     = "contract_error"
+	// EnvironmentLimited marks host limitations (sandbox write denials,
+	// profile-managed tools missing from PATH) that neither the implementer
+	// nor the planner can repair; they route to the user gate as blocked.
+	VerificationClassificationEnvironmentLimited = "environment_limited"
+	// Flaky marks a candidate failure that did not reproduce on the
+	// confirmation re-run after the baseline passed.
+	VerificationClassificationFlaky = "flaky_failure"
 )
 
 // VerificationExecutionOutcome is the deterministic portion of the
@@ -233,6 +240,20 @@ func ExecuteTestingContract(
 				continue
 			}
 		}
+		if detail, denied := verificationWriteDenial(candidate, writableRoots); denied {
+			if err := recordEnvironmentLimitedBlock(out, report, idx, item, contractPath, &candidate,
+				"verification environment denies required writes: "+detail); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if tool, missing := envManagedToolNotFound(candidate); missing {
+			if err := recordEnvironmentLimitedBlock(out, report, idx, item, contractPath, &candidate,
+				fmt.Sprintf("required tool %q is profile-managed and not on the harness PATH", tool)); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		candidateContractReason := verificationRuntimeContractError(candidateErr, candidate)
 
 		classification := VerificationClassificationUnclassified
@@ -266,6 +287,29 @@ func ExecuteTestingContract(
 						status = VerificationStatusInheritedFailure
 						out.InheritedItems = append(out.InheritedItems, item.ID)
 					} else if baseErr == nil {
+						// The baseline passed: confirm the failure once before
+						// declaring a regression, so a flake does not send the
+						// implementer chasing a defect that is not there.
+						confirmation, confirmationErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots)
+						confirmation.record.BaselineRunID = baseRun.record.RunID
+						if confirmationErr == nil {
+							candidate.record.Classification = VerificationClassificationFlaky
+							candidate.record.BaselineRunID = baseRun.record.RunID
+							if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
+								return nil, err
+							}
+							confirmation.record.Classification = VerificationClassificationPassed
+							if err := persistVerificationRun(contractPath, item.ID, &confirmation); err != nil {
+								return nil, err
+							}
+							report.Results[idx] = machineContractResult(item, VerificationStatusPassed, confirmation,
+								"passed on confirmation re-run; the initial failure did not reproduce")
+							continue
+						}
+						confirmation.record.Classification = VerificationClassificationRegression
+						if err := persistVerificationRun(contractPath, item.ID, &confirmation); err != nil {
+							return nil, err
+						}
 						classification = VerificationClassificationRegression
 						out.RegressionItems = append(out.RegressionItems, item.ID)
 					}
@@ -361,6 +405,18 @@ func machineContractResult(item TestingContractItem, status VerificationRunStatu
 			return ""
 		}(),
 	}
+}
+
+// recordEnvironmentLimitedBlock persists a run blocked by a host environment
+// limitation and routes the item to the user gate.
+func recordEnvironmentLimitedBlock(out *VerificationExecutionOutcome, report *VerificationReport, resultIndex int, item TestingContractItem, contractPath string, run *capturedVerificationRun, note string) error {
+	run.record.Classification = VerificationClassificationEnvironmentLimited
+	if err := persistVerificationRun(contractPath, item.ID, run); err != nil {
+		return err
+	}
+	report.Results[resultIndex] = machineContractResult(item, VerificationStatusBlocked, *run, note)
+	out.BlockedItems = append(out.BlockedItems, item.ID)
+	return nil
 }
 
 func recordVerificationContractError(out *VerificationExecutionOutcome, report *VerificationReport, resultIndex int, item TestingContractItem, cwd, reason, suggestion string) {
@@ -720,6 +776,70 @@ func repoLocalExecutableSetupFailure(run capturedVerificationRun) bool {
 }
 
 var repoLocalExecutableCommandRE = regexp.MustCompile(`(?:^|[;&|][;&|]?[\t ]*)(?:env[\t ]+(?:[A-Za-z_][A-Za-z0-9_]*=[^\t ]+[\t ]+)*)?["']?((?:\.{1,2}/|[A-Za-z0-9._-]+/)[^\t ;&|"']+)`)
+
+var verificationWriteDenialPath = regexp.MustCompile(`/[^\s:'"]+`)
+
+// verificationWriteDenial reports a failure line that names a filesystem write
+// denial outside every writable root. Under the write-restricted sandbox that
+// pattern means the command needs writes the harness denies — an environment
+// limit, not a code defect — so it must not masquerade as an inherited or
+// unclassified failure. Denials on writable paths are left alone: the sandbox
+// cannot be their cause.
+func verificationWriteDenial(run capturedVerificationRun, writableRoots []string) (string, bool) {
+	roots := make([]string, 0, len(writableRoots)*2)
+	for _, root := range writableRoots {
+		if root = strings.TrimSpace(root); root == "" {
+			continue
+		}
+		roots = append(roots, filepath.Clean(root))
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			roots = append(roots, resolved)
+		}
+	}
+	underRoot := func(path string) bool {
+		for _, root := range roots {
+			if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, line := range strings.Split(run.stdout+"\n"+run.stderr, "\n") {
+		lower := strings.ToLower(line)
+		switch {
+		case strings.Contains(lower, "read-only file system"):
+			return strings.TrimSpace(line), true
+		case strings.Contains(lower, "operation not permitted") || strings.Contains(lower, "permission denied"):
+			for _, path := range verificationWriteDenialPath.FindAllString(line, -1) {
+				if !underRoot(filepath.Clean(path)) {
+					return strings.TrimSpace(line), true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// envManagedVerificationTools are launchers that shell profiles typically put
+// on PATH. The harness runs a non-login shell, so a missing one is a host
+// environment gap that neither the implementer nor the planner can repair by
+// editing code or the plan.
+var envManagedVerificationTools = []string{"asdf", "devbox", "direnv", "mise", "nodenv", "nvm", "pyenv", "rbenv", "rtx", "volta"}
+
+// envManagedToolNotFound reports an exit-127 failure whose output names a
+// profile-managed tool as not found, including from wrapper scripts that
+// invoke the tool indirectly.
+func envManagedToolNotFound(run capturedVerificationRun) (string, bool) {
+	if run.record.ExitCode != 127 {
+		return "", false
+	}
+	for _, tool := range envManagedVerificationTools {
+		if outputContainsAny(run.stderr, tool+": command not found", tool+": not found", "command not found: "+tool) {
+			return tool, true
+		}
+	}
+	return "", false
+}
 
 func outputContainsAny(output string, values ...string) bool {
 	output = strings.ToLower(output)

@@ -943,13 +943,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Iterations:  i,
 				}, nil
 			case ReviewChangesRequested:
-				if reqs := MissingEvidenceRequirements(feedback); len(reqs) > 0 {
+				missingReqs := MissingEvidenceRequirements(feedback)
+				insufficientReqs := InsufficientEvidenceRequirements(feedback)
+				if len(missingReqs) > 0 || len(insufficientReqs) > 0 {
 					consecutiveFailures = 0
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "plan_revision_required")
 					return &LoopResult{
 						FinalStatus:          "plan_revision_required",
 						Iterations:           i,
-						PlanRevisionFeedback: MissingEvidencePlanRevisionFeedback(reqs),
+						PlanRevisionFeedback: EvidencePlanRevisionFeedback(missingReqs, insufficientReqs),
 					}, nil
 				}
 				consecutiveFailures = 0
@@ -1394,7 +1396,7 @@ func implementationPlanRevisionFeedback(planPath string, iteration int) string {
 	if feedbackAttempt == 0 || strings.TrimSpace(feedback) == "" {
 		return ""
 	}
-	if len(MissingEvidenceRequirements(feedback)) == 0 {
+	if len(MissingEvidenceRequirements(feedback)) == 0 && len(InsufficientEvidenceRequirements(feedback)) == 0 {
 		return ""
 	}
 	if LatestCompletedPlanAttempt(planDir) <= feedbackAttempt {

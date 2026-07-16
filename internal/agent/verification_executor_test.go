@@ -16,6 +16,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"image"
 	"image/png"
@@ -976,5 +978,49 @@ func TestFinalizeAgentOwnedEvidenceVisualRejectsNonImage(t *testing.T) {
 	}
 	if result := finalizeAgentOwnedEvidence(item, iterDir); result.Status != VerificationStatusFailed {
 		t.Fatalf("status = %q, want failed for a non-image file", result.Status)
+	}
+}
+
+func TestFinalizeAgentOwnedEvidenceRecordsSha256(t *testing.T) {
+	item := TestingContractItem{
+		ID: "manual_abc123def456", Source: testingContractManualSource,
+		ExpectedEvidence: TestingContractExpectedEvidence{
+			Kind: testingContractManualKind, Path: "observations/manual_abc123def456.md",
+		},
+	}
+	iterDir := t.TempDir()
+	path := filepath.Join(iterDir, "observations", "manual_abc123def456.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("observed the thing\n")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := finalizeAgentOwnedEvidence(item, iterDir)
+	if result.Status != VerificationStatusPassed {
+		t.Fatalf("status = %q", result.Status)
+	}
+	sum := sha256.Sum256(content)
+	if result.EvidenceData.Sha256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("sha256 = %q, want digest of file", result.EvidenceData.Sha256)
+	}
+}
+
+func TestVerificationEvidenceSha256RoundTrip(t *testing.T) {
+	report := VerificationReport{Version: 2, Results: []VerificationCheckResult{{
+		ItemID: "manual_abc123def456", Status: VerificationStatusPassed,
+		EvidenceData: VerificationEvidence{Summary: "ok", Primary: "observations/x.md", Sha256: "deadbeef"},
+	}}}
+	path := filepath.Join(t.TempDir(), "verification-report.yaml")
+	if err := WriteVerificationReport(path, report); err != nil {
+		t.Fatal(err)
+	}
+	read, err := ReadVerificationReport(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Results[0].EvidenceData.Sha256 != "deadbeef" {
+		t.Fatalf("sha256 = %q after round trip", read.Results[0].EvidenceData.Sha256)
 	}
 }

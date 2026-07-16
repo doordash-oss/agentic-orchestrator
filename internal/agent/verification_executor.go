@@ -17,6 +17,8 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"image"
@@ -567,6 +569,8 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 	result.Status = VerificationStatusPassed
 	result.Evidence = fmt.Sprintf("agent-owned evidence captured at %s", rel)
 	result.EvidenceData.Summary = result.Evidence
+	sum := sha256.Sum256(data)
+	result.EvidenceData.Sha256 = hex.EncodeToString(sum[:])
 	return result
 }
 

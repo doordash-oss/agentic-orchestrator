@@ -57,6 +57,7 @@ type VerificationEvidence struct {
 	ExitCode    *int     `yaml:"exit_code,omitempty"`
 	Summary     string   `yaml:"summary,omitempty"`
 	Primary     string   `yaml:"primary,omitempty"`
+	Sha256      string   `yaml:"sha256,omitempty"`
 	Attachments []string `yaml:"attachments,omitempty"`
 }
 
@@ -163,6 +164,9 @@ func (r *VerificationCheckResult) UnmarshalYAML(node *yaml.Node) error {
 		if primary, ok := evidence["primary"].(string); ok {
 			r.EvidenceData.Primary = strings.TrimSpace(primary)
 		}
+		if digest, ok := evidence["sha256"].(string); ok {
+			r.EvidenceData.Sha256 = strings.TrimSpace(digest)
+		}
 		if attachments, ok := evidence["attachments"]; ok {
 			r.EvidenceData.Attachments = toStringSlice(attachments)
 		}
@@ -194,6 +198,7 @@ func hasStructuredEvidence(e VerificationEvidence) bool {
 	return e.ExitCode != nil ||
 		strings.TrimSpace(e.Summary) != "" ||
 		strings.TrimSpace(e.Primary) != "" ||
+		strings.TrimSpace(e.Sha256) != "" ||
 		len(e.Attachments) > 0
 }
 

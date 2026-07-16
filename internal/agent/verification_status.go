@@ -21,20 +21,21 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// Harness verification progress rides the same feature-level surface the
-// multi-axis validators use: CurrentPhaseStatus flags the substep and
-// ValidatorStatuses carries per-command states, which the TUI renders in the
-// detail status line and the live-preview banner.
+// Harness verification progress is its own presentation surface, distinct
+// from the review validators: CurrentPhaseStatus flags the substep and
+// VerificationItems carries ordered per-command states that the TUI renders
+// as a high-level execution log.
 
 const verifyingPhaseStatus = "verifying"
 
 // beginVerificationStatuses marks the feature as running harness
-// verification and seeds one pending entry per harness-owned command item.
+// verification and seeds one pending entry per harness-owned command item,
+// preserving contract order.
 func beginVerificationStatuses(store ports.FeatureStore, featureID string, contract *TestingContract) {
 	if store == nil || contract == nil {
 		return
 	}
-	statuses := make(map[string]string)
+	items := make([]feature.VerificationItemStatus, 0, len(contract.Items))
 	for _, item := range contract.Items {
 		if item.Owner != TestingContractOwnerHarness || item.Run == nil || strings.TrimSpace(item.Run.Shell) == "" {
 			continue
@@ -42,14 +43,14 @@ func beginVerificationStatuses(store ports.FeatureStore, featureID string, contr
 		if IsTestingContractItemWaived(item) {
 			continue
 		}
-		statuses[item.Name] = "pending"
+		items = append(items, feature.VerificationItemStatus{Name: item.Name, State: "pending"})
 	}
-	if len(statuses) == 0 {
+	if len(items) == 0 {
 		return
 	}
 	_ = store.Modify(featureID, func(f *feature.Feature) error {
 		f.CurrentPhaseStatus = verifyingPhaseStatus
-		f.ValidatorStatuses = statuses
+		f.VerificationItems = items
 		return nil
 	})
 }
@@ -60,10 +61,13 @@ func updateVerificationStatus(store ports.FeatureStore, featureID, name, state s
 		return
 	}
 	_ = store.Modify(featureID, func(f *feature.Feature) error {
-		if f.ValidatorStatuses == nil {
-			f.ValidatorStatuses = make(map[string]string)
+		for i := range f.VerificationItems {
+			if f.VerificationItems[i].Name == name {
+				f.VerificationItems[i].State = state
+				return nil
+			}
 		}
-		f.ValidatorStatuses[name] = state
+		f.VerificationItems = append(f.VerificationItems, feature.VerificationItemStatus{Name: name, State: state})
 		return nil
 	})
 }
@@ -77,7 +81,7 @@ func clearVerificationStatuses(store ports.FeatureStore, featureID string) {
 		if f.CurrentPhaseStatus == verifyingPhaseStatus {
 			f.CurrentPhaseStatus = ""
 		}
-		f.ValidatorStatuses = nil
+		f.VerificationItems = nil
 		return nil
 	})
 }

@@ -1456,23 +1456,41 @@ func TestRenderPhaseProgress_KBSubRows_RenderedForMultiRepo(t *testing.T) {
 	}
 }
 
-func TestFormatPhaseStatusVerifyingShowsCompactProgress(t *testing.T) {
+func TestFormatPhaseStatusVerifyingShowsCountOnly(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing}
 	f.SetRun(&feature.Run{
 		CurrentPhaseStatus: "verifying",
-		ValidatorStatuses: map[string]string{
-			"Go build passes": "passed",
-			"Desktop tests":   "running",
-			"Security tests":  "pending",
+		VerificationItems: []feature.VerificationItemStatus{
+			{Name: "Go build passes", State: "passed"},
+			{Name: "Desktop tests", State: "running"},
+			{Name: "Security tests", State: "pending"},
 		},
 	})
 	got := formatPhaseStatus(f)
-	if !strings.Contains(got, "verifying") || !strings.Contains(got, "1/3") || !strings.Contains(got, "Desktop tests") {
-		t.Fatalf("formatPhaseStatus() = %q, want compact verifying [1/3] with the running command", got)
+	if !strings.Contains(got, "verifying") || !strings.Contains(got, "1/3") {
+		t.Fatalf("formatPhaseStatus() = %q, want compact verifying [1/3]", got)
 	}
-	if strings.Contains(got, "Go build passes") || strings.Contains(got, "Security tests") {
-		t.Fatalf("formatPhaseStatus() = %q, want only the running command named, not one chip per command", got)
+	for _, name := range []string{"Go build passes", "Desktop tests", "Security tests"} {
+		if strings.Contains(got, name) {
+			t.Fatalf("formatPhaseStatus() = %q, want counts only with no command names", got)
+		}
+	}
+}
+
+func TestFormatPhaseStatusVerifyingShowsFailureCount(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		VerificationItems: []feature.VerificationItemStatus{
+			{Name: "Go build passes", State: "failed"},
+			{Name: "Desktop tests", State: "running"},
+		},
+	})
+	got := formatPhaseStatus(f)
+	if !strings.Contains(got, "✗1") {
+		t.Fatalf("formatPhaseStatus() = %q, want failure count ✗1", got)
 	}
 }
 

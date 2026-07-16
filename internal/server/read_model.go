@@ -129,6 +129,9 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		ValidatingPlan:    f.ValidatingPlan,
 		ValidatorStatuses: copyStringMap(f.ValidatorStatuses),
 	}
+	for _, item := range f.VerificationItems {
+		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
+	}
 	detail.Actions = actionCatalogDTOs(f)
 	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {

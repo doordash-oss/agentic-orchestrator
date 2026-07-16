@@ -1135,36 +1135,24 @@ func formatValidatorStatuses(statuses map[string]string) string {
 	return strings.Join(parts, "  ")
 }
 
-// formatVerificationStatuses renders harness verification progress as one
-// compact line: completed/total, a failure count when non-zero, and the
-// command currently running. Example: "[3/9] ✗1 · Desktop unit tests ⟳".
-func formatVerificationStatuses(statuses map[string]string) string {
-	total := len(statuses)
+// formatVerificationStatuses renders harness verification progress as counts
+// only: completed/total plus a failure count when non-zero. Example:
+// "[3/9] · ✗1". Command names live in the verification live preview.
+func formatVerificationStatuses(items []feature.VerificationItemStatus) string {
 	done, failed := 0, 0
-	current := ""
-	for name, state := range statuses {
-		switch state {
-		case "running":
-			if current == "" || name < current {
-				current = name
-			}
-		case "pending":
+	for _, item := range items {
+		switch item.State {
+		case "running", "pending":
 		default:
 			done++
-			if state == "failed" || state == "blocked" || state == "inherited_failure" {
+			if item.State == "failed" || item.State == "blocked" || item.State == "inherited_failure" {
 				failed++
 			}
 		}
 	}
-	parts := []string{MutedStyle.Render(fmt.Sprintf("[%d/%d]", done, total))}
+	parts := []string{MutedStyle.Render(fmt.Sprintf("[%d/%d]", done, len(items)))}
 	if failed > 0 {
 		parts = append(parts, ErrorStyle.Render(fmt.Sprintf("✗%d", failed)))
-	}
-	if current != "" {
-		if len(current) > 40 {
-			current = current[:39] + "…"
-		}
-		parts = append(parts, lipgloss.NewStyle().Foreground(colorInfo).Render(current+" ⟳"))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -1190,8 +1178,8 @@ func formatPhaseStatus(f *feature.Feature) string {
 			}
 			return ReviewStyle.Render(fmt.Sprintf("reviewing [%d]", f.CurrentIteration))
 		}
-		if f.CurrentPhaseStatus == "verifying" && len(f.ValidatorStatuses) > 0 {
-			return ReviewStyle.Render("verifying: ") + formatVerificationStatuses(f.ValidatorStatuses)
+		if f.CurrentPhaseStatus == "verifying" && len(f.VerificationItems) > 0 {
+			return ReviewStyle.Render("verifying: ") + formatVerificationStatuses(f.VerificationItems)
 		}
 		return lipgloss.NewStyle().Foreground(colorInfo).Render(
 			fmt.Sprintf("iteration %d", f.CurrentIteration))

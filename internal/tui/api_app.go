@@ -1964,6 +1964,10 @@ func applyAPIFeatureDetail(f *feature.Feature, detail server.FeatureDetailDTO) {
 	f.ReviewFixing = detail.ReviewGate.ReviewFixing
 	f.ValidatingPlan = detail.ReviewGate.ValidatingPlan
 	f.ValidatorStatuses = copyStringMapValues(detail.ReviewGate.ValidatorStatuses)
+	f.VerificationItems = nil
+	for _, item := range detail.VerificationItems {
+		f.VerificationItems = append(f.VerificationItems, feature.VerificationItemStatus{Name: item.Name, State: item.State})
+	}
 	applyAPIActiveRunDetail(f, detail.ActiveRunDetail)
 	if detail.Failure != nil {
 		f.FailureType = detail.Failure.Type
@@ -2165,6 +2169,7 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		ReviewFixing:                    f.ReviewFixing,
 		ValidatingPlan:                  f.ValidatingPlan,
 		ValidatorStatuses:               f.ValidatorStatuses,
+		VerificationItems:               f.VerificationItems,
 		PhaseTimings:                    f.PhaseTimings,
 		PhaseCosts:                      f.PhaseCosts,
 		LastError:                       f.LastError,
@@ -2779,6 +2784,12 @@ func (m APIAppModel) apiAttachTabsForFeature(featureID string) []repoTab {
 		}
 	}
 	if len(order) == 0 {
+		// While the harness verifies the testing contract there is no agent
+		// session to attach; offering the previous session's transcript as a
+		// fallback tab would masquerade as a live session.
+		if livePreviewIsVerifying(m.apiDashboardFeatureByID(featureID)) {
+			return nil
+		}
 		preview, havePreview := m.livePreviews[featureID]
 		if havePreview && preview.Session != nil {
 			addSummary(*preview.Session)
@@ -5373,6 +5384,10 @@ func (m APIAppModel) openAPIAttachForFeature(featureID string) (tea.Model, tea.C
 func (m APIAppModel) openAPIAttachForFeatureFromCache(featureID string, refreshSessions bool) (tea.Model, tea.Cmd) {
 	tabs := m.apiAttachTabsForFeature(featureID)
 	if len(tabs) == 0 {
+		if livePreviewIsVerifying(m.apiDashboardFeatureByID(featureID)) {
+			m.statusMessage = "Verification in progress — no agent session to watch; see the live preview."
+			return m, nil
+		}
 		if refreshSessions {
 			m.statusMessage = "Refreshing sessions..."
 			return m, m.fetchAttachSessionsCmd(featureID, true)

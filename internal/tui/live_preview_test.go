@@ -1493,17 +1493,68 @@ func dashboardWithSelectedFeature(f *feature.Feature) DashboardModel {
 	return m
 }
 
-func TestLivePreviewValidationContextDuringHarnessVerification(t *testing.T) {
-	t.Parallel()
+func verifyingPreviewFeature() *feature.Feature {
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
 	f.SetRun(&feature.Run{
 		CurrentPhaseStatus: "verifying",
-		ValidatorStatuses:  map[string]string{"Go build passes": "running"},
+		VerificationItems: []feature.VerificationItemStatus{
+			{Name: "Go build passes", State: "passed"},
+			{Name: "Desktop unit tests", State: "running"},
+			{Name: "Security tests", State: "pending"},
+		},
 	})
+	return f
+}
+
+func TestLivePreviewValidationContextDuringHarnessVerification(t *testing.T) {
+	t.Parallel()
+	f := verifyingPreviewFeature()
 	if !livePreviewHasValidationContext(f, nil) {
 		t.Fatal("livePreviewHasValidationContext() = false, want true during harness verification")
 	}
 	if got := livePreviewValidationTarget(f); got != "Verifying implementation" {
 		t.Fatalf("livePreviewValidationTarget() = %q, want Verifying implementation", got)
+	}
+}
+
+func TestLivePreviewMetadataMinimalDuringVerification(t *testing.T) {
+	t.Parallel()
+	f := verifyingPreviewFeature()
+	items := livePreviewMetadataItems(f, nil, -1)
+	labels := make(map[string]string, len(items))
+	for _, item := range items {
+		labels[item.label] = item.value
+	}
+	for _, banned := range []string{"Phase Model", "Validators", "Context"} {
+		if _, ok := labels[banned]; ok {
+			t.Errorf("metadata includes %q during verification, want a clean info box without session fields", banned)
+		}
+	}
+	if labels["Status"] != "Verifying implementation" {
+		t.Errorf("Status = %q, want Verifying implementation", labels["Status"])
+	}
+}
+
+func TestLivePreviewTailShowsVerificationLog(t *testing.T) {
+	t.Parallel()
+	f := verifyingPreviewFeature()
+	lines := livePreviewTranscriptTail(f, nil, 80, -1)
+	if len(lines) != 3 {
+		t.Fatalf("tail lines = %q, want one high-level log line per contract command", lines)
+	}
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{"Go build passes", "Desktop unit tests", "Security tests", "running"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("tail = %q, want it to mention %q", joined, want)
+		}
+	}
+}
+
+func TestLivePreviewBannerCountsDuringVerification(t *testing.T) {
+	t.Parallel()
+	f := verifyingPreviewFeature()
+	got := livePreviewTailBannerLabel(f, nil)
+	if !strings.Contains(got, "Verifying implementation") || !strings.Contains(got, "1/3") {
+		t.Fatalf("livePreviewTailBannerLabel() = %q, want Verifying implementation with 1/3 progress", got)
 	}
 }

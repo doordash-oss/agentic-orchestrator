@@ -652,9 +652,12 @@ type Feature struct {
 	ReviewFixing      bool              `yaml:"-"`
 	ValidatingPlan    bool              `yaml:"-"`
 	ValidatorStatuses map[string]string `yaml:"-"`
-	PlanIteration     int               `yaml:"-"`
-	ReviewIteration   int               `yaml:"-"`
-	Artifacts         map[string]string `yaml:"-"`
+	// VerificationItems is the ordered live progress of harness-executed
+	// testing-contract commands while CurrentPhaseStatus is "verifying".
+	VerificationItems []VerificationItemStatus `yaml:"-"`
+	PlanIteration     int                      `yaml:"-"`
+	ReviewIteration   int                      `yaml:"-"`
+	Artifacts         map[string]string        `yaml:"-"`
 	// RepoStates is the per-repo state map. agent.AtomicPhaseStamp writes it
 	// in a single FeatureStore.Modify call; orchestration readers consume it
 	// via Feature.AllReposPublished / Feature.TouchedRepos. Persisted on
@@ -771,6 +774,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.ReviewFixing = f.ReviewFixing
 	r.ValidatingPlan = f.ValidatingPlan
 	r.ValidatorStatuses = f.ValidatorStatuses
+	r.VerificationItems = f.VerificationItems
 	r.PlanIteration = f.PlanIteration
 	r.ReviewIteration = f.ReviewIteration
 	r.Artifacts = f.Artifacts
@@ -819,6 +823,7 @@ func (f *Feature) syncRunToShadows() {
 	f.ReviewFixing = r.ReviewFixing
 	f.ValidatingPlan = r.ValidatingPlan
 	f.ValidatorStatuses = r.ValidatorStatuses
+	f.VerificationItems = r.VerificationItems
 	f.PlanIteration = r.PlanIteration
 	f.ReviewIteration = r.ReviewIteration
 	f.Artifacts = r.Artifacts

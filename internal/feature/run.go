@@ -38,6 +38,14 @@ type RewindRequest struct {
 	RoadmapPhase int
 }
 
+// VerificationItemStatus is one harness-executed testing-contract command's
+// live progress state ("pending", "running", or a terminal classification)
+// during the deterministic verification substep.
+type VerificationItemStatus struct {
+	Name  string `yaml:"name" json:"name"`
+	State string `yaml:"state" json:"state"`
+}
+
 // Run captures one attempt at the pipeline for a feature. Every per-attempt
 // field that used to live on Feature now lives here. Run is persisted at
 // `<stateDir>/<featureID>/runs/run-<zero-padded-number>/run.yaml`. Loaded
@@ -133,19 +141,23 @@ type Run struct {
 	RebaseOperation *RebaseOperationState `yaml:"rebase_operation,omitempty"`
 
 	// CurrentPhaseStatus is the mid-flight phase-implement status for the
-	// unified flow ("implementing", "reviewing", or "" when not in a phase).
+	// unified flow ("implementing", "reviewing", "verifying", or "" when not
+	// in a phase).
 	CurrentPhaseStatus string `yaml:"current_phase_status,omitempty"`
 
 	// Publish (moved from Feature).
 	PRURL string `yaml:"pr_url,omitempty"`
 
 	// Plan validation + gate state (moved from Feature).
-	ValidatingPlan     bool              `yaml:"validating_plan,omitempty"`
-	ValidatorStatuses  map[string]string `yaml:"validator_statuses,omitempty"`
-	ReviewingGate      bool              `yaml:"reviewing_gate,omitempty"`
-	ReviewFixing       bool              `yaml:"review_fixing,omitempty"`
-	AddressingReviews  bool              `yaml:"addressing_reviews,omitempty"`
-	PendingReviewPhase *Phase            `yaml:"pending_review_phase,omitempty"`
+	ValidatingPlan    bool              `yaml:"validating_plan,omitempty"`
+	ValidatorStatuses map[string]string `yaml:"validator_statuses,omitempty"`
+	// VerificationItems is the ordered live progress of harness-executed
+	// testing-contract commands while CurrentPhaseStatus is "verifying".
+	VerificationItems  []VerificationItemStatus `yaml:"verification_items,omitempty"`
+	ReviewingGate      bool                     `yaml:"reviewing_gate,omitempty"`
+	ReviewFixing       bool                     `yaml:"review_fixing,omitempty"`
+	AddressingReviews  bool                     `yaml:"addressing_reviews,omitempty"`
+	PendingReviewPhase *Phase                   `yaml:"pending_review_phase,omitempty"`
 	// PendingRewindReviewRoadmapPhase is set only while a partial rewind to
 	// Implement is waiting for human review of the selected roadmap phase plan.
 	// It is deliberately separate from CurrentRoadmapPhase so the dashboard can

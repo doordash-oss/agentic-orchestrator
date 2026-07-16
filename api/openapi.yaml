@@ -2108,6 +2108,14 @@ components:
           additionalProperties:
             type: number
             format: double
+    VerificationItem:
+      type: object
+      required: [name, state]
+      properties:
+        name:
+          type: string
+        state:
+          type: string
     ReviewGate:
       type: object
       required: [reviewing_gate, review_fixing, validating_plan]
@@ -2325,6 +2333,10 @@ components:
               $ref: "#/components/schemas/Cost"
             review_gate:
               $ref: "#/components/schemas/ReviewGate"
+            verification_items:
+              type: array
+              items:
+                $ref: "#/components/schemas/VerificationItem"
             failure:
               $ref: "#/components/schemas/Failure"
               x-go-type-skip-optional-pointer: false

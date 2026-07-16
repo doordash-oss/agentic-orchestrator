@@ -96,6 +96,7 @@ var tuiParallelIneligibleTestFiles = []string{
 var tuiParallelCandidateTestFiles = []string{
 	"api_app_test.go",
 	"api_chat_adapter_test.go",
+	"api_verification_test.go",
 	"attention_test.go",
 	"auto_picked_tag_test.go",
 	"branding_test.go",

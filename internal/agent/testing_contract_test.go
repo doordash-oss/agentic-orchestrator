@@ -438,3 +438,81 @@ func TestTestingContractRoundTrip(t *testing.T) {
 		t.Fatalf("ReadTestingContract() len(Changes) = %d, want 1", len(got.Changes))
 	}
 }
+
+func TestCompileTestingContractMultiRepoBehavioralCommandIsHarnessOwned(t *testing.T) {
+	plan := "### Behavioral Evidence\n\n- [ ] Primary journey trace bundle: `npx playwright test e2e/journey.spec.ts`\n"
+	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{Repos: []string{"app"}, PlanText: plan, PlanPath: "phase-01/plan/phase-plan.md"})
+	var item *TestingContractItem
+	for i := range contract.Items {
+		if contract.Items[i].Source == testingContractBehavioralSource {
+			item = &contract.Items[i]
+		}
+	}
+	if item == nil {
+		t.Fatal("no behavioral item compiled")
+	}
+	if item.Owner != TestingContractOwnerHarness {
+		t.Fatalf("owner = %q, want harness", item.Owner)
+	}
+	if item.Run == nil || item.Run.Shell != "npx playwright test e2e/journey.spec.ts" {
+		t.Fatalf("run = %+v, want the packaged command", item.Run)
+	}
+	if item.ExpectedEvidence.Kind != testingContractEvidenceKind || item.ExpectedEvidence.Matcher != testingContractEvidenceMatcher {
+		t.Fatalf("evidence = %+v, want command_result/exit_code_zero", item.ExpectedEvidence)
+	}
+	if item.ExpectedEvidence.Path != "" {
+		t.Fatalf("path = %q, want empty for harness-owned evidence", item.ExpectedEvidence.Path)
+	}
+}
+
+func TestCompileTestingContractMultiRepoBehavioralWithoutCommandStaysAgentOwned(t *testing.T) {
+	plan := "### Behavioral Evidence\n\n- [ ] Capture the primary journey with a screen recording\n"
+	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{Repos: []string{"app"}, PlanText: plan, PlanPath: "phase-01/plan/phase-plan.md"})
+	for _, item := range contract.Items {
+		if item.Source != testingContractBehavioralSource {
+			continue
+		}
+		if item.Owner != TestingContractOwnerAgent || item.Run != nil {
+			t.Fatalf("item = %+v, want agent-owned with no run", item)
+		}
+		if item.ExpectedEvidence.Path == "" {
+			t.Fatal("agent-owned behavioral item must keep its canonical evidence path")
+		}
+		return
+	}
+	t.Fatal("no behavioral item compiled")
+}
+
+func TestCompileTestingContractMultiRepoVisualSizeCells(t *testing.T) {
+	plan := "### Visual Evidence\n\n- [ ] Home populated, dark theme [size: 1440x900]\n- [ ] Home populated, dark theme [size: 760x900]\n"
+	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{Repos: []string{"app"}, PlanText: plan, PlanPath: "phase-01/plan/phase-plan.md"})
+	var visual []TestingContractItem
+	for _, item := range contract.Items {
+		if item.Source == testingContractVisualSource {
+			visual = append(visual, item)
+		}
+	}
+	if len(visual) != 2 {
+		t.Fatalf("visual rows = %d, want 2 distinct cells", len(visual))
+	}
+	if visual[0].ID == visual[1].ID {
+		t.Fatal("cells differing only by size must get distinct item IDs")
+	}
+	if visual[0].ExpectedEvidence.Width != 1440 || visual[0].ExpectedEvidence.Height != 900 {
+		t.Fatalf("first cell size = %dx%d", visual[0].ExpectedEvidence.Width, visual[0].ExpectedEvidence.Height)
+	}
+	if visual[1].ExpectedEvidence.Width != 760 {
+		t.Fatalf("second cell width = %d", visual[1].ExpectedEvidence.Width)
+	}
+}
+
+func TestValidateEvidenceSectionAllowsMultipleCommandBackedBehavioralItems(t *testing.T) {
+	body := "### Behavioral Evidence\n\n- [ ] Primary journey: `npx playwright test e2e/a.spec.ts`\n- [ ] Attention journey: `npx playwright test e2e/b.spec.ts`\n"
+	if reason := validateEvidenceSectionBody(body, "### Behavioral Evidence"); reason != "" {
+		t.Fatalf("unexpected violation: %s", reason)
+	}
+	proseBody := "### Behavioral Evidence\n\n- [ ] Journey one recording\n- [ ] Journey two recording\n"
+	if reason := validateEvidenceSectionBody(proseBody, "### Behavioral Evidence"); reason == "" {
+		t.Fatal("multiple prose-only behavioral items must still be rejected")
+	}
+}

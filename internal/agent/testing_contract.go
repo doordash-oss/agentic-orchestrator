@@ -53,6 +53,8 @@ type TestingContractExpectedEvidence struct {
 	Kind    string `yaml:"kind,omitempty"`
 	Matcher string `yaml:"matcher,omitempty"`
 	Path    string `yaml:"path,omitempty"`
+	Width   int    `yaml:"width,omitempty"`
+	Height  int    `yaml:"height,omitempty"`
 }
 
 // TestingContractRun is an opaque, language-agnostic command owned by the
@@ -193,13 +195,13 @@ func CompileTestingContract(planText, planPath, phaseType string) TestingContrac
 		if description == "" {
 			return
 		}
-		key := source + "\x00" + normalizeVerificationCommand(description)
+		command := evidenceRequirementCommand(source, step)
+		key := source + "\x00" + normalizeVerificationCommand(command)
 		if seen[key] {
 			return
 		}
 		seen[key] = true
-		command := evidenceRequirementCommand(source, description)
-		contract.Items = append(contract.Items, TestingContractItem{
+		item := TestingContractItem{
 			ID:      testingContractItemID(source, command),
 			Source:  source,
 			Name:    description,
@@ -207,9 +209,19 @@ func CompileTestingContract(planText, planPath, phaseType string) TestingContrac
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
 				Matcher: testingContractEvidenceFileExistsMatcher,
+				Width:   step.Width,
+				Height:  step.Height,
 			},
 			Policy: defaultTestingContractPolicy(source),
-		})
+		}
+		if source == testingContractBehavioralSource && strings.TrimSpace(step.Command) != "" {
+			item.Run = &TestingContractRun{Shell: strings.TrimSpace(step.Command), Cwd: ".", Timeout: "10m"}
+			item.ExpectedEvidence = TestingContractExpectedEvidence{
+				Kind:    testingContractEvidenceKind,
+				Matcher: testingContractEvidenceMatcher,
+			}
+		}
+		contract.Items = append(contract.Items, item)
 	}
 
 	for _, step := range ParsePlanVerification(planText) {
@@ -221,7 +233,12 @@ func CompileTestingContract(planText, planPath, phaseType string) TestingContrac
 	for _, step := range ParsePlanVisualEvidence(planText) {
 		addEvidence(testingContractVisualSource, testingContractVisualKind, step)
 	}
-	if step, ok := consolidatedBehavioralEvidence(ParsePlanBehavioralEvidence(planText)); ok {
+	behavioralSteps := ParsePlanBehavioralEvidence(planText)
+	if evidenceStepsHaveCommands(behavioralSteps) {
+		for _, step := range behavioralSteps {
+			addEvidence(testingContractBehavioralSource, testingContractBehavioralKind, step)
+		}
+	} else if step, ok := consolidatedBehavioralEvidence(behavioralSteps); ok {
 		addEvidence(testingContractBehavioralSource, testingContractBehavioralKind, step)
 	}
 
@@ -561,13 +578,13 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		if description == "" {
 			return
 		}
-		key := source + "\x00" + repo + "\x00" + normalizeVerificationCommand(description)
+		command := evidenceRequirementCommand(source, step)
+		key := source + "\x00" + repo + "\x00" + normalizeVerificationCommand(command)
 		if seen[key] {
 			return
 		}
 		seen[key] = true
-		command := evidenceRequirementCommand(source, description)
-		contract.Items = append(contract.Items, TestingContractItem{
+		item := TestingContractItem{
 			ID:      testingContractItemIDWithRepo(source, repo, command),
 			Source:  source,
 			Repo:    repo,
@@ -576,9 +593,19 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
 				Matcher: testingContractEvidenceFileExistsMatcher,
+				Width:   step.Width,
+				Height:  step.Height,
 			},
 			Policy: defaultTestingContractPolicy(source),
-		})
+		}
+		if source == testingContractBehavioralSource && strings.TrimSpace(step.Command) != "" {
+			item.Run = &TestingContractRun{Shell: strings.TrimSpace(step.Command), Cwd: ".", Timeout: "10m"}
+			item.ExpectedEvidence = TestingContractExpectedEvidence{
+				Kind:    testingContractEvidenceKind,
+				Matcher: testingContractEvidenceMatcher,
+			}
+		}
+		contract.Items = append(contract.Items, item)
 	}
 
 	// 1) Plan-source rows. Skipped when PlanLess.
@@ -644,7 +671,12 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		for _, step := range ParsePlanVisualEvidence(in.PlanText) {
 			addEvidenceItem(testingContractVisualSource, phaseRepo, testingContractVisualKind, step)
 		}
-		if step, ok := consolidatedBehavioralEvidence(ParsePlanBehavioralEvidence(in.PlanText)); ok {
+		behavioralSteps := ParsePlanBehavioralEvidence(in.PlanText)
+		if evidenceStepsHaveCommands(behavioralSteps) {
+			for _, step := range behavioralSteps {
+				addEvidenceItem(testingContractBehavioralSource, phaseRepo, testingContractBehavioralKind, step)
+			}
+		} else if step, ok := consolidatedBehavioralEvidence(behavioralSteps); ok {
 			addEvidenceItem(testingContractBehavioralSource, phaseRepo, testingContractBehavioralKind, step)
 		}
 	}
@@ -759,15 +791,33 @@ func consolidatedManualVerification(steps []ManualVerificationStep) (ManualVerif
 	return ManualVerificationStep{Description: description}, true
 }
 
-func consolidatedBehavioralEvidence(steps []EvidenceRequirement) (EvidenceRequirement, bool) {
-	descriptions := make([]string, 0, len(steps))
+func evidenceStepsHaveCommands(steps []EvidenceRequirement) bool {
 	for _, step := range steps {
+		if strings.TrimSpace(step.Command) == "" {
+			return false
+		}
+	}
+	return len(steps) > 0
+}
+
+func consolidatedBehavioralEvidence(steps []EvidenceRequirement) (EvidenceRequirement, bool) {
+	clean := make([]EvidenceRequirement, 0, len(steps))
+	for _, step := range steps {
+		if strings.TrimSpace(step.Description) != "" {
+			clean = append(clean, step)
+		}
+	}
+	switch len(clean) {
+	case 0:
+		return EvidenceRequirement{}, false
+	case 1:
+		return clean[0], true
+	}
+	descriptions := make([]string, 0, len(clean))
+	for _, step := range clean {
 		descriptions = append(descriptions, step.Description)
 	}
-	description, ok := consolidatedChecklist("Capture one phase behavioral evidence bundle covering:", descriptions)
-	if !ok {
-		return EvidenceRequirement{}, false
-	}
+	description, _ := consolidatedChecklist("Capture one phase behavioral evidence bundle covering:", descriptions)
 	return EvidenceRequirement{Description: description}, true
 }
 
@@ -793,8 +843,12 @@ func consolidatedChecklist(title string, descriptions []string) (string, bool) {
 	return b.String(), true
 }
 
-func evidenceRequirementCommand(source, description string) string {
-	return strings.TrimSpace(source) + ": " + strings.TrimSpace(description)
+func evidenceRequirementCommand(source string, step EvidenceRequirement) string {
+	command := strings.TrimSpace(source) + ": " + strings.TrimSpace(step.Description)
+	if step.Width > 0 && step.Height > 0 {
+		command += fmt.Sprintf(" [size: %dx%d]", step.Width, step.Height)
+	}
+	return command
 }
 
 func testingContractRunFor(source, command string) *TestingContractRun {
@@ -817,7 +871,11 @@ func finalizeTestingContractOwnership(contract *TestingContract) {
 		} else {
 			item.Owner = TestingContractOwnerAgent
 		}
-		item.ExpectedEvidence.Path = testingContractEvidencePath(*item)
+		if item.Owner == TestingContractOwnerHarness {
+			item.ExpectedEvidence.Path = ""
+		} else {
+			item.ExpectedEvidence.Path = testingContractEvidencePath(*item)
+		}
 	}
 }
 

@@ -486,12 +486,34 @@ func validateEvidenceSectionBody(successCriteria, heading string) string {
 	case noneMarkers > 0:
 		return fmt.Sprintf("phase plan markdown `%s` must contain checklist requirements or exactly one `None required: <reason>` checklist item, not both", heading)
 	case heading == "### Behavioral Evidence" && requirements > 1:
-		return "phase plan markdown `### Behavioral Evidence` must use one consolidated primary-journey artifact rather than separate paperwork files"
+		if behavioralItemsAllCarryCommands(body) {
+			return ""
+		}
+		return "phase plan markdown `### Behavioral Evidence` may list multiple requirements only when every item ends with its packaged executable command in backticks; otherwise use one consolidated primary-journey artifact"
 	case requirements > 0:
 		return ""
 	default:
 		return fmt.Sprintf("phase plan markdown `%s` must contain checklist evidence requirements or exactly one `None required: <reason>` checklist item", heading)
 	}
+}
+
+func behavioralItemsAllCarryCommands(body string) bool {
+	var fence fenceState
+	saw := false
+	for _, line := range strings.Split(body, "\n") {
+		if fence.update(line) || fence.inside() {
+			continue
+		}
+		req, ok := parseEvidenceChecklistItem(strings.TrimSpace(line))
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(req.Command) == "" {
+			return false
+		}
+		saw = true
+	}
+	return saw
 }
 
 func countEvidenceChecklistItems(body string) (requirements int, noneMarkers int, invalidNoneMarkers int) {

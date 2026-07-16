@@ -16,6 +16,7 @@ package agent
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -43,9 +44,14 @@ type ManualVerificationStep struct {
 }
 
 // EvidenceRequirement represents one visual or behavioral artifact requirement
-// extracted from a phase plan.
+// extracted from a phase plan. Command is set when the bullet ends with an
+// executable backtick span (the harness runs it); Width/Height come from an
+// optional [size: WxH] tag on visual bullets.
 type EvidenceRequirement struct {
 	Description string
+	Command     string
+	Width       int
+	Height      int
 }
 
 // ParsePlanVerification extracts automated verification commands from a plan's
@@ -190,6 +196,8 @@ func isBehavioralEvidenceHeader(line string) bool {
 	return behavioralEvidenceRe.MatchString(line)
 }
 
+var evidenceSizeRE = regexp.MustCompile(`(?i)\[size:\s*(\d+)\s*x\s*(\d+)\s*\]`)
+
 // parseChecklistItem implements a two-layer strategy:
 //
 //  1. Prefer backtick spans that look like executable commands — i.e. contain
@@ -327,7 +335,20 @@ func parseEvidenceChecklistItem(line string) (EvidenceRequirement, bool) {
 	if isNoneRequiredDescription(description) {
 		return EvidenceRequirement{}, false
 	}
-	return EvidenceRequirement{Description: description}, true
+	req := EvidenceRequirement{Description: description}
+	if m := evidenceSizeRE.FindStringSubmatch(req.Description); m != nil {
+		req.Width, _ = strconv.Atoi(m[1])
+		req.Height, _ = strconv.Atoi(m[2])
+		req.Description = strings.Join(strings.Fields(evidenceSizeRE.ReplaceAllString(req.Description, " ")), " ")
+	}
+	if command, stripped, ok := trailingCommandSpan(req.Description); ok {
+		req.Command = command
+		req.Description = stripped
+	}
+	if strings.TrimSpace(req.Description) == "" {
+		return EvidenceRequirement{}, false
+	}
+	return req, true
 }
 
 func parseChecklistDescription(line string) (string, bool) {
@@ -345,6 +366,27 @@ func parseChecklistDescription(line string) (string, bool) {
 		return "", false
 	}
 	return description, true
+}
+
+// trailingCommandSpan returns the final backtick span of s when it is
+// command-shaped and terminal (nothing but punctuation after it), plus s with
+// the span and any trailing separator removed. Inline code references earlier
+// in the prose never match, so descriptions keep their identifier spans.
+func trailingCommandSpan(s string) (string, string, bool) {
+	spans := findBacktickSpans(s)
+	if len(spans) == 0 {
+		return "", "", false
+	}
+	last := spans[len(spans)-1]
+	command := strings.TrimSpace(s[last[2]:last[3]])
+	if command == "" || !looksLikeShellCommand(command) {
+		return "", "", false
+	}
+	if strings.Trim(s[last[1]:], " .") != "" {
+		return "", "", false
+	}
+	stripped := strings.TrimSpace(strings.TrimRight(strings.TrimSpace(s[:last[0]]), ":"))
+	return command, stripped, true
 }
 
 func isNoneRequiredDescription(description string) bool {

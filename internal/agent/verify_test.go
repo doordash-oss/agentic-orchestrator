@@ -451,3 +451,52 @@ func TestParseCrossRepoItem_PlainBulletRequiresCommandShape(t *testing.T) {
 		t.Fatalf("command = %q, want make", step.Command)
 	}
 }
+
+func TestParseEvidenceChecklistItemSizeTag(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Home populated, dark theme [size: 1440x900]")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Width != 1440 || req.Height != 900 {
+		t.Fatalf("size = %dx%d, want 1440x900", req.Width, req.Height)
+	}
+	if req.Description != "Home populated, dark theme" {
+		t.Fatalf("description = %q, want tag stripped", req.Description)
+	}
+}
+
+func TestParseEvidenceChecklistItemTrailingCommand(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Primary journey trace bundle: `npx playwright test e2e/journey.spec.ts`")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Command != "npx playwright test e2e/journey.spec.ts" {
+		t.Fatalf("command = %q", req.Command)
+	}
+	if req.Description != "Primary journey trace bundle" {
+		t.Fatalf("description = %q, want command and trailing colon stripped", req.Description)
+	}
+}
+
+func TestParseEvidenceChecklistItemInlineCodeIsNotCommand(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Capture the `WorkspaceShell` overflow menu open")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Command != "" {
+		t.Fatalf("command = %q, want empty for bare identifier span", req.Command)
+	}
+	if req.Description != "Capture the `WorkspaceShell` overflow menu open" {
+		t.Fatalf("description = %q, want untouched", req.Description)
+	}
+}
+
+func TestParseEvidenceChecklistItemNonTerminalCommandIsNotStripped(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Run `npm run dev` and capture the home screen")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Command != "" {
+		t.Fatalf("command = %q, want empty when prose follows the span", req.Command)
+	}
+}

@@ -46,6 +46,51 @@ func sandboxExecAvailable() bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// wrapVerificationSandbox runs a planner-authored verification command under
+// sandbox-exec with writes denied everywhere except the given writable roots
+// (repo worktree, temp, build caches) and /dev. Fails open when sandbox-exec
+// is unavailable, matching wrapHelperSandbox.
+func wrapVerificationSandbox(command []string, writableRoots []string) ([]string, bool, func()) {
+	noop := func() {}
+	if !sandboxExecAvailable() {
+		return command, false, noop
+	}
+	f, err := os.CreateTemp("", "agentico-verification-rw-*.sb")
+	if err != nil {
+		return command, false, noop
+	}
+	profilePath := f.Name()
+	if _, werr := f.WriteString(writeRestrictedSandboxProfile(writableRoots)); werr != nil {
+		_ = f.Close()
+		_ = os.Remove(profilePath)
+		return command, false, noop
+	}
+	if cerr := f.Close(); cerr != nil {
+		_ = os.Remove(profilePath)
+		return command, false, noop
+	}
+	wrapped := append([]string{sandboxExecPath, "-f", profilePath}, command...)
+	return wrapped, true, func() { _ = os.Remove(profilePath) }
+}
+
+// writeRestrictedSandboxProfile builds an SBPL profile that allows everything
+// by default but denies file writes outside the writable roots. /dev stays
+// writable so shells keep /dev/null and ttys.
+func writeRestrictedSandboxProfile(writableRoots []string) string {
+	var b strings.Builder
+	b.WriteString("(version 1)\n(allow default)\n(deny file-write*)\n")
+	b.WriteString("(allow file-write* (subpath \"/dev\"))\n")
+	esc := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	for _, root := range writableRoots {
+		real := filepath.Clean(root)
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			real = resolved
+		}
+		fmt.Fprintf(&b, "(allow file-write* (subpath \"%s\"))\n", esc.Replace(real))
+	}
+	return b.String()
+}
+
 // readOnlySandboxProfile builds an SBPL profile that allows everything by
 // default but denies file writes under each deny dir (resolved to its real
 // path). A worktree write fails as an ordinary shell error the model absorbs.

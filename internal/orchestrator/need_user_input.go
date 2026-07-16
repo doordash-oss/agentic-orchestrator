@@ -379,7 +379,10 @@ func (o *Orchestrator) applyTrustedVerificationDecision(featureID, gatePath stri
 		return fmt.Errorf("resolve verification contract path: %w", err)
 	}
 	rel, err := filepath.Rel(stateRoot, absContract)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil {
+		return fmt.Errorf("relate verification contract %q to state root %q: %w", absContract, stateRoot, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("verification decision contract %q is outside state root %q", absContract, stateRoot)
 	}
 	if filepath.Base(absContract) != "testing-contract.yaml" {

@@ -140,17 +140,6 @@ func feedbackMentionsManualVerification(feedback string) bool {
 	return false
 }
 
-// manualVerificationOutcomesGuidance returns the fix-prompt section that
-// teaches the fix agent the two valid YAML outcomes for a manual-verification
-// bullet.
-//
-// Kept as a thin wrapper for tests that exercise the section in isolation;
-// the prose itself lives in
-// internal/agent/prompts/partials/manual_verification_outcomes.tmpl.
-func manualVerificationOutcomesGuidance() string {
-	return prompts.MustRender("manual_verification_outcomes", nil)
-}
-
 // guidelineAdditionalDirs returns a single-element slice containing dir when
 // non-empty, or nil otherwise. Used to conditionally add the guidelines
 // directory to AdditionalDirs.
@@ -159,59 +148,6 @@ func guidelineAdditionalDirs(dir string) []string {
 		return nil
 	}
 	return []string{dir}
-}
-
-// writeAggregateVerificationStub preserves the legacy non-contract final
-// review behavior used by post-publish review flows that lack a phase or
-// cycle testing-contract.yaml (e.g., a post-cycle FR for a feature with no
-// active roadmap phase).
-func writeAggregateVerificationStub(path string) {
-	content := `# Verification Report — Final Review Placeholder
-#
-# This is a placeholder. The Final Review session has full tool access
-# and runs verification (tests, build, lint) directly rather than
-# consuming aggregated reports from prior phases.
-#
-# The reviewer should:
-# 1. Run the project's test suite
-# 2. Run the build
-# 3. Run any linting/vet checks
-# 4. Verify exit criteria are met
-status: pending_interactive_review
-note: "The interactive reviewer runs verification directly via tool access"
-`
-	_ = os.WriteFile(path, []byte(content), 0o644)
-}
-
-// selectFinalReviewSeedSource picks the source file to seed this
-// iteration's verification-report.yaml from. Prefers the prior iteration's
-// review file (so review-time attestation accumulates across iterations);
-// on iteration 1, falls back to the implementation phase's frozen report.
-// Returns "" when neither is available.
-func selectFinalReviewSeedSource(artifactDir, iterDir, implementationReportPath string) string {
-	if prior := priorIterationFinalReviewReportPath(artifactDir, iterDir); prior != "" {
-		return prior
-	}
-	if implementationReportPath != "" {
-		if _, err := os.Stat(implementationReportPath); err == nil {
-			return implementationReportPath
-		}
-	}
-	return ""
-}
-
-// priorIterationFinalReviewReportPath returns the path to iter-(N-1)'s
-// verification-report.yaml if it exists.
-func priorIterationFinalReviewReportPath(artifactDir, iterDir string) string {
-	var n int
-	if _, err := fmt.Sscanf(filepath.Base(iterDir), "iteration-%02d", &n); err != nil || n <= 1 {
-		return ""
-	}
-	prior := filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", n-1), "verification-report.yaml")
-	if _, err := os.Stat(prior); err != nil {
-		return ""
-	}
-	return prior
 }
 
 // copyFile copies src to dst, creating dst's parent directory if needed.
@@ -227,24 +163,6 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("writing seed destination %s: %w", dst, err)
 	}
 	return nil
-}
-
-// latestImplementationVerificationReportPath returns the path to the most
-// recent implementation verification report for a feature/repo, or "" if
-// none exists.
-func latestImplementationVerificationReportPath(stateDir string, f *feature.Feature, repoName string) string {
-	if f == nil || f.CurrentRoadmapPhase <= 0 {
-		return ""
-	}
-	implementDir := PhaseImplementDir(stateDir, f, f.CurrentRoadmapPhase)
-	if repoName != "" {
-		implementDir = filepath.Join(implementDir, repoName)
-	}
-	iteration := NewArtifactManager(implementDir).LatestIteration()
-	if iteration == 0 {
-		return ""
-	}
-	return filepath.Join(implementDir, fmt.Sprintf("iteration-%02d", iteration), "verification-report.yaml")
 }
 
 type priorImplementationEvidenceContext struct {

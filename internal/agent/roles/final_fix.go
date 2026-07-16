@@ -33,17 +33,10 @@ var finalReviewFixerRoleSpec = RoleSpec{
 		iterationDirOutputRoot("Final-review fix iteration artifact directory."),
 	},
 	MarkerRoot: "iteration_dir",
-	Artifacts: []RoleArtifactSpec{
-		{
-			Name:         "verification_report",
-			DisplayPath:  "verification-report.yaml",
-			RootName:     "iteration_dir",
-			RelativePath: "verification-report.yaml",
-			Presence:     ArtifactRequired,
-			Description:  "verification report YAML updated after addressing final-review feedback",
-			Validate:     ValidatorVerificationReport,
-		},
-	},
+	// No required artifacts: the harness executes the testing contract and
+	// writes verification-report.yaml after the fix session, mirroring the
+	// implementer role.
+	Artifacts: []RoleArtifactSpec{},
 }
 
 // FinalReviewFixerRoleSpec returns the RoleSpec-backed final-review fix role.

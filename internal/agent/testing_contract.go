@@ -263,6 +263,12 @@ func ReviseTestingContract(contract *TestingContract, changes []TestingContractC
 			return nil, fmt.Errorf("revising testing contract: unsupported action %q for %q", action, itemID)
 		}
 		if action == TestingContractChangeWaive {
+			// The executor only honors user-authorized waivers; recording any
+			// other author would leave a `waived` disposition the harness
+			// ignores, making the contract file lie about what runs.
+			if !strings.EqualFold(strings.TrimSpace(change.ChangedBy), "user") {
+				return nil, fmt.Errorf("revising testing contract: waiver for %q requires changed_by \"user\", got %q", itemID, strings.TrimSpace(change.ChangedBy))
+			}
 			idx := testingContractItemIndex(revised.Items, itemID)
 			if idx < 0 || !revised.Items[idx].Policy.AllowWaiver {
 				return nil, fmt.Errorf("revising testing contract: item %q does not allow waiver", itemID)
@@ -576,7 +582,7 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		preTasks, perTaskBodies := splitPlanForVerification(in.PlanText)
 		topSteps := ParsePlanVerification(preTasks)
 		for _, step := range topSteps {
-			repo := strings.TrimSpace(step.Repo)
+			repo := canonicalDeclaredRepo(repos, strings.TrimSpace(step.Repo))
 			if repo == "" && len(repos) == 1 {
 				repo = repos[0]
 			}
@@ -590,9 +596,9 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		for _, tb := range perTaskBodies {
 			steps := ParsePlanVerification(tb.body)
 			for _, step := range steps {
-				repo := strings.TrimSpace(step.Repo)
+				repo := canonicalDeclaredRepo(repos, strings.TrimSpace(step.Repo))
 				if repo == "" {
-					repo = strings.TrimSpace(tb.repo)
+					repo = canonicalDeclaredRepo(repos, strings.TrimSpace(tb.repo))
 				}
 				if repo == "" && len(repos) == 1 {
 					repo = repos[0]
@@ -628,6 +634,21 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 
 	finalizeTestingContractOwnership(&contract)
 	return contract
+}
+
+// canonicalDeclaredRepo maps a plan-authored repo tag onto the declared repo
+// set case-insensitively, returning the declared casing so item repos always
+// match Feature.Repos names. Unknown names pass through unchanged.
+func canonicalDeclaredRepo(declared []string, name string) string {
+	if name == "" {
+		return ""
+	}
+	for _, repo := range declared {
+		if strings.EqualFold(repo, name) {
+			return repo
+		}
+	}
+	return name
 }
 
 // splitPlanForVerification splits the plan text into the content outside the

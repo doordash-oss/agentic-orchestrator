@@ -59,50 +59,43 @@ type EvidenceRequirement struct {
 //   - [ ] Description (`command`)
 func ParsePlanVerification(planText string) []VerificationStep {
 	var steps []VerificationStep
-	lines := strings.Split(planText, "\n")
-	inSection := false
-	inCodeFence := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Track fenced code blocks — skip all content inside them
-		if strings.HasPrefix(trimmed, "```") {
-			inCodeFence = !inCodeFence
-			if inCodeFence && inSection {
-				// A code fence opened inside a verification section;
-				// don't end the section, just skip fence contents.
-			}
-			continue
-		}
-		if inCodeFence {
-			continue
-		}
-
-		// Detect start of an Automated Verification section
-		if isAutomatedVerificationHeader(trimmed) {
-			inSection = true
-			continue
-		}
-
-		// Detect end of section: any header line
-		if inSection && isHeaderLine(trimmed) {
-			inSection = false
-			continue
-		}
-
-		// Skip non-checklist lines within section
-		if !inSection {
-			continue
-		}
-
-		// Parse checklist items
+	forEachVerificationSectionLine(planText, isAutomatedVerificationHeader, func(trimmed string) {
 		if step, ok := parseChecklistItem(trimmed); ok {
 			steps = append(steps, step)
 		}
-	}
-
+	})
 	return steps
+}
+
+// forEachVerificationSectionLine invokes fn for every non-fence line inside
+// sections whose heading matches isSectionHeader. Fence and section-end rules
+// are identical to extractMarkdownSection and countEvidenceChecklistItems
+// (``` and ~~~ fences skipped; only a heading at the opener's level or higher
+// ends the section) — the plan validator cross-checks their counts, so any
+// divergence would reject valid plans.
+func forEachVerificationSectionLine(planText string, isSectionHeader func(string) bool, fn func(trimmed string)) {
+	var fence fenceState
+	inSection := false
+	sectionLevel := 0
+	for _, line := range strings.Split(planText, "\n") {
+		if fence.update(line) || fence.inside() {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if isSectionHeader(trimmed) {
+			inSection = true
+			sectionLevel = headingLevel(trimmed)
+			continue
+		}
+		if inSection {
+			if l := headingLevel(trimmed); l > 0 && l <= sectionLevel {
+				inSection = false
+			}
+		}
+		if inSection {
+			fn(trimmed)
+		}
+	}
 }
 
 // ParsePlanManualVerification extracts manual verification checklist bullets
@@ -111,38 +104,11 @@ func ParsePlanVerification(planText string) []VerificationStep {
 // returned as a required manual check.
 func ParsePlanManualVerification(planText string) []ManualVerificationStep {
 	var steps []ManualVerificationStep
-	lines := strings.Split(planText, "\n")
-	inSection := false
-	inCodeFence := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if strings.HasPrefix(trimmed, "```") {
-			inCodeFence = !inCodeFence
-			continue
-		}
-		if inCodeFence {
-			continue
-		}
-
-		if isManualVerificationHeader(trimmed) {
-			inSection = true
-			continue
-		}
-		if inSection && isHeaderLine(trimmed) {
-			inSection = false
-			continue
-		}
-		if !inSection {
-			continue
-		}
-
+	forEachVerificationSectionLine(planText, isManualVerificationHeader, func(trimmed string) {
 		if step, ok := parseManualChecklistItem(trimmed); ok {
 			steps = append(steps, step)
 		}
-	}
-
+	})
 	return steps
 }
 
@@ -164,38 +130,11 @@ func ParsePlanBehavioralEvidence(planText string) []EvidenceRequirement {
 
 func parsePlanEvidenceRequirements(planText string, isSectionHeader func(string) bool) []EvidenceRequirement {
 	var requirements []EvidenceRequirement
-	lines := strings.Split(planText, "\n")
-	inSection := false
-	inCodeFence := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if strings.HasPrefix(trimmed, "```") {
-			inCodeFence = !inCodeFence
-			continue
-		}
-		if inCodeFence {
-			continue
-		}
-
-		if isSectionHeader(trimmed) {
-			inSection = true
-			continue
-		}
-		if inSection && isHeaderLine(trimmed) {
-			inSection = false
-			continue
-		}
-		if !inSection {
-			continue
-		}
-
+	forEachVerificationSectionLine(planText, isSectionHeader, func(trimmed string) {
 		if requirement, ok := parseEvidenceChecklistItem(trimmed); ok {
 			requirements = append(requirements, requirement)
 		}
-	}
-
+	})
 	return requirements
 }
 
@@ -224,11 +163,6 @@ var behavioralEvidenceRe = regexp.MustCompile(`^#{2,5}\s+Behavioral Evidence`)
 
 func isBehavioralEvidenceHeader(line string) bool {
 	return behavioralEvidenceRe.MatchString(line)
-}
-
-// isHeaderLine returns true for any markdown header.
-func isHeaderLine(line string) bool {
-	return len(line) > 0 && line[0] == '#'
 }
 
 // parseChecklistItem implements a two-layer strategy:
@@ -348,10 +282,6 @@ func parseChecklistDescription(line string) (string, bool) {
 		return "", false
 	}
 	return description, true
-}
-
-func isManualNoneRequired(description string) bool {
-	return isNoneRequiredDescription(description)
 }
 
 func isNoneRequiredDescription(description string) bool {

@@ -3602,3 +3602,43 @@ func TestWaitForStatus_BackgroundTasks(t *testing.T) {
 		}
 	})
 }
+
+// TestVerificationContextCancelsOnInterruptedFeature pins the P3 fix: a
+// verification run's context must cancel once the feature is interrupted, so
+// a hung command cannot outlive a user interrupt by its full timeout.
+func TestVerificationContextCancelsOnInterruptedFeature(t *testing.T) {
+	t.Parallel()
+	store := feature.NewStore(filepath.Join(t.TempDir(), "state"))
+	f := &feature.Feature{
+		ID:            "verify-ctx-001",
+		Name:          "Verify Ctx",
+		Slug:          "verify-ctx",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	ctx, cancel := verificationContext(store, f.ID)
+	defer cancel()
+	select {
+	case <-ctx.Done():
+		t.Fatal("context cancelled before interruption")
+	default:
+	}
+
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusInterrupted
+		return nil
+	}); err != nil {
+		t.Fatalf("interrupt feature: %v", err)
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("context not cancelled within 10s of feature interruption")
+	}
+}

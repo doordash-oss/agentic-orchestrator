@@ -89,16 +89,54 @@ func TestCompileTestingContract(t *testing.T) {
 func TestCompileTestingContractMarksOnlyExplicitPlanCommandsRunnable(t *testing.T) {
 	plan := "### Automated Verification\n- [ ] Protected [agentico capability: Okta session; probe: okta auth status]: `make integration`\n"
 	contract := CompileTestingContract(plan, "/tmp/phase/plan.md", "collapsed")
+	planItems := 0
 	for _, item := range contract.Items {
 		if item.Source != testingContractPlanSource {
 			continue
 		}
+		planItems++
 		if item.Run == nil || item.Run.Shell != "make integration" {
 			t.Fatalf("plan item Run = %+v, want explicit command", item.Run)
 		}
 		if len(item.Capabilities) != 1 || item.Capabilities[0].Probe != "okta auth status" {
 			t.Fatalf("plan item Capabilities = %+v, want Okta probe", item.Capabilities)
 		}
+	}
+	if planItems != 1 {
+		t.Fatalf("plan items = %d, want 1 (assertions above would be vacuous)", planItems)
+	}
+}
+
+func TestReviseTestingContractRejectsNonUserWaiver(t *testing.T) {
+	contract := CompileTestingContract("### Automated Verification\n- [ ] Tests: `make test`\n", "/tmp/phase/plan.md", "collapsed")
+	itemID := ""
+	for _, item := range contract.Items {
+		if item.Source == testingContractPlanSource {
+			itemID = item.ID
+		}
+	}
+	if itemID == "" {
+		t.Fatal("compiled contract has no plan item")
+	}
+
+	tests := []struct {
+		name      string
+		changedBy string
+	}{
+		{name: "agent", changedBy: "agent"},
+		{name: "planner", changedBy: "planner"},
+		{name: "empty", changedBy: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ReviseTestingContract(&contract, []TestingContractChange{{
+				ItemID: itemID, Action: TestingContractChangeWaive,
+				ChangeReason: "self-waive attempt", ChangedBy: tt.changedBy,
+			}})
+			if err == nil || !strings.Contains(err.Error(), "changed_by") {
+				t.Fatalf("ReviseTestingContract() error = %v, want changed_by rejection", err)
+			}
+		})
 	}
 }
 

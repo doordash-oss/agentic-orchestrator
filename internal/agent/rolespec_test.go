@@ -508,9 +508,9 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 			wantSkill:  "final-fix",
 			wantRoots:  []string{"iteration_dir"},
 			wantMarker: "/state/feat/run-001/review/iteration-02/phase_complete",
-			wantPaths: map[string]string{
-				"verification_report": "/state/feat/run-001/review/iteration-02/verification-report.yaml",
-			},
+			// verification-report.yaml is harness-owned; the fixer role has
+			// no required artifacts.
+			wantPaths: map[string]string{},
 		},
 	}
 

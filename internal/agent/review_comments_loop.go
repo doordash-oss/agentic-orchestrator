@@ -367,6 +367,26 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 			Repos:             repoNames,
 		}, nil
 
+	case "plan_revision_required":
+		// The review-comments plan is harness-authored: there is no planner
+		// session to revise it, so a verification contract defect is a
+		// harness/environment failure. Fail the cycle with the full
+		// feedback so the defect is actionable instead of silently dropped.
+		errMsg := cyclePlanRevisionFailure("review-comments", loopResult)
+		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
+			FeatureID: cfg.Feature.ID,
+			Repos:     repoNames,
+			Outcome:   PhaseOutcomeFailed,
+			LastError: errMsg,
+		})
+		_ = markActiveReviewCommentsCycleFailed(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+		return &ReviewCommentsLoopResult{
+			FinalStatus: "failed",
+			Iterations:  loopResult.Iterations,
+			LastError:   errMsg,
+			Repos:       repoNames,
+		}, nil
+
 	default:
 		// max_iterations / safety_rail / failed all map to a cycle
 		// failure: every staged repo transitions to failed (LastError set); the

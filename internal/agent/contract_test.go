@@ -830,14 +830,7 @@ func TestContractRegistryImplementerDoesNotRequireNeedUserInputForSuccess(t *tes
 	}
 }
 
-func TestContractRegistryFinalReviewFixer(t *testing.T) {
-	iterDir := t.TempDir()
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
+func TestContractRegistryFinalReviewFixerRequiresNoReportArtifact(t *testing.T) {
 	contract, ok := Lookup(feature.PhaseReview, RoleFinalReviewFixer)
 	if !ok {
 		t.Fatal("Lookup(PhaseReview, RoleFinalReviewFixer) ok = false, want true")
@@ -846,70 +839,17 @@ func TestContractRegistryFinalReviewFixer(t *testing.T) {
 		t.Fatalf("Lookup(PhaseReview, RoleFinalReviewFixer).Role = %q, want %q", contract.Role, RoleFinalReviewFixer)
 	}
 
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewFixer, iterDir)
+	// verification-report.yaml is harness-owned: an empty fix iteration dir
+	// must validate cleanly instead of demanding an agent-authored report.
+	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewFixer, t.TempDir())
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
 	if len(violations) != 0 {
 		t.Fatalf("Validate() violations = %v, want none", violations)
 	}
-	if !out.OK || out.VerificationReport == nil {
-		t.Fatalf("Validate() outcome = %+v, want parsed verification report", out)
-	}
-}
-
-func TestContractRegistryFinalReviewFixerReportsMissingVerificationReport(t *testing.T) {
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewFixer, t.TempDir())
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := JoinProtocolViolations(violations)
-	if !strings.Contains(got, "verification-report.yaml") || !strings.Contains(got, "missing") {
-		t.Fatalf("JoinProtocolViolations() = %q, want missing verification-report.yaml", got)
-	}
-}
-
-func TestContractRegistryFinalReviewFixerReportsMalformedVerificationReport(t *testing.T) {
-	iterDir := t.TempDir()
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	if err := os.WriteFile(reportPath, []byte(":\n  :"), 0o644); err != nil {
-		t.Fatalf("write malformed verification report: %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewFixer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := JoinProtocolViolations(violations)
-	if !strings.Contains(got, "verification-report.yaml") || !strings.Contains(got, "unparseable") {
-		t.Fatalf("JoinProtocolViolations() = %q, want unparseable verification-report.yaml", got)
-	}
-}
-
-func TestContractRegistryFinalReviewFixerRejectsNotRunVerificationReport(t *testing.T) {
-	iterDir := t.TempDir()
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	report := BuildVerificationReportStub([]RequiredVerificationItem{
-		{Name: "Relevant tests pass", Requirement: "go test ./..."},
-	})
-	if err := WriteVerificationReport(reportPath, report); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewFixer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "not_run") {
-		t.Fatalf("Validate() = (%+v, %q), want not_run schema violation", out, got)
+	if !out.OK {
+		t.Fatalf("Validate() outcome = %+v, want OK", out)
 	}
 }
 
@@ -1169,52 +1109,6 @@ func writeReviewFeedbackFile(t *testing.T, path, body string) {
 	}
 }
 
-func writePassedVerificationReport(t *testing.T, path string) {
-	t.Helper()
-	if err := WriteVerificationReport(path, BuildVerificationReportStub(nil)); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-}
-
-func writeNotRunVerificationReport(t *testing.T, path string) {
-	t.Helper()
-	report := BuildVerificationReportStub([]RequiredVerificationItem{
-		{Name: "Relevant tests pass", Requirement: "go test ./..."},
-	})
-	if err := WriteVerificationReport(path, report); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-}
-
-func writeTestingContractForFinalReview(t *testing.T, path string, revision int, itemID string, command string) *TestingContract {
-	t.Helper()
-	contract := TestingContract{
-		Version:  1,
-		Revision: revision,
-		Scope:    "review",
-		Items: []TestingContractItem{
-			{
-				ID:      itemID,
-				Source:  testingContractPlanSource,
-				Repo:    TestingContractCrossRepoTag,
-				Name:    "Relevant tests pass",
-				Command: command,
-				ExpectedEvidence: TestingContractExpectedEvidence{
-					Kind:    testingContractEvidenceKind,
-					Matcher: testingContractEvidenceMatcher,
-				},
-				Policy: TestingContractItemPolicy{
-					Required: true,
-				},
-			},
-		},
-	}
-	if err := WriteTestingContract(path, contract); err != nil {
-		t.Fatalf("WriteTestingContract() error = %v", err)
-	}
-	return &contract
-}
-
 func writeValidProgress(t *testing.T, path string, reportPath string, state IterationState) {
 	t.Helper()
 	_ = reportPath
@@ -1381,5 +1275,150 @@ func writeNeedUserInputGate(t *testing.T, path string, summary string, questions
 	}
 	if err := WriteNeedUserInputRecord(path, rec); err != nil {
 		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+}
+
+func TestVerificationScopeViolations(t *testing.T) {
+	multiRepoTasks := "## Tasks\n\n### Task 1: api work\n**Repo:** `api`\n\nBody.\n\n### Task 2: web work\n**Repo:** `web`\n\nBody.\n"
+	tests := []struct {
+		name    string
+		plan    string
+		wantIn  string
+		wantLen int
+	}{
+		{
+			name:    "multi-repo unscoped command in success criteria",
+			plan:    multiRepoTasks + "\n## Success Criteria\n\n### Automated Verification\n- [ ] Tests pass: `go test ./...`\n",
+			wantIn:  "must scope every command",
+			wantLen: 1,
+		},
+		{
+			name:    "multi-repo unscoped command in top-level section outside success criteria",
+			plan:    "### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" + multiRepoTasks,
+			wantIn:  "must scope every command",
+			wantLen: 1,
+		},
+		{
+			name:    "case-drifted repo tag accepted",
+			plan:    multiRepoTasks + "\n## Success Criteria\n\n### Automated Verification\n- [ ] [repo: API] Tests pass: `go test ./...`\n",
+			wantLen: 0,
+		},
+		{
+			name:    "unknown repo rejected",
+			plan:    multiRepoTasks + "\n## Success Criteria\n\n### Automated Verification\n- [ ] [repo: ghost] Tests pass: `go test ./...`\n",
+			wantIn:  "not assigned to any phase task",
+			wantLen: 1,
+		},
+		{
+			name:    "per-task step with case-drifted matching repo accepted",
+			plan:    "## Tasks\n\n### Task 1: api work\n**Repo:** `api`\n\n#### Automated Verification:\n- [ ] [repo: API] Tests: `go test ./...`\n",
+			wantLen: 0,
+		},
+		{
+			name:    "single-repo unscoped accepted",
+			plan:    "## Tasks\n\n### Task 1: work\n**Repo:** `solo`\n\nBody.\n\n## Success Criteria\n\n### Automated Verification\n- [ ] Tests pass: `go test ./...`\n",
+			wantLen: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := verificationScopeViolations(tt.plan)
+			if len(got) != tt.wantLen {
+				t.Fatalf("verificationScopeViolations() = %+v, want %d violations", got, tt.wantLen)
+			}
+			if tt.wantLen > 0 && !strings.Contains(got[0].Reason, tt.wantIn) {
+				t.Fatalf("violation = %q, want to contain %q", got[0].Reason, tt.wantIn)
+			}
+		})
+	}
+}
+
+func TestValidateAutomatedVerificationSectionParserAgreement(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		wantIn string
+	}{
+		{
+			name: "tilde fence with checklist-looking content accepted",
+			body: "### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n~~~\n- [ ] example: `not a real command`\n~~~\n",
+		},
+		{
+			name: "level-4 sub-heading does not truncate the section",
+			body: "### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n#### Notes\n- [ ] Lint passes: `go vet ./...`\n",
+		},
+		{
+			name:   "command-less checklist item still rejected",
+			body:   "### Automated Verification\n- [ ] Tests pass somehow\n",
+			wantIn: "one complete executable command",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := validateAutomatedVerificationSection("## Success Criteria\n\n" + tt.body)
+			if tt.wantIn == "" && got != "" {
+				t.Fatalf("validateAutomatedVerificationSection() = %q, want no violation", got)
+			}
+			if tt.wantIn != "" && !strings.Contains(got, tt.wantIn) {
+				t.Fatalf("validateAutomatedVerificationSection() = %q, want to contain %q", got, tt.wantIn)
+			}
+		})
+	}
+}
+
+func TestValidateManualVerificationSectionAllowsInlineCodeReferences(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		wantIn string
+	}{
+		{
+			name: "inline symbol reference accepted",
+			body: "### Manual Verification\n- [ ] Confirm the `Submit` button label reads correctly\n",
+		},
+		{
+			name: "fenced example ignored",
+			body: "### Manual Verification\n- [ ] Confirm the error page renders the fallback copy\n\n```\n- [ ] not a check: `go test ./...`\n```\n",
+		},
+		{
+			name:   "command-shaped backtick still rejected",
+			body:   "### Manual Verification\n- [ ] Confirm tests pass by running `go test ./...`\n",
+			wantIn: "without executable backtick commands",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := validateManualVerificationSection("## Success Criteria\n\n" + tt.body)
+			if tt.wantIn == "" && got != "" {
+				t.Fatalf("validateManualVerificationSection() = %q, want no violation", got)
+			}
+			if tt.wantIn != "" && !strings.Contains(got, tt.wantIn) {
+				t.Fatalf("validateManualVerificationSection() = %q, want to contain %q", got, tt.wantIn)
+			}
+		})
+	}
+}
+
+func TestValidateRefactorPlanMarkdownScopesTopLevelCommands(t *testing.T) {
+	iterDir := t.TempDir()
+	planPath := filepath.Join(iterDir, "refactor-plan.md")
+	plan := "# Refactor\n\n### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
+		"## Tasks\n\n### Task 1: api work\n**Repo:** `api`\n\nBody.\n\n### Task 2: web work\n**Repo:** `web`\n\nBody.\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out Outcome
+	violations, err := validateRefactorPlanMarkdownArtifact(iterDir, planPath, &out)
+	if err != nil {
+		t.Fatalf("validateRefactorPlanMarkdownArtifact() error = %v", err)
+	}
+	found := false
+	for _, violation := range violations {
+		if strings.Contains(violation.Reason, "must scope every command") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("violations = %+v, want unscoped multi-repo top-level command rejected", violations)
 	}
 }

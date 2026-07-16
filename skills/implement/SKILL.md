@@ -98,4 +98,6 @@ Choose exactly one state:
 - `RETRY`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
 - `NEED_USER_INPUT`: progress requires a human decision, authorization, unavailable external capability, scope/contract change, or resolution of contradictory repository state.
 
+Never emit `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware, a human decision): the harness re-dispatches `RETRY` iterations unchanged, so an externally blocked `RETRY` only burns the iteration budget. Emit `NEED_USER_INPUT` and name the blocker instead.
+
 For `NEED_USER_INPUT`, insert a numbered `## Questions for User` section between `## Deferrals` and `## Iteration State`, then put a concise blocker summary below the `NEED_USER_INPUT` token. Ask only questions whose answers are required to resume safely.

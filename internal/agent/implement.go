@@ -280,7 +280,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			contractFingerprint string
 		)
 		planContent := readPlanContent(cfg.PlanPath)
-		if violations := verificationScopeViolations(planContent, extractMarkdownSection(planContent, "## Success Criteria")); len(violations) > 0 {
+		if violations := verificationScopeViolations(planContent); len(violations) > 0 {
 			cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "plan_revision_required")
 			return &LoopResult{
 				FinalStatus:          "plan_revision_required",
@@ -614,8 +614,14 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						}
 					}
 				}
-				harnessVerification, readErr = ExecuteTestingContract(context.Background(), cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
+				verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
+				harnessVerification, readErr = ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
+				cancelVerify()
 				if readErr != nil {
+					if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "interrupted")
+						return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+					}
 					return nil, fmt.Errorf("executing testing contract: %w", readErr)
 				}
 				if readErr = WriteVerificationReport(reportPath, *harnessVerification.Report); readErr != nil {
@@ -1974,6 +1980,32 @@ func waitForShutdownIntent(sm shutdownChecker, grace time.Duration) bool {
 // isFeatureInterrupted checks the feature store to determine if the feature
 // has been stopped by the user. Loops call this before starting new sessions
 // to avoid zombie iterations after the user presses 's' to stop.
+// verificationContext returns a context that cancels once the feature is
+// interrupted or failed, so a hung verification command cannot outlive a user
+// interrupt by its full declared timeout. The caller must call cancel.
+func verificationContext(store ports.FeatureStore, featureID string) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if store == nil {
+		return ctx, cancel
+	}
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if isFeatureInterrupted(store, featureID) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel
+}
+
 func isFeatureInterrupted(store ports.FeatureStore, featureID string) bool {
 	if store == nil {
 		return false

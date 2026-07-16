@@ -1260,3 +1260,98 @@ func TestRefactorFeature_PromptStashedAtCycleEntry(t *testing.T) {
 		t.Fatalf("RunRefactorFeatureLoop: %v", err)
 	}
 }
+
+// TestRunRefactorFeatureLoop_PlanRevisionRequiredReplans covers the contract
+// error round-trip: the first implement round finds planner command defects
+// and returns plan_revision_required; the loop re-runs the plan step and the
+// second implement round succeeds.
+func TestRunRefactorFeatureLoop_PlanRevisionRequiredReplans(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-revision", []string{testRepoNameAPI, testRepoNameWeb})
+
+	planCalls := 0
+	implementCalls := 0
+	cfg := RefactorFeatureLoopConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       stateDir,
+		Prompt:         "extract shared config",
+		MaxIterations:  3,
+		MaxConsecFails: 3,
+		RunRefactorPlanFn: func(stagedDir string) (string, error) {
+			planCalls++
+			return stubRefactorPlanFn(refactorPlanCrossRepo)(stagedDir)
+		},
+		RunImplementFn: func(ImplementConfig, ports.SessionManager) (*LoopResult, error) {
+			implementCalls++
+			if implementCalls == 1 {
+				return &LoopResult{
+					FinalStatus:          "plan_revision_required",
+					Iterations:           1,
+					PlanRevisionFeedback: "## Verification Contract Errors\n\n- `plan:api:xyz`: command not found",
+				}, nil
+			}
+			return &LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1}, nil
+		},
+	}
+
+	result, err := RunRefactorFeatureLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunRefactorFeatureLoop: %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%s)", result.FinalStatus, result.LastError)
+	}
+	if planCalls != 2 || implementCalls != 2 {
+		t.Fatalf("planCalls = %d, implementCalls = %d, want 2 and 2 (one revision round)", planCalls, implementCalls)
+	}
+}
+
+// TestRunRefactorFeatureLoop_PlanRevisionRoundsExhaustedFails bounds the
+// replanning: persistent contract defects fail the cycle with the feedback
+// preserved instead of looping forever or discarding it.
+func TestRunRefactorFeatureLoop_PlanRevisionRoundsExhaustedFails(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-revision-cap", []string{testRepoNameAPI, testRepoNameWeb})
+
+	implementCalls := 0
+	cfg := RefactorFeatureLoopConfig{
+		Feature:           f,
+		FeatureStore:      store,
+		StateDir:          stateDir,
+		Prompt:            "extract shared config",
+		MaxIterations:     3,
+		MaxConsecFails:    3,
+		RunRefactorPlanFn: stubRefactorPlanFn(refactorPlanCrossRepo),
+		RunImplementFn: func(ImplementConfig, ports.SessionManager) (*LoopResult, error) {
+			implementCalls++
+			return &LoopResult{
+				FinalStatus:          "plan_revision_required",
+				Iterations:           1,
+				PlanRevisionFeedback: "- `plan:api:xyz`: command not found",
+			}, nil
+		},
+	}
+
+	result, err := RunRefactorFeatureLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunRefactorFeatureLoop: %v", err)
+	}
+	if result.FinalStatus != "failed" {
+		t.Fatalf("FinalStatus = %q, want failed", result.FinalStatus)
+	}
+	if !strings.Contains(result.LastError, "command not found") {
+		t.Fatalf("LastError = %q, want preserved contract-error feedback", result.LastError)
+	}
+	if implementCalls != 3 {
+		t.Fatalf("implementCalls = %d, want 3 (initial + 2 revision rounds)", implementCalls)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleFailed {
+		t.Fatalf("ActiveCycle = %+v, want failed", loaded.ActiveCycle)
+	}
+}

@@ -468,3 +468,215 @@ func runVerificationTestCommand(t *testing.T, runner ports.CommandRunner, dir, c
 		t.Fatalf("%s: %v", command, err)
 	}
 }
+
+func TestFinalizeAgentOwnedEvidence(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		content    *string
+		wantStatus VerificationRunStatus
+		wantIn     string
+	}{
+		{name: "no canonical path", path: "", content: nil, wantStatus: VerificationStatusFailed, wantIn: "no canonical path"},
+		{name: "missing file", path: "observations/x.md", content: nil, wantStatus: VerificationStatusFailed, wantIn: "missing"},
+		{name: "empty file", path: "observations/x.md", content: strPtr("  \n"), wantStatus: VerificationStatusFailed, wantIn: "empty"},
+		{name: "present file", path: "observations/x.md", content: strPtr("observed"), wantStatus: VerificationStatusPassed, wantIn: "captured"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iterDir := t.TempDir()
+			if tt.content != nil {
+				full := filepath.Join(iterDir, filepath.FromSlash(tt.path))
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(full, []byte(*tt.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			item := TestingContractItem{
+				ID: "manual", Source: testingContractManualSource, Owner: TestingContractOwnerAgent,
+				Name: "observe", Command: "manual: observe",
+				ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractManualKind, Path: tt.path},
+			}
+			got := finalizeAgentOwnedEvidence(item, iterDir)
+			if got.Status != tt.wantStatus || !strings.Contains(got.Evidence, tt.wantIn) {
+				t.Fatalf("finalizeAgentOwnedEvidence() = {Status:%q Evidence:%q}, want status %q containing %q", got.Status, got.Evidence, tt.wantStatus, tt.wantIn)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+func TestExecuteTestingContractIgnoresForgedWaiver(t *testing.T) {
+	repo := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ran")
+	command := "touch " + marker
+	contract := TestingContract{Version: 2, Revision: 2, Items: []TestingContractItem{{
+		ID: "forged", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		Name: "forged waiver", Command: command,
+		Run: &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"}, Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true},
+		Disposition: TestingContractItemDisposition{Status: TestingContractDispositionWaived, Reason: "self-authorized", ChangedBy: "agent"},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if got := out.Report.Results[0].Status; got == VerificationStatusWaived {
+		t.Fatalf("status = %q; a non-user waiver must not be honored", got)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("command did not run despite forged waiver: %v", statErr)
+	}
+}
+
+func TestSameVerificationFailureMutualTimeoutBias(t *testing.T) {
+	// Documented heuristic limit: two exit-124 runs with no output compare
+	// equal, biasing classification toward inherited over regression.
+	a := capturedVerificationRun{record: verificationRunRecord{ExitCode: 124}}
+	b := capturedVerificationRun{record: verificationRunRecord{ExitCode: 124}}
+	if !sameVerificationFailure(a, b) {
+		t.Fatal("sameVerificationFailure() = false, want true for mutual empty-output timeouts")
+	}
+	c := capturedVerificationRun{record: verificationRunRecord{ExitCode: 1}, stderr: "boom"}
+	if sameVerificationFailure(a, c) {
+		t.Fatal("sameVerificationFailure() = true, want false for differing exit codes")
+	}
+}
+
+func TestExecuteTestingContractRecordsContractErrorForUnknownRepo(t *testing.T) {
+	repo := t.TempDir()
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{
+		{
+			ID: "ghost", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "ghost",
+			Name: "ghost repo", Command: "true", Run: &TestingContractRun{Shell: "true", Cwd: ".", Timeout: "30s"},
+			Policy: TestingContractItemPolicy{Required: true},
+		},
+		{
+			ID: "ok", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+			Name: "still runs", Command: "printf verified", Run: &TestingContractRun{Shell: "printf verified", Cwd: ".", Timeout: "30s"},
+			Policy: TestingContractItemPolicy{Required: true},
+		},
+	}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v, want per-item contract error instead of abort", err)
+	}
+	if len(out.ContractErrors) != 1 || out.ContractErrors[0].ItemID != "ghost" {
+		t.Fatalf("ContractErrors = %+v, want one for item ghost", out.ContractErrors)
+	}
+	if got := out.Report.Results[1].Status; got != VerificationStatusPassed {
+		t.Fatalf("second item status = %q, want passed (execution must continue past the bad item)", got)
+	}
+}
+
+func TestExecuteTestingContractMatchesRepoTagCaseInsensitively(t *testing.T) {
+	repo := t.TempDir()
+	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
+		ID: "case", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "Repo",
+		Name: "case drift", Command: "printf verified", Run: &TestingContractRun{Shell: "printf verified", Cwd: ".", Timeout: "30s"},
+		Policy: TestingContractItemPolicy{Required: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "")
+
+	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	if err != nil {
+		t.Fatalf("ExecuteTestingContract() error = %v", err)
+	}
+	if len(out.ContractErrors) != 0 || out.Report.Results[0].Status != VerificationStatusPassed {
+		t.Fatalf("outcome = %+v, want case-drifted repo tag to resolve", out)
+	}
+}
+
+func TestPersistVerificationRunSkipsClaimedRunSlots(t *testing.T) {
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	root := verificationEvidenceRoot(contractPath, "item")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A plain file at run-001 is invisible to the numbering scan but blocks
+	// Mkdir — the claim loop must move to the next slot instead of failing.
+	if err := os.WriteFile(filepath.Join(root, "run-001"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := capturedVerificationRun{record: verificationRunRecord{ItemID: "item", Kind: "candidate", Command: "true"}}
+	if err := persistVerificationRun(contractPath, "item", &run); err != nil {
+		t.Fatalf("persistVerificationRun() error = %v", err)
+	}
+	if run.record.RunID != "item/run-002" {
+		t.Fatalf("RunID = %q, want item/run-002", run.record.RunID)
+	}
+}
+
+type verificationCallCountingRunner struct {
+	inner        ports.CommandRunner
+	worktreeAdds int
+}
+
+func (r *verificationCallCountingRunner) Run(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
+	if name == "git" && len(args) >= 3 && args[2] == "worktree" && args[3] == "add" {
+		r.worktreeAdds++
+	}
+	return r.inner.Run(ctx, name, args, opts)
+}
+
+func TestExecuteTestingContractReusesCachedBaselineRun(t *testing.T) {
+	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
+	if err := os.WriteFile(filepath.Join(repo, "check.sh"), []byte("#!/bin/sh\necho new-failure >&2\nexit 9\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := executableContract(commit)
+	runner := &verificationCallCountingRunner{inner: NewExecCommandRunner()}
+
+	for round := 1; round <= 2; round++ {
+		report := BuildContractVerificationReportStub(&contract, contractPath)
+		out, err := ExecuteTestingContract(context.Background(), runner, &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+		if err != nil {
+			t.Fatalf("round %d: ExecuteTestingContract() error = %v", round, err)
+		}
+		if len(out.RegressionItems) != 1 {
+			t.Fatalf("round %d: RegressionItems = %v, want one regression", round, out.RegressionItems)
+		}
+	}
+	if runner.worktreeAdds != 1 {
+		t.Fatalf("baseline worktree creations = %d, want 1 (second round must reuse the cached baseline)", runner.worktreeAdds)
+	}
+}
+
+type verificationFakeRunner struct{}
+
+func (verificationFakeRunner) Run(context.Context, string, []string, ports.CommandOpts) ([]byte, error) {
+	return nil, nil
+}
+
+func TestSandboxVerificationArgvOnlyWrapsHostRunner(t *testing.T) {
+	argv := []string{"/bin/sh", "-c", "true"}
+	got, sandboxed, cleanup := sandboxVerificationArgv(verificationFakeRunner{}, argv, []string{t.TempDir()})
+	defer cleanup()
+	if sandboxed || len(got) != len(argv) || got[0] != "/bin/sh" {
+		t.Fatalf("sandboxVerificationArgv(fake runner) = (%v, %v), want passthrough", got, sandboxed)
+	}
+}
+
+func TestVerificationWritableRootsFiltersMissingDirs(t *testing.T) {
+	existing := t.TempDir()
+	roots := verificationWritableRoots(existing, filepath.Join(existing, "missing"), "")
+	found := false
+	for _, root := range roots {
+		if root == existing {
+			found = true
+		}
+		if strings.HasSuffix(root, "missing") {
+			t.Fatalf("verificationWritableRoots() included missing dir: %v", roots)
+		}
+	}
+	if !found {
+		t.Fatalf("verificationWritableRoots() = %v, want to include %q", roots, existing)
+	}
+}

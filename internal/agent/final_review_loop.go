@@ -377,9 +377,6 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: i}, nil
 
 		case ReviewChangesRequested:
-			if err := s.seedFixVerificationReport(iterDir); err != nil {
-				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: err.Error()}, nil
-			}
 			s.setReviewFixing(true)
 			fixStatus, fixErr := s.runFix(i, iterDir, feedback)
 
@@ -420,6 +417,14 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 					return done, nil
 				}
 				continue
+			}
+
+			// Harness-owned verification: execute the current testing
+			// contract and write the fix iteration's report deterministically
+			// (mirrors the implement loop; the fix agent never authors it).
+			// The next review iteration judges the report's rows.
+			if err := s.runHarnessVerification(iterDir); err != nil {
+				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: err.Error()}, nil
 			}
 
 			consecutiveFailures = 0
@@ -709,7 +714,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 			return false
 		},
 		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-		MissingArtifacts:     []string{"verification-report.yaml"},
 	}).Status
 	return agentStatus, nil
 }
@@ -742,30 +746,61 @@ func (s *featureFinalReviewLoopState) featureFinalReviewSessionID(role string, i
 	return fmt.Sprintf("%s-%s-%02d", s.cfg.Feature.ID, role, iteration)
 }
 
-// seedFixVerificationReport pre-populates the fix leg's verification report.
-// Final Review itself only emits review-feedback.md; this report exists for
-// the final-review fix role after a CHANGES_REQUESTED verdict.
-func (s *featureFinalReviewLoopState) seedFixVerificationReport(iterDir string) error {
-	target := filepath.Join(iterDir, "verification-report.yaml")
-	if seed := priorIterationFinalReviewReportPath(s.artifactDir, iterDir); seed != "" {
-		if err := copyFile(seed, target); err == nil {
+// runHarnessVerification executes the feature's current testing contract
+// after a fix session and writes the iteration's verification-report.yaml,
+// mirroring the implement loop's harness-owned report model. A feature with
+// no resolvable contract (legacy state) simply gets no report.
+func (s *featureFinalReviewLoopState) runHarnessVerification(iterDir string) error {
+	cfg := s.cfg
+	contractPath, ok := resolveImplementationContractPath(cfg.StateDir, cfg.Feature, "")
+	if !ok {
+		return nil
+	}
+	contract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		if os.IsNotExist(err) {
 			return nil
 		}
+		return fmt.Errorf("reading testing contract for final-fix verification: %w", err)
 	}
-	report := VerificationReport{
-		Version: 1,
-		RequiredChecks: []VerificationCheckResult{{
-			Name:        "Final Review fix validation",
-			Requirement: "Address the current Final Review findings and run targeted verification for the changed behavior.",
-			Command:     "targeted verification for the Final Review fix",
-			Mode:        VerificationModeCommand,
-			Status:      VerificationStatusNotRun,
-		}},
+	s.seedAgentOwnedEvidence(iterDir)
+	report := BuildContractVerificationReportStub(contract, contractPath)
+	verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
+	outcome, execErr := ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, contractPath, iterDir, s.workspace.Cwd, cfg.Feature.Repos)
+	cancelVerify()
+	if execErr != nil {
+		return fmt.Errorf("executing testing contract for final-fix verification: %w", execErr)
 	}
-	if err := WriteVerificationReport(target, report); err != nil {
-		return fmt.Errorf("writing final-review fix verification report stub: %w", err)
+	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"), *outcome.Report); err != nil {
+		return fmt.Errorf("writing final-fix verification report: %w", err)
 	}
 	return nil
+}
+
+// seedAgentOwnedEvidence copies agent-owned semantic evidence (observations,
+// screenshots, behaviors) from prior implementation iterations into the fix
+// iteration dir so unchanged evidence is not re-demanded. Files the fix agent
+// already re-captured are never overwritten.
+func (s *featureFinalReviewLoopState) seedAgentOwnedEvidence(iterDir string) {
+	evidence := priorImplementationEvidenceContextForRun(filepath.Dir(s.artifactDir))
+	for _, rootDir := range evidence.EvidenceRootDirs {
+		for _, sub := range []string{"observations", "screenshots", "behaviors"} {
+			entries, err := os.ReadDir(filepath.Join(rootDir, sub))
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				dst := filepath.Join(iterDir, sub, entry.Name())
+				if _, statErr := os.Stat(dst); statErr == nil {
+					continue
+				}
+				_ = copyFile(filepath.Join(rootDir, sub, entry.Name()), dst)
+			}
+		}
+	}
 }
 
 func (s *featureFinalReviewLoopState) writeIterationMeta(iterDir string, iteration int, reviewStatus string) {

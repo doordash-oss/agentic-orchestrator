@@ -70,10 +70,13 @@ type verificationRunRecord struct {
 	Kind           string    `yaml:"kind"`
 	Command        string    `yaml:"command"`
 	Cwd            string    `yaml:"cwd"`
+	RelCwd         string    `yaml:"rel_cwd,omitempty"`
 	StartedAt      time.Time `yaml:"started_at"`
 	Duration       string    `yaml:"duration"`
 	ExitCode       int       `yaml:"exit_code"`
 	Classification string    `yaml:"classification"`
+	Sandboxed      bool      `yaml:"sandboxed,omitempty"`
+	BaseCommit     string    `yaml:"base_commit,omitempty"`
 	StdoutPath     string    `yaml:"stdout_path"`
 	StderrPath     string    `yaml:"stderr_path"`
 	BaselineRunID  string    `yaml:"baseline_run_id,omitempty"`
@@ -118,6 +121,9 @@ func ExecuteTestingContract(
 		resultIndexes[strings.TrimSpace(report.Results[i].ItemID)] = i
 	}
 	for _, item := range contract.Items {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("executing testing contract: %w", ctxErr)
+		}
 		idx, ok := resultIndexes[item.ID]
 		if !ok {
 			report.Results = append(report.Results, contractResultStub(item))
@@ -136,10 +142,12 @@ func ExecuteTestingContract(
 			continue
 		}
 
-		repo, workDir, err := verificationItemWorkDir(item, workspaceDir, repos)
-		if err != nil {
-			return nil, err
+		repo, workDir, workDirErr := verificationItemWorkDir(item, workspaceDir, repos)
+		if workDirErr != nil {
+			recordVerificationContractError(out, report, idx, item, "", workDirErr.Error(), "Tag the item with one repository from the feature scope.")
+			continue
 		}
+		writableRoots := verificationWritableRoots(itemWritableWorkRoots(item, workDir, repos)...)
 		cwd, err := resolveVerificationCwd(workDir, item.Run.Cwd)
 		if err != nil {
 			recordVerificationContractError(out, report, idx, item, workDir, err.Error(), "Use a cwd relative to the tagged repository root.")
@@ -171,7 +179,7 @@ func ExecuteTestingContract(
 				blocked = true
 				break
 			}
-			run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s")
+			run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s", writableRoots)
 			if runErr != nil {
 				var exitCoder interface{ ExitCode() int }
 				if !errors.As(runErr, &exitCoder) && !errors.Is(runErr, context.DeadlineExceeded) {
@@ -206,7 +214,7 @@ func ExecuteTestingContract(
 			continue
 		}
 
-		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout)
+		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots)
 		if candidateErr == nil {
 			candidate.record.Classification = VerificationClassificationPassed
 			if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
@@ -415,7 +423,7 @@ func verificationItemWorkDir(item TestingContractItem, workspaceDir string, repo
 		name = repos[0].Name
 	}
 	for i := range repos {
-		if repos[i].Name != name {
+		if !strings.EqualFold(repos[i].Name, name) {
 			continue
 		}
 		path := strings.TrimSpace(repos[i].WorktreePath)
@@ -428,6 +436,26 @@ func verificationItemWorkDir(item TestingContractItem, workspaceDir string, repo
 		return &repos[i], path, nil
 	}
 	return nil, "", fmt.Errorf("verification item %s: repository %q is not in feature scope", item.ID, name)
+}
+
+// itemWritableWorkRoots returns the work directories a verification command
+// may mutate. Cross-repo items span every repo worktree in scope; repo items
+// get their own worktree only.
+func itemWritableWorkRoots(item TestingContractItem, workDir string, repos []feature.FeatureRepo) []string {
+	if strings.TrimSpace(item.Repo) != TestingContractCrossRepoTag {
+		return []string{workDir}
+	}
+	roots := []string{workDir}
+	for _, repo := range repos {
+		path := strings.TrimSpace(repo.WorktreePath)
+		if path == "" {
+			path = strings.TrimSpace(repo.Path)
+		}
+		if path != "" {
+			roots = append(roots, path)
+		}
+	}
+	return roots
 }
 
 func resolveVerificationCwd(root, relative string) (string, error) {
@@ -557,7 +585,7 @@ func preflightVerificationShell(ctx context.Context, runner ports.CommandRunner,
 	return "invalid verification shell syntax: " + detail, nil
 }
 
-func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner, itemID, kind, command, cwd, timeoutText string) (capturedVerificationRun, error) {
+func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner, itemID, kind, command, cwd, timeoutText string, writableRoots []string) (capturedVerificationRun, error) {
 	timeout := 10 * time.Minute
 	if parsed, err := time.ParseDuration(strings.TrimSpace(timeoutText)); err == nil && parsed > 0 {
 		timeout = parsed
@@ -566,10 +594,15 @@ func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner,
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 	started := time.Now().UTC()
+	sandboxed := false
 	err := func() error {
 		// Non-login shell: sourcing the user's profile would make runs
 		// machine-dependent and pollute captured output.
-		_, runErr := runner.Run(runCtx, "/bin/sh", []string{"-c", command}, ports.CommandOpts{Dir: cwd, Stdout: &stdout, Stderr: &stderr})
+		argv := []string{"/bin/sh", "-c", command}
+		var cleanup func()
+		argv, sandboxed, cleanup = sandboxVerificationArgv(runner, argv, writableRoots)
+		defer cleanup()
+		_, runErr := runner.Run(runCtx, argv[0], argv[1:], ports.CommandOpts{Dir: cwd, Stdout: &stdout, Stderr: &stderr})
 		return runErr
 	}()
 	exitCode := commandExitCode(err)
@@ -577,10 +610,51 @@ func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner,
 		exitCode = 124
 	}
 	run := capturedVerificationRun{
-		record: verificationRunRecord{ItemID: itemID, Kind: kind, Command: command, Cwd: cwd, StartedAt: started, Duration: time.Since(started).String(), ExitCode: exitCode},
+		record: verificationRunRecord{ItemID: itemID, Kind: kind, Command: command, Cwd: cwd, StartedAt: started, Duration: time.Since(started).String(), ExitCode: exitCode, Sandboxed: sandboxed},
 		stdout: redactVerificationOutput(stdout.String()), stderr: redactVerificationOutput(stderr.String()),
 	}
 	return run, err
+}
+
+// sandboxVerificationArgv wraps a planner-authored command in the platform
+// write-restricted sandbox. Only the host exec runner is wrapped: fake
+// runners in tests never execute on the host, and wrapping would break their
+// argv expectations.
+func sandboxVerificationArgv(runner ports.CommandRunner, argv []string, writableRoots []string) ([]string, bool, func()) {
+	if _, ok := runner.(*execCommandRunner); !ok {
+		return argv, false, func() {}
+	}
+	return wrapVerificationSandbox(argv, writableRoots)
+}
+
+// verificationWritableRoots lists the directories a verification command may
+// write to: its repo worktree (or workspace), the system temp dir, and the
+// user cache and Go toolchain dirs so builds and tests keep their caches.
+// Read access is not restricted — denying reads breaks toolchains — so the
+// sandbox mitigates host mutation, not exfiltration by a hostile command.
+func verificationWritableRoots(workRoots ...string) []string {
+	roots := make([]string, 0, len(workRoots)+3)
+	add := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return
+		}
+		if _, err := os.Stat(dir); err != nil {
+			return
+		}
+		roots = append(roots, dir)
+	}
+	for _, root := range workRoots {
+		add(root)
+	}
+	add(os.TempDir())
+	if cache, err := os.UserCacheDir(); err == nil {
+		add(cache)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		add(filepath.Join(home, "go"))
+	}
+	return roots
 }
 
 var verificationSecretPatterns = []*regexp.Regexp{
@@ -658,6 +732,13 @@ func outputContainsAny(output string, values ...string) bool {
 }
 
 func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, contractPath string, item TestingContractItem, repo feature.FeatureRepo, commit string) (*capturedVerificationRun, error) {
+	// A baseline result is a function of (command, relative cwd, base
+	// commit): the anchor is immutable, so a prior run this iteration or a
+	// previous one answers the same question without another 10-minute
+	// worktree run. Flaky baselines re-run only when the anchor moves.
+	if cached, ok := cachedBaselineRun(contractPath, item, commit); ok {
+		return cached, cachedBaselineErr(cached)
+	}
 	repoPath := strings.TrimSpace(repo.Path)
 	if repoPath == "" {
 		repoPath = strings.TrimSpace(repo.WorktreePath)
@@ -681,12 +762,64 @@ func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, cont
 	if err != nil {
 		return nil, err
 	}
-	run, runErr := captureVerificationCommand(ctx, runner, item.ID, "baseline", item.Run.Shell, cwd, item.Run.Timeout)
+	run, runErr := captureVerificationCommand(ctx, runner, item.ID, "baseline", item.Run.Shell, cwd, item.Run.Timeout, verificationWritableRoots(tmp))
 	run.record.Classification = "baseline"
+	run.record.BaseCommit = commit
+	run.record.RelCwd = strings.TrimSpace(item.Run.Cwd)
 	if err := persistVerificationRun(contractPath, item.ID, &run); err != nil {
 		return nil, err
 	}
 	return &run, runErr
+}
+
+// cachedBaselineErr reconstructs the error contract of a live baseline run
+// from a cached record: nil on exit 0, an exit-coded error otherwise.
+func cachedBaselineErr(run *capturedVerificationRun) error {
+	if run.record.ExitCode == 0 {
+		return nil
+	}
+	return cachedExitError{code: run.record.ExitCode}
+}
+
+type cachedExitError struct{ code int }
+
+func (e cachedExitError) Error() string { return fmt.Sprintf("cached baseline run exited %d", e.code) }
+func (e cachedExitError) ExitCode() int { return e.code }
+
+// cachedBaselineRun returns the most recent persisted baseline run for the
+// same (command, relative cwd, base commit) tuple, if any.
+func cachedBaselineRun(contractPath string, item TestingContractItem, commit string) (*capturedVerificationRun, bool) {
+	root := verificationEvidenceRoot(contractPath, item.ID)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, false
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "run-") {
+			continue
+		}
+		runDir := filepath.Join(root, entry.Name())
+		data, readErr := os.ReadFile(filepath.Join(runDir, "run.yaml"))
+		if readErr != nil {
+			continue
+		}
+		var record verificationRunRecord
+		if yaml.Unmarshal(data, &record) != nil {
+			continue
+		}
+		if record.Kind != "baseline" || record.BaseCommit != commit ||
+			record.Command != item.Run.Shell || record.RelCwd != strings.TrimSpace(item.Run.Cwd) {
+			continue
+		}
+		stdout, outErr := os.ReadFile(record.StdoutPath)
+		stderr, errErr := os.ReadFile(record.StderrPath)
+		if outErr != nil || errErr != nil {
+			continue
+		}
+		return &capturedVerificationRun{record: record, stdout: string(stdout), stderr: string(stderr)}, true
+	}
+	return nil, false
 }
 
 var unstableFailureText = regexp.MustCompile(`(?m)(/[^\s:]+|[A-Za-z]:\\[^\s:]+|\b\d+(?:\.\d+)?(?:ms|s|m)\b)`)
@@ -714,13 +847,15 @@ func sameVerificationFailure(a, b capturedVerificationRun) bool {
 	return normalize(a.stdout+"\n"+a.stderr) == normalize(b.stdout+"\n"+b.stderr)
 }
 
-func persistVerificationRun(contractPath, itemID string, run *capturedVerificationRun) error {
-	root := ""
+func verificationEvidenceRoot(contractPath, itemID string) string {
 	if strings.TrimSpace(contractPath) != "" {
-		root = filepath.Join(filepath.Dir(contractPath), "verification-evidence", safeEvidenceComponent(itemID))
-	} else {
-		root = filepath.Join(os.TempDir(), "agentico-verification-evidence", safeEvidenceComponent(itemID))
+		return filepath.Join(filepath.Dir(contractPath), "verification-evidence", safeEvidenceComponent(itemID))
 	}
+	return filepath.Join(os.TempDir(), "agentico-verification-evidence", safeEvidenceComponent(itemID))
+}
+
+func persistVerificationRun(contractPath, itemID string, run *capturedVerificationRun) error {
+	root := verificationEvidenceRoot(contractPath, itemID)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return fmt.Errorf("creating verification evidence root: %w", err)
 	}
@@ -737,9 +872,19 @@ func persistVerificationRun(contractPath, itemID string, run *capturedVerificati
 			next = n + 1
 		}
 	}
-	runDir := filepath.Join(root, fmt.Sprintf("run-%03d", next))
-	if err := os.Mkdir(runDir, 0o755); err != nil {
-		return err
+	// Claim the run number via Mkdir: under the shared temp-dir fallback two
+	// features can race the same root, so EEXIST just means try the next slot.
+	var runDir string
+	for {
+		runDir = filepath.Join(root, fmt.Sprintf("run-%03d", next))
+		mkdirErr := os.Mkdir(runDir, 0o755)
+		if mkdirErr == nil {
+			break
+		}
+		if !errors.Is(mkdirErr, os.ErrExist) {
+			return mkdirErr
+		}
+		next++
 	}
 	run.record.RunID = fmt.Sprintf("%s/run-%03d", safeEvidenceComponent(itemID), next)
 	run.record.StdoutPath = filepath.Join(runDir, "stdout.log")

@@ -241,6 +241,9 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 
 	// Step 1 — refactor-plan. Produces a phase-plan-style markdown with
 	// per-Task `**Repo:** <name>` tags. Tests inject RunRefactorPlanFn.
+	// planRevisionFeedback carries verification-contract defects from a
+	// completed implement round back into the next planning round.
+	planRevisionFeedback := ""
 	planRunner := cfg.RunRefactorPlanFn
 	if planRunner == nil {
 		planRunner = func(stagedDir string) (string, error) {
@@ -250,7 +253,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				StateDir:                   cfg.StateDir,
 				ArtifactDir:                stagedDir,
 				Workspace:                  workspace,
-				Prompt:                     prompt,
+				Prompt:                     promptWithRevisionFeedback(prompt, planRevisionFeedback),
 				PlanningModel:              cfg.PlanningModel,
 				ImplementModel:             cfg.Model,
 				DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
@@ -277,198 +280,240 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		}, fmt.Errorf("refactor feature loop: read protocol retry sidecar: %w", err)
 	}
 
+	// A contract error found by the deterministic executor is a planner
+	// command defect: the implementation is intact, only the plan's declared
+	// commands need repair. Bounded replanning keeps a recoverable typo from
+	// permanently failing the cycle while still terminating.
+	const maxPlanRevisionRounds = 2
+	var loopResult *LoopResult
+	var runErr error
+	var stagedRepos []string
 	var planPath string
-	var scope PhaseScopeResult
-	for {
-		if err := RemovePhaseCompleteMarker(artifactDir); err != nil {
-			_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, err.Error())
-			return &RefactorFeatureLoopResult{
-				FinalStatus: "failed",
-				LastError:   err.Error(),
-				ArtifactDir: artifactDir,
-			}, fmt.Errorf("refactor feature loop: prepare plan attempt: %w", err)
-		}
-		candidate, planErr := planRunner(artifactDir)
-		if planErr == nil && candidate != "" {
-			candidateScope, scopeErr := PhaseScope(cfg.Feature, candidate)
-			if scopeErr != nil {
-				errMsg := scopeErr.Error()
-				_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+
+planRevisionLoop:
+	for revisionRound := 0; ; revisionRound++ {
+		var scope PhaseScopeResult
+		for {
+			if err := RemovePhaseCompleteMarker(artifactDir); err != nil {
+				_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, err.Error())
 				return &RefactorFeatureLoopResult{
 					FinalStatus: "failed",
-					LastError:   errMsg,
+					LastError:   err.Error(),
 					ArtifactDir: artifactDir,
-				}, fmt.Errorf("refactor feature loop: scoping plan: %w", scopeErr)
+				}, fmt.Errorf("refactor feature loop: prepare plan attempt: %w", err)
 			}
-			if !candidateScope.ScopeOK() {
-				violations := make([]ProtocolViolation, 0, len(candidateScope.Issues))
-				for _, issue := range candidateScope.Issues {
-					reason := issue.Message
-					if issue.Task != "" {
-						reason = strings.TrimSpace(issue.Task) + ": " + reason
-					}
-					violations = append(violations, ProtocolViolation{Artifact: "refactor-plan.md", Reason: reason})
+			candidate, planErr := planRunner(artifactDir)
+			if planErr == nil && candidate != "" {
+				candidateScope, scopeErr := PhaseScope(cfg.Feature, candidate)
+				if scopeErr != nil {
+					errMsg := scopeErr.Error()
+					_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+					return &RefactorFeatureLoopResult{
+						FinalStatus: "failed",
+						LastError:   errMsg,
+						ArtifactDir: artifactDir,
+					}, fmt.Errorf("refactor feature loop: scoping plan: %w", scopeErr)
 				}
-				planErr = newProtocolViolationError(RoleRefactorPlanStep, artifactDir, violations)
-			} else {
-				scope = candidateScope
+				if !candidateScope.ScopeOK() {
+					violations := make([]ProtocolViolation, 0, len(candidateScope.Issues))
+					for _, issue := range candidateScope.Issues {
+						reason := issue.Message
+						if issue.Task != "" {
+							reason = strings.TrimSpace(issue.Task) + ": " + reason
+						}
+						violations = append(violations, ProtocolViolation{Artifact: "refactor-plan.md", Reason: reason})
+					}
+					planErr = newProtocolViolationError(RoleRefactorPlanStep, artifactDir, violations)
+				} else {
+					scope = candidateScope
+				}
 			}
-		}
-		if planErr != nil {
-			if isProtocolViolationError(planErr) {
-				decision := DecideProtocolRetry(
-					RoleRefactorPlanStep,
-					artifactDir,
-					cfg.Feature.ActiveRun,
-					sidecar,
-					protocolViolationsFromError(planErr),
-					cfg.MaxConsecFails,
-				)
-				if decision.NewSidecar != nil {
-					if err := WriteProtocolRetrySidecar(artifactDir, *decision.NewSidecar); err != nil {
-						errMsg := err.Error()
+			if planErr != nil {
+				if isProtocolViolationError(planErr) {
+					decision := DecideProtocolRetry(
+						RoleRefactorPlanStep,
+						artifactDir,
+						cfg.Feature.ActiveRun,
+						sidecar,
+						protocolViolationsFromError(planErr),
+						cfg.MaxConsecFails,
+					)
+					if decision.NewSidecar != nil {
+						if err := WriteProtocolRetrySidecar(artifactDir, *decision.NewSidecar); err != nil {
+							errMsg := err.Error()
+							_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+							return &RefactorFeatureLoopResult{
+								FinalStatus: "failed",
+								LastError:   errMsg,
+								ArtifactDir: artifactDir,
+							}, fmt.Errorf("refactor feature loop: write protocol retry sidecar: %w", err)
+						}
+						sidecar = decision.NewSidecar
+					}
+					switch decision.Action {
+					case ProtocolRetryActionRetry:
+						continue
+					case ProtocolRetryActionTerminal:
+						errMsg := planErr.Error()
+						_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+						return &RefactorFeatureLoopResult{
+							FinalStatus: BoundedHelperStatusProtocolViolation,
+							LastError:   errMsg,
+							ArtifactDir: artifactDir,
+						}, nil
+					case ProtocolRetryActionSucceed:
+						errMsg := planErr.Error()
 						_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
 						return &RefactorFeatureLoopResult{
 							FinalStatus: "failed",
 							LastError:   errMsg,
 							ArtifactDir: artifactDir,
-						}, fmt.Errorf("refactor feature loop: write protocol retry sidecar: %w", err)
+						}, fmt.Errorf("refactor feature loop: protocol violation had no violations: %w", planErr)
+					default:
+						errMsg := fmt.Sprintf("unknown protocol retry action %d", decision.Action)
+						_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+						return &RefactorFeatureLoopResult{
+							FinalStatus: "failed",
+							LastError:   errMsg,
+							ArtifactDir: artifactDir,
+						}, fmt.Errorf("refactor feature loop: %s", errMsg)
 					}
-					sidecar = decision.NewSidecar
 				}
-				switch decision.Action {
-				case ProtocolRetryActionRetry:
-					continue
-				case ProtocolRetryActionTerminal:
-					errMsg := planErr.Error()
-					_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
-					return &RefactorFeatureLoopResult{
-						FinalStatus: BoundedHelperStatusProtocolViolation,
-						LastError:   errMsg,
-						ArtifactDir: artifactDir,
-					}, nil
-				case ProtocolRetryActionSucceed:
-					errMsg := planErr.Error()
-					_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
-					return &RefactorFeatureLoopResult{
-						FinalStatus: "failed",
-						LastError:   errMsg,
-						ArtifactDir: artifactDir,
-					}, fmt.Errorf("refactor feature loop: protocol violation had no violations: %w", planErr)
-				default:
-					errMsg := fmt.Sprintf("unknown protocol retry action %d", decision.Action)
-					_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
-					return &RefactorFeatureLoopResult{
-						FinalStatus: "failed",
-						LastError:   errMsg,
-						ArtifactDir: artifactDir,
-					}, fmt.Errorf("refactor feature loop: %s", errMsg)
-				}
+				_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, planErr.Error())
+				return &RefactorFeatureLoopResult{
+					FinalStatus: "failed",
+					LastError:   planErr.Error(),
+					ArtifactDir: artifactDir,
+				}, fmt.Errorf("refactor feature loop: plan step: %w", planErr)
 			}
-			_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, planErr.Error())
+			_ = DeleteProtocolRetrySidecar(artifactDir)
+			planPath = candidate
+			break
+		}
+		if planPath == "" {
+			// Defensive: planner returned an empty path with no error. Treat
+			// as a dispatch failure so the cycle surfaces the issue rather
+			// than running an iteration with no plan.
+			errMsg := "refactor feature loop: plan step returned empty path"
+			_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
 			return &RefactorFeatureLoopResult{
 				FinalStatus: "failed",
-				LastError:   planErr.Error(),
+				LastError:   errMsg,
 				ArtifactDir: artifactDir,
-			}, fmt.Errorf("refactor feature loop: plan step: %w", planErr)
+			}, fmt.Errorf("%s", errMsg)
 		}
-		_ = DeleteProtocolRetrySidecar(artifactDir)
-		planPath = candidate
-		break
+
+		// Step 2 — use the validated plan scope captured before the planner's
+		// protocol gate succeeded. Invalid or ambiguous ownership never reaches
+		// implementation and never broadens to every feature repo.
+		stagedRepos = scope.Repos
+
+		// Read plan text once for testing-contract compilation.
+		planBytes, readErr := os.ReadFile(planPath)
+		if readErr != nil {
+			return &RefactorFeatureLoopResult{
+				FinalStatus: "failed",
+				LastError:   readErr.Error(),
+				ArtifactDir: artifactDir,
+			}, fmt.Errorf("refactor feature loop: reading plan: %w", readErr)
+		}
+
+		// Step 3 — compile and persist the plan-declared testing contract.
+		// Reconcile against any prior round's contract so base-commit anchors
+		// and user waivers survive a plan revision.
+		contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
+		contract := CompileTestingContractMultiRepo(MultiRepoContractInput{
+			Repos:     stagedRepos,
+			PlanText:  string(planBytes),
+			PlanPath:  planPath,
+			PhaseType: cfg.Feature.RoadmapPhaseType,
+			PlanLess:  false,
+		})
+		if existing, readErr := ReadTestingContract(contractPath); readErr == nil {
+			contract = ReconcileTestingContract(existing, contract)
+		}
+		if err := WriteTestingContract(contractPath, contract); err != nil {
+			return &RefactorFeatureLoopResult{
+				FinalStatus: "failed",
+				LastError:   err.Error(),
+				ArtifactDir: artifactDir,
+			}, fmt.Errorf("refactor feature loop: writing testing contract: %w", err)
+		}
+
+		// Step 4 — drive the iterative implement loop. The rest of the loop's
+		// state-machine (handoff parser, review gate, retry/safety-rail,
+		// crash recovery) is owned by RunImplementationLoop; the refactor loop
+		// just translates outcomes into the cycle-level result.
+		setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "refactoring")
+
+		runImpl := RunImplementationLoop
+		if cfg.RunImplementFn != nil {
+			runImpl = cfg.RunImplementFn
+		}
+
+		implCfg := ImplementConfig{
+			Feature:                    cfg.Feature,
+			FeatureStore:               cfg.FeatureStore,
+			WorkDir:                    workspace.Cwd,
+			PlanPath:                   planPath,
+			MaxIterations:              cfg.MaxIterations,
+			MaxConsecFails:             cfg.MaxConsecFails,
+			MaxConsecNoProgress:        cfg.MaxConsecNoProgress,
+			ExitCriteria:               refactorExitCriteria(cfg.Feature),
+			Model:                      cfg.Model,
+			ReviewModel:                cfg.ReviewModel,
+			ArtifactDir:                artifactDir,
+			StateDir:                   stateDir,
+			RunDir:                     runDir,
+			AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
+			KBInfos:                    cfg.KBInfos,
+			PhaseType:                  cfg.Feature.RoadmapPhaseType,
+			DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
+			DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
+			PermissionCache:            cfg.PermissionCache,
+			BuildSession:               cfg.BuildSession,
+			AskingClause:               cfg.AskingClause,
+			EffortLevel:                cfg.EffortLevel,
+			SkillsDir:                  cfg.SkillsDir,
+			GuidelinesDir:              cfg.GuidelinesDir,
+			FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
+			Observer:                   cfg.Observer,
+			CommandRunner:              cfg.CommandRunner,
+			// Refactor cycles run the per-iteration review gate so the
+			// reviewer can attest the cross-repo edits landed cleanly before
+			// AtomicPhaseStamp marks the staged subset AwaitingFinalReview.
+			// Skipping iteration review here would let half-done refactors
+			// ship.
+			SkipIterationReview: false,
+		}
+
+		loopResult, runErr = runImpl(implCfg, sm)
+
+		if runErr == nil && loopResult != nil && loopResult.FinalStatus == "plan_revision_required" {
+			if revisionRound < maxPlanRevisionRounds {
+				planRevisionFeedback = loopResult.PlanRevisionFeedback
+				setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "refactor-planning")
+				continue planRevisionLoop
+			}
+			errMsg := "refactor plan revision limit reached; verification contract still has command defects:\n" +
+				strings.TrimSpace(loopResult.PlanRevisionFeedback)
+			_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
+				FeatureID: cfg.Feature.ID,
+				Repos:     stagedRepos,
+				Outcome:   PhaseOutcomeFailed,
+				LastError: errMsg,
+			})
+			_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+			return &RefactorFeatureLoopResult{
+				FinalStatus: "failed",
+				Iterations:  loopResult.Iterations,
+				LastError:   errMsg,
+				Repos:       stagedRepos,
+				ArtifactDir: artifactDir,
+			}, nil
+		}
+		break planRevisionLoop
 	}
-	if planPath == "" {
-		// Defensive: planner returned an empty path with no error. Treat
-		// as a dispatch failure so the cycle surfaces the issue rather
-		// than running an iteration with no plan.
-		errMsg := "refactor feature loop: plan step returned empty path"
-		_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
-		return &RefactorFeatureLoopResult{
-			FinalStatus: "failed",
-			LastError:   errMsg,
-			ArtifactDir: artifactDir,
-		}, fmt.Errorf("%s", errMsg)
-	}
-
-	// Step 2 — use the validated plan scope captured before the planner's
-	// protocol gate succeeded. Invalid or ambiguous ownership never reaches
-	// implementation and never broadens to every feature repo.
-	stagedRepos := scope.Repos
-
-	// Read plan text once for testing-contract compilation.
-	planBytes, readErr := os.ReadFile(planPath)
-	if readErr != nil {
-		return &RefactorFeatureLoopResult{
-			FinalStatus: "failed",
-			LastError:   readErr.Error(),
-			ArtifactDir: artifactDir,
-		}, fmt.Errorf("refactor feature loop: reading plan: %w", readErr)
-	}
-
-	// Step 3 — compile and persist the plan-declared testing contract.
-	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
-	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos:     stagedRepos,
-		PlanText:  string(planBytes),
-		PlanPath:  planPath,
-		PhaseType: cfg.Feature.RoadmapPhaseType,
-		PlanLess:  false,
-	})
-	if err := WriteTestingContract(contractPath, contract); err != nil {
-		return &RefactorFeatureLoopResult{
-			FinalStatus: "failed",
-			LastError:   err.Error(),
-			ArtifactDir: artifactDir,
-		}, fmt.Errorf("refactor feature loop: writing testing contract: %w", err)
-	}
-
-	// Step 4 — drive the iterative implement loop. The rest of the loop's
-	// state-machine (handoff parser, review gate, retry/safety-rail,
-	// crash recovery) is owned by RunImplementationLoop; the refactor loop
-	// just translates outcomes into the cycle-level result.
-	setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "refactoring")
-
-	runImpl := RunImplementationLoop
-	if cfg.RunImplementFn != nil {
-		runImpl = cfg.RunImplementFn
-	}
-
-	implCfg := ImplementConfig{
-		Feature:                    cfg.Feature,
-		FeatureStore:               cfg.FeatureStore,
-		WorkDir:                    workspace.Cwd,
-		PlanPath:                   planPath,
-		MaxIterations:              cfg.MaxIterations,
-		MaxConsecFails:             cfg.MaxConsecFails,
-		MaxConsecNoProgress:        cfg.MaxConsecNoProgress,
-		ExitCriteria:               refactorExitCriteria(cfg.Feature),
-		Model:                      cfg.Model,
-		ReviewModel:                cfg.ReviewModel,
-		ArtifactDir:                artifactDir,
-		StateDir:                   stateDir,
-		RunDir:                     runDir,
-		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
-		KBInfos:                    cfg.KBInfos,
-		PhaseType:                  cfg.Feature.RoadmapPhaseType,
-		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
-		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
-		PermissionCache:            cfg.PermissionCache,
-		BuildSession:               cfg.BuildSession,
-		AskingClause:               cfg.AskingClause,
-		EffortLevel:                cfg.EffortLevel,
-		SkillsDir:                  cfg.SkillsDir,
-		GuidelinesDir:              cfg.GuidelinesDir,
-		FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
-		Observer:                   cfg.Observer,
-		CommandRunner:              cfg.CommandRunner,
-		// Refactor cycles run the per-iteration review gate so the
-		// reviewer can attest the cross-repo edits landed cleanly before
-		// AtomicPhaseStamp marks the staged subset AwaitingFinalReview.
-		// Skipping iteration review here would let half-done refactors
-		// ship.
-		SkipIterationReview: false,
-	}
-
-	loopResult, runErr := runImpl(implCfg, sm)
 
 	// Translate the inner LoopResult into the outer RefactorFeatureLoopResult
 	// and commit the cycle outcome.
@@ -572,6 +617,15 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 			ArtifactDir: artifactDir,
 		}, nil
 	}
+}
+
+// promptWithRevisionFeedback appends verification-contract repair feedback to
+// the planner prompt on plan-revision rounds.
+func promptWithRevisionFeedback(prompt, feedback string) string {
+	if strings.TrimSpace(feedback) == "" {
+		return prompt
+	}
+	return prompt + "\n\n" + strings.TrimSpace(feedback) + "\n"
 }
 
 // refactorExitCriteria returns the refactor cycle's exit criteria. The

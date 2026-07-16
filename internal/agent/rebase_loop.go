@@ -47,6 +47,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -394,6 +395,26 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 			Repos:             repoNames,
 		}, nil
 
+	case "plan_revision_required":
+		// The rebase plan is harness-authored: there is no planner session
+		// to revise it, so a verification contract defect is a
+		// harness/environment failure. Fail the cycle with the full
+		// feedback so the defect is actionable instead of silently dropped.
+		errMsg := cyclePlanRevisionFailure("rebase", loopResult)
+		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
+			FeatureID: cfg.Feature.ID,
+			Repos:     repoNames,
+			Outcome:   PhaseOutcomeFailed,
+			LastError: errMsg,
+		})
+		_ = markActiveCycleFailed(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+		return &RebaseLoopResult{
+			FinalStatus: "failed",
+			Iterations:  loopResult.Iterations,
+			LastError:   errMsg,
+			Repos:       repoNames,
+		}, nil
+
 	default:
 		// max_iterations / safety_rail / failed all map to a cycle failure:
 		// surface conflict (LastError carries it) and leave for human
@@ -414,6 +435,17 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 			Repos:       repoNames,
 		}, nil
 	}
+}
+
+// cyclePlanRevisionFailure formats a plan_revision_required inner-loop result
+// for cycles whose plan is harness-authored and therefore has no planner
+// session to revise it.
+func cyclePlanRevisionFailure(cycleType string, loopResult *LoopResult) string {
+	msg := fmt.Sprintf("%s cycle verification contract has command defects the harness cannot repair", cycleType)
+	if feedback := strings.TrimSpace(loopResult.PlanRevisionFeedback); feedback != "" {
+		msg += ":\n" + feedback
+	}
+	return msg
 }
 
 // writeRebaseTestingContract persists an initially empty cycle contract. The

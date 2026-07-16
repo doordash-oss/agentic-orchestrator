@@ -1061,3 +1061,47 @@ func sliceContainsAny(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// TestRunRebaseLoop_PlanRevisionRequiredFailsWithFeedback: the rebase plan is
+// harness-authored, so a verification contract defect cannot be replanned.
+// The cycle must fail loudly with the feedback preserved instead of dropping
+// it in the default branch.
+func TestRunRebaseLoop_PlanRevisionRequiredFailsWithFeedback(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-plan-revision", []string{testRepoNameAPI})
+
+	cfg := RebaseLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		BehindRepos: []RebaseRepoTarget{
+			{RepoName: testRepoNameAPI, RebaseTarget: defaultTestBranch},
+		},
+		MaxIterations:  3,
+		MaxConsecFails: 3,
+		RunImplementFn: stubRunImplementFn(&LoopResult{
+			FinalStatus:          "plan_revision_required",
+			Iterations:           1,
+			PlanRevisionFeedback: "- `plan:api:xyz`: verification command was not found",
+		}, nil),
+	}
+
+	result, err := RunRebaseLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+	if result.FinalStatus != "failed" {
+		t.Fatalf("FinalStatus = %q, want failed", result.FinalStatus)
+	}
+	if !strings.Contains(result.LastError, "verification command was not found") {
+		t.Fatalf("LastError = %q, want preserved contract-error feedback", result.LastError)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleFailed {
+		t.Fatalf("ActiveCycle = %+v, want failed cycle", loaded.ActiveCycle)
+	}
+}

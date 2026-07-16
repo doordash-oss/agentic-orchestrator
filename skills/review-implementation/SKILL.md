@@ -58,7 +58,7 @@ When the prompt lists required verification items, apply these rules:
 
 1. Do NOT execute any commands, tests, builds, linters, or scripts. Audit the implementation-provided verification report instead.
 2. Every testing-contract item must appear in the harness-generated verification report with evidence or an authorized disposition.
-3. A required item that is missing or marked `not_run` is a Critical finding. A harness-classified `regression` is Critical. A plain `failed`/`unclassified_failure` still requires code-and-evidence judgment; do not turn uncertainty into an automatic retry when the failure is demonstrably unrelated.
+3. A required item that is missing or marked `not_run` is a Critical finding. A harness-classified `regression` is Critical. A plain `failed`/`unclassified_failure` still requires code-and-evidence judgment; do not turn uncertainty into an automatic retry when the failure is demonstrably unrelated. Note `repo: cross-repo` items have no base-commit anchor, so their failures are always `unclassified_failure` — judge them on evidence, never on the missing classification.
 4. Treat `inherited_failure` as non-blocking when its harness evidence shows the same command, exit code, and normalized failure at the contract's phase-start base commit. Treat `waived` as satisfied only when the bound testing contract records the user-authorized waiver. Never ask the implementer to recreate either disposition.
 5. Treat pending_human as non-blocking only when the report clearly marks the item as mode: manual.
 6. Agent-owned manual, visual, and behavioral rows must point to the canonical evidence file declared by the testing contract. Missing evidence is blocking; do not ask the implementer to edit report rows.

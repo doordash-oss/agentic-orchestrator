@@ -335,7 +335,7 @@ func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
 		}
 	}
 	violations = append(violations, taskScopedEvidenceViolations(planText)...)
-	violations = append(violations, verificationScopeViolations(planText, success)...)
+	violations = append(violations, verificationScopeViolations(planText)...)
 	return violations
 }
 
@@ -372,9 +372,13 @@ func validateManualVerificationSection(successCriteria string) string {
 	case noneMarkers > 0:
 		return "phase plan markdown `### Manual Verification` must contain one consolidated checklist requirement or exactly one `None required: <reason>` checklist item, not both"
 	case requirements == 1:
+		var fence fenceState
 		for _, line := range strings.Split(body, "\n") {
+			if fence.update(line) || fence.inside() {
+				continue
+			}
 			description, ok := parseChecklistDescription(strings.TrimSpace(line))
-			if ok && !isNoneRequiredDescription(description) && strings.Contains(description, "`") {
+			if ok && !isNoneRequiredDescription(description) && descriptionContainsCommandSpan(description) {
 				return "phase plan markdown `### Manual Verification` must describe semantic judgment without executable backtick commands"
 			}
 		}
@@ -386,7 +390,24 @@ func validateManualVerificationSection(successCriteria string) string {
 	}
 }
 
-func verificationScopeViolations(planText, successCriteria string) []ProtocolViolation {
+// descriptionContainsCommandSpan reports whether any backtick span in the
+// description looks like an executable shell command. Inline code references
+// (symbol names, UI labels) are allowed in manual checks.
+func descriptionContainsCommandSpan(description string) bool {
+	for _, span := range findBacktickSpans(description) {
+		if looksLikeShellCommand(strings.TrimSpace(description[span[2]:span[3]])) {
+			return true
+		}
+	}
+	return false
+}
+
+// verificationScopeViolations checks every automated-verification command the
+// contract compiler would consume: per-Task blocks plus all content outside
+// the `## Tasks` section (the compiler's top-level scope — not just Success
+// Criteria). Repo names compare case-insensitively so tag-case drift does not
+// reject an otherwise valid plan.
+func verificationScopeViolations(planText string) []ProtocolViolation {
 	tasks := ParsePlanTasks(planText)
 	repos := make(map[string]bool)
 	var violations []ProtocolViolation
@@ -396,7 +417,7 @@ func verificationScopeViolations(planText, successCriteria string) []ProtocolVio
 				"%s declares multiple `**Repo:**` tags; split cross-repo work into one task per repo", strings.TrimSpace(task.Heading))})
 		}
 		for _, declaredRepo := range task.Repos {
-			repo := strings.TrimSpace(declaredRepo)
+			repo := strings.ToLower(strings.TrimSpace(declaredRepo))
 			repos[repo] = true
 		}
 	}
@@ -406,19 +427,20 @@ func verificationScopeViolations(planText, successCriteria string) []ProtocolVio
 			taskRepo = strings.TrimSpace(task.Repos[0])
 		}
 		for _, step := range ParsePlanVerification(strings.Join(task.Body, "\n")) {
-			if step.Repo != "" && taskRepo != "" && step.Repo != taskRepo {
+			if step.Repo != "" && taskRepo != "" && !strings.EqualFold(step.Repo, taskRepo) {
 				violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: fmt.Sprintf(
 					"verification command scoped to repo %q appears under a task scoped to repo %q", step.Repo, taskRepo)})
 			}
 		}
 	}
-	for _, step := range ParsePlanVerification(successCriteria) {
+	topLevel, _ := splitPlanForVerification(planText)
+	for _, step := range ParsePlanVerification(topLevel) {
 		repo := strings.TrimSpace(step.Repo)
 		if len(repos) > 1 && repo == "" {
 			violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: "multi-repo phase automated verification must scope every command with `[repo: <name>]`"})
 			continue
 		}
-		if repo != "" && len(repos) > 0 && !repos[repo] {
+		if repo != "" && len(repos) > 0 && !repos[strings.ToLower(repo)] {
 			violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: fmt.Sprintf(
 				"verification command references repo %q, which is not assigned to any phase task", repo)})
 		}
@@ -529,7 +551,7 @@ func validateRefactorPlanMarkdownArtifact(iterDir string, path string, out *Outc
 	}
 	out.PlanMarkdownPath = path
 	planText := string(data)
-	violations := verificationScopeViolations(planText, extractMarkdownSection(planText, "## Success Criteria"))
+	violations := verificationScopeViolations(planText)
 	for _, task := range ParsePlanTasks(planText) {
 		if len(task.Repos) != 1 {
 			violations = append(violations, ProtocolViolation{

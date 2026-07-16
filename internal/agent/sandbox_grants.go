@@ -24,8 +24,6 @@
 package agent
 
 import (
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,9 +40,81 @@ type sandboxGrant struct {
 	DeniedPath string `yaml:"denied_path"`
 }
 
+// sandboxUnsandboxedDisposition records a ladder-proven fact: the item's
+// command fails under the verification sandbox and passes without it, so
+// later runs execute it unsandboxed directly.
+type sandboxUnsandboxedDisposition struct {
+	ItemID string `yaml:"item_id"`
+	Reason string `yaml:"reason"`
+}
+
 type sandboxGrantsFile struct {
-	Version int            `yaml:"version"`
-	Grants  []sandboxGrant `yaml:"grants"`
+	Version     int                             `yaml:"version"`
+	Grants      []sandboxGrant                  `yaml:"grants"`
+	Unsandboxed []sandboxUnsandboxedDisposition `yaml:"unsandboxed,omitempty"`
+}
+
+// loadUnsandboxedDispositions returns the item IDs recorded as requiring
+// unsandboxed execution.
+func loadUnsandboxedDispositions(contractPath string) map[string]bool {
+	file, ok := readSandboxGrantsFile(contractPath)
+	if !ok {
+		return nil
+	}
+	items := make(map[string]bool, len(file.Unsandboxed))
+	for _, disposition := range file.Unsandboxed {
+		if id := strings.TrimSpace(disposition.ItemID); id != "" {
+			items[id] = true
+		}
+	}
+	return items
+}
+
+// recordUnsandboxedDisposition persists an unsandboxed-execution disposition,
+// deduplicated by item ID.
+func recordUnsandboxedDisposition(contractPath string, disposition sandboxUnsandboxedDisposition) error {
+	path := sandboxGrantsPath(contractPath)
+	if path == "" {
+		return nil
+	}
+	file, _ := readSandboxGrantsFile(contractPath)
+	disposition.ItemID = strings.TrimSpace(disposition.ItemID)
+	for _, existing := range file.Unsandboxed {
+		if strings.TrimSpace(existing.ItemID) == disposition.ItemID {
+			return nil
+		}
+	}
+	file.Unsandboxed = append(file.Unsandboxed, disposition)
+	return writeSandboxGrantsFile(path, file)
+}
+
+func readSandboxGrantsFile(contractPath string) (sandboxGrantsFile, bool) {
+	var file sandboxGrantsFile
+	path := sandboxGrantsPath(contractPath)
+	if path == "" {
+		return file, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return file, false
+	}
+	if yaml.Unmarshal(data, &file) != nil {
+		return sandboxGrantsFile{}, false
+	}
+	return file, true
+}
+
+func writeSandboxGrantsFile(path string, file sandboxGrantsFile) error {
+	file.Version = 1
+	data, err := yaml.Marshal(file)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // protectedHomeComponents are top-level home entries that hold credentials,
@@ -160,6 +230,37 @@ func toolchainCacheRoots(home string) []string {
 	return roots
 }
 
+// sandboxEscalationSafe reports whether a command whose sandboxed run was
+// denied on deniedPath may be retried unsandboxed. Escalation is unsafe
+// exactly when the sandbox is the only wall: paths under the user's home
+// (grantable ones were already granted upstream) and paths whose nearest
+// existing ancestor the user can write. Root-owned system paths stay
+// protected by unix permissions either way, and a path-less denial is a
+// process-level restriction (GUI, nested sandbox) with nothing to protect.
+func sandboxEscalationSafe(home, deniedPath string) bool {
+	deniedPath = strings.TrimSpace(deniedPath)
+	if deniedPath == "" {
+		return true
+	}
+	deniedPath = filepath.Clean(deniedPath)
+	home = filepath.Clean(strings.TrimSpace(home))
+	if home != "" && home != string(filepath.Separator) &&
+		(deniedPath == home || strings.HasPrefix(deniedPath, home+string(filepath.Separator))) {
+		return false
+	}
+	dir := deniedPath
+	for {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return !pathWritableByUser(dir)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return true
+		}
+		dir = parent
+	}
+}
+
 func sandboxGrantsPath(contractPath string) string {
 	contractPath = strings.TrimSpace(contractPath)
 	if contractPath == "" {
@@ -212,29 +313,13 @@ func appendSandboxGrant(contractPath string, grant sandboxGrant) error {
 	if path == "" {
 		return nil
 	}
-	var file sandboxGrantsFile
-	if data, err := os.ReadFile(path); err == nil {
-		if err := yaml.Unmarshal(data, &file); err != nil {
-			return fmt.Errorf("parsing sandbox grants file: %w", err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("reading sandbox grants file: %w", err)
-	}
+	file, _ := readSandboxGrantsFile(contractPath)
 	grant.Root = filepath.Clean(strings.TrimSpace(grant.Root))
 	for _, existing := range file.Grants {
 		if filepath.Clean(existing.Root) == grant.Root {
 			return nil
 		}
 	}
-	file.Version = 1
 	file.Grants = append(file.Grants, grant)
-	data, err := yaml.Marshal(file)
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeSandboxGrantsFile(path, file)
 }

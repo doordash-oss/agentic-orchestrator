@@ -665,7 +665,14 @@ func TestSandboxVerificationArgvOnlyWrapsHostRunner(t *testing.T) {
 }
 
 func TestExecuteTestingContractBlocksEnvironmentWriteDenial(t *testing.T) {
-	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho 'mkdir /agentico-denied/.m2: Operation not permitted' >&2\nexit 1\n")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	// A denial on a non-grantable home path (user data the sandbox alone
+	// protects) must gate to the user, never self-grant or escalate.
+	denied := filepath.Join(home, "Documents", "agentico-denied")
+	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho 'mkdir "+denied+": Operation not permitted' >&2\nexit 1\n")
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
 	contract := executableContract(commit)
 	report := BuildContractVerificationReportStub(&contract, contractPath)

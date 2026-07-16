@@ -97,6 +97,41 @@ func TestToolchainCacheRoots(t *testing.T) {
 	}
 }
 
+func TestUnsandboxedDispositionRoundtrip(t *testing.T) {
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	for _, d := range []sandboxUnsandboxedDisposition{
+		{ItemID: "a", Reason: "sandbox blocks GUI"},
+		{ItemID: "a", Reason: "duplicate"},
+		{ItemID: "b", Reason: "nested sandbox"},
+	} {
+		if err := recordUnsandboxedDisposition(contractPath, d); err != nil {
+			t.Fatalf("recordUnsandboxedDisposition() error = %v", err)
+		}
+	}
+	got := loadUnsandboxedDispositions(contractPath)
+	if len(got) != 2 || !got["a"] || !got["b"] {
+		t.Fatalf("loadUnsandboxedDispositions() = %v, want deduped {a, b}", got)
+	}
+	if got := loadUnsandboxedDispositions(filepath.Join(t.TempDir(), "missing.yaml")); len(got) != 0 {
+		t.Fatalf("loadUnsandboxedDispositions(missing) = %v, want empty", got)
+	}
+	// Dispositions and grants share the sidecar without clobbering each other.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	grantRoot := filepath.Join(home, ".agentico-test-cache")
+	if err := appendSandboxGrant(contractPath, sandboxGrant{Root: grantRoot, ItemID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadUnsandboxedDispositions(contractPath); len(got) != 2 {
+		t.Fatalf("dispositions lost after grant append: %v", got)
+	}
+	if roots := loadSandboxGrantRoots(contractPath); len(roots) != 1 {
+		t.Fatalf("grants lost after disposition append: %v", roots)
+	}
+}
+
 func TestExecuteTestingContractBlocksProtectedPathDenial(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

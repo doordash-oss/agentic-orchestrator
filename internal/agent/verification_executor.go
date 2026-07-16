@@ -123,6 +123,10 @@ func ExecuteTestingContract(
 	report.ContractPath = strings.TrimSpace(contractPath)
 	report.ContractRevision = contract.Revision
 	grantRoots := loadSandboxGrantRoots(contractPath)
+	unsandboxedItems := loadUnsandboxedDispositions(contractPath)
+	if unsandboxedItems == nil {
+		unsandboxedItems = make(map[string]bool)
+	}
 	userHome, homeErr := os.UserHomeDir()
 	if homeErr != nil {
 		userHome = ""
@@ -191,7 +195,7 @@ func ExecuteTestingContract(
 				blocked = true
 				break
 			}
-			run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s", writableRoots)
+			run, runErr := captureVerificationCommand(ctx, runner, item.ID, "capability", probe, cwd, "30s", writableRoots, true)
 			if runErr != nil {
 				var exitCoder interface{ ExitCode() int }
 				if !errors.As(runErr, &exitCoder) && !errors.Is(runErr, context.DeadlineExceeded) {
@@ -226,13 +230,14 @@ func ExecuteTestingContract(
 			continue
 		}
 
-		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots)
+		runSandboxed := !unsandboxedItems[item.ID]
+		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed)
 		// Sandbox self-expansion: an OS write denial on a grantable path is a
 		// harness limitation, not a finding. Grant the minimal root, retry,
 		// and persist so later runs (and baselines) start with it. Protected
 		// paths never grant and fall through to the environment gate below.
 		var grantedThisItem []string
-		for candidateErr != nil && len(grantedThisItem) < maxSandboxGrantsPerItem {
+		for candidateErr != nil && runSandboxed && len(grantedThisItem) < maxSandboxGrantsPerItem {
 			_, deniedPath, denied := verificationWriteDenial(candidate, writableRoots)
 			if !denied || deniedPath == "" {
 				break
@@ -254,7 +259,7 @@ func ExecuteTestingContract(
 			grantRoots = append(grantRoots, root)
 			grantedThisItem = append(grantedThisItem, root)
 			writableRoots = verificationWritableRoots(append(itemWritableWorkRoots(item, workDir, repos), grantRoots...)...)
-			candidate, candidateErr = captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots)
+			candidate, candidateErr = captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed)
 		}
 		if candidateErr == nil {
 			candidate.record.Classification = VerificationClassificationPassed
@@ -264,6 +269,8 @@ func ExecuteTestingContract(
 			note := ""
 			if len(grantedThisItem) > 0 {
 				note = "passed after sandbox write grants: " + strings.Join(grantedThisItem, ", ")
+			} else if !runSandboxed {
+				note = "executed unsandboxed per recorded environment disposition"
 			}
 			report.Results[idx] = machineContractResult(item, VerificationStatusPassed, candidate, note)
 			continue
@@ -278,7 +285,10 @@ func ExecuteTestingContract(
 				continue
 			}
 		}
-		if detail, _, denied := verificationWriteDenial(candidate, writableRoots); denied {
+		// Escalation triage: a write denial whose path only the sandbox
+		// protects (user-writable outside the grant policy) gates to the
+		// user; everything else is eligible for the environment differential.
+		if detail, deniedPath, denied := verificationWriteDenial(candidate, writableRoots); denied && !sandboxEscalationSafe(userHome, deniedPath) {
 			if err := recordEnvironmentLimitedBlock(out, report, idx, item, contractPath, &candidate,
 				"verification environment denies required writes: "+detail); err != nil {
 				return nil, err
@@ -292,6 +302,54 @@ func ExecuteTestingContract(
 			}
 			continue
 		}
+		// Environment differential: vary only the sandbox and observe. An
+		// unsandboxed pass with a reproducing sandboxed failure is a proven
+		// environment limitation (recorded as a disposition); an unsandboxed
+		// pass with a sandboxed re-pass was a flake; a second failure stands
+		// in for the regression confirmation below.
+		var ladderFailure *capturedVerificationRun
+		if candidate.record.Sandboxed && candidate.record.ExitCode != 124 && ctx.Err() == nil {
+			escalated, escalatedErr := captureVerificationCommand(ctx, runner, item.ID, "unsandboxed", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, false)
+			if escalatedErr == nil {
+				confirm, confirmErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, true)
+				if confirmErr == nil {
+					candidate.record.Classification = VerificationClassificationFlaky
+					escalated.record.Classification = VerificationClassificationPassed
+					confirm.record.Classification = VerificationClassificationPassed
+					for _, run := range []*capturedVerificationRun{&candidate, &escalated, &confirm} {
+						if err := persistVerificationRun(contractPath, item.ID, run); err != nil {
+							return nil, err
+						}
+					}
+					report.Results[idx] = machineContractResult(item, VerificationStatusPassed, confirm,
+						"passed on confirmation re-run; the initial failure did not reproduce")
+					continue
+				}
+				candidate.record.Classification = VerificationClassificationEnvironmentLimited
+				confirm.record.Classification = VerificationClassificationEnvironmentLimited
+				escalated.record.Classification = VerificationClassificationPassed
+				for _, run := range []*capturedVerificationRun{&candidate, &confirm, &escalated} {
+					if err := persistVerificationRun(contractPath, item.ID, run); err != nil {
+						return nil, err
+					}
+				}
+				if err := recordUnsandboxedDisposition(contractPath, sandboxUnsandboxedDisposition{
+					ItemID: item.ID,
+					Reason: "command fails under the verification sandbox and passes unsandboxed",
+				}); err != nil {
+					return nil, err
+				}
+				unsandboxedItems[item.ID] = true
+				report.Results[idx] = machineContractResult(item, VerificationStatusPassed, escalated,
+					"passed unsandboxed; sandboxed execution is environment-limited (disposition recorded)")
+				continue
+			}
+			escalated.record.Classification = "unsandboxed_failure"
+			if err := persistVerificationRun(contractPath, item.ID, &escalated); err != nil {
+				return nil, err
+			}
+			ladderFailure = &escalated
+		}
 		candidateContractReason := verificationRuntimeContractError(candidateErr, candidate)
 
 		classification := VerificationClassificationUnclassified
@@ -303,7 +361,7 @@ func ExecuteTestingContract(
 			baseCommit := strings.TrimSpace(contract.BaseCommits[repo.Name])
 			if baseCommit != "" {
 				baselineAttempted = true
-				baseRun, baseErr := runVerificationAtBase(ctx, runner, contractPath, item, *repo, baseCommit)
+				baseRun, baseErr := runVerificationAtBase(ctx, runner, contractPath, item, *repo, baseCommit, runSandboxed)
 				if baseRun != nil {
 					baseline = baseRun
 					baselineContractReason := verificationRuntimeContractError(baseErr, *baseRun)
@@ -327,26 +385,30 @@ func ExecuteTestingContract(
 					} else if baseErr == nil {
 						// The baseline passed: confirm the failure once before
 						// declaring a regression, so a flake does not send the
-						// implementer chasing a defect that is not there.
-						confirmation, confirmationErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots)
-						confirmation.record.BaselineRunID = baseRun.record.RunID
-						if confirmationErr == nil {
-							candidate.record.Classification = VerificationClassificationFlaky
-							candidate.record.BaselineRunID = baseRun.record.RunID
-							if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
-								return nil, err
+						// implementer chasing a defect that is not there. The
+						// ladder's unsandboxed failure already re-observed the
+						// failure, so it stands in for the confirmation.
+						if ladderFailure == nil {
+							confirmation, confirmationErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed)
+							confirmation.record.BaselineRunID = baseRun.record.RunID
+							if confirmationErr == nil {
+								candidate.record.Classification = VerificationClassificationFlaky
+								candidate.record.BaselineRunID = baseRun.record.RunID
+								if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
+									return nil, err
+								}
+								confirmation.record.Classification = VerificationClassificationPassed
+								if err := persistVerificationRun(contractPath, item.ID, &confirmation); err != nil {
+									return nil, err
+								}
+								report.Results[idx] = machineContractResult(item, VerificationStatusPassed, confirmation,
+									"passed on confirmation re-run; the initial failure did not reproduce")
+								continue
 							}
-							confirmation.record.Classification = VerificationClassificationPassed
+							confirmation.record.Classification = VerificationClassificationRegression
 							if err := persistVerificationRun(contractPath, item.ID, &confirmation); err != nil {
 								return nil, err
 							}
-							report.Results[idx] = machineContractResult(item, VerificationStatusPassed, confirmation,
-								"passed on confirmation re-run; the initial failure did not reproduce")
-							continue
-						}
-						confirmation.record.Classification = VerificationClassificationRegression
-						if err := persistVerificationRun(contractPath, item.ID, &confirmation); err != nil {
-							return nil, err
 						}
 						classification = VerificationClassificationRegression
 						out.RegressionItems = append(out.RegressionItems, item.ID)
@@ -679,7 +741,7 @@ func preflightVerificationShell(ctx context.Context, runner ports.CommandRunner,
 	return "invalid verification shell syntax: " + detail, nil
 }
 
-func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner, itemID, kind, command, cwd, timeoutText string, writableRoots []string) (capturedVerificationRun, error) {
+func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner, itemID, kind, command, cwd, timeoutText string, writableRoots []string, useSandbox bool) (capturedVerificationRun, error) {
 	timeout := 10 * time.Minute
 	if parsed, err := time.ParseDuration(strings.TrimSpace(timeoutText)); err == nil && parsed > 0 {
 		timeout = parsed
@@ -693,8 +755,10 @@ func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner,
 		// Non-login shell: sourcing the user's profile would make runs
 		// machine-dependent and pollute captured output.
 		argv := []string{"/bin/sh", "-c", command}
-		var cleanup func()
-		argv, sandboxed, cleanup = sandboxVerificationArgv(runner, argv, writableRoots)
+		cleanup := func() {}
+		if useSandbox {
+			argv, sandboxed, cleanup = sandboxVerificationArgv(runner, argv, writableRoots)
+		}
 		defer cleanup()
 		_, runErr := runner.Run(runCtx, argv[0], argv[1:], ports.CommandOpts{Dir: cwd, Stdout: &stdout, Stderr: &stderr})
 		return runErr
@@ -897,7 +961,7 @@ func outputContainsAny(output string, values ...string) bool {
 	return false
 }
 
-func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, contractPath string, item TestingContractItem, repo feature.FeatureRepo, commit string) (*capturedVerificationRun, error) {
+func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, contractPath string, item TestingContractItem, repo feature.FeatureRepo, commit string, useSandbox bool) (*capturedVerificationRun, error) {
 	// A baseline result is a function of (command, relative cwd, base
 	// commit): the anchor is immutable, so a prior run this iteration or a
 	// previous one answers the same question without another 10-minute
@@ -929,7 +993,7 @@ func runVerificationAtBase(ctx context.Context, runner ports.CommandRunner, cont
 		return nil, err
 	}
 	run, runErr := captureVerificationCommand(ctx, runner, item.ID, "baseline", item.Run.Shell, cwd, item.Run.Timeout,
-		verificationWritableRoots(append([]string{tmp}, loadSandboxGrantRoots(contractPath)...)...))
+		verificationWritableRoots(append([]string{tmp}, loadSandboxGrantRoots(contractPath)...)...), useSandbox)
 	run.record.Classification = "baseline"
 	run.record.BaseCommit = commit
 	run.record.RelCwd = strings.TrimSpace(item.Run.Cwd)

@@ -172,6 +172,14 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 	if label == "" {
 		label = "bounded helper"
 	}
+	if cfg.phaseCompleteDir != "" {
+		// A helper with phase_complete semantics may end its turn while its
+		// background Task subagents are still running, expecting the CLI to
+		// re-invoke it when they complete. Keep the CLI up after such a
+		// result so the deferral in the statusCh arm has a live session to
+		// wait on (mirrors the implementation loop's waiter).
+		cfg.sessOpts = enableTruncatedTurnAutoResume(cfg.sessOpts)
+	}
 	baseSessionID := cfg.sessionID
 	for sessionAttempt := 1; ; sessionAttempt++ {
 		cfg.sessionID = retrySessionID(baseSessionID, sessionAttempt)
@@ -247,11 +255,51 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 		return result, err, retryable
 	}
 
+	// awaitingBackgroundTasks is set when the helper ended its turn while its
+	// background subagents were still running. The waiter then defers: the CLI
+	// re-invokes the agent when the tasks complete, so no nudge is sent and no
+	// budget is consumed. The bgTicker below provides the fallback paths.
+	awaitingBackgroundTasks := false
+	autoResumeAttempts := 0
+	bgTicker := time.NewTicker(backgroundTaskPollInterval)
+	defer bgTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusTimedOut)
 			return finish(result, fmt.Errorf("running %s: %w", label, ctx.Err()))
+
+		case <-bgTicker.C:
+			if !awaitingBackgroundTasks {
+				continue
+			}
+			quiet := time.Since(sess.LastStdoutAt())
+			if liveBackgroundTasks(sess) > 0 {
+				// Running subagents emit periodic task_progress lines; a
+				// stream this quiet means the CLI wedged. Give up rather
+				// than wait forever.
+				if quiet >= backgroundTaskStallTimeout {
+					result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+					return finish(result, err)
+				}
+				continue
+			}
+			// All tasks finished but no new result arrived: the CLI did not
+			// re-invoke the agent on its own. Resume it explicitly, bounded so
+			// a session that keeps yielding without finishing still converges.
+			if quiet < backgroundTaskQuietGrace {
+				continue
+			}
+			awaitingBackgroundTasks = false
+			if autoResumeAttempts < maxAutoResumeAttempts {
+				autoResumeAttempts++
+				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
+					continue
+				}
+			}
+			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			return finish(result, err)
 
 		case msg, ok := <-attachCh:
 			if !ok {
@@ -270,10 +318,19 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 
 		case <-statusCh:
 			// Peek at why the turn ended (mirroring finalizeBoundedHelperResult's
-			// classification). For capability-positive providers, nudge the same
-			// live session to finish when it ended its turn without writing the
-			// completion artifacts, before finalizing as a protocol violation.
-			if cfg.finishOrViolateNudge && boundedHelperShouldNudge(sess, cfg.phaseCompleteDir) {
+			// classification). A turn that ended while background subagents are
+			// still running is a yield, not a completion — defer and let the CLI
+			// re-invoke the agent (bgTicker bounds the wait). Otherwise, for
+			// capability-positive providers, nudge the same live session to
+			// finish when it ended its turn without writing the completion
+			// artifacts, before finalizing as a protocol violation.
+			class := boundedHelperTurnClass(sess, cfg.phaseCompleteDir)
+			if class == llm.TermAwaitingBackgroundTasks {
+				awaitingBackgroundTasks = true
+				continue
+			}
+			awaitingBackgroundTasks = false
+			if cfg.finishOrViolateNudge && class == llm.TermEndedAfterText {
 				if decideFinishOrViolate(sess, llm.TermEndedAfterText, &finishOrViolateNudges, []string{PhaseCompleteFile}) {
 					continue
 				}
@@ -290,28 +347,33 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 	}
 }
 
-// boundedHelperShouldNudge reports whether the just-ended turn is a deliberate
-// end_turn without the completion marker — the only case the finish-or-violate
-// nudge fires for. It mirrors finalizeBoundedHelperResult's inputs so the nudge
-// and the finalize verdict classify the turn identically.
-func boundedHelperShouldNudge(sess ports.SessionHandle, phaseCompleteDir string) bool {
+// boundedHelperTurnClass classifies why the just-ended turn stopped, for the
+// statusCh arm's defer/nudge routing. TermAwaitingBackgroundTasks means the
+// helper yielded while its background subagents were still running;
+// TermEndedAfterText is a deliberate end_turn without the completion marker —
+// the only case the finish-or-violate nudge fires for. Pending questions or
+// control requests return TermUnknown so the caller falls through to
+// finalizeBoundedHelperResult, which surfaces them first. Deferral to
+// background tasks is scoped to helpers with phase_complete semantics:
+// markerless helpers treat an end_turn as their normal completion signal.
+func boundedHelperTurnClass(sess ports.SessionHandle, phaseCompleteDir string) llm.TerminationClass {
 	if sess.HasPendingAskUserQuestion() || sess.LastControlRequest() != nil {
-		return false
+		return llm.TermUnknown
 	}
 	result := sess.Cost()
 	if result == nil {
-		return false
+		return llm.TermUnknown
 	}
 	phaseCompleteExists := false
 	if phaseCompleteDir != "" {
 		phaseCompleteExists = HasPhaseComplete(phaseCompleteDir)
 	}
-	class := llm.ClassifyTermination(llm.TerminationInputs{
+	return llm.ClassifyTermination(llm.TerminationInputs{
 		Result:                 result,
 		PhaseCompleteExists:    phaseCompleteExists,
 		AskUserQuestionPending: false,
+		BackgroundTasksRunning: phaseCompleteDir != "" && liveBackgroundTasks(sess) > 0,
 	})
-	return class == llm.TermEndedAfterText && !phaseCompleteExists
 }
 
 func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, label string, requireOutput bool, phaseCompleteDir string, contractPhase feature.Phase, contractRole Role) (*BoundedHelperResult, error) {

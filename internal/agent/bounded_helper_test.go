@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -551,6 +552,291 @@ func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
 	case <-sess.nudges:
 		t.Fatal("no extra nudge expected beyond the cap")
 	default:
+	}
+}
+
+// boundedBgTaskSession extends boundedNudgeSession with test-controlled
+// live-background-task count and stdout-activity timestamp, mirroring a
+// session whose agent spawned background Task subagents.
+type boundedBgTaskSession struct {
+	*boundedNudgeSession
+	liveTasks    atomic.Int32
+	lastStdoutNs atomic.Int64
+}
+
+func newBoundedBgTaskSession(result *llm.ResultMessage) *boundedBgTaskSession {
+	s := &boundedBgTaskSession{boundedNudgeSession: newBoundedNudgeSession(result)}
+	s.lastStdoutNs.Store(time.Now().UnixNano())
+	return s
+}
+
+func (s *boundedBgTaskSession) LiveBackgroundTaskCount() int { return int(s.liveTasks.Load()) }
+func (s *boundedBgTaskSession) LastStdoutAt() time.Time      { return time.Unix(0, s.lastStdoutNs.Load()) }
+
+// TestRunBoundedHelper_DefersOnLiveBackgroundTasks proves the bounded helper
+// waiter defers instead of finalizing when the helper ends its turn without
+// phase_complete while its background subagents are still running — the CLI
+// re-invokes the agent when they complete. Nudge capability is unarmed,
+// matching providers where the yield-for-tasks pattern showed up.
+func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
+	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+
+	phaseDir := t.TempDir()
+	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
+	sess.liveTasks.Store(3)
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:        "helper-bg-defer",
+			workDir:          t.TempDir(),
+			phaseCompleteDir: phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
+		})
+		resultCh <- result
+	}()
+
+	// First turn ends without the marker while tasks are live → defer.
+	sess.statusC <- agentStatusSuccess
+	select {
+	case result := <-resultCh:
+		t.Fatalf("runBoundedHelperSession() finalized %q; want it to defer to background tasks", result.Status)
+	case msg := <-sess.nudges:
+		t.Fatalf("unexpected user message %q while background tasks run", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if sess.stopCalls != 0 {
+		t.Fatal("session was stopped while background tasks were running")
+	}
+
+	// Tasks finish; the re-invoked agent writes the contract artifacts and
+	// ends its turn again.
+	sess.liveTasks.Store(0)
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	sess.statusC <- agentStatusSuccess
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize")
+	}
+	select {
+	case msg := <-sess.nudges:
+		t.Fatalf("unexpected user message %q; completion needed no nudge", msg)
+	default:
+	}
+}
+
+// TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes proves the
+// bgTicker fallback: when the tasks finish but the CLI never re-invokes the
+// agent, the waiter sends the auto-resume continuation instead of hanging or
+// violating.
+func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) {
+	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+
+	phaseDir := t.TempDir()
+	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
+	sess.liveTasks.Store(1)
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:        "helper-bg-resume",
+			workDir:          t.TempDir(),
+			phaseCompleteDir: phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
+		})
+		resultCh <- result
+	}()
+
+	sess.statusC <- agentStatusSuccess
+
+	// Give the waiter a moment to defer, then finish the tasks with a stale
+	// stdout stamp: the CLI never re-invoked the agent.
+	time.Sleep(20 * time.Millisecond)
+	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
+	sess.liveTasks.Store(0)
+
+	select {
+	case msg := <-sess.nudges:
+		if !strings.Contains(msg, "Continue where you left off") {
+			t.Fatalf("SendUserMessage() = %q, want auto-resume message", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for auto-resume after tasks finished")
+	}
+
+	// The resumed turn writes the contract artifacts and ends cleanly.
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	sess.statusC <- agentStatusSuccess
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize")
+	}
+}
+
+// TestRunBoundedHelper_BackgroundTaskStallFinalizesViolation proves the stall
+// backstop: a wedged stream with perpetually-"live" tasks is bounded, and the
+// run finalizes as a protocol violation instead of waiting forever.
+func TestRunBoundedHelper_BackgroundTaskStallFinalizesViolation(t *testing.T) {
+	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+	prev := backgroundTaskStallTimeout
+	backgroundTaskStallTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { backgroundTaskStallTimeout = prev })
+
+	phaseDir := t.TempDir()
+	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
+	sess.liveTasks.Store(1)
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:        "helper-bg-stall",
+			workDir:          t.TempDir(),
+			phaseCompleteDir: phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
+		})
+		resultCh <- result
+	}()
+
+	sess.statusC <- agentStatusSuccess
+
+	// The waiter must defer first (not finalize on the spot) …
+	select {
+	case result := <-resultCh:
+		t.Fatalf("runBoundedHelperSession() finalized %q immediately; want deferral before the stall backstop", result.Status)
+	case <-time.After(15 * time.Millisecond):
+	}
+
+	// … then the silent wedged stream trips the backstop.
+	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusProtocolViolation {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusProtocolViolation)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stall backstop")
+	}
+}
+
+// TestRunBoundedHelper_DoneArmIgnoresStaleBackgroundTasks proves a dead
+// process never defers to its stale task set: the Done arm finalizes
+// immediately even when the counter still reports live tasks.
+func TestRunBoundedHelper_DoneArmIgnoresStaleBackgroundTasks(t *testing.T) {
+	phaseDir := t.TempDir()
+	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
+	sess.liveTasks.Store(2)
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:        "helper-bg-done",
+			workDir:          t.TempDir(),
+			phaseCompleteDir: phaseDir,
+			contractRole:     RoleImplementationReviewCraft,
+		})
+		resultCh <- result
+	}()
+
+	close(sess.doneC)
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusProtocolViolation {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusProtocolViolation)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runBoundedHelperSession() hung on a dead session with stale background tasks")
+	}
+}
+
+// TestRunBoundedHelper_ArmsKeepAliveForMarkeredHelpers proves helpers with
+// phase_complete semantics start their session with KeepAliveOnTruncatedResult
+// so the session layer keeps the CLI up after an end_turn result while
+// background tasks are live. Markerless helpers keep the old behavior.
+func TestRunBoundedHelper_ArmsKeepAliveForMarkeredHelpers(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		phaseDir      string
+		wantKeepAlive bool
+	}{
+		{name: "markered helper arms keep-alive", phaseDir: t.TempDir(), wantKeepAlive: true},
+		{name: "markerless helper does not", phaseDir: "", wantKeepAlive: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotOpts *session.SessionOpts
+			sm := mocks.NewMockSessionManager()
+			sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+				if len(opts) > 0 {
+					gotOpts = opts[0]
+				}
+				sess := newUtilityTestSession()
+				sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, Result: "done", StopReason: testStopReasonEndTurn}
+				if tc.phaseDir != "" {
+					if err := os.WriteFile(filepath.Join(tc.phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+						t.Fatalf("write marker: %v", err)
+					}
+				}
+				sess.statusCh <- agentStatusSuccess
+				return sess, nil
+			}
+			pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+			_, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+				sessionID:        "helper-keepalive",
+				workDir:          t.TempDir(),
+				phaseCompleteDir: tc.phaseDir,
+			})
+			if err != nil {
+				t.Fatalf("runBoundedHelperSession() error = %v", err)
+			}
+			gotKeepAlive := gotOpts != nil && gotOpts.KeepAliveOnTruncatedResult
+			if gotKeepAlive != tc.wantKeepAlive {
+				t.Errorf("KeepAliveOnTruncatedResult = %v, want %v", gotKeepAlive, tc.wantKeepAlive)
+			}
+		})
 	}
 }
 

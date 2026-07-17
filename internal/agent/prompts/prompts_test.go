@@ -242,11 +242,10 @@ type ReviewUserInput struct {
 type FinalFixUserInput struct {
 	VisualReferences VisualReferencesInput
 
-	Iteration              int
-	ExitCriteria           string
-	Feedback               string
-	FeedbackPath           string
-	VerificationReportPath string
+	Iteration    int
+	ExitCriteria string
+	Feedback     string
+	FeedbackPath string
 
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool
@@ -585,7 +584,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					ExitCriteria:                      "Relevant tests pass.",
 					Feedback:                          "Manual verification bullet 'Inspect login UI' is unattested.",
 					FeedbackPath:                      "/state/feat-x/run-1/review/iteration-2/review-feedback.md",
-					VerificationReportPath:            "/state/feat-x/run-1/phase-1/iter-2/verification-report.yaml",
 					IncludeManualVerificationOutcomes: true,
 					Publishable:                       true,
 				})

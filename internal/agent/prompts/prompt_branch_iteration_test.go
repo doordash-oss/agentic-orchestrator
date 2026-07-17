@@ -131,7 +131,6 @@ func TestFinalFixPromptBranches(t *testing.T) {
 			input: FinalFixUserInput{
 				Iteration:                         2,
 				Feedback:                          "Manual verification is missing.",
-				VerificationReportPath:            "/iter/verification-report.yaml",
 				IncludeManualVerificationOutcomes: true,
 				Publishable:                       true,
 			},

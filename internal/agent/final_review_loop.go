@@ -207,9 +207,9 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 //     live at runs/run-N/<cycle>-N/review/iteration-NN/.
 //
 // The iteration loop body (review FIRST, fix SECOND on CHANGES_REQUESTED,
-// --add-dir to every Feature.Repos worktree, one verification report per
-// iteration) is identical to RunFeatureFinalReviewLoop. This entry exists
-// purely to elide the atomic-stamp wrapper for post-publish cycles.
+// --add-dir to every Feature.Repos worktree) is identical to
+// RunFeatureFinalReviewLoop. This entry exists purely to elide the
+// atomic-stamp wrapper for post-publish cycles.
 //
 // Cumulative-diff review semantics align with the unification principle:
 // the post-cycle FR reviews every Feature.Repos cumulative diff, not just
@@ -417,14 +417,6 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 					return done, nil
 				}
 				continue
-			}
-
-			// Harness-owned verification: execute the current testing
-			// contract and write the fix iteration's report deterministically
-			// (mirrors the implement loop; the fix agent never authors it).
-			// The next review iteration judges the report's rows.
-			if err := s.runHarnessVerification(iterDir); err != nil {
-				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: err.Error()}, nil
 			}
 
 			consecutiveFailures = 0
@@ -651,18 +643,16 @@ func (s *featureFinalReviewLoopState) previousAggregateFeedback(iteration int) s
 func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback string) (string, error) {
 	cfg := s.cfg
 
-	verificationReportPath := filepath.Join(iterDir, "verification-report.yaml")
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
-		Feedback:               feedback,
-		FeedbackPath:           feedbackPath,
-		ExitCriteria:           cfg.Feature.ExitCriteria,
-		IterDir:                iterDir,
-		VerificationReportPath: verificationReportPath,
-		Iteration:              iteration,
-		Publishable:            cfg.Feature.IsPublishable(),
-		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
-		Images:                 cfg.Feature.Images,
+		Feedback:           feedback,
+		FeedbackPath:       feedbackPath,
+		ExitCriteria:       cfg.Feature.ExitCriteria,
+		IterDir:            iterDir,
+		Iteration:          iteration,
+		Publishable:        cfg.Feature.IsPublishable(),
+		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),
+		Images:             cfg.Feature.Images,
 	})
 
 	_ = os.WriteFile(filepath.Join(iterDir, "fix-prompt.md"), []byte(prompt), 0o644)
@@ -774,68 +764,6 @@ func (s *featureFinalReviewLoopState) maxConsecFails() int {
 // suffix collapses since the FR session owns every repo at once.
 func (s *featureFinalReviewLoopState) featureFinalReviewSessionID(role string, iteration int) string {
 	return fmt.Sprintf("%s-%s-%02d", s.cfg.Feature.ID, role, iteration)
-}
-
-// runHarnessVerification executes the feature's current testing contract
-// after a fix session and writes the iteration's verification-report.yaml,
-// mirroring the implement loop's harness-owned report model. A feature with
-// no resolvable contract (legacy state) simply gets no report.
-func (s *featureFinalReviewLoopState) runHarnessVerification(iterDir string) error {
-	cfg := s.cfg
-	contractPath, ok := resolveImplementationContractPath(cfg.StateDir, cfg.Feature, "")
-	if !ok {
-		return nil
-	}
-	contract, err := ReadTestingContract(contractPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("reading testing contract for final-fix verification: %w", err)
-	}
-	s.seedAgentOwnedEvidence(iterDir)
-	report := BuildContractVerificationReportStub(contract, contractPath)
-	verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
-	beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract, cfg.OnVerificationProgress)
-	verifyCtx = WithVerificationProgress(verifyCtx, func(name, state string) {
-		updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state, cfg.OnVerificationProgress)
-	})
-	outcome, execErr := ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, contractPath, iterDir, s.workspace.Cwd, cfg.Feature.Repos)
-	cancelVerify()
-	clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, cfg.OnVerificationProgress)
-	if execErr != nil {
-		return fmt.Errorf("executing testing contract for final-fix verification: %w", execErr)
-	}
-	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"), *outcome.Report); err != nil {
-		return fmt.Errorf("writing final-fix verification report: %w", err)
-	}
-	return nil
-}
-
-// seedAgentOwnedEvidence copies agent-owned semantic evidence (observations,
-// screenshots, behaviors) from prior implementation iterations into the fix
-// iteration dir so unchanged evidence is not re-demanded. Files the fix agent
-// already re-captured are never overwritten.
-func (s *featureFinalReviewLoopState) seedAgentOwnedEvidence(iterDir string) {
-	evidence := priorImplementationEvidenceContextForRun(filepath.Dir(s.artifactDir))
-	for _, rootDir := range evidence.EvidenceRootDirs {
-		for _, sub := range []string{"observations", "screenshots", "behaviors"} {
-			entries, err := os.ReadDir(filepath.Join(rootDir, sub))
-			if err != nil {
-				continue
-			}
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				dst := filepath.Join(iterDir, sub, entry.Name())
-				if _, statErr := os.Stat(dst); statErr == nil {
-					continue
-				}
-				_ = copyFile(filepath.Join(rootDir, sub, entry.Name()), dst)
-			}
-		}
-	}
 }
 
 func (s *featureFinalReviewLoopState) writeIterationMeta(iterDir string, iteration int, reviewStatus string) {

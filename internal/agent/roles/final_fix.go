@@ -33,9 +33,8 @@ var finalReviewFixerRoleSpec = RoleSpec{
 		iterationDirOutputRoot("Final-review fix iteration artifact directory."),
 	},
 	MarkerRoot: "iteration_dir",
-	// No required artifacts: the harness executes the testing contract and
-	// writes verification-report.yaml after the fix session, mirroring the
-	// implementer role.
+	// No required artifacts: no testing contract executes at Final Review;
+	// the next review iteration's live-run axes re-exercise the product.
 	Artifacts: []RoleArtifactSpec{},
 }
 
@@ -48,11 +47,10 @@ func FinalReviewFixerRoleSpec() RoleSpec {
 type FinalFixUserInput struct {
 	VisualReferences prompts.VisualReferencesInput
 
-	Iteration              int
-	ExitCriteria           string
-	Feedback               string
-	FeedbackPath           string
-	VerificationReportPath string
+	Iteration    int
+	ExitCriteria string
+	Feedback     string
+	FeedbackPath string
 
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool

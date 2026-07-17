@@ -17,13 +17,12 @@
 // the post-cycle Final Review entry (also in final_review_loop.go for
 // post-publish rebase/review-comments cycles).
 //
-// The prompt builders, verification-context resolver, and seed-source helpers
-// stay here because both the feature-level Final Review and the feature-level
+// The prompt builders and prior-implementation-evidence resolver stay here
+// because both the feature-level Final Review and the feature-level
 // post-cycle Final Review share them.
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,15 +34,14 @@ import (
 
 // FinalFixPromptOpts contains the parameters for building the fix agent prompt.
 type FinalFixPromptOpts struct {
-	Feedback               string
-	FeedbackPath           string
-	ExitCriteria           string
-	IterDir                string // for phase_complete and verification report references
-	VerificationReportPath string
-	Iteration              int
-	Publishable            bool
-	DesignArtifactPath     string   // retained for caller compatibility; no longer re-injected
-	Images                 []string // user-attached visual references, re-injected per iteration
+	Feedback           string
+	FeedbackPath       string
+	ExitCriteria       string
+	IterDir            string // for phase_complete references
+	Iteration          int
+	Publishable        bool
+	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
+	Images             []string // user-attached visual references, re-injected per iteration
 }
 
 // BuildFinalFixPrompt constructs the prompt for the fix agent session.
@@ -61,7 +59,6 @@ func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
 		ExitCriteria:                      opts.ExitCriteria,
 		Feedback:                          opts.Feedback,
 		FeedbackPath:                      opts.FeedbackPath,
-		VerificationReportPath:            opts.VerificationReportPath,
 		IncludeManualVerificationOutcomes: feedbackMentionsManualVerification(opts.Feedback),
 		Publishable:                       opts.Publishable,
 	})
@@ -108,21 +105,6 @@ func finalReviewArtifactPath(stateDir string, f *feature.Feature, key string) st
 		return path
 	}
 	return filepath.Join(ActiveRunDir(stateDir, f), path)
-}
-
-// copyFile copies src to dst, creating dst's parent directory if needed.
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return fmt.Errorf("reading seed source %s: %w", src, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("creating seed destination directory: %w", err)
-	}
-	if err := os.WriteFile(dst, data, 0o644); err != nil {
-		return fmt.Errorf("writing seed destination %s: %w", dst, err)
-	}
-	return nil
 }
 
 type priorImplementationEvidenceContext struct {

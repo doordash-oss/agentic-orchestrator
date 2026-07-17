@@ -17,7 +17,7 @@ Read the reviewer feedback at: /state/feat-x/run-1/review/iteration-2/review-fee
 
 ## Manual Verification Outcomes
 
-The reviewer flagged unattested `### Manual Verification` bullets. Re-running automated commands does NOT attest a manual bullet, and you never edit `verification-report.yaml` — the harness derives it. For each flagged bullet, write (or rewrite) the contract item's agent-owned evidence file under this iteration dir at the item's `expected_evidence.path` (an `observations/*.md` file) describing what you actually observed when you executed the bullet: steps, command output snippets, UI state. "Manual check, looks fine" is not evidence.
+The reviewer flagged unattested `### Manual Verification` bullets. Re-running automated commands does NOT attest a manual bullet. For each flagged bullet, write (or rewrite) the contract item's agent-owned evidence file under this iteration dir at the item's `expected_evidence.path` (an `observations/*.md` file) describing what you actually observed when you executed the bullet: steps, command output snippets, UI state. "Manual check, looks fine" is not evidence.
 
 If the bullet is genuinely out-of-environment (production-only, physical device, mutates real user state), do not invent an observation — state the gap and its downstream owner in your fix output so the reviewer can judge it.
 

@@ -192,7 +192,7 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		iterDir := latestFinalReviewIterationDir(t, artDir)
 		switch {
 		case strings.Contains(id, "-fix-01"):
-			// verification-report.yaml is harness-owned; the fix session
+			// No testing contract executes at Final Review; the fix session
 			// only completes its marker.
 			touchPhaseComplete(t, iterDir)
 		case strings.HasSuffix(id, "-01"), strings.HasSuffix(id, "-02"):
@@ -1806,101 +1806,4 @@ func sliceContains(haystack []string, needle string) bool {
 		}
 	}
 	return false
-}
-
-// TestRunHarnessVerificationWritesFixIterationReport pins the harness-owned
-// final-fix model: after a fix session, the harness executes the phase
-// testing contract, seeds unchanged agent-owned evidence from the latest
-// implementation iteration, and writes the fix iteration's report itself.
-func TestRunHarnessVerificationWritesFixIterationReport(t *testing.T) {
-	t.Parallel()
-	stateBase := t.TempDir()
-	repoDir := t.TempDir()
-	store, f, _ := newFRTestFeature(t, stateBase, "fr-harness-verify", []string{"repo"})
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.CurrentRoadmapPhase = 1
-		ff.Repos = []feature.FeatureRepo{{Name: "repo", Path: repoDir, WorktreePath: repoDir}}
-		return nil
-	}); err != nil {
-		t.Fatalf("modify feature: %v", err)
-	}
-	f, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load feature: %v", err)
-	}
-
-	contractPath := PhaseTestingContractPath(stateBase, f, 1)
-	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{
-		{
-			ID: "manual", Source: testingContractManualSource, Owner: TestingContractOwnerAgent, Repo: "repo",
-			Name: "observe", Command: "manual: observe",
-			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractManualKind, Path: "observations/manual.md"},
-			Policy:           TestingContractItemPolicy{Required: true},
-		},
-		{
-			ID: "cmd", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
-			Name: "explicit", Command: "printf verified",
-			Run:    &TestingContractRun{Shell: "printf verified", Cwd: ".", Timeout: "30s"},
-			Policy: TestingContractItemPolicy{Required: true},
-		},
-	}}
-	if err := WriteTestingContract(contractPath, contract); err != nil {
-		t.Fatalf("write contract: %v", err)
-	}
-
-	// Prior completed implementation iteration with agent-owned evidence.
-	runDir := ActiveRunDir(stateBase, f)
-	implementIterDir := filepath.Join(PhaseImplementDir(stateBase, f, 1), "iteration-01")
-	if err := os.MkdirAll(filepath.Join(implementIterDir, "observations"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(implementIterDir, "observations", "manual.md"), []byte("observed in implement"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteVerificationReport(filepath.Join(implementIterDir, "verification-report.yaml"), BuildContractVerificationReportStub(&contract, contractPath)); err != nil {
-		t.Fatal(err)
-	}
-	am := &ArtifactManager{}
-	if err := am.WriteMeta(implementIterDir, IterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: ReviewApproved.String()}); err != nil {
-		t.Fatal(err)
-	}
-
-	fixIterDir := filepath.Join(runDir, feature.PhaseReview.DirName(), "iteration-01")
-	if err := os.MkdirAll(fixIterDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	s := &featureFinalReviewLoopState{
-		cfg: OrchestratorConfig{
-			Feature:       f,
-			FeatureStore:  store,
-			StateDir:      stateBase,
-			CommandRunner: NewExecCommandRunner(),
-		},
-		workspace:   WorkspaceSetup{Cwd: runDir},
-		stateDir:    filepath.Join(stateBase, f.ID),
-		artifactDir: filepath.Join(runDir, feature.PhaseReview.DirName()),
-	}
-	if err := s.runHarnessVerification(fixIterDir); err != nil {
-		t.Fatalf("runHarnessVerification() error = %v", err)
-	}
-
-	report, err := ReadVerificationReport(filepath.Join(fixIterDir, "verification-report.yaml"))
-	if err != nil {
-		t.Fatalf("read fix iteration report: %v", err)
-	}
-	statuses := map[string]VerificationRunStatus{}
-	for _, result := range report.Results {
-		statuses[result.ItemID] = NormalizeStatus(result.Status)
-	}
-	if statuses["cmd"] != VerificationStatusPassed {
-		t.Fatalf("harness item status = %q, want passed (report %+v)", statuses["cmd"], report.Results)
-	}
-	if statuses["manual"] != VerificationStatusPassed {
-		t.Fatalf("agent item status = %q, want passed via seeded evidence", statuses["manual"])
-	}
-	seeded, err := os.ReadFile(filepath.Join(fixIterDir, "observations", "manual.md"))
-	if err != nil || string(seeded) != "observed in implement" {
-		t.Fatalf("seeded evidence = (%q, %v), want carried forward from implement iteration", seeded, err)
-	}
 }

@@ -172,8 +172,9 @@ sleep 30
 		&SessionOpts{
 			ProviderName: "test-provider",
 			Watchdog: &ports.SessionWatchdogConfig{
-				PendingToolIdleTimeout: 25 * time.Millisecond,
-				PollInterval:           5 * time.Millisecond,
+				PendingToolIdleTimeout:    25 * time.Millisecond,
+				TurnCompletionIdleTimeout: 100 * time.Millisecond,
+				PollInterval:              5 * time.Millisecond,
 			},
 		},
 	)
@@ -226,8 +227,9 @@ sleep 30
 		&SessionOpts{
 			ProviderName: "test-provider",
 			Watchdog: &ports.SessionWatchdogConfig{
-				PendingToolIdleTimeout: 25 * time.Millisecond,
-				PollInterval:           5 * time.Millisecond,
+				PendingToolIdleTimeout:    25 * time.Millisecond,
+				TurnCompletionIdleTimeout: 25 * time.Millisecond,
+				PollInterval:              5 * time.Millisecond,
 			},
 		},
 	)
@@ -255,7 +257,7 @@ sleep 30
 	}
 }
 
-func TestPendingToolWatchdogIgnoresCompletedPendingTool(t *testing.T) {
+func TestPendingToolWatchdogAllowsPromptResultAfterCompletedTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")
 	script := `#!/usr/bin/env bash
@@ -284,8 +286,9 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		&SessionOpts{
 			ProviderName: "test-provider",
 			Watchdog: &ports.SessionWatchdogConfig{
-				PendingToolIdleTimeout: 25 * time.Millisecond,
-				PollInterval:           5 * time.Millisecond,
+				PendingToolIdleTimeout:    25 * time.Millisecond,
+				TurnCompletionIdleTimeout: 100 * time.Millisecond,
+				PollInterval:              5 * time.Millisecond,
 			},
 			ResultShutdownGrace: 20 * time.Millisecond,
 		},
@@ -301,6 +304,204 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timeout waiting for success status")
+	}
+}
+
+func TestWatchdogToolProgressTransitions(t *testing.T) {
+	t.Parallel()
+
+	running := watchdogTool{phase: watchdogToolRunning, id: "tool-1", name: "Write"}
+	tests := []struct {
+		name     string
+		current  watchdogTool
+		progress llm.ToolProgressMessage
+		want     watchdogTool
+	}{
+		{
+			name:     "pending arms running tool",
+			progress: llm.ToolProgressMessage{ToolUseID: "tool-1", ToolName: "Write", Data: "pending"},
+			want:     running,
+		},
+		{
+			name:     "completed awaits enclosing turn result",
+			current:  running,
+			progress: llm.ToolProgressMessage{ToolUseID: "tool-1", ToolName: "Write", Data: "Status: completed"},
+			want:     watchdogTool{phase: watchdogToolAwaitingTurnResult, id: "tool-1", name: "Write"},
+		},
+		{
+			name:     "failed awaits enclosing turn result",
+			current:  running,
+			progress: llm.ToolProgressMessage{ToolUseID: "tool-1", ToolName: "Write", Data: "failed"},
+			want:     watchdogTool{phase: watchdogToolAwaitingTurnResult, id: "tool-1", name: "Write"},
+		},
+		{
+			name:     "terminal update for another tool cannot clear running tool",
+			current:  running,
+			progress: llm.ToolProgressMessage{ToolUseID: "tool-2", ToolName: "Read", Data: "completed"},
+			want:     running,
+		},
+		{
+			name:     "unrecognized progress keeps current state",
+			current:  running,
+			progress: llm.ToolProgressMessage{ToolUseID: "tool-1", ToolName: "Write", Data: "Status: running"},
+			want:     running,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := observeWatchdogToolProgress(tt.current, tt.progress); got != tt.want {
+				t.Fatalf("observeWatchdogToolProgress() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWatchdogControlWaitPausesAndRefreshesTurnTimer(t *testing.T) {
+	sess := NewSession("watchdog-control-wait", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-1",
+		ToolName:  "Write",
+		Data:      "completed",
+	}})
+
+	sess.mu.Lock()
+	sess.status = SessionWaitingPermission
+	sess.recordPendingControlRequestLocked(&llm.ControlRequestMessage{RequestID: "permission-1"})
+	sess.mu.Unlock()
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+
+	if _, _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("watchdog reported a stall while a real control request was pending")
+	}
+
+	sess.mu.Lock()
+	sess.removePendingControlRequestLocked("permission-1")
+	sess.status = SessionRunning
+	sess.mu.Unlock()
+	if _, _, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatal("watchdog reused pre-permission idle time after the control wait ended")
+	}
+
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	if tool, _, _, stalled := watchdog.toolStall(); !stalled || tool.phase != watchdogToolAwaitingTurnResult {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want awaiting-turn-result stall after refreshed timeout", tool, stalled)
+	}
+}
+
+func TestWatchdogDoesNotPauseForWaitingPermissionWithoutPendingControl(t *testing.T) {
+	sess := NewSession("watchdog-stale-permission-status", "feat-1", feature.PhaseImplement)
+	sess.SetStatus(SessionWaitingPermission)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-1",
+		ToolName:  "Write",
+		Data:      "completed",
+	}})
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+
+	if tool, _, _, stalled := watchdog.toolStall(); !stalled || tool.phase != watchdogToolAwaitingTurnResult {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want stale WaitingPermission status not to mask the stall", tool, stalled)
+	}
+}
+
+func TestWatchdogActivityRefreshesAwaitingTurnTimerAndResultDisarmsIt(t *testing.T) {
+	sess := NewSession("watchdog-activity", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-1",
+		ToolName:  "Write",
+		Data:      "completed",
+	}})
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+
+	watchdog.Observe(llm.SDKMessage{Assistant: &llm.AssistantMessage{}})
+	if tool, _, _, stalled := watchdog.toolStall(); stalled || tool.phase != watchdogToolAwaitingTurnResult {
+		t.Fatalf("toolStall() after assistant activity = (%+v, stalled=%v), want refreshed awaiting-turn state", tool, stalled)
+	}
+
+	watchdog.Observe(llm.SDKMessage{Result: &llm.ResultMessage{Subtype: "success"}})
+	if tool, _, _, stalled := watchdog.toolStall(); stalled || tool.phase != watchdogToolInactive {
+		t.Fatalf("toolStall() after Result = (%+v, stalled=%v), want inactive watchdog", tool, stalled)
+	}
+}
+
+func TestPendingToolWatchdogFailsWhenTurnStallsAfterCompletedTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "completed-tool-turn-stall.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"pending"}'
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"in_progress"}'
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"completed"}'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"completed-tool-turn-watchdog-stall",
+		"feat-1",
+		feature.PhaseImplement,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "test-provider",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout:    25 * time.Millisecond,
+				TurnCompletionIdleTimeout: 25 * time.Millisecond,
+				PollInterval:              5 * time.Millisecond,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "FAILED" {
+			t.Fatalf("StatusCh = %q, want FAILED", status)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for watchdog to fail a turn stalled after a completed tool")
+	}
+
+	select {
+	case <-sess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for watchdog to stop session")
+	}
+
+	if got := sess.ErrorDetail(); !strings.Contains(got, "provider watchdog stalled awaiting turn completion after tool Write") {
+		t.Fatalf("ErrorDetail() = %q, want post-tool turn-completion watchdog detail", got)
 	}
 }
 
@@ -326,6 +527,32 @@ func TestWatchdogPendingToolDataMatchesStatusLine(t *testing.T) {
 			t.Parallel()
 			if got := isWatchdogPendingToolData(tt.data); got != tt.want {
 				t.Fatalf("isWatchdogPendingToolData(%q) = %v, want %v", tt.data, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWatchdogTerminalToolDataMatchesStatusLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{name: "bare completed status", data: "completed", want: true},
+		{name: "multi-line completed status", data: "File: report.md\nStatus: completed", want: true},
+		{name: "bare failed status", data: "failed", want: true},
+		{name: "multi-line failed status", data: "command\nStatus: failed", want: true},
+		{name: "command mentions completed", data: "echo completed\nStatus: in_progress", want: false},
+		{name: "path mentions failed", data: "File: failed-report.md\nStatus: in_progress", want: false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isWatchdogTerminalToolData(tt.data); got != tt.want {
+				t.Fatalf("isWatchdogTerminalToolData(%q) = %v, want %v", tt.data, got, tt.want)
 			}
 		})
 	}

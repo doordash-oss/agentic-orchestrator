@@ -113,8 +113,10 @@ func NewWithRunner(runner clirun.CommandRunner) *Provider {
 func (p *Provider) Name() string { return providerName }
 
 // EnablesPendingToolWatchdog opts this adapter into the generic session
-// watchdog for providers that can report a tool as pending without surfacing a
-// permission request.
+// watchdog for providers that can report tool lifecycle updates without
+// necessarily completing the enclosing turn or surfacing a permission request.
+// The historical capability name is retained for compatibility; it enables
+// both the running-tool and post-tool turn-completion safety rails.
 func (p *Provider) EnablesPendingToolWatchdog() bool { return true }
 
 // UsesBoundedHelperSandbox opts bounded helper sessions into OS-level worktree

@@ -1435,6 +1435,9 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 		originalInput = cr.Request.Input
 		s.removePendingControlRequestLocked(requestID)
 	}
+	if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
+		s.status = SessionRunning
+	}
 	s.mu.Unlock()
 
 	if s.protocol != nil {

@@ -787,6 +787,32 @@ func TestManagerOnMessage_BashToolPermission_SetsWaitingPermission(t *testing.T)
 	}
 }
 
+func TestRespondToControlReturnsToRunningAfterLastPendingPermission(t *testing.T) {
+	t.Parallel()
+
+	sess := NewSession("permission-response-status", "feat-1", feature.PhaseImplement)
+	sess.protocol = &interruptTrackingProtocol{}
+	sess.mu.Lock()
+	sess.status = SessionWaitingPermission
+	sess.recordPendingControlRequestLocked(&llm.ControlRequestMessage{RequestID: "permission-1"})
+	sess.recordPendingControlRequestLocked(&llm.ControlRequestMessage{RequestID: "permission-2"})
+	sess.mu.Unlock()
+
+	if err := sess.RespondToControl("permission-1", true, ""); err != nil {
+		t.Fatalf("RespondToControl(permission-1): %v", err)
+	}
+	if status := sess.Status(); status != SessionWaitingPermission {
+		t.Fatalf("status after first response = %v, want WaitingPermission while another request is pending", status)
+	}
+
+	if err := sess.RespondToControl("permission-2", true, ""); err != nil {
+		t.Fatalf("RespondToControl(permission-2): %v", err)
+	}
+	if status := sess.Status(); status != SessionRunning {
+		t.Fatalf("status after final response = %v, want Running", status)
+	}
+}
+
 // --- Codex provider session-level tests ---
 
 func TestSendUserMessage_CodexProvider_SendsTurnStart(t *testing.T) {

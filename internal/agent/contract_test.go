@@ -764,6 +764,72 @@ func TestContractRegistryImplementer(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactsPreflightImplementerAcceptsAgentEvidence(t *testing.T) {
+	phaseDir := filepath.Join(t.TempDir(), "phase-01")
+	artifactDir := filepath.Join(phaseDir, "implement")
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatalf("mkdir iteration: %v", err)
+	}
+	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", StateSuccess)
+
+	contract := CompileTestingContract(strings.Join([]string{
+		"### Visual Evidence",
+		"- [ ] Capture the dashboard empty state [size: 1x1]",
+	}, "\n"), filepath.Join(phaseDir, "plan.md"), "collapsed")
+	if err := WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
+		t.Fatalf("WriteTestingContract() error = %v", err)
+	}
+
+	var visual TestingContractItem
+	for _, item := range contract.Items {
+		if item.Owner == TestingContractOwnerAgent && item.Source == testingContractVisualSource {
+			visual = item
+			break
+		}
+	}
+	if visual.ID == "" {
+		t.Fatal("compiled contract has no agent-owned visual item")
+	}
+	writeTestPNG(t, filepath.Join(iterDir, filepath.FromSlash(visual.ExpectedEvidence.Path)), 1, 1)
+
+	out, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, RoleImplementer, iterDir)
+	if err != nil {
+		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+	}
+	if len(violations) != 0 || !out.OK {
+		t.Fatalf("ValidateArtifactsPreflight() = (%+v, %v), want OK", out, violations)
+	}
+}
+
+func TestValidateArtifactsPreflightImplementerReportsMissingAgentEvidence(t *testing.T) {
+	phaseDir := filepath.Join(t.TempDir(), "phase-01")
+	artifactDir := filepath.Join(phaseDir, "implement")
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatalf("mkdir iteration: %v", err)
+	}
+	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", StateSuccess)
+
+	contract := CompileTestingContract(strings.Join([]string{
+		"### Manual Verification",
+		"- [ ] Confirm the status copy is understandable to a user.",
+	}, "\n"), filepath.Join(phaseDir, "plan.md"), "collapsed")
+	if err := WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
+		t.Fatalf("WriteTestingContract() error = %v", err)
+	}
+
+	_, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, RoleImplementer, iterDir)
+	if err != nil {
+		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if !strings.Contains(got, "observations/confirm-the-status-copy-is-understandable-to-a-user.md") ||
+		!strings.Contains(got, "required agent-owned evidence is missing") {
+		t.Fatalf("JoinProtocolViolations() = %q, want missing agent evidence", got)
+	}
+}
+
 func TestContractRegistryImplementerReportsMissingArtifacts(t *testing.T) {
 	iterDir := t.TempDir()
 

@@ -482,7 +482,7 @@ func TestFinalizeAgentOwnedEvidence(t *testing.T) {
 		wantStatus VerificationRunStatus
 		wantIn     string
 	}{
-		{name: "no canonical path", path: "", content: nil, wantStatus: VerificationStatusFailed, wantIn: "no canonical path"},
+		{name: "no path", path: "", content: nil, wantStatus: VerificationStatusFailed, wantIn: "no path"},
 		{name: "missing file", path: "observations/x.md", content: nil, wantStatus: VerificationStatusFailed, wantIn: "missing"},
 		{name: "empty file", path: "observations/x.md", content: strPtr("  \n"), wantStatus: VerificationStatusFailed, wantIn: "empty"},
 		{name: "present file", path: "observations/x.md", content: strPtr("observed"), wantStatus: VerificationStatusPassed, wantIn: "captured"},

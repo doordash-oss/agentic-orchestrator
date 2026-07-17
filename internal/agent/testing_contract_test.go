@@ -229,6 +229,35 @@ func TestCompileTestingContract_ManualVerificationItems(t *testing.T) {
 	}
 }
 
+func TestCompileTestingContractAgentEvidenceHasReadableUniquePaths(t *testing.T) {
+	plan := strings.Join([]string{
+		"### Visual Evidence",
+		"- [ ] Capture the dashboard empty state at 1440x900 [size: 1440x900]",
+		"- [ ] Capture the dashboard empty state at 1440x900 [size: 1440x900]",
+		"### Manual Verification",
+		"- [ ] Confirm the status copy is understandable to a user.",
+	}, "\n")
+
+	contract := CompileTestingContract(plan, "/tmp/phase-01/plan.md", "collapsed")
+
+	evidencePaths := map[string]bool{}
+	for _, item := range contract.Items {
+		if item.Owner != TestingContractOwnerAgent {
+			continue
+		}
+		if strings.TrimSpace(item.ExpectedEvidence.Path) == "" {
+			t.Fatalf("agent item %s missing evidence path", item.ID)
+		}
+		if evidencePaths[item.ExpectedEvidence.Path] {
+			t.Fatalf("duplicate evidence path %q", item.ExpectedEvidence.Path)
+		}
+		evidencePaths[item.ExpectedEvidence.Path] = true
+	}
+	if !evidencePaths["screenshots/capture-the-dashboard-empty-state-at-1440x900.png"] {
+		t.Fatalf("evidence paths = %v, want visual path from requirement text and dimensions", evidencePaths)
+	}
+}
+
 func TestCompileTestingContract_ConsolidatesBehavioralEvidence(t *testing.T) {
 	plan := "### Behavioral Evidence\n- [ ] Capture the primary journey trace.\n- [ ] Record the resulting state transition.\n"
 	contract := CompileTestingContract(plan, "/tmp/phase/plan.md", "collapsed")
@@ -476,7 +505,7 @@ func TestCompileTestingContractMultiRepoBehavioralWithoutCommandStaysAgentOwned(
 			t.Fatalf("item = %+v, want agent-owned with no run", item)
 		}
 		if item.ExpectedEvidence.Path == "" {
-			t.Fatal("agent-owned behavioral item must keep its canonical evidence path")
+			t.Fatal("agent-owned behavioral item must have an evidence path")
 		}
 		return
 	}

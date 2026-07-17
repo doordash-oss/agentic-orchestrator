@@ -17,6 +17,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,36 +59,47 @@ func TestFingerprint(t *testing.T) {
 }
 
 func TestProgressTracker(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "progress.md")
-
 	pt := NewProgressTracker()
 
-	// First check with no file — always "progress" (initial)
-	made, err := pt.Check(path)
-	if err != nil {
-		t.Fatalf("check: %v", err)
-	}
+	made := pt.ObserveVerifiedOutcome(3)
 	if !made {
-		t.Error("expected progress on first check")
+		t.Fatal("first verified outcome should establish progress baseline")
 	}
-
-	// Same empty state — no progress
-	made, _ = pt.Check(path)
+	made = pt.ObserveVerifiedOutcome(3)
 	if made {
-		t.Error("expected no progress on unchanged file")
+		t.Fatal("same blocker count should not count as progress")
 	}
 	if pt.NoProgressCount() != 1 {
-		t.Errorf("expected no-progress count 1, got %d", pt.NoProgressCount())
+		t.Fatalf("NoProgressCount = %d, want 1", pt.NoProgressCount())
 	}
-
-	// Write content — progress
-	os.WriteFile(path, []byte("step 1\n"), 0o644)
-	made, _ = pt.Check(path)
+	made = pt.ObserveVerifiedOutcome(2)
 	if !made {
-		t.Error("expected progress after content change")
+		t.Fatal("lower blocker count should count as progress")
 	}
 	if pt.NoProgressCount() != 0 {
-		t.Errorf("expected no-progress count reset to 0, got %d", pt.NoProgressCount())
+		t.Fatalf("NoProgressCount = %d, want reset to 0", pt.NoProgressCount())
+	}
+	made = pt.ObserveVerifiedOutcome(3)
+	if made {
+		t.Fatal("regressing blocker count should not count as progress")
+	}
+	made = pt.ObserveUnverifiedOutcome()
+	if made {
+		t.Fatal("unverified outcome should not count as progress")
+	}
+	if pt.NoProgressCount() != 2 {
+		t.Fatalf("NoProgressCount = %d, want 2", pt.NoProgressCount())
+	}
+}
+
+func TestCountBlockingReviewFindings(t *testing.T) {
+	feedback := strings.Join([]string{
+		"- **Critical**: first",
+		"- **[High]**: second",
+		"- **Medium**: ignored",
+		"* **high**: third",
+	}, "\n")
+	if got := CountBlockingReviewFindings(feedback); got != 3 {
+		t.Fatalf("CountBlockingReviewFindings() = %d, want 3", got)
 	}
 }

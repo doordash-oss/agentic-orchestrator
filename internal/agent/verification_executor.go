@@ -528,12 +528,18 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 	rel := strings.TrimSpace(item.ExpectedEvidence.Path)
 	if rel == "" {
 		result.Status = VerificationStatusFailed
-		result.Evidence = "agent-owned evidence item has no canonical path"
+		result.Evidence = "agent-owned evidence item has no path"
+		result.EvidenceData.Summary = result.Evidence
+		return result
+	}
+	path, err := evidencePathUnderIteration(iterationDir, rel)
+	if err != nil {
+		result.Status = VerificationStatusFailed
+		result.Evidence = err.Error()
 		result.EvidenceData.Summary = result.Evidence
 		return result
 	}
 	result.EvidenceData.Primary = rel
-	path := filepath.Join(iterationDir, filepath.FromSlash(rel))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		result.Status = VerificationStatusFailed
@@ -572,6 +578,40 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 	sum := sha256.Sum256(data)
 	result.EvidenceData.Sha256 = hex.EncodeToString(sum[:])
 	return result
+}
+
+func ValidateRequiredAgentOwnedEvidence(contract *TestingContract, iterationDir string) []ProtocolViolation {
+	if contract == nil {
+		return nil
+	}
+	var violations []ProtocolViolation
+	for _, item := range contract.Items {
+		if item.Owner != TestingContractOwnerAgent || !item.Policy.Required || IsTestingContractItemWaived(item) {
+			continue
+		}
+		result := finalizeAgentOwnedEvidence(item, iterationDir)
+		if result.Status == VerificationStatusPassed {
+			continue
+		}
+		artifact := strings.TrimSpace(item.ExpectedEvidence.Path)
+		if artifact == "" {
+			artifact = item.ID
+		}
+		reason := strings.TrimSpace(result.EvidenceData.Summary)
+		if reason == "" {
+			reason = strings.TrimSpace(result.Evidence)
+		}
+		violations = append(violations, ProtocolViolation{Artifact: artifact, Reason: reason})
+	}
+	return violations
+}
+
+func evidencePathUnderIteration(iterationDir, rel string) (string, error) {
+	cleanRel := filepath.Clean(filepath.FromSlash(strings.TrimSpace(rel)))
+	if cleanRel == "." || filepath.IsAbs(cleanRel) || strings.HasPrefix(cleanRel, ".."+string(filepath.Separator)) || cleanRel == ".." {
+		return "", fmt.Errorf("agent-owned evidence path %q must stay under the iteration directory", rel)
+	}
+	return filepath.Join(iterationDir, cleanRel), nil
 }
 
 func contractResultStub(item TestingContractItem) VerificationCheckResult {

@@ -1,12 +1,12 @@
 ---
-description: Execute an approved phase plan with TDD, dependency-aware task fan-out, semantic evidence, and a strict iteration handoff
+description: Execute an approved phase plan with TDD, dependency-aware task fan-out, required evidence, and a strict iteration handoff
 license: Apache-2.0; Superpowers inspiration acknowledged in ATTRIBUTION.md
 provenance: upstream-inspired
 ---
 
 # Plan Execution
 
-Implement the approved phase plan. You own code, development-time testing, any explicitly agent-owned semantic evidence, and the progress handoff. When a testing contract exists, Agentico owns final contract execution and `verification-report.yaml` after you signal completion.
+Implement the approved phase plan. You own code, development-time testing, explicitly agent-owned evidence, and the progress handoff. The verification harness owns final contract execution and `verification-report.yaml`.
 
 ## Output Files
 
@@ -39,17 +39,17 @@ Never create or edit `verification-report.yaml`. When a testing contract exists,
 
 Parallelize independent non-trivial Tasks. Give each worker the exact Task and acceptance criteria, its repo/file boundary, dependencies, and the focused development test it should use. Sequentialize shared migrations, API decisions, and overlapping edits. Review returned diffs and integrate them before unlocking dependents.
 
-Workers validate the code they change. They do not author final verification results; when a testing contract exists, Agentico runs it after handoff — otherwise you run the plan's Automated Verification yourself before reporting SUCCESS.
+Workers validate the code they change. They do not author final verification results; when a testing contract exists, the harness runs it after handoff. Otherwise, run the plan's Automated Verification before reporting SUCCESS.
 
 ## Agent-Owned Evidence
 
-For every testing-contract item with `owner: agent`, write exactly the relative file named by `expected_evidence.path` under `{iteration_dir}`:
+For every testing-contract item with `owner: agent`, write the file named by `expected_evidence.path` under `{iteration_dir}`.
 
 - `manual_observation`: one concise Markdown record covering the contract's consolidated semantic checklist, the observed result, and enough concrete detail for review.
 - `visual_artifact`: the actual image at the specified `screenshots/` path.
 - `behavioral_artifact`: one actual trace, recording, or interaction log covering the contract's consolidated primary-journey checklist at the specified `behaviors/` path.
 
-Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required semantic evidence needs unavailable authorization, hardware, a human judgment, or an external environment, emit `NEED_USER_INPUT` and name the missing capability. Never create placeholder evidence.
+Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs unavailable authorization, hardware, a human judgment, or an external environment, emit `NEED_USER_INPUT` and name the missing capability. Never create placeholder evidence.
 
 ## Handoff
 
@@ -92,11 +92,11 @@ closed_deferrals: []
 SUCCESS
 ````
 
-The Deferrals block must include both keys. Deferrals are Agentico-owned work due in a numbered future roadmap phase; permissions, external systems, and human follow-ups are blockers, not deferrals.
+The Deferrals block must include both keys. Deferrals are work due in a numbered future roadmap phase; permissions, external systems, and human follow-ups are blockers, not deferrals.
 
 Choose exactly one state:
 
-- `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. When a testing contract exists, Agentico performs final contract verification next; otherwise your reported automated-verification runs are the record.
+- `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. When a testing contract exists, the harness performs final contract verification next; otherwise your reported automated-verification runs are the record.
 - `RETRY`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
 - `NEED_USER_INPUT`: progress requires a human decision, authorization, unavailable external capability, scope/contract change, or resolution of contradictory repository state.
 

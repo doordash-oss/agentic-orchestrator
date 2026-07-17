@@ -68,6 +68,8 @@ type ProgressTracker struct {
 	lastFingerprint string
 	hasChecked      bool
 	noProgressCount int
+	hasOutcome      bool
+	bestBlockers    int
 }
 
 func NewProgressTracker() *ProgressTracker {
@@ -103,6 +105,63 @@ func (pt *ProgressTracker) Check(progressPath string) (bool, error) {
 // NoProgressCount returns the number of consecutive no-progress iterations.
 func (pt *ProgressTracker) NoProgressCount() int {
 	return pt.noProgressCount
+}
+
+// ObserveVerifiedOutcome records a deterministic outcome. Progress is credited
+// only when the verified blocker count reaches a new low; repeated narrative or
+// file churn without fewer blockers does not reset the safety rail.
+func (pt *ProgressTracker) ObserveVerifiedOutcome(blockers int) bool {
+	if blockers < 0 {
+		blockers = 0
+	}
+	if !pt.hasOutcome {
+		pt.hasOutcome = true
+		pt.bestBlockers = blockers
+		return true
+	}
+	if blockers < pt.bestBlockers {
+		pt.bestBlockers = blockers
+		pt.noProgressCount = 0
+		return true
+	}
+	pt.noProgressCount++
+	return false
+}
+
+// ObserveUnverifiedOutcome records an iteration that did not produce a
+// verifier/reviewer outcome, such as RETRY or a protocol violation.
+func (pt *ProgressTracker) ObserveUnverifiedOutcome() bool {
+	pt.noProgressCount++
+	return false
+}
+
+var blockingReviewFindingRE = regexp.MustCompile(`(?im)^\s*[-*]\s+\*\*\[?(critical|high)(?:\]|\b)`)
+
+func CountBlockingReviewFindings(feedback string) int {
+	return len(blockingReviewFindingRE.FindAllString(feedback, -1))
+}
+
+func CountOpenVerificationBlockers(report *VerificationReport) int {
+	if report == nil {
+		return 0
+	}
+	count := 0
+	for _, result := range report.Results {
+		switch NormalizeStatus(result.Status) {
+		case VerificationStatusPassed, VerificationStatusWaived:
+			continue
+		default:
+			count++
+		}
+	}
+	return count
+}
+
+func CountOpenVerificationOutcomeBlockers(out *VerificationExecutionOutcome) int {
+	if out == nil {
+		return 0
+	}
+	return CountOpenVerificationBlockers(out.Report)
 }
 
 // IterationState is the harness-recognised terminal state the agent declares

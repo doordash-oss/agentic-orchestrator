@@ -315,7 +315,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			skipImplement = false
 			iterDir = filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", i))
 			agentStatus = agentStatusSuccess
-			madeProgress, _ = pt.Check(progressPath)
 			var prepareErr error
 			testingContractPath, contractFingerprint, prepareErr = prepareImplementationTestingContract(cfg, planContent)
 			if prepareErr != nil {
@@ -606,9 +605,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Append iteration output to aggregate log so the TUI log viewer works
 			appendIterationLog(aggregateLogPath, i, output)
 
-			// Check progress
-			madeProgress, _ = pt.Check(progressPath)
-
 			// Build iteration metadata from the logical agent result, not
 			// the process status after Stop(). Multi-turn providers such as
 			// Codex can report SUCCESS and then exit non-zero during
@@ -762,8 +758,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// iteration starts fresh against the just-emitted progress.md
 			// (no reviewer feedback — RETRY is not a rejection).
 			if parsed.State == StateRetry {
+				madeProgress = pt.ObserveUnverifiedOutcome()
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
+				meta.MadeProgress = madeProgress
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
@@ -798,6 +796,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}
 				meta.AgentStatus = "NEED_USER_INPUT"
 				meta.ReviewStatus = "skipped_need_user_input"
+				meta.MadeProgress = pt.ObserveUnverifiedOutcome()
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
@@ -817,6 +816,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				// the implementer — with no per-iteration reviewer there is
 				// nobody else to act on a red harness report.
 				if harnessVerification != nil && len(harnessVerification.RegressionItems) > 0 {
+					meta.MadeProgress = pt.ObserveVerifiedOutcome(CountOpenVerificationOutcomeBlockers(harnessVerification))
 					meta.ReviewStatus = ReviewChangesRequested.String()
 					_ = am.WriteMeta(iterDir, meta)
 					_ = am.WriteSummary(summaryPath, meta)
@@ -835,6 +835,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
 					continue
 				}
+				meta.MadeProgress = pt.ObserveVerifiedOutcome(0)
 				meta.ReviewStatus = reviewStatusSkipped
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
@@ -934,12 +935,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}, nil
 			}
 
-			meta.ReviewStatus = reviewStatus.String()
-			_ = am.WriteMeta(iterDir, meta)
-			_ = am.WriteSummary(summaryPath, meta)
-
 			switch reviewStatus {
 			case ReviewApproved:
+				meta.MadeProgress = pt.ObserveVerifiedOutcome(0)
+				meta.ReviewStatus = reviewStatus.String()
+				_ = am.WriteMeta(iterDir, meta)
+				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusReviewPassed)
 				return &LoopResult{
@@ -947,6 +948,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Iterations:  i,
 				}, nil
 			case ReviewChangesRequested:
+				meta.MadeProgress = pt.ObserveVerifiedOutcome(CountBlockingReviewFindings(feedback) + CountOpenVerificationOutcomeBlockers(harnessVerification))
+				meta.ReviewStatus = reviewStatus.String()
+				_ = am.WriteMeta(iterDir, meta)
+				_ = am.WriteSummary(summaryPath, meta)
 				missingReqs := MissingEvidenceRequirements(feedback)
 				insufficientReqs := InsufficientEvidenceRequirements(feedback)
 				if len(missingReqs) > 0 || len(insufficientReqs) > 0 {
@@ -973,6 +978,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "changes_requested")
 				continue
 			default:
+				meta.MadeProgress = pt.ObserveUnverifiedOutcome()
+				meta.ReviewStatus = reviewStatus.String()
+				_ = am.WriteMeta(iterDir, meta)
+				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
 				reviewerFeedback = "Review produced no clear result. Please verify your changes."
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_unclear")

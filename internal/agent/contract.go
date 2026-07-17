@@ -191,7 +191,65 @@ func ValidateArtifactsPreflight(phase feature.Phase, role Role, iterDir string) 
 	if len(violations) > 0 {
 		return Outcome{OK: false}, violations, nil
 	}
-	return validateContractArtifacts(contract, iterDir, false)
+	out, contractViolations, err := validateContractArtifacts(contract, iterDir, false)
+	if err != nil {
+		return out, nil, err
+	}
+	violations = append(violations, contractViolations...)
+	if phase == feature.PhaseImplement && role == RoleImplementer {
+		extra, extraErr := validateImplementerAgentOwnedEvidencePreflight(iterDir)
+		if extraErr != nil {
+			return out, nil, extraErr
+		}
+		violations = append(violations, extra...)
+	}
+	out.OK = len(violations) == 0
+	return out, violations, nil
+}
+
+func validateImplementerAgentOwnedEvidencePreflight(iterDir string) ([]ProtocolViolation, error) {
+	contractPath := ""
+	for _, candidate := range implementerTestingContractPathCandidates(iterDir) {
+		if _, err := os.Stat(candidate); err == nil {
+			contractPath = candidate
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("checking testing contract for artifact preflight: %w", err)
+		}
+	}
+	if strings.TrimSpace(contractPath) == "" {
+		return nil, nil
+	}
+	contract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading testing contract for artifact preflight: %w", err)
+	}
+	return ValidateRequiredAgentOwnedEvidence(contract, iterDir), nil
+}
+
+func implementerTestingContractPathCandidates(iterDir string) []string {
+	// Roadmap phase iterations live at <phase>/implement/iteration-N with the
+	// contract at <phase>/testing-contract.yaml. Cycle iterations use the same
+	// phase-dir progress layout and keep the contract beside progress.md.
+	parent := filepath.Dir(iterDir)
+	phaseDir := filepath.Dir(parent)
+	candidates := []string{}
+	for _, dir := range []string{phaseDir, parent} {
+		if dir == "." || dir == string(filepath.Separator) {
+			continue
+		}
+		candidate := filepath.Join(dir, "testing-contract.yaml")
+		duplicate := false
+		for _, existing := range candidates {
+			if existing == candidate {
+				duplicate = true
+			}
+		}
+		if !duplicate {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
 }
 
 func validateYAMLArtifactSyntax(displayPath, path string, required bool) []ProtocolViolation {

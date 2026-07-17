@@ -864,6 +864,7 @@ func finalizeTestingContractOwnership(contract *TestingContract) {
 	if contract == nil {
 		return
 	}
+	evidencePaths := map[string]string{}
 	for i := range contract.Items {
 		item := &contract.Items[i]
 		if item.Run != nil && strings.TrimSpace(item.Run.Shell) != "" {
@@ -874,22 +875,56 @@ func finalizeTestingContractOwnership(contract *TestingContract) {
 		if item.Owner == TestingContractOwnerHarness {
 			item.ExpectedEvidence.Path = ""
 		} else {
-			item.ExpectedEvidence.Path = testingContractEvidencePath(*item)
+			item.ExpectedEvidence.Path = testingContractEvidencePath(*item, evidencePaths)
 		}
 	}
 }
 
-func testingContractEvidencePath(item TestingContractItem) string {
+func testingContractEvidencePath(item TestingContractItem, seen map[string]string) string {
+	base := evidencePathComponent(item.Name)
+	if item.ExpectedEvidence.Width > 0 && item.ExpectedEvidence.Height > 0 {
+		dimensions := fmt.Sprintf("%dx%d", item.ExpectedEvidence.Width, item.ExpectedEvidence.Height)
+		if !strings.Contains(base, dimensions) {
+			base += "-" + dimensions
+		}
+	}
+	if base == "" {
+		base = evidencePathComponent(item.ID)
+	}
+	ext := ".txt"
+	dir := "evidence"
 	switch {
 	case item.Source == testingContractManualSource || item.ExpectedEvidence.Kind == testingContractManualKind:
-		return filepath.ToSlash(filepath.Join("observations", safeEvidenceComponent(item.ID)+".md"))
+		dir, ext = "observations", ".md"
 	case item.Source == testingContractVisualSource || item.ExpectedEvidence.Kind == testingContractVisualKind:
-		return filepath.ToSlash(filepath.Join("screenshots", safeEvidenceComponent(item.ID)+".png"))
+		dir, ext = "screenshots", ".png"
 	case item.Source == testingContractBehavioralSource || item.ExpectedEvidence.Kind == testingContractBehavioralKind:
-		return filepath.ToSlash(filepath.Join("behaviors", safeEvidenceComponent(item.ID)+".log"))
-	default:
-		return ""
+		dir, ext = "behaviors", ".log"
 	}
+	rel := filepath.ToSlash(filepath.Join(dir, base+ext))
+	if seen == nil {
+		return rel
+	}
+	if otherID, ok := seen[rel]; ok && otherID != item.ID {
+		hash := sha1.Sum([]byte(item.ID))
+		suffix := hex.EncodeToString(hash[:])[:8]
+		rel = filepath.ToSlash(filepath.Join(dir, base+"-"+suffix+ext))
+	}
+	seen[rel] = item.ID
+	return rel
+}
+
+func evidencePathComponent(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = safeEvidenceComponent(value)
+	value = strings.Trim(value, "-._")
+	if len(value) > 80 {
+		value = strings.Trim(value[:80], "-._")
+	}
+	if value == "" {
+		return "evidence"
+	}
+	return value
 }
 
 func testingContractRequiresCommandRunner(contract *TestingContract) bool {

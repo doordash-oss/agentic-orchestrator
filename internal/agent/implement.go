@@ -1307,6 +1307,14 @@ func prepareImplementationTestingContract(cfg ImplementConfig, planContent strin
 	if !ok {
 		return "", "", nil
 	}
+	if resolveCycleTypeForRepo(cfg.Feature, cfg.RepoName) == "" &&
+		!cfg.Feature.EffectivePipeline().ShouldRunImplementationHarness() {
+		// Medium/Large roadmap phases run no per-iteration harness; the
+		// plan's automated verification is the implementer's to run and is
+		// re-exercised live at Final Review. Cycle contracts keep the
+		// harness for every profile.
+		return "", "", nil
+	}
 	contract := compileImplementationTestingContract(cfg, planContent)
 	if existing, err := ReadTestingContract(contractPath); err == nil {
 		contract = ReconcileTestingContract(existing, contract)

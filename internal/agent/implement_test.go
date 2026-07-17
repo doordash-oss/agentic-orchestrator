@@ -3016,6 +3016,89 @@ func countContractEvidenceRuns(t *testing.T, contractPath string) int {
 	return runs
 }
 
+func TestPrepareImplementationTestingContractSkipsNonMoonshotRoadmapPhases(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-large-roadmap")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "test-large-roadmap", Name: "Large Roadmap", Slug: "large-roadmap",
+		Pipeline: feature.PipelineLarge, CurrentRoadmapPhase: 1,
+	}
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir}
+	planContent := "### Automated Verification\n- [ ] Check passes: `printf verified`\n"
+
+	path, fingerprint, err := prepareImplementationTestingContract(cfg, planContent)
+	if err != nil {
+		t.Fatalf("prepareImplementationTestingContract: %v", err)
+	}
+	if path != "" || fingerprint != "" {
+		t.Fatalf("expected no contract for large-profile roadmap phase, got path=%q fingerprint=%q", path, fingerprint)
+	}
+	if _, statErr := os.Stat(PhaseTestingContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, 1)); !os.IsNotExist(statErr) {
+		t.Fatalf("testing-contract.yaml must not be written for large-profile roadmap phase")
+	}
+}
+
+func TestPrepareImplementationTestingContractMoonshotRoadmapPhaseStillWritesContract(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-moonshot-roadmap")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "test-moonshot-roadmap", Name: "Moonshot Roadmap", Slug: "moonshot-roadmap",
+		Pipeline: feature.PipelineMoonshot, CurrentRoadmapPhase: 1,
+	}
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir}
+	planContent := "### Automated Verification\n- [ ] Check passes: `printf verified`\n"
+
+	path, fingerprint, err := prepareImplementationTestingContract(cfg, planContent)
+	if err != nil {
+		t.Fatalf("prepareImplementationTestingContract: %v", err)
+	}
+	if path == "" || fingerprint == "" {
+		t.Fatalf("expected a contract for moonshot roadmap phase, got path=%q fingerprint=%q", path, fingerprint)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("expected testing-contract.yaml at %s: %v", path, statErr)
+	}
+}
+
+func TestPrepareImplementationTestingContractLargeCycleStillWritesContract(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-large-cycle")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "test-large-cycle", Name: "Large Cycle", Slug: "large-cycle",
+		Pipeline: feature.PipelineLarge,
+	}
+	f.SetActiveCycleType(feature.CycleReviewComments)
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir, CommandRunner: NewExecCommandRunner()}
+	planContent := "### Automated Verification\n- [ ] Check passes: `printf verified`\n"
+
+	path, fingerprint, err := prepareImplementationTestingContract(cfg, planContent)
+	if err != nil {
+		t.Fatalf("prepareImplementationTestingContract: %v", err)
+	}
+	if path == "" || fingerprint == "" {
+		t.Fatalf("expected a cycle contract for large-profile repo cycle, got path=%q fingerprint=%q", path, fingerprint)
+	}
+	wantPath := CycleTestingContractPath(filepath.Dir(cfg.StateDir), f, cfg.RepoName, feature.CycleReviewComments)
+	if path != wantPath {
+		t.Fatalf("path = %q, want cycle contract path %q", path, wantPath)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("expected testing-contract.yaml at %s: %v", path, statErr)
+	}
+}
+
 func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")

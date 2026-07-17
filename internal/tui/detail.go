@@ -586,8 +586,10 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 
 		timing := phaseProgressTiming(f, p.phase, p.timerKey)
 
-		// Context usage percentage (active phase only)
-		if current && isRunningStatus(f.Status) {
+		// Context usage belongs to an active LLM session. Harness verification
+		// runs commands without one, so the last session's percentage would be
+		// stale and misleading during this substep.
+		if current && isRunningStatus(f.Status) && f.CurrentPhaseStatus != "verifying" {
 			timing += formatContextUsage(m.contextPct)
 		}
 

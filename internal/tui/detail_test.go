@@ -1478,6 +1478,34 @@ func TestFormatPhaseStatusVerifyingShowsCountOnly(t *testing.T) {
 	}
 }
 
+func TestRenderPhaseProgressVerifyingOmitsStaleContextUsage(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-verifying",
+		Slug:         "verifying",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Models:       config.ModelConfig{Implementation: "opus"},
+	}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		VerificationItems: []feature.VerificationItemStatus{
+			{Name: "Go build passes", State: "passed"},
+			{Name: "Desktop tests", State: "running"},
+		},
+	})
+	m := NewDetailModel(f, "")
+	m.contextPct = 17
+
+	got := stripANSI(m.renderPhaseProgress(f))
+	if !strings.Contains(got, "verifying: [1/2]") {
+		t.Fatalf("renderPhaseProgress() = %q, want verification progress", got)
+	}
+	if strings.Contains(got, "context window") || strings.Contains(got, "17%") {
+		t.Fatalf("renderPhaseProgress() = %q, want no stale session context during harness verification", got)
+	}
+}
+
 func TestFormatPhaseStatusVerifyingShowsFailureCount(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing}

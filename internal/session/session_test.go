@@ -380,7 +380,7 @@ func TestWatchdogControlWaitPausesAndRefreshesTurnTimer(t *testing.T) {
 	watchdog.lastActivityAt = time.Now().Add(-time.Second)
 	watchdog.mu.Unlock()
 
-	if _, _, _, stalled := watchdog.toolStall(); stalled {
+	if _, _, stalled := watchdog.toolStall(); stalled {
 		t.Fatal("watchdog reported a stall while a real control request was pending")
 	}
 
@@ -388,14 +388,14 @@ func TestWatchdogControlWaitPausesAndRefreshesTurnTimer(t *testing.T) {
 	sess.removePendingControlRequestLocked("permission-1")
 	sess.status = SessionRunning
 	sess.mu.Unlock()
-	if _, _, _, stalled := watchdog.toolStall(); stalled {
+	if _, _, stalled := watchdog.toolStall(); stalled {
 		t.Fatal("watchdog reused pre-permission idle time after the control wait ended")
 	}
 
 	watchdog.mu.Lock()
 	watchdog.lastActivityAt = time.Now().Add(-time.Second)
 	watchdog.mu.Unlock()
-	if tool, _, _, stalled := watchdog.toolStall(); !stalled || tool.phase != watchdogToolAwaitingTurnResult {
+	if tool, _, stalled := watchdog.toolStall(); !stalled || tool.phase != watchdogToolAwaitingTurnResult {
 		t.Fatalf("toolStall() = (%+v, stalled=%v), want awaiting-turn-result stall after refreshed timeout", tool, stalled)
 	}
 }
@@ -417,7 +417,7 @@ func TestWatchdogDoesNotPauseForWaitingPermissionWithoutPendingControl(t *testin
 	watchdog.lastActivityAt = time.Now().Add(-time.Second)
 	watchdog.mu.Unlock()
 
-	if tool, _, _, stalled := watchdog.toolStall(); !stalled || tool.phase != watchdogToolAwaitingTurnResult {
+	if tool, _, stalled := watchdog.toolStall(); !stalled || tool.phase != watchdogToolAwaitingTurnResult {
 		t.Fatalf("toolStall() = (%+v, stalled=%v), want stale WaitingPermission status not to mask the stall", tool, stalled)
 	}
 }
@@ -439,12 +439,12 @@ func TestWatchdogActivityRefreshesAwaitingTurnTimerAndResultDisarmsIt(t *testing
 	watchdog.mu.Unlock()
 
 	watchdog.Observe(llm.SDKMessage{Assistant: &llm.AssistantMessage{}})
-	if tool, _, _, stalled := watchdog.toolStall(); stalled || tool.phase != watchdogToolAwaitingTurnResult {
+	if tool, _, stalled := watchdog.toolStall(); stalled || tool.phase != watchdogToolAwaitingTurnResult {
 		t.Fatalf("toolStall() after assistant activity = (%+v, stalled=%v), want refreshed awaiting-turn state", tool, stalled)
 	}
 
 	watchdog.Observe(llm.SDKMessage{Result: &llm.ResultMessage{Subtype: "success"}})
-	if tool, _, _, stalled := watchdog.toolStall(); stalled || tool.phase != watchdogToolInactive {
+	if tool, _, stalled := watchdog.toolStall(); stalled || tool.phase != watchdogToolInactive {
 		t.Fatalf("toolStall() after Result = (%+v, stalled=%v), want inactive watchdog", tool, stalled)
 	}
 }

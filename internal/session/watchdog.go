@@ -36,7 +36,6 @@ type sessionWatchdog struct {
 	lastActivityAt time.Time
 
 	startOnce sync.Once
-	failOnce  sync.Once
 }
 
 type watchdogToolPhase uint8
@@ -179,7 +178,7 @@ func (w *sessionWatchdog) run() {
 		case <-ticker.C:
 		}
 
-		if tool, timeout, _, ok := w.toolStall(); ok {
+		if tool, timeout, ok := w.toolStall(); ok {
 			if w.failTool(tool, timeout) {
 				return
 			}
@@ -187,18 +186,18 @@ func (w *sessionWatchdog) run() {
 	}
 }
 
-func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, time.Duration, bool) {
+func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, bool) {
 	if len(w.session.PendingControlRequests()) > 0 || w.session.HasPendingAskUserQuestion() {
 		w.refreshActivity()
-		return watchdogTool{}, 0, 0, false
+		return watchdogTool{}, 0, false
 	}
 	status := w.session.Status()
 	if status == SessionWaitingHelp {
 		w.refreshActivity()
-		return watchdogTool{}, 0, 0, false
+		return watchdogTool{}, 0, false
 	}
 	if status == SessionDone || status == SessionFailed {
-		return watchdogTool{}, 0, 0, false
+		return watchdogTool{}, 0, false
 	}
 
 	w.mu.Lock()
@@ -207,13 +206,13 @@ func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, time.Duratio
 	w.mu.Unlock()
 	timeout := w.timeoutFor(tool.phase)
 	if timeout <= 0 {
-		return watchdogTool{}, 0, 0, false
+		return watchdogTool{}, 0, false
 	}
 	if stdoutAt := w.session.LastStdoutAt(); stdoutAt.After(lastActivityAt) {
 		lastActivityAt = stdoutAt
 	}
 	idleFor := time.Since(lastActivityAt)
-	return tool, timeout, idleFor, idleFor >= timeout
+	return tool, timeout, idleFor >= timeout
 }
 
 func (w *sessionWatchdog) refreshActivity() {
@@ -237,6 +236,8 @@ func (w *sessionWatchdog) failTool(tool watchdogTool, timeout time.Duration) boo
 	// Observe and the poller race at the timeout boundary. Linearize the
 	// decision under the watchdog lock: if a Result or any stdout arrived after
 	// the poll snapshot, that activity wins and the watchdog keeps waiting.
+	// Clearing w.tool here also guarantees a single fire: the only caller is
+	// run(), which returns as soon as this reports true.
 	w.mu.Lock()
 	if w.tool != tool {
 		w.mu.Unlock()
@@ -254,18 +255,14 @@ func (w *sessionWatchdog) failTool(tool watchdogTool, timeout time.Duration) boo
 	w.tool = watchdogTool{}
 	w.mu.Unlock()
 
-	failed := false
-	w.failOnce.Do(func() {
-		failed = true
-		var reason string
-		if tool.phase == watchdogToolAwaitingTurnResult {
-			reason = fmt.Sprintf("provider watchdog stalled awaiting turn completion after tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
-		} else {
-			reason = fmt.Sprintf("provider watchdog stalled with pending tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
-		}
-		w.session.failFromWatchdog(reason)
-	})
-	return failed
+	var reason string
+	if tool.phase == watchdogToolAwaitingTurnResult {
+		reason = fmt.Sprintf("provider watchdog stalled awaiting turn completion after tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
+	} else {
+		reason = fmt.Sprintf("provider watchdog stalled with pending tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
+	}
+	w.session.failFromWatchdog(reason)
+	return true
 }
 
 func (p watchdogTool) displayName() string {

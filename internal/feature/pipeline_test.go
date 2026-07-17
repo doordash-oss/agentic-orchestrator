@@ -627,9 +627,11 @@ func TestShouldRunImplementationHarness(t *testing.T) {
 		{PipelineLarge, false},
 	}
 	for _, tt := range tests {
-		if got := tt.profile.ShouldRunImplementationHarness(); got != tt.want {
-			t.Errorf("%s.ShouldRunImplementationHarness() = %v, want %v", tt.profile, got, tt.want)
-		}
+		t.Run(string(tt.profile), func(t *testing.T) {
+			if got := tt.profile.ShouldRunImplementationHarness(); got != tt.want {
+				t.Errorf("%s.ShouldRunImplementationHarness() = %v, want %v", tt.profile, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -645,8 +647,10 @@ func TestShouldContractAgentEvidence(t *testing.T) {
 		{PipelineLarge, false},
 	}
 	for _, tt := range tests {
-		if got := tt.profile.ShouldContractAgentEvidence(); got != tt.want {
-			t.Errorf("%s.ShouldContractAgentEvidence() = %v, want %v", tt.profile, got, tt.want)
-		}
+		t.Run(string(tt.profile), func(t *testing.T) {
+			if got := tt.profile.ShouldContractAgentEvidence(); got != tt.want {
+				t.Errorf("%s.ShouldContractAgentEvidence() = %v, want %v", tt.profile, got, tt.want)
+			}
+		})
 	}
 }

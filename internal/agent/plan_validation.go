@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1108,7 +1109,7 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 		ResearchPath:              researchPath,
 		FeedbackPath:              feedbackPath,
 		AxisLabel:                 strings.ToLower(domain.Name),
-		AutomatedVerificationOnly: !f.EffectivePipeline().ShouldContractAgentEvidence(),
+		AutomatedVerificationOnly: kind != validationArtifactRoadmap && !f.EffectivePipeline().ShouldContractAgentEvidence(),
 	})
 }
 
@@ -2056,7 +2057,9 @@ phasePlanAttemptLoop:
 		// agent-owned evidence rows at all.
 		{
 			planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
-			if planText, readErr := os.ReadFile(planArtifactPath); readErr == nil {
+			if planText, readErr := os.ReadFile(planArtifactPath); readErr != nil {
+				log.Printf("plan evidence-mode check skipped: read %s: %v", planArtifactPath, readErr)
+			} else {
 				contractAgentEvidence := cfg.Feature.EffectivePipeline().ShouldContractAgentEvidence()
 				if violations := phasePlanEvidenceModeViolations(string(planText), contractAgentEvidence); len(violations) > 0 {
 					lastErr := formatProtocolViolationError(plannerRole, attemptDir, violations)

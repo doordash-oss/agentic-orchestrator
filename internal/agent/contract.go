@@ -737,62 +737,6 @@ func validateProgressArtifact(iterDir, path string, out *Outcome) ([]ProtocolVio
 	return nil, nil
 }
 
-func validateVerificationReportArtifact(_ string, path string, out *Outcome) ([]ProtocolViolation, error) {
-	report, err := ReadVerificationReport(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []ProtocolViolation{{Artifact: "verification-report.yaml", Reason: missingArtifactReason("verification-report.yaml", filepath.Dir(path))}}, nil
-		}
-		return []ProtocolViolation{{Artifact: "verification-report.yaml", Reason: fmt.Sprintf("verification-report.yaml is unparseable: %v", err)}}, nil
-	}
-	out.VerificationReport = report
-	contract, contractErr := readVerificationReportTestingContract(report, filepath.Dir(path))
-	if contractErr != nil {
-		return []ProtocolViolation{{Artifact: "verification-report.yaml", Reason: fmt.Sprintf("testing contract referenced by verification-report.yaml is unreadable: %v", contractErr)}}, nil
-	}
-	gate := ValidateVerificationReportWithContext(report, nil, verificationReportComplete(out), VerificationReportValidationContext{
-		IterationDir: filepath.Dir(path),
-		Contract:     contract,
-	})
-	if !gate.Rejected {
-		return nil, nil
-	}
-	return reportGateViolations(gate), nil
-}
-
-func readVerificationReportTestingContract(report *VerificationReport, iterDir string) (*TestingContract, error) {
-	expectedPath := verificationReportSiblingTestingContractPath(iterDir)
-	reportPath := strings.TrimSpace(report.ContractPath)
-	if expectedPath != "" {
-		if reportPath != "" && !sameCleanPath(reportPath, expectedPath) {
-			return nil, fmt.Errorf("contract_path %q does not match expected testing contract %q", reportPath, expectedPath)
-		}
-		contract, err := ReadTestingContract(expectedPath)
-		if err != nil {
-			return nil, fmt.Errorf("reading testing contract %s: %w", expectedPath, err)
-		}
-		return contract, nil
-	}
-	return readBoundTestingContract(report)
-}
-
-func verificationReportSiblingTestingContractPath(iterDir string) string {
-	if strings.TrimSpace(iterDir) == "" {
-		return ""
-	}
-	phaseDir := filepath.Dir(iterDir)
-	candidates := []string{filepath.Join(phaseDir, "testing-contract.yaml")}
-	if filepath.Base(phaseDir) == feature.PhaseImplement.DirName() {
-		candidates = append([]string{filepath.Join(filepath.Dir(phaseDir), "testing-contract.yaml")}, candidates...)
-	}
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return ""
-}
-
 func validateReviewFeedbackArtifactWithDisplay(_ string, path, displayPath string, out *Outcome) ([]ProtocolViolation, error) {
 	parsed, err := ParseReviewFeedback(path)
 	if err != nil {
@@ -843,13 +787,6 @@ func validateNeedUserInputArtifact(_ string, path string, out *Outcome) ([]Proto
 	}
 	out.NeedUserInput = &rec
 	return nil, nil
-}
-
-func verificationReportComplete(out *Outcome) bool {
-	if out.Progress == nil {
-		return true
-	}
-	return out.Progress.State == StateSuccess
 }
 
 func progressViolations(parsed *ParsedProgress) []ProtocolViolation {

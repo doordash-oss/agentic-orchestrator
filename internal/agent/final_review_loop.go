@@ -648,7 +648,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		Feedback:           feedback,
 		FeedbackPath:       feedbackPath,
 		ExitCriteria:       cfg.Feature.ExitCriteria,
-		IterDir:            iterDir,
 		Iteration:          iteration,
 		Publishable:        cfg.Feature.IsPublishable(),
 		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),

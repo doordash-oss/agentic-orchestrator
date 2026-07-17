@@ -17,7 +17,7 @@ Implement the approved phase plan. You own code, development-time testing, any e
 
 ## Start Here
 
-Never create or edit `verification-report.yaml`. The harness derives it after `phase_complete` from the testing contract, command results, waivers, and agent-owned evidence files.
+Never create or edit `verification-report.yaml`. When a testing contract exists, the harness derives it after `phase_complete` from the testing contract, command results, waivers, and agent-owned evidence files.
 
 1. Read the full phase plan.
 2. If `{phase_dir}/progress.md` exists, read it and resume from `### Where I stopped`. Reviewer feedback and the current plan override stale handoff prose.

@@ -3052,9 +3052,19 @@ func TestPrepareImplementationTestingContractMoonshotRoadmapPhaseStillWritesCont
 	f := &feature.Feature{
 		ID: "test-moonshot-roadmap", Name: "Moonshot Roadmap", Slug: "moonshot-roadmap",
 		Pipeline: feature.PipelineMoonshot, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "test-repo", Path: stateDir, WorktreePath: stateDir}},
 	}
-	cfg := ImplementConfig{Feature: f, StateDir: stateDir}
-	planContent := "### Automated Verification\n- [ ] Check passes: `printf verified`\n"
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, stateDir, "git init -q")
+	runVerificationTestCommand(t, runner, stateDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, stateDir, "git config user.name Test")
+	if err := os.WriteFile(filepath.Join(stateDir, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runVerificationTestCommand(t, runner, stateDir, "git add README.md")
+	runVerificationTestCommand(t, runner, stateDir, "git commit -qm base")
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir, CommandRunner: runner}
+	planContent := "#### Automated Verification:\n- [ ] Check passes: `printf verified`\n"
 
 	path, fingerprint, err := prepareImplementationTestingContract(cfg, planContent)
 	if err != nil {
@@ -3065,6 +3075,45 @@ func TestPrepareImplementationTestingContractMoonshotRoadmapPhaseStillWritesCont
 	}
 	if _, statErr := os.Stat(path); statErr != nil {
 		t.Fatalf("expected testing-contract.yaml at %s: %v", path, statErr)
+	}
+	contract, err := ReadTestingContract(path)
+	if err != nil {
+		t.Fatalf("ReadTestingContract: %v", err)
+	}
+	if len(contract.Items) == 0 {
+		t.Fatalf("expected written contract to have at least one item, got none")
+	}
+}
+
+func TestPrepareImplementationTestingContractNonMoonshotRoadmapRemovesStaleContract(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-large-stale")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "test-large-stale", Name: "Large Stale", Slug: "large-stale",
+		Pipeline: feature.PipelineLarge, CurrentRoadmapPhase: 1,
+	}
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir}
+	contractPath := PhaseTestingContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, 1)
+	if err := os.MkdirAll(filepath.Dir(contractPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTestingContract(contractPath, compileImplementationTestingContract(cfg, "### Automated Verification\n- [ ] Check passes: `printf verified`\n")); err != nil {
+		t.Fatalf("seeding stale contract: %v", err)
+	}
+
+	path, fingerprint, err := prepareImplementationTestingContract(cfg, "### Automated Verification\n- [ ] Check passes: `printf verified`\n")
+	if err != nil {
+		t.Fatalf("prepareImplementationTestingContract: %v", err)
+	}
+	if path != "" || fingerprint != "" {
+		t.Fatalf("expected no contract for large-profile roadmap phase, got path=%q fingerprint=%q", path, fingerprint)
+	}
+	if _, statErr := os.Stat(contractPath); !os.IsNotExist(statErr) {
+		t.Fatalf("stale testing-contract.yaml must be removed, stat err = %v", statErr)
 	}
 }
 

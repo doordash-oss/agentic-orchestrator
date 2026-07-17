@@ -134,7 +134,7 @@ func TestFinalFixPromptBranches(t *testing.T) {
 				IncludeManualVerificationOutcomes: true,
 				Publishable:                       true,
 			},
-			wantContains: []string{"## Manual Verification Outcomes", "agent-owned evidence file under this iteration dir"},
+			wantContains: []string{"## Manual Verification Outcomes", "describe in your fix output what you actually observed"},
 			wantOmit:     []string{"NOTE: Local-only repository"},
 		},
 		{

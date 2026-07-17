@@ -47,7 +47,6 @@ type ArtifactValidator string
 
 const (
 	ValidatorProgress                  ArtifactValidator = "progress"
-	ValidatorVerificationReport        ArtifactValidator = "verification_report"
 	ValidatorNeedUserInput             ArtifactValidator = "need_user_input"
 	ValidatorRoadmap                   ArtifactValidator = "roadmap"
 	ValidatorPhasePlanMarkdown         ArtifactValidator = "phase_plan_markdown"

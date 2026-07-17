@@ -1312,7 +1312,11 @@ func prepareImplementationTestingContract(cfg ImplementConfig, planContent strin
 		// Medium/Large roadmap phases run no per-iteration harness; the
 		// plan's automated verification is the implementer's to run and is
 		// re-exercised live at Final Review. Cycle contracts keep the
-		// harness for every profile.
+		// harness for every profile. Remove any stale contract left by a
+		// prior run/profile so the implementer's presence check sees none.
+		if err := os.Remove(contractPath); err != nil && !os.IsNotExist(err) {
+			return "", "", fmt.Errorf("removing stale testing contract: %w", err)
+		}
 		return "", "", nil
 	}
 	contract := compileImplementationTestingContract(cfg, planContent)

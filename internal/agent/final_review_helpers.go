@@ -37,7 +37,6 @@ type FinalFixPromptOpts struct {
 	Feedback           string
 	FeedbackPath       string
 	ExitCriteria       string
-	IterDir            string // for phase_complete references
 	Iteration          int
 	Publishable        bool
 	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected

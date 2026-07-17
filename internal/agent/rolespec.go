@@ -27,30 +27,30 @@ import (
 type Role = roles.Role
 
 const (
-	RoleImplementer                                    = roles.RoleImplementer
-	RoleFinalReviewFixer                               = roles.RoleFinalReviewFixer
-	RolePlanRoadmapPlanner                             = roles.RolePlanRoadmapPlanner
-	RolePlanRoadmapReviser                             = roles.RolePlanRoadmapReviser
-	RolePlanPhasePlanner                               = roles.RolePlanPhasePlanner
-	RolePlanPhaseReviser                               = roles.RolePlanPhaseReviser
-	RoleValidateRoadmapArchitecture                    = roles.RoleValidateRoadmapArchitecture
-	RoleValidateRoadmapScope                           = roles.RoleValidateRoadmapScope
-	RoleValidatePhasePlanStructural                    = roles.RoleValidatePhasePlanStructural
-	RoleValidatePhasePlanScope                         = roles.RoleValidatePhasePlanScope
-	RoleValidatePhasePlanGrounding                     = roles.RoleValidatePhasePlanGrounding
-	RoleValidatePlanSecurity                           = roles.RoleValidatePlanSecurity
-	RoleValidatePlanPerformance                        = roles.RoleValidatePlanPerformance
-	RoleValidatePlanTesting                            = roles.RoleValidatePlanTesting
-	RoleImplementationReviewCraft                      = roles.RoleImplementationReviewCraft
-	RoleImplementationReviewFunctionalityEvidence      = roles.RoleImplementationReviewFunctionalityEvidence
-	RoleImplementationReviewCleanliness                = roles.RoleImplementationReviewCleanliness
-	RoleImplementationReviewQA                         = roles.RoleImplementationReviewQA
-	RoleImplementationReviewDesign                     = roles.RoleImplementationReviewDesign
-	RoleRefactorPlanStep                               = roles.RoleRefactorPlanStep
-	RoleKnowledgeBaseBuilder                           = roles.RoleKnowledgeBaseBuilder
-	RoleInquirer                                       = roles.RoleInquirer
-	RoleResearcher                                     = roles.RoleResearcher
-	RoleDesigner                                       = roles.RoleDesigner
+	RoleImplementer                               = roles.RoleImplementer
+	RoleFinalReviewFixer                          = roles.RoleFinalReviewFixer
+	RolePlanRoadmapPlanner                        = roles.RolePlanRoadmapPlanner
+	RolePlanRoadmapReviser                        = roles.RolePlanRoadmapReviser
+	RolePlanPhasePlanner                          = roles.RolePlanPhasePlanner
+	RolePlanPhaseReviser                          = roles.RolePlanPhaseReviser
+	RoleValidateRoadmapArchitecture               = roles.RoleValidateRoadmapArchitecture
+	RoleValidateRoadmapScope                      = roles.RoleValidateRoadmapScope
+	RoleValidatePhasePlanStructural               = roles.RoleValidatePhasePlanStructural
+	RoleValidatePhasePlanScope                    = roles.RoleValidatePhasePlanScope
+	RoleValidatePhasePlanGrounding                = roles.RoleValidatePhasePlanGrounding
+	RoleValidatePlanSecurity                      = roles.RoleValidatePlanSecurity
+	RoleValidatePlanPerformance                   = roles.RoleValidatePlanPerformance
+	RoleValidatePlanTesting                       = roles.RoleValidatePlanTesting
+	RoleImplementationReviewCraft                 = roles.RoleImplementationReviewCraft
+	RoleImplementationReviewFunctionalityEvidence = roles.RoleImplementationReviewFunctionalityEvidence
+	RoleImplementationReviewCleanliness           = roles.RoleImplementationReviewCleanliness
+	RoleImplementationReviewQA                    = roles.RoleImplementationReviewQA
+	RoleImplementationReviewDesign                = roles.RoleImplementationReviewDesign
+	RoleRefactorPlanStep                          = roles.RoleRefactorPlanStep
+	RoleKnowledgeBaseBuilder                      = roles.RoleKnowledgeBaseBuilder
+	RoleInquirer                                  = roles.RoleInquirer
+	RoleResearcher                                = roles.RoleResearcher
+	RoleDesigner                                  = roles.RoleDesigner
 )
 
 type ArtifactPresence = roles.ArtifactPresence
@@ -246,8 +246,6 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 	switch artifact.Validate {
 	case roles.ValidatorProgress:
 		return validateProgressArtifact
-	case roles.ValidatorVerificationReport:
-		return validateVerificationReportArtifact
 	case roles.ValidatorNeedUserInput:
 		return validateNeedUserInputArtifact
 	case roles.ValidatorRoadmap:
@@ -299,10 +297,6 @@ func conditionForRoleArtifact(artifact RoleArtifactSpec) func(Outcome) bool {
 // derived from RoleSpec.Artifacts.
 func RenderRoleSpecOutputFilesSection(spec RoleSpec) string {
 	return roles.RenderOutputFilesSection(spec.roleSpec())
-}
-
-func sameCleanPath(a, b string) bool {
-	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func latestCompletedImplementationReportPath(implementDir string) string {

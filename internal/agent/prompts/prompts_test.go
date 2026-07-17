@@ -177,6 +177,8 @@ type PhasePlanUserInput struct {
 	QAFiles QAFilesInput
 
 	Inquireness GrillMeInquirenessInput
+
+	AutomatedVerificationOnly bool
 }
 
 type PhasePlanRevisionUserInput struct {
@@ -191,6 +193,8 @@ type PhasePlanRevisionUserInput struct {
 	PhasePlanFormatPath string
 
 	Inquireness AutonomousInquirenessInput
+
+	AutomatedVerificationOnly bool
 }
 
 type VerificationItemView struct {
@@ -439,6 +443,35 @@ func TestGoldenSnapshots(t *testing.T) {
 					PhasePlanPath:       "/state/feat-x/run-1/phase-2/plan.md",
 					PhasePlanFormatPath: "/skills/plan-phase/format.md",
 					Inquireness:         AutonomousInquirenessInput{},
+				})
+			},
+		},
+		{
+			name: "phase_plan_user_automated_verification_only",
+			render: func() string {
+				in := PhasePlanUserInput{
+					Phase: PhasePlanView{
+						Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in",
+						Goal: "Make the login button work.",
+					},
+					RoadmapPath:               "/state/feat-x/run-1/roadmap/plan.md",
+					Inquireness:               GrillMeInquirenessInput{Level: "none"},
+					AutomatedVerificationOnly: true,
+				}
+				return PhasePlanUserPrompt(in)
+			},
+		},
+		{
+			name: "phase_plan_revision_user_automated_verification_only",
+			render: func() string {
+				return PhasePlanRevisionUserPrompt(PhasePlanRevisionUserInput{
+					Attempt:                   2,
+					Phase:                     PhasePlanView{Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in"},
+					Feedback:                  "Plan groundwork is fine but missing PKCE.",
+					PhasePlanPath:             "/state/feat-x/run-1/phase-2/plan.md",
+					PhasePlanFormatPath:       "/skills/plan-phase/format.md",
+					Inquireness:               AutonomousInquirenessInput{},
+					AutomatedVerificationOnly: true,
 				})
 			},
 		},

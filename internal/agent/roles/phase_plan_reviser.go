@@ -57,6 +57,8 @@ type PhasePlanRevisionUserInput struct {
 	PhasePlanFormatPath string
 
 	Inquireness prompts.AutonomousInquirenessInput
+
+	AutomatedVerificationOnly bool
 }
 
 // BuildPhasePlanRevisionPrompt renders the phase-plan revision prompt.

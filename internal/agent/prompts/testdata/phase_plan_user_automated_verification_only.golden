@@ -1,0 +1,24 @@
+# Phase 2: Wire up auth UI
+
+## Approved Roadmap
+
+Roadmap: /state/feat-x/run-1/roadmap/plan.md (focus on Phase 2)
+
+## Phase Goal (from roadmap)
+
+Make the login button work.
+
+## Verification Contracting Mode
+
+This feature verifies through automated tests only.
+
+- Put every verification command — unit, integration, build, lint, and packaged end-to-end journeys — under `### Automated Verification`.
+- `### Manual Verification`, `### Visual Evidence`, and `### Behavioral Evidence` must each contain exactly one item: `- [ ] None required: automated-only verification for this feature`.
+- Do not contract screenshots, manual observations, or any other agent-captured evidence artifacts.
+
+## Ambiguity Resolution [grill-me]
+Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+
+Ask the questions one at a time, waiting for feedback on each question before continuing.
+
+If a question can be answered by exploring the codebase, explore the codebase instead.

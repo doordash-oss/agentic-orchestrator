@@ -211,7 +211,8 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesD
 			Lead:          "Read these Q&A files for important context about their intent and preferences — do not re-ask questions that have already been answered:",
 			TrailingBlank: true,
 		},
-		Inquireness: prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
+		Inquireness:               prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
+		AutomatedVerificationOnly: !f.EffectivePipeline().ShouldContractAgentEvidence(),
 	})
 }
 
@@ -227,7 +228,6 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesD
 // The prose lives in
 // internal/agent/prompts/templates/phase_plan_revision.user.tmpl.
 func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback, designArtifactPath string, phase RoadmapPhase, attempt int, approvals []AxisApproval) string {
-	_ = f
 	_ = designArtifactPath
 	return roles.BuildPhasePlanRevisionPrompt(roles.PhasePlanRevisionUserInput{
 		Attempt: attempt,
@@ -241,9 +241,10 @@ func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, 
 			ArtifactName: "phase plan",
 			Approvals:    axisApprovalViews(approvals),
 		},
-		PhasePlanPath:       phasePlanPath,
-		PhasePlanFormatPath: phasePlanFormatPath(skillsDir),
-		Inquireness:         prompts.AutonomousInquirenessInput{},
+		PhasePlanPath:             phasePlanPath,
+		PhasePlanFormatPath:       phasePlanFormatPath(skillsDir),
+		Inquireness:               prompts.AutonomousInquirenessInput{},
+		AutomatedVerificationOnly: !f.EffectivePipeline().ShouldContractAgentEvidence(),
 	})
 }
 

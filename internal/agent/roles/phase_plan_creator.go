@@ -62,6 +62,8 @@ type PhasePlanUserInput struct {
 	QAFiles prompts.QAFilesInput
 
 	Inquireness prompts.GrillMeInquirenessInput
+
+	AutomatedVerificationOnly bool
 }
 
 // BuildPhasePlanPrompt renders the phase-plan creation prompt.

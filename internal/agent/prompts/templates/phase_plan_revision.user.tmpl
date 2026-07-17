@@ -21,5 +21,13 @@ Revision attempt {{ .Attempt }} for Phase {{ .Phase.Number }} — {{ .Phase.Name
 
 Plan: {{ .PhasePlanPath }}
 
+{{ end }}{{ if .AutomatedVerificationOnly }}## Verification Contracting Mode
+
+This feature verifies through automated tests only.
+
+- Put every verification command — unit, integration, build, lint, and packaged end-to-end journeys — under `### Automated Verification`.
+- `### Manual Verification`, `### Visual Evidence`, and `### Behavioral Evidence` must each contain exactly one item: `- [ ] None required: automated-only verification for this feature`.
+- Do not contract screenshots, manual observations, or any other agent-captured evidence artifacts.
+
 {{ end }}{{ template "autonomous_inquireness" .Inquireness }}
 {{ end -}}

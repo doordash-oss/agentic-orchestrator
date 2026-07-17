@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"image"
+	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -978,6 +979,72 @@ func TestFinalizeAgentOwnedEvidenceVisualRejectsNonImage(t *testing.T) {
 	}
 	if result := finalizeAgentOwnedEvidence(item, iterDir); result.Status != VerificationStatusFailed {
 		t.Fatalf("status = %q, want failed for a non-image file", result.Status)
+	}
+}
+
+func TestPreflightAgentEvidenceDetectsDuplicatesAndMissing(t *testing.T) {
+	visualItem := func(id, path string) TestingContractItem {
+		return TestingContractItem{
+			ID: id, Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+			Name: id, Command: "visual: " + id,
+			ExpectedEvidence: TestingContractExpectedEvidence{
+				Kind: testingContractVisualKind, Matcher: testingContractEvidenceFileExistsMatcher,
+				Path: path, Width: 1440, Height: 900,
+			},
+			Policy: TestingContractItemPolicy{Required: true},
+		}
+	}
+	contract := &TestingContract{Version: testingContractVersion, Revision: 1, Items: []TestingContractItem{
+		visualItem("light", "screenshots/config-light.png"),
+		visualItem("dark", "screenshots/config-dark.png"),
+	}}
+
+	t.Run("distinct captures pass", func(t *testing.T) {
+		iterDir := t.TempDir()
+		writeFilledTestPNG(t, filepath.Join(iterDir, "screenshots", "config-light.png"), 1440, 900, color.RGBA{R: 10, A: 255})
+		writeFilledTestPNG(t, filepath.Join(iterDir, "screenshots", "config-dark.png"), 1440, 900, color.RGBA{B: 200, A: 255})
+		if v := PreflightAgentEvidence(contract, iterDir); len(v) != 0 {
+			t.Fatalf("distinct captures must pass, got %+v", v)
+		}
+	})
+
+	t.Run("byte-identical captures reject", func(t *testing.T) {
+		iterDir := t.TempDir()
+		writeFilledTestPNG(t, filepath.Join(iterDir, "screenshots", "config-light.png"), 1440, 900, color.RGBA{G: 99, A: 255})
+		writeFilledTestPNG(t, filepath.Join(iterDir, "screenshots", "config-dark.png"), 1440, 900, color.RGBA{G: 99, A: 255})
+		v := PreflightAgentEvidence(contract, iterDir)
+		if len(v) == 0 {
+			t.Fatal("two identical captures must produce a violation")
+		}
+		joined := JoinProtocolViolations(v)
+		if !strings.Contains(joined, "identical") {
+			t.Fatalf("violation should explain the duplicate, got %q", joined)
+		}
+	})
+
+	t.Run("missing file rejects", func(t *testing.T) {
+		iterDir := t.TempDir()
+		writeFilledTestPNG(t, filepath.Join(iterDir, "screenshots", "config-light.png"), 1440, 900, color.RGBA{R: 10, A: 255})
+		if v := PreflightAgentEvidence(contract, iterDir); len(v) == 0 {
+			t.Fatal("a missing required capture must produce a violation")
+		}
+	})
+}
+
+func writeFilledTestPNG(t *testing.T, path string, w, h int, c color.Color) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	img.Set(0, 0, c)
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		t.Fatal(err)
 	}
 }
 

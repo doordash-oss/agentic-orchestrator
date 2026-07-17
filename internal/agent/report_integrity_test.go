@@ -739,6 +739,73 @@ func TestValidateVerificationReportRejectsForgedWaiverAndAcceptsContractWaiver(t
 	}
 }
 
+func TestValidateVerificationReportRejectsDuplicateEvidenceAcrossRows(t *testing.T) {
+	iterDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(iterDir, "screenshots"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lightBytes := []byte("identical-capture-bytes")
+	darkBytes := []byte("a-genuinely-different-capture")
+	writeShot := func(rel string, data []byte) string {
+		if err := os.WriteFile(filepath.Join(iterDir, filepath.FromSlash(rel)), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		return hex.EncodeToString(sum[:])
+	}
+	lightDigest := writeShot("screenshots/config-light.png", lightBytes)
+	darkDigest := writeShot("screenshots/config-dark.png", darkBytes)
+
+	contract := &TestingContract{Version: testingContractVersion, Revision: 1, Items: []TestingContractItem{
+		{
+			ID: "visual_light", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+			Name: "Config editor, light theme", Command: "visual: Config editor, light theme",
+			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/config-light.png"},
+			Policy:           TestingContractItemPolicy{Required: true},
+		},
+		{
+			ID: "visual_dark", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+			Name: "Config editor, dark theme", Command: "visual: Config editor, dark theme",
+			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/config-dark.png"},
+			Policy:           TestingContractItemPolicy{Required: true},
+		},
+	}}
+	passed := func(itemID, name, primary, digest string) VerificationCheckResult {
+		return VerificationCheckResult{
+			ItemID: itemID, Name: name, Mode: VerificationModeVisual, Status: VerificationStatusPassed,
+			EvidenceData: VerificationEvidence{Summary: "captured", Primary: primary, Sha256: digest},
+		}
+	}
+	report := &VerificationReport{Version: 2, ContractRevision: 1, Results: []VerificationCheckResult{
+		passed("visual_light", "Config editor, light theme", "screenshots/config-light.png", lightDigest),
+		passed("visual_dark", "Config editor, dark theme", "screenshots/config-dark.png", darkDigest),
+	}}
+	ctx := VerificationReportValidationContext{IterationDir: iterDir, Contract: contract}
+
+	if gate := ValidateVerificationReportWithContext(report, nil, true, ctx); gate.Rejected {
+		t.Fatalf("distinct captures must pass, got %+v", gate.Findings)
+	}
+
+	// Point the dark row at the light bytes: two contracted cells now share
+	// one image, which no real capture of distinct surfaces can produce.
+	dupDigest := writeShot("screenshots/config-dark.png", lightBytes)
+	report.Results[1] = passed("visual_dark", "Config editor, dark theme", "screenshots/config-dark.png", dupDigest)
+
+	gate := ValidateVerificationReportWithContext(report, nil, true, ctx)
+	if !gate.Rejected {
+		t.Fatal("two rows sharing one image must reject")
+	}
+	found := false
+	for _, f := range gate.Findings {
+		if f.Kind == KindEvidenceDuplicate {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a %s finding, got %+v", KindEvidenceDuplicate, gate.Findings)
+	}
+}
+
 func TestValidateVerificationReportRejectsChangedEvidence(t *testing.T) {
 	iterDir := t.TempDir()
 	path := filepath.Join(iterDir, "screenshots", "visual_abc123def456.png")

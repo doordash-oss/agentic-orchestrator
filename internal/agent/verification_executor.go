@@ -606,6 +606,49 @@ func ValidateRequiredAgentOwnedEvidence(contract *TestingContract, iterationDir 
 	return violations
 }
 
+// PreflightAgentEvidence is the read-only, in-session equivalent of the
+// file-backed checks the report-integrity gate runs after phase_complete. It
+// lets the implementer confirm — before signaling SUCCESS — that every
+// required agent-owned capture is present, well-formed, correctly sized, and
+// not a byte-identical copy of another contracted row. Catching those here
+// costs seconds; catching them at the post-handoff gate costs a whole
+// iteration (a fresh session plus a consecutive-failure increment).
+func PreflightAgentEvidence(contract *TestingContract, iterationDir string) []ProtocolViolation {
+	if contract == nil {
+		return nil
+	}
+	violations := ValidateRequiredAgentOwnedEvidence(contract, iterationDir)
+	digestRows := make(map[string][]string)
+	for _, item := range contract.Items {
+		if item.Owner != TestingContractOwnerAgent || !item.Policy.Required || IsTestingContractItemWaived(item) {
+			continue
+		}
+		if _, ok := evidenceFileRootForContractItem(item); !ok {
+			continue
+		}
+		result := finalizeAgentOwnedEvidence(item, iterationDir)
+		if result.Status != VerificationStatusPassed || result.EvidenceData.Sha256 == "" {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = item.ID
+		}
+		digestRows[result.EvidenceData.Sha256] = append(digestRows[result.EvidenceData.Sha256], name)
+	}
+	for _, names := range digestRows {
+		if len(names) < 2 {
+			continue
+		}
+		sort.Strings(names)
+		violations = append(violations, ProtocolViolation{
+			Artifact: strings.Join(names, "; "),
+			Reason:   "these captures are byte-identical, so they cannot each depict their own contracted surface — recapture each distinctly",
+		})
+	}
+	return violations
+}
+
 func evidencePathUnderIteration(iterationDir, rel string) (string, error) {
 	cleanRel := filepath.Clean(filepath.FromSlash(strings.TrimSpace(rel)))
 	if cleanRel == "." || filepath.IsAbs(cleanRel) || strings.HasPrefix(cleanRel, ".."+string(filepath.Separator)) || cleanRel == ".." {

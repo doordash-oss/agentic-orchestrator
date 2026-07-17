@@ -1032,6 +1032,65 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 	}
 }
 
+func TestRunArgsVerifyEvidencePassesAndFails(t *testing.T) {
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	contract := agent.CompileTestingContract(strings.Join([]string{
+		"## Success Criteria",
+		"### Behavioral Evidence",
+		"- [ ] Attach the workflow transcript.",
+	}, "\n"), filepath.Join(t.TempDir(), "plan.md"), "collapsed")
+	if err := agent.WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatalf("write contract: %v", err)
+	}
+
+	run := func(iterDir string) (int, string, string) {
+		var stdout, stderr bytes.Buffer
+		code := runArgs(
+			[]string{cliSubcommandVerifyEvidence, cliFlagContract, contractPath, cliFlagDir, iterDir},
+			&stdout, &stderr,
+			failingLauncher(t), failingServerLauncher(t), failingUpdater(t),
+		)
+		return code, stdout.String(), stderr.String()
+	}
+
+	t.Run("missing evidence fails", func(t *testing.T) {
+		code, stdout, stderr := run(t.TempDir())
+		if code != 1 {
+			t.Fatalf("code = %d, want 1 for missing evidence; stderr=%q", code, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("stdout = %q, want empty on failure", stdout)
+		}
+		if strings.TrimSpace(stderr) == "" {
+			t.Fatal("stderr should name the missing evidence")
+		}
+	})
+
+	t.Run("present evidence passes", func(t *testing.T) {
+		iterDir := t.TempDir()
+		for _, item := range contract.Items {
+			rel := strings.TrimSpace(item.ExpectedEvidence.Path)
+			if rel == "" {
+				continue
+			}
+			full := filepath.Join(iterDir, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(full, []byte("journey transcript\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		code, stdout, stderr := run(iterDir)
+		if code != 0 {
+			t.Fatalf("code = %d, want 0; stderr=%q", code, stderr)
+		}
+		if !strings.Contains(stdout, "evidence OK") {
+			t.Fatalf("stdout = %q, want confirmation", stdout)
+		}
+	})
+}
+
 func TestParseLaunchArgsServerSurface(t *testing.T) {
 	opts, err := parseLaunchArgs([]string{cliSubcommandServer, "--config", testServerConfigPath, "--state-dir", testStateFeaturesDir, "--providers", providerNameCodex, "--dangerously-skip-permissions"})
 	if err != nil {

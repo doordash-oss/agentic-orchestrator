@@ -56,10 +56,11 @@ Do not write evidence for `owner: harness` items. Do not invent statuses, counts
 At iteration end:
 
 1. Write all required agent-owned evidence files.
-2. Write `{phase_dir}/progress.md`.
-3. Write `{iteration_dir}/need-user-input.yaml` only for `NEED_USER_INPUT`.
-4. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix reported handoff defects.
-5. Write `{iteration_dir}/phase_complete` last.
+2. When a testing contract exists, run `"$AGENTICO_BIN" verify-evidence --contract "{testing_contract_path}" --dir "{iteration_dir}"`; fix every reported gap (missing, malformed, mis-sized, or byte-identical duplicate captures) before continuing. This runs the same file-backed checks the post-handoff integrity gate applies — clearing it here avoids losing a whole iteration to a gap you can fix now.
+3. Write `{phase_dir}/progress.md`.
+4. Write `{iteration_dir}/need-user-input.yaml` only for `NEED_USER_INPUT`.
+5. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix reported handoff defects.
+6. Write `{iteration_dir}/phase_complete` last.
 
 Use this `progress.md` shape:
 

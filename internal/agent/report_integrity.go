@@ -67,6 +67,7 @@ const (
 	KindDeferralUnclosed      ReportGateKind = "deferral_unclosed_due_this_phase"
 	KindDeferralMissingReason ReportGateKind = "deferral_missing_reason"
 	KindEvidenceIntegrity     ReportGateKind = "evidence_integrity"
+	KindEvidenceDuplicate     ReportGateKind = "evidence_duplicate"
 )
 
 // ReportGateFinding describes a single integrity issue found in a
@@ -256,6 +257,7 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 	for _, item := range contract.Items {
 		items[item.ID] = item
 	}
+	digestRows := make(map[string][]string)
 	for i := range checks {
 		c := &checks[i]
 		item, ok := items[strings.TrimSpace(c.ItemID)]
@@ -274,6 +276,11 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 		}
 
 		name := checkDisplayName(c)
+		if status == VerificationStatusPassed {
+			if digest := strings.ToLower(strings.TrimSpace(c.EvidenceData.Sha256)); digest != "" {
+				digestRows[digest] = append(digestRows[digest], name)
+			}
+		}
 		if strings.TrimSpace(c.EvidenceData.Primary) == "" {
 			result.Findings = append(result.Findings, ReportGateFinding{
 				CheckName: name,
@@ -291,6 +298,18 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 			field := fmt.Sprintf("attachments[%d]", idx)
 			validateEvidencePath(result, name, iterDir, root, field, attachment)
 		}
+	}
+	for _, names := range digestRows {
+		if len(names) < 2 {
+			continue
+		}
+		sort.Strings(names)
+		result.Findings = append(result.Findings, ReportGateFinding{
+			Category: GateCategorySchema,
+			Kind:     KindEvidenceDuplicate,
+			Detail: fmt.Sprintf("these passed evidence rows share one byte-identical file, so they cannot each depict their own contracted surface — capture each distinctly: %s",
+				strings.Join(names, "; ")),
+		})
 	}
 }
 

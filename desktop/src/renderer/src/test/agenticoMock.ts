@@ -293,6 +293,23 @@ export function installAgenticoMock(
       return () => sessionOutputListeners.delete(listener);
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
+    loadLocalReviewDraft: vi.fn(() => Promise.resolve(null)),
+    saveLocalReviewDraft: vi.fn(() =>
+      Promise.resolve({
+        runtimeId: 'runtime-a',
+        featureId: feature.id,
+        reviewId: 'review-a',
+        baseDraftRevision: 'revision-a',
+        text: '',
+        savedAt: '2026-07-16T00:00:00.000Z',
+      }),
+    ),
+    discardLocalReviewDraft: vi.fn(() => Promise.resolve(false)),
+    readReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    openReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    saveReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    validateReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    decideReview: vi.fn(() => Promise.reject(new Error('unused'))),
     onAppEvent: vi.fn((listener: (event: AppEvent) => void) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);

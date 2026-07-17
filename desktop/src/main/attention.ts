@@ -1,4 +1,5 @@
 import {
+  FeatureListResponseSchema,
   PermissionSnapshotResponseSchema,
   PromptSnapshotResponseSchema,
   validateWithSchema,
@@ -11,6 +12,8 @@ import {
   HelpAnswerRequestSchema,
   PermissionDecisionRequestSchema,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
+  isPendingReviewStatus,
+  reviewKindLabel,
   type AttentionActionResult,
   type AttentionItem,
   type AttentionSnapshot,
@@ -38,9 +41,10 @@ export class AttentionService {
   constructor(private readonly transport: ServerTransport) {}
 
   async getSnapshot(): Promise<AttentionSnapshot> {
-    const [promptsRaw, permissionsRaw] = await Promise.all([
+    const [promptsRaw, permissionsRaw, featuresRaw] = await Promise.all([
       this.get('/api/v1/prompts', PromptSnapshotResponseSchema),
       this.get('/api/v1/permissions', PermissionSnapshotResponseSchema),
+      this.get('/api/v1/features', FeatureListResponseSchema),
     ]);
     const items: AttentionItem[] = [
       ...permissionsRaw.requests
@@ -121,13 +125,25 @@ export class AttentionService {
             answer: question.answer ?? '',
           })),
         })),
+      ...featuresRaw.features
+        .filter((feature) => isPendingReviewStatus(feature.status))
+        .map((feature) => ({
+          kind: 'review' as const,
+          // This identity changes only when the server opens a new review or advances it.
+          id: `review:${feature.id}:${feature.active_run}:${feature.current_phase}:${feature.status}`,
+          featureId: feature.id,
+          waitingSince: feature.created_at ?? fallbackTime,
+          reviewKind: reviewKindLabel(feature.status),
+          phase: feature.current_phase,
+        })),
     ];
     const unique = new Map(items.map((item) => [item.id, item]));
     const classRank: Record<AttentionItem['kind'], number> = {
       permission: 0,
       questions: 1,
       gate: 2,
-      help: 3,
+      review: 3,
+      help: 4,
     };
     return validateWithSchema(
       {

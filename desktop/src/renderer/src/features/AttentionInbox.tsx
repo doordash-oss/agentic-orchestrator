@@ -278,7 +278,11 @@ export function AttentionInbox({
                       busy={busy === item.id}
                       submit={(action, options) => submit(item.id, action, options)}
                       saveDraft={(action, options) => saveDraft(item.id, action, options)}
-                      onJump={onJump}
+                      onJump={(featureId) => {
+                        setExpanded(null);
+                        setOpen(false);
+                        onJump?.(featureId);
+                      }}
                       drafts={drafts}
                       setDrafts={setDrafts}
                     />
@@ -649,6 +653,25 @@ export function AttentionDetail({
     );
   }
 
+  if (item.kind === 'review')
+    return (
+      <div className="attention-detail">
+        <AttentionContextMeta item={item} />
+        <p className="attention-detail__summary">
+          {item.reviewKind} review is waiting at {item.phase}.
+        </p>
+        <div className="attention-detail__actions">
+          <button
+            type="button"
+            className="attention-button attention-button--primary"
+            onClick={() => onJump?.(item.featureId)}
+          >
+            Open review
+          </button>
+        </div>
+      </div>
+    );
+
   const exhaustive: never = item;
   throw new Error(`Unhandled attention item: ${JSON.stringify(exhaustive)}`);
 }
@@ -711,6 +734,8 @@ function attentionKindLabel(item: AttentionItem): string {
       return 'Help request';
     case 'permission':
       return 'Permission';
+    case 'review':
+      return 'Review';
     default: {
       const exhaustive: never = item;
       return exhaustive;

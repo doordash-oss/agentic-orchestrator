@@ -3,10 +3,13 @@
 //   2. stage the matching Go server + build-identity.json (resources/)
 //   3. electron-builder with publishing disabled (dist/)
 //
-// macOS always produces the universal DMG; Linux produces AppImage + deb for
-// the host arch (AGENTICO_PACKAGE_ARCH=x64|arm64 cross-builds the other
-// Linux arch — the staged Go binary and the electron-builder arch flag move
-// together so packages can never carry a mismatched server).
+// macOS normally produces the universal DMG; Linux produces AppImage + deb
+// for the host arch. `--unpacked` produces only the runnable app directory
+// used by packaged Playwright journeys, avoiding a disk-image mount on hosts
+// where hdiutil/FUSE is unavailable. AGENTICO_PACKAGE_ARCH=x64|arm64
+// cross-builds the other Linux arch — the staged Go binary and the
+// electron-builder arch flag move together so packages can never carry a
+// mismatched server.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -29,6 +32,12 @@ function nodeBin(pkg, relBin) {
 // installed version explicitly so packaging always matches the dev runtime.
 const electronVersion = require('electron/package.json').version;
 const builderArgs = ['--publish', 'never', `--config.electronVersion=${electronVersion}`];
+if (process.argv.slice(2).includes('--unpacked')) {
+  builderArgs.push('--dir');
+  if (process.platform === 'darwin') {
+    builderArgs.push('--universal');
+  }
+}
 if (process.platform === 'linux') {
   const arch = process.env.AGENTICO_PACKAGE_ARCH ?? (process.arch === 'arm64' ? 'arm64' : 'x64');
   builderArgs.push(arch === 'arm64' ? '--arm64' : '--x64');

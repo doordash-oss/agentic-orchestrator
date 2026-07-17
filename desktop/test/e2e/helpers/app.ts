@@ -201,10 +201,13 @@ export async function setWindowSize(
 export async function setTheme(handle: AppHandle, theme: 'light' | 'dark'): Promise<void> {
   // click (not check): the radio is React-controlled and only flips after
   // the theme IPC round-trip, which check() would misread as a failure.
-  await handle.page
+  const radio = handle.page
     .getByRole('radiogroup', { name: 'Theme' })
-    .getByRole('radio', { name: theme === 'dark' ? 'Dark' : 'Light' })
-    .click();
+    .getByRole('radio', { name: theme === 'dark' ? 'Dark' : 'Light' });
+  // Evidence can intentionally capture the open inbox, which covers the
+  // theme picker. Invoke the real DOM control directly so React receives its
+  // change event without altering the captured inbox state.
+  await radio.evaluate((input: HTMLInputElement) => input.click());
   await expect(handle.page.locator(`html[data-theme="${theme}"]`)).toBeAttached();
   await handle.page.waitForTimeout(150); // let colors settle before screenshots
 }

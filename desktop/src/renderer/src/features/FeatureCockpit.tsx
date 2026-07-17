@@ -14,11 +14,16 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
-import type { FeatureSnapshot, SetupTaskView } from '../../../shared/ipc';
+import {
+  isPendingReviewStatus,
+  type FeatureSnapshot,
+  type SetupTaskView,
+} from '../../../shared/ipc';
 import { PhaseSpine } from '../components/PhaseSpine';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { RunTimeline } from './RunTimeline';
+import { ReviewSurface } from './ReviewSurface';
 import {
   AttentionDetail,
   attentionActionNotice,
@@ -643,6 +648,7 @@ export function FeatureCockpit({
   const setupAction = actionById(snapshot, 'setup');
   const startAction = actionById(snapshot, 'start');
   const stopAction = actionById(snapshot, 'pause-stop');
+  const hasPendingReview = isPendingReviewStatus(snapshot.status);
 
   const openStopDialog = async () => {
     setActionError(null);
@@ -686,6 +692,10 @@ export function FeatureCockpit({
       });
   };
 
+  const visibleAttentionItems = attentionItems.filter(
+    (item) => !(hasPendingReview && item.kind === 'review'),
+  );
+
   return (
     <section className="cockpit" aria-label={`Feature ${snapshot.name}`}>
       <PhaseSpine
@@ -722,7 +732,10 @@ export function FeatureCockpit({
 
       <div className="cockpit__content">
         <main className="cockpit__canvas">
-          {attentionItems.length > 0 ? (
+          {hasPendingReview ? (
+            <ReviewSurface featureId={featureId} onResolved={() => load({ silent: true })} />
+          ) : null}
+          {visibleAttentionItems.length > 0 ? (
             <section
               ref={attentionRegionRef}
               className="cockpit__attention"
@@ -730,7 +743,7 @@ export function FeatureCockpit({
               tabIndex={-1}
             >
               <h3>Blocking input</h3>
-              {attentionItems.map((item) => (
+              {visibleAttentionItems.map((item) => (
                 <AttentionDetail
                   key={`${item.kind}:${item.id}`}
                   item={item}
@@ -772,7 +785,7 @@ export function FeatureCockpit({
             </section>
           ) : null}
 
-          {showsRun(snapshot) ? (
+          {showsRun(snapshot) && !hasPendingReview ? (
             <RunTimeline
               featureId={featureId}
               activeRun={snapshot.activeRun}

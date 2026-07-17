@@ -89,6 +89,14 @@ function makeServices(): IpcServices {
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
     ),
+    loadLocalReviewDraft: vi.fn(() => null),
+    saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),
+    discardLocalReviewDraft: vi.fn(() => false),
+    readReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    openReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    saveReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    validateReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    decideReview: vi.fn(() => Promise.reject(new Error('unused'))),
   };
 }
 
@@ -177,6 +185,22 @@ describe('registerIpcHandlers', () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
     expect(services.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('validates local draft requests before calling the owner-only store', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.reviewDraftsSave)!(goodEvent, {
+      runtimeId: 'runtime-a',
+      featureId: 'feature-a',
+      reviewId: 'review-a',
+      baseDraftRevision: 'base-a',
+      text: 'draft',
+      extra: 'rejected',
+    })) as { ok: boolean; error?: { code: string } };
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.saveLocalReviewDraft).not.toHaveBeenCalled();
   });
 
   it('fails closed on prototype-polluting payloads', async () => {

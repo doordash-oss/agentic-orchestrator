@@ -22,6 +22,8 @@ import {
   type TrustedSender,
 } from './security';
 import { SettingsStore } from './settings';
+import { LocalDraftStore } from './localDraftStore';
+import { ReviewService } from './reviews';
 import { SetupService } from './setup';
 import { ThemeController } from './theme';
 import { IPC_EVENTS } from '../shared/ipc';
@@ -110,6 +112,7 @@ void app.whenReady().then(() => {
   installSecurityPolicies({ app, session: session.defaultSession, appOrigins });
 
   const settings = new SettingsStore(app.getPath('userData'));
+  const localDrafts = new LocalDraftStore(app.getPath('userData'));
   const { gateway } = createRuntimeGateway({
     getRuntimeSelection: () => settings.get().runtime.selection,
     isPackaged: app.isPackaged,
@@ -151,6 +154,7 @@ void app.whenReady().then(() => {
     readReadiness: () => setup.getReadiness(),
   });
   const sessions = new SessionService(gateway);
+  const reviews = new ReviewService(gateway);
   const attention = new AttentionService(gateway);
 
   // Main-process SSE consumption: runs only while the gateway is ready and
@@ -211,6 +215,35 @@ void app.whenReady().then(() => {
     openSessionOutput: (request, emit) => sessions.subscribe(request, emit),
     cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
     getCreationDefaults: () => features.creationDefaults(),
+    loadLocalReviewDraft: (request) => localDrafts.load(request),
+    saveLocalReviewDraft: (request) => localDrafts.save(request),
+    discardLocalReviewDraft: (request) => localDrafts.discard(request),
+    readReview: async (request) => toReviewSession(await reviews.read(request.featureId)),
+    openReview: async (request) => toReviewSession(await reviews.open(request.featureId)),
+    saveReview: async (request) => {
+      const result = await reviews.save(request);
+      return result.type === 'conflict'
+        ? result
+        : { type: 'saved' as const, session: toReviewSession(result.session) };
+    },
+    validateReview: async (request) => {
+      const result = await reviews.validate(request);
+      return {
+        applicable: result.applicable,
+        valid: result.valid,
+        revision: result.revision,
+        findings: result.findings.map((finding) => ({
+          code: finding.code,
+          message: finding.message,
+        })),
+      };
+    },
+    decideReview: async (request) => {
+      const result = await reviews.decide(request);
+      return result.type === 'conflict'
+        ? result
+        : { type: 'saved' as const, result: result.session.result };
+    },
   };
   registerIpcHandlers(ipcMain, trusted, services);
 
@@ -242,3 +275,29 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+function toReviewSession(session: {
+  feature_id: string;
+  review_id: string;
+  review_mode: string;
+  target_phase: string;
+  run_number: number;
+  artifact_id: string;
+  text: string;
+  draft_revision: string;
+  source_revision: string;
+  can_iterate: boolean;
+}) {
+  return {
+    featureId: session.feature_id,
+    reviewId: session.review_id,
+    reviewMode: session.review_mode,
+    targetPhase: session.target_phase,
+    runNumber: session.run_number,
+    artifactId: session.artifact_id,
+    text: session.text,
+    draftRevision: session.draft_revision,
+    sourceRevision: session.source_revision,
+    canIterate: session.can_iterate,
+  };
+}

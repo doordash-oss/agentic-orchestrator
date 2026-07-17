@@ -23,6 +23,13 @@ import {
   type SessionOutputOpenRequest,
   type SessionOutputOpenResult,
   type SessionOutputEvent,
+  type LocalReviewDraftSaveRequest,
+  type LocalReviewDraftLookupRequest,
+  type LocalReviewDraftDiscardRequest,
+  type ReviewReadRequest,
+  type ReviewSaveRequest,
+  type ReviewValidateRequest,
+  type ReviewDecisionRequest,
 } from '../shared/ipc';
 import { assertNoPrototypePollution } from '../shared/sanitize';
 
@@ -108,6 +115,19 @@ const api: AgenticoApi = {
     };
   },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),
+  loadLocalReviewDraft: (request: LocalReviewDraftLookupRequest) =>
+    call(IPC_CHANNELS.reviewDraftsLoad, request),
+  saveLocalReviewDraft: (request: LocalReviewDraftSaveRequest) =>
+    call(IPC_CHANNELS.reviewDraftsSave, request),
+  discardLocalReviewDraft: (request: LocalReviewDraftDiscardRequest) =>
+    call<{ discarded: boolean }>(IPC_CHANNELS.reviewDraftsDiscard, request).then(
+      ({ discarded }) => discarded,
+    ),
+  readReview: (request: ReviewReadRequest) => call(IPC_CHANNELS.reviewsRead, request),
+  openReview: (request: ReviewReadRequest) => call(IPC_CHANNELS.reviewsOpen, request),
+  saveReview: (request: ReviewSaveRequest) => call(IPC_CHANNELS.reviewsSave, request),
+  validateReview: (request: ReviewValidateRequest) => call(IPC_CHANNELS.reviewsValidate, request),
+  decideReview: (request: ReviewDecisionRequest) => call(IPC_CHANNELS.reviewsDecide, request),
   onAppEvent: (listener: (event: AppEvent) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

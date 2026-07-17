@@ -82,6 +82,14 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
         defaults: { models: [], useCurrentBranch: false },
       }),
     ),
+    loadLocalReviewDraft: vi.fn(() => null),
+    saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),
+    discardLocalReviewDraft: vi.fn(() => false),
+    readReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    openReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    saveReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    validateReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    decideReview: vi.fn(() => Promise.reject(new Error('unused'))),
     ...overrides,
   };
 }

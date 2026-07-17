@@ -119,6 +119,22 @@ describe('App readiness gating', () => {
     expect(within(inbox).getByText('Search revamp')).toBeVisible();
   });
 
+  it('refreshes review attention after a lifecycle invalidation', async () => {
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Home' });
+    const before = mock.api.getAttention.mock.calls.length;
+
+    act(() => {
+      mock.emitAppEvent({ type: 'invalidated', kind: 'lifecycle.updated', featureId: 'feature-1' });
+    });
+
+    await waitFor(() => expect(mock.api.getAttention.mock.calls.length).toBeGreaterThan(before));
+  });
+
   it('shows the connection shell — never the wizard — before the gateway is ready', async () => {
     const mock = installAgenticoMock();
     render(<App />);

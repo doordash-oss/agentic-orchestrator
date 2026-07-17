@@ -41,7 +41,9 @@ export default function App() {
         event.type === 'status' ||
         event.kind === 'resync' ||
         event.kind === 'permission.updated' ||
-        event.kind === 'prompt.updated'
+        event.kind === 'prompt.updated' ||
+        event.kind.startsWith('feature') ||
+        event.kind.startsWith('lifecycle')
       ) {
         void refreshAttention();
       }

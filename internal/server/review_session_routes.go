@@ -24,6 +24,10 @@ import (
 func (h *apiHandler) handleReviewSessionRoute(w http.ResponseWriter, r *http.Request, featureID string, parts []string) {
 	switch {
 	case len(parts) == 0:
+		if r.Method == http.MethodGet {
+			h.handleReadReviewSession(w, r, featureID)
+			return
+		}
 		h.handleCreateReviewSession(w, r, featureID)
 	case len(parts) == 2:
 		if !validEntityID(parts[0]) {
@@ -33,6 +37,8 @@ func (h *apiHandler) handleReviewSessionRoute(w http.ResponseWriter, r *http.Req
 		switch parts[1] {
 		case "draft":
 			h.handleSaveReviewDraft(w, r, featureID, parts[0])
+		case "validate":
+			h.handleValidateReviewDraft(w, r, featureID, parts[0])
 		case "decision":
 			h.handleSubmitReviewSessionDecision(w, r, featureID, parts[0])
 		default:
@@ -41,6 +47,15 @@ func (h *apiHandler) handleReviewSessionRoute(w http.ResponseWriter, r *http.Req
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
 	}
+}
+
+func (h *apiHandler) handleReadReviewSession(w http.ResponseWriter, r *http.Request, featureID string) {
+	resp, err := h.reviewSessionService().Read(featureID)
+	if err != nil {
+		writeReviewSessionError(w, err, featureID, "")
+		return
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
 }
 
 func (h *apiHandler) handleCreateReviewSession(w http.ResponseWriter, r *http.Request, featureID string) {
@@ -78,6 +93,27 @@ func (h *apiHandler) handleSaveReviewDraft(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	resp, err := h.reviewSessionService().SaveDraft(featureID, reviewID, req)
+	if err != nil {
+		writeReviewSessionError(w, err, featureID, reviewID)
+		return
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
+}
+
+func (h *apiHandler) handleValidateReviewDraft(w http.ResponseWriter, r *http.Request, featureID, reviewID string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		return
+	}
+	if !h.requireTrustedJSONMutation(w, r) {
+		return
+	}
+	var req ReviewDraftValidationRequest
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	resp, err := h.reviewSessionService().ValidateDraft(featureID, reviewID, req)
 	if err != nil {
 		writeReviewSessionError(w, err, featureID, reviewID)
 		return

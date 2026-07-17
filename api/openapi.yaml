@@ -118,6 +118,20 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
   /api/v1/features/{feature_id}/reviews:
+    get:
+      operationId: getReviewSession
+      summary: Read the active artifact review draft session without reopening it.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
     post:
       operationId: createReviewSession
       summary: Create or reopen the active artifact review draft session.
@@ -129,6 +143,28 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ReviewSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/features/{feature_id}/reviews/{review_id}/validate:
+    post:
+      operationId: validateReviewDraft
+      summary: Validate review draft text without modifying the session.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/ReviewID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewDraftValidationRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ReviewDraftValidationResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
@@ -797,6 +833,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ReviewSessionDecisionResponse"
+    ReviewDraftValidationResponse:
+      description: Advisory validation result for review draft text.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ReviewDraftValidationResponse"
     LivePreviewResponse:
       description: Live preview.
       content:
@@ -1492,6 +1534,40 @@ components:
               type: string
             result:
               type: string
+    ReviewDraftValidationRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+    ReviewDraftValidationResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, review_id, applicable, valid, revision, findings]
+          properties:
+            feature_id:
+              type: string
+            review_id:
+              type: string
+            applicable:
+              type: boolean
+            valid:
+              type: boolean
+            revision:
+              type: string
+            findings:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewDraftValidationFinding"
+    ReviewDraftValidationFinding:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
     LivePreviewResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

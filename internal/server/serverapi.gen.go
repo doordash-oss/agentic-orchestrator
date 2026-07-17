@@ -559,6 +559,21 @@ func (e SaveReviewDraftParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for ValidateReviewDraftParamsXAgenticoClient.
+const (
+	ValidateReviewDraftParamsXAgenticoClientLocal ValidateReviewDraftParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ValidateReviewDraftParamsXAgenticoClient enum.
+func (e ValidateReviewDraftParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ValidateReviewDraftParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AnswerPermissionParamsXAgenticoClient.
 const (
 	AnswerPermissionParamsXAgenticoClientLocal AnswerPermissionParamsXAgenticoClient = "local"
@@ -666,13 +681,13 @@ func (e ShutdownRuntimeParamsXAgenticoClient) Valid() bool {
 
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -1589,6 +1604,29 @@ type ReviewDraftUpdateRequest struct {
 	Text         string `json:"text"`
 }
 
+// ReviewDraftValidationFinding defines model for ReviewDraftValidationFinding.
+type ReviewDraftValidationFinding struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// ReviewDraftValidationRequest defines model for ReviewDraftValidationRequest.
+type ReviewDraftValidationRequest struct {
+	Text string `json:"text"`
+}
+
+// ReviewDraftValidationResponse defines model for ReviewDraftValidationResponse.
+type ReviewDraftValidationResponse struct {
+	APIVersion string                         `json:"api_version"`
+	Applicable bool                           `json:"applicable"`
+	FeatureID  string                         `json:"feature_id"`
+	Findings   []ReviewDraftValidationFinding `json:"findings"`
+	Meta       ResponseMeta                   `json:"meta,omitempty"`
+	ReviewID   string                         `json:"review_id"`
+	Revision   string                         `json:"revision"`
+	Valid      bool                           `json:"valid"`
+}
+
 // ReviewGate defines model for ReviewGate.
 type ReviewGate struct {
 	ReviewFixing      bool              `json:"review_fixing"`
@@ -2087,6 +2125,15 @@ type SaveReviewDraftParams struct {
 // SaveReviewDraftParamsXAgenticoClient defines parameters for SaveReviewDraft.
 type SaveReviewDraftParamsXAgenticoClient string
 
+// ValidateReviewDraftParams defines parameters for ValidateReviewDraft.
+type ValidateReviewDraftParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ValidateReviewDraftParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ValidateReviewDraftParamsXAgenticoClient defines parameters for ValidateReviewDraft.
+type ValidateReviewDraftParamsXAgenticoClient string
+
 // GetArtifactContentParams defines parameters for GetArtifactContent.
 type GetArtifactContentParams struct {
 	Offset Offset `form:"offset,omitempty" json:"offset,omitempty"`
@@ -2227,6 +2274,9 @@ type SubmitReviewSessionDecisionJSONRequestBody = ReviewSessionDecisionRequest
 
 // SaveReviewDraftJSONRequestBody defines body for SaveReviewDraft for application/json ContentType.
 type SaveReviewDraftJSONRequestBody = ReviewDraftUpdateRequest
+
+// ValidateReviewDraftJSONRequestBody defines body for ValidateReviewDraft for application/json ContentType.
+type ValidateReviewDraftJSONRequestBody = ReviewDraftValidationRequest
 
 // AnswerPermissionJSONRequestBody defines body for AnswerPermission for application/json ContentType.
 type AnswerPermissionJSONRequestBody = PermissionAnswerSchema

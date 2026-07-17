@@ -17,6 +17,8 @@ import {
   defaultTabsPrefs,
   defaultWizardPrefs,
   ipcContracts,
+  LocalReviewDraftSaveRequestSchema,
+  LocalReviewDraftStoreSchema,
 } from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
 
@@ -426,5 +428,35 @@ describe('IpcEnvelopeSchema', () => {
   it('rejects malformed envelopes', () => {
     expect(IpcEnvelopeSchema.safeParse({ ok: false }).success).toBe(false);
     expect(IpcEnvelopeSchema.safeParse({ value: 1 }).success).toBe(false);
+  });
+});
+
+describe('recoverable local review draft schemas', () => {
+  const key = {
+    runtimeId: 'runtime-a',
+    featureId: 'feature-a',
+    reviewId: 'review-a',
+    baseDraftRevision: 'revision-a',
+  };
+
+  it('accepts only bounded, strictly-keyed local editor text', () => {
+    expect(LocalReviewDraftSaveRequestSchema.safeParse({ ...key, text: '# Draft' }).success).toBe(
+      true,
+    );
+    expect(
+      LocalReviewDraftSaveRequestSchema.safeParse({ ...key, text: 'draft', snapshot: {} }).success,
+    ).toBe(false);
+  });
+
+  it('requires the exact versioned store envelope', () => {
+    expect(
+      LocalReviewDraftStoreSchema.safeParse({
+        schemaVersion: 1,
+        drafts: [{ ...key, text: 'draft', savedAt: '2026-07-16T00:00:00.000Z' }],
+      }).success,
+    ).toBe(true);
+    expect(LocalReviewDraftStoreSchema.safeParse({ schemaVersion: 2, drafts: [] }).success).toBe(
+      false,
+    );
   });
 });

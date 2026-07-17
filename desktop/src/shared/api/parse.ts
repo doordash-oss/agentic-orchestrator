@@ -254,6 +254,58 @@ export const PermissionSnapshotResponseSchema = z.object({
 export type ServerPromptSnapshot = z.output<typeof PromptSnapshotResponseSchema>;
 export type ServerPermissionSnapshot = z.output<typeof PermissionSnapshotResponseSchema>;
 
+// --- Review sessions -------------------------------------------------------
+// These are deliberately narrow, renderer-independent views of the review
+// protocol. The main process maps them into its IPC contract after checking
+// the generated OpenAPI shape below.
+export const ReviewSessionResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string().min(1),
+  review_id: z.string().min(1),
+  review_mode: z.string().min(1),
+  target_phase: z.string().min(1),
+  run_number: z.number().int().nonnegative(),
+  artifact_id: z.string().min(1),
+  text: z.string(),
+  draft_revision: z.string().min(1),
+  source_revision: z.string().min(1),
+  can_iterate: z.boolean(),
+});
+export type ServerReviewSession = z.output<typeof ReviewSessionResponseSchema>;
+
+export const ReviewDraftValidationResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string().min(1),
+  review_id: z.string().min(1),
+  applicable: z.boolean(),
+  valid: z.boolean(),
+  revision: z.string().min(1),
+  findings: z.array(z.object({ code: z.string().min(1), message: z.string().min(1) })).max(100),
+});
+export type ServerReviewDraftValidation = z.output<typeof ReviewDraftValidationResponseSchema>;
+
+export const ReviewDecisionResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string().min(1),
+  review_id: z.string().min(1),
+  decision: z.string().optional(),
+  result: z.string().min(1),
+});
+export type ServerReviewDecision = z.output<typeof ReviewDecisionResponseSchema>;
+
+export const ReviewConflictResponseSchema = z.object({
+  api_version: z.string(),
+  error: z.object({
+    code: z.literal('conflict'),
+    message: z.string(),
+    target: z.object({
+      review_id: z.string().min(1),
+      current_revision: z.string().min(1),
+      expected_revision: z.string().min(1),
+    }),
+  }),
+});
+
 // --- Runtime config (GET /api/v1/config/runtime) — workspace-roots subset ---
 // Only the fields the desktop setup flow consumes; the full response has
 // many more, which z.object tolerates and strips.
@@ -583,5 +635,14 @@ type OutputChunkDTO = components['schemas']['SessionOutputChunk'];
 const _outputChunkSubset = (value: OutputChunkDTO): z.output<typeof SessionOutputChunkSchema> =>
   value;
 void _outputChunkSubset;
+type ReviewSessionDTO = components['schemas']['ReviewSessionResponse'];
+const _reviewSessionSubset = (value: ReviewSessionDTO): ServerReviewSession => value;
+void _reviewSessionSubset;
+type ReviewValidationDTO = components['schemas']['ReviewDraftValidationResponse'];
+const _reviewValidationSubset = (value: ReviewValidationDTO): ServerReviewDraftValidation => value;
+void _reviewValidationSubset;
+type ReviewDecisionDTO = components['schemas']['ReviewSessionDecisionResponse'];
+const _reviewDecisionSubset = (value: ReviewDecisionDTO): ServerReviewDecision => value;
+void _reviewDecisionSubset;
 const _runtimeConfigCreationSubset = (value: RuntimeConfigDTO): RuntimeConfigCreation => value;
 void _runtimeConfigCreationSubset;

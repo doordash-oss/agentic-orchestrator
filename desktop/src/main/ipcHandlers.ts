@@ -46,6 +46,18 @@ import {
   type GateDraftRequest,
   type GateResolutionRequest,
   type AttentionActionResult,
+  type LocalReviewDraft,
+  type LocalReviewDraftSaveRequest,
+  type LocalReviewDraftLookupRequest,
+  type LocalReviewDraftDiscardRequest,
+  type ReviewReadRequest,
+  type ReviewSaveRequest,
+  type ReviewValidateRequest,
+  type ReviewDecisionRequest,
+  type ReviewSession,
+  type ReviewSaveResult,
+  type ReviewValidation,
+  type ReviewDecisionResult,
   ipcContracts,
 } from '../shared/ipc';
 import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './security';
@@ -83,6 +95,14 @@ export interface IpcServices {
   sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult>;
   saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
   resolveGate(request: GateResolutionRequest): Promise<AttentionActionResult>;
+  loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): LocalReviewDraft | null;
+  saveLocalReviewDraft(request: LocalReviewDraftSaveRequest): LocalReviewDraft;
+  discardLocalReviewDraft(request: LocalReviewDraftDiscardRequest): boolean;
+  readReview(request: ReviewReadRequest): Promise<ReviewSession>;
+  openReview(request: ReviewReadRequest): Promise<ReviewSession>;
+  saveReview(request: ReviewSaveRequest): Promise<ReviewSaveResult>;
+  validateReview(request: ReviewValidateRequest): Promise<ReviewValidation>;
+  decideReview(request: ReviewDecisionRequest): Promise<ReviewDecisionResult>;
 }
 
 export interface IpcMainLike {
@@ -179,6 +199,23 @@ export function registerIpcHandlers(
       cancelled: services.cancelSessionOutput(request.subscriptionId),
     }),
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
+    [IPC_CHANNELS.reviewDraftsLoad]: (_event, request: LocalReviewDraftLookupRequest) =>
+      services.loadLocalReviewDraft(request),
+    [IPC_CHANNELS.reviewDraftsSave]: (_event, request: LocalReviewDraftSaveRequest) =>
+      services.saveLocalReviewDraft(request),
+    [IPC_CHANNELS.reviewDraftsDiscard]: (_event, request: LocalReviewDraftDiscardRequest) => ({
+      discarded: services.discardLocalReviewDraft(request),
+    }),
+    [IPC_CHANNELS.reviewsRead]: (_event, request: ReviewReadRequest) =>
+      services.readReview(request),
+    [IPC_CHANNELS.reviewsOpen]: (_event, request: ReviewReadRequest) =>
+      services.openReview(request),
+    [IPC_CHANNELS.reviewsSave]: (_event, request: ReviewSaveRequest) =>
+      services.saveReview(request),
+    [IPC_CHANNELS.reviewsValidate]: (_event, request: ReviewValidateRequest) =>
+      services.validateReview(request),
+    [IPC_CHANNELS.reviewsDecide]: (_event, request: ReviewDecisionRequest) =>
+      services.decideReview(request),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

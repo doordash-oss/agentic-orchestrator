@@ -104,10 +104,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Read the active artifact review draft session without reopening it. */
+        get: operations["getReviewSession"];
         put?: never;
         /** Create or reopen the active artifact review draft session. */
         post: operations["createReviewSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/reviews/{review_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate review draft text without modifying the session. */
+        post: operations["validateReviewDraft"];
         delete?: never;
         options?: never;
         head?: never;
@@ -831,6 +849,21 @@ export interface components {
             decision?: string;
             result: string;
         };
+        ReviewDraftValidationRequest: {
+            text: string;
+        };
+        ReviewDraftValidationResponse: components["schemas"]["JSONResponse"] & {
+            feature_id: string;
+            review_id: string;
+            applicable: boolean;
+            valid: boolean;
+            revision: string;
+            findings: components["schemas"]["ReviewDraftValidationFinding"][];
+        };
+        ReviewDraftValidationFinding: {
+            code: string;
+            message: string;
+        };
         LivePreviewResponse: components["schemas"]["JSONResponse"] & {
             feature: components["schemas"]["FeatureSummary"];
             session?: components["schemas"]["SessionSummary"];
@@ -1523,6 +1556,15 @@ export interface components {
                 "application/json": components["schemas"]["ReviewSessionDecisionResponse"];
             };
         };
+        /** @description Advisory validation result for review draft text. */
+        ReviewDraftValidationResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ReviewDraftValidationResponse"];
+            };
+        };
         /** @description Live preview. */
         LivePreviewResponse: {
             headers: {
@@ -1784,6 +1826,23 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    getReviewSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["ReviewSessionResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
     createReviewSession: {
         parameters: {
             query?: never;
@@ -1799,6 +1858,30 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ReviewSessionResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    validateReviewDraft: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+                review_id: components["parameters"]["ReviewID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewDraftValidationRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ReviewDraftValidationResponse"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];
         };

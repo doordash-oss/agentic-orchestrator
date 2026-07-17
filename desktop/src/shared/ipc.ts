@@ -39,6 +39,14 @@ export const IPC_CHANNELS = {
   sessionsOutputOpen: 'agentico:sessions:output-open',
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
   creationDefaults: 'agentico:creation:defaults',
+  reviewDraftsLoad: 'agentico:review-drafts:load',
+  reviewDraftsSave: 'agentico:review-drafts:save',
+  reviewDraftsDiscard: 'agentico:review-drafts:discard',
+  reviewsRead: 'agentico:reviews:read',
+  reviewsOpen: 'agentico:reviews:open',
+  reviewsSave: 'agentico:reviews:save',
+  reviewsValidate: 'agentico:reviews:validate',
+  reviewsDecide: 'agentico:reviews:decide',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -613,11 +621,21 @@ export const AttentionGateSchema = z.strictObject({
     )
     .max(100),
 });
+/** A review is actionable only in the cockpit; the inbox is a deliberate jump. */
+export const AttentionReviewSchema = z.strictObject({
+  kind: z.literal('review'),
+  id: AttentionIDSchema,
+  featureId: FeatureIdSchema,
+  waitingSince: z.string().max(100),
+  reviewKind: z.string().max(200),
+  phase: z.string().max(200),
+});
 export const AttentionItemSchema = z.discriminatedUnion('kind', [
   AttentionPermissionSchema,
   AttentionQuestionBundleSchema,
   AttentionHelpSchema,
   AttentionGateSchema,
+  AttentionReviewSchema,
 ]);
 export type AttentionItem = z.output<typeof AttentionItemSchema>;
 export const AttentionSnapshotSchema = z.strictObject({
@@ -978,6 +996,140 @@ export function defaultSettings(): Settings {
   };
 }
 
+// --- Recoverable local review drafts --------------------------------------
+// These are intentionally not server review-session snapshots. The app stores
+// only a user's unsaved text, its lookup key, and a save timestamp so that a
+// renderer can honestly distinguish recovered local text from server state.
+
+export const LOCAL_DRAFT_STORE_SCHEMA_VERSION = 1;
+export const MAX_LOCAL_REVIEW_DRAFT_BYTES = 1024 * 1024;
+
+export const ReviewIdSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[a-z0-9._-]+$/i);
+export type ReviewId = z.output<typeof ReviewIdSchema>;
+
+export const DraftRevisionSchema = z.string().min(1).max(512);
+export type DraftRevision = z.output<typeof DraftRevisionSchema>;
+
+/** An opaque runtime identity, typically the selected runtime's state dir. */
+export const RuntimeIdSchema = z.string().min(1).max(4096);
+export type RuntimeId = z.output<typeof RuntimeIdSchema>;
+
+/** Fallback runtime identity when no runtime is selected. */
+export const DEFAULT_RUNTIME_ID = 'default-runtime';
+
+/** True when a feature status indicates a pending review gate. */
+export function isPendingReviewStatus(status: string): boolean {
+  return status.endsWith('NeedsReview');
+}
+
+/** Human-readable label for a review kind, stripping the status suffix. */
+export function reviewKindLabel(reviewKind: string): string {
+  return reviewKind.replace(/NeedsReview$/, '');
+}
+
+/** The identity of exactly one unsaved review buffer. */
+export const ReviewDraftKeySchema = z.strictObject({
+  runtimeId: RuntimeIdSchema,
+  featureId: FeatureIdSchema,
+  reviewId: ReviewIdSchema,
+  baseDraftRevision: DraftRevisionSchema,
+});
+export type ReviewDraftKey = z.output<typeof ReviewDraftKeySchema>;
+
+export const LocalReviewDraftSchema = ReviewDraftKeySchema.extend({
+  text: z.string().max(MAX_LOCAL_REVIEW_DRAFT_BYTES),
+  savedAt: z.string().datetime({ offset: true }),
+});
+export type LocalReviewDraft = z.output<typeof LocalReviewDraftSchema>;
+
+export const LocalReviewDraftSaveRequestSchema = ReviewDraftKeySchema.extend({
+  text: z.string().max(MAX_LOCAL_REVIEW_DRAFT_BYTES),
+});
+export type LocalReviewDraftSaveRequest = z.output<typeof LocalReviewDraftSaveRequestSchema>;
+
+/** Finds the most recent unsaved buffer for one review, regardless of its base revision. */
+export const LocalReviewDraftLookupRequestSchema = ReviewDraftKeySchema.pick({
+  runtimeId: true,
+  featureId: true,
+  reviewId: true,
+}).extend({ baseDraftRevision: DraftRevisionSchema.optional() });
+export type LocalReviewDraftLookupRequest = z.output<typeof LocalReviewDraftLookupRequestSchema>;
+
+export const LocalReviewDraftDiscardRequestSchema = ReviewDraftKeySchema;
+export type LocalReviewDraftDiscardRequest = z.output<typeof LocalReviewDraftDiscardRequestSchema>;
+
+export const LocalReviewDraftDiscardResultSchema = z.strictObject({ discarded: z.boolean() });
+export type LocalReviewDraftDiscardResult = z.output<typeof LocalReviewDraftDiscardResultSchema>;
+
+/** Disk-only envelope. Versioning keeps incompatible persisted content safe. */
+export const LocalReviewDraftStoreSchema = z.strictObject({
+  schemaVersion: z.literal(LOCAL_DRAFT_STORE_SCHEMA_VERSION),
+  drafts: z.array(LocalReviewDraftSchema).max(20),
+});
+export type LocalReviewDraftStore = z.output<typeof LocalReviewDraftStoreSchema>;
+
+export const ReviewSessionSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  reviewId: ReviewIdSchema,
+  reviewMode: z.string().min(1).max(200),
+  targetPhase: z.string().min(1).max(200),
+  runNumber: z.number().int().nonnegative(),
+  artifactId: z.string().min(1).max(500),
+  text: z.string().max(2 * 1024 * 1024),
+  draftRevision: DraftRevisionSchema,
+  sourceRevision: DraftRevisionSchema,
+  canIterate: z.boolean(),
+});
+export type ReviewSession = z.output<typeof ReviewSessionSchema>;
+
+export const ReviewReadRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
+export type ReviewReadRequest = z.output<typeof ReviewReadRequestSchema>;
+export const ReviewSaveRequestSchema = ReviewReadRequestSchema.extend({
+  reviewId: ReviewIdSchema,
+  baseRevision: DraftRevisionSchema,
+  text: z.string().max(2 * 1024 * 1024),
+});
+export type ReviewSaveRequest = z.output<typeof ReviewSaveRequestSchema>;
+export const ReviewValidateRequestSchema = ReviewReadRequestSchema.extend({
+  reviewId: ReviewIdSchema,
+  text: z.string().max(2 * 1024 * 1024),
+});
+export type ReviewValidateRequest = z.output<typeof ReviewValidateRequestSchema>;
+export const ReviewDecisionRequestSchema = ReviewReadRequestSchema.extend({
+  reviewId: ReviewIdSchema,
+  baseRevision: DraftRevisionSchema,
+  decision: z.enum(['proceed', 'iterate']),
+});
+export type ReviewDecisionRequest = z.output<typeof ReviewDecisionRequestSchema>;
+export const ReviewValidationSchema = z.strictObject({
+  applicable: z.boolean(),
+  valid: z.boolean(),
+  revision: DraftRevisionSchema,
+  findings: z
+    .array(z.strictObject({ code: z.string().min(1), message: z.string().min(1) }))
+    .max(100),
+});
+export type ReviewValidation = z.output<typeof ReviewValidationSchema>;
+export const ReviewConflictSchema = z.strictObject({
+  type: z.literal('conflict'),
+  expectedRevision: DraftRevisionSchema,
+  currentRevision: DraftRevisionSchema,
+});
+export const ReviewSaveResultSchema = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('saved'), session: ReviewSessionSchema }),
+  ReviewConflictSchema,
+]);
+export type ReviewSaveResult = z.output<typeof ReviewSaveResultSchema>;
+export const ReviewDecisionResultSchema = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('saved'), result: z.string().min(1).max(500) }),
+  ReviewConflictSchema,
+]);
+export type ReviewDecisionResult = z.output<typeof ReviewDecisionResultSchema>;
+
 // --- Per-channel contracts ---------------------------------------------------
 
 export interface IpcContract {
@@ -1101,6 +1253,38 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([]),
     response: CreationDefaultsSchema,
   },
+  [IPC_CHANNELS.reviewDraftsLoad]: {
+    request: z.tuple([LocalReviewDraftLookupRequestSchema]),
+    response: LocalReviewDraftSchema.nullable(),
+  },
+  [IPC_CHANNELS.reviewDraftsSave]: {
+    request: z.tuple([LocalReviewDraftSaveRequestSchema]),
+    response: LocalReviewDraftSchema,
+  },
+  [IPC_CHANNELS.reviewDraftsDiscard]: {
+    request: z.tuple([LocalReviewDraftDiscardRequestSchema]),
+    response: LocalReviewDraftDiscardResultSchema,
+  },
+  [IPC_CHANNELS.reviewsRead]: {
+    request: z.tuple([ReviewReadRequestSchema]),
+    response: ReviewSessionSchema,
+  },
+  [IPC_CHANNELS.reviewsOpen]: {
+    request: z.tuple([ReviewReadRequestSchema]),
+    response: ReviewSessionSchema,
+  },
+  [IPC_CHANNELS.reviewsSave]: {
+    request: z.tuple([ReviewSaveRequestSchema]),
+    response: ReviewSaveResultSchema,
+  },
+  [IPC_CHANNELS.reviewsValidate]: {
+    request: z.tuple([ReviewValidateRequestSchema]),
+    response: ReviewValidationSchema,
+  },
+  [IPC_CHANNELS.reviewsDecide]: {
+    request: z.tuple([ReviewDecisionRequestSchema]),
+    response: ReviewDecisionResultSchema,
+  },
 };
 
 // --- The narrow window API the preload exposes -------------------------------
@@ -1137,5 +1321,13 @@ export interface AgenticoApi {
   cancelSessionOutput(subscriptionId: string): Promise<boolean>;
   onSessionOutput(listener: (event: SessionOutputEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
+  loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): Promise<LocalReviewDraft | null>;
+  saveLocalReviewDraft(request: LocalReviewDraftSaveRequest): Promise<LocalReviewDraft>;
+  discardLocalReviewDraft(request: LocalReviewDraftDiscardRequest): Promise<boolean>;
+  readReview(request: ReviewReadRequest): Promise<ReviewSession>;
+  openReview(request: ReviewReadRequest): Promise<ReviewSession>;
+  saveReview(request: ReviewSaveRequest): Promise<ReviewSaveResult>;
+  validateReview(request: ReviewValidateRequest): Promise<ReviewValidation>;
+  decideReview(request: ReviewDecisionRequest): Promise<ReviewDecisionResult>;
   onAppEvent(listener: (event: AppEvent) => void): () => void;
 }

@@ -1,7 +1,9 @@
 // Package inspection gate for the current host's native target ("current CI
-// matrix target"). Opens every artifact electron-builder produced for this
-// host — the universal DMG on macOS, the native-arch AppImage and deb on
-// Linux — and asserts, failing loudly on any gap:
+// matrix target"). Normally opens every artifact electron-builder produced
+// for this host — the universal DMG on macOS, the native-arch AppImage and
+// deb on Linux — and asserts, failing loudly on any gap. `--unpacked` checks
+// the runnable app directory directly for packaged Playwright; this avoids
+// requiring disk-image facilities merely to launch the package in a sandbox.
 //
 //   1. Desktop app payload: app.asar containing the built main/preload/
 //      renderer entry points and the offline @fontsource font assets.
@@ -45,6 +47,7 @@ import {
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = join(desktopDir, 'dist');
 const require = createRequire(import.meta.url);
+const unpackedOnly = process.argv.slice(2).includes('--unpacked');
 
 class VerificationFailure extends Error {}
 
@@ -202,17 +205,42 @@ function verifyDeb(debPath) {
   }
 }
 
+function unpackedExecutable() {
+  if (process.platform === 'darwin') {
+    return join(distDir, 'mac-universal', 'Agentico.app', 'Contents', 'MacOS', 'Agentico');
+  }
+  if (process.platform === 'linux') {
+    const unpackedDir = process.arch === 'arm64' ? 'linux-arm64-unpacked' : 'linux-unpacked';
+    return join(distDir, unpackedDir, 'agentico');
+  }
+  fail(`unsupported verification host: ${process.platform}`);
+}
+
+function verifyUnpackedApp(executablePath) {
+  if (!existsSync(executablePath)) {
+    fail(`expected unpacked app for packaged E2E at ${executablePath}`);
+  }
+  const resourcesDir =
+    process.platform === 'darwin'
+      ? join(dirname(dirname(executablePath)), 'Resources')
+      : join(dirname(executablePath), 'resources');
+  return verifyResources(resourcesDir, { expectUniversalBinary: process.platform === 'darwin' });
+}
+
 function main() {
   const startedAt = Date.now();
   const verified = [];
   let identity;
-  let unpackedApp;
-  if (process.platform === 'darwin') {
+  const unpackedApp = unpackedExecutable();
+  if (unpackedOnly) {
+    console.log(`verify-package: inspecting unpacked app ${unpackedApp}`);
+    identity = verifyUnpackedApp(unpackedApp);
+    verified.push({ target: 'unpacked', path: unpackedApp });
+  } else if (process.platform === 'darwin') {
     const dmg = findArtifact('.dmg');
     console.log(`verify-package: inspecting ${dmg}`);
     identity = verifyDmg(dmg);
     verified.push({ target: 'dmg', path: dmg });
-    unpackedApp = join(distDir, 'mac-universal', 'Agentico.app', 'Contents', 'MacOS', 'Agentico');
   } else if (process.platform === 'linux') {
     const appImage = findArtifact('.AppImage');
     console.log(`verify-package: inspecting ${appImage}`);
@@ -222,8 +250,6 @@ function main() {
     console.log(`verify-package: inspecting ${deb}`);
     identity = verifyDeb(deb);
     verified.push({ target: 'deb', path: deb });
-    const unpackedDir = process.arch === 'arm64' ? 'linux-arm64-unpacked' : 'linux-unpacked';
-    unpackedApp = join(distDir, unpackedDir, 'agentico');
   } else {
     fail(`unsupported verification host: ${process.platform}`);
   }

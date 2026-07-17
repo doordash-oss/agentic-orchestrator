@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { AttentionInbox, emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
@@ -96,6 +96,15 @@ const cycleGateItem: AttentionItem = {
       answer: '',
     },
   ],
+};
+
+const reviewItem: AttentionItem = {
+  kind: 'review',
+  id: 'review:feature-1:4:plan:PhasePlanNeedsReview',
+  featureId: 'feature-1',
+  waitingSince: '2026-07-15T10:00:00.000Z',
+  reviewKind: 'Phase plan',
+  phase: 'plan',
 };
 
 function renderInbox(items: AttentionItem[], refresh: () => Promise<AttentionItem[]>) {
@@ -241,6 +250,36 @@ describe('AttentionInbox accessibility', () => {
       'Submitted. Waiting for the server snapshot...',
     );
     expect(within(inbox).getByRole('button', { name: /Permission/ })).toHaveFocus();
+  });
+});
+
+describe('AttentionInbox reviews', () => {
+  it('shows a pending review as a cockpit jump instead of an inline editor', async () => {
+    const onJump = vi.fn();
+    function Harness() {
+      const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+      return (
+        <AttentionInbox
+          items={[reviewItem]}
+          refresh={async () => [reviewItem]}
+          featureLabel={() => 'Search revamp'}
+          drafts={drafts}
+          setDrafts={setDrafts}
+          onJump={onJump}
+        />
+      );
+    }
+    render(<Harness />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: /Attention inbox, 1 pending/ }));
+    await user.click(screen.getByRole('button', { name: /Review/ }));
+    expect(screen.getByText('Phase plan review is waiting at plan.')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Open review' }));
+    expect(onJump).toHaveBeenCalledWith('feature-1');
+    expect(
+      screen.queryByRole('complementary', { name: 'Attention inbox' }),
+    ).not.toBeInTheDocument();
   });
 });
 

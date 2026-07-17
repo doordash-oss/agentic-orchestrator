@@ -5,9 +5,9 @@
  * unpacked_app must exist, and the identity's server_revision must match the
  * current git HEAD and newer than any local source edit (a package built from
  * other code would silently test the wrong build). Anything else triggers one
- * `npm run package:verify`, which rebuilds and re-inspects the native package.
- * CI runs package:verify right before this suite, so the check passes without
- * a second build there.
+ * `npm run package:verify:e2e`, which rebuilds and re-inspects the runnable
+ * unpacked app. CI's distribution-package gate can still run independently;
+ * journeys do not require hdiutil/FUSE just to launch Electron.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -21,14 +21,14 @@ export default function globalSetup(): void {
     return;
   }
   console.log(`e2e global-setup: (re)building the package — ${reason}`);
-  execFileSync('npm', ['run', 'package:verify'], {
+  execFileSync('npm', ['run', 'package:verify:e2e'], {
     cwd: desktopDir,
     stdio: 'inherit',
     timeout: 15 * 60_000,
   });
   const remaining = stalenessReason({ includeLocalChanges: false });
   if (remaining !== null) {
-    throw new Error(`package:verify did not produce a fresh package: ${remaining}`);
+    throw new Error(`package:verify:e2e did not produce a fresh package: ${remaining}`);
   }
 }
 

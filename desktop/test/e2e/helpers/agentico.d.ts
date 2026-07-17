@@ -58,12 +58,19 @@ interface SessionTranscriptLite {
 }
 
 interface AttentionItemLite {
-  kind: 'permission' | 'questions' | 'help' | 'gate';
+  kind: 'permission' | 'questions' | 'help' | 'gate' | 'review';
   id: string;
   featureId?: string;
   sessionId?: string;
   repoName?: string;
   cycleType?: string;
+}
+
+interface ReviewSessionLite {
+  featureId: string;
+  reviewId: string;
+  draftRevision: string;
+  text: string;
 }
 
 declare global {
@@ -74,6 +81,10 @@ declare global {
       refreshReadiness(): Promise<ReadinessLite>;
       listFeatures(): Promise<{ id: string; name: string; status: string }[]>;
       getFeature(featureId: string): Promise<FeatureSnapshotLite>;
+      dispatchFeatureAction(request: {
+        featureId: string;
+        action: 'start' | 'pause-stop';
+      }): Promise<{ result: string }>;
       listSessions(): Promise<SessionSummaryLite[]>;
       getSessionTranscript(request: {
         sessionId: string;
@@ -97,6 +108,19 @@ declare global {
       getSettings(): Promise<{
         tabs: { open: { featureId: string; titleHint: string }[]; activeFeatureId: string | null };
       }>;
+      readReview(input: { featureId: string }): Promise<ReviewSessionLite>;
+      saveReview(input: {
+        featureId: string;
+        reviewId: string;
+        baseRevision: string;
+        text: string;
+      }): Promise<{ type: 'saved' | 'conflict' }>;
+      loadLocalReviewDraft(input: {
+        runtimeId: string;
+        featureId: string;
+        reviewId: string;
+        baseDraftRevision?: string;
+      }): Promise<{ text: string } | null>;
     };
   }
 }

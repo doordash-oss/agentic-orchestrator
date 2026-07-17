@@ -296,9 +296,23 @@ func (c *Client) CreateReviewSession(ctx context.Context, featureID string) (Rev
 	return out, err
 }
 
+// ReviewSession reads an existing review session without reopening its draft.
+func (c *Client) ReviewSession(ctx context.Context, featureID string) (ReviewSessionResponse, error) {
+	var out ReviewSessionResponse
+	err := c.getJSON(ctx, reviewSessionRootPath(featureID), nil, &out)
+	return out, err
+}
+
 func (c *Client) SaveReviewDraft(ctx context.Context, featureID, reviewID string, req ReviewDraftUpdateRequest) (ReviewSessionResponse, error) {
 	var out ReviewSessionResponse
 	err := c.doJSON(ctx, http.MethodPut, reviewSessionPath(featureID, reviewID)+"/draft", nil, req, &out, true)
+	return out, err
+}
+
+// ValidateReviewDraft checks proposed text without persisting it.
+func (c *Client) ValidateReviewDraft(ctx context.Context, featureID, reviewID string, req ReviewDraftValidationRequest) (ReviewDraftValidationResponse, error) {
+	var out ReviewDraftValidationResponse
+	err := c.doJSON(ctx, http.MethodPost, reviewSessionPath(featureID, reviewID)+"/validate", nil, req, &out, true)
 	return out, err
 }
 

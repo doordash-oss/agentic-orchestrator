@@ -93,7 +93,7 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     ]);
 
     transcript.section('Overflowing feature tabs remain directly navigable');
-    const overflowNames = Array.from({ length: 7 }, (_, index) => `Spatial overflow ${index + 1}`);
+    const overflowNames = Array.from({ length: 12 }, (_, index) => `Spatial overflow ${index + 1}`);
     await handle.page.evaluate(async (names) => {
       for (const name of names) {
         await window.agentico.createFeature({
@@ -106,7 +106,7 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     }, overflowNames);
     await handle.page.getByRole('tab', { name: 'Home' }).click();
     for (const name of overflowNames) {
-      const row = handle.page.getByRole('listitem').filter({ hasText: name });
+      const row = handle.page.getByRole('listitem').filter({ hasText: new RegExp(`^${name}\\b`) });
       await expect(row).toBeVisible({ timeout: 30_000 });
       await row.getByRole('button', { name: 'Open' }).click();
       await handle.page.getByRole('tab', { name: 'Home' }).click();
@@ -114,15 +114,15 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await setWindowSize(handle, 760, 900);
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
-    let tabMenu = await openFeatureOverflowMenu(handle);
+    let tabTarget = await featureTabNavigationTarget(handle);
     await evidenceShot(handle, 'visual_43fa4c4627eb');
     await setTheme(handle, 'dark');
-    tabMenu = await openFeatureOverflowMenu(handle);
+    tabTarget = await featureTabNavigationTarget(handle);
     await evidenceShot(handle, 'visual_262f46c3198f');
     await setTheme(handle, 'light');
-    tabMenu = await openFeatureOverflowMenu(handle);
-    await tabMenu.getByRole('menuitem', { name: 'Spatial overflow 7' }).click();
-    await expect(handle.page.getByRole('tab', { name: 'Spatial overflow 7' })).toHaveAttribute(
+    tabTarget = await featureTabNavigationTarget(handle);
+    await tabTarget.click();
+    await expect(handle.page.getByRole('tab', { name: 'Spatial overflow 12' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -188,11 +188,14 @@ async function captureVisualMatrix(handle: AppHandle, cells: readonly VisualCell
   }
 }
 
-async function openFeatureOverflowMenu(handle: AppHandle) {
+async function featureTabNavigationTarget(handle: AppHandle): Promise<Locator> {
+  const visibleTab = handle.page.getByRole('tab', { name: 'Spatial overflow 12' });
+  if (await visibleTab.isVisible()) return visibleTab;
   await handle.page.getByRole('button', { name: /Tabs/ }).click();
   const menu = handle.page.getByRole('menu', { name: 'Open features' });
-  await expect(menu.getByRole('menuitem', { name: 'Spatial overflow 7' })).toBeVisible();
-  return menu;
+  const menuItem = menu.getByRole('menuitem', { name: 'Spatial overflow 12' });
+  await expect(menuItem).toBeVisible();
+  return menuItem;
 }
 
 test('packaged inbox and cockpit resolve real attention classes from the bundled server', async ({

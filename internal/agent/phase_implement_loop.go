@@ -163,6 +163,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		SkillsDir:                  cfg.SkillsDir,
 		GuidelinesDir:              cfg.GuidelinesDir,
 		Observer:                   cfg.Observer,
+		OnVerificationProgress:     cfg.OnVerificationProgress,
 		// Per-iteration review stays on the same gating policy as the
 		// per-repo path historically used: Medium/Large skip per-
 		// iteration review and rely on Final Review for quality gating;

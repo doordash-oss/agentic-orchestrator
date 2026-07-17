@@ -102,6 +102,47 @@ func TestUpdateVerificationStatusPreservesOrder(t *testing.T) {
 	}
 }
 
+func TestVerificationStatusTransitionsNotifyAfterPersistence(t *testing.T) {
+	t.Parallel()
+	store, f := verificationStatusTestStore(t)
+	contract := &TestingContract{Items: []TestingContractItem{
+		{ID: "t1", Name: "Unit tests", Owner: TestingContractOwnerHarness, Run: &TestingContractRun{Shell: "x"}},
+	}}
+	var snapshots [][]feature.VerificationItemStatus
+	onProgress := func(featureID string) {
+		if featureID != f.ID {
+			t.Errorf("notification feature ID = %q, want %q", featureID, f.ID)
+		}
+		got, err := store.Load(featureID)
+		if err != nil {
+			t.Errorf("load notified feature: %v", err)
+			return
+		}
+		snapshots = append(snapshots, append([]feature.VerificationItemStatus(nil), got.VerificationItems...))
+	}
+
+	beginVerificationStatuses(store, f.ID, contract, onProgress)
+	updateVerificationStatus(store, f.ID, "Unit tests", "running", onProgress)
+	updateVerificationStatus(store, f.ID, "Unit tests", "passed", onProgress)
+	clearVerificationStatuses(store, f.ID, onProgress)
+
+	wantStates := []string{"pending", "running", "passed", ""}
+	if len(snapshots) != len(wantStates) {
+		t.Fatalf("notifications = %d, want %d", len(snapshots), len(wantStates))
+	}
+	for i, want := range wantStates {
+		if want == "" {
+			if len(snapshots[i]) != 0 {
+				t.Errorf("snapshot %d = %+v, want cleared", i, snapshots[i])
+			}
+			continue
+		}
+		if len(snapshots[i]) != 1 || snapshots[i][0].State != want {
+			t.Errorf("snapshot %d = %+v, want state %q", i, snapshots[i], want)
+		}
+	}
+}
+
 func TestClearVerificationStatusesRemovesItems(t *testing.T) {
 	t.Parallel()
 	store, f := verificationStatusTestStore(t)

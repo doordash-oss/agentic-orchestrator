@@ -93,6 +93,10 @@ type ImplementConfig struct {
 	// Observer is the observability facade for lifecycle event emission (nil = no-op).
 	Observer *observe.Observer
 
+	// OnVerificationProgress is called after each persisted harness
+	// verification status transition.
+	OnVerificationProgress func(featureID string)
+
 	// RepoName is the repo name for session ID namespacing in multi-repo features.
 	RepoName string
 
@@ -687,13 +691,13 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					harnessVerification = ReconstructVerificationOutcome(cached)
 				} else {
 					verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
-					beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract)
+					beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract, cfg.OnVerificationProgress)
 					verifyCtx = WithVerificationProgress(verifyCtx, func(name, state string) {
-						updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state)
+						updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state, cfg.OnVerificationProgress)
 					})
 					harnessVerification, readErr = ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
 					cancelVerify()
-					clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID)
+					clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, cfg.OnVerificationProgress)
 					if readErr != nil {
 						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 							cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "interrupted")

@@ -50,6 +50,11 @@ type PhaseRunner struct {
 	// Observer is the observability facade. May be nil (acts as NopObserver).
 	Observer *observe.Observer
 
+	// OnVerificationProgress is called after a harness verification status
+	// transition has been persisted. The runtime uses it to invalidate API
+	// clients while verification runs without an active agent session.
+	OnVerificationProgress func(featureID string)
+
 	// BuildSessionFn, if non-nil, overrides the production BuildSession logic.
 	// Used exclusively for test injection.
 	BuildSessionFn func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
@@ -705,6 +710,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
+		OnVerificationProgress:     pr.OnVerificationProgress,
 	}
 
 	resultCh := make(chan *LoopResult, 1)
@@ -760,6 +766,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
+		OnVerificationProgress:     pr.OnVerificationProgress,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
 
@@ -822,6 +829,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
+		OnVerificationProgress:     pr.OnVerificationProgress,
 		RunImplementFn:             pr.RunImplementFn,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -875,6 +883,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
+		OnVerificationProgress:     pr.OnVerificationProgress,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
 

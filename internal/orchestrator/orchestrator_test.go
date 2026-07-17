@@ -175,6 +175,26 @@ func TestOrchestrator_CreateFeature_Error(t *testing.T) {
 	}
 }
 
+func TestNewWiresVerificationProgressToEventStream(t *testing.T) {
+	t.Parallel()
+	phaseRunner := &agent.PhaseRunner{}
+	o := orchestrator.New(orchestrator.Deps{PhaseRunner: phaseRunner}, orchestrator.Hooks{})
+
+	if phaseRunner.OnVerificationProgress == nil {
+		t.Fatal("PhaseRunner.OnVerificationProgress is nil")
+	}
+	phaseRunner.OnVerificationProgress("feat-live")
+
+	select {
+	case ev := <-o.Events():
+		if ev.Type != ports.VerificationProgress || ev.FeatureID != "feat-live" {
+			t.Fatalf("event = %+v, want VerificationProgress for feat-live", ev)
+		}
+	default:
+		t.Fatal("verification progress did not reach orchestrator event stream")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestOrchestrator_CreateFeature_NilHook
 // ---------------------------------------------------------------------------

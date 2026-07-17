@@ -31,7 +31,7 @@ const verifyingPhaseStatus = "verifying"
 // beginVerificationStatuses marks the feature as running harness
 // verification and seeds one pending entry per harness-owned command item,
 // preserving contract order.
-func beginVerificationStatuses(store ports.FeatureStore, featureID string, contract *TestingContract) {
+func beginVerificationStatuses(store ports.FeatureStore, featureID string, contract *TestingContract, onProgress ...func(string)) {
 	if store == nil || contract == nil {
 		return
 	}
@@ -48,19 +48,21 @@ func beginVerificationStatuses(store ports.FeatureStore, featureID string, contr
 	if len(items) == 0 {
 		return
 	}
-	_ = store.Modify(featureID, func(f *feature.Feature) error {
+	if err := store.Modify(featureID, func(f *feature.Feature) error {
 		f.CurrentPhaseStatus = verifyingPhaseStatus
 		f.VerificationItems = items
 		return nil
-	})
+	}); err == nil {
+		notifyVerificationProgress(featureID, onProgress)
+	}
 }
 
 // updateVerificationStatus records one command's progress state.
-func updateVerificationStatus(store ports.FeatureStore, featureID, name, state string) {
+func updateVerificationStatus(store ports.FeatureStore, featureID, name, state string, onProgress ...func(string)) {
 	if store == nil || strings.TrimSpace(name) == "" {
 		return
 	}
-	_ = store.Modify(featureID, func(f *feature.Feature) error {
+	if err := store.Modify(featureID, func(f *feature.Feature) error {
 		for i := range f.VerificationItems {
 			if f.VerificationItems[i].Name == name {
 				f.VerificationItems[i].State = state
@@ -69,19 +71,31 @@ func updateVerificationStatus(store ports.FeatureStore, featureID, name, state s
 		}
 		f.VerificationItems = append(f.VerificationItems, feature.VerificationItemStatus{Name: name, State: state})
 		return nil
-	})
+	}); err == nil {
+		notifyVerificationProgress(featureID, onProgress)
+	}
 }
 
 // clearVerificationStatuses removes the verification substep markers.
-func clearVerificationStatuses(store ports.FeatureStore, featureID string) {
+func clearVerificationStatuses(store ports.FeatureStore, featureID string, onProgress ...func(string)) {
 	if store == nil {
 		return
 	}
-	_ = store.Modify(featureID, func(f *feature.Feature) error {
+	if err := store.Modify(featureID, func(f *feature.Feature) error {
 		if f.CurrentPhaseStatus == verifyingPhaseStatus {
 			f.CurrentPhaseStatus = ""
 		}
 		f.VerificationItems = nil
 		return nil
-	})
+	}); err == nil {
+		notifyVerificationProgress(featureID, onProgress)
+	}
+}
+
+func notifyVerificationProgress(featureID string, callbacks []func(string)) {
+	for _, callback := range callbacks {
+		if callback != nil {
+			callback(featureID)
+		}
+	}
 }

@@ -55,6 +55,11 @@ const (
 	SetupProgress
 	SetupCompleted
 	SetupFailed
+	// VerificationProgress fires after the harness durably changes the
+	// ordered per-command verification status. API clients use it to refresh
+	// feature detail while no agent session is active to provide refresh
+	// signals of its own.
+	VerificationProgress
 	// RuntimeShutdownStarted fires when the orchestrator/runtime has begun a
 	// graceful shutdown. SSE consumers use it as a metadata-only signal to
 	// refresh authoritative REST snapshots during reconnect.

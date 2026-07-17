@@ -106,6 +106,10 @@ type OrchestratorConfig struct {
 
 	// Observer is the observability facade for lifecycle events. Nil = no-op.
 	Observer *observe.Observer
+
+	// OnVerificationProgress is called after each persisted harness
+	// verification status transition so API clients can refresh live state.
+	OnVerificationProgress func(featureID string)
 }
 
 // OrchestratorResult is the aggregate outcome of multi-repo implementation.

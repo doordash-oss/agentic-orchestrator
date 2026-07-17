@@ -796,13 +796,13 @@ func (s *featureFinalReviewLoopState) runHarnessVerification(iterDir string) err
 	s.seedAgentOwnedEvidence(iterDir)
 	report := BuildContractVerificationReportStub(contract, contractPath)
 	verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
-	beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract)
+	beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract, cfg.OnVerificationProgress)
 	verifyCtx = WithVerificationProgress(verifyCtx, func(name, state string) {
-		updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state)
+		updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state, cfg.OnVerificationProgress)
 	})
 	outcome, execErr := ExecuteTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, contractPath, iterDir, s.workspace.Cwd, cfg.Feature.Repos)
 	cancelVerify()
-	clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID)
+	clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, cfg.OnVerificationProgress)
 	if execErr != nil {
 		return fmt.Errorf("executing testing contract for final-fix verification: %w", execErr)
 	}

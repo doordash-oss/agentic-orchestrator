@@ -55,6 +55,11 @@ type apiHandler struct {
 	disableHostValidation bool
 	initGitRepository     func(path string) error
 
+	// resourceSvc is the cached resource service, created once in
+	// newAPIHandler so the per-resource mutex in resourceLockSet survives
+	// across HTTP requests instead of being reconstructed every call.
+	resourceSvc *resourceService
+
 	recoveryMu         sync.Mutex
 	recoverySnapshots  map[string][]ports.RecoveryItem
 	reviewSessionLocks *reviewSessionLockSet
@@ -100,6 +105,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		initGitRepository:     opts.InitGitRepository,
 		reviewSessionLocks:    newReviewSessionLockSet(),
 	}
+	handler.resourceSvc = newResourceService(store, handler.configOrDefault, opts.Registry, opts.Mutations, opts.Runtime)
 	return handler
 }
 
@@ -127,6 +133,7 @@ const (
 	apiPathRecoveryActions  = "/api/v1/recovery/actions"
 	apiPathShutdown         = "/api/v1/shutdown"
 	apiPathEvents           = "/api/v1/events"
+	apiPathResources        = "/api/v1/resources"
 )
 
 // routeSegmentConfig is the feature sub-route segment for the per-feature
@@ -165,6 +172,8 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
 	{apiPathShutdown, func(h *apiHandler) http.HandlerFunc { return h.handleShutdownMutationRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
+	{apiPathResources, func(h *apiHandler) http.HandlerFunc { return h.handleResourceRoutes }},
+	{apiPathResources + "/", func(h *apiHandler) http.HandlerFunc { return h.handleResourceRoutes }},
 }
 
 func (h *apiHandler) routes() http.Handler {
@@ -193,6 +202,10 @@ func (h *apiHandler) routes() http.Handler {
 		}
 		if strings.HasPrefix(escaped, apiPathSessions+"/") {
 			methodHandler(h.handleSessionRoutes)(w, r)
+			return
+		}
+		if strings.HasPrefix(escaped, apiPathResources) {
+			h.handleResourceRoutes(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)

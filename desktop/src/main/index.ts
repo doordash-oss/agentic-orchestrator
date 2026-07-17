@@ -24,6 +24,8 @@ import {
 import { SettingsStore } from './settings';
 import { LocalDraftStore } from './localDraftStore';
 import { ReviewService } from './reviews';
+import { ResourceService } from './resources';
+import { ResourceDraftStore } from './resourceDraftStore';
 import { SetupService } from './setup';
 import { ThemeController } from './theme';
 import { IPC_EVENTS } from '../shared/ipc';
@@ -113,6 +115,7 @@ void app.whenReady().then(() => {
 
   const settings = new SettingsStore(app.getPath('userData'));
   const localDrafts = new LocalDraftStore(app.getPath('userData'));
+  const resourceDrafts = new ResourceDraftStore(app.getPath('userData'));
   const { gateway } = createRuntimeGateway({
     getRuntimeSelection: () => settings.get().runtime.selection,
     isPackaged: app.isPackaged,
@@ -155,6 +158,7 @@ void app.whenReady().then(() => {
   });
   const sessions = new SessionService(gateway);
   const reviews = new ReviewService(gateway);
+  const resourceService = new ResourceService(gateway);
   const attention = new AttentionService(gateway);
 
   // Main-process SSE consumption: runs only while the gateway is ready and
@@ -188,6 +192,7 @@ void app.whenReady().then(() => {
   const services: IpcServices = {
     getConnectionStatus: () => gateway.getState(),
     retryConnection: () => gateway.retry(),
+    restartConnection: () => gateway.restart(),
     getSettings: () => settings.get(),
     updateSettings: (patch) => settings.update(patch),
     getTheme: () => theme.getInfo(),
@@ -196,6 +201,8 @@ void app.whenReady().then(() => {
     refreshReadiness: () => setup.refreshReadiness(),
     pickWorkspaceDirectory: () => setup.pickWorkspaceDirectory(),
     addWorkspaceRoot: (rootPath) => setup.addWorkspaceRoot(rootPath),
+    removeWorkspaceRoot: (rootPath) => setup.removeWorkspaceRoot(rootPath),
+    reorderWorkspaceRoots: (paths) => setup.reorderWorkspaceRoots(paths),
     initRepository: (request) => setup.initRepository(request),
     listRepositories: () => setup.listRepositories(),
     listFeatures: () => features.listFeatures(),
@@ -244,6 +251,13 @@ void app.whenReady().then(() => {
         ? result
         : { type: 'saved' as const, result: result.session.result };
     },
+    listResources: (kind) => resourceService.catalogue(kind),
+    readResource: (resourceId) => resourceService.read(resourceId),
+    validateResource: (request) => resourceService.validate(request),
+    writeResource: (request) => resourceService.write(request),
+    loadLocalResourceDraft: (request) => resourceDrafts.load(request),
+    saveLocalResourceDraft: (request) => resourceDrafts.save(request),
+    discardLocalResourceDraft: (request) => resourceDrafts.discard(request),
   };
   registerIpcHandlers(ipcMain, trusted, services);
 

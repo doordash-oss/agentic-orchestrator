@@ -162,6 +162,7 @@ export interface AgenticoMock {
   api: AgenticoApi & {
     getConnectionStatus: ReturnType<typeof vi.fn>;
     retryConnection: ReturnType<typeof vi.fn>;
+    restartConnection: ReturnType<typeof vi.fn>;
     getSettings: ReturnType<typeof vi.fn>;
     updateSettings: ReturnType<typeof vi.fn>;
     setThemePreference: ReturnType<typeof vi.fn>;
@@ -169,6 +170,8 @@ export interface AgenticoMock {
     refreshReadiness: ReturnType<typeof vi.fn>;
     pickWorkspaceDirectory: ReturnType<typeof vi.fn>;
     addWorkspaceRoot: ReturnType<typeof vi.fn>;
+    removeWorkspaceRoot: ReturnType<typeof vi.fn>;
+    reorderWorkspaceRoots: ReturnType<typeof vi.fn>;
     initRepository: ReturnType<typeof vi.fn>;
     listRepositories: ReturnType<typeof vi.fn>;
     listFeatures: ReturnType<typeof vi.fn>;
@@ -188,6 +191,13 @@ export interface AgenticoMock {
     sendHelp: ReturnType<typeof vi.fn>;
     saveGateDraft: ReturnType<typeof vi.fn>;
     resolveGate: ReturnType<typeof vi.fn>;
+    listResources: ReturnType<typeof vi.fn>;
+    readResource: ReturnType<typeof vi.fn>;
+    validateResource: ReturnType<typeof vi.fn>;
+    writeResource: ReturnType<typeof vi.fn>;
+    loadLocalResourceDraft: ReturnType<typeof vi.fn>;
+    saveLocalResourceDraft: ReturnType<typeof vi.fn>;
+    discardLocalResourceDraft: ReturnType<typeof vi.fn>;
   };
   /** Push a connection change to every subscribed listener. */
   emitConnection(state: ConnectionState): void;
@@ -234,6 +244,7 @@ export function installAgenticoMock(
   const api = {
     getConnectionStatus: vi.fn(() => Promise.resolve(connection)),
     retryConnection: vi.fn(() => Promise.resolve(connection)),
+    restartConnection: vi.fn(() => Promise.resolve(connection)),
     onConnectionChanged: vi.fn((listener: (state: ConnectionState) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -249,6 +260,8 @@ export function installAgenticoMock(
     refreshReadiness: vi.fn(() => Promise.resolve(readiness)),
     pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
     addWorkspaceRoot: vi.fn(() => Promise.resolve(readiness)),
+    removeWorkspaceRoot: vi.fn(() => Promise.resolve(readiness)),
+    reorderWorkspaceRoots: vi.fn(() => Promise.resolve(readiness)),
     initRepository: vi.fn(() => Promise.resolve(readiness)),
     listRepositories: vi.fn(() => Promise.resolve(readiness.repositories)),
     listFeatures: vi.fn(() => Promise.resolve(overrides.features ?? [])),
@@ -310,6 +323,13 @@ export function installAgenticoMock(
     saveReview: vi.fn(() => Promise.reject(new Error('unused'))),
     validateReview: vi.fn(() => Promise.reject(new Error('unused'))),
     decideReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    listResources: vi.fn(() => Promise.resolve({ resources: [] })),
+    readResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    validateResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    writeResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    loadLocalResourceDraft: vi.fn(() => Promise.resolve(null)),
+    saveLocalResourceDraft: vi.fn(() => Promise.reject(new Error('unused'))),
+    discardLocalResourceDraft: vi.fn(() => Promise.resolve(false)),
     onAppEvent: vi.fn((listener: (event: AppEvent) => void) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);

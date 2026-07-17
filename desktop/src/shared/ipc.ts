@@ -12,6 +12,7 @@ export const ATTENTION_SUBMITTED_NOTICE = 'Submitted. Waiting for the server sna
 export const IPC_CHANNELS = {
   connectionGetStatus: 'agentico:connection:get-status',
   connectionRetry: 'agentico:connection:retry',
+  connectionRestart: 'agentico:connection:restart',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
   themeGet: 'agentico:theme:get',
@@ -20,6 +21,8 @@ export const IPC_CHANNELS = {
   readinessRefresh: 'agentico:readiness:refresh',
   workspacePickDirectory: 'agentico:workspace:pick-directory',
   workspaceAddRoot: 'agentico:workspace:add-root',
+  workspaceRemoveRoot: 'agentico:workspace:remove-root',
+  workspaceReorderRoots: 'agentico:workspace:reorder-roots',
   workspaceInitRepository: 'agentico:workspace:init-repository',
   repositoriesList: 'agentico:repositories:list',
   featuresList: 'agentico:features:list',
@@ -47,6 +50,13 @@ export const IPC_CHANNELS = {
   reviewsSave: 'agentico:reviews:save',
   reviewsValidate: 'agentico:reviews:validate',
   reviewsDecide: 'agentico:reviews:decide',
+  resourcesCatalogue: 'agentico:resources:catalogue',
+  resourcesRead: 'agentico:resources:read',
+  resourcesValidate: 'agentico:resources:validate',
+  resourcesWrite: 'agentico:resources:write',
+  resourceDraftsLoad: 'agentico:resource-drafts:load',
+  resourceDraftsSave: 'agentico:resource-drafts:save',
+  resourceDraftsDiscard: 'agentico:resource-drafts:discard',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -142,6 +152,14 @@ export type ServerBuildInfo = z.output<typeof ServerBuildInfoSchema>;
 const connectionStateBase = {
   detail: z.string(),
   serverBuild: ServerBuildInfoSchema.optional(),
+  /**
+   * The runtime directory the gateway actually resolved and connected with.
+   * Absent until the connect cycle resolves the selected runtime; null when
+   * no runtime has been resolved yet. The renderer compares this against
+   * `settings.runtime.selection` to derive restart-pending state
+   * authoritatively, without transient component state.
+   */
+  connectedRuntimeDir: z.string().max(4096).nullable().optional(),
 } as const;
 
 const connectionStage = <T extends ConnectionStage>(stage: T) => z.literal(stage);
@@ -949,7 +967,11 @@ export type FeatureTab = z.output<typeof FeatureTabSchema>;
 export const TabsPrefsSchema = z.strictObject({
   /** Open feature tabs in display order. */
   open: z.array(FeatureTabSchema).max(50),
-  /** Active tab; null means the Home tab. */
+  /**
+   * Active tab; null means the Home tab. The sentinel '__settings__'
+   * represents the Settings tab — it passes the feature-id regex but is
+   * not a real feature id.
+   */
   activeFeatureId: FeatureIdSchema.nullable(),
 });
 
@@ -1130,6 +1152,152 @@ export const ReviewDecisionResultSchema = z.discriminatedUnion('type', [
 ]);
 export type ReviewDecisionResult = z.output<typeof ReviewDecisionResultSchema>;
 
+// --- Editable resources (feature config, runtime config, skills, guidelines) ---
+
+export const ResourceKindSchema = z.enum([
+  'feature_config',
+  'runtime_config',
+  'skill',
+  'guideline',
+]);
+export type ResourceKind = z.output<typeof ResourceKindSchema>;
+
+export const ResourceContentTypeSchema = z.enum(['yaml', 'markdown', 'text']);
+export type ResourceContentType = z.output<typeof ResourceContentTypeSchema>;
+
+export const ResourceEffectSchema = z.enum([
+  'immediate',
+  'next_dispatch',
+  'next_session',
+  'restart_required',
+]);
+export type ResourceEffect = z.output<typeof ResourceEffectSchema>;
+
+export const ResourceFindingSchema = z.strictObject({
+  code: z.string().min(1),
+  message: z.string().min(1),
+  field: z.string().optional(),
+});
+export type ResourceFinding = z.output<typeof ResourceFindingSchema>;
+
+export const ResourceEntrySchema = z.strictObject({
+  id: z.string().min(1).max(256),
+  kind: ResourceKindSchema,
+  label: z.string().min(1).max(500),
+  contentType: ResourceContentTypeSchema,
+  revision: z.string().min(1).max(128),
+  effect: ResourceEffectSchema.optional(),
+  validatable: z.boolean(),
+  hierarchy: z.array(z.string().max(200)).max(50).optional(),
+  featureId: z.string().max(200).optional(),
+});
+export type ResourceEntry = z.output<typeof ResourceEntrySchema>;
+
+export const ResourceCatalogueSchema = z.strictObject({
+  resources: z.array(ResourceEntrySchema).max(5000),
+  truncated: z.boolean().optional(),
+});
+export type ResourceCatalogue = z.output<typeof ResourceCatalogueSchema>;
+
+export const ResourceReadSchema = z.strictObject({
+  id: z.string().min(1).max(256),
+  kind: ResourceKindSchema,
+  label: z.string().min(1).max(500),
+  contentType: ResourceContentTypeSchema,
+  revision: z.string().min(1).max(128),
+  text: z.string().max(2 * 1024 * 1024),
+  effect: ResourceEffectSchema.optional(),
+  validatable: z.boolean(),
+  hierarchy: z.array(z.string().max(200)).max(50).optional(),
+  featureId: z.string().max(200).optional(),
+});
+export type ResourceRead = z.output<typeof ResourceReadSchema>;
+
+export const ResourceValidateRequestSchema = z.strictObject({
+  resourceId: z.string().min(1).max(256),
+  text: z.string().max(1024 * 1024),
+});
+export type ResourceValidateRequest = z.output<typeof ResourceValidateRequestSchema>;
+
+export const ResourceValidateResultSchema = z.strictObject({
+  id: z.string().min(1).max(256),
+  valid: z.boolean(),
+  revision: z.string().max(128),
+  findings: z.array(ResourceFindingSchema).max(100),
+});
+export type ResourceValidateResult = z.output<typeof ResourceValidateResultSchema>;
+
+export const ResourceWriteRequestSchema = z.strictObject({
+  resourceId: z.string().min(1).max(256),
+  baseRevision: z.string().min(1).max(128),
+  text: z.string().max(1024 * 1024),
+});
+export type ResourceWriteRequest = z.output<typeof ResourceWriteRequestSchema>;
+
+export const ResourceWriteResultSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('saved'),
+    id: z.string().min(1).max(256),
+    revision: z.string().min(1).max(128),
+    effect: ResourceEffectSchema.optional(),
+  }),
+  z.strictObject({
+    type: z.literal('conflict'),
+    id: z.string().min(1).max(256),
+    expectedRevision: z.string().max(128),
+    currentRevision: z.string().min(1).max(128),
+    currentText: z.string().max(2 * 1024 * 1024),
+  }),
+]);
+export type ResourceWriteResult = z.output<typeof ResourceWriteResultSchema>;
+
+// --- Recoverable local resource drafts (generalized from review drafts) ---
+
+export const LOCAL_RESOURCE_DRAFT_STORE_SCHEMA_VERSION = 1;
+export const MAX_LOCAL_RESOURCE_DRAFT_BYTES = 1024 * 1024;
+
+export const ResourceDraftKeySchema = z.strictObject({
+  runtimeId: RuntimeIdSchema,
+  resourceId: z.string().min(1).max(256),
+  baseRevision: DraftRevisionSchema,
+});
+export type ResourceDraftKey = z.output<typeof ResourceDraftKeySchema>;
+
+export const LocalResourceDraftSchema = ResourceDraftKeySchema.extend({
+  text: z.string().max(MAX_LOCAL_RESOURCE_DRAFT_BYTES),
+  savedAt: z.string().datetime({ offset: true }),
+});
+export type LocalResourceDraft = z.output<typeof LocalResourceDraftSchema>;
+
+export const LocalResourceDraftSaveRequestSchema = ResourceDraftKeySchema.extend({
+  text: z.string().max(MAX_LOCAL_RESOURCE_DRAFT_BYTES),
+});
+export type LocalResourceDraftSaveRequest = z.output<typeof LocalResourceDraftSaveRequestSchema>;
+
+export const LocalResourceDraftLookupRequestSchema = ResourceDraftKeySchema.pick({
+  runtimeId: true,
+  resourceId: true,
+}).extend({ baseRevision: DraftRevisionSchema.optional() });
+export type LocalResourceDraftLookupRequest = z.output<
+  typeof LocalResourceDraftLookupRequestSchema
+>;
+
+export const LocalResourceDraftDiscardRequestSchema = ResourceDraftKeySchema;
+export type LocalResourceDraftDiscardRequest = z.output<
+  typeof LocalResourceDraftDiscardRequestSchema
+>;
+
+export const LocalResourceDraftDiscardResultSchema = z.strictObject({ discarded: z.boolean() });
+export type LocalResourceDraftDiscardResult = z.output<
+  typeof LocalResourceDraftDiscardResultSchema
+>;
+
+export const LocalResourceDraftStoreSchema = z.strictObject({
+  schemaVersion: z.literal(LOCAL_RESOURCE_DRAFT_STORE_SCHEMA_VERSION),
+  drafts: z.array(LocalResourceDraftSchema).max(50),
+});
+export type LocalResourceDraftStore = z.output<typeof LocalResourceDraftStoreSchema>;
+
 // --- Per-channel contracts ---------------------------------------------------
 
 export interface IpcContract {
@@ -1145,6 +1313,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     response: ConnectionStateSchema,
   },
   [IPC_CHANNELS.connectionRetry]: {
+    request: z.tuple([]),
+    response: ConnectionStateSchema,
+  },
+  [IPC_CHANNELS.connectionRestart]: {
     request: z.tuple([]),
     response: ConnectionStateSchema,
   },
@@ -1178,6 +1350,14 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   },
   [IPC_CHANNELS.workspaceAddRoot]: {
     request: z.tuple([AbsolutePathSchema]),
+    response: ReadinessSnapshotSchema,
+  },
+  [IPC_CHANNELS.workspaceRemoveRoot]: {
+    request: z.tuple([AbsolutePathSchema]),
+    response: ReadinessSnapshotSchema,
+  },
+  [IPC_CHANNELS.workspaceReorderRoots]: {
+    request: z.tuple([z.array(AbsolutePathSchema).max(100)]),
     response: ReadinessSnapshotSchema,
   },
   [IPC_CHANNELS.workspaceInitRepository]: {
@@ -1285,6 +1465,34 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([ReviewDecisionRequestSchema]),
     response: ReviewDecisionResultSchema,
   },
+  [IPC_CHANNELS.resourcesCatalogue]: {
+    request: z.tuple([z.string().max(50).optional()]),
+    response: ResourceCatalogueSchema,
+  },
+  [IPC_CHANNELS.resourcesRead]: {
+    request: z.tuple([z.string().min(1).max(256)]),
+    response: ResourceReadSchema,
+  },
+  [IPC_CHANNELS.resourcesValidate]: {
+    request: z.tuple([ResourceValidateRequestSchema]),
+    response: ResourceValidateResultSchema,
+  },
+  [IPC_CHANNELS.resourcesWrite]: {
+    request: z.tuple([ResourceWriteRequestSchema]),
+    response: ResourceWriteResultSchema,
+  },
+  [IPC_CHANNELS.resourceDraftsLoad]: {
+    request: z.tuple([LocalResourceDraftLookupRequestSchema]),
+    response: LocalResourceDraftSchema.nullable(),
+  },
+  [IPC_CHANNELS.resourceDraftsSave]: {
+    request: z.tuple([LocalResourceDraftSaveRequestSchema]),
+    response: LocalResourceDraftSchema,
+  },
+  [IPC_CHANNELS.resourceDraftsDiscard]: {
+    request: z.tuple([LocalResourceDraftDiscardRequestSchema]),
+    response: LocalResourceDraftDiscardResultSchema,
+  },
 };
 
 // --- The narrow window API the preload exposes -------------------------------
@@ -1292,6 +1500,7 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
 export interface AgenticoApi {
   getConnectionStatus(): Promise<ConnectionState>;
   retryConnection(): Promise<ConnectionState>;
+  restartConnection(): Promise<ConnectionState>;
   onConnectionChanged(listener: (state: ConnectionState) => void): () => void;
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
@@ -1301,6 +1510,8 @@ export interface AgenticoApi {
   refreshReadiness(): Promise<ReadinessSnapshot>;
   pickWorkspaceDirectory(): Promise<PickedDirectory>;
   addWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
+  removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
+  reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeatureSummaryView[]>;
@@ -1329,5 +1540,14 @@ export interface AgenticoApi {
   saveReview(request: ReviewSaveRequest): Promise<ReviewSaveResult>;
   validateReview(request: ReviewValidateRequest): Promise<ReviewValidation>;
   decideReview(request: ReviewDecisionRequest): Promise<ReviewDecisionResult>;
+  listResources(kind?: string): Promise<ResourceCatalogue>;
+  readResource(resourceId: string): Promise<ResourceRead>;
+  validateResource(request: ResourceValidateRequest): Promise<ResourceValidateResult>;
+  writeResource(request: ResourceWriteRequest): Promise<ResourceWriteResult>;
+  loadLocalResourceDraft(
+    request: LocalResourceDraftLookupRequest,
+  ): Promise<LocalResourceDraft | null>;
+  saveLocalResourceDraft(request: LocalResourceDraftSaveRequest): Promise<LocalResourceDraft>;
+  discardLocalResourceDraft(request: LocalResourceDraftDiscardRequest): Promise<boolean>;
   onAppEvent(listener: (event: AppEvent) => void): () => void;
 }

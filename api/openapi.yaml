@@ -626,6 +626,78 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/resources:
+    get:
+      operationId: listResources
+      summary: List the editable resource catalogue (feature config, runtime config, skills, guidelines).
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/ResourceKind"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResourceCatalogResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/resources/{resource_id}:
+    get:
+      operationId: readResource
+      summary: Read a single editable resource with its current content and revision.
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResourceReadResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+    put:
+      operationId: writeResource
+      summary: Write a resource with expected-revision checking, pre-write validation, and atomic replacement.
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceWriteRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResourceWriteResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/resources/{resource_id}/validate:
+    post:
+      operationId: validateResource
+      summary: Validate proposed content for a resource without writing it.
+      parameters:
+        - $ref: "#/components/parameters/ResourceID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceValidateRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResourceValidateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -737,6 +809,14 @@ components:
         type: string
         enum: ["local"]
       description: CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+    ResourceID:
+      name: resource_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-z0-9._-]{1,256}$'
+      description: Opaque resource identity from the catalogue.
 
   requestBodies:
     JSONMutation:
@@ -914,8 +994,42 @@ components:
       description: Session output SSE stream carrying `SessionOutputChunk` JSON payloads.
       content:
         text/event-stream:
+            schema:
+              $ref: "#/components/schemas/SessionOutputChunk"
+    ResourceCatalogResponse:
+      description: Editable resource catalogue.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
           schema:
-            $ref: "#/components/schemas/SessionOutputChunk"
+            $ref: "#/components/schemas/ResourceCatalogResponse"
+    ResourceReadResponse:
+      description: Single resource with content and revision.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ResourceReadResponse"
+    ResourceValidateResponse:
+      description: Advisory validation result for proposed resource content.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ResourceValidateResponse"
+    ResourceWriteResponse:
+      description: Resource write result (saved or stale conflict).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ResourceWriteResponse"
 
   headers:
     Sequence:
@@ -2969,3 +3083,191 @@ components:
               type: boolean
             safe_error:
               type: string
+    ResourceKind:
+      type: string
+      enum:
+        - feature_config
+        - runtime_config
+        - skill
+        - guideline
+    ResourceContentType:
+      type: string
+      enum:
+        - yaml
+        - markdown
+        - text
+    ResourceEffect:
+      type: string
+      enum:
+        - immediate
+        - next_dispatch
+        - next_session
+        - restart_required
+    ResourceFinding:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        field:
+          type: string
+    ResourceEntry:
+      type: object
+      required:
+        - id
+        - kind
+        - label
+        - content_type
+        - revision
+        - validatable
+      properties:
+        id:
+          type: string
+          description: Opaque stable resource identity.
+        kind:
+          $ref: "#/components/schemas/ResourceKind"
+        label:
+          type: string
+          description: Display label for navigation.
+        content_type:
+          $ref: "#/components/schemas/ResourceContentType"
+        revision:
+          type: string
+          description: SHA-256 content revision.
+        effect:
+          $ref: "#/components/schemas/ResourceEffect"
+        validatable:
+          type: boolean
+        hierarchy:
+          type: array
+          items:
+            type: string
+          description: Breadcrumb path for display (never raw host paths).
+        feature_id:
+          type: string
+          description: Present only for feature_config resources.
+    ResourceCatalogResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required:
+            - resources
+          properties:
+            resources:
+              type: array
+              items:
+                $ref: "#/components/schemas/ResourceEntry"
+              maxItems: 5000
+            truncated:
+              type: boolean
+              description: True when the catalogue exceeded maxResourceCatalogue and was truncated.
+    ResourceReadResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required:
+            - id
+            - kind
+            - label
+            - content_type
+            - revision
+            - text
+            - validatable
+          properties:
+            id:
+              type: string
+            kind:
+              $ref: "#/components/schemas/ResourceKind"
+            label:
+              type: string
+            content_type:
+              $ref: "#/components/schemas/ResourceContentType"
+            revision:
+              type: string
+            text:
+              type: string
+              description: Current canonical content.
+            effect:
+              $ref: "#/components/schemas/ResourceEffect"
+            validatable:
+              type: boolean
+            hierarchy:
+              type: array
+              items:
+                type: string
+            feature_id:
+              type: string
+    ResourceValidateRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          maxLength: 1048576
+    ResourceValidateResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required:
+            - id
+            - valid
+            - revision
+            - findings
+          properties:
+            id:
+              type: string
+            valid:
+              type: boolean
+            revision:
+              type: string
+            findings:
+              type: array
+              items:
+                $ref: "#/components/schemas/ResourceFinding"
+              maxItems: 100
+    ResourceWriteRequest:
+      type: object
+      required:
+        - base_revision
+        - text
+      properties:
+        base_revision:
+          type: string
+          description: Expected current revision for optimistic concurrency.
+        text:
+          type: string
+          maxLength: 1048576
+    ResourceWriteResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required:
+            - type
+            - id
+          properties:
+            type:
+              type: string
+              enum:
+                - saved
+                - conflict
+            id:
+              type: string
+            revision:
+              type: string
+              description: New content revision (present when type is saved).
+            effect:
+              $ref: "#/components/schemas/ResourceEffect"
+            expected_revision:
+              type: string
+              description: The caller's stale base revision (present when type is conflict).
+            current_revision:
+              type: string
+              description: The server's current revision (present when type is conflict).
+            current_text:
+              type: string
+              description: The server's current content (present when type is conflict).

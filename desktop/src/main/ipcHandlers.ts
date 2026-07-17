@@ -58,6 +58,16 @@ import {
   type ReviewSaveResult,
   type ReviewValidation,
   type ReviewDecisionResult,
+  type ResourceCatalogue,
+  type ResourceRead,
+  type ResourceValidateRequest,
+  type ResourceValidateResult,
+  type ResourceWriteRequest,
+  type ResourceWriteResult,
+  type LocalResourceDraft,
+  type LocalResourceDraftSaveRequest,
+  type LocalResourceDraftLookupRequest,
+  type LocalResourceDraftDiscardRequest,
   ipcContracts,
 } from '../shared/ipc';
 import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './security';
@@ -65,6 +75,7 @@ import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './sec
 export interface IpcServices {
   getConnectionStatus(): ConnectionState;
   retryConnection(): Promise<ConnectionState> | ConnectionState;
+  restartConnection(): Promise<ConnectionState> | ConnectionState;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
   getTheme(): ThemeInfo;
@@ -73,6 +84,8 @@ export interface IpcServices {
   refreshReadiness(): Promise<ReadinessSnapshot>;
   pickWorkspaceDirectory(): Promise<PickedDirectory>;
   addWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
+  removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
+  reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
   initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
   listRepositories(): Promise<RepositoryState[]>;
   listFeatures(): Promise<FeatureSummaryView[]>;
@@ -103,6 +116,13 @@ export interface IpcServices {
   saveReview(request: ReviewSaveRequest): Promise<ReviewSaveResult>;
   validateReview(request: ReviewValidateRequest): Promise<ReviewValidation>;
   decideReview(request: ReviewDecisionRequest): Promise<ReviewDecisionResult>;
+  listResources(kind?: string): Promise<ResourceCatalogue>;
+  readResource(resourceId: string): Promise<ResourceRead>;
+  validateResource(request: ResourceValidateRequest): Promise<ResourceValidateResult>;
+  writeResource(request: ResourceWriteRequest): Promise<ResourceWriteResult>;
+  loadLocalResourceDraft(request: LocalResourceDraftLookupRequest): LocalResourceDraft | null;
+  saveLocalResourceDraft(request: LocalResourceDraftSaveRequest): LocalResourceDraft;
+  discardLocalResourceDraft(request: LocalResourceDraftDiscardRequest): boolean;
 }
 
 export interface IpcMainLike {
@@ -153,6 +173,7 @@ export function registerIpcHandlers(
   const bindings: Record<IpcChannel, (event: SenderLikeEvent, ...args: never[]) => unknown> = {
     [IPC_CHANNELS.connectionGetStatus]: () => services.getConnectionStatus(),
     [IPC_CHANNELS.connectionRetry]: () => services.retryConnection(),
+    [IPC_CHANNELS.connectionRestart]: () => services.restartConnection(),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),
@@ -161,6 +182,10 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.readinessRefresh]: () => services.refreshReadiness(),
     [IPC_CHANNELS.workspacePickDirectory]: () => services.pickWorkspaceDirectory(),
     [IPC_CHANNELS.workspaceAddRoot]: (_event, path: string) => services.addWorkspaceRoot(path),
+    [IPC_CHANNELS.workspaceRemoveRoot]: (_event, path: string) =>
+      services.removeWorkspaceRoot(path),
+    [IPC_CHANNELS.workspaceReorderRoots]: (_event, paths: string[]) =>
+      services.reorderWorkspaceRoots(paths),
     [IPC_CHANNELS.workspaceInitRepository]: (_event, request: InitRepositoryRequest) =>
       services.initRepository(request),
     [IPC_CHANNELS.repositoriesList]: () => services.listRepositories(),
@@ -216,6 +241,19 @@ export function registerIpcHandlers(
       services.validateReview(request),
     [IPC_CHANNELS.reviewsDecide]: (_event, request: ReviewDecisionRequest) =>
       services.decideReview(request),
+    [IPC_CHANNELS.resourcesCatalogue]: (_event, kind?: string) => services.listResources(kind),
+    [IPC_CHANNELS.resourcesRead]: (_event, resourceId: string) => services.readResource(resourceId),
+    [IPC_CHANNELS.resourcesValidate]: (_event, request: ResourceValidateRequest) =>
+      services.validateResource(request),
+    [IPC_CHANNELS.resourcesWrite]: (_event, request: ResourceWriteRequest) =>
+      services.writeResource(request),
+    [IPC_CHANNELS.resourceDraftsLoad]: (_event, request: LocalResourceDraftLookupRequest) =>
+      services.loadLocalResourceDraft(request),
+    [IPC_CHANNELS.resourceDraftsSave]: (_event, request: LocalResourceDraftSaveRequest) =>
+      services.saveLocalResourceDraft(request),
+    [IPC_CHANNELS.resourceDraftsDiscard]: (_event, request: LocalResourceDraftDiscardRequest) => ({
+      discarded: services.discardLocalResourceDraft(request),
+    }),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

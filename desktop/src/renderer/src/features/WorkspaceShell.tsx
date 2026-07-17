@@ -22,15 +22,19 @@ import { defaultTabsPrefs } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
+import { SettingsPanel } from './SettingsPanel';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
 import { dashboardState, orderDashboardFeatures } from './featureView';
+
+const SETTINGS_TAB_ID = '__settings__';
 
 type ListState =
   | { phase: 'loading' }
   | { phase: 'error'; error: WizardError }
   | { phase: 'loaded'; features: FeatureSnapshot[] };
 
-type CreationDestination = { kind: 'home' } | { kind: 'feature'; featureId: string };
+type CreationDestination =
+  { kind: 'home' } | { kind: 'settings' } | { kind: 'feature'; featureId: string };
 
 export function WorkspaceShell({
   attentionItems = [],
@@ -194,7 +198,9 @@ export function WorkspaceShell({
     const index =
       tabs.activeFeatureId === null
         ? 0
-        : tabs.open.findIndex((tab) => tab.featureId === tabs.activeFeatureId) + 1;
+        : tabs.activeFeatureId === SETTINGS_TAB_ID
+          ? 1
+          : tabs.open.findIndex((tab) => tab.featureId === tabs.activeFeatureId) + 2;
     const tab = tabRefs.current[index];
     if (tab !== null && tab !== undefined && typeof tab.scrollIntoView === 'function') {
       tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -215,9 +221,15 @@ export function WorkspaceShell({
   const completeCreationExit = useCallback((destination: CreationDestination) => {
     setTabs((current) => {
       const base = current ?? defaultTabsPrefs();
+      const activeFeatureId =
+        destination.kind === 'home'
+          ? null
+          : destination.kind === 'settings'
+            ? SETTINGS_TAB_ID
+            : destination.featureId;
       const next = {
         ...base,
-        activeFeatureId: destination.kind === 'home' ? null : destination.featureId,
+        activeFeatureId,
       };
       window.agentico.updateSettings({ tabs: next }).catch(() => {});
       return next;
@@ -240,9 +252,10 @@ export function WorkspaceShell({
   }
 
   const activeId = tabs.activeFeatureId;
+  const isSettingsActive = activeId === SETTINGS_TAB_ID;
   const activeIsOpen = activeId !== null && tabs.open.some((tab) => tab.featureId === activeId);
-  const active = activeIsOpen ? activeId : null;
-  const tabCount = tabs.open.length + 1;
+  const active = isSettingsActive ? SETTINGS_TAB_ID : activeIsOpen ? activeId : null;
+  const tabCount = tabs.open.length + 2;
 
   const focusTab = (index: number): void => {
     const clamped = (index + tabCount) % tabCount;
@@ -277,6 +290,14 @@ export function WorkspaceShell({
     showHome();
   };
 
+  const navigateSettings = () => {
+    if (view === 'create') {
+      creationGuard.leave({ kind: 'settings' });
+      return;
+    }
+    persist({ ...tabs, activeFeatureId: SETTINGS_TAB_ID });
+  };
+
   const navigateFeature = (featureId: string) => {
     if (view === 'create') {
       creationGuard.leave({ kind: 'feature', featureId });
@@ -305,11 +326,27 @@ export function WorkspaceShell({
           >
             Home
           </button>
+          <button
+            ref={(node) => {
+              tabRefs.current[1] = node;
+            }}
+            type="button"
+            role="tab"
+            id="tab-settings"
+            aria-selected={isSettingsActive}
+            aria-controls="panel-settings"
+            className="tab-strip__tab"
+            tabIndex={isSettingsActive ? 0 : -1}
+            onClick={navigateSettings}
+            onKeyDown={(event) => onTabKeyDown(event, 1)}
+          >
+            Settings
+          </button>
           {tabs.open.map((tab, index) => (
             <span key={tab.featureId} className="tab-strip__entry">
               <button
                 ref={(node) => {
-                  tabRefs.current[index + 1] = node;
+                  tabRefs.current[index + 2] = node;
                 }}
                 type="button"
                 role="tab"
@@ -321,7 +358,7 @@ export function WorkspaceShell({
                 onClick={() => {
                   navigateFeature(tab.featureId);
                 }}
-                onKeyDown={(event) => onTabKeyDown(event, index + 1)}
+                onKeyDown={(event) => onTabKeyDown(event, index + 2)}
               >
                 <span>{tab.titleHint === '' ? featureLabel(tab.featureId) : tab.titleHint}</span>
                 <AttentionBadge
@@ -345,6 +382,7 @@ export function WorkspaceShell({
           attentionByFeature={attentionByFeature}
           featureLabel={featureLabel}
           onNavigateHome={navigateHome}
+          onNavigateSettings={navigateSettings}
           onNavigateFeature={navigateFeature}
         />
       </div>
@@ -387,6 +425,15 @@ export function WorkspaceShell({
               />
             </>
           )}
+        </div>
+      ) : active === SETTINGS_TAB_ID ? (
+        <div
+          id="panel-settings"
+          role="tabpanel"
+          aria-labelledby="tab-settings"
+          className="tab-panel"
+        >
+          <SettingsPanel />
         </div>
       ) : (
         <div
@@ -505,12 +552,14 @@ function TabOverflowMenu({
   attentionByFeature,
   featureLabel,
   onNavigateHome,
+  onNavigateSettings,
   onNavigateFeature,
 }: {
   tabs: TabsPrefs;
   attentionByFeature: ReadonlyMap<string, number>;
   featureLabel(featureId: string): string;
   onNavigateHome(): void;
+  onNavigateSettings(): void;
   onNavigateFeature(featureId: string): void;
 }) {
   const [open, setOpen] = useState(false);
@@ -572,6 +621,9 @@ function TabOverflowMenu({
         >
           <button type="button" role="menuitem" onClick={() => select(onNavigateHome)}>
             Home
+          </button>
+          <button type="button" role="menuitem" onClick={() => select(onNavigateSettings)}>
+            Settings
           </button>
           {tabs.open.map((tab) => {
             const count = attentionByFeature.get(tab.featureId) ?? 0;

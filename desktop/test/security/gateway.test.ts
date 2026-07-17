@@ -217,3 +217,41 @@ const SELECTED_RECORD_RUNTIME = {
   state_dir: '/rt/features',
   config_path: '/rt/config.yaml',
 };
+
+describe('gateway API path allowlist for resource catalogue', () => {
+  it('permits kind-filtered /api/v1/resources through the real allowlist', async () => {
+    const record = { states: [] as ConnectionState[], logs: [] as string[], urls: [] as string[] };
+    const gateway = new RuntimeGateway(attachDeps(record));
+    await gateway.start();
+    expect(gateway.getState().status).toBe('ready');
+
+    // Each valid kind must pass the allowlist and reach fetchJson.
+    for (const kind of ['feature_config', 'runtime_config', 'skill', 'guideline']) {
+      record.urls.length = 0;
+      await gateway.apiRequest(`/api/v1/resources?kind=${kind}`);
+      expect(record.urls.some((u) => u.includes(`kind=${kind}`))).toBe(true);
+    }
+
+    // An unfiltered catalogue call must also pass.
+    record.urls.length = 0;
+    await gateway.apiRequest('/api/v1/resources');
+    expect(record.urls.some((u) => u.endsWith('/api/v1/resources'))).toBe(true);
+
+    // An invalid kind value must be rejected by the allowlist before fetchJson.
+    await expect(gateway.apiRequest('/api/v1/resources?kind=bogus')).rejects.toThrow();
+    expect(record.urls.some((u) => u.includes('kind=bogus'))).toBe(false);
+
+    // A duplicate kind query parameter must be rejected.
+    await expect(
+      gateway.apiRequest('/api/v1/resources?kind=skill&kind=guideline'),
+    ).rejects.toThrow();
+  });
+
+  it('rejects unknown query keys on /api/v1/resources', async () => {
+    const record = { states: [] as ConnectionState[], logs: [] as string[], urls: [] as string[] };
+    const gateway = new RuntimeGateway(attachDeps(record));
+    await gateway.start();
+
+    await expect(gateway.apiRequest('/api/v1/resources?foo=bar')).rejects.toThrow();
+  });
+});

@@ -100,6 +100,52 @@ export class SetupService {
   }
 
   /**
+   * Removes a workspace root through the server's runtime-config mutation.
+   * Existing features remain intact; discovery refreshes from the server.
+   */
+  async removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot> {
+    const validated = validateWithSchema(path, AbsolutePathSchema);
+    const configBody = await this.api('/api/v1/config/runtime');
+    const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
+    const roots = config.workspace_roots ?? [];
+    const next = roots.filter((r) => r !== validated);
+    if (next.length !== roots.length) {
+      await this.api('/api/v1/config/runtime', {
+        method: 'PATCH',
+        body: { workspace_roots: next },
+      });
+    }
+    return this.getReadiness();
+  }
+
+  /**
+   * Reorders workspace roots by replacing the full array through the
+   * server's runtime-config mutation. The set of roots must be identical;
+   * only the order changes.
+   */
+  async reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot> {
+    const validated = paths.map((p) => validateWithSchema(p, AbsolutePathSchema));
+    const configBody = await this.api('/api/v1/config/runtime');
+    const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
+    const current = (config.workspace_roots ?? []).slice().sort();
+    const sorted = validated.slice().sort();
+    if (current.length !== sorted.length || current.some((r, i) => r !== sorted[i])) {
+      throw new SafeErrorException(
+        safeError(
+          'E_INVALID_REORDER',
+          'The reordered root set must match the current set of workspace roots.',
+          'Add or remove roots separately before reordering.',
+        ),
+      );
+    }
+    await this.api('/api/v1/config/runtime', {
+      method: 'PATCH',
+      body: { workspace_roots: validated },
+    });
+    return this.getReadiness();
+  }
+
+  /**
    * Server-owned repository initialization. Consent is enforced by the IPC
    * request schema already; this recheck is defense in depth. On success the
    * fresh discovery snapshot is returned so the renderer never infers state.

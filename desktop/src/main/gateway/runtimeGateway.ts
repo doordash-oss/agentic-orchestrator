@@ -156,6 +156,12 @@ export class RuntimeGateway {
   private readySince: number | null = null;
   private recoveryPending = false;
   private launchCommandContext: string | null = null;
+  /**
+   * The runtime directory the gateway actually resolved and connected with.
+   * Exposed via ConnectionState so the renderer can authoritatively derive
+   * restart-pending state by comparing it against settings.runtime.selection.
+   */
+  private connectedRuntimeDir: string | null = null;
 
   constructor(private readonly deps: GatewayDeps) {
     this.timeouts = { ...DEFAULT_TIMEOUTS, ...deps.timeouts };
@@ -309,6 +315,32 @@ export class RuntimeGateway {
   }
 
   /**
+   * Graceful restart from a healthy connection: stops the app-owned child
+   * (external servers are never signalled), resets to idle so start()
+   * proceeds with the fresh connect cycle, and re-resolves the selected
+   * runtime. Used by the restart-pending flow when the user chooses
+   * Restart Now after a runtime path change.
+   */
+  async restart(): Promise<ConnectionState> {
+    if (this.shuttingDown) {
+      return this.state;
+    }
+    this.generation += 1;
+    await this.stopChild();
+    this.token = null;
+    this.baseUrl = null;
+    this.readySince = null;
+    this.setState({
+      status: 'idle',
+      stage: 'resolve-runtime',
+      detail: 'Restarting to apply the pending runtime change.',
+      ownership: 'none',
+    });
+    await this.start();
+    return this.state;
+  }
+
+  /**
    * Verifies a stale global stream before dropping an externally owned
    * connection. This never signals, restarts, or adopts the external process.
    */
@@ -368,6 +400,7 @@ export class RuntimeGateway {
     await this.stopChild();
     this.token = null;
     this.baseUrl = null;
+    this.connectedRuntimeDir = null;
   }
 
   // --- connect cycle ---------------------------------------------------------
@@ -385,6 +418,7 @@ export class RuntimeGateway {
       ownership: 'none',
     });
     const selected = this.deps.selectRuntime();
+    this.connectedRuntimeDir = selected.runtimeDir;
 
     this.setState({
       status: 'discovering',
@@ -919,7 +953,13 @@ export class RuntimeGateway {
   }
 
   private setState(next: ConnectionState): void {
-    const sanitized = this.sanitizeState(next);
+    const withRuntime = {
+      ...next,
+      ...(this.connectedRuntimeDir !== null
+        ? { connectedRuntimeDir: this.connectedRuntimeDir }
+        : {}),
+    } as ConnectionState;
+    const sanitized = this.sanitizeState(withRuntime);
     this.state = sanitized;
     for (const listener of [...this.listeners]) {
       listener(sanitized);
@@ -994,6 +1034,8 @@ const SESSION_TRANSCRIPT_PATH_PATTERN = new RegExp(
   `^/api/v1/sessions/${SESSION_ID_SEGMENT_PATTERN}/transcript$`,
   'i',
 );
+const RESOURCES_PATH_PATTERN = /^\/api\/v1\/resources$/i;
+const ALLOWED_RESOURCE_KINDS = new Set(['feature_config', 'runtime_config', 'skill', 'guideline']);
 
 function isAllowedApiPath(path: string): boolean {
   const parts = path.split('?');
@@ -1003,6 +1045,21 @@ function isAllowedApiPath(path: string): boolean {
     return (
       QUERYLESS_API_PATH_PATTERN.test(pathname) || QUERYLESS_SESSION_API_PATH_PATTERN.test(pathname)
     );
+  }
+  // The resource catalogue supports an optional ?kind=<kind> query that
+  // filters by resource kind.  Validate the value against the closed set
+  // of kinds to keep the fail-closed posture of the allowlist.
+  if (parts.length === 2 && RESOURCES_PATH_PATTERN.test(pathname)) {
+    const rawQuery = parts[1] ?? '';
+    if (rawQuery === '') return false;
+    const seen = new Set<string>();
+    for (const [key, value] of new URLSearchParams(rawQuery)) {
+      if (seen.has(key)) return false;
+      if (key !== 'kind') return false;
+      if (!ALLOWED_RESOURCE_KINDS.has(value)) return false;
+      seen.add(key);
+    }
+    return seen.size > 0;
   }
   if (parts.length !== 2 || !SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)) {
     return false;

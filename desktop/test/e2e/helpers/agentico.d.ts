@@ -12,6 +12,7 @@ interface ConnectionStatusLite {
   ownership: string;
   serverBuild?: { version: string; revision?: string };
   error?: { code: string; message: string; remediation?: string };
+  connectedRuntimeDir?: string | null;
 }
 
 interface ReadinessLite {
@@ -107,6 +108,7 @@ declare global {
       }): Promise<{ featureId: string }>;
       getSettings(): Promise<{
         tabs: { open: { featureId: string; titleHint: string }[]; activeFeatureId: string | null };
+        runtime: { selection?: string };
       }>;
       readReview(input: { featureId: string }): Promise<ReviewSessionLite>;
       saveReview(input: {
@@ -121,6 +123,69 @@ declare global {
         reviewId: string;
         baseDraftRevision?: string;
       }): Promise<{ text: string } | null>;
+      listResources(kind?: string): Promise<{
+        resources: {
+          id: string;
+          kind: string;
+          label: string;
+          revision: string;
+          hierarchy?: string[];
+          featureId?: string;
+        }[];
+        truncated?: boolean;
+      }>;
+      readResource(resourceId: string): Promise<{
+        id: string;
+        kind: string;
+        label: string;
+        revision: string;
+        text: string;
+        hierarchy?: string[];
+        featureId?: string;
+      }>;
+      validateResource(request: { resourceId: string; text: string }): Promise<{
+        id: string;
+        valid: boolean;
+        revision: string;
+        findings: { code: string; message: string; field?: string }[];
+      }>;
+      writeResource(request: { resourceId: string; baseRevision: string; text: string }): Promise<
+        | { type: 'saved'; id: string; revision: string; effect?: string }
+        | {
+            type: 'conflict';
+            id: string;
+            expectedRevision: string;
+            currentRevision: string;
+            currentText: string;
+          }
+      >;
+      saveLocalResourceDraft(request: {
+        runtimeId: string;
+        resourceId: string;
+        baseRevision: string;
+        text: string;
+      }): Promise<{ savedAt: string }>;
+      loadLocalResourceDraft(request: {
+        runtimeId: string;
+        resourceId: string;
+        baseRevision?: string;
+      }): Promise<{ text: string; baseRevision: string; savedAt: string } | null>;
+      discardLocalResourceDraft(request: {
+        runtimeId: string;
+        resourceId: string;
+        baseRevision: string;
+      }): Promise<{ discarded: boolean }>;
+      pickWorkspaceDirectory(): Promise<{ path: string | null }>;
+      addWorkspaceRoot(path: string): Promise<ReadinessLite>;
+      removeWorkspaceRoot(path: string): Promise<ReadinessLite>;
+      reorderWorkspaceRoots(paths: string[]): Promise<ReadinessLite>;
+      updateSettings(patch: {
+        runtime?: { selection: string | null };
+        tabs?: { open: { featureId: string; titleHint: string }[]; activeFeatureId: string | null };
+      }): Promise<unknown>;
+      restartConnection(): Promise<ConnectionStatusLite>;
+      getThemePreference(): Promise<{ preference: string; resolved: string }>;
+      setThemePreference(preference: string): Promise<{ preference: string; resolved: string }>;
     };
   }
 }

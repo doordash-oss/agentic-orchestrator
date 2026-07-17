@@ -18,12 +18,14 @@ import {
   isPendingReviewStatus,
   type FeatureSnapshot,
   type SetupTaskView,
+  type ResourceEntry,
 } from '../../../shared/ipc';
 import { PhaseSpine } from '../components/PhaseSpine';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { RunTimeline } from './RunTimeline';
 import { ReviewSurface } from './ReviewSurface';
+import { ResourceEditor, useResolvedTheme } from './ResourceWorkspace';
 import {
   AttentionDetail,
   attentionActionNotice,
@@ -428,6 +430,82 @@ function StopConfirmDialog({
   );
 }
 
+function FeatureConfigEditor({ featureId }: { featureId: string }) {
+  const [configResourceId, setConfigResourceId] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const theme = useResolvedTheme();
+
+  useEffect(() => {
+    let alive = true;
+    setConfigLoaded(false);
+    setConfigError(null);
+    void window.agentico
+      .listResources('feature_config')
+      .then((cat) => {
+        if (!alive) return;
+        const entry = cat.resources.find((e: ResourceEntry) => e.featureId === featureId);
+        if (entry) {
+          setConfigResourceId(entry.id);
+          setConfigError(null);
+        } else {
+          setConfigResourceId(null);
+        }
+        setConfigLoaded(true);
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setConfigError(parseIpcError(e).message);
+        setConfigLoaded(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [featureId, retryNonce]);
+
+  return (
+    <section className="cockpit__config" aria-label="Feature configuration">
+      <button
+        type="button"
+        className="cockpit__config-toggle"
+        aria-expanded={showConfig}
+        onClick={() => setShowConfig((v) => !v)}
+      >
+        <span aria-hidden="true">{showConfig ? '▾' : '▸'}</span>
+        Configuration
+      </button>
+      {showConfig && (
+        <div className="cockpit__config-body">
+          {configError ? (
+            <div className="cockpit__config-error">
+              <p className="resource-editor__notice resource-editor__notice--error" role="alert">
+                Could not load configuration — {configError}
+              </p>
+              <button
+                type="button"
+                className="resource-editor__btn"
+                onClick={() => setRetryNonce((n) => n + 1)}
+              >
+                Retry
+              </button>
+            </div>
+          ) : configResourceId ? (
+            <ResourceEditor resourceId={configResourceId} theme={theme} />
+          ) : configLoaded ? (
+            <p className="resource-editor__notice">
+              No configuration resource found for this feature.
+            </p>
+          ) : (
+            <p className="resource-editor__notice">Loading configuration…</p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function FeatureCockpit({
   featureId,
   titleHint,
@@ -732,6 +810,7 @@ export function FeatureCockpit({
 
       <div className="cockpit__content">
         <main className="cockpit__canvas">
+          <FeatureConfigEditor featureId={featureId} />
           {hasPendingReview ? (
             <ReviewSurface featureId={featureId} onResolved={() => load({ silent: true })} />
           ) : null}

@@ -591,6 +591,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the editable resource catalogue (feature config, runtime config, skills, guidelines). */
+        get: operations["listResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/{resource_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a single editable resource with its current content and revision. */
+        get: operations["readResource"];
+        /** Write a resource with expected-revision checking, pre-write validation, and atomic replacement. */
+        put: operations["writeResource"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/{resource_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate proposed content for a resource without writing it. */
+        post: operations["validateResource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1441,6 +1493,79 @@ export interface components {
             log_available: boolean;
             safe_error?: string;
         };
+        /** @enum {string} */
+        ResourceKind: "feature_config" | "runtime_config" | "skill" | "guideline";
+        /** @enum {string} */
+        ResourceContentType: "yaml" | "markdown" | "text";
+        /** @enum {string} */
+        ResourceEffect: "immediate" | "next_dispatch" | "next_session" | "restart_required";
+        ResourceFinding: {
+            code: string;
+            message: string;
+            field?: string;
+        };
+        ResourceEntry: {
+            /** @description Opaque stable resource identity. */
+            id: string;
+            kind: components["schemas"]["ResourceKind"];
+            /** @description Display label for navigation. */
+            label: string;
+            content_type: components["schemas"]["ResourceContentType"];
+            /** @description SHA-256 content revision. */
+            revision: string;
+            effect?: components["schemas"]["ResourceEffect"];
+            validatable: boolean;
+            /** @description Breadcrumb path for display (never raw host paths). */
+            hierarchy?: string[];
+            /** @description Present only for feature_config resources. */
+            feature_id?: string;
+        };
+        ResourceCatalogResponse: components["schemas"]["JSONResponse"] & {
+            resources: components["schemas"]["ResourceEntry"][];
+            /** @description True when the catalogue exceeded maxResourceCatalogue and was truncated. */
+            truncated?: boolean;
+        };
+        ResourceReadResponse: components["schemas"]["JSONResponse"] & {
+            id: string;
+            kind: components["schemas"]["ResourceKind"];
+            label: string;
+            content_type: components["schemas"]["ResourceContentType"];
+            revision: string;
+            /** @description Current canonical content. */
+            text: string;
+            effect?: components["schemas"]["ResourceEffect"];
+            validatable: boolean;
+            hierarchy?: string[];
+            feature_id?: string;
+        };
+        ResourceValidateRequest: {
+            text: string;
+        };
+        ResourceValidateResponse: components["schemas"]["JSONResponse"] & {
+            id: string;
+            valid: boolean;
+            revision: string;
+            findings: components["schemas"]["ResourceFinding"][];
+        };
+        ResourceWriteRequest: {
+            /** @description Expected current revision for optimistic concurrency. */
+            base_revision: string;
+            text: string;
+        };
+        ResourceWriteResponse: components["schemas"]["JSONResponse"] & {
+            /** @enum {string} */
+            type: "saved" | "conflict";
+            id: string;
+            /** @description New content revision (present when type is saved). */
+            revision?: string;
+            effect?: components["schemas"]["ResourceEffect"];
+            /** @description The caller's stale base revision (present when type is conflict). */
+            expected_revision?: string;
+            /** @description The server's current revision (present when type is conflict). */
+            current_revision?: string;
+            /** @description The server's current content (present when type is conflict). */
+            current_text?: string;
+        };
     };
     responses: {
         /** @description Runtime health. */
@@ -1681,6 +1806,46 @@ export interface components {
                 "text/event-stream": components["schemas"]["SessionOutputChunk"];
             };
         };
+        /** @description Editable resource catalogue. */
+        ResourceCatalogResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ResourceCatalogResponse"];
+            };
+        };
+        /** @description Single resource with content and revision. */
+        ResourceReadResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ResourceReadResponse"];
+            };
+        };
+        /** @description Advisory validation result for proposed resource content. */
+        ResourceValidateResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ResourceValidateResponse"];
+            };
+        };
+        /** @description Resource write result (saved or stale conflict). */
+        ResourceWriteResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ResourceWriteResponse"];
+            };
+        };
     };
     parameters: {
         FeatureID: string;
@@ -1695,6 +1860,8 @@ export interface components {
         Limit: number;
         /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
         TrustedMutationHeader: "local";
+        /** @description Opaque resource identity from the catalogue. */
+        ResourceID: string;
     };
     requestBodies: {
         JSONMutation: {
@@ -2356,6 +2523,87 @@ export interface operations {
         responses: {
             200: components["responses"]["EventStream"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    listResources: {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["ResourceKind"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["ResourceCatalogResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    readResource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque resource identity from the catalogue. */
+                resource_id: components["parameters"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["ResourceReadResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+        };
+    };
+    writeResource: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                /** @description Opaque resource identity from the catalogue. */
+                resource_id: components["parameters"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceWriteRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ResourceWriteResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    validateResource: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                /** @description Opaque resource identity from the catalogue. */
+                resource_id: components["parameters"]["ResourceID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceValidateRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ResourceValidateResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
         };
     };
 }

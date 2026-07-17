@@ -50,6 +50,12 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
       detail: 'ok',
       ownership: 'external' as const,
     })),
+    restartConnection: vi.fn(() => ({
+      status: 'ready' as const,
+      stage: 'ready' as const,
+      detail: 'ok',
+      ownership: 'external' as const,
+    })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn(() => defaultSettings()),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
@@ -58,6 +64,8 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     refreshReadiness: vi.fn(() => Promise.resolve(snapshot())),
     pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
     addWorkspaceRoot: vi.fn(() => Promise.resolve(snapshot())),
+    removeWorkspaceRoot: vi.fn(() => Promise.resolve(snapshot())),
+    reorderWorkspaceRoots: vi.fn(() => Promise.resolve(snapshot())),
     initRepository: vi.fn(() => Promise.resolve(snapshot())),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve([])),
@@ -90,6 +98,16 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     saveReview: vi.fn(() => Promise.reject(new Error('unused'))),
     validateReview: vi.fn(() => Promise.reject(new Error('unused'))),
     decideReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    listResources: vi.fn(() => Promise.resolve({ resources: [] })),
+    readResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    validateResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    writeResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    loadLocalResourceDraft: vi.fn(() => null),
+    saveLocalResourceDraft: vi.fn((request) => ({
+      ...request,
+      savedAt: '2026-07-16T00:00:00.000Z',
+    })),
+    discardLocalResourceDraft: vi.fn(() => false),
     ...overrides,
   };
 }

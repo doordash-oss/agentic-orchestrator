@@ -265,10 +265,15 @@ describe('WorkspaceShell tabs', () => {
     const user = userEvent.setup();
 
     const home = await screen.findByRole('tab', { name: 'Home' });
+    const settingsTab = screen.getByRole('tab', { name: 'Settings' });
     const featureTab = screen.getByRole('tab', { name: 'Search revamp' });
     featureTab.focus();
     await user.keyboard('{ArrowLeft}');
+    expect(settingsTab).toHaveFocus();
+    await user.keyboard('{ArrowLeft}');
     expect(home).toHaveFocus();
+    await user.keyboard('{ArrowRight}');
+    expect(settingsTab).toHaveFocus();
     await user.keyboard('{ArrowRight}');
     expect(featureTab).toHaveFocus();
   });

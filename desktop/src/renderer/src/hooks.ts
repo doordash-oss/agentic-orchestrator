@@ -69,8 +69,12 @@ export interface ThemeState {
 /**
  * Owns the light/dark/system theme: loads the persisted preference from main,
  * follows OS appearance while on `system`, and mirrors the resolved theme
- * onto <html data-theme> for the CSS custom properties.
+ * onto <html data-theme> for the CSS custom properties. Multiple instances
+ * sync through a custom window event so a theme change from any surface
+ * (header switcher or Settings panel) updates all of them.
  */
+const THEME_SYNC_EVENT = 'agentico-theme-sync';
+
 export function useTheme(): ThemeState {
   const [info, setInfo] = useState<ThemeInfo>(() => ({
     preference: 'system',
@@ -93,13 +97,25 @@ export function useTheme(): ThemeState {
     const query = window.matchMedia('(prefers-color-scheme: dark)');
     const onChange = (event: MediaQueryListEvent): void => {
       if (infoRef.current.preference === 'system') {
-        setInfo((prev) => ({ ...prev, resolved: event.matches ? 'dark' : 'light' }));
+        const resolved: 'light' | 'dark' = event.matches ? 'dark' : 'light';
+        const next = { ...infoRef.current, resolved };
+        setInfo(next);
+        window.dispatchEvent(new CustomEvent(THEME_SYNC_EVENT, { detail: next }));
       }
     };
     query.addEventListener('change', onChange);
+
+    const onSync = (event: Event): void => {
+      if (event instanceof CustomEvent && event.detail) {
+        setInfo(event.detail as ThemeInfo);
+      }
+    };
+    window.addEventListener(THEME_SYNC_EVENT, onSync);
+
     return () => {
       alive = false;
       query.removeEventListener('change', onChange);
+      window.removeEventListener(THEME_SYNC_EVENT, onSync);
     };
   }, []);
 
@@ -110,7 +126,10 @@ export function useTheme(): ThemeState {
   const setPreference = useCallback((preference: ThemePreference) => {
     void window.agentico
       .setThemePreference(preference)
-      .then(setInfo)
+      .then((loaded) => {
+        setInfo(loaded);
+        window.dispatchEvent(new CustomEvent(THEME_SYNC_EVENT, { detail: loaded }));
+      })
       .catch(() => {
         // Persisting failed; leave the current theme untouched.
       });

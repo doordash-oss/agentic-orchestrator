@@ -688,6 +688,35 @@ describe('RuntimeGateway supervision', () => {
     expect(env.states.length).toBe(before);
   });
 
+  it('restart from a healthy app-owned connection stops the child and relaunches', async () => {
+    const env = makeEnv();
+    await env.gateway.start();
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().ownership).toBe('app-owned');
+    expect(env.spawnCalls).toHaveLength(1);
+
+    env.setDiscovery(null);
+    await env.gateway.restart();
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().ownership).toBe('app-owned');
+    expect(env.spawnCalls).toHaveLength(2);
+    expect(env.spawned[0]!.stopCalls.length).toBeGreaterThan(0);
+    expectNoTokenLeak(env);
+  });
+
+  it('restart from a healthy external connection detaches without signalling the server', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    expect(env.gateway.getState().ownership).toBe('external');
+    expect(env.spawnCalls).toHaveLength(0);
+
+    await env.gateway.restart();
+    expect(env.gateway.getState().status).toBe('ready');
+    expect(env.gateway.getState().ownership).toBe('external');
+    expect(env.spawnCalls).toHaveLength(0);
+    expectNoTokenLeak(env);
+  });
+
   it('shutdown gracefully stops only the app-owned child within the bound', async () => {
     const env = makeEnv();
     await env.gateway.start();

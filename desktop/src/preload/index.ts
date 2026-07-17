@@ -30,6 +30,11 @@ import {
   type ReviewSaveRequest,
   type ReviewValidateRequest,
   type ReviewDecisionRequest,
+  type ResourceValidateRequest,
+  type ResourceWriteRequest,
+  type LocalResourceDraftSaveRequest,
+  type LocalResourceDraftLookupRequest,
+  type LocalResourceDraftDiscardRequest,
 } from '../shared/ipc';
 import { assertNoPrototypePollution } from '../shared/sanitize';
 
@@ -50,6 +55,7 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 const api: AgenticoApi = {
   getConnectionStatus: () => call(IPC_CHANNELS.connectionGetStatus),
   retryConnection: () => call(IPC_CHANNELS.connectionRetry),
+  restartConnection: () => call(IPC_CHANNELS.connectionRestart),
   onConnectionChanged: (listener: (state: ConnectionState) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {
@@ -75,6 +81,8 @@ const api: AgenticoApi = {
   refreshReadiness: () => call(IPC_CHANNELS.readinessRefresh),
   pickWorkspaceDirectory: () => call(IPC_CHANNELS.workspacePickDirectory),
   addWorkspaceRoot: (path: string) => call(IPC_CHANNELS.workspaceAddRoot, path),
+  removeWorkspaceRoot: (path: string) => call(IPC_CHANNELS.workspaceRemoveRoot, path),
+  reorderWorkspaceRoots: (paths: string[]) => call(IPC_CHANNELS.workspaceReorderRoots, paths),
   initRepository: (request: InitRepositoryRequest) =>
     call(IPC_CHANNELS.workspaceInitRepository, request),
   listRepositories: () => call(IPC_CHANNELS.repositoriesList),
@@ -128,6 +136,19 @@ const api: AgenticoApi = {
   saveReview: (request: ReviewSaveRequest) => call(IPC_CHANNELS.reviewsSave, request),
   validateReview: (request: ReviewValidateRequest) => call(IPC_CHANNELS.reviewsValidate, request),
   decideReview: (request: ReviewDecisionRequest) => call(IPC_CHANNELS.reviewsDecide, request),
+  listResources: (kind?: string) => call(IPC_CHANNELS.resourcesCatalogue, kind),
+  readResource: (resourceId: string) => call(IPC_CHANNELS.resourcesRead, resourceId),
+  validateResource: (request: ResourceValidateRequest) =>
+    call(IPC_CHANNELS.resourcesValidate, request),
+  writeResource: (request: ResourceWriteRequest) => call(IPC_CHANNELS.resourcesWrite, request),
+  loadLocalResourceDraft: (request: LocalResourceDraftLookupRequest) =>
+    call(IPC_CHANNELS.resourceDraftsLoad, request),
+  saveLocalResourceDraft: (request: LocalResourceDraftSaveRequest) =>
+    call(IPC_CHANNELS.resourceDraftsSave, request),
+  discardLocalResourceDraft: (request: LocalResourceDraftDiscardRequest) =>
+    call<{ discarded: boolean }>(IPC_CHANNELS.resourceDraftsDiscard, request).then(
+      ({ discarded }) => discarded,
+    ),
   onAppEvent: (listener: (event: AppEvent) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

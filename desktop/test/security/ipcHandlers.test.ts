@@ -48,6 +48,12 @@ function makeServices(): IpcServices {
       detail: 'Resolving the selected runtime.',
       ownership: 'none' as const,
     })),
+    restartConnection: vi.fn(() => ({
+      status: 'resolving-runtime' as const,
+      stage: 'resolve-runtime' as const,
+      detail: 'Restarting to apply the pending runtime change.',
+      ownership: 'none' as const,
+    })),
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn((patch) => ({ ...defaultSettings(), ...patch })),
     getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
@@ -56,6 +62,8 @@ function makeServices(): IpcServices {
     refreshReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: null })),
     addWorkspaceRoot: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    removeWorkspaceRoot: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
+    reorderWorkspaceRoots: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     initRepository: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     listRepositories: vi.fn(() => Promise.resolve([])),
     listFeatures: vi.fn(() => Promise.resolve([])),
@@ -97,6 +105,16 @@ function makeServices(): IpcServices {
     saveReview: vi.fn(() => Promise.reject(new Error('unused'))),
     validateReview: vi.fn(() => Promise.reject(new Error('unused'))),
     decideReview: vi.fn(() => Promise.reject(new Error('unused'))),
+    listResources: vi.fn(() => Promise.resolve({ resources: [] })),
+    readResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    validateResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    writeResource: vi.fn(() => Promise.reject(new Error('unused'))),
+    loadLocalResourceDraft: vi.fn(() => null),
+    saveLocalResourceDraft: vi.fn((request) => ({
+      ...request,
+      savedAt: '2026-07-16T00:00:00.000Z',
+    })),
+    discardLocalResourceDraft: vi.fn(() => false),
   };
 }
 

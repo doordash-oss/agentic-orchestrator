@@ -6,7 +6,7 @@ provenance: upstream-inspired
 
 # Plan Execution
 
-Implement the approved phase plan. You own code, development-time testing, any explicitly agent-owned semantic evidence, and the progress handoff. Agentico owns final contract execution and `verification-report.yaml` after you signal completion.
+Implement the approved phase plan. You own code, development-time testing, any explicitly agent-owned semantic evidence, and the progress handoff. When a testing contract exists, Agentico owns final contract execution and `verification-report.yaml` after you signal completion.
 
 ## Output Files
 
@@ -21,7 +21,7 @@ Never create or edit `verification-report.yaml`. The harness derives it after `p
 
 1. Read the full phase plan.
 2. If `{phase_dir}/progress.md` exists, read it and resume from `### Where I stopped`. Reviewer feedback and the current plan override stale handoff prose.
-3. Read `testing-contract.yaml` — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/refactor/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility.
+3. Read `testing-contract.yaml` if it exists — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/refactor/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility. If the file does not exist, this feature has no per-iteration machine verification: run every command under the plan's `### Automated Verification` yourself each iteration and record the commands and results in your handoff — SUCCESS asserts they pass.
 4. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, emit `NEED_USER_INPUT`.
 5. Build a dependency graph from `Blocked by`, shared files, repo tags, and acceptance criteria.
 
@@ -39,7 +39,7 @@ Never create or edit `verification-report.yaml`. The harness derives it after `p
 
 Parallelize independent non-trivial Tasks. Give each worker the exact Task and acceptance criteria, its repo/file boundary, dependencies, and the focused development test it should use. Sequentialize shared migrations, API decisions, and overlapping edits. Review returned diffs and integrate them before unlocking dependents.
 
-Workers validate the code they change. They do not author final verification results; Agentico runs the contract after handoff.
+Workers validate the code they change. They do not author final verification results; when a testing contract exists, Agentico runs it after handoff — otherwise you run the plan's Automated Verification yourself before reporting SUCCESS.
 
 ## Agent-Owned Evidence
 
@@ -96,7 +96,7 @@ The Deferrals block must include both keys. Deferrals are Agentico-owned work du
 
 Choose exactly one state:
 
-- `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. Agentico performs final contract verification next.
+- `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. When a testing contract exists, Agentico performs final contract verification next; otherwise your reported automated-verification runs are the record.
 - `RETRY`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
 - `NEED_USER_INPUT`: progress requires a human decision, authorization, unavailable external capability, scope/contract change, or resolution of contradictory repository state.
 

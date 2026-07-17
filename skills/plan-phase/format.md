@@ -18,7 +18,7 @@ For multi-repo features, every `### Task N:` heading is followed by a `**Repo:**
 
 Every newly-authored phase plan includes a mandatory top-level `## Metadata` section before `## Overview`. The section contains the plan-level `**Frontend:** true|false` field:
 
-- `true` means this phase adds or changes a user-facing UI surface. A frontend phase must include at least one real checklist item under `### Visual Evidence`; it must not use `None required`.
+- `true` means this phase adds or changes a user-facing UI surface. A frontend phase must include at least one real checklist item under `### Visual Evidence`; it must not use `None required` — except when the planning prompt declared automated-only verification mode, which mandates `None required: automated-only verification for this feature` there instead.
 - `false` means this phase does not add or change a user-facing UI surface. Non-UI phases may use `None required: <reason>` under `### Visual Evidence` when no rendered surface is meaningful.
 
 The harness reads this field as the authoritative UI signal for the phase. Legacy plans with no `## Metadata` section or no `**Frontend:**` field are interpreted as `frontend: false` for compatibility, but new plans must write the field explicitly.
@@ -97,7 +97,7 @@ Use at most one requirement. It is reserved for irreducible semantic judgment an
 
 - [ ] [Visual artifact requirement, such as a screenshot path or capture description.]
 
-Use `- [ ] None required: <reason>` only when the phase has no meaningful rendered surface to capture and `**Frontend:** false`. If `**Frontend:** true`, include at least one real visual evidence checklist item. Keep visual evidence requirements here at the phase level; do not add per-task visual evidence sections.
+Use `- [ ] None required: <reason>` only when the phase has no meaningful rendered surface to capture and `**Frontend:** false`, or when the planning prompt declared automated-only verification mode (see below), which mandates `- [ ] None required: automated-only verification for this feature` here regardless of `**Frontend:**`. Otherwise, if `**Frontend:** true`, include at least one real visual evidence checklist item. Keep visual evidence requirements here at the phase level; do not add per-task visual evidence sections.
 
 Give each item a `[size: WxH]` tag naming the capture window size; one checklist item per surface/state/size/theme cell.
 
@@ -110,4 +110,30 @@ Do not request a screenshot merely to prove an invariant already covered by an a
 End each requirement with its packaged executable command in backticks; the harness runs it and preserves its evidence. Multiple requirements are allowed only when every item carries a command; without commands, use at most one consolidated requirement. Use `- [ ] None required: <reason>` only when the phase has no meaningful primary user journey artifact beyond automated verification. Keep behavioral evidence requirements here at the phase level; do not add per-task behavioral evidence sections.
 
 Do not request command transcripts here; command results already retain stdout, stderr, and run metadata.
+````
+
+## Automated-Only Verification Mode (Prompt-Declared)
+
+When the phase-plan prompt declares `## Verification Contracting Mode`, the `## Success Criteria` section takes this compact shape instead — every command under `### Automated Verification`, and each of the other three sections holding exactly one `None required: automated-only verification for this feature` item:
+
+````markdown
+## Success Criteria
+
+### Automated Verification
+
+- [ ] [repo: <name>] Build passes: `go build ./...`
+- [ ] [repo: <name>] Tests pass: `go test ./... -race -short`
+- [ ] Primary journey: `npx playwright test e2e/journey.spec.ts`
+
+### Manual Verification
+
+- [ ] None required: automated-only verification for this feature
+
+### Visual Evidence
+
+- [ ] None required: automated-only verification for this feature
+
+### Behavioral Evidence
+
+- [ ] None required: automated-only verification for this feature
 ````

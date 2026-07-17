@@ -32,7 +32,7 @@ provenance: agentic-orchestrator-original
 6. **Only then**: write the complete revised plan
 7. Write only the revised plan markdown. There is no `execution-order.yaml` and no separate execution artifact.
 
-When revising an older plan that lacks the mandatory `## Metadata` section, add it before `## Overview` and set `**Frontend:** true|false` from the phase scope. Use `true` for any phase that adds or changes a user-facing UI surface, and pair `true` with a real top-level `### Visual Evidence` checklist item rather than `None required`.
+When revising an older plan that lacks the mandatory `## Metadata` section, add it before `## Overview` and set `**Frontend:** true|false` from the phase scope. Use `true` for any phase that adds or changes a user-facing UI surface, and pair `true` with a real top-level `### Visual Evidence` checklist item rather than `None required` — unless the planning prompt declared automated-only verification mode, which mandates `None required: automated-only verification for this feature` there instead.
 
 ## Plan Format
 

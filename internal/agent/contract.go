@@ -478,6 +478,26 @@ func frontendVisualEvidenceRuleMessage() string {
 	return "frontend/visual-evidence rule: phase plan metadata declares `frontend: true`, so `### Visual Evidence` must contain at least one real checklist visual evidence requirement; `None required` or an empty/missing section is not allowed"
 }
 
+// agentEvidencePlanViolations rejects agent-owned evidence contracting for
+// features whose profile never consumes it: Manual/Visual/Behavioral
+// sections must each be a single None-required marker. Automated
+// Verification is unrestricted.
+func agentEvidencePlanViolations(planText string) []ProtocolViolation {
+	success := extractMarkdownSection(planText, "## Success Criteria")
+	var violations []ProtocolViolation
+	for _, heading := range []string{"### Manual Verification", "### Visual Evidence", "### Behavioral Evidence"} {
+		body := extractMarkdownSection(success, heading)
+		requirements, _, _ := countEvidenceChecklistItems(body)
+		if requirements > 0 {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "phase plan markdown",
+				Reason:   fmt.Sprintf("phase plan markdown `%s` must contain exactly one `None required: <reason>` item — this feature verifies through automated tests only; move executable checks under `### Automated Verification`", heading),
+			})
+		}
+	}
+	return violations
+}
+
 func validateEvidenceSectionBody(successCriteria, heading string) string {
 	body := extractMarkdownSection(successCriteria, heading)
 	requirements, noneMarkers, invalidNoneMarkers := countEvidenceChecklistItems(body)

@@ -237,6 +237,25 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 			wantContains: []string{"## Plan to Evaluate", "/roadmap.md"},
 			wantOmit:     []string{"## Feature Under Review", "## Prior Phase Context", "## Research Findings"},
 		},
+		{
+			name: "automated_verification_only_adds_note_and_omits_it_by_default",
+			input: ValidateSpecializedUserInput{
+				Name:                      "OAuth login",
+				DomainName:                "scope",
+				PlanPath:                  "/phase-plan.md",
+				AutomatedVerificationOnly: true,
+			},
+			wantContains: []string{"this feature verifies through automated tests only", "do not request evidence matrices, screenshots, or manual observation steps"},
+		},
+		{
+			name: "automated_verification_only_note_omitted_when_false",
+			input: ValidateSpecializedUserInput{
+				Name:       "OAuth login",
+				DomainName: "scope",
+				PlanPath:   "/phase-plan.md",
+			},
+			wantOmit: []string{"this feature verifies through automated tests only"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -275,6 +294,7 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"scout_user":                                           true,
 		"summary_user":                                         true,
 		"validate_specialized_grounding":                       true,
+		"validate_specialized_automated_verification_only":     true,
 	}
 
 	files, err := filepath.Glob(filepath.Join("testdata", "*.golden"))

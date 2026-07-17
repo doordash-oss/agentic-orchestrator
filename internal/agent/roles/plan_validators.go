@@ -114,6 +114,8 @@ type ValidateSpecializedUserInput struct {
 
 	FeedbackPath string
 	AxisLabel    string
+
+	AutomatedVerificationOnly bool
 }
 
 // BuildValidateSpecializedPrompt renders a per-axis validation prompt.

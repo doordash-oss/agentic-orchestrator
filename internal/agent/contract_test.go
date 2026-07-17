@@ -1375,6 +1375,21 @@ func TestValidateEvidenceSectionBodyParserAgreement(t *testing.T) {
 	}
 }
 
+func TestAgentEvidencePlanViolations(t *testing.T) {
+	plan := "## Success Criteria\n\n### Automated Verification\n\n- [ ] tests pass: `go test ./...`\n\n### Manual Verification\n\n- [ ] None required: automated-only verification for this feature\n\n### Visual Evidence\n\n- [ ] Home screen default state [size: 760x480]\n\n### Behavioral Evidence\n\n- [ ] None required: automated-only verification for this feature\n"
+	violations := agentEvidencePlanViolations(plan)
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 violation for visual row, got %d: %v", len(violations), violations)
+	}
+	if !strings.Contains(violations[0].Reason, "### Visual Evidence") {
+		t.Fatalf("violation should name the section: %v", violations[0])
+	}
+	clean := strings.Replace(plan, "- [ ] Home screen default state [size: 760x480]", "- [ ] None required: automated-only verification for this feature", 1)
+	if got := agentEvidencePlanViolations(clean); len(got) != 0 {
+		t.Fatalf("all-none plan should produce no violations, got %v", got)
+	}
+}
+
 func TestValidateRefactorPlanMarkdownScopesTopLevelCommands(t *testing.T) {
 	iterDir := t.TempDir()
 	planPath := filepath.Join(iterDir, "refactor-plan.md")

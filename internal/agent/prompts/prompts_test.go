@@ -273,6 +273,8 @@ type ValidateSpecializedUserInput struct {
 
 	FeedbackPath string
 	AxisLabel    string
+
+	AutomatedVerificationOnly bool
 }
 
 // TestGoldenSnapshots exercises each user-facing template with realistic
@@ -646,6 +648,20 @@ func TestGoldenSnapshots(t *testing.T) {
 					IncludePriorPhaseContext: true,
 					PriorPhasePlanPaths:      []string{"/state/feat-x/run-1/phase-1/plan.md"},
 					ResearchPath:             "/state/feat-x/run-1/research/research.md",
+				})
+			},
+		},
+		{
+			name: "validate_specialized_automated_verification_only",
+			render: func() string {
+				return ValidateSpecializedUserPrompt(ValidateSpecializedUserInput{
+					Name:                      "OAuth login",
+					Description:               "Sign in with Google.",
+					ExitCriteria:              "Relevant tests pass.",
+					RiskLevel:                 "medium",
+					DomainName:                "scope",
+					PlanPath:                  "/state/feat-x/run-1/phase-2/plan.md",
+					AutomatedVerificationOnly: true,
 				})
 			},
 		},

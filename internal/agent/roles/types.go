@@ -46,18 +46,17 @@ const (
 type ArtifactValidator string
 
 const (
-	ValidatorProgress                      ArtifactValidator = "progress"
-	ValidatorVerificationReport            ArtifactValidator = "verification_report"
-	ValidatorFinalReviewVerificationReport ArtifactValidator = "final_review_verification_report"
-	ValidatorNeedUserInput                 ArtifactValidator = "need_user_input"
-	ValidatorRoadmap                       ArtifactValidator = "roadmap"
-	ValidatorPhasePlanMarkdown             ArtifactValidator = "phase_plan_markdown"
-	ValidatorPlanAttemptMeta               ArtifactValidator = "plan_attempt_meta"
-	ValidatorKnowledgeBaseIndex            ArtifactValidator = "knowledge_base_index"
-	ValidatorPhaseMarkdown                 ArtifactValidator = "phase_markdown"
-	ValidatorRefactorPlanMarkdown          ArtifactValidator = "refactor_plan_markdown"
-	ValidatorReviewFeedback                ArtifactValidator = "review_feedback"
-	ValidatorPlanValidatorAxisApproval     ArtifactValidator = "plan_validator_axis_approval"
+	ValidatorProgress                  ArtifactValidator = "progress"
+	ValidatorVerificationReport        ArtifactValidator = "verification_report"
+	ValidatorNeedUserInput             ArtifactValidator = "need_user_input"
+	ValidatorRoadmap                   ArtifactValidator = "roadmap"
+	ValidatorPhasePlanMarkdown         ArtifactValidator = "phase_plan_markdown"
+	ValidatorPlanAttemptMeta           ArtifactValidator = "plan_attempt_meta"
+	ValidatorKnowledgeBaseIndex        ArtifactValidator = "knowledge_base_index"
+	ValidatorPhaseMarkdown             ArtifactValidator = "phase_markdown"
+	ValidatorRefactorPlanMarkdown      ArtifactValidator = "refactor_plan_markdown"
+	ValidatorReviewFeedback            ArtifactValidator = "review_feedback"
+	ValidatorPlanValidatorAxisApproval ArtifactValidator = "plan_validator_axis_approval"
 )
 
 // ArtifactCondition names the parsed-state predicate that makes a conditional

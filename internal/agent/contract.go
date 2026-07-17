@@ -301,7 +301,6 @@ func validatePhasePlanMarkdownArtifact(iterDir string, path string, _ *Outcome) 
 func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
 	var violations []ProtocolViolation
 	success := extractMarkdownSection(planText, "## Success Criteria")
-	frontend := ParsePhasePlanFrontend(planText)
 	for _, heading := range []string{"### Automated Verification", "### Manual Verification"} {
 		if !hasMarkdownHeading(success, heading) {
 			violations = append(violations, ProtocolViolation{
@@ -321,15 +320,6 @@ func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
 		}
 	}
 	for _, heading := range []string{"### Visual Evidence", "### Behavioral Evidence"} {
-		if frontend && heading == "### Visual Evidence" {
-			if reason := validateFrontendVisualEvidenceSection(success); reason != "" {
-				violations = append(violations, ProtocolViolation{
-					Artifact: "phase plan markdown",
-					Reason:   reason,
-				})
-				continue
-			}
-		}
 		if !hasMarkdownHeading(success, heading) {
 			violations = append(violations, ProtocolViolation{
 				Artifact: "phase plan markdown",
@@ -476,6 +466,24 @@ func validateFrontendVisualEvidenceSection(successCriteria string) string {
 
 func frontendVisualEvidenceRuleMessage() string {
 	return "frontend/visual-evidence rule: phase plan metadata declares `frontend: true`, so `### Visual Evidence` must contain at least one real checklist visual evidence requirement; `None required` or an empty/missing section is not allowed"
+}
+
+// phasePlanEvidenceModeViolations enforces the profile-aware evidence mode
+// for a phase plan. Evidence-contracting profiles must give frontend phases
+// real `### Visual Evidence` rows; automated-only profiles must never
+// declare agent-owned evidence rows at all.
+func phasePlanEvidenceModeViolations(planText string, contractAgentEvidence bool) []ProtocolViolation {
+	if !contractAgentEvidence {
+		return agentEvidencePlanViolations(planText)
+	}
+	if !ParsePhasePlanFrontend(planText) {
+		return nil
+	}
+	success := extractMarkdownSection(planText, "## Success Criteria")
+	if reason := validateFrontendVisualEvidenceSection(success); reason != "" {
+		return []ProtocolViolation{{Artifact: "phase plan markdown", Reason: reason}}
+	}
+	return nil
 }
 
 // agentEvidencePlanViolations rejects agent-owned evidence contracting for

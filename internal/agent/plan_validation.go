@@ -2050,12 +2050,15 @@ phasePlanAttemptLoop:
 			}
 		}
 
-		// Deterministically reject agent-owned evidence rows for profiles
-		// that never contract agent evidence (everything but Moonshot).
-		if !cfg.Feature.EffectivePipeline().ShouldContractAgentEvidence() {
+		// Deterministically enforce the profile-aware evidence mode:
+		// evidence-contracting profiles must give frontend phases real
+		// Visual Evidence rows; automated-only profiles must never declare
+		// agent-owned evidence rows at all.
+		{
 			planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
 			if planText, readErr := os.ReadFile(planArtifactPath); readErr == nil {
-				if violations := agentEvidencePlanViolations(string(planText)); len(violations) > 0 {
+				contractAgentEvidence := cfg.Feature.EffectivePipeline().ShouldContractAgentEvidence()
+				if violations := phasePlanEvidenceModeViolations(string(planText), contractAgentEvidence); len(violations) > 0 {
 					lastErr := formatProtocolViolationError(plannerRole, attemptDir, violations)
 					criticFeedback = formatPlanContractViolationFeedback(plannerRole, violations)
 					_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)

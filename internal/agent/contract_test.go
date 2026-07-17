@@ -351,31 +351,41 @@ func TestContractRegistryPlanPhasePlannerReportsTaskScopedEvidenceSections(t *te
 	}
 }
 
-func TestContractRegistryPlanPhasePlannerRejectsFrontendWithoutRealVisualEvidence(t *testing.T) {
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
-		PlanText: "# Phase 1 Plan\n\n" +
-			"## Metadata\n\n" +
-			"**Frontend:** true\n\n" +
-			"## Overview\nShip the phase.\n\n" +
-			"## Tasks\n\n" +
-			"### Task 1: Build\n\n" +
-			"#### What to build\nDo the work.\n\n" +
-			"#### Acceptance criteria\n- [ ] Done.\n\n" +
-			"#### Blocked by\nNone - can start immediately\n\n" +
-			"## Success Criteria\n\n" +
-			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
-			"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
-			"### Visual Evidence\n- [ ] None required: no UI surface.\n\n" +
-			"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n",
-	})
+// frontendPlanTextWithNoneRequiredVisualEvidence returns a frontend phase
+// plan whose Visual Evidence section carries a None-required marker instead
+// of real rows — the shape that deadlocked automated-only frontend features
+// before phasePlanEvidenceModeViolations became profile-aware.
+func frontendPlanTextWithNoneRequiredVisualEvidence() string {
+	return "# Phase 1 Plan\n\n" +
+		"## Metadata\n\n" +
+		"**Frontend:** true\n\n" +
+		"## Overview\nShip the phase.\n\n" +
+		"## Tasks\n\n" +
+		"### Task 1: Build\n\n" +
+		"#### What to build\nDo the work.\n\n" +
+		"#### Acceptance criteria\n- [ ] Done.\n\n" +
+		"#### Blocked by\nNone - can start immediately\n\n" +
+		"## Success Criteria\n\n" +
+		"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
+		"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
+		"### Visual Evidence\n- [ ] None required: no UI surface.\n\n" +
+		"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n"
+}
 
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
+func TestPhasePlanEvidenceModeViolationsRejectsFrontendWithoutRealVisualEvidenceWhenContracting(t *testing.T) {
+	violations := phasePlanEvidenceModeViolations(frontendPlanTextWithNoneRequiredVisualEvidence(), true)
 	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "frontend/visual-evidence rule") || !strings.Contains(got, "real checklist visual evidence requirement") {
-		t.Fatalf("JoinProtocolViolations() = %q, want frontend visual evidence rule violation", got)
+	if !strings.Contains(got, "frontend/visual-evidence rule") || !strings.Contains(got, "real checklist visual evidence requirement") {
+		t.Fatalf("phasePlanEvidenceModeViolations() = %q, want frontend visual evidence rule violation", got)
+	}
+}
+
+func TestPhasePlanEvidenceModeViolationsAllowsFrontendNoneRequiredVisualEvidenceWhenAutomatedOnly(t *testing.T) {
+	// This is the deadlock case: a frontend + automated-only feature must be
+	// plannable, so the None-required marker is allowed when the profile
+	// never contracts agent evidence.
+	if got := phasePlanEvidenceModeViolations(frontendPlanTextWithNoneRequiredVisualEvidence(), false); len(got) != 0 {
+		t.Fatalf("phasePlanEvidenceModeViolations() = %v, want no violations", got)
 	}
 }
 

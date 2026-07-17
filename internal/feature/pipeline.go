@@ -147,6 +147,23 @@ func (p PipelineProfile) ShouldSkipIterationReview() bool {
 	return p == PipelineMedium || p == PipelineLarge
 }
 
+// ShouldRunImplementationHarness returns true if the deterministic
+// verification harness executes the phase testing contract during
+// implementation iterations. Moonshot only; Medium and Large trust the
+// implementer and verify at Final Review through live-run review axes.
+func (p PipelineProfile) ShouldRunImplementationHarness() bool {
+	return p == PipelineMoonshot
+}
+
+// ShouldContractAgentEvidence returns true if phase plans may contract
+// agent-owned evidence (visual matrices, manual observations, behavioral
+// journey artifacts). Moonshot only — its per-phase harness validates that
+// evidence and its Functionality/Evidence axis audits it. Medium and Large
+// plans contract automated test commands only.
+func (p PipelineProfile) ShouldContractAgentEvidence() bool {
+	return p == PipelineMoonshot
+}
+
 // AllProfiles returns all profiles in cycle order: moonshot -> medium -> large.
 func AllProfiles() []PipelineProfile {
 	return []PipelineProfile{PipelineMoonshot, PipelineMedium, PipelineLarge}

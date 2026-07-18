@@ -15,14 +15,17 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,6 +73,11 @@ type ProgressTracker struct {
 	noProgressCount int
 	hasOutcome      bool
 	bestBlockers    int
+	// RETRY stall-evidence state: the last handoff-narrative and worktree
+	// fingerprints seen by ObserveRetryOutcome.
+	hasRetryObservation bool
+	lastRetryNarrative  string
+	lastRetryWorktree   string
 }
 
 func NewProgressTracker() *ProgressTracker {
@@ -129,10 +137,75 @@ func (pt *ProgressTracker) ObserveVerifiedOutcome(blockers int) bool {
 }
 
 // ObserveUnverifiedOutcome records an iteration that did not produce a
-// verifier/reviewer outcome, such as RETRY or a protocol violation.
+// verifier/reviewer outcome, such as a protocol violation.
 func (pt *ProgressTracker) ObserveUnverifiedOutcome() bool {
 	pt.noProgressCount++
 	return false
+}
+
+// ObserveRetryOutcome records a self-declared partial (RETRY) iteration.
+// A RETRY produces no review verdict, but absence of a verdict is not
+// evidence of a stall: a short-turn model legitimately splits one task
+// across many partial iterations. The iteration counts as no-progress only
+// when neither the handoff narrative nor the worktree state changed since
+// the previous RETRY observation. An empty fingerprint (unreadable
+// progress.md, git failure) is treated as unchanged so a broken signal
+// cannot disarm the rail. A progressing RETRY does not reset the counter
+// accumulated by non-improving verified outcomes — it only declines to add
+// to it — so review churn without fewer blockers still trips the rail.
+func (pt *ProgressTracker) ObserveRetryOutcome(narrativeFP, worktreeFP string) bool {
+	first := !pt.hasRetryObservation
+	narrativeChanged := narrativeFP != "" && narrativeFP != pt.lastRetryNarrative
+	worktreeChanged := worktreeFP != "" && worktreeFP != pt.lastRetryWorktree
+	pt.hasRetryObservation = true
+	pt.lastRetryNarrative = narrativeFP
+	pt.lastRetryWorktree = worktreeFP
+	if first || narrativeChanged || worktreeChanged {
+		return true
+	}
+	pt.noProgressCount++
+	return false
+}
+
+// WorktreeStateFingerprint hashes each repo worktree's HEAD, porcelain
+// status, tracked diff, and untracked-file stats (path, size, mtime — new
+// files stay untracked for the whole phase, so their edits never appear in
+// `git diff HEAD`). Returns "" when no signal could be gathered so callers
+// treat it as unchanged. A nil runner falls back to direct execution.
+func WorktreeStateFingerprint(ctx context.Context, runner ports.CommandRunner, paths []string) string {
+	h := sha256.New()
+	gotSignal := false
+	for _, p := range paths {
+		for _, args := range [][]string{
+			{"rev-parse", "HEAD"},
+			{"status", "--porcelain", "--untracked-files=all"},
+			{"diff", "HEAD"},
+		} {
+			out, err := gitOutput(ctx, runner, p, args...)
+			if err != nil {
+				continue
+			}
+			gotSignal = true
+			h.Write(out)
+		}
+		out, err := gitOutput(ctx, runner, p, "ls-files", "--others", "--exclude-standard", "-z")
+		if err != nil {
+			continue
+		}
+		gotSignal = true
+		for _, rel := range strings.Split(string(out), "\x00") {
+			if rel == "" {
+				continue
+			}
+			if fi, err := os.Stat(filepath.Join(p, rel)); err == nil {
+				fmt.Fprintf(h, "%s|%d|%d\n", rel, fi.Size(), fi.ModTime().UnixNano())
+			}
+		}
+	}
+	if !gotSignal {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 var blockingReviewFindingRE = regexp.MustCompile(`(?im)^\s*[-*]\s+\*\*\[?(critical|high)(?:\]|\b)`)

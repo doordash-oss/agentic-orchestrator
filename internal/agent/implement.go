@@ -758,7 +758,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// iteration starts fresh against the just-emitted progress.md
 			// (no reviewer feedback — RETRY is not a rejection).
 			if parsed.State == StateRetry {
-				madeProgress = pt.ObserveUnverifiedOutcome()
+				madeProgress = pt.ObserveRetryOutcome(retryProgressFingerprints(progressPath, cfg))
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
 				meta.MadeProgress = madeProgress
@@ -1137,6 +1137,36 @@ func retryReviewFeedbackReminder(artifactDir string, reviewedIter int) string {
 		return ""
 	}
 	return fmt.Sprintf("The iteration %d review requested changes, and the intervening RETRY iteration(s) may not have addressed every finding. Re-read the full feedback at %s and verify each finding against the current tree; progress.md alone is not authoritative for what remains. Do not declare SUCCESS while any finding is unaddressed.", reviewedIter, path)
+}
+
+// retryProgressFingerprints gathers the stall-evidence signals for a RETRY
+// iteration: the progress.md handoff-narrative fingerprint and a hash of
+// every feature worktree's uncommitted state.
+func retryProgressFingerprints(progressPath string, cfg ImplementConfig) (string, string) {
+	narrativeFP, _ := ProgressFingerprint(progressPath)
+	return narrativeFP, WorktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg))
+}
+
+// implementWorktreePaths returns the repo paths whose git state evidences
+// implementation progress: each feature repo's worktree (or checkout path),
+// falling back to the session work dir for repo-less configurations.
+func implementWorktreePaths(cfg ImplementConfig) []string {
+	if cfg.Feature != nil && len(cfg.Feature.Repos) > 0 {
+		paths := make([]string, 0, len(cfg.Feature.Repos))
+		for _, r := range cfg.Feature.Repos {
+			switch {
+			case r.WorktreePath != "":
+				paths = append(paths, r.WorktreePath)
+			case r.Path != "":
+				paths = append(paths, r.Path)
+			}
+		}
+		return paths
+	}
+	if cfg.WorkDir != "" {
+		return []string{cfg.WorkDir}
+	}
+	return nil
 }
 
 func isFailureBudgetAgentStatus(status string) bool {

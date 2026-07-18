@@ -73,6 +73,11 @@ type BoundedHelperResult struct {
 	Usage  llm.Usage
 }
 
+// boundedHelperDisallowedTools lists tools whose semantics require a harness
+// that bounded helpers don't have: no one re-invokes a helper on a scheduled
+// wakeup, so a helper that yields on one is stranded mid-turn.
+var boundedHelperDisallowedTools = []string{"ScheduleWakeup"}
+
 // RunBoundedHelper runs a single-turn interactive helper session without phase_complete semantics.
 func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperConfig) (*BoundedHelperResult, error) {
 	if cfg.SessionID == "" {
@@ -101,20 +106,21 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		markerPath = filepath.Join(cfg.PhaseCompleteDir, PhaseCompleteFile)
 	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:          cfg.Model,
-		Prompt:         cfg.Prompt,
-		SystemPrompt:   cfg.SystemPrompt,
-		AdditionalDirs: cfg.AdditionalDirs,
-		WritableRoots:  cfg.WritableRoots,
-		PIDDir:         pidDir,
-		PermHandler:    cfg.PermHandler,
-		RepoName:       cfg.RepoName,
-		WorkDir:        cfg.WorkDir,
-		LogPath:        cfg.LogPath,
-		EffortLevel:    cfg.EffortLevel,
-		AgentNames:     []string{},
-		Phase:          cfg.Phase,
-		MarkerPath:     markerPath,
+		Model:           cfg.Model,
+		Prompt:          cfg.Prompt,
+		SystemPrompt:    cfg.SystemPrompt,
+		DisallowedTools: boundedHelperDisallowedTools,
+		AdditionalDirs:  cfg.AdditionalDirs,
+		WritableRoots:   cfg.WritableRoots,
+		PIDDir:          pidDir,
+		PermHandler:     cfg.PermHandler,
+		RepoName:        cfg.RepoName,
+		WorkDir:         cfg.WorkDir,
+		LogPath:         cfg.LogPath,
+		EffortLevel:     cfg.EffortLevel,
+		AgentNames:      []string{},
+		Phase:           cfg.Phase,
+		MarkerPath:      markerPath,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running bounded helper: building session: %w", err)
@@ -330,6 +336,18 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				continue
 			}
 			awaitingBackgroundTasks = false
+			// The CLI ended the invocation while the helper was mid-work
+			// (stop_reason tool_use / max_tokens / pause_turn): resume the live
+			// session instead of finalizing as a failure, mirroring
+			// waitForStatusDetailed. The budget is shared with the
+			// background-task fallback so a session that keeps yielding
+			// without finishing still converges.
+			if cfg.phaseCompleteDir != "" && class == llm.TermTurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
+				autoResumeAttempts++
+				if err := sess.SendUserMessage(autoResumeMessage); err == nil {
+					continue
+				}
+			}
 			if cfg.finishOrViolateNudge && class == llm.TermEndedAfterText {
 				if decideFinishOrViolate(sess, llm.TermEndedAfterText, &finishOrViolateNudges, []string{PhaseCompleteFile}) {
 					continue

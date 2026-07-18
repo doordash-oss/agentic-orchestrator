@@ -703,6 +703,123 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 	}
 }
 
+// TestRunBoundedHelper_TruncatedTurnAutoResumes proves the statusCh arm
+// resumes a CLI-truncated turn (stop_reason tool_use — e.g. the helper yielded
+// on a scheduled wakeup) instead of finalizing the run as a failure.
+func TestRunBoundedHelper_TruncatedTurnAutoResumes(t *testing.T) {
+	phaseDir := t.TempDir()
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: "tool_use"})
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:        "helper-truncated-resume",
+			workDir:          t.TempDir(),
+			phaseCompleteDir: phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
+		})
+		resultCh <- result
+	}()
+
+	// The truncated turn triggers the auto-resume continuation, not a failure.
+	sess.statusC <- agentStatusSuccess
+	select {
+	case msg := <-sess.nudges:
+		if !strings.Contains(msg, "Continue where you left off") {
+			t.Fatalf("SendUserMessage() = %q, want auto-resume message", msg)
+		}
+	case result := <-resultCh:
+		t.Fatalf("runBoundedHelperSession() finalized %q; want auto-resume of the truncated turn", result.Status)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for auto-resume after truncated turn")
+	}
+
+	// The resumed turn writes the contract artifacts and ends cleanly.
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	sess.statusC <- agentStatusSuccess
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize")
+	}
+}
+
+// TestRunBoundedHelper_TruncatedTurnResumeCapThenFails proves the truncation
+// retry budget is bounded: a session that keeps truncating without finishing
+// finalizes as a failure after maxAutoResumeAttempts continuations.
+func TestRunBoundedHelper_TruncatedTurnResumeCapThenFails(t *testing.T) {
+	phaseDir := t.TempDir()
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: "tool_use"})
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:        "helper-truncated-cap",
+			workDir:          t.TempDir(),
+			phaseCompleteDir: phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
+		})
+		resultCh <- result
+		errCh <- err
+	}()
+
+	for i := 0; i < maxAutoResumeAttempts; i++ {
+		sess.statusC <- agentStatusSuccess
+		select {
+		case msg := <-sess.nudges:
+			if !strings.Contains(msg, "Continue where you left off") {
+				t.Fatalf("SendUserMessage() = %q, want auto-resume message", msg)
+			}
+		case result := <-resultCh:
+			t.Fatalf("runBoundedHelperSession() finalized %q after %d resumes; want %d", result.Status, i, maxAutoResumeAttempts)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for auto-resume")
+		}
+	}
+
+	// Budget exhausted: the next truncated turn finalizes as a failure.
+	sess.statusC <- agentStatusSuccess
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusFailed {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusFailed)
+		}
+		err := <-errCh
+		if err == nil || !strings.Contains(err.Error(), "turn ended before completion") {
+			t.Fatalf("err = %v, want turn-ended-before-completion failure", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize")
+	}
+	select {
+	case msg := <-sess.nudges:
+		t.Fatalf("unexpected user message %q after the resume budget was exhausted", msg)
+	default:
+	}
+}
+
 // TestRunBoundedHelper_BackgroundTaskStallFinalizesViolation proves the stall
 // backstop: a wedged stream with perpetually-"live" tasks is bounded, and the
 // run finalizes as a protocol violation instead of waiting forever.

@@ -45,6 +45,10 @@ type BuildRoleSystemPromptInput struct {
 	// RequiredSkillNames lists utility skills the role must read and apply,
 	// rather than merely advertising them as optional resources.
 	RequiredSkillNames []string
+	// RequiredSkillConditions optionally scopes a required skill's mandate
+	// (keyed by skill name): the skill is mandatory only when the clause
+	// applies to the iteration's work.
+	RequiredSkillConditions map[string]string
 	// SuppressSubagents omits the sub-agent calling-convention clause. Set for
 	// bounded helpers, which run with no configured sub-agents. Defaults false
 	// so every other session keeps the clause.
@@ -55,17 +59,25 @@ type BuildRoleSystemPromptInput struct {
 // one implement iteration.
 func BuildImplementSystemPrompt(in BuildImplementSystemPromptInput) string {
 	requiredSkillNames := []string(nil)
+	var requiredSkillConditions map[string]string
 	if in.Frontend {
 		requiredSkillNames = []string{"frontend-design"}
+		// Later iterations are often mechanical fix-up loops where the skill
+		// adds no value; scope the read to visual work and let the design
+		// review axis backstop misapplication.
+		requiredSkillConditions = map[string]string{
+			"frontend-design": "this iteration creates new UI or visually reshapes existing UI (components, layout, styling, motion); skip for mechanical fixes, test repair, refactors, or other non-visual changes",
+		}
 	}
 	return BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:               ImplementRoleSpec(),
-		IterationDir:       in.IterationDir,
-		SkillsDir:          in.SkillsDir,
-		GuidelinesDir:      in.GuidelinesDir,
-		KBInfos:            in.KBInfos,
-		AskingClause:       in.AskingClause,
-		RequiredSkillNames: requiredSkillNames,
+		Spec:                    ImplementRoleSpec(),
+		IterationDir:            in.IterationDir,
+		SkillsDir:               in.SkillsDir,
+		GuidelinesDir:           in.GuidelinesDir,
+		KBInfos:                 in.KBInfos,
+		AskingClause:            in.AskingClause,
+		RequiredSkillNames:      requiredSkillNames,
+		RequiredSkillConditions: requiredSkillConditions,
 	})
 }
 
@@ -94,6 +106,9 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 	}
 
 	requiredSkills := resolveSkillViews(in.RequiredSkillNames, in.SkillsDir)
+	for i := range requiredSkills {
+		requiredSkills[i].Condition = in.RequiredSkillConditions[requiredSkills[i].Name]
+	}
 	return prompts.RoleSystemPrompt(prompts.RoleSystemInput{
 		OutputRoots:          rootViews,
 		MarkerPath:           spec.MarkerPath(rt),

@@ -167,6 +167,8 @@ func TestBuildImplementSystemPromptRequiresFrontendDesignForFrontendPhase(t *tes
 		"frontend-design",
 		"/skills/frontend-design/SKILL.md",
 		"mandatory",
+		"when: this iteration creates new UI or visually reshapes existing UI",
+		"skip for mechanical fixes",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("BuildImplementSystemPrompt(frontend) missing %q in:\n%s", want, got)

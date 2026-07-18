@@ -40,6 +40,9 @@ type SkillView struct {
 	Description string
 	Topics      string
 	Path        string
+	// Condition, when set on a required skill, scopes the mandate: the skill
+	// is mandatory only when the clause applies to the iteration's work.
+	Condition string
 }
 
 // GuidelineView is the per-language projection used by the "Guidelines"

@@ -99,6 +99,32 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(active).toHaveTextContent('Setup');
   });
 
+  it('keeps rewind and run history in the feature action bar', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        actions: [{ id: 'rewind', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[]}
+        refreshAttention={() => Promise.resolve([])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+        onSelectRun={vi.fn()}
+      />,
+    );
+
+    const actions = await screen.findByRole('group', { name: 'Feature actions' });
+    expect(within(actions).getByRole('button', { name: 'Rewind feature' })).toBeVisible();
+    expect(within(actions).getByRole('button', { name: 'View run history' })).toBeVisible();
+    expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
+  });
+
   it('moves focus into the inspector drawer and restores it after Escape', async () => {
     matchMediaState.narrowCockpit = true;
     renderCockpit();

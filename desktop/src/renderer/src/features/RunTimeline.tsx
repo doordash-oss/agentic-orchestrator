@@ -20,6 +20,43 @@ export interface RunTimelineProps {
   shouldStream?: boolean;
 }
 
+/** Read-only semantic/raw transcript inspection for sealed-run history. */
+export function HistoricalTimeline({ messages }: { messages: readonly TranscriptMessage[] }) {
+  const [selected, setSelected] = useState<TranscriptMessage | null>(null);
+  const entries = useMemo(() => semanticTimeline(messages), [messages]);
+  return (
+    <div className="run-timeline__layout" data-history="true">
+      <div className="run-timeline__reader">
+        <div className="run-timeline__viewport" tabIndex={0} aria-label="Semantic timeline">
+          {entries.length === 0 ? (
+            <p className="setup-step__empty">This completed session has no transcript records.</p>
+          ) : (
+            <ol className="signal-trace">
+              {entries.slice(-MAX_RENDERED_ENTRIES).map((entry) => (
+                <TimelineEntry key={entry.id} entry={entry} onInspect={setSelected} />
+              ))}
+            </ol>
+          )}
+        </div>
+      </div>
+      <aside
+        className="raw-inspector"
+        aria-label="Raw record inspector"
+        data-has-selection={selected !== null}
+      >
+        <div className="raw-inspector__heading">
+          <h4>Validated source</h4>
+        </div>
+        {selected === null ? (
+          <p>Select a trace entry to inspect its validated source record.</p>
+        ) : (
+          <pre>{JSON.stringify(selected, null, 2)}</pre>
+        )}
+      </aside>
+    </div>
+  );
+}
+
 export function RunTimeline({
   featureId,
   activeRun,

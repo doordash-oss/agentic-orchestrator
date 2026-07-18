@@ -57,6 +57,14 @@ export const IPC_CHANNELS = {
   resourceDraftsLoad: 'agentico:resource-drafts:load',
   resourceDraftsSave: 'agentico:resource-drafts:save',
   resourceDraftsDiscard: 'agentico:resource-drafts:discard',
+  runsList: 'agentico:runs:list',
+  runsGet: 'agentico:runs:get',
+  runSessionsList: 'agentico:runs:sessions-list',
+  runArtifactsList: 'agentico:runs:artifacts-list',
+  runArtifactContent: 'agentico:runs:artifact-content',
+  runLogContent: 'agentico:runs:log-content',
+  rewindPreview: 'agentico:rewind:preview',
+  rewindExecute: 'agentico:rewind:execute',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -510,6 +518,15 @@ export const FeatureActionViewSchema = z.strictObject({
   id: z.string().min(1),
   enabled: z.boolean(),
   disabledReasons: z.array(z.strictObject({ code: z.string(), message: z.string() })),
+  inputs: z
+    .array(
+      z.strictObject({
+        name: z.string().min(1),
+        options: z.array(z.string()).max(50).optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
 });
 
 export type FeatureActionView = z.output<typeof FeatureActionViewSchema>;
@@ -540,6 +557,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   repos: z.array(z.string()),
   createdAt: z.string(),
   activeRun: z.number().int().nonnegative(),
+  currentRoadmapPhase: z.number().int().nonnegative().optional(),
+  totalRoadmapPhases: z.number().int().nonnegative().optional(),
   setup: FeatureSetupViewSchema.optional(),
   /** The authoritative server action catalogue (setup/start/…). */
   actions: z.array(FeatureActionViewSchema),
@@ -550,8 +569,8 @@ export const FeatureSnapshotSchema = z.strictObject({
 
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
 
-/** Renderer-visible operational actions are limited to the start/stop allowlist. */
-export const FeatureOperationalActionSchema = z.enum(['start', 'pause-stop']);
+/** Renderer-visible operational actions are limited to this audited allowlist. */
+export const FeatureOperationalActionSchema = z.enum(['start', 'pause-stop', 'rewind']);
 export type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
 
 export const FeatureActionRequestSchema = z.strictObject({
@@ -566,8 +585,183 @@ export const FeatureActionResultSchema = z.strictObject({
   result: z.string().max(500),
   phase: z.string().max(200).optional(),
   sessionIds: z.array(z.string().min(1).max(200)).max(100),
+  sourceRunNumber: z.number().int().nonnegative().optional(),
+  newRunNumber: z.number().int().nonnegative().optional(),
+  warnings: z.array(z.string().max(500)).max(100).optional(),
 });
 export type FeatureActionResult = z.output<typeof FeatureActionResultSchema>;
+
+// --- Run history (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) ---------
+
+export const RunSummaryViewSchema = z.strictObject({
+  runNumber: z.number().int().nonnegative(),
+  startedAt: z.string().optional(),
+  sealedAt: z.string().optional(),
+  sealReason: z.string().optional(),
+  currentPhase: z.string().optional(),
+  phaseStatus: z.string().optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  roadmapPhase: z.number().int().nonnegative().optional(),
+  roadmapTotal: z.number().int().nonnegative().optional(),
+  pendingReviewPhase: z.string().optional(),
+  isRewind: z.boolean().optional(),
+  artifactCount: z.number().int().nonnegative(),
+  hasNeedUserGate: z.boolean().optional(),
+});
+export type RunSummaryView = z.output<typeof RunSummaryViewSchema>;
+
+export const RunDetailViewSchema = RunSummaryViewSchema.extend({
+  rewindTarget: z.string().optional(),
+  rewindRoadmapPhase: z.number().int().nonnegative().optional(),
+  carriedFromRun: z.number().int().nonnegative().optional(),
+  carriedPhases: z.array(z.string()).max(200).optional(),
+  backupBranchRepos: z.array(z.string()).max(200).optional(),
+  committing: z.boolean().optional(),
+  timing: z
+    .strictObject({ totalSeconds: z.number().int(), byPhase: z.record(z.string(), z.number()) })
+    .optional(),
+  cost: z
+    .strictObject({ totalUsd: z.number(), byPhase: z.record(z.string(), z.number()) })
+    .optional(),
+});
+export type RunDetailView = z.output<typeof RunDetailViewSchema>;
+
+export const RunListResultSchema = z.strictObject({
+  runs: z.array(RunSummaryViewSchema).max(10000),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+  total: z.number().int().nonnegative(),
+  totalPages: z.number().int().nonnegative(),
+});
+export type RunListResult = z.output<typeof RunListResultSchema>;
+
+export const RunListRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  page: z.number().int().positive().optional(),
+  pageSize: z.number().int().positive().max(100).optional(),
+});
+export type RunListRequest = z.output<typeof RunListRequestSchema>;
+
+export const RunGetRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  runNumber: z.number().int().positive(),
+});
+export type RunGetRequest = z.output<typeof RunGetRequestSchema>;
+
+// RunSessionsListResultSchema is declared after SessionSummarySchema below.
+
+export const RunArtifactsListRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  runNumber: z.number().int().positive(),
+});
+export type RunArtifactsListRequest = z.output<typeof RunArtifactsListRequestSchema>;
+
+export const RunArtifactViewSchema = z.strictObject({
+  id: z.string().min(1).max(500),
+  type: z.string().max(100).optional(),
+  category: z.string().max(100).optional(),
+  runNumber: z.number().int().nonnegative(),
+  phase: z.string().max(200).optional(),
+  size: z.number().int().nonnegative().optional(),
+  modifiedAt: z.string().optional(),
+  contentAvailable: z.boolean().optional(),
+});
+export type RunArtifactView = z.output<typeof RunArtifactViewSchema>;
+
+export const RunArtifactsListResultSchema = z.strictObject({
+  artifacts: z.array(RunArtifactViewSchema).max(10000),
+});
+export type RunArtifactsListResult = z.output<typeof RunArtifactsListResultSchema>;
+
+/** Maximum bounded history text response accepted anywhere in the desktop. */
+export const MAX_RUN_CONTENT_BYTES = 256 * 1024;
+
+export const RunArtifactContentRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  runNumber: z.number().int().positive(),
+  artifactId: z.string().min(1).max(500),
+  offset: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().max(MAX_RUN_CONTENT_BYTES).optional(),
+});
+export type RunArtifactContentRequest = z.output<typeof RunArtifactContentRequestSchema>;
+
+export const RunTextContentSchema = z.strictObject({
+  id: z.string().min(1).max(500),
+  offset: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  size: z.number().int().nonnegative(),
+  text: z.string(),
+  truncated: z.boolean(),
+});
+export type RunTextContent = z.output<typeof RunTextContentSchema>;
+
+export const RunLogContentRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  runNumber: z.number().int().positive(),
+  logId: z.string().min(1).max(200),
+  offset: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().max(MAX_RUN_CONTENT_BYTES).optional(),
+});
+export type RunLogContentRequest = z.output<typeof RunLogContentRequestSchema>;
+
+// --- Rewind preview + execution --------------------------------------------
+
+export const RewindChoiceViewSchema = z.strictObject({
+  phase: z.string().min(1),
+  escalatesTo: z.string().optional(),
+  overridePhase: z.string().optional(),
+});
+export type RewindChoiceView = z.output<typeof RewindChoiceViewSchema>;
+
+export const RewindPRConsequenceViewSchema = z.strictObject({
+  repo: z.string(),
+  prUrl: z.string(),
+});
+export type RewindPRConsequenceView = z.output<typeof RewindPRConsequenceViewSchema>;
+
+export const RewindWorktreeConsequenceViewSchema = z.strictObject({
+  repo: z.string(),
+  resetKind: z.enum(['anchor', 'base', 'base-local', 'none']),
+});
+export type RewindWorktreeConsequenceView = z.output<typeof RewindWorktreeConsequenceViewSchema>;
+
+export const RewindPreviewViewSchema = z.strictObject({
+  eligible: z.boolean(),
+  sourceRunNumber: z.number().int().nonnegative(),
+  sourceRevision: z.string(),
+  targetPhase: z.string(),
+  effectivePhase: z.string(),
+  roadmapPhase: z.number().int().nonnegative().optional(),
+  upgradePipeline: z.string().optional(),
+  validPhases: z.array(RewindChoiceViewSchema).max(50).optional(),
+  validRoadmapPhases: z.array(z.number().int().positive()).max(50).optional(),
+  upgradePipelineOptions: z.array(z.string()).max(20).optional(),
+  carriedPhases: z.array(z.string()).max(200).optional(),
+  carriedFromRun: z.number().int().nonnegative().optional(),
+  prConsequences: z.array(RewindPRConsequenceViewSchema).max(200).optional(),
+  worktreeConsequences: z.array(RewindWorktreeConsequenceViewSchema).max(200).optional(),
+  backupBranchRepos: z.array(z.string()).max(200).optional(),
+  validationFindings: z.array(z.string()).max(50).optional(),
+});
+export type RewindPreviewView = z.output<typeof RewindPreviewViewSchema>;
+
+export const RewindPreviewRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  targetPhase: z.string().min(1).max(200),
+  roadmapPhase: z.number().int().positive().optional(),
+  upgradePipeline: z.string().max(200).optional(),
+});
+export type RewindPreviewRequest = z.output<typeof RewindPreviewRequestSchema>;
+
+export const RewindExecuteRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  targetPhase: z.string().min(1).max(200),
+  roadmapPhase: z.number().int().positive().optional(),
+  upgradePipeline: z.string().max(200).optional(),
+  sourceRunNumber: z.number().int().nonnegative().optional(),
+  sourceRevision: z.string().max(512).optional(),
+});
+export type RewindExecuteRequest = z.output<typeof RewindExecuteRequestSchema>;
 
 // --- Blocking attention ----------------------------------------------------
 
@@ -739,6 +933,12 @@ export const SessionSummarySchema = z.strictObject({
   usage: SessionUsageSchema,
 });
 export type SessionSummary = z.output<typeof SessionSummarySchema>;
+
+export const RunSessionsListResultSchema = z.strictObject({
+  runNumber: z.number().int().positive(),
+  sessions: z.array(SessionSummarySchema).max(1000),
+});
+export type RunSessionsListResult = z.output<typeof RunSessionsListResultSchema>;
 
 export const TranscriptCursorSchema = z.strictObject({
   total: z.number().int().nonnegative(),
@@ -960,6 +1160,8 @@ export function defaultWizardPrefs(): WizardPrefs {
 export const FeatureTabSchema = z.strictObject({
   featureId: FeatureIdSchema,
   titleHint: z.string().max(200),
+  /** Selected sealed run for archive mode; null/absent means current run. */
+  selectedRunNumber: z.number().int().nonnegative().nullable().optional(),
 });
 
 export type FeatureTab = z.output<typeof FeatureTabSchema>;
@@ -1493,6 +1695,38 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([LocalResourceDraftDiscardRequestSchema]),
     response: LocalResourceDraftDiscardResultSchema,
   },
+  [IPC_CHANNELS.runsList]: {
+    request: z.tuple([RunListRequestSchema]),
+    response: RunListResultSchema,
+  },
+  [IPC_CHANNELS.runsGet]: {
+    request: z.tuple([RunGetRequestSchema]),
+    response: RunDetailViewSchema,
+  },
+  [IPC_CHANNELS.runSessionsList]: {
+    request: z.tuple([RunGetRequestSchema]),
+    response: RunSessionsListResultSchema,
+  },
+  [IPC_CHANNELS.runArtifactsList]: {
+    request: z.tuple([RunArtifactsListRequestSchema]),
+    response: RunArtifactsListResultSchema,
+  },
+  [IPC_CHANNELS.runArtifactContent]: {
+    request: z.tuple([RunArtifactContentRequestSchema]),
+    response: RunTextContentSchema,
+  },
+  [IPC_CHANNELS.runLogContent]: {
+    request: z.tuple([RunLogContentRequestSchema]),
+    response: RunTextContentSchema,
+  },
+  [IPC_CHANNELS.rewindPreview]: {
+    request: z.tuple([RewindPreviewRequestSchema]),
+    response: RewindPreviewViewSchema,
+  },
+  [IPC_CHANNELS.rewindExecute]: {
+    request: z.tuple([RewindExecuteRequestSchema]),
+    response: FeatureActionResultSchema,
+  },
 };
 
 // --- The narrow window API the preload exposes -------------------------------
@@ -1549,5 +1783,13 @@ export interface AgenticoApi {
   ): Promise<LocalResourceDraft | null>;
   saveLocalResourceDraft(request: LocalResourceDraftSaveRequest): Promise<LocalResourceDraft>;
   discardLocalResourceDraft(request: LocalResourceDraftDiscardRequest): Promise<boolean>;
+  listRuns(request: RunListRequest): Promise<RunListResult>;
+  getRun(request: RunGetRequest): Promise<RunDetailView>;
+  listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
+  listRunArtifacts(request: RunArtifactsListRequest): Promise<RunArtifactsListResult>;
+  getRunArtifactContent(request: RunArtifactContentRequest): Promise<RunTextContent>;
+  getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
+  getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;
+  executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
   onAppEvent(listener: (event: AppEvent) => void): () => void;
 }

@@ -115,8 +115,8 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		}
 	}
 	detail := featureDetailFromSummary(summarizeFeature(f))
-	detail.Description = safeDisplayText(f.Description, 500)
-	detail.Summary = safeDisplayText(f.Summary, 500)
+	detail.Description = SafeDisplayText(f.Description, 500)
+	detail.Summary = SafeDisplayText(f.Summary, 500)
 	detail.Pipeline = string(f.Pipeline)
 	detail.Models = f.Models
 	autoReviewEnabled, autoReviewSource := feature.ResolveAutomaticReview(
@@ -147,7 +147,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 	if f.HasTerminalFailure() {
 		detail.Failure = &FailureDTO{
 			Type:    f.FailureType,
-			Message: safeDisplayText(f.LastError, 240),
+			Message: SafeDisplayText(f.LastError, 240),
 		}
 	}
 	if f.PendingNeedUserInputPath != "" {
@@ -417,14 +417,12 @@ func rewindPhaseOptions(f *feature.Feature) []string {
 }
 
 func rewindUpgradePipelineOptions(f *feature.Feature) []string {
-	switch f.EffectivePipeline() {
-	case feature.PipelineMedium:
-		return []string{string(feature.PipelineLarge), string(feature.PipelineMoonshot)}
-	case feature.PipelineLarge:
-		return []string{string(feature.PipelineMoonshot)}
-	default:
-		return nil
+	opts := f.EffectivePipeline().UpgradeOptions()
+	out := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		out = append(out, string(opt))
 	}
+	return out
 }
 
 func hasRewindUpgradeTarget(f *feature.Feature) bool {
@@ -432,12 +430,8 @@ func hasRewindUpgradeTarget(f *feature.Feature) bool {
 		return false
 	}
 	current := f.EffectivePipeline()
-	for _, option := range rewindUpgradePipelineOptions(f) {
-		upgraded := *f
-		upgraded.Pipeline = feature.PipelineProfile(option)
-		if upgraded.PipelineUpgradedFrom == "" {
-			upgraded.PipelineUpgradedFrom = current
-		}
+	for _, option := range current.UpgradeOptions() {
+		upgraded := feature.FeatureWithUpgrade(f, option)
 		for _, choice := range feature.RewindChoicesForFeature(&upgraded) {
 			if choice.Phase == feature.PhaseInquire {
 				return true
@@ -503,10 +497,10 @@ func setupDTO(setup *feature.SetupState) *SetupDTO {
 		Attempt:       setup.Attempt,
 		StartedAt:     setup.StartedAt,
 		CompletedAt:   setup.CompletedAt,
-		LatestLogPath: safeDisplayText(setup.LatestLogPath, 1000),
+		LatestLogPath: SafeDisplayText(setup.LatestLogPath, 1000),
 		Tasks:         tasks,
 		TaskOrder:     append([]string(nil), setup.TaskOrder...),
-		LastError:     safeDisplayText(setup.LastError, 500),
+		LastError:     SafeDisplayText(setup.LastError, 500),
 	}
 }
 
@@ -514,18 +508,18 @@ func setupTaskDTO(task feature.SetupTask) SetupTaskDTO {
 	return SetupTaskDTO{
 		Key:              task.Key,
 		Kind:             string(task.Kind),
-		Label:            safeDisplayText(task.Label, 200),
-		Repo:             safeDisplayText(task.Repo, 200),
+		Label:            SafeDisplayText(task.Label, 200),
+		Repo:             SafeDisplayText(task.Repo, 200),
 		Status:           string(task.Status),
-		Path:             safeDisplayText(task.Path, 1000),
-		SourcePath:       safeDisplayText(task.SourcePath, 1000),
-		Branch:           safeDisplayText(task.Branch, 500),
-		StartPoint:       safeDisplayText(task.StartPoint, 500),
+		Path:             SafeDisplayText(task.Path, 1000),
+		SourcePath:       SafeDisplayText(task.SourcePath, 1000),
+		Branch:           SafeDisplayText(task.Branch, 500),
+		StartPoint:       SafeDisplayText(task.StartPoint, 500),
 		UseCurrentBranch: task.UseCurrentBranch,
 		Attempt:          task.Attempt,
 		StartedAt:        task.StartedAt,
 		EndedAt:          task.EndedAt,
-		LastError:        safeDisplayText(task.LastError, 500),
+		LastError:        SafeDisplayText(task.LastError, 500),
 	}
 }
 
@@ -544,7 +538,7 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {
 		if state != nil {
 			dto.Touched = state.Touched
 			dto.PRURL = state.PRURL
-			dto.LastError = safeDisplayText(state.LastError, 200)
+			dto.LastError = SafeDisplayText(state.LastError, 200)
 		}
 		if h.freshness != nil {
 			dto.Freshness = string(h.freshness.Freshness(f, repo))
@@ -557,10 +551,10 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {
 			progress := f.RebaseOperation.Repos[repo.Name]
 			if progress != nil {
 				dto.RebaseStatus = string(progress.Status)
-				dto.RebaseTarget = safeDisplayText(progress.RebaseTarget, 128)
+				dto.RebaseTarget = SafeDisplayText(progress.RebaseTarget, 128)
 				dto.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
 				if dto.LastError == "" {
-					dto.LastError = safeDisplayText(progress.LastError, 200)
+					dto.LastError = SafeDisplayText(progress.LastError, 200)
 				}
 			}
 		}
@@ -863,7 +857,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 			help = append(help, orderedHelpQueue{
 				dto: HelpQueueDTO{
 					FeatureID: f.ID,
-					Question:  safeDisplayText(req.Question, 300),
+					Question:  SafeDisplayText(req.Question, 300),
 					Pending:   req.Pending,
 					Time:      req.Time,
 				},
@@ -1164,14 +1158,14 @@ func safeControlSummary(req *llm.ControlRequestMessage) string {
 			if q == "" {
 				q = envelope.Questions[0].Header
 			}
-			return safeDisplayText(q, 180)
+			return SafeDisplayText(q, 180)
 		}
 		return "user input requested"
 	}
 	if detail := safeControlInputDetail(req.Request.ToolName, req.Request.Input); detail != "" {
-		return safeDisplayText(detail, 180)
+		return SafeDisplayText(detail, 180)
 	}
-	return safeDisplayText(req.Request.ToolName+" requested", 180)
+	return SafeDisplayText(req.Request.ToolName+" requested", 180)
 }
 
 func safeControlInput(req *llm.ControlRequestMessage) map[string]any {
@@ -1200,7 +1194,7 @@ func safeControlInputValue(value any) any {
 		}
 		return out
 	case string:
-		return safeDisplayText(v, 2000)
+		return SafeDisplayText(v, 2000)
 	default:
 		return v
 	}
@@ -1238,7 +1232,7 @@ func safeStringField(fields map[string]any, key string) string {
 	if !ok {
 		return ""
 	}
-	return safeDisplayText(value, 2000)
+	return SafeDisplayText(value, 2000)
 }
 
 const (
@@ -1282,14 +1276,14 @@ func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestionDTO {
 	questions := make([]AskUserQuestionDTO, 0, len(envelope.Questions))
 	for _, rawQuestion := range envelope.Questions {
 		question := AskUserQuestionDTO{
-			Question:    safeDisplayText(rawQuestion.Question, askUserQuestionDisplayLimit),
-			Header:      safeDisplayText(rawQuestion.Header, askUserHeaderDisplayLimit),
+			Question:    SafeDisplayText(rawQuestion.Question, askUserQuestionDisplayLimit),
+			Header:      SafeDisplayText(rawQuestion.Header, askUserHeaderDisplayLimit),
 			MultiSelect: rawQuestion.MultiSelect || rawQuestion.MultiSelectSnake,
 		}
 		for _, rawOption := range rawQuestion.Options {
 			option := AskUserOptionDTO{
-				Label:       safeDisplayText(rawOption.Label, askUserOptionLabelDisplayLimit),
-				Description: safeDisplayText(rawOption.Description, askUserOptionDescriptionDisplayLimit),
+				Label:       SafeDisplayText(rawOption.Label, askUserOptionLabelDisplayLimit),
+				Description: SafeDisplayText(rawOption.Description, askUserOptionDescriptionDisplayLimit),
 				Confidence:  rawOption.Confidence,
 			}
 			if option.Label == "" && option.Description == "" && option.Confidence == nil {
@@ -1370,7 +1364,7 @@ func copyAskUserQuestionDTOConfidence(questions, source []AskUserQuestionDTO) []
 	return enriched
 }
 
-func safeDisplayText(s string, limit int) string {
+func SafeDisplayText(s string, limit int) string {
 	s = strings.ReplaceAll(s, "private-token", "[redacted]")
 	s = strings.ReplaceAll(s, "raw initial prompt", "[redacted prompt]")
 	s = strings.TrimSpace(s)

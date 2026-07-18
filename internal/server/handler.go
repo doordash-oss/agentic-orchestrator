@@ -275,13 +275,37 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 		h.handleFeatureConfig(w, r, featureID)
 	case len(parts) == 2 && parts[1] == "live-preview":
 		h.handleLivePreview(w, r, featureID)
-	case len(parts) >= 4 && parts[1] == "runs":
-		runNumber, ok := parseRunNumber(parts[2])
+	case len(parts) == 3 && parts[1] == "rewind" && parts[2] == "preview":
+		h.handleRewindPreview(w, r, featureID)
+	case len(parts) >= 2 && parts[1] == "runs":
+		h.handleRunsRoute(w, r, featureID, parts[2:])
+	default:
+		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
+	}
+}
+
+// handleRunsRoute dispatches the run-scoped history surface under
+// /api/v1/features/{feature_id}/runs. All branches are GET-only: the
+// caller (handleFeatureRoutes) rejects non-GET methods before reaching
+// here, so run history exposes no mutation operation.
+func (h *apiHandler) handleRunsRoute(w http.ResponseWriter, r *http.Request, featureID string, parts []string) {
+	switch {
+	case len(parts) == 0:
+		h.handleRunList(w, r, featureID)
+	case len(parts) == 1:
+		runNumber, ok := parseRunNumber(parts[0])
 		if !ok {
 			writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid run number", map[string]any{"feature_id": featureID})
 			return
 		}
-		h.handleRunRoute(w, r, featureID, runNumber, parts[3:])
+		h.handleRunDetail(w, r, featureID, runNumber)
+	case len(parts) >= 2:
+		runNumber, ok := parseRunNumber(parts[0])
+		if !ok {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid run number", map[string]any{"feature_id": featureID})
+			return
+		}
+		h.handleRunRoute(w, r, featureID, runNumber, parts[1:])
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
 	}
@@ -295,6 +319,8 @@ func (h *apiHandler) handleRunRoute(w http.ResponseWriter, r *http.Request, feat
 		h.handleArtifactContent(w, r, featureID, runNumber, parts[1])
 	case len(parts) == 2 && parts[0] == "logs":
 		h.handleLogContent(w, r, featureID, runNumber, parts[1])
+	case len(parts) == 1 && parts[0] == "sessions":
+		h.handleRunSessions(w, r, featureID, runNumber)
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
 	}

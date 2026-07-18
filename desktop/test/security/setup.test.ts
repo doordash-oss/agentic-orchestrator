@@ -108,6 +108,14 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
       savedAt: '2026-07-16T00:00:00.000Z',
     })),
     discardLocalResourceDraft: vi.fn(() => false),
+    listRuns: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRun: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRunSessions: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRunArtifacts: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRunArtifactContent: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    executeRewind: vi.fn(() => Promise.reject(new Error('unused'))),
     ...overrides,
   };
 }

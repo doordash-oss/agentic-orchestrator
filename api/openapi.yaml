@@ -214,6 +214,37 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/features/{feature_id}/rewind/preview:
+    get:
+      operationId: getRewindPreview
+      summary: Read-only, server-authored rewind preview — valid hierarchical targets, effective target, carry-forward set, PR/worktree consequences, backup behavior, and validation findings. No side effects.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - name: target_phase
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Proposed rewind target phase dir-name.
+        - name: roadmap_phase
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Optional partial Implement roadmap phase.
+        - name: upgrade_pipeline
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional pipeline upgrade profile.
+      responses:
+        "200":
+          $ref: "#/components/responses/RewindPreviewResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/features/{feature_id}/actions/{action}:
     post:
       operationId: runFeatureAction
@@ -244,6 +275,46 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs:
+    get:
+      operationId: listRuns
+      summary: List every sealed and active run for a feature, newest first, with bounded pagination.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          $ref: "#/components/responses/RunListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs/{run_number}:
+    get:
+      operationId: getRunDetail
+      summary: Read run-authentic detail for one run, including seal, provenance, timing, and cost.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+      responses:
+        "200":
+          $ref: "#/components/responses/RunDetailResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs/{run_number}/sessions:
+    get:
+      operationId: listRunSessions
+      summary: List sessions belonging to one run, filtered by run number.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+      responses:
+        "200":
+          $ref: "#/components/responses/RunSessionListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -801,6 +872,23 @@ components:
         type: integer
         format: int64
         minimum: 1
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+      description: 1-indexed page number for run-history pagination.
+    PageSize:
+      name: page_size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+      description: Bounded page size for run-history pagination.
     TrustedMutationHeader:
       name: X-Agentico-Client
       in: header
@@ -901,6 +989,45 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/TextContentResponse"
+    RunListResponse:
+      description: Paginated run history, newest first.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RunListResponse"
+    RunDetailResponse:
+      description: Run-authentic detail for one run.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RunDetailResponse"
+    RunSessionListResponse:
+      description: Sessions belonging to one run.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RunSessionListResponse"
+    RewindPreviewResponse:
+      description: Server-authored, side-effect-free rewind preview.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RewindPreviewResponse"
     ReviewSessionResponse:
       description: Artifact review draft session.
       content:
@@ -1983,6 +2110,102 @@ components:
               type: integer
             upgrade_pipeline:
               type: string
+            source_run_number:
+              type: integer
+              description: The run that was sealed (rewind source).
+            new_run_number:
+              type: integer
+              description: The new active run forked by the rewind.
+            warnings:
+              type: array
+              items:
+                type: string
+              description: Redacted non-fatal warning details (PR close, backup branch, worktree reset failures).
+    RewindPreviewResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - $ref: "#/components/schemas/RewindPreview"
+    RewindPreview:
+      type: object
+      required: [eligible, source_run_number, source_revision, target_phase, effective_phase]
+      properties:
+        eligible:
+          type: boolean
+        source_run_number:
+          type: integer
+          minimum: 0
+        source_revision:
+          type: string
+          description: Hash of rewind-relevant feature state; execution must present the same value or be rejected as stale.
+        target_phase:
+          type: string
+        effective_phase:
+          type: string
+        roadmap_phase:
+          type: integer
+        upgrade_pipeline:
+          type: string
+        valid_phases:
+          type: array
+          items:
+            $ref: "#/components/schemas/RewindChoice"
+        valid_roadmap_phases:
+          type: array
+          items:
+            type: integer
+        upgrade_pipeline_options:
+          type: array
+          items:
+            type: string
+        carried_phases:
+          type: array
+          items:
+            type: string
+        carried_from_run:
+          type: integer
+        pr_consequences:
+          type: array
+          items:
+            $ref: "#/components/schemas/RewindPRConsequence"
+        worktree_consequences:
+          type: array
+          items:
+            $ref: "#/components/schemas/RewindWorktreeConsequence"
+        backup_branch_repos:
+          type: array
+          items:
+            type: string
+        validation_findings:
+          type: array
+          items:
+            type: string
+    RewindChoice:
+      type: object
+      required: [phase]
+      properties:
+        phase:
+          type: string
+        escalates_to:
+          type: string
+        override_phase:
+          type: string
+    RewindPRConsequence:
+      type: object
+      required: [repo, pr_url]
+      properties:
+        repo:
+          type: string
+        pr_url:
+          type: string
+    RewindWorktreeConsequence:
+      type: object
+      required: [repo, reset_kind]
+      properties:
+        repo:
+          type: string
+        reset_kind:
+          type: string
+          enum: [anchor, base, base-local, none]
     RetryFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2807,6 +3030,76 @@ components:
         setup:
           $ref: "#/components/schemas/Setup"
           x-go-type-skip-optional-pointer: false
+    RunDetail:
+      allOf:
+        - $ref: "#/components/schemas/RunSummary"
+        - type: object
+          required: [timing, cost]
+          properties:
+            rewind_target:
+              type: string
+            rewind_roadmap_phase:
+              type: integer
+            carried_from_run:
+              type: integer
+            carried_phases:
+              type: array
+              items:
+                type: string
+            backup_branch_repos:
+              type: array
+              items:
+                type: string
+            committing:
+              type: boolean
+              description: True while a forked run's carry-forward copy is in flight (crash-recovery signal); a reconnecting client treats this as "requires safe retry" until startup cleanup reconciles.
+            timing:
+              $ref: "#/components/schemas/Timing"
+            cost:
+              $ref: "#/components/schemas/Cost"
+    RunListResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [runs, page, page_size, total, total_pages]
+          properties:
+            runs:
+              type: array
+              items:
+                $ref: "#/components/schemas/RunSummary"
+            page:
+              type: integer
+              minimum: 1
+            page_size:
+              type: integer
+              minimum: 1
+            total:
+              type: integer
+              minimum: 0
+            total_pages:
+              type: integer
+              minimum: 0
+    RunDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [run]
+          properties:
+            run:
+              $ref: "#/components/schemas/RunDetail"
+    RunSessionListResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [run_number, sessions]
+          properties:
+            run_number:
+              type: integer
+              minimum: 1
+            sessions:
+              type: array
+              items:
+                $ref: "#/components/schemas/SessionSummary"
     ActionScope:
       type: object
       required: [type]

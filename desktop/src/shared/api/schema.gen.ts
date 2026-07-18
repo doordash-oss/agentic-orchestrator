@@ -166,6 +166,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/rewind/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read-only, server-authored rewind preview — valid hierarchical targets, effective target, carry-forward set, PR/worktree consequences, backup behavior, and validation findings. No side effects. */
+        get: operations["getRewindPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/actions/{action}": {
         parameters: {
             query?: never;
@@ -194,6 +211,57 @@ export interface paths {
         put?: never;
         /** Run a named feature subaction. */
         post: operations["runFeatureSubaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List every sealed and active run for a feature, newest first, with bounded pagination. */
+        get: operations["listRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/runs/{run_number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read run-authentic detail for one run, including seal, provenance, timing, and cost. */
+        get: operations["getRunDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/runs/{run_number}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List sessions belonging to one run, filtered by run number. */
+        get: operations["listRunSessions"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1030,6 +1098,46 @@ export interface components {
             roadmap_phase?: number;
             warning_count?: number;
             upgrade_pipeline?: string;
+            /** @description The run that was sealed (rewind source). */
+            source_run_number?: number;
+            /** @description The new active run forked by the rewind. */
+            new_run_number?: number;
+            /** @description Redacted non-fatal warning details (PR close, backup branch, worktree reset failures). */
+            warnings?: string[];
+        };
+        RewindPreviewResponse: components["schemas"]["JSONResponse"] & components["schemas"]["RewindPreview"];
+        RewindPreview: {
+            eligible: boolean;
+            source_run_number: number;
+            /** @description Hash of rewind-relevant feature state; execution must present the same value or be rejected as stale. */
+            source_revision: string;
+            target_phase: string;
+            effective_phase: string;
+            roadmap_phase?: number;
+            upgrade_pipeline?: string;
+            valid_phases?: components["schemas"]["RewindChoice"][];
+            valid_roadmap_phases?: number[];
+            upgrade_pipeline_options?: string[];
+            carried_phases?: string[];
+            carried_from_run?: number;
+            pr_consequences?: components["schemas"]["RewindPRConsequence"][];
+            worktree_consequences?: components["schemas"]["RewindWorktreeConsequence"][];
+            backup_branch_repos?: string[];
+            validation_findings?: string[];
+        };
+        RewindChoice: {
+            phase: string;
+            escalates_to?: string;
+            override_phase?: string;
+        };
+        RewindPRConsequence: {
+            repo: string;
+            pr_url: string;
+        };
+        RewindWorktreeConsequence: {
+            repo: string;
+            /** @enum {string} */
+            reset_kind: "anchor" | "base" | "base-local" | "none";
         };
         RetryFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RebaseStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
@@ -1381,6 +1489,31 @@ export interface components {
             has_need_user_gate?: boolean;
             setup?: components["schemas"]["Setup"];
         };
+        RunDetail: components["schemas"]["RunSummary"] & {
+            rewind_target?: string;
+            rewind_roadmap_phase?: number;
+            carried_from_run?: number;
+            carried_phases?: string[];
+            backup_branch_repos?: string[];
+            /** @description True while a forked run's carry-forward copy is in flight (crash-recovery signal); a reconnecting client treats this as "requires safe retry" until startup cleanup reconciles. */
+            committing?: boolean;
+            timing: components["schemas"]["Timing"];
+            cost: components["schemas"]["Cost"];
+        };
+        RunListResponse: components["schemas"]["JSONResponse"] & {
+            runs: components["schemas"]["RunSummary"][];
+            page: number;
+            page_size: number;
+            total: number;
+            total_pages: number;
+        };
+        RunDetailResponse: components["schemas"]["JSONResponse"] & {
+            run: components["schemas"]["RunDetail"];
+        };
+        RunSessionListResponse: components["schemas"]["JSONResponse"] & {
+            run_number: number;
+            sessions: components["schemas"]["SessionSummary"][];
+        };
         ActionScope: {
             type: string;
             repo_selection?: string;
@@ -1663,6 +1796,48 @@ export interface components {
                 "application/json": components["schemas"]["TextContentResponse"];
             };
         };
+        /** @description Paginated run history, newest first. */
+        RunListResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RunListResponse"];
+            };
+        };
+        /** @description Run-authentic detail for one run. */
+        RunDetailResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RunDetailResponse"];
+            };
+        };
+        /** @description Sessions belonging to one run. */
+        RunSessionListResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RunSessionListResponse"];
+            };
+        };
+        /** @description Server-authored, side-effect-free rewind preview. */
+        RewindPreviewResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RewindPreviewResponse"];
+            };
+        };
         /** @description Artifact review draft session. */
         ReviewSessionResponse: {
             headers: {
@@ -1858,6 +2033,10 @@ export interface components {
         FeatureSubaction: "description" | "fetch" | "finish" | "restart";
         Offset: number;
         Limit: number;
+        /** @description 1-indexed page number for run-history pagination. */
+        Page: number;
+        /** @description Bounded page size for run-history pagination. */
+        PageSize: number;
         /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
         TrustedMutationHeader: "local";
         /** @description Opaque resource identity from the catalogue. */
@@ -2101,6 +2280,28 @@ export interface operations {
             409: components["responses"]["ErrorResponse"];
         };
     };
+    getRewindPreview: {
+        parameters: {
+            query: {
+                /** @description Proposed rewind target phase dir-name. */
+                target_phase: string;
+                /** @description Optional partial Implement roadmap phase. */
+                roadmap_phase?: number;
+                /** @description Optional pipeline upgrade profile. */
+                upgrade_pipeline?: string;
+            };
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RewindPreviewResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     runFeatureAction: {
         parameters: {
             query?: never;
@@ -2137,6 +2338,58 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listRuns: {
+        parameters: {
+            query?: {
+                /** @description 1-indexed page number for run-history pagination. */
+                page?: components["parameters"]["Page"];
+                /** @description Bounded page size for run-history pagination. */
+                page_size?: components["parameters"]["PageSize"];
+            };
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RunListResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getRunDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+                run_number: components["parameters"]["RunNumber"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RunDetailResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listRunSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+                run_number: components["parameters"]["RunNumber"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RunSessionListResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

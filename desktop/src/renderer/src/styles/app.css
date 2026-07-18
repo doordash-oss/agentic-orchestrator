@@ -1729,7 +1729,9 @@ body {
 .review-surface {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-  min-height: 0;
+  /* Monaco needs a real grid track: a flex-only minimum can collapse its
+   * editor to a few pixels before the first content measurement completes. */
+  min-height: min(640px, 68vh);
   flex: 1;
   border: 1px solid var(--color-hairline);
   background: var(--color-panel);
@@ -2038,6 +2040,31 @@ body {
   border-bottom: 1px solid var(--color-hairline);
 }
 
+/* Current-run utilities stay in the cockpit control language, with rewind
+ * visibly separated as a consequential action rather than browser chrome. */
+.cockpit__rewind-button,
+.cockpit__history-button {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cockpit__rewind-button {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.cockpit__rewind-button:hover,
+.cockpit__history-button:hover {
+  background: color-mix(in srgb, var(--color-signal) 10%, var(--color-panel));
+}
+
 .cockpit__inspector-toggle,
 .cockpit__drawer-backdrop {
   display: none;
@@ -2139,6 +2166,107 @@ body {
   min-height: 1.2em;
   color: var(--color-muted);
   font-size: 13px;
+}
+
+/* A completed rewind remains legible in the new live cockpit, rather than
+ * disappearing with the confirmation dialog. */
+.cockpit__rewind-landing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--color-success);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  background: color-mix(in srgb, var(--color-success) 6%, var(--color-bg));
+}
+
+.cockpit__rewind-landing-header,
+.cockpit__carried-material {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.cockpit__rewind-landing-header {
+  justify-content: space-between;
+}
+
+.cockpit__carried-material {
+  justify-content: flex-start;
+}
+
+.cockpit__eyebrow,
+.cockpit__carried-label {
+  margin: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cockpit__landing-dismiss,
+.cockpit__source-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-signal);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cockpit__landing-dismiss {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.cockpit__rewind-source,
+.cockpit__rewind-warnings p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.cockpit__carried-badge {
+  border: 1px solid var(--color-hairline);
+  border-radius: 3px;
+  padding: 1px var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.cockpit__rewind-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-top: 1px solid var(--color-danger);
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+}
+
+.cockpit__rewind-warnings h4,
+.cockpit__rewind-warnings ul {
+  margin: 0;
+}
+
+.cockpit__rewind-warnings h4 {
+  color: var(--color-danger);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cockpit__rewind-warnings ul {
+  padding-left: var(--space-4);
+  color: var(--color-text);
+  font-size: 12px;
 }
 
 .cockpit__setup {
@@ -3486,4 +3614,879 @@ body {
   border-color: var(--color-hairline);
   color: var(--color-muted);
   cursor: not-allowed;
+}
+
+/* --- Archive mode --- */
+
+/* Sealed band: a read-only rail. The amber edge marks the archive as stale
+ * rather than actionable; text stays muted so the content is the focus. */
+.archive-mode__band {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--color-muted) 12%, var(--color-panel));
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.archive-mode__run-meta {
+  display: inline-flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.archive-mode__badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 var(--space-1);
+  border-radius: 999px;
+  color: var(--color-bg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.archive-mode__badge[data-tone='changed'] {
+  background: var(--color-signal);
+}
+
+.archive-mode__badge[data-tone='attention'] {
+  background: var(--color-accent);
+}
+
+.archive-mode__selector {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.archive-mode__selector-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+}
+
+.archive-mode__select {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.archive-mode__current-choice,
+.archive-mode__pagination button {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text);
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.archive-mode__current-choice:hover:not(:disabled),
+.archive-mode__pagination button:hover:not(:disabled) {
+  border-color: var(--color-signal);
+}
+
+.archive-mode__pagination {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.archive-mode__select:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0;
+  border-color: var(--color-signal);
+}
+
+.archive-mode__page-info {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.archive-mode__content {
+  align-items: start;
+}
+
+.archive-mode__main {
+  padding-right: var(--space-3);
+}
+
+.archive-mode__inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.archive-mode__inspector-facts {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.archive-mode__inspector-facts dt {
+  color: var(--color-muted);
+  font: 11px var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.archive-mode__inspector-facts dd {
+  margin: var(--space-1) 0 0;
+  font: 12px/1.45 var(--font-mono);
+}
+
+.archive-mode__facts {
+  margin: 0;
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.archive-mode__fact dt {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.archive-mode__fact dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.archive-mode__carried-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-hairline);
+  border-radius: 3px;
+  padding: 1px var(--space-2);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.archive-mode__artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.archive-mode__artifact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.archive-mode__artifact-button {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--color-signal);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.archive-mode__artifact-button:hover {
+  text-decoration: underline;
+}
+
+.archive-mode__artifact-content {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.archive-mode__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.archive-mode__logs,
+.archive-mode__log-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.archive-mode__log-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.archive-mode__hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.archive-mode__session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.archive-mode__session-item {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.archive-mode__session-button {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.archive-mode__session-button:hover {
+  color: var(--color-signal);
+}
+
+.archive-mode__section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.archive-mode__empty {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.archive-mode__loading {
+  margin: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.archive-mode__error {
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.archive-mode__error:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.archive-mode__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-hairline);
+}
+
+/* Return to the live run: the one filled signal control in the archive. */
+.archive-mode__return {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-bg);
+  background: var(--color-signal);
+  border: 1px solid var(--color-signal);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+}
+
+.archive-mode__return:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.archive-mode__return:disabled {
+  color: var(--color-muted);
+  background: transparent;
+  border-color: var(--color-hairline);
+  cursor: default;
+}
+
+.archive-mode__content[data-state='loading'] {
+  opacity: 0.6;
+}
+
+/* Sealed runs read as quiet on the phase spine: a muted tick, not the
+ * progress/success or error tones used for live runs. */
+.phase-spine__stage[data-tone='sealed'] .phase-spine__tick {
+  background: color-mix(in srgb, var(--color-muted) 50%, var(--color-hairline));
+}
+
+@media (max-width: 900px) {
+  .archive-mode__selector {
+    width: 100%;
+  }
+
+  .archive-mode__page-info {
+    margin-left: 0;
+  }
+
+  .archive-mode__content {
+    display: block;
+  }
+
+  .archive-mode__inspector {
+    border-left: 0;
+    border-top: 1px solid var(--color-hairline);
+    margin-top: var(--space-5);
+    padding: var(--space-4) 0 0;
+  }
+}
+
+/* --- Rewind journey --- */
+
+.rewind-journey__backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: color-mix(
+    in srgb,
+    var(--color-danger) 18%,
+    color-mix(in srgb, var(--color-bg) 70%, transparent)
+  );
+}
+
+.rewind-journey {
+  width: min(640px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  border: 1px solid var(--color-hairline);
+  border-top: 3px solid var(--color-danger);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+  background: var(--color-panel);
+  box-shadow: 0 18px 60px color-mix(in srgb, var(--color-bg) 70%, transparent);
+}
+
+.rewind-journey__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.rewind-journey__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.5rem;
+  letter-spacing: 0.02em;
+}
+
+.rewind-journey__subtitle {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.rewind-journey__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.rewind-journey__field {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.rewind-journey__legend {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rewind-journey__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rewind-journey__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    border-color 120ms,
+    background 120ms;
+}
+
+.rewind-journey__option:hover {
+  border-color: var(--color-signal);
+  background: color-mix(in srgb, var(--color-signal) 8%, transparent);
+}
+
+.rewind-journey__option:focus-within {
+  border-color: var(--color-signal);
+}
+
+.rewind-journey__option input[type='radio'] {
+  margin-top: 3px;
+  accent-color: var(--color-signal);
+}
+
+.rewind-journey__select {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.rewind-journey__select:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0;
+  border-color: var(--color-signal);
+}
+
+.rewind-journey__advanced {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+
+.rewind-journey__advanced-summary {
+  cursor: pointer;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.rewind-journey__advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+/* Consequence preview: the border encodes eligibility — success when the
+ * rewind target is reachable, danger when it is not. */
+.rewind-journey__preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+}
+
+.rewind-journey__preview[data-eligible='true'] {
+  border-color: var(--color-success);
+}
+
+.rewind-journey__preview[data-eligible='false'] {
+  border-color: var(--color-danger);
+}
+
+.rewind-journey__preview-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.rewind-journey__preview-facts {
+  margin: 0;
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.rewind-journey__preview-fact dt {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.rewind-journey__preview-fact dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.rewind-journey__findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+.rewind-journey__findings li {
+  overflow-wrap: anywhere;
+}
+
+.rewind-journey__confirm-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+}
+
+.rewind-journey__warning {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.rewind-journey__type-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rewind-journey__type-label {
+  font-size: 13px;
+}
+
+.rewind-journey__type-label code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px var(--space-1);
+  background: var(--color-bg);
+  border: 1px solid var(--color-hairline);
+  border-radius: 3px;
+}
+
+.rewind-journey__type-input {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  text-align: center;
+  letter-spacing: 0.12em;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+}
+
+.rewind-journey__type-input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0;
+  border-color: var(--color-signal);
+}
+
+.rewind-journey__actions {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.rewind-journey__cancel {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.rewind-journey__cancel:hover {
+  border-color: var(--color-signal);
+}
+
+/* Advance step: signal edge, the affirmative (non-destructive) control. */
+.rewind-journey__next {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-bg);
+  background: var(--color-signal);
+  border: 1px solid var(--color-signal);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+}
+
+.rewind-journey__next:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.rewind-journey__next:disabled {
+  color: var(--color-muted);
+  background: transparent;
+  border-color: var(--color-hairline);
+  cursor: default;
+}
+
+/* The destructive commit: danger fill, gated by the typed confirmation. */
+.rewind-journey__submit {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-bg);
+  background: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+}
+
+.rewind-journey__submit:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.rewind-journey__submit:disabled {
+  background: var(--color-hairline);
+  border-color: var(--color-hairline);
+  color: var(--color-muted);
+  cursor: not-allowed;
+}
+
+.rewind-journey__progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+}
+
+.rewind-journey__progress-text {
+  margin: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+@keyframes rewind-journey-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.rewind-journey__spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--color-hairline);
+  border-top-color: var(--color-signal);
+  border-radius: 50%;
+  animation: rewind-journey-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rewind-journey__spinner {
+    animation: none;
+  }
+}
+
+.rewind-journey__success {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* Persistent warning panel: amber edge, because a rewind can succeed while
+ * leaving unsent questions or stranded runs behind. */
+.rewind-journey__warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.rewind-journey__warnings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rewind-journey__warning-item {
+  color: var(--color-accent);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.rewind-journey__done {
+  align-self: flex-start;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--color-bg);
+  background: var(--color-signal);
+  border: 1px solid var(--color-signal);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+}
+
+.rewind-journey__done:hover {
+  filter: brightness(1.1);
+}
+
+.rewind-journey__error {
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rewind-journey__error:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.rewind-journey__error-result {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.rewind-journey__recovery {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.rewind-journey__retry {
+  align-self: flex-start;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.rewind-journey__retry:hover {
+  border-color: var(--color-signal);
+}
+
+.rewind-journey__section-title {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 480px) {
+  .rewind-journey {
+    width: 100%;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+
+  .rewind-journey__options {
+    gap: var(--space-1);
+  }
+
+  .rewind-journey__actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .rewind-journey__actions > button {
+    width: 100%;
+  }
 }

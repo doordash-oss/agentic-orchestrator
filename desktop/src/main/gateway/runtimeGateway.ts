@@ -16,6 +16,7 @@
 import { SafeErrorException, safeError, toSafeError, redactText } from '../../shared/errors';
 import {
   isConnectionErrorState,
+  MAX_RUN_CONTENT_BYTES,
   SESSION_ID_SEGMENT_PATTERN,
   type ConnectionDiagnostics,
   type ConnectionState,
@@ -1036,6 +1037,16 @@ const SESSION_TRANSCRIPT_PATH_PATTERN = new RegExp(
 );
 const RESOURCES_PATH_PATTERN = /^\/api\/v1\/resources$/i;
 const ALLOWED_RESOURCE_KINDS = new Set(['feature_config', 'runtime_config', 'skill', 'guideline']);
+const SAFE_API_SEGMENT = '[a-z0-9_-]+';
+const RUN_LIST_PATH_PATTERN = new RegExp(`^/api/v1/features/${SAFE_API_SEGMENT}/runs$`, 'i');
+const RUN_CONTENT_PATH_PATTERN = new RegExp(
+  `^/api/v1/features/${SAFE_API_SEGMENT}/runs/\\d+/(?:artifacts|logs)/${SAFE_API_SEGMENT}$`,
+  'i',
+);
+const REWIND_PREVIEW_PATH_PATTERN = new RegExp(
+  `^/api/v1/features/${SAFE_API_SEGMENT}/rewind/preview$`,
+  'i',
+);
 
 function isAllowedApiPath(path: string): boolean {
   const parts = path.split('?');
@@ -1061,22 +1072,59 @@ function isAllowedApiPath(path: string): boolean {
     }
     return seen.size > 0;
   }
+  if (parts.length === 2 && RUN_LIST_PATH_PATTERN.test(pathname)) {
+    return hasBoundedIntegerQuery(parts[1] ?? '', {
+      page: { min: 1 },
+      page_size: { min: 1, max: 100 },
+    });
+  }
+  if (parts.length === 2 && RUN_CONTENT_PATH_PATTERN.test(pathname)) {
+    return hasBoundedIntegerQuery(parts[1] ?? '', {
+      offset: { min: 0 },
+      limit: { min: 1, max: MAX_RUN_CONTENT_BYTES },
+    });
+  }
+  if (parts.length === 2 && REWIND_PREVIEW_PATH_PATTERN.test(pathname)) {
+    return hasRewindPreviewQuery(parts[1] ?? '');
+  }
   if (parts.length !== 2 || !SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)) {
     return false;
   }
-  const rawQuery = parts[1] ?? '';
+  return hasBoundedIntegerQuery(parts[1] ?? '', {
+    offset: { min: 0 },
+    limit: { min: 1, max: 500 },
+  });
+}
+
+function hasBoundedIntegerQuery(
+  rawQuery: string,
+  allowed: Record<string, { min: number; max?: number }>,
+): boolean {
   if (rawQuery === '') return false;
   const seen = new Set<string>();
   for (const [key, value] of new URLSearchParams(rawQuery)) {
-    if (seen.has(key) || !/^\d+$/.test(value)) return false;
-    seen.add(key);
+    const bounds = allowed[key];
+    if (bounds === undefined || seen.has(key) || !/^\d+$/.test(value)) return false;
     const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed)) return false;
-    if (key === 'offset' && parsed >= 0) continue;
-    if (key === 'limit' && parsed >= 1 && parsed <= 500) continue;
-    return false;
+    if (!Number.isSafeInteger(parsed) || parsed < bounds.min) return false;
+    if (bounds.max !== undefined && parsed > bounds.max) return false;
+    seen.add(key);
   }
   return seen.size > 0;
+}
+
+function hasRewindPreviewQuery(rawQuery: string): boolean {
+  if (rawQuery === '') return false;
+  const seen = new Set<string>();
+  for (const [key, value] of new URLSearchParams(rawQuery)) {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (key === 'target_phase' && /^[a-z][a-z0-9_-]{0,199}$/i.test(value)) continue;
+    if (key === 'roadmap_phase' && /^\d+$/.test(value) && Number(value) >= 1) continue;
+    if (key === 'upgrade_pipeline' && /^[a-z][a-z0-9_-]{0,199}$/i.test(value)) continue;
+    return false;
+  }
+  return seen.has('target_phase');
 }
 
 function trimBase(baseUrl: string): string {

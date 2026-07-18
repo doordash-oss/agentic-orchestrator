@@ -300,6 +300,96 @@ export function createPlainFolder(world: JourneyWorld, name: string): string {
   return dir;
 }
 
+/**
+ * Seeds a server-created feature with immutable, run-authentic history while
+ * the bundled server is stopped.  The base run is produced by the normal
+ * creation/setup path, then copied using the production runs/run-NNN layout;
+ * this keeps packaged journeys deterministic without teaching the client a
+ * private mutation API or relying on timing-sensitive provider sessions.
+ */
+export function seedRunHistory(
+  world: JourneyWorld,
+  featureId: string,
+  runCount = 7,
+  repoName = 'signal-lab',
+): void {
+  if (!Number.isSafeInteger(runCount) || runCount < 2) {
+    throw new Error(`runCount must be at least two, got ${runCount}`);
+  }
+  const featurePath = path.join(world.stateDir, featureId, 'feature.yaml');
+  const runsPath = path.join(world.stateDir, featureId, 'runs');
+  const basePath = path.join(runsPath, 'run-001');
+  const baseRun = path.join(basePath, 'run.yaml');
+  if (!fs.existsSync(featurePath) || !fs.existsSync(baseRun)) {
+    throw new Error('seedRunHistory requires a feature created by the bundled server');
+  }
+  const phaseOneAnchor = git(path.join(world.workspaceRoot, repoName), 'rev-parse', 'HEAD').trim();
+
+  const stamp = (runNumber: number, sealed: boolean): string => {
+    const artifactName = `history-run-${runNumber}.md`;
+    const sealedFields = sealed
+      ? [
+          `sealed_at: 2026-01-${String(runNumber).padStart(2, '0')}T12:00:00Z`,
+          'seal_reason: rewind',
+          'rewind_target: 2',
+        ]
+      : [];
+    return [
+      `run_number: ${runNumber}`,
+      ...sealedFields,
+      'current_iteration: 2',
+      'current_roadmap_phase: 2',
+      'total_roadmap_phases: 3',
+      'roadmap_phase_type: tdd-fill-in',
+      'roadmap_phase_commit_anchors:',
+      '  1:',
+      `    ${repoName}: ${phaseOneAnchor}`,
+      'pending_review_phase: 2',
+      'artifacts:',
+      `  history-${runNumber}: ${artifactName}`,
+      'phase_timings:',
+      '  implement: 42s',
+      'phase_costs:',
+      '  implement: 0.12',
+      '',
+    ].join('\n');
+  };
+
+  for (let runNumber = 1; runNumber <= runCount; runNumber += 1) {
+    const runPath = path.join(runsPath, `run-${String(runNumber).padStart(3, '0')}`);
+    if (runNumber !== 1) fs.cpSync(basePath, runPath, { recursive: true });
+    fs.writeFileSync(path.join(runPath, 'run.yaml'), stamp(runNumber, runNumber < runCount));
+    fs.writeFileSync(
+      path.join(runPath, `history-run-${runNumber}.md`),
+      `# Historical run ${runNumber}\n\nThis artifact belongs only to Run ${runNumber}.\n`,
+    );
+    fs.mkdirSync(path.join(runPath, 'logs'), { recursive: true });
+    fs.writeFileSync(
+      path.join(runPath, 'logs', 'session.log'),
+      `sealed run ${runNumber}: session output retained for bounded inspection\n`,
+    );
+    fs.writeFileSync(
+      path.join(runPath, 'logs', 'phase.log'),
+      `sealed run ${runNumber}: implement phase completed\n`,
+    );
+  }
+
+  let featureYaml = fs.readFileSync(featurePath, 'utf8');
+  featureYaml = upsertYamlScalar(featureYaml, 'status', 'CodeReady');
+  featureYaml = upsertYamlScalar(featureYaml, 'current_phase', '2');
+  featureYaml = upsertYamlScalar(featureYaml, 'active_run', String(runCount));
+  featureYaml = upsertYamlScalar(featureYaml, 'run_count', String(runCount));
+  fs.writeFileSync(featurePath, featureYaml);
+}
+
+function upsertYamlScalar(yaml: string, key: string, value: string): string {
+  const line = `${key}: ${value}`;
+  const pattern = new RegExp(`^${key}:.*$`, 'm');
+  return pattern.test(yaml)
+    ? yaml.replace(pattern, line)
+    : `${yaml.endsWith('\n') ? yaml : `${yaml}\n`}${line}\n`;
+}
+
 // --- discovery / processes -----------------------------------------------------
 
 export interface DiscoveryRecord {

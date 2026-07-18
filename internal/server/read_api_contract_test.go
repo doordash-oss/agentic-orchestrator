@@ -2548,8 +2548,9 @@ func (p fakeProvider) ModelCatalog() []llm.ModelInfo {
 }
 
 type countingFeatureReader struct {
-	feature        *feature.Feature
-	loadRunNumbers []int
+	feature         *feature.Feature
+	loadRunNumbers  []int
+	listRunsNumbers []int
 }
 
 func (r *countingFeatureReader) List() ([]*feature.Feature, error) {
@@ -2572,6 +2573,13 @@ func (r *countingFeatureReader) LoadRun(_ string, runNumber int) (*feature.Run, 
 }
 
 func (r *countingFeatureReader) RunDir(string, int) string { return "" }
+
+func (r *countingFeatureReader) ListRuns(_ string) ([]int, error) {
+	if r.feature == nil {
+		return nil, nil
+	}
+	return r.listRunsNumbers, nil
+}
 
 type fakeSessionManager struct {
 	views                []ports.SessionView

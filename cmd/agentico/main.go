@@ -1551,6 +1551,20 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 		resp.Result = resultFailed
 		return resp, errors.New("orchestrator is not available")
 	}
+	// Stale-preview guard: when the client presents a preview's source run
+	// and revision, reject before any side effect if the active run changed
+	// or rewind-relevant state advanced since the preview was computed.
+	// Historical source runs (run number below the active run) are rejected
+	// outright — rewind executes only against the current active run.
+	current, err := t.validateRewindGuard(featureID, req)
+	if err != nil {
+		resp.Result = resultFailed
+		return resp, err
+	}
+	sourceRunNumber := 0
+	if current != nil {
+		sourceRunNumber = current.ActiveRun
+	}
 	if req.UpgradePipeline != "" {
 		if err := t.orch.UpgradePipeline(featureID, req.UpgradePipeline); err != nil {
 			resp.Result = resultFailed
@@ -1566,12 +1580,69 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 		resp.EffectivePhase = effectiveTarget.DirName()
 	}
 	resp.WarningCount = len(warnings)
+	resp.SourceRunNumber = sourceRunNumber
+	resp.Warnings = redactRewindWarnings(warnings)
 	if err != nil {
 		resp.Result = resultFailed
 		return resp, err
 	}
 	resp.Result = "rewound"
+	if t.store != nil {
+		if updated, loadErr := t.store.Load(featureID); loadErr == nil {
+			resp.NewRunNumber = updated.ActiveRun
+		}
+	}
 	return resp, nil
+}
+
+// staleRewindError is a sentinel for a stale/historical rewind-preview guard
+// rejection. It carries a redacted reason; no internal path or token is
+// exposed across the API boundary.
+type staleRewindError struct {
+	reason string
+}
+
+func (e staleRewindError) Error() string { return e.reason }
+
+// validateRewindGuard enforces that a rewind request was previewed against
+// the current active run and rewind-relevant state. It performs no side
+// effect and is safe to call before any mutation. It returns the current
+// feature so execution can use the same loaded snapshot for its source run.
+func (t *serverMutationTarget) validateRewindGuard(featureID string, req serverruntime.RewindFeatureRequest) (*feature.Feature, error) {
+	if t.store == nil {
+		if req.SourceRevision == "" {
+			return nil, nil
+		}
+		return nil, errors.New("store is not available for rewind guard")
+	}
+	current, loadErr := t.store.Load(featureID)
+	if loadErr != nil {
+		return nil, fmt.Errorf("loading feature for rewind guard: %w", loadErr)
+	}
+	if req.SourceRevision == "" {
+		return current, nil
+	}
+	if req.SourceRunNumber != 0 && req.SourceRunNumber != current.ActiveRun {
+		return nil, staleRewindError{reason: "active run changed since preview"}
+	}
+	if got := feature.RewindRevision(current); got != req.SourceRevision {
+		return nil, staleRewindError{reason: "rewind state changed since preview"}
+	}
+	return current, nil
+}
+
+// redactRewindWarnings sanitizes rewind warning strings for API exposure,
+// stripping private tokens and bounding length, mirroring the server's
+// safeDisplayText redaction.
+func redactRewindWarnings(warnings []string) []string {
+	if len(warnings) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		out = append(out, serverruntime.SafeDisplayText(w, 300))
+	}
+	return out
 }
 
 func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.RetryFeatureResponse, error) {
@@ -1926,23 +1997,12 @@ func findFeatureRepo(f *feature.Feature, repoName string) (feature.FeatureRepo, 
 }
 
 func parseServerPhaseStrict(in string) (feature.Phase, error) {
+	if phase, ok := feature.ParsePhaseDirName(in); ok {
+		return phase, nil
+	}
 	switch strings.ToLower(strings.TrimSpace(in)) {
-	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
-		return feature.PhaseKnowledgeBase, nil
-	case phaseNameInquire:
-		return feature.PhaseInquire, nil
-	case phaseNameResearch:
-		return feature.PhaseResearch, nil
-	case "design":
-		return feature.PhaseDesign, nil
-	case phaseNamePlan:
-		return feature.PhasePlan, nil
-	case phaseNameImplement:
-		return feature.PhaseImplement, nil
 	case phaseNameReview:
 		return feature.PhaseReview, nil
-	case phaseNameFinalReview, "final review":
-		return feature.PhaseFinalReview, nil
 	case phaseNamePublish:
 		return feature.PhasePublish, nil
 	default:

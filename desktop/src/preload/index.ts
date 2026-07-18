@@ -35,6 +35,13 @@ import {
   type LocalResourceDraftSaveRequest,
   type LocalResourceDraftLookupRequest,
   type LocalResourceDraftDiscardRequest,
+  type RunListRequest,
+  type RunGetRequest,
+  type RunArtifactsListRequest,
+  type RunArtifactContentRequest,
+  type RunLogContentRequest,
+  type RewindPreviewRequest,
+  type RewindExecuteRequest,
 } from '../shared/ipc';
 import { assertNoPrototypePollution } from '../shared/sanitize';
 
@@ -149,6 +156,16 @@ const api: AgenticoApi = {
     call<{ discarded: boolean }>(IPC_CHANNELS.resourceDraftsDiscard, request).then(
       ({ discarded }) => discarded,
     ),
+  listRuns: (request: RunListRequest) => call(IPC_CHANNELS.runsList, request),
+  getRun: (request: RunGetRequest) => call(IPC_CHANNELS.runsGet, request),
+  listRunSessions: (request: RunGetRequest) => call(IPC_CHANNELS.runSessionsList, request),
+  listRunArtifacts: (request: RunArtifactsListRequest) =>
+    call(IPC_CHANNELS.runArtifactsList, request),
+  getRunArtifactContent: (request: RunArtifactContentRequest) =>
+    call(IPC_CHANNELS.runArtifactContent, request),
+  getRunLogContent: (request: RunLogContentRequest) => call(IPC_CHANNELS.runLogContent, request),
+  getRewindPreview: (request: RewindPreviewRequest) => call(IPC_CHANNELS.rewindPreview, request),
+  executeRewind: (request: RewindExecuteRequest) => call(IPC_CHANNELS.rewindExecute, request),
   onAppEvent: (listener: (event: AppEvent) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

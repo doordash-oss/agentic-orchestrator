@@ -93,6 +93,7 @@ type FeatureReader interface {
 	Load(id string) (*feature.Feature, error)
 	LoadRun(featureID string, runNumber int) (*feature.Run, error)
 	RunDir(featureID string, runNumber int) string
+	ListRuns(featureID string) ([]int, error)
 }
 
 type ErrorDTO = Error

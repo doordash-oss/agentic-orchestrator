@@ -768,6 +768,21 @@ describe('RuntimeGateway apiRequest', () => {
     expectNoTokenLeak(env);
   });
 
+  it('permits bounded history and rewind-preview requests through the allowlist', async () => {
+    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    await env.gateway.start();
+    env.deps.fetchJson = vi.fn(() => Promise.resolve({ status: 200, body: { api_version: 'v1' } }));
+
+    for (const path of [
+      '/api/v1/features/feature-1/runs?page=1&page_size=20',
+      '/api/v1/features/feature-1/runs/6/artifacts/history-6?offset=0&limit=262144',
+      '/api/v1/features/feature-1/runs/6/logs/session-1?limit=4096',
+      '/api/v1/features/feature-1/rewind/preview?target_phase=implement&roadmap_phase=2&upgrade_pipeline=large',
+    ]) {
+      await expect(env.gateway.apiRequest(path)).resolves.toMatchObject({ status: 200 });
+    }
+  });
+
   it('allows only bounded transcript pagination query parameters', async () => {
     const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
     await env.gateway.start();

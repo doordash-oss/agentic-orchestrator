@@ -198,6 +198,14 @@ export interface AgenticoMock {
     loadLocalResourceDraft: ReturnType<typeof vi.fn>;
     saveLocalResourceDraft: ReturnType<typeof vi.fn>;
     discardLocalResourceDraft: ReturnType<typeof vi.fn>;
+    listRuns: ReturnType<typeof vi.fn>;
+    getRun: ReturnType<typeof vi.fn>;
+    listRunSessions: ReturnType<typeof vi.fn>;
+    listRunArtifacts: ReturnType<typeof vi.fn>;
+    getRunArtifactContent: ReturnType<typeof vi.fn>;
+    getRunLogContent: ReturnType<typeof vi.fn>;
+    getRewindPreview: ReturnType<typeof vi.fn>;
+    executeRewind: ReturnType<typeof vi.fn>;
   };
   /** Push a connection change to every subscribed listener. */
   emitConnection(state: ConnectionState): void;
@@ -330,6 +338,16 @@ export function installAgenticoMock(
     loadLocalResourceDraft: vi.fn(() => Promise.resolve(null)),
     saveLocalResourceDraft: vi.fn(() => Promise.reject(new Error('unused'))),
     discardLocalResourceDraft: vi.fn(() => Promise.resolve(false)),
+    listRuns: vi.fn(() =>
+      Promise.resolve({ runs: [], page: 1, pageSize: 20, total: 0, totalPages: 0 }),
+    ),
+    getRun: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRunSessions: vi.fn(() => Promise.resolve({ runNumber: 1, sessions: [] })),
+    listRunArtifacts: vi.fn(() => Promise.resolve({ artifacts: [] })),
+    getRunArtifactContent: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    executeRewind: vi.fn(() => Promise.reject(new Error('unused'))),
     onAppEvent: vi.fn((listener: (event: AppEvent) => void) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);

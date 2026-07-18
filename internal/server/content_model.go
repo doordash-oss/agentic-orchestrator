@@ -240,7 +240,7 @@ func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, 
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read content", map[string]any{"id": id})
 		return
 	}
-	text := safeDisplayText(string(buf[:n]), int(limit))
+	text := SafeDisplayText(string(buf[:n]), int(limit))
 	resp := TextContentResponse{
 		APIVersion: APIVersion,
 		ID:         id,

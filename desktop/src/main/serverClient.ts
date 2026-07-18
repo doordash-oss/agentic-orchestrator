@@ -304,7 +304,7 @@ export function parseSessionOutputBlock(block: SseBlock): ParsedSessionOutput {
   };
 }
 
-function toSessionSummary(session: ServerSessionSummary): SessionSummary {
+export function toSessionSummary(session: ServerSessionSummary): SessionSummary {
   return validateWithSchema(
     {
       id: session.id,

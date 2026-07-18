@@ -105,6 +105,19 @@ export function spineStages(pipeline: string | undefined): SpineStage[] {
 }
 
 /**
+ * Renders known storage phase ids with the same vocabulary as the cockpit
+ * spine. Unknown values are retained verbatim: this helper also receives
+ * artifact metadata, where title-casing an identifier would corrupt it.
+ */
+export function displayPhaseLabel(phase: string): string {
+  const normalized = phase
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[_\s]+/g, '-');
+  return spineStages('large').find((stage) => stage.id === normalized)?.label ?? phase;
+}
+
+/**
  * Where the needle points: on Setup until durable setup completes, on the
  * next upcoming phase once the feature is Created and startable, and on the
  * server-reported current phase after later-phase work begins.
@@ -117,8 +130,19 @@ export function spineActiveIndex(snapshot: FeatureSnapshot, stages: SpineStage[]
   if (snapshot.status === 'Created') {
     return Math.min(1, stages.length - 1);
   }
-  const label = snapshot.currentPhase === 'Final Review' ? 'Review' : snapshot.currentPhase;
-  const index = stages.findIndex((stage) => stage.label === label);
+  return spineActiveIndexForPhase(snapshot.currentPhase, stages);
+}
+
+/** Maps a server phase label to the shared cockpit spine. */
+export function spineActiveIndexForPhase(
+  currentPhase: string,
+  stages: readonly SpineStage[],
+): number {
+  const label = currentPhase === 'Final Review' ? 'Review' : currentPhase;
+  const normalizedLabel = label.trim().toLocaleLowerCase();
+  const index = stages.findIndex(
+    (stage) => stage.label.trim().toLocaleLowerCase() === normalizedLabel,
+  );
   return index >= 0 ? index : 0;
 }
 

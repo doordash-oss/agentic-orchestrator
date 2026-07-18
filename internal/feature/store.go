@@ -322,6 +322,36 @@ func (s *Store) LoadRun(featureID string, runNumber int) (*Run, error) {
 	return s.loadRunUnlocked(featureID, runNumber)
 }
 
+// ListRuns enumerates every run directory on disk for a feature and returns
+// the parseable run numbers sorted ascending. It reads the filesystem rather
+// than deriving from ActiveRun/RunCount so it survives active-run gaps left
+// by crash recovery and reports run numbers above 999 without lexicographic
+// truncation. A missing runs directory yields an empty slice and no error.
+// Callers paginate/newest-first by reversing the result.
+func (s *Store) ListRuns(featureID string) ([]int, error) {
+	runsDir := filepath.Join(s.BaseDir, featureID, "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing runs directory: %w", err)
+	}
+	var runNumbers []int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		n, ok := parseRunDirName(e.Name())
+		if !ok {
+			continue
+		}
+		runNumbers = append(runNumbers, n)
+	}
+	sort.Ints(runNumbers)
+	return runNumbers, nil
+}
+
 // SaveRun writes a run.yaml. Panics if r.IsSealed() — a sealed run is
 // immutable by contract. Atomic temp-file+rename.
 func (s *Store) SaveRun(featureID string, r *Run) error {

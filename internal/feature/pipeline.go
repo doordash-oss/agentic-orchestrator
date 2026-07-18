@@ -95,6 +95,21 @@ func (p PipelineProfile) HasPhase(phase Phase) bool {
 	return slices.Contains(PhasesForProfile(p), phase)
 }
 
+// UpgradeOptions returns the pipeline profiles this profile may upgrade into
+// (higher effort, same or richer phase set). Returns nil when no upgrade is
+// available. Shared by the rewind preview and the server read-model so the
+// upgrade lattice never drifts.
+func (p PipelineProfile) UpgradeOptions() []PipelineProfile {
+	switch p {
+	case PipelineMedium:
+		return []PipelineProfile{PipelineLarge, PipelineMoonshot}
+	case PipelineLarge:
+		return []PipelineProfile{PipelineMoonshot}
+	default:
+		return nil
+	}
+}
+
 // FirstPhase returns the first phase to execute for this profile.
 // Medium: PhasePlan, Large/Moonshot: PhaseKnowledgeBase
 func (p PipelineProfile) FirstPhase() Phase {

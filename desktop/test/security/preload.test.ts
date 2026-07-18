@@ -73,6 +73,14 @@ describe('preload surface', () => {
         'sendHelp',
         'setThemePreference',
         'updateSettings',
+        'listRuns',
+        'getRun',
+        'listRunSessions',
+        'listRunArtifacts',
+        'getRunArtifactContent',
+        'getRunLogContent',
+        'getRewindPreview',
+        'executeRewind',
       ].sort(),
     );
   });

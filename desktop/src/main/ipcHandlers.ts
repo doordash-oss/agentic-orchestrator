@@ -68,6 +68,19 @@ import {
   type LocalResourceDraftSaveRequest,
   type LocalResourceDraftLookupRequest,
   type LocalResourceDraftDiscardRequest,
+  type RunListRequest,
+  type RunListResult,
+  type RunGetRequest,
+  type RunDetailView,
+  type RunSessionsListResult,
+  type RunArtifactsListRequest,
+  type RunArtifactsListResult,
+  type RunArtifactContentRequest,
+  type RunTextContent,
+  type RunLogContentRequest,
+  type RewindPreviewRequest,
+  type RewindPreviewView,
+  type RewindExecuteRequest,
   ipcContracts,
 } from '../shared/ipc';
 import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './security';
@@ -123,6 +136,14 @@ export interface IpcServices {
   loadLocalResourceDraft(request: LocalResourceDraftLookupRequest): LocalResourceDraft | null;
   saveLocalResourceDraft(request: LocalResourceDraftSaveRequest): LocalResourceDraft;
   discardLocalResourceDraft(request: LocalResourceDraftDiscardRequest): boolean;
+  listRuns(request: RunListRequest): Promise<RunListResult>;
+  getRun(request: RunGetRequest): Promise<RunDetailView>;
+  listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
+  listRunArtifacts(request: RunArtifactsListRequest): Promise<RunArtifactsListResult>;
+  getRunArtifactContent(request: RunArtifactContentRequest): Promise<RunTextContent>;
+  getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
+  getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;
+  executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
 }
 
 export interface IpcMainLike {
@@ -254,6 +275,20 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.resourceDraftsDiscard]: (_event, request: LocalResourceDraftDiscardRequest) => ({
       discarded: services.discardLocalResourceDraft(request),
     }),
+    [IPC_CHANNELS.runsList]: (_event, request: RunListRequest) => services.listRuns(request),
+    [IPC_CHANNELS.runsGet]: (_event, request: RunGetRequest) => services.getRun(request),
+    [IPC_CHANNELS.runSessionsList]: (_event, request: RunGetRequest) =>
+      services.listRunSessions(request),
+    [IPC_CHANNELS.runArtifactsList]: (_event, request: RunArtifactsListRequest) =>
+      services.listRunArtifacts(request),
+    [IPC_CHANNELS.runArtifactContent]: (_event, request: RunArtifactContentRequest) =>
+      services.getRunArtifactContent(request),
+    [IPC_CHANNELS.runLogContent]: (_event, request: RunLogContentRequest) =>
+      services.getRunLogContent(request),
+    [IPC_CHANNELS.rewindPreview]: (_event, request: RewindPreviewRequest) =>
+      services.getRewindPreview(request),
+    [IPC_CHANNELS.rewindExecute]: (_event, request: RewindExecuteRequest) =>
+      services.executeRewind(request),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

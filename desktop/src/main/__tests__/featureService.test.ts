@@ -316,8 +316,9 @@ describe('FeatureService.getFeature', () => {
         id: 'setup',
         enabled: false,
         disabledReasons: [{ code: 'no_pending_setup', message: 'nothing to retry' }],
+        inputs: [],
       },
-      { id: 'start', enabled: true, disabledReasons: [] },
+      { id: 'start', enabled: true, disabledReasons: [], inputs: [] },
     ]);
   });
 

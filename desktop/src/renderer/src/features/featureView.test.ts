@@ -3,12 +3,14 @@ import { featureSnapshot } from '../test/agenticoMock';
 import {
   actionById,
   dashboardState,
+  displayPhaseLabel,
   featureBranch,
   fieldForCreationError,
   isReadyToStart,
   orderDashboardFeatures,
   setupProgress,
   spineActiveIndex,
+  spineActiveIndexForPhase,
   spineStages,
   spineTone,
 } from './featureView';
@@ -91,6 +93,14 @@ describe('spineStages', () => {
   });
 });
 
+describe('displayPhaseLabel', () => {
+  it('uses cockpit labels for known storage phase ids and preserves unknown values', () => {
+    expect(displayPhaseLabel('knowledge-base')).toBe('Knowledge Base');
+    expect(displayPhaseLabel('implement')).toBe('Implement');
+    expect(displayPhaseLabel('History-Run-6.Md')).toBe('History-Run-6.Md');
+  });
+});
+
 describe('spineActiveIndex', () => {
   it('points at Setup while durable setup runs or fails', () => {
     const stages = spineStages('medium');
@@ -121,6 +131,14 @@ describe('spineActiveIndex', () => {
       setup: { status: 'done', attempt: 1, tasks: [] },
     });
     expect(spineActiveIndex(implementing, stages)).toBe(2);
+  });
+
+  it('uses the same phase mapping for archived and live cockpit spines', () => {
+    const stages = spineStages('large');
+    expect(spineActiveIndexForPhase('Final Review', stages)).toBe(7);
+    expect(spineActiveIndexForPhase('Implement', stages)).toBe(6);
+    expect(spineActiveIndexForPhase('implement', stages)).toBe(6);
+    expect(spineActiveIndexForPhase('Unknown', stages)).toBe(0);
   });
 });
 

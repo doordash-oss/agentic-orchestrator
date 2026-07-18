@@ -265,6 +265,9 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
 
     transcript.section('Already-resolved stale path stays calm');
     const staleItem = await waitForAttentionItem(handle.page, 'perm-stale');
+    if (staleItem.kind !== 'permission') {
+      throw new Error(`perm-stale resolved to unexpected attention kind: ${staleItem.kind}`);
+    }
     inbox = await openInbox(handle);
     await expandInboxItem(inbox, /Permission/);
     await expect(inbox.getByText(/stale-resolution/).first()).toBeVisible();

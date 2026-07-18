@@ -347,6 +347,14 @@ export type ServerSetup = z.output<typeof ServerSetupSchema>;
 export const ServerActionSchema = z.object({
   id: z.string(),
   enabled: z.boolean(),
+  required_inputs: z
+    .array(
+      z.object({
+        name: z.string(),
+        options: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
   disabled_reasons: z.array(z.object({ code: z.string(), message: z.string() })).optional(),
 });
 
@@ -375,6 +383,8 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   active_run_detail: z
     .object({
       setup: ServerSetupSchema.optional(),
+      roadmap_phase: z.number().int().nonnegative().optional(),
+      roadmap_total: z.number().int().nonnegative().optional(),
     })
     .optional(),
   actions: z.array(ServerActionSchema),
@@ -396,6 +406,142 @@ export const FeatureDetailResponseSchema = z.object({
 });
 
 export type FeatureDetailResponse = z.output<typeof FeatureDetailResponseSchema>;
+
+// --- Run history (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) --------
+
+export const ServerRunSummarySchema = z.object({
+  run_number: z.number().int().nonnegative(),
+  started_at: z.string().optional(),
+  sealed_at: z.string().optional(),
+  seal_reason: z.string().optional(),
+  current_phase: z.string().optional(),
+  phase_status: z.string().optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  roadmap_phase: z.number().int().nonnegative().optional(),
+  roadmap_total: z.number().int().nonnegative().optional(),
+  pending_review_phase: z.string().optional(),
+  is_rewind: z.boolean().optional(),
+  artifact_count: z.number().int().nonnegative(),
+  has_need_user_gate: z.boolean().optional(),
+});
+export type ServerRunSummary = z.output<typeof ServerRunSummarySchema>;
+
+export const ServerRunDetailSchema = ServerRunSummarySchema.extend({
+  rewind_target: z.string().optional(),
+  rewind_roadmap_phase: z.number().int().nonnegative().optional(),
+  carried_from_run: z.number().int().nonnegative().optional(),
+  carried_phases: z.array(z.string()).optional(),
+  backup_branch_repos: z.array(z.string()).optional(),
+  committing: z.boolean().optional(),
+  timing: z
+    .object({ total_seconds: z.number().int(), by_phase: z.record(z.string(), z.number()) })
+    .optional(),
+  cost: z.object({ total_usd: z.number(), by_phase: z.record(z.string(), z.number()) }).optional(),
+});
+export type ServerRunDetail = z.output<typeof ServerRunDetailSchema>;
+
+export const RunListResponseSchema = z.object({
+  api_version: z.string(),
+  runs: z.array(ServerRunSummarySchema),
+  page: z.number().int().positive(),
+  page_size: z.number().int().positive(),
+  total: z.number().int().nonnegative(),
+  total_pages: z.number().int().nonnegative(),
+});
+export type RunListResponse = z.output<typeof RunListResponseSchema>;
+
+export const RunDetailResponseSchema = z.object({
+  api_version: z.string(),
+  run: ServerRunDetailSchema,
+});
+export type RunDetailResponse = z.output<typeof RunDetailResponseSchema>;
+
+// RunSessionListResponse is declared after ServerSessionSummarySchema below.
+
+// --- Artifacts + logs (run-scoped) ------------------------------------------
+
+export const ServerArtifactSchema = z.object({
+  id: z.string(),
+  type: z.string().optional(),
+  category: z.string().optional(),
+  run_number: z.number().int().nonnegative(),
+  phase: z.string().optional(),
+  size: z.number().int().nonnegative().optional(),
+  modified_at: z.string().optional(),
+  content_available: z.boolean().optional(),
+});
+export type ServerArtifact = z.output<typeof ServerArtifactSchema>;
+
+export const ArtifactListResponseSchema = z.object({
+  api_version: z.string(),
+  artifacts: z.array(ServerArtifactSchema),
+});
+export type ArtifactListResponse = z.output<typeof ArtifactListResponseSchema>;
+
+export const TextContentResponseSchema = z.object({
+  api_version: z.string(),
+  id: z.string(),
+  offset: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  size: z.number().int().nonnegative(),
+  text: z.string(),
+  truncated: z.boolean(),
+});
+export type TextContentResponse = z.output<typeof TextContentResponseSchema>;
+
+// --- Rewind preview + execution --------------------------------------------
+
+export const ServerRewindChoiceSchema = z.object({
+  phase: z.string(),
+  escalates_to: z.string().optional(),
+  override_phase: z.string().optional(),
+});
+
+export const ServerRewindPRConsequenceSchema = z.object({
+  repo: z.string(),
+  pr_url: z.string(),
+});
+
+export const ServerRewindWorktreeConsequenceSchema = z.object({
+  repo: z.string(),
+  reset_kind: z.enum(['anchor', 'base', 'base-local', 'none']),
+});
+
+export const RewindPreviewResponseSchema = z.object({
+  api_version: z.string(),
+  eligible: z.boolean(),
+  source_run_number: z.number().int().nonnegative(),
+  source_revision: z.string(),
+  target_phase: z.string(),
+  effective_phase: z.string(),
+  roadmap_phase: z.number().int().nonnegative().optional(),
+  upgrade_pipeline: z.string().optional(),
+  valid_phases: z.array(ServerRewindChoiceSchema).optional(),
+  valid_roadmap_phases: z.array(z.number().int().positive()).optional(),
+  upgrade_pipeline_options: z.array(z.string()).optional(),
+  carried_phases: z.array(z.string()).optional(),
+  carried_from_run: z.number().int().nonnegative().optional(),
+  pr_consequences: z.array(ServerRewindPRConsequenceSchema).optional(),
+  worktree_consequences: z.array(ServerRewindWorktreeConsequenceSchema).optional(),
+  backup_branch_repos: z.array(z.string()).optional(),
+  validation_findings: z.array(z.string()).optional(),
+});
+export type RewindPreviewResponse = z.output<typeof RewindPreviewResponseSchema>;
+
+export const RewindActionResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.string(),
+  feature_id: z.string(),
+  target_phase: z.string().optional(),
+  effective_phase: z.string().optional(),
+  roadmap_phase: z.number().int().nonnegative().optional(),
+  upgrade_pipeline: z.string().optional(),
+  warning_count: z.number().int().nonnegative().optional(),
+  source_run_number: z.number().int().nonnegative().optional(),
+  new_run_number: z.number().int().nonnegative().optional(),
+  warnings: z.array(z.string()).optional(),
+});
+export type RewindActionResponse = z.output<typeof RewindActionResponseSchema>;
 
 /** Shared shape of create/setup action responses (FeatureActionResult). */
 export const FeatureActionResponseSchema = z.object({
@@ -437,6 +583,13 @@ export const ServerSessionSummarySchema = z.object({
   usage: ServerUsageSchema,
 });
 export type ServerSessionSummary = z.output<typeof ServerSessionSummarySchema>;
+
+export const RunSessionListResponseSchema = z.object({
+  api_version: z.string(),
+  run_number: z.number().int().positive(),
+  sessions: z.array(ServerSessionSummarySchema),
+});
+export type RunSessionListResponse = z.output<typeof RunSessionListResponseSchema>;
 
 export const ServerTranscriptCursorSchema = z.object({
   total: z.number().int().nonnegative(),
@@ -646,3 +799,24 @@ const _reviewDecisionSubset = (value: ReviewDecisionDTO): ServerReviewDecision =
 void _reviewDecisionSubset;
 const _runtimeConfigCreationSubset = (value: RuntimeConfigDTO): RuntimeConfigCreation => value;
 void _runtimeConfigCreationSubset;
+type RunListDTO = components['schemas']['RunListResponse'];
+const _runListSubset = (value: RunListDTO): RunListResponse => value;
+void _runListSubset;
+type RunDetailDTO = components['schemas']['RunDetailResponse'];
+const _runDetailSubset = (value: RunDetailDTO): RunDetailResponse => value;
+void _runDetailSubset;
+type RunSessionListDTO = components['schemas']['RunSessionListResponse'];
+const _runSessionListSubset = (value: RunSessionListDTO): RunSessionListResponse => value;
+void _runSessionListSubset;
+type ArtifactListDTO = components['schemas']['ArtifactListResponse'];
+const _artifactListSubset = (value: ArtifactListDTO): ArtifactListResponse => value;
+void _artifactListSubset;
+type TextContentDTO = components['schemas']['TextContentResponse'];
+const _textContentSubset = (value: TextContentDTO): TextContentResponse => value;
+void _textContentSubset;
+type RewindPreviewDTO = components['schemas']['RewindPreviewResponse'];
+const _rewindPreviewSubset = (value: RewindPreviewDTO): RewindPreviewResponse => value;
+void _rewindPreviewSubset;
+type RewindActionDTO = components['schemas']['RewindFeatureResponse'];
+const _rewindActionSubset = (value: RewindActionDTO): RewindActionResponse => value;
+void _rewindActionSubset;

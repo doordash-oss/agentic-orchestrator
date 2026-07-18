@@ -239,6 +239,12 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     repos: feature.repos,
     createdAt: feature.created_at,
     activeRun: feature.active_run,
+    ...(feature.active_run_detail?.roadmap_phase === undefined
+      ? {}
+      : { currentRoadmapPhase: feature.active_run_detail.roadmap_phase }),
+    ...(feature.active_run_detail?.roadmap_total === undefined
+      ? {}
+      : { totalRoadmapPhases: feature.active_run_detail.roadmap_total }),
     ...(setup === null ? {} : { setup }),
     actions: (feature.actions ?? []).map((action) => ({
       id: action.id,
@@ -247,6 +253,14 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
         code: reason.code,
         message: redactText(reason.message),
       })),
+      ...(action.required_inputs === undefined
+        ? {}
+        : {
+            inputs: action.required_inputs.map((input) => ({
+              name: input.name,
+              ...(input.options === undefined ? {} : { options: input.options }),
+            })),
+          }),
     })),
     ...(feature.failure === undefined
       ? {}

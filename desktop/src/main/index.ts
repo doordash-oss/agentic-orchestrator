@@ -25,6 +25,7 @@ import { SettingsStore } from './settings';
 import { LocalDraftStore } from './localDraftStore';
 import { ReviewService } from './reviews';
 import { ResourceService } from './resources';
+import { RunHistoryService } from './runHistory';
 import { ResourceDraftStore } from './resourceDraftStore';
 import { SetupService } from './setup';
 import { ThemeController } from './theme';
@@ -160,6 +161,7 @@ void app.whenReady().then(() => {
   const reviews = new ReviewService(gateway);
   const resourceService = new ResourceService(gateway);
   const attention = new AttentionService(gateway);
+  const runHistory = new RunHistoryService(gateway);
 
   // Main-process SSE consumption: runs only while the gateway is ready and
   // forwards schema-validated invalidation metadata to the app window.
@@ -258,6 +260,14 @@ void app.whenReady().then(() => {
     loadLocalResourceDraft: (request) => resourceDrafts.load(request),
     saveLocalResourceDraft: (request) => resourceDrafts.save(request),
     discardLocalResourceDraft: (request) => resourceDrafts.discard(request),
+    listRuns: (request) => runHistory.listRuns(request),
+    getRun: (request) => runHistory.getRun(request),
+    listRunSessions: (request) => runHistory.listRunSessions(request),
+    listRunArtifacts: (request) => runHistory.listRunArtifacts(request),
+    getRunArtifactContent: (request) => runHistory.getRunArtifactContent(request),
+    getRunLogContent: (request) => runHistory.getRunLogContent(request),
+    getRewindPreview: (request) => runHistory.getRewindPreview(request),
+    executeRewind: (request) => runHistory.executeRewind(request),
   };
   registerIpcHandlers(ipcMain, trusted, services);
 

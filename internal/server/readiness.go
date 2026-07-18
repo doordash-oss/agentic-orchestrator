@@ -166,7 +166,7 @@ func probeProviderReadiness(ctx context.Context, p llm.LLMProvider) ProviderRead
 	}
 	out.Installed = true
 	if version, err := p.VersionInfo(); err == nil {
-		out.Version = safeDisplayText(strings.TrimSpace(version), maxReadinessTextLen)
+		out.Version = SafeDisplayText(strings.TrimSpace(version), maxReadinessTextLen)
 	}
 	if enforcer, ok := p.(llm.VersionEnforcer); ok && enforcer.EnforcesMinVersion() {
 		if below, version, minVer := agent.BelowMinVersion(p); below {
@@ -197,8 +197,8 @@ func probeProviderReadiness(ctx context.Context, p llm.LLMProvider) ProviderRead
 	}
 	out.Issue = &ReadinessIssue{
 		Code:    Unauthenticated,
-		Message: safeDisplayText(message, maxReadinessTextLen),
-		Remedy:  safeDisplayText(strings.TrimSpace(status.Remedy), maxReadinessTextLen),
+		Message: SafeDisplayText(message, maxReadinessTextLen),
+		Remedy:  SafeDisplayText(strings.TrimSpace(status.Remedy), maxReadinessTextLen),
 	}
 	return out
 }

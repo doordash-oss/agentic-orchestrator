@@ -1359,39 +1359,7 @@ type partialRewindPlan struct {
 }
 
 func (m *Manager) validatePartialRewindRequest(f *Feature, request RewindRequest) (partialRewindPlan, error) {
-	if request.RoadmapPhase == 0 {
-		return partialRewindPlan{}, nil
-	}
-	if request.TargetPhase != PhaseImplement {
-		return partialRewindPlan{}, fmt.Errorf("roadmap phase rewind is only valid for Implement targets")
-	}
-	if f.TotalRoadmapPhases <= 1 {
-		return partialRewindPlan{}, fmt.Errorf("roadmap phase rewind requires a multi-phase roadmap run")
-	}
-	if request.RoadmapPhase < 1 || request.RoadmapPhase > f.TotalRoadmapPhases {
-		return partialRewindPlan{}, fmt.Errorf("roadmap phase %d out of range 1..%d", request.RoadmapPhase, f.TotalRoadmapPhases)
-	}
-	partial := partialRewindPlan{enabled: true, roadmapPhase: request.RoadmapPhase}
-	if request.RoadmapPhase == 1 {
-		return partial, nil
-	}
-	previousPhase := request.RoadmapPhase - 1
-	anchors := f.Run().RoadmapPhaseCommitAnchors[previousPhase]
-	if len(anchors) == 0 {
-		return partialRewindPlan{}, fmt.Errorf("missing commit anchor for roadmap phase %d", previousPhase)
-	}
-	partial.resetAnchors = make(map[string]string)
-	for _, repo := range f.Repos {
-		if repo.WorktreePath == "" {
-			continue
-		}
-		sha := anchors[repo.Name]
-		if sha == "" {
-			return partialRewindPlan{}, fmt.Errorf("missing commit anchor for roadmap phase %d repo %s", previousPhase, repo.Name)
-		}
-		partial.resetAnchors[repo.Name] = sha
-	}
-	return partial, nil
+	return validatePartialRewindRequestForFeature(f, request)
 }
 
 func roadmapPhaseType(phase, total int) string {
@@ -1446,27 +1414,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 	// Validate: target phase must be rewindable from the current state.
 	// Use RewindChoicesForFeature so escalation targets are also valid.
 	choices := RewindChoicesForFeature(f)
-	validTarget := false
-	for _, c := range choices {
-		if c.Phase == targetPhase {
-			validTarget = true
-			break
-		}
-	}
-	if !validTarget {
-		if targetPhase == PhaseKnowledgeBase {
-			return nil, 0, fmt.Errorf("cannot rewind to knowledge base phase")
-		}
-		return nil, 0, fmt.Errorf("cannot rewind to %s from current state %s", targetPhase, f.Status)
+	if err := ValidateRewindTarget(choices, targetPhase, f.Status); err != nil {
+		return nil, 0, err
 	}
 
 	// Compute effective target (may differ if KB was never built)
-	effectiveTarget = targetPhase
-	if f.PipelineUpgradedFrom == PipelineMedium && !PipelineMedium.HasPhase(targetPhase) {
-		// Feature was upgraded from medium via UpgradePipeline without rewinding.
-		// Pre-plan phases still need KB Build because KB was never completed.
-		effectiveTarget = PhaseKnowledgeBase
-	}
+	effectiveTarget = EffectiveRewindPhase(f, targetPhase)
 
 	partial, err := m.validatePartialRewindRequest(f, request)
 	if err != nil {
@@ -1532,11 +1485,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 					continue
 				}
 				var resetErr error
-				if partial.enabled && partial.roadmapPhase > 1 {
+				switch WorktreeResetKind(repo, partial.enabled, partial.roadmapPhase) {
+				case ResetKindAnchor:
 					resetErr = m.Worktrees.ResetToCommit(repo.WorktreePath, partial.resetAnchors[repo.Name])
-				} else if repo.BaseBranch != "" && repo.Publishable != nil && !*repo.Publishable {
+				case ResetKindBaseLocal:
 					resetErr = m.Worktrees.ResetToBaseLocal(repo.WorktreePath, repo.BaseBranch)
-				} else if repo.BaseBranch != "" {
+				case ResetKindBase:
 					resetErr = m.Worktrees.ResetToBase(repo.WorktreePath, repo.BaseBranch)
 				}
 				if resetErr != nil {
@@ -1611,41 +1565,9 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		// on the already-persisted skeleton. The Store clears Committing and
 		// re-persists newRun after populate returns.
 		func(oldRun, newRun *Run) error {
-			// Static matrix per target; empty for PhaseInquire.
-			dirs := append([]string(nil), carryForwardDirs(targetPhase)...)
-
-			// For rewind-to-PhaseImplement, also carry every phase-NN/plan/
-			// directory that exists in the sealed run.
-			//
-			// Pipeline-variant guard: this `targetPhase == PhaseImplement`
-			// branch is reached by Medium, Large, AND Moonshot — it is a
-			// dynamic-discovery scope (not a pipeline gate). Medium features
-			// produce no `phase-NN/` subdirs, so `discoverCarriedPhasePlanDirs`
-			// returns nil and only the static `plan`/`roadmap` entries (above)
-			// may carry. Large/Moonshot populate `phase-NN/plan/` and have
-			// no top-level `plan/` dir; both are listed in `dirs` but
-			// `copyRunArtifactsForward` silently skips missing sources. All
-			// three profiles thus reach the same path with pipeline-specific
-			// behavior produced by the on-disk contents of the sealed run.
-			if targetPhase == PhaseImplement {
-				if partial.enabled {
-					phaseHistory, err := discoverPartialImplementCarryForward(sealedRunDir, partial.roadmapPhase)
-					if err != nil {
-						return fmt.Errorf("discovering partial roadmap phase history: %w", err)
-					}
-					dirs = append(dirs, phaseHistory...)
-				} else {
-					phaseDirs, err := discoverCarriedPhasePlanDirs(sealedRunDir)
-					if err != nil {
-						return fmt.Errorf("discovering phase-NN plan dirs: %w", err)
-					}
-					dirs = append(dirs, phaseDirs...)
-					phaseFiles, err := discoverCarriedPhaseFiles(sealedRunDir)
-					if err != nil {
-						return fmt.Errorf("discovering phase-root history files: %w", err)
-					}
-					dirs = append(dirs, phaseFiles...)
-				}
+			dirs, err := carryForwardSet(targetPhase, sealedRunDir, partial.roadmapPhase)
+			if err != nil {
+				return err
 			}
 
 			// Deep-copy carried directories from sealed to new run. On error
@@ -1739,6 +1661,33 @@ func carryForwardDirs(target Phase) []string {
 		return []string{"inquire", "research", "design", "roadmap", "plan", "implement"}
 	}
 	return nil
+}
+
+// carryForwardSet returns the complete static and on-disk carry-forward set
+// shared by rewind preview and execution. A positive partialRoadmapPhase
+// selects the partial Implement rule; zero selects the full Implement rule.
+func carryForwardSet(target Phase, sealedRunDir string, partialRoadmapPhase int) ([]string, error) {
+	dirs := append([]string(nil), carryForwardDirs(target)...)
+	if target != PhaseImplement || sealedRunDir == "" {
+		return dirs, nil
+	}
+	if partialRoadmapPhase > 0 {
+		phaseHistory, err := discoverPartialImplementCarryForward(sealedRunDir, partialRoadmapPhase)
+		if err != nil {
+			return nil, fmt.Errorf("discovering partial roadmap phase history: %w", err)
+		}
+		return append(dirs, phaseHistory...), nil
+	}
+	phaseDirs, err := discoverCarriedPhasePlanDirs(sealedRunDir)
+	if err != nil {
+		return nil, fmt.Errorf("discovering phase-NN plan dirs: %w", err)
+	}
+	phaseFiles, err := discoverCarriedPhaseFiles(sealedRunDir)
+	if err != nil {
+		return nil, fmt.Errorf("discovering phase-root history files: %w", err)
+	}
+	dirs = append(dirs, phaseDirs...)
+	return append(dirs, phaseFiles...), nil
 }
 
 // UpgradePipeline escalates a feature's pipeline profile without rewinding.

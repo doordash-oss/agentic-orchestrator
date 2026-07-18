@@ -106,10 +106,10 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 		End:   sess.MessageLog().Len(),
 	}
 	detail.PendingControls = pendingControlDTOs(sess)
-	detail.InitialPrompt = safeDisplayText(sess.InitialPrompt(), 2000)
+	detail.InitialPrompt = SafeDisplayText(sess.InitialPrompt(), 2000)
 	detail.CanAttach = sess.IsActive()
 	detail.LogAvailable = fileExists(sess.LogFilePath())
-	detail.SafeError = safeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240)
+	detail.SafeError = SafeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240)
 	revision := revisionForAny(detail)
 	h.writeRevisionedJSON(w, r, revision, SessionDetailResponse{
 		APIVersion: APIVersion,
@@ -458,9 +458,9 @@ func safeTranscriptText(text, role string, locallyAppended bool) string {
 		return safeTranscriptPrompt(text)
 	}
 	if role == roleAssistant {
-		return safeDisplayText(text, 0)
+		return SafeDisplayText(text, 0)
 	}
-	return safeDisplayText(text, 500)
+	return SafeDisplayText(text, 500)
 }
 
 func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCallDTO {
@@ -482,7 +482,7 @@ func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCallDTO {
 		return nil
 	}
 	return &ToolCallDTO{
-		Summary: safeDisplayText(summary, 500),
+		Summary: SafeDisplayText(summary, 500),
 		Prompt:  safeTranscriptPrompt(prompt),
 	}
 }
@@ -492,10 +492,10 @@ func taskDTOFromStarted(msg *llm.TaskStartedMessage) *TaskDTO {
 		return nil
 	}
 	return &TaskDTO{
-		ID:          safeDisplayText(msg.TaskID, 200),
-		ToolUseID:   safeDisplayText(msg.ToolUseID, 200),
-		Description: safeDisplayText(msg.Description, 500),
-		TaskType:    safeDisplayText(msg.TaskType, 200),
+		ID:          SafeDisplayText(msg.TaskID, 200),
+		ToolUseID:   SafeDisplayText(msg.ToolUseID, 200),
+		Description: SafeDisplayText(msg.Description, 500),
+		TaskType:    SafeDisplayText(msg.TaskType, 200),
 		Prompt:      safeTranscriptPrompt(msg.Prompt),
 	}
 }
@@ -505,10 +505,10 @@ func taskDTOFromProgress(msg *llm.TaskProgressMessage) *TaskDTO {
 		return nil
 	}
 	return &TaskDTO{
-		ID:           safeDisplayText(msg.TaskID, 200),
-		ToolUseID:    safeDisplayText(msg.ToolUseID, 200),
-		Description:  safeDisplayText(msg.Description, 500),
-		LastToolName: safeDisplayText(msg.LastToolName, 200),
+		ID:           SafeDisplayText(msg.TaskID, 200),
+		ToolUseID:    SafeDisplayText(msg.ToolUseID, 200),
+		Description:  SafeDisplayText(msg.Description, 500),
+		LastToolName: SafeDisplayText(msg.LastToolName, 200),
 	}
 }
 
@@ -517,16 +517,16 @@ func taskDTOFromNotification(msg *llm.TaskNotificationMessage) *TaskDTO {
 		return nil
 	}
 	return &TaskDTO{
-		ID:         safeDisplayText(msg.TaskID, 200),
-		ToolUseID:  safeDisplayText(msg.ToolUseID, 200),
-		Status:     safeDisplayText(msg.Status, 200),
-		Summary:    safeDisplayText(msg.Summary, 1000),
+		ID:         SafeDisplayText(msg.TaskID, 200),
+		ToolUseID:  SafeDisplayText(msg.ToolUseID, 200),
+		Status:     SafeDisplayText(msg.Status, 200),
+		Summary:    SafeDisplayText(msg.Summary, 1000),
 		OutputFile: safeTranscriptPath("", msg.OutputFile),
 	}
 }
 
 func safeTranscriptPrompt(prompt string) string {
-	return safeDisplayText(truncateTranscriptPrompt(prompt), 4000)
+	return SafeDisplayText(truncateTranscriptPrompt(prompt), 4000)
 }
 
 func truncateTranscriptPrompt(prompt string) string {
@@ -573,7 +573,7 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 		return &FileChangeDTO{
 			Path:      safeTranscriptPath(workDir, path),
 			Operation: op,
-			Detail:    safeDisplayText(truncateTranscriptFileChangeDetail(detail), 2000),
+			Detail:    SafeDisplayText(truncateTranscriptFileChangeDetail(detail), 2000),
 		}
 	case "Delete":
 		path := firstTranscriptString(input, "file_path", "path")
@@ -605,7 +605,7 @@ func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir st
 	if path == "" {
 		return nil
 	}
-	detail := safeDisplayText(truncateTranscriptFileChangeDetail(progress.Data), 2000)
+	detail := SafeDisplayText(truncateTranscriptFileChangeDetail(progress.Data), 2000)
 	if detail == "" {
 		detail = "Captured from tool activity."
 	}
@@ -643,14 +643,14 @@ func fileChangeDTOFromSDKFileChange(change llm.FileChangeEvent, workDir string) 
 	if op == "" {
 		op = fileChangeOpUpdate
 	}
-	detail := safeDisplayText(truncateTranscriptFileChangeDetail(change.Detail), 2000)
+	detail := SafeDisplayText(truncateTranscriptFileChangeDetail(change.Detail), 2000)
 	if detail == "" {
 		detail = "Captured from provider file change."
 	}
 	return &FileChangeDTO{
 		Path:         safeTranscriptPath(workDir, path),
 		OldPath:      safeTranscriptPath(workDir, change.OldPath),
-		Operation:    safeDisplayText(op, 120),
+		Operation:    SafeDisplayText(op, 120),
 		Detail:       detail,
 		AddedLines:   change.AddedLines,
 		RemovedLines: change.RemovedLines,

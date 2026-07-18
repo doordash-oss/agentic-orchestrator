@@ -250,6 +250,30 @@ func (e ResourceWriteResponseType) Valid() bool {
 	}
 }
 
+// Defines values for RewindWorktreeConsequenceResetKind.
+const (
+	Anchor    RewindWorktreeConsequenceResetKind = "anchor"
+	Base      RewindWorktreeConsequenceResetKind = "base"
+	BaseLocal RewindWorktreeConsequenceResetKind = "base-local"
+	None      RewindWorktreeConsequenceResetKind = "none"
+)
+
+// Valid indicates whether the value is a known member of the RewindWorktreeConsequenceResetKind enum.
+func (e RewindWorktreeConsequenceResetKind) Valid() bool {
+	switch e {
+	case Anchor:
+		return true
+	case Base:
+		return true
+	case BaseLocal:
+		return true
+	case None:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureAction.
 const (
 	FeatureActionCleanup            FeatureAction = "cleanup"
@@ -1897,17 +1921,149 @@ type ReviewSessionResponse struct {
 	Text           string       `json:"text"`
 }
 
+// RewindChoice defines model for RewindChoice.
+type RewindChoice struct {
+	EscalatesTo   string `json:"escalates_to,omitempty"`
+	OverridePhase string `json:"override_phase,omitempty"`
+	Phase         string `json:"phase"`
+}
+
 // RewindFeatureResponse defines model for RewindFeatureResponse.
 type RewindFeatureResponse struct {
-	APIVersion      string       `json:"api_version"`
-	EffectivePhase  string       `json:"effective_phase,omitempty"`
-	FeatureID       string       `json:"feature_id"`
-	Meta            ResponseMeta `json:"meta,omitempty"`
-	Result          string       `json:"result"`
-	RoadmapPhase    int          `json:"roadmap_phase,omitempty"`
-	TargetPhase     string       `json:"target_phase,omitempty"`
-	UpgradePipeline string       `json:"upgrade_pipeline,omitempty"`
-	WarningCount    int          `json:"warning_count,omitempty"`
+	APIVersion     string       `json:"api_version"`
+	EffectivePhase string       `json:"effective_phase,omitempty"`
+	FeatureID      string       `json:"feature_id"`
+	Meta           ResponseMeta `json:"meta,omitempty"`
+
+	// NewRunNumber The new active run forked by the rewind.
+	NewRunNumber int    `json:"new_run_number,omitempty"`
+	Result       string `json:"result"`
+	RoadmapPhase int    `json:"roadmap_phase,omitempty"`
+
+	// SourceRunNumber The run that was sealed (rewind source).
+	SourceRunNumber int    `json:"source_run_number,omitempty"`
+	TargetPhase     string `json:"target_phase,omitempty"`
+	UpgradePipeline string `json:"upgrade_pipeline,omitempty"`
+	WarningCount    int    `json:"warning_count,omitempty"`
+
+	// Warnings Redacted non-fatal warning details (PR close, backup branch, worktree reset failures).
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// RewindPRConsequence defines model for RewindPRConsequence.
+type RewindPRConsequence struct {
+	PrURL string `json:"pr_url"`
+	Repo  string `json:"repo"`
+}
+
+// RewindPreview defines model for RewindPreview.
+type RewindPreview struct {
+	BackupBranchRepos []string              `json:"backup_branch_repos,omitempty"`
+	CarriedFromRun    int                   `json:"carried_from_run,omitempty"`
+	CarriedPhases     []string              `json:"carried_phases,omitempty"`
+	EffectivePhase    string                `json:"effective_phase"`
+	Eligible          bool                  `json:"eligible"`
+	PrConsequences    []RewindPRConsequence `json:"pr_consequences,omitempty"`
+	RoadmapPhase      int                   `json:"roadmap_phase,omitempty"`
+
+	// SourceRevision Hash of rewind-relevant feature state; execution must present the same value or be rejected as stale.
+	SourceRevision         string                      `json:"source_revision"`
+	SourceRunNumber        int                         `json:"source_run_number"`
+	TargetPhase            string                      `json:"target_phase"`
+	UpgradePipeline        string                      `json:"upgrade_pipeline,omitempty"`
+	UpgradePipelineOptions []string                    `json:"upgrade_pipeline_options,omitempty"`
+	ValidPhases            []RewindChoice              `json:"valid_phases,omitempty"`
+	ValidRoadmapPhases     []int                       `json:"valid_roadmap_phases,omitempty"`
+	ValidationFindings     []string                    `json:"validation_findings,omitempty"`
+	WorktreeConsequences   []RewindWorktreeConsequence `json:"worktree_consequences,omitempty"`
+}
+
+// RewindPreviewResponse defines model for RewindPreviewResponse.
+type RewindPreviewResponse struct {
+	APIVersion        string                `json:"api_version"`
+	BackupBranchRepos []string              `json:"backup_branch_repos,omitempty"`
+	CarriedFromRun    int                   `json:"carried_from_run,omitempty"`
+	CarriedPhases     []string              `json:"carried_phases,omitempty"`
+	EffectivePhase    string                `json:"effective_phase"`
+	Eligible          bool                  `json:"eligible"`
+	Meta              ResponseMeta          `json:"meta,omitempty"`
+	PrConsequences    []RewindPRConsequence `json:"pr_consequences,omitempty"`
+	RoadmapPhase      int                   `json:"roadmap_phase,omitempty"`
+
+	// SourceRevision Hash of rewind-relevant feature state; execution must present the same value or be rejected as stale.
+	SourceRevision         string                      `json:"source_revision"`
+	SourceRunNumber        int                         `json:"source_run_number"`
+	TargetPhase            string                      `json:"target_phase"`
+	UpgradePipeline        string                      `json:"upgrade_pipeline,omitempty"`
+	UpgradePipelineOptions []string                    `json:"upgrade_pipeline_options,omitempty"`
+	ValidPhases            []RewindChoice              `json:"valid_phases,omitempty"`
+	ValidRoadmapPhases     []int                       `json:"valid_roadmap_phases,omitempty"`
+	ValidationFindings     []string                    `json:"validation_findings,omitempty"`
+	WorktreeConsequences   []RewindWorktreeConsequence `json:"worktree_consequences,omitempty"`
+}
+
+// RewindWorktreeConsequence defines model for RewindWorktreeConsequence.
+type RewindWorktreeConsequence struct {
+	Repo      string                             `json:"repo"`
+	ResetKind RewindWorktreeConsequenceResetKind `json:"reset_kind"`
+}
+
+// RewindWorktreeConsequenceResetKind defines model for RewindWorktreeConsequence.ResetKind.
+type RewindWorktreeConsequenceResetKind string
+
+// RunDetail defines model for RunDetail.
+type RunDetail struct {
+	ArtifactCount     int      `json:"artifact_count"`
+	BackupBranchRepos []string `json:"backup_branch_repos,omitempty"`
+	CarriedFromRun    int      `json:"carried_from_run,omitempty"`
+	CarriedPhases     []string `json:"carried_phases,omitempty"`
+
+	// Committing True while a forked run's carry-forward copy is in flight (crash-recovery signal); a reconnecting client treats this as "requires safe retry" until startup cleanup reconciles.
+	Committing                      bool       `json:"committing,omitempty"`
+	Cost                            Cost       `json:"cost"`
+	CurrentPhase                    string     `json:"current_phase,omitempty"`
+	HasNeedUserGate                 bool       `json:"has_need_user_gate,omitempty"`
+	IsRewind                        bool       `json:"is_rewind,omitempty"`
+	Iteration                       int        `json:"iteration,omitempty"`
+	PendingReviewPhase              string     `json:"pending_review_phase,omitempty"`
+	PendingRewindReviewRoadmapPhase int        `json:"pending_rewind_review_roadmap_phase,omitempty"`
+	PhaseStatus                     string     `json:"phase_status,omitempty"`
+	RewindRoadmapPhase              int        `json:"rewind_roadmap_phase,omitempty"`
+	RewindTarget                    string     `json:"rewind_target,omitempty"`
+	RoadmapPhase                    int        `json:"roadmap_phase,omitempty"`
+	RoadmapTotal                    int        `json:"roadmap_total,omitempty"`
+	RunNumber                       int        `json:"run_number"`
+	SealReason                      string     `json:"seal_reason,omitempty"`
+	SealedAt                        *time.Time `json:"sealed_at,omitempty"`
+	Setup                           *Setup     `json:"setup,omitempty"`
+	StartedAt                       *time.Time `json:"started_at,omitempty"`
+	Timing                          Timing     `json:"timing"`
+}
+
+// RunDetailResponse defines model for RunDetailResponse.
+type RunDetailResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Run        RunDetail    `json:"run"`
+}
+
+// RunListResponse defines model for RunListResponse.
+type RunListResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Page       int          `json:"page"`
+	PageSize   int          `json:"page_size"`
+	Runs       []RunSummary `json:"runs"`
+	Total      int          `json:"total"`
+	TotalPages int          `json:"total_pages"`
+}
+
+// RunSessionListResponse defines model for RunSessionListResponse.
+type RunSessionListResponse struct {
+	APIVersion string           `json:"api_version"`
+	Meta       ResponseMeta     `json:"meta,omitempty"`
+	RunNumber  int              `json:"run_number"`
+	Sessions   []SessionSummary `json:"sessions"`
 }
 
 // RunSummary defines model for RunSummary.
@@ -2213,6 +2369,12 @@ type LogID = string
 // Offset defines model for Offset.
 type Offset = int64
 
+// Page defines model for Page.
+type Page = int
+
+// PageSize defines model for PageSize.
+type PageSize = int
+
 // ResourceID defines model for ResourceID.
 type ResourceID = string
 
@@ -2366,6 +2528,27 @@ type ValidateReviewDraftParams struct {
 
 // ValidateReviewDraftParamsXAgenticoClient defines parameters for ValidateReviewDraft.
 type ValidateReviewDraftParamsXAgenticoClient string
+
+// GetRewindPreviewParams defines parameters for GetRewindPreview.
+type GetRewindPreviewParams struct {
+	// TargetPhase Proposed rewind target phase dir-name.
+	TargetPhase string `form:"target_phase" json:"target_phase"`
+
+	// RoadmapPhase Optional partial Implement roadmap phase.
+	RoadmapPhase int `form:"roadmap_phase,omitempty" json:"roadmap_phase,omitempty"`
+
+	// UpgradePipeline Optional pipeline upgrade profile.
+	UpgradePipeline string `form:"upgrade_pipeline,omitempty" json:"upgrade_pipeline,omitempty"`
+}
+
+// ListRunsParams defines parameters for ListRuns.
+type ListRunsParams struct {
+	// Page 1-indexed page number for run-history pagination.
+	Page Page `form:"page,omitempty" json:"page,omitempty"`
+
+	// PageSize Bounded page size for run-history pagination.
+	PageSize PageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
 
 // GetArtifactContentParams defines parameters for GetArtifactContent.
 type GetArtifactContentParams struct {

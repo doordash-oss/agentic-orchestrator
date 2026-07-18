@@ -10,7 +10,7 @@ export interface PhaseSpineProps {
   /** Index of the stage the needle points at. */
   activeIndex: number;
   /** Visual tone of the active tick. */
-  tone: 'progress' | 'error';
+  tone: 'progress' | 'error' | 'sealed';
   /** Accessible name for the rail. */
   label?: string;
 }
@@ -28,7 +28,7 @@ export function PhaseSpine({
 }: PhaseSpineProps) {
   const reducedMotion = usePrefersReducedMotion();
   return (
-    <div className="phase-spine" role="group" aria-label={label}>
+    <div className="phase-spine" data-tone={tone} role="group" aria-label={label}>
       <ol className="phase-spine__rail">
         {stages.map((stage, index) => {
           const state =

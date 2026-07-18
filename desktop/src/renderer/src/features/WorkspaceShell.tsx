@@ -452,6 +452,18 @@ export function WorkspaceShell({
             refreshAttention={refreshAttention}
             attentionDrafts={activeAttentionDrafts}
             setAttentionDrafts={updateAttentionDrafts}
+            selectedRunNumber={
+              tabs.open.find((tab) => tab.featureId === active)?.selectedRunNumber ?? null
+            }
+            onSelectRun={(runNumber) => {
+              const next = {
+                ...tabs,
+                open: tabs.open.map((tab) =>
+                  tab.featureId === active ? { ...tab, selectedRunNumber: runNumber } : tab,
+                ),
+              };
+              persist(next);
+            }}
           />
         </div>
       )}

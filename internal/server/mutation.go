@@ -355,6 +355,13 @@ type RewindFeatureRequest struct {
 	TargetPhase     string                  `json:"target_phase"`
 	RoadmapPhase    int                     `json:"roadmap_phase,omitempty"`
 	UpgradePipeline feature.PipelineProfile `json:"upgrade_pipeline,omitempty"`
+	// SourceRunNumber and SourceRevision carry the preview's authoritative
+	// source identity. When both are set, execution rejects a stale preview
+	// (active run changed or rewind-relevant state advanced) before any
+	// side effect. When omitted, the request is treated as unguarded for
+	// backward compatibility with older clients.
+	SourceRunNumber int    `json:"source_run_number,omitempty"`
+	SourceRevision  string `json:"source_revision,omitempty"`
 }
 
 type RebaseActionRequest struct{}

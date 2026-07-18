@@ -387,6 +387,7 @@ func TestParseCrossRepoVerification(t *testing.T) {
 		"## Cross-Repo Verification",
 		"- e2e smoke: `scripts/e2e.sh`",
 		"- [ ] contract test: `scripts/contract-test.sh`",
+		"- Keep `service-a` and `service-b` schemas in sync",
 		"## Manual Verification",
 		"- [ ] UI looks fine",
 	}, "\n")
@@ -402,5 +403,25 @@ func TestParseCrossRepoVerification(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+func TestParseCrossRepoItem_PlainBulletRequiresCommandShape(t *testing.T) {
+	if _, ok := parseCrossRepoItem("- Keep `service-a` and `service-b` schemas in sync"); ok {
+		t.Fatal("prose bullet with identifier backticks must not become a verification step")
+	}
+	step, ok := parseCrossRepoItem("- e2e smoke: `scripts/e2e.sh`")
+	if !ok {
+		t.Fatal("plain bullet with script path should parse")
+	}
+	if step.Command != "scripts/e2e.sh" {
+		t.Fatalf("command = %q, want scripts/e2e.sh", step.Command)
+	}
+	step, ok = parseCrossRepoItem("- [ ] single word: `make`")
+	if !ok {
+		t.Fatal("checklist items still allow last-span fallback for single-word commands")
+	}
+	if step.Command != "make" {
+		t.Fatalf("command = %q, want make", step.Command)
 	}
 }

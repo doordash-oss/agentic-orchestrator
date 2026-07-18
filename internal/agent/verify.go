@@ -275,14 +275,17 @@ func parseChecklistItem(line string) (VerificationStep, bool) {
 
 // parseCrossRepoItem accepts checklist items and plain markdown bullets so
 // Cross-Repo Verification sections authored either way yield VerificationSteps.
+// Plain bullets require a command-shaped backtick span (no last-span fallback)
+// so prose notes like `- Keep `service-a` and `service-b` schemas in sync`
+// do not become fabricated contract rows.
 func parseCrossRepoItem(line string) (VerificationStep, bool) {
-	if strings.HasPrefix(line, "- [") {
-		return parseBacktickVerificationItem(line)
-	}
 	if !strings.HasPrefix(line, "- ") {
 		return VerificationStep{}, false
 	}
-	return parseBacktickVerificationItem(line)
+	if strings.HasPrefix(line, "- [") {
+		return parseBacktickVerificationItem(line)
+	}
+	return parsePlainCrossRepoBullet(line)
 }
 
 func parseBacktickVerificationItem(line string) (VerificationStep, bool) {
@@ -295,6 +298,26 @@ func parseBacktickVerificationItem(line string) (VerificationStep, bool) {
 	if chosen == nil {
 		return VerificationStep{}, false
 	}
+	return verificationStepFromSpan(line, chosen)
+}
+
+// parsePlainCrossRepoBullet parses "- description: `cmd`" lines. Unlike
+// checklist parsing, it rejects lines whose backtick spans are only bare
+// identifiers (no looksLikeShellCommand match).
+func parsePlainCrossRepoBullet(line string) (VerificationStep, bool) {
+	matches := findBacktickSpans(line)
+	if len(matches) == 0 {
+		return VerificationStep{}, false
+	}
+	for _, m := range matches {
+		if looksLikeShellCommand(line[m[2]:m[3]]) {
+			return verificationStepFromSpan(line, m)
+		}
+	}
+	return VerificationStep{}, false
+}
+
+func verificationStepFromSpan(line string, chosen []int) (VerificationStep, bool) {
 	command := strings.TrimSpace(line[chosen[2]:chosen[3]])
 	if command == "" {
 		return VerificationStep{}, false
@@ -436,6 +459,14 @@ func looksLikeShellCommand(s string) bool {
 	}
 	// Relative-path invocations like `./bin/agentic` or `./scripts/foo.sh`.
 	if strings.Contains(s, "./") {
+		return true
+	}
+	// Script-path invocations without ./, e.g. `scripts/e2e.sh`.
+	lower := strings.ToLower(s)
+	if strings.HasSuffix(lower, ".sh") ||
+		strings.HasSuffix(lower, ".bash") ||
+		strings.HasSuffix(lower, ".py") ||
+		strings.HasSuffix(lower, ".rb") {
 		return true
 	}
 	return false

@@ -160,12 +160,13 @@ type AskUserAutoPickConfig struct {
 }
 
 // SessionWatchdogConfig enables provider-specific lifecycle safety rails for a
-// session. The first watchdog watches for a provider that reports a pending or
-// in-progress tool call and then goes silent without emitting a permission
-// request, result, or process exit.
+// session. PendingToolIdleTimeout bounds silence while a tool is running.
+// TurnCompletionIdleTimeout bounds silence after a tool reaches a terminal
+// state but before the provider completes the enclosing turn.
 type SessionWatchdogConfig struct {
-	PendingToolIdleTimeout time.Duration
-	PollInterval           time.Duration
+	PendingToolIdleTimeout    time.Duration
+	TurnCompletionIdleTimeout time.Duration
+	PollInterval              time.Duration
 }
 
 // ToolPermissionRequest describes a pending tool-use permission check.

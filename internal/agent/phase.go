@@ -1066,21 +1066,22 @@ type BuildSessionOpts struct {
 // Used by TUI components and loop configs that need to create sessions.
 type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
-var pendingToolWatchdogConfig = ports.SessionWatchdogConfig{
-	PendingToolIdleTimeout: 5 * time.Minute,
-	PollInterval:           time.Second,
+var sessionWatchdogConfig = ports.SessionWatchdogConfig{
+	PendingToolIdleTimeout:    5 * time.Minute,
+	TurnCompletionIdleTimeout: 5 * time.Minute,
+	PollInterval:              time.Second,
 }
 
-type pendingToolWatchdogProvider interface {
+type sessionWatchdogProvider interface {
 	EnablesPendingToolWatchdog() bool
 }
 
 func watchdogConfigForProvider(provider llm.LLMProvider) *ports.SessionWatchdogConfig {
-	p, ok := provider.(pendingToolWatchdogProvider)
+	p, ok := provider.(sessionWatchdogProvider)
 	if !ok || !p.EnablesPendingToolWatchdog() {
 		return nil
 	}
-	cfg := pendingToolWatchdogConfig
+	cfg := sessionWatchdogConfig
 	return &cfg
 }
 

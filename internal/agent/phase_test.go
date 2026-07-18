@@ -1454,6 +1454,8 @@ func TestWatchdogConfigForProviderCapability(t *testing.T) {
 	}
 	if got := watchdogConfigForProvider(&captureProvider{name: "watchdog", watchdog: true}); got == nil {
 		t.Fatal("watchdogConfigForProvider(enabled) = nil, want config")
+	} else if got.PendingToolIdleTimeout <= 0 || got.TurnCompletionIdleTimeout <= 0 {
+		t.Fatalf("watchdogConfigForProvider(enabled) = %#v, want both tool and turn-completion timeouts", got)
 	}
 }
 

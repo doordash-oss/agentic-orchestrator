@@ -3506,3 +3506,29 @@ func TestWaitForStatus_BackgroundTasks(t *testing.T) {
 		}
 	})
 }
+
+func TestRetryReviewFeedbackReminder(t *testing.T) {
+	dir := t.TempDir()
+	if got := retryReviewFeedbackReminder(dir, 0); got != "" {
+		t.Errorf("retryReviewFeedbackReminder(dir, 0) = %q, want empty", got)
+	}
+	if got := retryReviewFeedbackReminder(dir, 2); got != "" {
+		t.Errorf("retryReviewFeedbackReminder without feedback file = %q, want empty", got)
+	}
+
+	iterDir := filepath.Join(dir, "iteration-02")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(iterDir, "review-feedback.md")
+	if err := os.WriteFile(path, []byte("findings"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := retryReviewFeedbackReminder(dir, 2)
+	if !strings.Contains(got, path) {
+		t.Errorf("retryReviewFeedbackReminder = %q, want it to reference %s", got, path)
+	}
+	if strings.Contains(got, "findings") {
+		t.Errorf("retryReviewFeedbackReminder = %q, want a pointer without the feedback body", got)
+	}
+}

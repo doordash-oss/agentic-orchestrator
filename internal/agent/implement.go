@@ -195,6 +195,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	startIter := am.LatestIteration()
 	var consecutiveFailures int
 	var reviewerFeedback string
+	// Iteration number of the most recent CHANGES_REQUESTED review. RETRY
+	// iterations swap the full feedback for a pointer to this iteration's
+	// review-feedback.md (see retryReviewFeedbackReminder).
+	var lastChangesRequestedIter int
 
 	// Mid-iteration restart: if the next iteration's dir already has
 	// phase_complete (but no meta.yaml, otherwise LatestIteration would have
@@ -219,8 +223,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			consecutiveFailures++
 		}
 		// Recover reviewer feedback: walk backwards to find the most recent
-		// CHANGES_REQUESTED review. FAILED iterations (e.g. API errors) sit
-		// between the last review and the restart point and must be skipped.
+		// CHANGES_REQUESTED review. FAILED iterations (e.g. API errors) and
+		// RETRY iterations sit between the last review and the restart point
+		// and must be skipped. Feedback found beyond a RETRY is recovered as
+		// the same pointer reminder the live loop uses, mirroring what the
+		// interrupted process would have carried.
+		passedRetry := false
 		for j := startIter; j >= 1; j-- {
 			jDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", j))
 			jMeta, jErr := am.ReadMeta(jDir)
@@ -228,10 +236,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				continue
 			}
 			if jMeta.ReviewStatus == agentStatusChangesRequested {
-				if data, err := os.ReadFile(filepath.Join(jDir, "review-feedback.md")); err == nil {
+				lastChangesRequestedIter = j
+				if passedRetry {
+					reviewerFeedback = retryReviewFeedbackReminder(cfg.ArtifactDir, j)
+				} else if data, err := os.ReadFile(filepath.Join(jDir, "review-feedback.md")); err == nil {
 					reviewerFeedback = strings.TrimSpace(string(data))
 				}
 				break
+			}
+			if jMeta.AgentStatus == "RETRY" {
+				passedRetry = true
+				continue
 			}
 			// Stop searching once we hit an iteration that had a successful
 			// review (APPROVED) or a non-FAILED agent run — earlier feedback
@@ -662,7 +677,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
-				reviewerFeedback = ""
+				// Don't re-inject the full feedback (the RETRY handoff may
+				// have partially addressed it), but don't drop it either —
+				// the progress.md handoff is not guaranteed to carry every
+				// finding. Point the next iteration at the on-disk feedback
+				// so it re-verifies what remains.
+				reviewerFeedback = retryReviewFeedbackReminder(cfg.ArtifactDir, lastChangesRequestedIter)
 				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "retry")
 					return &LoopResult{
@@ -773,6 +793,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						feedback = fmt.Sprintf("Review helper protocol violation: %v", reviewErr)
 					}
 					reviewerFeedback = feedback
+					lastChangesRequestedIter = i
 					meta.AgentStatus = agentStatusProtocolViolation
 					meta.ReviewStatus = ReviewChangesRequested.String()
 					_ = am.WriteMeta(iterDir, meta)
@@ -824,6 +845,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}
 				consecutiveFailures = 0
 				reviewerFeedback = feedback
+				lastChangesRequestedIter = i
 				// Check no-progress safety rail
 				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "changes_requested")
@@ -972,6 +994,25 @@ func recordProtocolViolationIteration(
 		return &LoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: iteration, LastError: lastErr}
 	}
 	return nil
+}
+
+// retryReviewFeedbackReminder builds the reviewer-feedback text carried into
+// iterations that follow a RETRY. Re-injecting the full CHANGES_REQUESTED
+// feedback every iteration is wasteful — some findings may already be
+// addressed — but dropping it entirely trusts the RETRY handoff in
+// progress.md to have captured every finding, which is not guaranteed.
+// Instead, point the implementer at the on-disk feedback so it re-reads and
+// re-verifies what remains in its own context. Returns "" when no reviewed
+// iteration precedes the RETRY or its feedback file is gone.
+func retryReviewFeedbackReminder(artifactDir string, reviewedIter int) string {
+	if reviewedIter <= 0 {
+		return ""
+	}
+	path := filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", reviewedIter), "review-feedback.md")
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("The iteration %d review requested changes, and the intervening RETRY iteration(s) may not have addressed every finding. Re-read the full feedback at %s and verify each finding against the current tree; progress.md alone is not authoritative for what remains. Do not declare SUCCESS while any finding is unaddressed.", reviewedIter, path)
 }
 
 func isFailureBudgetAgentStatus(status string) bool {

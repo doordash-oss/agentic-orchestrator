@@ -1016,6 +1016,96 @@ func TestImplementLoopResumesReviewerFeedbackAcrossFailures(t *testing.T) {
 	}
 }
 
+// TestImplementLoopResumesFeedbackReminderAcrossRetry verifies that when a
+// RETRY iteration sits between the last CHANGES_REQUESTED review and the
+// resume point, restart recovers a pointer to the on-disk feedback (not the
+// full text, which the RETRY may have partially addressed, and not nothing,
+// which would trust the RETRY handoff to have captured every finding).
+func TestImplementLoopResumesFeedbackReminderAcrossRetry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-001")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	// Pre-populate: iteration 1 = CHANGES_REQUESTED, iteration 2 = RETRY
+	am := NewArtifactManager(artifactDir)
+
+	iter1Dir, _ := am.CreateIterationDir(1)
+	am.WriteMeta(iter1Dir, IterationMeta{
+		Iteration:    1,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusChangesRequested,
+	})
+	feedbackPath := filepath.Join(iter1Dir, "review-feedback.md")
+	os.WriteFile(feedbackPath, []byte("Fix the widget tests"), 0o644)
+
+	iter2Dir, _ := am.CreateIterationDir(2)
+	am.WriteMeta(iter2Dir, IterationMeta{
+		Iteration:    2,
+		AgentStatus:  "RETRY",
+		ReviewStatus: "skipped_retry",
+	})
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	planPath := writePlanFile(t, artifactDir, "Plan with feedback reminder across retry")
+
+	cfg := ImplementConfig{
+		Feature:             f,
+		WorkDir:             workDir,
+		PlanPath:            planPath,
+		MaxIterations:       10,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "Tests pass",
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		BuildSession:        mockBuildSession(agentScript, reviewScript),
+	}
+
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop error: %v", err)
+	}
+
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
+	}
+	if result.Iterations != 3 {
+		t.Errorf("expected Iterations=3, got %d", result.Iterations)
+	}
+
+	promptData, err := os.ReadFile(filepath.Join(artifactDir, "iteration-03", "user-prompt.md"))
+	if err != nil {
+		t.Fatalf("reading prompt: %v", err)
+	}
+	prompt := string(promptData)
+	if !strings.Contains(prompt, feedbackPath) {
+		t.Errorf("expected resumed prompt to point at %s across a RETRY iteration 2", feedbackPath)
+	}
+	if strings.Contains(prompt, "Fix the widget tests") {
+		t.Error("expected resumed prompt to carry a pointer, not the full feedback text")
+	}
+}
+
 func TestImplementLoopResumesConsecutiveFailures(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

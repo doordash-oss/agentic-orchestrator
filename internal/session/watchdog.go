@@ -26,43 +26,66 @@ import (
 )
 
 type sessionWatchdog struct {
-	session                *Session
-	pendingToolIdleTimeout time.Duration
-	pollInterval           time.Duration
+	session                   *Session
+	pendingToolIdleTimeout    time.Duration
+	turnCompletionIdleTimeout time.Duration
+	pollInterval              time.Duration
 
 	mu             sync.Mutex
-	pendingTool    watchdogPendingTool
+	tool           watchdogTool
 	lastActivityAt time.Time
 
 	startOnce sync.Once
-	failOnce  sync.Once
 }
 
-type watchdogPendingTool struct {
-	pending bool
-	id      string
-	name    string
+type watchdogToolPhase uint8
+
+const (
+	watchdogToolInactive watchdogToolPhase = iota
+	watchdogToolRunning
+	watchdogToolAwaitingTurnResult
+)
+
+type watchdogTool struct {
+	phase watchdogToolPhase
+	id    string
+	name  string
 }
 
 func newSessionWatchdog(sess *Session, cfg *ports.SessionWatchdogConfig) *sessionWatchdog {
-	if sess == nil || cfg == nil || cfg.PendingToolIdleTimeout <= 0 {
+	if sess == nil || cfg == nil || (cfg.PendingToolIdleTimeout <= 0 && cfg.TurnCompletionIdleTimeout <= 0) {
 		return nil
 	}
+	shortestTimeout := shortestPositiveDuration(cfg.PendingToolIdleTimeout, cfg.TurnCompletionIdleTimeout)
 	interval := cfg.PollInterval
-	if interval <= 0 || interval > cfg.PendingToolIdleTimeout {
-		interval = cfg.PendingToolIdleTimeout / 4
+	if interval <= 0 || interval > shortestTimeout {
+		interval = shortestTimeout / 4
 		if interval <= 0 {
-			interval = cfg.PendingToolIdleTimeout
+			interval = shortestTimeout
 		}
 		if interval > time.Second {
 			interval = time.Second
 		}
 	}
 	return &sessionWatchdog{
-		session:                sess,
-		pendingToolIdleTimeout: cfg.PendingToolIdleTimeout,
-		pollInterval:           interval,
-		lastActivityAt:         time.Now(),
+		session:                   sess,
+		pendingToolIdleTimeout:    cfg.PendingToolIdleTimeout,
+		turnCompletionIdleTimeout: cfg.TurnCompletionIdleTimeout,
+		pollInterval:              interval,
+		lastActivityAt:            time.Now(),
+	}
+}
+
+func shortestPositiveDuration(a, b time.Duration) time.Duration {
+	switch {
+	case a <= 0:
+		return b
+	case b <= 0:
+		return a
+	case a < b:
+		return a
+	default:
+		return b
 	}
 }
 
@@ -84,31 +107,41 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 	w.lastActivityAt = now
 	switch {
 	case msg.Result != nil:
-		w.pendingTool = watchdogPendingTool{}
+		w.tool = watchdogTool{}
 	case msg.ToolProgress != nil:
-		w.pendingTool = observeWatchdogToolProgress(w.pendingTool, *msg.ToolProgress)
+		w.tool = observeWatchdogToolProgress(w.tool, *msg.ToolProgress)
 	}
 	w.mu.Unlock()
 }
 
-func observeWatchdogToolProgress(current watchdogPendingTool, progress llm.ToolProgressMessage) watchdogPendingTool {
+func observeWatchdogToolProgress(current watchdogTool, progress llm.ToolProgressMessage) watchdogTool {
 	data := strings.TrimSpace(progress.Data)
 	id := strings.TrimSpace(progress.ToolUseID)
 	name := strings.TrimSpace(progress.ToolName)
 	if isWatchdogPendingToolData(data) {
-		return watchdogPendingTool{
-			pending: true,
-			id:      id,
-			name:    name,
+		return watchdogTool{
+			phase: watchdogToolRunning,
+			id:    id,
+			name:  name,
 		}
 	}
-	if !current.pending {
-		return watchdogPendingTool{}
-	}
-	if id != "" && current.id != "" && id != current.id {
+	if !isWatchdogTerminalToolData(data) {
 		return current
 	}
-	return watchdogPendingTool{}
+	if current.phase == watchdogToolRunning && id != "" && current.id != "" && id != current.id {
+		return current
+	}
+	if id == "" {
+		id = current.id
+	}
+	if name == "" {
+		name = current.name
+	}
+	return watchdogTool{
+		phase: watchdogToolAwaitingTurnResult,
+		id:    id,
+		name:  name,
+	}
 }
 
 func isWatchdogPendingToolData(data string) bool {
@@ -118,6 +151,17 @@ func isWatchdogPendingToolData(data string) bool {
 		// statuses are non-terminal and must remain watchdog-eligible.
 		if line == "pending" || line == "status: pending" ||
 			line == "in_progress" || line == "status: in_progress" {
+			return true
+		}
+	}
+	return false
+}
+
+func isWatchdogTerminalToolData(data string) bool {
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.ToLower(strings.TrimSpace(line))
+		if line == "completed" || line == "status: completed" ||
+			line == "failed" || line == "status: failed" {
 			return true
 		}
 	}
@@ -134,44 +178,94 @@ func (w *sessionWatchdog) run() {
 		case <-ticker.C:
 		}
 
-		if pending, idleFor, ok := w.pendingToolStall(); ok {
-			w.failPendingTool(pending, idleFor)
-			return
+		if tool, timeout, ok := w.toolStall(); ok {
+			if w.failTool(tool, timeout) {
+				return
+			}
 		}
 	}
 }
 
-func (w *sessionWatchdog) pendingToolStall() (watchdogPendingTool, time.Duration, bool) {
+func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, bool) {
 	if len(w.session.PendingControlRequests()) > 0 || w.session.HasPendingAskUserQuestion() {
-		return watchdogPendingTool{}, 0, false
+		w.refreshActivity()
+		return watchdogTool{}, 0, false
 	}
 	status := w.session.Status()
-	if status == SessionWaitingPermission || status == SessionWaitingHelp || status == SessionDone || status == SessionFailed {
-		return watchdogPendingTool{}, 0, false
+	if status == SessionWaitingHelp {
+		w.refreshActivity()
+		return watchdogTool{}, 0, false
+	}
+	if status == SessionDone || status == SessionFailed {
+		return watchdogTool{}, 0, false
 	}
 
 	w.mu.Lock()
-	pending := w.pendingTool
+	tool := w.tool
 	lastActivityAt := w.lastActivityAt
 	w.mu.Unlock()
-	if !pending.pending {
-		return watchdogPendingTool{}, 0, false
+	timeout := w.timeoutFor(tool.phase)
+	if timeout <= 0 {
+		return watchdogTool{}, 0, false
 	}
 	if stdoutAt := w.session.LastStdoutAt(); stdoutAt.After(lastActivityAt) {
 		lastActivityAt = stdoutAt
 	}
 	idleFor := time.Since(lastActivityAt)
-	return pending, idleFor, idleFor >= w.pendingToolIdleTimeout
+	return tool, timeout, idleFor >= timeout
 }
 
-func (w *sessionWatchdog) failPendingTool(pending watchdogPendingTool, idleFor time.Duration) {
-	w.failOnce.Do(func() {
-		reason := fmt.Sprintf("provider watchdog stalled with pending tool %s for %s (idle %s)", pending.displayName(), w.pendingToolIdleTimeout, idleFor.Round(time.Millisecond))
-		w.session.failFromWatchdog(reason)
-	})
+func (w *sessionWatchdog) refreshActivity() {
+	w.mu.Lock()
+	w.lastActivityAt = time.Now()
+	w.mu.Unlock()
 }
 
-func (p watchdogPendingTool) displayName() string {
+func (w *sessionWatchdog) timeoutFor(phase watchdogToolPhase) time.Duration {
+	switch phase {
+	case watchdogToolRunning:
+		return w.pendingToolIdleTimeout
+	case watchdogToolAwaitingTurnResult:
+		return w.turnCompletionIdleTimeout
+	default:
+		return 0
+	}
+}
+
+func (w *sessionWatchdog) failTool(tool watchdogTool, timeout time.Duration) bool {
+	// Observe and the poller race at the timeout boundary. Linearize the
+	// decision under the watchdog lock: if a Result or any stdout arrived after
+	// the poll snapshot, that activity wins and the watchdog keeps waiting.
+	// Clearing w.tool here also guarantees a single fire: the only caller is
+	// run(), which returns as soon as this reports true.
+	w.mu.Lock()
+	if w.tool != tool {
+		w.mu.Unlock()
+		return false
+	}
+	lastActivityAt := w.lastActivityAt
+	if stdoutAt := w.session.LastStdoutAt(); stdoutAt.After(lastActivityAt) {
+		lastActivityAt = stdoutAt
+	}
+	idleFor := time.Since(lastActivityAt)
+	if idleFor < timeout {
+		w.mu.Unlock()
+		return false
+	}
+	w.tool = watchdogTool{}
+	w.mu.Unlock()
+
+	var reason string
+	if tool.phase == watchdogToolAwaitingTurnResult {
+		reason = fmt.Sprintf("provider watchdog stalled awaiting turn completion after tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
+	} else {
+		reason = fmt.Sprintf("provider watchdog stalled with pending tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
+	}
+	w.session.failFromWatchdog(reason)
+	return true
+}
+
+func (p watchdogTool) displayName() string {
 	switch {
 	case p.name != "":
 		return p.name

@@ -16,11 +16,14 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -204,13 +207,18 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 			return nil, fmt.Errorf("protocol handshake: %w", err)
 		}
 	} else {
-		// Legacy path (no protocol set): Claude interactive
-		if err := s.SendInitialize(); err != nil {
+		// Legacy path (no protocol set): Claude interactive.
+		//
+		// A fast session can exit right after emitting its result without ever
+		// reading stdin (common with mock scripts in tests), closing the pipe
+		// before these writes land. That EPIPE/closed-pipe error is benign: the
+		// child already finished, so there is nothing left to hand off to.
+		if err := s.SendInitialize(); err != nil && !isChildExitedWriteError(err) {
 			_ = s.Stop()
 			return nil, fmt.Errorf("sending initialize handshake: %w", err)
 		}
 		if len(opts) > 0 && opts[0] != nil && opts[0].InitialPrompt != "" {
-			if err := s.SendUserMessage(opts[0].InitialPrompt); err != nil {
+			if err := s.SendUserMessage(opts[0].InitialPrompt); err != nil && !isChildExitedWriteError(err) {
 				_ = s.Stop()
 				return nil, fmt.Errorf("sending initial prompt: %w", err)
 			}
@@ -254,6 +262,13 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	}()
 
 	return s, nil
+}
+
+// isChildExitedWriteError reports whether a stdin write failed because the
+// child process already closed its end of the pipe (it exited). Both EPIPE and
+// io.ErrClosedPipe surface this race.
+func isChildExitedWriteError(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)
 }
 
 func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase feature.Phase, msg llm.SDKMessage) {

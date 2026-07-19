@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // discoverCarriedPhasePlanDirs scans `sealedRunDir` for `phase-*`
@@ -138,14 +139,15 @@ func roadmapPhaseDirNumber(name string) (int, bool) {
 // silently skipped (not an error — matches the "pipelines with different
 // phase sets" reality described in the roadmap).
 //
-// File mode is preserved. Symlinks are copied as regular files (via
-// os.ReadFile / os.WriteFile); Agentic does not use symlinks in run
-// directories, so the simpler behavior is acceptable.
+// File mode is preserved. Symlinks and other non-regular files are skipped:
+// review agents leave scratch symlinks (e.g. node_modules pointing into the
+// worktree) inside artifact dirs, and following them would copy mutable
+// worktree state — or fail outright when the target is a directory.
 func copyRunArtifactsForward(sealedRunDir, newRunDir string, dirs []string) error {
 	for _, rel := range dirs {
 		src := filepath.Join(sealedRunDir, rel)
 		dst := filepath.Join(newRunDir, rel)
-		info, err := os.Stat(src)
+		info, err := os.Lstat(src)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -153,6 +155,9 @@ func copyRunArtifactsForward(sealedRunDir, newRunDir string, dirs []string) erro
 			return fmt.Errorf("stat carry-forward source %s: %w", rel, err)
 		}
 		if !info.IsDir() {
+			if !info.Mode().IsRegular() {
+				continue
+			}
 			if err := copyRegularFile(src, dst); err != nil {
 				return fmt.Errorf("copying %s: %w", rel, err)
 			}
@@ -183,6 +188,11 @@ func copyTree(src, dst string) error {
 				return err
 			}
 			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		if !d.Type().IsRegular() {
+			// Skip symlinks, FIFOs, sockets: opening a symlink follows it,
+			// so a link to a directory would fail the whole carry-forward.
+			return nil
 		}
 		return copyRegularFile(path, target)
 	})
@@ -249,6 +259,68 @@ func carryForwardArtifactKeyForPartialImplement(key string, targetRoadmapPhase i
 		}
 	}
 	return false
+}
+
+// carryForwardCostKey reports whether a PhaseCosts/PhaseTimings/SessionCosts
+// key survives a rewind to `target` (`targetRoadmapPhase` > 0 for partial
+// implement rewinds). Mirrors the artifact matrices, extended with the
+// cost-only keys ("knowledgebase", "phase-N-impl"): time and money already
+// spent on phases whose outputs are kept stay visible on the new run. Spend
+// on phases being redone stays only on the sealed run's ledger.
+func carryForwardCostKey(key string, target Phase, targetRoadmapPhase int) bool {
+	switch target {
+	case PhaseInquire:
+		return key == "knowledgebase"
+	case PhaseResearch:
+		return key == "knowledgebase" || key == "inquire"
+	case PhaseDesign:
+		return key == "knowledgebase" || key == "inquire" || key == "research"
+	case PhasePlan:
+		return key == "knowledgebase" || key == "inquire" || key == "research" || key == "design"
+	case PhaseImplement:
+		switch key {
+		case "knowledgebase", "inquire", "research", "design", "plan":
+			return true
+		}
+		phase, kind, ok := roadmapArtifactKey(key)
+		if !ok {
+			return false
+		}
+		switch kind {
+		case "plan":
+			if targetRoadmapPhase > 0 {
+				return phase <= targetRoadmapPhase
+			}
+			return true
+		case "impl", "implement":
+			return targetRoadmapPhase > 0 && phase < targetRoadmapPhase
+		}
+	}
+	return false
+}
+
+// carryForwardCostLedgers copies the surviving PhaseCosts, PhaseTimings, and
+// SessionCosts entries from the sealed run onto the forked run.
+func carryForwardCostLedgers(oldRun, newRun *Run, target Phase, targetRoadmapPhase int) {
+	for k, v := range oldRun.PhaseCosts {
+		if carryForwardCostKey(k, target, targetRoadmapPhase) {
+			newRun.AddPhaseCost(k, v)
+		}
+	}
+	for k, v := range oldRun.PhaseTimings {
+		if !carryForwardCostKey(k, target, targetRoadmapPhase) {
+			continue
+		}
+		if newRun.PhaseTimings == nil {
+			newRun.PhaseTimings = make(map[string]time.Duration)
+		}
+		newRun.PhaseTimings[k] += v
+	}
+	for _, rec := range oldRun.SessionCosts {
+		if carryForwardCostKey(rec.PhaseKey, target, targetRoadmapPhase) {
+			newRun.SessionCosts = append(newRun.SessionCosts, rec)
+		}
+	}
 }
 
 func roadmapArtifactKey(key string) (phase int, kind string, ok bool) {

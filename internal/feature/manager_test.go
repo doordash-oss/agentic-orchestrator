@@ -17,6 +17,7 @@ package feature_test
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2012,10 +2013,11 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 	}
 }
 
-// TestRewindToPhase_TimingsCostsForkedEmpty_Run001Preserved verifies that
-// seal+fork puts the new run in a zero-timings/costs state while the sealed
-// run keeps its history intact for provenance.
-func TestRewindToPhase_TimingsCostsForkedEmpty_Run001Preserved(t *testing.T) {
+// TestRewindToPhase_TimingsCostsCarriedForKeptPhases_Run001Preserved verifies
+// that seal+fork carries timings/costs of the phases whose outputs survive the
+// rewind, drops the ledger entries for redone phases, and keeps the sealed
+// run's full history intact for provenance.
+func TestRewindToPhase_TimingsCostsCarriedForKeptPhases_Run001Preserved(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind timing/cost provenance variant")
@@ -2047,12 +2049,15 @@ func TestRewindToPhase_TimingsCostsForkedEmpty_Run001Preserved(t *testing.T) {
 		t.Fatalf("RewindToPhase: %v", err)
 	}
 	got, _ := mgr.Get(f.ID)
-	// The fresh run starts empty.
-	if len(got.PhaseTimings) != 0 {
-		t.Errorf("new run PhaseTimings should be empty, got %v", got.PhaseTimings)
+	// Rewind to PhasePlan keeps inquire/research outputs, so their ledger
+	// entries carry; plan/implement/rebase-1 are redone and start at zero.
+	wantTimings := map[string]time.Duration{"inquire": 1 * time.Minute, "research": 2 * time.Minute}
+	if !maps.Equal(got.PhaseTimings, wantTimings) {
+		t.Errorf("new run PhaseTimings = %v, want %v", got.PhaseTimings, wantTimings)
 	}
-	if len(got.PhaseCosts) != 0 {
-		t.Errorf("new run PhaseCosts should be empty, got %v", got.PhaseCosts)
+	wantCosts := map[string]float64{"inquire": 0.10, "research": 0.20}
+	if !maps.Equal(got.PhaseCosts, wantCosts) {
+		t.Errorf("new run PhaseCosts = %v, want %v", got.PhaseCosts, wantCosts)
 	}
 	// Sealed run-001 retains ALL timings/costs as immutable history.
 	sealed, err := mgr.Store.LoadRun(f.ID, 1)
@@ -5303,10 +5308,10 @@ func TestRewindToPhase_NotFromReviewing_ReviewDirPreservedInSealedRun(t *testing
 	}
 }
 
-// TestRewindToPhase_FromReviewing_ForksEmptyTimings — seal+fork puts the
-// active run at empty timings/costs; the sealed run-001 retains its full
-// timing/cost history.
-func TestRewindToPhase_FromReviewing_ForksEmptyTimings(t *testing.T) {
+// TestRewindToPhase_FromReviewing_CarriesKeptPhaseTimings — seal+fork carries
+// the planning ledger (its outputs survive a rewind to implement) and drops
+// the review spend; the sealed run-001 retains its full timing/cost history.
+func TestRewindToPhase_FromReviewing_CarriesKeptPhaseTimings(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended reviewing rewind timing reset regression")
@@ -5333,12 +5338,14 @@ func TestRewindToPhase_FromReviewing_ForksEmptyTimings(t *testing.T) {
 		t.Fatalf("RewindToPhase: %v", err)
 	}
 	got, _ := mgr.Get(f.ID)
-	// New active run (run-002) is empty.
-	if len(got.PhaseTimings) != 0 {
-		t.Errorf("new run PhaseTimings should be empty, got %v", got.PhaseTimings)
+	// New active run (run-002) carries the plan ledger; review is redone.
+	wantTimings := map[string]time.Duration{"plan": 2 * time.Minute}
+	if !maps.Equal(got.PhaseTimings, wantTimings) {
+		t.Errorf("new run PhaseTimings = %v, want %v", got.PhaseTimings, wantTimings)
 	}
-	if len(got.PhaseCosts) != 0 {
-		t.Errorf("new run PhaseCosts should be empty, got %v", got.PhaseCosts)
+	wantCosts := map[string]float64{"plan": 0.25}
+	if !maps.Equal(got.PhaseCosts, wantCosts) {
+		t.Errorf("new run PhaseCosts = %v, want %v", got.PhaseCosts, wantCosts)
 	}
 	// Sealed run-001 keeps both timings/costs as history.
 	sealed, err := mgr.Store.LoadRun(f.ID, 1)

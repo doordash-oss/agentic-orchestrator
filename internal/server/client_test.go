@@ -579,6 +579,42 @@ func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 	}
 }
 
+func TestClientRewindFeatureUsesLongMutationTimeout(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		if r.URL.Path == "/api/v1/features/feat-1/actions/rewind" {
+			writeJSON(w, http.StatusOK, RewindFeatureResponse{
+				APIVersion: APIVersion, FeatureID: fixtureFeatureID, Result: resultRewound,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, HealthResponse{APIVersion: APIVersion})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{
+		BaseURL:     srv.URL,
+		Timeout:     50 * time.Millisecond,
+		LongTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err := client.Health(context.Background()); err == nil {
+		t.Fatalf("Health() succeeded despite 50ms client timeout, want deadline error")
+	}
+	rewound, err := client.RewindFeature(context.Background(), fixtureFeatureID, RewindFeatureRequest{
+		TargetPhase: targetPhaseInquire,
+	})
+	if err != nil {
+		t.Fatalf("RewindFeature() error = %v, want success under long mutation timeout", err)
+	}
+	if rewound.Result != resultRewound {
+		t.Fatalf("RewindFeature() result = %q, want %q", rewound.Result, resultRewound)
+	}
+}
+
 func TestClientShutdownPostsTrustedMutationAndReturnsResult(t *testing.T) {
 	var sawTrustedHeader bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

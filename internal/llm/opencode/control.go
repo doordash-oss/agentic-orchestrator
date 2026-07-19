@@ -431,12 +431,12 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 	}
 
 	// A numbered list is only a candidate AskUserQuestion when its stem actually
-	// reads like a question (checked on the stem, not the raw text — the stem
-	// may lead the options and so end mid-message, well before the text's final
-	// character). An informational list ("Here's what I found: 1. ... 2. ...")
-	// has a non-question stem and is a normal completion; it must not be forced
-	// through the question-reformat pipeline just because it enumerates items.
-	if stem, options, ok := parseNumberedOptions(lastText); ok && textLooksLikeQuestion(stem) {
+	// reads like a question or its options carry question-contract markers
+	// (confidence scores / "(Recommended)"). An informational list ("Here's
+	// what I found: 1. ... 2. ...") has neither and is a normal completion; it
+	// must not be forced through the question-reformat pipeline just because it
+	// enumerates items.
+	if stem, options, ok := parseNumberedOptions(lastText); ok && (stemLooksLikeQuestion(stem) || optionsCarryQuestionContract(options)) {
 		if !parsedOptionsHaveConfidence(options) {
 			if p.sendQuestionFormatReminder(lastText) {
 				return llm.SDKMessage{}, false, true
@@ -446,7 +446,7 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 		return p.synthesizeAskUser(stem, options), true, true
 	}
 
-	if !textLooksLikeQuestion(lastText) {
+	if !textLooksLikeQuestion(lastText) && !textCarriesQuestionContract(lastText) {
 		p.resetFormatRetry()
 		return llm.SDKMessage{}, false, false
 	}
@@ -548,6 +548,40 @@ func textLooksLikeQuestion(text string) bool {
 		return false
 	}
 	return strings.HasSuffix(text, "?")
+}
+
+// stemLooksLikeQuestion reports whether any sentence in a numbered-options
+// stem ends with '?'. The question contract allows a short stem where the
+// question leads and a declarative clarifier follows, so unlike
+// textLooksLikeQuestion the '?' need not be the stem's final character.
+func stemLooksLikeQuestion(stem string) bool {
+	stem = strings.TrimSpace(stem)
+	return strings.HasSuffix(stem, "?") ||
+		strings.Contains(stem, "? ") ||
+		strings.Contains(stem, "?\n")
+}
+
+// optionsCarryQuestionContract reports whether parsed options carry markers
+// only the question contract produces — confidence scores or a
+// "(Recommended)" label — which mark the list as a question regardless of
+// stem punctuation.
+func optionsCarryQuestionContract(options []parsedOption) bool {
+	for _, o := range options {
+		if o.Confidence != nil || labelHasRecommended(o.Label) {
+			return true
+		}
+	}
+	return false
+}
+
+var confidenceMarkerRe = regexp.MustCompile(`(?i)\[confidence:\s*(?:0(?:\.\d+)?|1(?:\.0+)?)\]`)
+
+// textCarriesQuestionContract reports whether final text that failed option
+// parsing still carries question-contract confidence markers; such a turn is
+// a malformed question and should get a reformat reminder rather than being
+// misread as a silent completion.
+func textCarriesQuestionContract(text string) bool {
+	return confidenceMarkerRe.MatchString(text)
 }
 
 // parsedOption holds one numbered alternative extracted from a plain-text

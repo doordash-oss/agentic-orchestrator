@@ -105,7 +105,7 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Sealed run');
 
     transcript.section('Verify no mutation controls are mounted in archive mode');
-    await expect(cockpit.getByRole('button', { name: 'Start' })).not.toBeVisible();
+    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).not.toBeVisible();
     await expect(cockpit.getByRole('button', { name: 'Stop' })).not.toBeVisible();
     await expect(cockpit.getByRole('button', { name: 'Rewind' })).not.toBeVisible();
 

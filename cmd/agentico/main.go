@@ -1687,12 +1687,75 @@ func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.R
 	if starter == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
+	if req.SourceRevision != "" {
+		if t.orch != nil {
+			current, err := t.orch.RebasePreflightSourceRevision(featureID)
+			if err != nil {
+				return resp, err
+			}
+			if current != req.SourceRevision {
+				resp.Result = resultFailed
+				return resp, &serverruntime.ActionConflictError{
+					Err:     orchestrator.ErrStalePreflight,
+					Message: "stale rebase preflight",
+					Target:  map[string]any{"reason": "stale_preflight"},
+				}
+			}
+		}
+	}
 	if err := starter.StartFeatureRebase(featureID); err != nil {
 		resp.Result = resultFailed
 		return resp, err
 	}
 	resp.Result = resultStarted
 	return resp, nil
+}
+
+func (t *serverMutationTarget) PreflightRebase(featureID string) (serverruntime.RebasePreflightResponse, error) {
+	if t.orch == nil {
+		return serverruntime.RebasePreflightResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	result, err := t.orch.RebasePreflight(featureID)
+	if err != nil {
+		return serverruntime.RebasePreflightResponse{FeatureID: featureID}, err
+	}
+	resp := serverruntime.RebasePreflightResponse{
+		APIVersion:     serverruntime.APIVersion,
+		FeatureID:      result.FeatureID,
+		SourceRevision: result.SourceRevision,
+	}
+	for _, r := range result.Repos {
+		resp.Repos = append(resp.Repos, serverruntime.RebasePreflightRepo{
+			Repo:          r.Repo,
+			Target:        r.Target,
+			Publishable:   r.Publishable,
+			Freshness:     r.Freshness,
+			Behind:        r.Behind,
+			Blocker:       r.Blocker,
+			ConflictFiles: append([]string(nil), r.ConflictFiles...),
+		})
+	}
+	return resp, nil
+}
+
+func (t *serverMutationTarget) PreflightRefactor(featureID string, req serverruntime.RefactorPreflightRequest) (serverruntime.RefactorPreflightResponse, error) {
+	if t.orch == nil {
+		return serverruntime.RefactorPreflightResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	result, err := t.orch.RefactorPreflight(featureID, req.Repo, req.Prompt, req.Pipeline)
+	if err != nil {
+		return serverruntime.RefactorPreflightResponse{FeatureID: featureID}, err
+	}
+	return serverruntime.RefactorPreflightResponse{
+		APIVersion:     serverruntime.APIVersion,
+		FeatureID:      result.FeatureID,
+		SourceRevision: result.SourceRevision,
+		Scope:          result.Scope,
+		Repos:          append([]string(nil), result.Repos...),
+		Prompt:         result.Prompt,
+		Pipeline:       result.Pipeline,
+		Blockers:       append([]string(nil), result.Blockers...),
+	}, nil
 }
 
 func (t *serverMutationTarget) FetchReviewComments(featureID string, req serverruntime.ReviewCommentsFetchRequest) (serverruntime.ReviewCommentsFetchResponse, error) {
@@ -1894,6 +1957,24 @@ func (t *serverMutationTarget) startRefactorAction(featureID string, req serverr
 	}
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
+	}
+	if req.SourceRevision != "" {
+		var resolvedRepos []string
+		if r := strings.TrimSpace(req.Repo); r != "" {
+			resolvedRepos = []string{r}
+		}
+		current, err := t.orch.RefactorPreflightSourceRevision(featureID, resolvedRepos)
+		if err != nil {
+			return resp, err
+		}
+		if current != req.SourceRevision {
+			resp.Result = resultFailed
+			return resp, &serverruntime.ActionConflictError{
+				Err:     orchestrator.ErrStalePreflight,
+				Message: "stale refactor preflight",
+				Target:  map[string]any{"reason": "stale_preflight"},
+			}
+		}
 	}
 	var (
 		sessionID string

@@ -206,6 +206,16 @@ export interface AgenticoMock {
     getRunLogContent: ReturnType<typeof vi.fn>;
     getRewindPreview: ReturnType<typeof vi.fn>;
     executeRewind: ReturnType<typeof vi.fn>;
+    startRebase: ReturnType<typeof vi.fn>;
+    preflightRebase: ReturnType<typeof vi.fn>;
+    fetchReviewComments: ReturnType<typeof vi.fn>;
+    startReviewComments: ReturnType<typeof vi.fn>;
+    startRefactor: ReturnType<typeof vi.fn>;
+    preflightRefactor: ReturnType<typeof vi.fn>;
+    scanRecovery: ReturnType<typeof vi.fn>;
+    executeRecovery: ReturnType<typeof vi.fn>;
+    readRecoveryLog: ReturnType<typeof vi.fn>;
+    bulkPreview: ReturnType<typeof vi.fn>;
   };
   /** Push a connection change to every subscribed listener. */
   emitConnection(state: ConnectionState): void;
@@ -348,6 +358,16 @@ export function installAgenticoMock(
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),
     executeRewind: vi.fn(() => Promise.reject(new Error('unused'))),
+    startRebase: vi.fn(() => Promise.reject(new Error('unused'))),
+    preflightRebase: vi.fn(() => Promise.reject(new Error('unused'))),
+    fetchReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
+    startReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
+    startRefactor: vi.fn(() => Promise.reject(new Error('unused'))),
+    preflightRefactor: vi.fn(() => Promise.reject(new Error('unused'))),
+    scanRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
+    executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
+    readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),
+    bulkPreview: vi.fn(() => Promise.reject(new Error('unused'))),
     onAppEvent: vi.fn((listener: (event: AppEvent) => void) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);

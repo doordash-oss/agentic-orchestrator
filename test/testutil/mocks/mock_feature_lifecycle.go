@@ -94,6 +94,12 @@ type MockFeatureLifecycle struct {
 	// this. Called after the mock records the invocation.
 	CompleteRepoCycleFn func(featureID, repoName string) error
 
+	// FailRepoCycleFn lets tests mimic the real FailRepoCycle side-effect
+	// (set Status=RepoCycleFailed, clear PendingNeedUserInputPath, clear
+	// RefactorPrompt for refactor cycles). Called after the mock records
+	// the invocation.
+	FailRepoCycleFn func(featureID, repoName, errMsg string) error
+
 	// FailRepoImplementationFn lets tests intercept the per-repo
 	// implementation failure path. The plan parameter was dropped in
 	// SchemaVersionCurrent = 4.
@@ -471,6 +477,9 @@ func (m *MockFeatureLifecycle) RemoveRepoCycle(featureID, repoName string) error
 
 func (m *MockFeatureLifecycle) FailRepoCycle(featureID, repoName, errMsg string) error {
 	m.record("FailRepoCycle", featureID, repoName, errMsg)
+	if m.FailRepoCycleFn != nil {
+		return m.FailRepoCycleFn(featureID, repoName, errMsg)
+	}
 	return m.DefaultError
 }
 

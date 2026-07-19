@@ -1006,3 +1006,184 @@ func containsString(sl []string, v string) bool {
 	}
 	return false
 }
+
+// T10. TestExecuteRecovery_Resume_NeedUserInputCycle_DoesNotRelaunch
+//
+// When a recovery item carries a RepoName and the feature has a
+// RepoCycleNeedUserInput state for that repo, Resume must NOT relaunch the
+// cycle (that would bypass the gate's answer-validating, shared-gate-clearing
+// single dispatch) and must NOT fall through to a generic feature-phase
+// restart via startPhase. The process-level recovery action runs; the user
+// answers the gate separately to resume the cycle.
+func TestExecuteRecovery_Resume_NeedUserInputCycle_DoesNotRelaunch(t *testing.T) {
+	gatePath := writeGateArtifact(t, "Cycle gate",
+		[]string{"Apply fix?"}, []string{"yes"})
+
+	f := &feature.Feature{
+		ID:           "feat-cycle-recovery",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusPublished,
+		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		RepoCycles: map[string]*feature.RepoCycleState{
+			"repo-a": {
+				Type:                     feature.CycleReviewComments,
+				Status:                   feature.RepoCycleNeedUserInput,
+				Count:                    1,
+				PendingNeedUserInputPath: gatePath,
+			},
+		},
+	}
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    "feat-cycle-recovery",
+		RepoName:     "repo-a",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusPublished,
+	})
+	items[0].Feature = f
+
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-cycle-recovery", "repo-a"): ports.RecoveryResume,
+	}
+
+	fake := &fakeRecoveryOp{}
+	store := newFeatureStore(f)
+	lc := lifecycleForFeature(f)
+	spy := &fakeRunMultiRepoImpl{}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  fake,
+		Lifecycle: lc,
+		Store:     store,
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	// With the fix in place, a NeedUserInput cycle is NOT relaunched: the
+	// process-level recovery action runs, the gate stays paused for the user
+	// to answer separately, and ExecuteRecovery returns nil. The critical
+	// assertion is that no lifecycle Start* method was called at all —
+	// neither StartRepoCycle (which would bypass the gate) nor startPhase
+	// (which would restart the feature phase).
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery: %v; want nil (need-user-input cycle must not relaunch)", err)
+	}
+	if spy.numCalls() != 0 {
+		t.Errorf("runMultiRepoImplFn called %d times; want 0 (cycle restart must not dispatch a feature phase)", spy.numCalls())
+	}
+	for _, c := range lc.Calls {
+		if strings.HasPrefix(c.Method, "Start") {
+			t.Errorf("lifecycle %q was called; a need-user-input cycle must NOT relaunch — the gate decision contract resumes it after answers", c.Method)
+		}
+	}
+}
+
+// T10b. TestExecuteRecovery_Resume_InterruptedCycle_RestartsCycleNotPhase
+//
+// When a recovery item carries a RepoName and the feature has a
+// RepoCycleInterrupted state for that repo (a cycle stopped mid-flight with
+// no gate to clear), Resume must restart the cycle through its cycle-type-
+// specific seam — NOT fall through to a generic feature-phase restart. This
+// is the gate-less counterpart to T10: only interrupted cycles relaunch here.
+func TestExecuteRecovery_Resume_InterruptedCycle_RestartsCycleNotPhase(t *testing.T) {
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:           "feat-interrupted-cycle",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusPublished,
+		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		RepoCycles: map[string]*feature.RepoCycleState{
+			"repo-a": {
+				Type:     feature.CycleReviewComments,
+				Status:   feature.RepoCycleInterrupted,
+				Count:    1,
+				PlanPath: planPath,
+			},
+		},
+	}
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    "feat-interrupted-cycle",
+		RepoName:     "repo-a",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusPublished,
+	})
+	items[0].Feature = f
+
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-interrupted-cycle", "repo-a"): ports.RecoveryResume,
+	}
+
+	fake := &fakeRecoveryOp{}
+	store := newFeatureStore(f)
+	lc := lifecycleForFeature(f)
+	spy := &fakeRunMultiRepoImpl{}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  fake,
+		Lifecycle: lc,
+		Store:     store,
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	err := o.ExecuteRecovery(context.Background(), items, actions)
+	// Without a PhaseRunner the cycle restart fails; the critical assertion is
+	// that the cycle-restart path was taken (the error names the cycle restart)
+	// and startPhase was NOT called.
+	if err == nil {
+		t.Fatal("expected a cycle-restart error (no PhaseRunner); got nil")
+	}
+	if !strings.Contains(err.Error(), "restart cycle") {
+		t.Fatalf("error = %v; want a cycle-restart error", err)
+	}
+	if spy.numCalls() != 0 {
+		t.Errorf("runMultiRepoImplFn called %d times; want 0 (cycle restart must not dispatch a feature phase)", spy.numCalls())
+	}
+	for _, c := range lc.Calls {
+		if strings.HasPrefix(c.Method, "Start") && c.Method != "StartRepoCycle" {
+			t.Errorf("lifecycle %q was called; recovery should restart the interrupted cycle, not the feature phase", c.Method)
+		}
+	}
+}
+
+// T11. TestExecuteRecovery_Resume_NoCycle_FallsThroughToPhase
+//
+// When a recovery item has no paused cycle (regular phase orphan),
+// Resume still falls through to startPhase as before.
+func TestExecuteRecovery_Resume_NoCycle_FallsThroughToPhase(t *testing.T) {
+	planPath := writeTempFile(t, "plan.md", "# plan")
+	f := &feature.Feature{
+		ID:           "feat-phase-recovery",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+		Artifacts:    map[string]string{"plan": planPath},
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	items := fakeRecoveryItems(itemSpec{
+		FeatureID:    "feat-phase-recovery",
+		CurrentPhase: feature.PhaseImplement,
+		Status:       feature.StatusImplementing,
+	})
+	items[0].Feature = f
+
+	actions := map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey("feat-phase-recovery", ""): ports.RecoveryResume,
+	}
+
+	fake := &fakeRecoveryOp{}
+	store := newFeatureStore(f)
+	lc := lifecycleForFeature(f)
+	spy := &fakeRunMultiRepoImpl{}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:  fake,
+		Lifecycle: lc,
+		Store:     store,
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery: %v", err)
+	}
+	if spy.numCalls() != 1 {
+		t.Errorf("runMultiRepoImplFn calls = %d, want 1 (phase resume should dispatch)", spy.numCalls())
+	}
+}

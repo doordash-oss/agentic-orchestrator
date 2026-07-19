@@ -189,14 +189,16 @@ export function AttentionInbox({
     itemButtons.current.get(next.id)?.focus();
   };
 
+  const actionableCount = items.filter((i) => i.kind !== 'recovery').length;
+
   return (
     <>
       <button
         ref={bell}
         type="button"
         className="attention-bell"
-        data-empty={items.length === 0}
-        aria-label={`Attention inbox, ${items.length} pending`}
+        data-empty={actionableCount === 0}
+        aria-label={`Attention inbox, ${actionableCount} pending`}
         aria-expanded={open}
         aria-controls="attention-inbox"
         onClick={() => setOpen(true)}
@@ -204,9 +206,9 @@ export function AttentionInbox({
         <span className="attention-bell__glyph" aria-hidden="true">
           !
         </span>
-        {items.length > 0 ? (
+        {actionableCount > 0 ? (
           <span className="attention-bell__count" aria-hidden="true">
-            {items.length}
+            {actionableCount}
           </span>
         ) : null}
       </button>
@@ -265,7 +267,9 @@ export function AttentionInbox({
                     <span className="attention-inbox__item-main">
                       <span className="attention-inbox__kind">{attentionKindLabel(item)}</span>
                       <span className="attention-inbox__feature">
-                        {featureLabel(item.featureId)}
+                        {item.kind === 'recovery'
+                          ? 'Recovery workspace'
+                          : featureLabel(item.featureId)}
                       </span>
                     </span>
                     <span className="attention-inbox__waiting">
@@ -672,6 +676,29 @@ export function AttentionDetail({
       </div>
     );
 
+  if (item.kind === 'recovery')
+    return (
+      <div className="attention-detail">
+        <p className="attention-detail__summary">
+          {item.liveCount > 0
+            ? `${item.liveCount} live orphan process${item.liveCount === 1 ? '' : 'es'} need recovery.`
+            : `${item.deadCount} dead orphan session${item.deadCount === 1 ? '' : 's'} need cleanup.`}
+        </p>
+        <p className="attention-detail__hint">
+          Recovery is contextual priority — unrelated features remain usable.
+        </p>
+        <div className="attention-detail__actions">
+          <button
+            type="button"
+            className="attention-button attention-button--primary"
+            onClick={() => onJump?.('__recovery__')}
+          >
+            Open recovery
+          </button>
+        </div>
+      </div>
+    );
+
   const exhaustive: never = item;
   throw new Error(`Unhandled attention item: ${JSON.stringify(exhaustive)}`);
 }
@@ -701,7 +728,8 @@ function AttentionJumpAction({
   item: AttentionItem;
   onJump?: (featureId: string) => void;
 }) {
-  if (item.featureId === undefined || onJump === undefined) return null;
+  if (item.kind === 'recovery' || onJump === undefined) return null;
+  if (item.featureId === undefined) return null;
   const featureId = item.featureId;
   return (
     <button className="attention-button" onClick={() => onJump(featureId)}>
@@ -736,6 +764,8 @@ function attentionKindLabel(item: AttentionItem): string {
       return 'Permission';
     case 'review':
       return 'Review';
+    case 'recovery':
+      return 'Recovery';
     default: {
       const exhaustive: never = item;
       return exhaustive;

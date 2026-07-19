@@ -47,7 +47,16 @@ describe('operational IPC schemas', () => {
     expect(
       FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'pause-stop' }),
     ).toStrictEqual({ featureId: 'abcd1234', action: 'pause-stop' });
-    for (const action of ['delete', 'resume', 'retry', '../start']) {
+    expect(
+      FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'resume' }),
+    ).toStrictEqual({ featureId: 'abcd1234', action: 'resume' });
+    expect(
+      FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'retry' }),
+    ).toStrictEqual({ featureId: 'abcd1234', action: 'retry' });
+    expect(
+      FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'restart' }),
+    ).toStrictEqual({ featureId: 'abcd1234', action: 'restart' });
+    for (const action of ['delete', 'publish', '../start']) {
       expect(FeatureActionRequestSchema.safeParse({ featureId: 'abcd1234', action }).success).toBe(
         false,
       );

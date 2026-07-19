@@ -123,6 +123,16 @@ function makeServices(): IpcServices {
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),
     executeRewind: vi.fn(() => Promise.reject(new Error('unused'))),
+    startRebase: vi.fn(() => Promise.reject(new Error('unused'))),
+    preflightRebase: vi.fn(() => Promise.reject(new Error('unused'))),
+    fetchReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
+    startReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
+    startRefactor: vi.fn(() => Promise.reject(new Error('unused'))),
+    preflightRefactor: vi.fn(() => Promise.reject(new Error('unused'))),
+    scanRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
+    executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
+    readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),
+    bulkPreview: vi.fn(() => Promise.reject(new Error('unused'))),
   };
 }
 

@@ -25,6 +25,8 @@ import { FeatureCockpit } from './FeatureCockpit';
 import { SettingsPanel } from './SettingsPanel';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
 import { dashboardState, orderDashboardFeatures } from './featureView';
+import { BulkPreviewPanel } from './BulkPreviewPanel';
+import { RecoveryWorkspace } from './RecoveryWorkspace';
 
 const SETTINGS_TAB_ID = '__settings__';
 
@@ -173,6 +175,7 @@ export function WorkspaceShell({
   const attentionByFeature = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of attentionItems) {
+      if (item.kind === 'recovery') continue;
       if (item.featureId === undefined) continue;
       counts.set(item.featureId, (counts.get(item.featureId) ?? 0) + 1);
     }
@@ -214,9 +217,14 @@ export function WorkspaceShell({
     }
     if (tabs === null || handledAttentionJump.current === attentionJump) return;
     handledAttentionJump.current = attentionJump;
-    openFeature(attentionJump, featureLabel(attentionJump));
+    if (attentionJump === '__recovery__') {
+      persist({ ...tabs, activeFeatureId: null });
+      setView('home');
+    } else {
+      openFeature(attentionJump, featureLabel(attentionJump));
+    }
     onAttentionJumpHandled();
-  }, [attentionJump, featureLabel, onAttentionJumpHandled, openFeature, tabs]);
+  }, [attentionJump, featureLabel, onAttentionJumpHandled, openFeature, persist, tabs]);
 
   const completeCreationExit = useCallback((destination: CreationDestination) => {
     setTabs((current) => {
@@ -423,6 +431,10 @@ export function WorkspaceShell({
                 onRetry={loadList}
                 onCreate={() => setView('create')}
               />
+              <RecoveryWorkspace
+                onNavigateToFeature={(featureId) => openFeature(featureId, featureLabel(featureId))}
+              />
+              <BulkPreviewPanel />
             </>
           )}
         </div>
@@ -448,7 +460,9 @@ export function WorkspaceShell({
             titleHint={tabs.open.find((tab) => tab.featureId === active)?.titleHint ?? active}
             onClose={() => closeFeature(active)}
             onLoadedName={(name) => renameTab(active, name)}
-            attentionItems={attentionItems.filter((item) => item.featureId === active)}
+            attentionItems={attentionItems.filter(
+              (item) => item.kind !== 'recovery' && item.featureId === active,
+            )}
             refreshAttention={refreshAttention}
             attentionDrafts={activeAttentionDrafts}
             setAttentionDrafts={updateAttentionDrafts}

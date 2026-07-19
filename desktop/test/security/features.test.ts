@@ -115,6 +115,16 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),
     executeRewind: vi.fn(() => Promise.reject(new Error('unused'))),
+    startRebase: vi.fn(() => Promise.reject(new Error('unused'))),
+    preflightRebase: vi.fn(() => Promise.reject(new Error('unused'))),
+    fetchReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
+    startReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
+    startRefactor: vi.fn(() => Promise.reject(new Error('unused'))),
+    preflightRefactor: vi.fn(() => Promise.reject(new Error('unused'))),
+    scanRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
+    executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
+    readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),
+    bulkPreview: vi.fn(() => Promise.reject(new Error('unused'))),
     ...overrides,
   };
 }
@@ -170,7 +180,7 @@ describe('feature IPC security', () => {
 
   it('rejects broad feature actions and global cursors on session operations', async () => {
     const { handlers, services } = register();
-    for (const action of ['delete', 'resume', 'retry', '../start']) {
+    for (const action of ['delete', 'publish', 'merge', '../start']) {
       const result = (await handlers.get(IPC_CHANNELS.featuresDispatchAction)!(goodEvent, {
         featureId: 'abcd1234ef567890',
         action,

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '../../../../');
 
 export default defineConfig({
   testDir: __dirname,
@@ -17,7 +18,7 @@ export default defineConfig({
     baseURL: 'http://localhost:9871',
   },
   webServer: {
-    command: 'npx vite --port 9871 --strictPort',
+    command: `node ${path.join(repoRoot, 'node_modules/vite/bin/vite.js')} --port 9871 --strictPort`,
     cwd: __dirname,
     port: 9871,
     reuseExistingServer: true,

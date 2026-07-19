@@ -6,6 +6,7 @@
  */
 :root,
 :root[data-theme='dark'] {
+  color-scheme: dark;
   /* Dark set: Basalt / Chalk / Zinc / Rail Dark / Ion Signal / Amber Light */
   --color-bg: #101514; /* Basalt */
   --color-panel: #161c1b; /* mineral card, slightly lifted over Basalt */
@@ -19,6 +20,7 @@
 }
 
 :root[data-theme='light'] {
+  color-scheme: light;
   /* Light set: Porcelain / Graphite / Slate / Rail / Cobalt / Burnished Amber */
   --color-bg: #f3f6f5; /* Porcelain */
   --color-panel: #ffffff; /* near-white mineral card over Porcelain */

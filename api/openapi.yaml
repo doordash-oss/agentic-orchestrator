@@ -245,6 +245,36 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/features/{feature_id}/rebase/preflight:
+    get:
+      operationId: getRebasePreflight
+      summary: Read-only, server-authored rebase preflight — every affected repository, target branch, freshness, blocker, and source revision execution will use. No side effects; rejects stale, ineligible, or cross-feature execution before repository mutation.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/RebasePreflightResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/refactor/preflight:
+    post:
+      operationId: getRefactorPreflight
+      summary: Read-only, server-authored refactor scope-resolution preflight — resolves an explicit one-repository or all-repositories choice into the exact repository impact, validates prompt/pipeline bounds, and returns the source revision. No side effects.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefactorPreflightRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RefactorPreflightResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/features/{feature_id}/actions/{action}:
     post:
       operationId: runFeatureAction
@@ -649,6 +679,21 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/recovery/logs:
+    get:
+      operationId: getRecoveryLog
+      summary: Read a bounded, redacted log slice for one recovery item, resolved through the snapshot and item key. Rejects traversal, cross-item access, and stale snapshots; never returns raw host paths.
+      parameters:
+        - $ref: "#/components/parameters/RecoverySnapshotID"
+        - $ref: "#/components/parameters/RecoveryItemKey"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/TextContentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/shutdown:
     post:
       operationId: shutdownRuntime
@@ -905,6 +950,20 @@ components:
         type: string
         pattern: '^[a-z0-9._-]{1,256}$'
       description: Opaque resource identity from the catalogue.
+    RecoverySnapshotID:
+      name: snapshot_id
+      in: query
+      required: true
+      schema:
+        type: string
+      description: Recovery snapshot identity returned by GET /api/v1/recovery.
+    RecoveryItemKey:
+      name: key
+      in: query
+      required: true
+      schema:
+        type: string
+      description: Recovery item key (feature id, or feature id and repo name joined by a colon).
 
   requestBodies:
     JSONMutation:
@@ -1076,6 +1135,28 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RecoverySnapshotResponse"
+    RebasePreflightResponse:
+      description: Read-only, server-authored rebase preflight.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RebasePreflightResponse"
+    RefactorPreflightResponse:
+      description: Read-only, server-authored refactor scope-resolution preflight.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefactorPreflightResponse"
     ReadinessResponse:
       description: Consolidated runtime readiness snapshot.
       headers:
@@ -2299,6 +2380,84 @@ components:
     RefactorRestartResponse:
       allOf:
         - $ref: "#/components/schemas/RefactorStartResponse"
+    RebasePreflightRepo:
+      type: object
+      required: [repo, target, publishable, freshness, behind]
+      properties:
+        repo:
+          type: string
+        target:
+          type: string
+          description: Base ref a rebase will target for this repository.
+        publishable:
+          type: boolean
+        freshness:
+          type: string
+          description: Server-authored freshness state (up_to_date, behind, unknown).
+        behind:
+          type: boolean
+          description: Whether the repository is behind its rebase target.
+        blocker:
+          type: string
+          description: Safe, server-authored reason a rebase cannot proceed for this repository, when non-empty.
+        conflict_files:
+          type: array
+          items:
+            type: string
+    RebasePreflightResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, source_revision, repos]
+          properties:
+            feature_id:
+              type: string
+            source_revision:
+              type: string
+              description: Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect.
+            repos:
+              type: array
+              items:
+                $ref: "#/components/schemas/RebasePreflightRepo"
+    RefactorPreflightRequest:
+      type: object
+      required: [prompt]
+      properties:
+        repo:
+          type: string
+          description: Explicit single repository, or empty to resolve all feature repositories. An empty choice is never treated as implicit all-repository authorization at execution — the desktop must send the resolved scope from this preflight.
+        prompt:
+          type: string
+        pipeline:
+          type: string
+    RefactorPreflightResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, source_revision, scope, repos, prompt]
+          properties:
+            feature_id:
+              type: string
+            source_revision:
+              type: string
+              description: Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect.
+            scope:
+              type: string
+              description: Resolved scope — single or all.
+            repos:
+              type: array
+              items:
+                type: string
+              description: Exact resolved repository set the refactor will affect.
+            prompt:
+              type: string
+            pipeline:
+              type: string
+            blockers:
+              type: array
+              items:
+                type: string
+              description: Safe, server-authored reasons the refactor cannot proceed, when non-empty.
     MarkDoneResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2586,6 +2745,9 @@ components:
           x-go-name: PID
         process_alive:
           type: boolean
+        log_available:
+          type: boolean
+          description: Whether a bounded log read is available for this item.
         default_action:
           type: string
         allowed_actions:

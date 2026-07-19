@@ -6,7 +6,7 @@ import {
 } from '../../shared/ipc';
 import { ConnectionShell } from './components/ConnectionShell';
 import { ReadinessGate } from './components/ReadinessGate';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AttentionInbox,
   emptyAttentionDrafts,
@@ -23,23 +23,55 @@ const THEME_OPTIONS: readonly { value: ThemePreference; label: string }[] = [
 export default function App() {
   const { preference, setPreference } = useTheme();
   const connection = useConnectionState();
-  const [attentionItems, setAttentionItems] = useState<AttentionItem[]>([]);
+  const [serverAttentionItems, setServerAttentionItems] = useState<AttentionItem[]>([]);
+  const [recoveryItems, setRecoveryItems] = useState<{
+    liveCount: number;
+    deadCount: number;
+    firstSeenAt: string;
+  } | null>(null);
   const [attentionDrafts, setAttentionDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   const [featureNames, setFeatureNames] = useState<Record<string, string>>({});
   const [attentionJump, setAttentionJump] = useState<string | null>(null);
 
   const refreshAttention = useCallback(async () => {
     const snapshot = await window.agentico.getAttention();
-    setAttentionItems(snapshot.items);
+    setServerAttentionItems(snapshot.items);
     return snapshot.items;
+  }, []);
+
+  const refreshRecovery = useCallback(async () => {
+    try {
+      const snapshot = await window.agentico.scanRecovery();
+      const live = snapshot.items.filter((i) => i.processAlive).length;
+      const dead = snapshot.items.length - live;
+      if (live > 0 || dead > 0) {
+        setRecoveryItems((prev) =>
+          prev === null
+            ? { liveCount: live, deadCount: dead, firstSeenAt: new Date().toISOString() }
+            : { ...prev, liveCount: live, deadCount: dead },
+        );
+      } else {
+        setRecoveryItems(null);
+      }
+    } catch {
+      setRecoveryItems(null);
+    }
   }, []);
 
   useEffect(() => {
     void refreshAttention();
+    void refreshRecovery();
     return window.agentico.onAppEvent((event) => {
+      if (event.type === 'status') {
+        void refreshAttention();
+        return;
+      }
+      if (event.kind === 'resync') {
+        void refreshAttention();
+        void refreshRecovery();
+        return;
+      }
       if (
-        event.type === 'status' ||
-        event.kind === 'resync' ||
         event.kind === 'permission.updated' ||
         event.kind === 'prompt.updated' ||
         event.kind.startsWith('feature') ||
@@ -48,7 +80,7 @@ export default function App() {
         void refreshAttention();
       }
     });
-  }, [refreshAttention]);
+  }, [refreshAttention, refreshRecovery]);
 
   const refreshFeatureNames = useCallback(async () => {
     const features = await window.agentico.listFeatures();
@@ -81,6 +113,20 @@ export default function App() {
       : isConnectionErrorState(connection)
         ? 'error'
         : 'progress';
+
+  // Recovery items sort ahead of all other attention so recovery receives
+  // contextual priority (Task 8 acceptance criterion 1).
+  const attentionItems = useMemo<AttentionItem[]>(() => {
+    if (recoveryItems === null) return serverAttentionItems;
+    const recoveryAttention: AttentionItem = {
+      kind: 'recovery',
+      id: 'recovery-scan',
+      waitingSince: recoveryItems.firstSeenAt,
+      liveCount: recoveryItems.liveCount,
+      deadCount: recoveryItems.deadCount,
+    };
+    return [recoveryAttention, ...serverAttentionItems];
+  }, [recoveryItems, serverAttentionItems]);
 
   return (
     <div className="app-frame">

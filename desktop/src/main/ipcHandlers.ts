@@ -81,6 +81,24 @@ import {
   type RewindPreviewRequest,
   type RewindPreviewView,
   type RewindExecuteRequest,
+  type RebaseRequest,
+  type RebaseResult,
+  type RebasePreflightRequest,
+  type RebasePreflightResult,
+  type ReviewCommentsFetchRequest,
+  type ReviewCommentsFetchResult,
+  type ReviewCommentsStartRequest,
+  type ReviewCommentsStartResult,
+  type RefactorRequest,
+  type RefactorResult,
+  type RefactorPreflightRequest,
+  type RefactorPreflightResult,
+  type RecoverySnapshot,
+  type RecoveryExecuteRequest,
+  type RecoveryExecuteResult,
+  type RecoveryLogReadRequest,
+  type RecoveryLogReadResult,
+  type BulkPreview,
   ipcContracts,
 } from '../shared/ipc';
 import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './security';
@@ -144,6 +162,16 @@ export interface IpcServices {
   getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
   getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;
   executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
+  startRebase(request: RebaseRequest): Promise<RebaseResult>;
+  preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
+  fetchReviewComments(request: ReviewCommentsFetchRequest): Promise<ReviewCommentsFetchResult>;
+  startReviewComments(request: ReviewCommentsStartRequest): Promise<ReviewCommentsStartResult>;
+  startRefactor(request: RefactorRequest): Promise<RefactorResult>;
+  preflightRefactor(request: RefactorPreflightRequest): Promise<RefactorPreflightResult>;
+  scanRecovery(): Promise<RecoverySnapshot>;
+  executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;
+  readRecoveryLog(request: RecoveryLogReadRequest): Promise<RecoveryLogReadResult>;
+  bulkPreview(): Promise<BulkPreview>;
 }
 
 export interface IpcMainLike {
@@ -289,6 +317,24 @@ export function registerIpcHandlers(
       services.getRewindPreview(request),
     [IPC_CHANNELS.rewindExecute]: (_event, request: RewindExecuteRequest) =>
       services.executeRewind(request),
+    [IPC_CHANNELS.featuresRebase]: (_event, request: RebaseRequest) =>
+      services.startRebase(request),
+    [IPC_CHANNELS.featuresRebasePreflight]: (_event, request: RebasePreflightRequest) =>
+      services.preflightRebase(request),
+    [IPC_CHANNELS.featuresReviewCommentsFetch]: (_event, request: ReviewCommentsFetchRequest) =>
+      services.fetchReviewComments(request),
+    [IPC_CHANNELS.featuresReviewCommentsStart]: (_event, request: ReviewCommentsStartRequest) =>
+      services.startReviewComments(request),
+    [IPC_CHANNELS.featuresRefactor]: (_event, request: RefactorRequest) =>
+      services.startRefactor(request),
+    [IPC_CHANNELS.featuresRefactorPreflight]: (_event, request: RefactorPreflightRequest) =>
+      services.preflightRefactor(request),
+    [IPC_CHANNELS.recoveryScan]: () => services.scanRecovery(),
+    [IPC_CHANNELS.recoveryExecute]: (_event, request: RecoveryExecuteRequest) =>
+      services.executeRecovery(request),
+    [IPC_CHANNELS.recoveryLogRead]: (_event, request: RecoveryLogReadRequest) =>
+      services.readRecoveryLog(request),
+    [IPC_CHANNELS.bulkPreview]: () => services.bulkPreview(),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

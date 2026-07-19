@@ -81,6 +81,16 @@ describe('preload surface', () => {
         'getRunLogContent',
         'getRewindPreview',
         'executeRewind',
+        'startRebase',
+        'preflightRebase',
+        'fetchReviewComments',
+        'startReviewComments',
+        'startRefactor',
+        'preflightRefactor',
+        'scanRecovery',
+        'executeRecovery',
+        'readRecoveryLog',
+        'bulkPreview',
       ].sort(),
     );
   });

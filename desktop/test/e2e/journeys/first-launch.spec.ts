@@ -171,8 +171,8 @@ test('first launch: wizard-gated creation reaches Ready to start', async ({}, te
     await expect(cockpit.getByText('1 of 1 tasks complete')).toBeVisible();
     const worktreeTask = cockpit.locator('.task-row', { hasText: 'Worktree: demo-app' });
     await expect(worktreeTask).toContainText('Done');
-    await expect(cockpit.getByRole('button', { name: 'Start' })).toBeVisible();
-    await expect(cockpit.getByRole('button', { name: 'Start' })).toBeEnabled();
+    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
+    await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
     await expect(cockpit.getByText("Starting isn't available in this version yet.")).toHaveCount(0);
     await evidenceShotBothThemes(handle, 'ready-to-start');
 

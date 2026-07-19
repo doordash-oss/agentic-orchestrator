@@ -278,6 +278,174 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   ],
 };
 
+const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
+  id: 'abcd1234ef567890',
+  name: 'Signal Lab telemetry',
+  slug: 'signal-lab-telemetry',
+  status: 'Ready',
+  currentPhase: 'Implement',
+  pipeline: 'large',
+  description: 'Complete desktop operational parity for routine lifecycle actions and cycles.',
+  repos: ['signal-lab', 'orchestrator-core'],
+  createdAt: '2026-07-14T10:00:00Z',
+  activeRun: 8,
+  actions: [
+    {
+      id: 'start',
+      enabled: false,
+      disabledReasons: [{ code: 'already_running', message: 'Already running.' }],
+    },
+    { id: 'pause-stop', enabled: true, disabledReasons: [] },
+    {
+      id: 'resume',
+      enabled: false,
+      disabledReasons: [{ code: 'not_paused', message: 'Pause this feature first to resume it.' }],
+    },
+    {
+      id: 'retry',
+      enabled: false,
+      disabledReasons: [
+        { code: 'not_failed', message: 'This feature has not failed, so retry is not available.' },
+      ],
+    },
+    { id: 'restart', enabled: true, disabledReasons: [] },
+    { id: 'rewind', enabled: true, disabledReasons: [] },
+    { id: 'rebase', enabled: true, disabledReasons: [] },
+    {
+      id: 'review-comments',
+      enabled: true,
+      disabledReasons: [],
+      inputs: [
+        { name: 'repo', options: ['signal-lab', 'orchestrator-core'] },
+        { name: 'mode', options: ['auto', 'address_all'] },
+      ],
+    },
+    {
+      id: 'refactor',
+      enabled: true,
+      disabledReasons: [],
+      inputs: [
+        { name: 'repo' },
+        { name: 'prompt' },
+        { name: 'pipeline', options: ['medium', 'large', 'moonshot'] },
+      ],
+    },
+  ],
+  repoStatus: [
+    {
+      name: 'signal-lab',
+      publishable: true,
+      touched: true,
+      prUrl: 'https://github.com/example/signal-lab/pull/42',
+      freshness: 'in sync',
+      cycleType: 'review-comments',
+      cycleStatus: 'running',
+    },
+    {
+      name: 'orchestrator-core',
+      publishable: true,
+      touched: false,
+      prUrl: 'https://github.com/example/orchestrator-core/pull/18',
+      freshness: 'local changes',
+    },
+  ],
+  cycle: { type: 'review-comments', status: 'running', count: 2, iteration: 1 },
+};
+
+const REBASE_FEATURE_SNAPSHOT: FeatureSnapshot = {
+  ...CYCLES_FEATURE_SNAPSHOT,
+  repoStatus: [
+    {
+      name: 'signal-lab',
+      publishable: true,
+      freshness: 'local changes',
+      rebaseStatus: 'pending',
+      rebaseTarget: 'origin/main',
+      conflictFiles: ['src/telemetry/signal.go', 'src/telemetry/collector.go'],
+    },
+    {
+      name: 'orchestrator-core',
+      publishable: true,
+      freshness: 'in sync',
+      rebaseStatus: 'completed',
+      rebaseTarget: 'origin/main',
+    },
+  ],
+  cycle: { type: 'rebase', status: 'running', count: 1 },
+};
+
+const RECOVERY_ITEMS = [
+  {
+    key: 'feature-alpha:signal-lab',
+    featureId: 'alpha1234ef567890',
+    featureName: 'Alpha Feature',
+    repoName: 'signal-lab',
+    phase: 'implement',
+    iteration: 3,
+    pid: 12345,
+    processAlive: true,
+    logAvailable: true,
+    allowedActions: ['resume', 'kill', 'skip'],
+    defaultAction: 'skip',
+  },
+  {
+    key: 'feature-beta:orchestrator-core',
+    featureId: 'beta1234ef567890',
+    featureName: 'Beta Feature',
+    repoName: 'orchestrator-core',
+    phase: 'implement',
+    iteration: 1,
+    pid: 0,
+    processAlive: false,
+    logAvailable: true,
+    allowedActions: ['resume', 'kill', 'skip'],
+    defaultAction: 'skip',
+  },
+];
+
+const BULK_PREVIEW_DATA = {
+  previewId: 'bulk-preview-001',
+  eligible: [
+    {
+      featureId: 'alpha1234ef567890',
+      featureName: 'Alpha Feature',
+      action: 'resume' as const,
+      enabled: true,
+      repos: ['signal-lab'],
+    },
+    {
+      featureId: 'gamma1234ef567890',
+      featureName: 'Gamma Feature',
+      action: 'retry' as const,
+      enabled: true,
+      repos: ['orchestrator-core'],
+    },
+    {
+      featureId: 'epsilon1234ef567890',
+      featureName: 'Epsilon Feature',
+      action: 'resume' as const,
+      enabled: true,
+      repos: ['data-platform'],
+    },
+  ],
+  excluded: [
+    {
+      featureId: 'beta1234ef567890',
+      featureName: 'Beta Feature',
+      action: 'resume' as const,
+      enabled: false,
+      disabledReason: 'Pause this feature first to resume it.',
+    },
+    {
+      featureId: 'delta1234ef567890',
+      featureName: 'Delta Feature',
+      action: 'retry' as const,
+      enabled: false,
+      disabledReason: 'This feature has not failed, so retry is not available.',
+    },
+  ],
+};
+
 const REWIND_PREVIEW = {
   eligible: true,
   sourceRunNumber: 8,
@@ -415,13 +583,110 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
           ],
         });
       }
+      if (scene === 'repo-instrument' || scene === 'review-refactor' || scene === 'cycle-gate') {
+        return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
+      }
+      if (scene === 'rebase-preflight') {
+        return Promise.resolve(REBASE_FEATURE_SNAPSHOT);
+      }
+      if (scene === 'bulk-preview' || scene === 'bulk-queue') {
+        const id = _featureId;
+        if (id === 'alpha1234ef567890') {
+          return Promise.resolve({
+            ...CYCLES_FEATURE_SNAPSHOT,
+            id,
+            name: 'Alpha Feature',
+            status: 'Paused',
+            actions: [
+              { id: 'start', enabled: false, disabledReasons: [] },
+              { id: 'pause-stop', enabled: false, disabledReasons: [] },
+              { id: 'resume', enabled: true, disabledReasons: [] },
+              { id: 'retry', enabled: false, disabledReasons: [] },
+              { id: 'restart', enabled: false, disabledReasons: [] },
+              { id: 'rewind', enabled: false, disabledReasons: [] },
+            ],
+          });
+        }
+        if (id === 'gamma1234ef567890') {
+          return Promise.resolve({
+            ...CYCLES_FEATURE_SNAPSHOT,
+            id,
+            name: 'Gamma Feature',
+            status: 'Failed',
+            actions: [
+              { id: 'start', enabled: false, disabledReasons: [] },
+              { id: 'pause-stop', enabled: false, disabledReasons: [] },
+              { id: 'resume', enabled: false, disabledReasons: [] },
+              { id: 'retry', enabled: true, disabledReasons: [] },
+              { id: 'restart', enabled: false, disabledReasons: [] },
+              { id: 'rewind', enabled: false, disabledReasons: [] },
+            ],
+          });
+        }
+        if (id === 'epsilon1234ef567890') {
+          return Promise.resolve({
+            ...CYCLES_FEATURE_SNAPSHOT,
+            id,
+            name: 'Epsilon Feature',
+            status: 'Paused',
+            actions: [
+              { id: 'start', enabled: false, disabledReasons: [] },
+              { id: 'pause-stop', enabled: false, disabledReasons: [] },
+              { id: 'resume', enabled: true, disabledReasons: [] },
+              { id: 'retry', enabled: false, disabledReasons: [] },
+              { id: 'restart', enabled: false, disabledReasons: [] },
+              { id: 'rewind', enabled: false, disabledReasons: [] },
+            ],
+          });
+        }
+        return Promise.resolve(CYCLES_FEATURE_SNAPSHOT);
+      }
       return Promise.resolve(FEATURE_SNAPSHOT);
     },
     createFeature: () => Promise.resolve({ featureId: 'abcd1234ef567890' } as CreateFeatureResult),
     dispatchFeatureSetup: () => Promise.resolve({ result: 'setup_started' } as SetupDispatchResult),
-    dispatchFeatureAction: ({ action }) =>
-      Promise.resolve({ featureId: 'abcd1234ef567890', action, result: 'started', sessionIds: [] }),
-    getAttention: () => Promise.resolve({ items: [] } as AttentionSnapshot),
+    dispatchFeatureAction: ({ action, featureId }) => {
+      if (scene === 'bulk-queue' && featureId === 'alpha1234ef567890') {
+        return new Promise((resolve) =>
+          setTimeout(
+            () => resolve({ featureId, action, result: 'started', sessionIds: [] }),
+            3_000,
+          ),
+        );
+      }
+      if (scene === 'bulk-queue' && featureId === 'gamma1234ef567890') {
+        return new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Server rejected retry: feature is no longer failed.')),
+            8_000,
+          ),
+        );
+      }
+      if (scene === 'bulk-queue' && featureId === 'epsilon1234ef567890') {
+        return new Promise((resolve) =>
+          setTimeout(
+            () => resolve({ featureId, action, result: 'started', sessionIds: [] }),
+            5_000,
+          ),
+        );
+      }
+      return Promise.resolve({ featureId, action, result: 'started', sessionIds: [] });
+    },
+    getAttention: () =>
+      Promise.resolve({
+        items:
+          scene === 'recovery' || scene === 'recovery-constrained'
+            ? ([
+                {
+                  kind: 'recovery' as const,
+                  id: 'recovery-scan',
+                  waitingSince: new Date(Date.now() - 120_000).toISOString(),
+                  liveCount: 1,
+                  deadCount: 1,
+                },
+              ] as AttentionSnapshot['items'])
+            : ([] as AttentionSnapshot['items']),
+      } as AttentionSnapshot),
     answerPermission: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     answerQuestions: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     sendHelp: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
@@ -539,6 +804,93 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
       new Promise((resolve) => {
         setTimeout(() => resolve(REWIND_RESULT), 500);
       }),
+    startRebase: () =>
+      Promise.resolve({
+        featureId: 'abcd1234ef567890',
+        cycleType: 'rebase',
+        result: 'started',
+      }),
+    preflightRebase: () =>
+      Promise.resolve({
+        featureId: 'abcd1234ef567890',
+        sourceRevision: 'rebase-rev-001',
+        repos: [
+          {
+            repo: 'signal-lab',
+            target: 'main',
+            publishable: true,
+            freshness: 'behind',
+            behind: true,
+          },
+          {
+            repo: 'telemetry-sdk',
+            target: 'main',
+            publishable: true,
+            freshness: 'up_to_date',
+            behind: false,
+            blocker: '',
+          },
+        ],
+      }),
+    fetchReviewComments: () =>
+      Promise.resolve({
+        featureId: 'abcd1234ef567890',
+        repo: 'signal-lab',
+        comments: [
+          {
+            id: 1,
+            file: 'src/main.ts',
+            line: 42,
+            body: 'Consider extracting this logic.',
+            author: 'reviewer',
+          },
+          {
+            id: 2,
+            file: 'src/utils.ts',
+            line: 10,
+            body: 'Add error handling here.',
+            author: 'reviewer',
+          },
+        ],
+        revision: 'a1b2c3d4e5f6',
+        modes: ['auto', 'address_all'],
+      }),
+    startReviewComments: () =>
+      Promise.resolve({
+        featureId: 'abcd1234ef567890',
+        cycleType: 'review-comments',
+        result: 'started',
+      }),
+    startRefactor: () =>
+      Promise.resolve({
+        featureId: 'abcd1234ef567890',
+        cycleType: 'refactor',
+        result: 'started',
+      }),
+    preflightRefactor: () =>
+      Promise.resolve({
+        featureId: 'abcd1234ef567890',
+        sourceRevision: 'refactor-rev-001',
+        scope: 'all',
+        repos: ['signal-lab', 'telemetry-sdk'],
+        prompt: 'Rename foo to bar across the codebase',
+      }),
+    scanRecovery: () =>
+      Promise.resolve({
+        snapshotId: 'recovery-snapshot-001',
+        items: RECOVERY_ITEMS,
+      }),
+    executeRecovery: () => Promise.resolve({ result: 'Action processed.' }),
+    readRecoveryLog: () =>
+      Promise.resolve({
+        id: 'abcd1234ef567890:signal-lab',
+        offset: 0,
+        limit: 65536,
+        size: 220,
+        text: '[implement] iteration 3 started\n[model] requesting review-comments cycle\n[implement] NEED_USER_INPUT: apply suggested fix?\n[cycle] review-comments paused on gate\n[recovery] orphan process detected (pid 412)\n[recovery] log excerpt available — Resume, Kill, or Skip.',
+        truncated: false,
+      }),
+    bulkPreview: () => Promise.resolve(BULK_PREVIEW_DATA),
     onAppEvent: (listener) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);
@@ -574,6 +926,8 @@ export {
   RUN_ARTIFACTS,
   SESSIONS,
   FEATURE_SNAPSHOT,
+  CYCLES_FEATURE_SNAPSHOT,
+  REBASE_FEATURE_SNAPSHOT,
   REWIND_PREVIEW,
   REWIND_RESULT,
 };

@@ -1,0 +1,59 @@
+/**
+ * Shared test helpers for seeding feature state on disk while the bundled
+ * server is stopped. Extracted from journey specs to eliminate the
+ * triplicated setFeatureStatus copies that drifted across lifecycle-cycles,
+ * bulk-resume-retry, and recovery-orphans specs. persistAppLogs and
+ * evidenceDir live in ./app and are re-exported here so journey specs keep a
+ * single import surface without duplicating evidence-writing logic.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+
+// Re-export the canonical evidence helpers from ./app so journey specs that
+// import them from ./seed keep working without a second copy of the logic.
+export { persistAppLogs, evidenceDir } from './app';
+
+/**
+ * Sets a feature's status in feature.yaml. When the target status is not
+ * "Failed", also clears run-level failure_type and last_error from the
+ * active run's run.yaml so reconcileTerminalRunFailure does not overwrite
+ * the seeded status back to Failed on the next server load.
+ */
+export function setFeatureStatus(stateDir: string, featureId: string, status: string): void {
+  const featurePath = path.join(stateDir, featureId, 'feature.yaml');
+  let yaml = fs.readFileSync(featurePath, 'utf8');
+  const pattern = /^status:.*$/m;
+  if (pattern.test(yaml)) {
+    yaml = yaml.replace(pattern, `status: ${status}`);
+  } else {
+    yaml = `${yaml.endsWith('\n') ? yaml : `${yaml}\n`}status: ${status}\n`;
+  }
+  fs.writeFileSync(featurePath, yaml);
+
+  if (status === 'Failed') return;
+  clearRunFailures(stateDir, featureId);
+}
+
+/**
+ * Removes failure_type and last_error from the active run's run.yaml so
+ * Feature.reconcileTerminalRunFailure does not revert a non-failed status
+ * to StatusFailed on load.
+ */
+function clearRunFailures(stateDir: string, featureId: string): void {
+  const featurePath = path.join(stateDir, featureId, 'feature.yaml');
+  const featureYaml = fs.readFileSync(featurePath, 'utf8');
+  const activeRunMatch = featureYaml.match(/^active_run:\s*(\d+)/m);
+  const activeRun = activeRunMatch !== null ? activeRunMatch[1]! : '1';
+  const runPath = path.join(
+    stateDir,
+    featureId,
+    'runs',
+    `run-${activeRun.padStart(3, '0')}`,
+    'run.yaml',
+  );
+  if (!fs.existsSync(runPath)) return;
+  let runYaml = fs.readFileSync(runPath, 'utf8');
+  runYaml = runYaml.replace(/^failure_type:.*$\n?/m, '');
+  runYaml = runYaml.replace(/^last_error:.*$\n?/m, '');
+  fs.writeFileSync(runPath, runYaml);
+}

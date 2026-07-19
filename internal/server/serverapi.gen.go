@@ -1575,6 +1575,35 @@ type ReadinessResponse struct {
 	Workspace WorkspaceReadiness `json:"workspace"`
 }
 
+// RebasePreflightRepo defines model for RebasePreflightRepo.
+type RebasePreflightRepo struct {
+	// Behind Whether the repository is behind its rebase target.
+	Behind bool `json:"behind"`
+
+	// Blocker Safe, server-authored reason a rebase cannot proceed for this repository, when non-empty.
+	Blocker       string   `json:"blocker,omitempty"`
+	ConflictFiles []string `json:"conflict_files,omitempty"`
+
+	// Freshness Server-authored freshness state (up_to_date, behind, unknown).
+	Freshness   string `json:"freshness"`
+	Publishable bool   `json:"publishable"`
+	Repo        string `json:"repo"`
+
+	// Target Base ref a rebase will target for this repository.
+	Target string `json:"target"`
+}
+
+// RebasePreflightResponse defines model for RebasePreflightResponse.
+type RebasePreflightResponse struct {
+	APIVersion string                `json:"api_version"`
+	FeatureID  string                `json:"feature_id"`
+	Meta       ResponseMeta          `json:"meta,omitempty"`
+	Repos      []RebasePreflightRepo `json:"repos"`
+
+	// SourceRevision Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect.
+	SourceRevision string `json:"source_revision"`
+}
+
 // RebaseStartResponse defines model for RebaseStartResponse.
 type RebaseStartResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -1600,10 +1629,13 @@ type RecoveryItem struct {
 	FeatureName    string   `json:"feature_name,omitempty"`
 	Iteration      int      `json:"iteration,omitempty"`
 	Key            string   `json:"key"`
-	Phase          string   `json:"phase,omitempty"`
-	PID            int      `json:"pid,omitempty"`
-	ProcessAlive   bool     `json:"process_alive"`
-	RepoName       string   `json:"repo_name,omitempty"`
+
+	// LogAvailable Whether a bounded log read is available for this item.
+	LogAvailable bool   `json:"log_available,omitempty"`
+	Phase        string `json:"phase,omitempty"`
+	PID          int    `json:"pid,omitempty"`
+	ProcessAlive bool   `json:"process_alive"`
+	RepoName     string `json:"repo_name,omitempty"`
 }
 
 // RecoverySnapshotResponse defines model for RecoverySnapshotResponse.
@@ -1612,6 +1644,36 @@ type RecoverySnapshotResponse struct {
 	Items      []RecoveryItem `json:"items"`
 	Meta       ResponseMeta   `json:"meta,omitempty"`
 	SnapshotID string         `json:"snapshot_id"`
+}
+
+// RefactorPreflightRequest defines model for RefactorPreflightRequest.
+type RefactorPreflightRequest struct {
+	Pipeline string `json:"pipeline,omitempty"`
+	Prompt   string `json:"prompt"`
+
+	// Repo Explicit single repository, or empty to resolve all feature repositories. An empty choice is never treated as implicit all-repository authorization at execution — the desktop must send the resolved scope from this preflight.
+	Repo string `json:"repo,omitempty"`
+}
+
+// RefactorPreflightResponse defines model for RefactorPreflightResponse.
+type RefactorPreflightResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// Blockers Safe, server-authored reasons the refactor cannot proceed, when non-empty.
+	Blockers  []string     `json:"blockers,omitempty"`
+	FeatureID string       `json:"feature_id"`
+	Meta      ResponseMeta `json:"meta,omitempty"`
+	Pipeline  string       `json:"pipeline,omitempty"`
+	Prompt    string       `json:"prompt"`
+
+	// Repos Exact resolved repository set the refactor will affect.
+	Repos []string `json:"repos"`
+
+	// Scope Resolved scope — single or all.
+	Scope string `json:"scope"`
+
+	// SourceRevision Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect.
+	SourceRevision string `json:"source_revision"`
 }
 
 // RefactorRestartResponse defines model for RefactorRestartResponse.
@@ -2375,6 +2437,12 @@ type Page = int
 // PageSize defines model for PageSize.
 type PageSize = int
 
+// RecoveryItemKey defines model for RecoveryItemKey.
+type RecoveryItemKey = string
+
+// RecoverySnapshotID defines model for RecoverySnapshotID.
+type RecoverySnapshotID = string
+
 // ResourceID defines model for ResourceID.
 type ResourceID = string
 
@@ -2631,6 +2699,17 @@ type ExecuteRecoveryActionsParams struct {
 // ExecuteRecoveryActionsParamsXAgenticoClient defines parameters for ExecuteRecoveryActions.
 type ExecuteRecoveryActionsParamsXAgenticoClient string
 
+// GetRecoveryLogParams defines parameters for GetRecoveryLog.
+type GetRecoveryLogParams struct {
+	// SnapshotID Recovery snapshot identity returned by GET /api/v1/recovery.
+	SnapshotID RecoverySnapshotID `form:"snapshot_id" json:"snapshot_id"`
+
+	// Key Recovery item key (feature id, or feature id and repo name joined by a colon).
+	Key    RecoveryItemKey `form:"key" json:"key"`
+	Offset Offset          `form:"offset,omitempty" json:"offset,omitempty"`
+	Limit  Limit           `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // ListResourcesParams defines parameters for ListResources.
 type ListResourcesParams struct {
 	Kind ResourceKind `form:"kind,omitempty" json:"kind,omitempty"`
@@ -2704,6 +2783,9 @@ type RunFeatureSubactionJSONRequestBody RunFeatureSubactionJSONBody
 
 // UpdateFeatureConfigJSONRequestBody defines body for UpdateFeatureConfig for application/json ContentType.
 type UpdateFeatureConfigJSONRequestBody UpdateFeatureConfigJSONBody
+
+// GetRefactorPreflightJSONRequestBody defines body for GetRefactorPreflight for application/json ContentType.
+type GetRefactorPreflightJSONRequestBody = RefactorPreflightRequest
 
 // CreateReviewSessionJSONRequestBody defines body for CreateReviewSession for application/json ContentType.
 type CreateReviewSessionJSONRequestBody CreateReviewSessionJSONBody

@@ -14,6 +14,12 @@ import {
   FeatureDetailResponseSchema,
   FeatureListResponseSchema,
   RuntimeConfigCreationSchema,
+  RebaseStartResponseSchema,
+  RebasePreflightResponseSchema,
+  ReviewCommentsFetchResponseSchema,
+  ReviewCommentsStartResponseSchema,
+  RefactorStartResponseSchema,
+  RefactorPreflightResponseSchema,
   validateWithSchema,
   type ServerFeatureDetail,
   type ServerSetup,
@@ -23,6 +29,12 @@ import {
   FeatureActionRequestSchema,
   FeatureIdSchema,
   FeatureSetupStatusSchema,
+  RebaseRequestSchema,
+  RebasePreflightRequestSchema,
+  ReviewCommentsFetchRequestSchema,
+  ReviewCommentsStartRequestSchema,
+  RefactorRequestSchema,
+  RefactorPreflightRequestSchema,
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
@@ -32,6 +44,18 @@ import {
   type FeatureActionResult,
   type FeatureSummaryView,
   type ReadinessSnapshot,
+  type RebaseRequest,
+  type RebasePreflightRequest,
+  type RebasePreflightResult,
+  type RebaseResult,
+  type RefactorRequest,
+  type RefactorPreflightRequest,
+  type RefactorPreflightResult,
+  type RefactorResult,
+  type ReviewCommentsFetchRequest,
+  type ReviewCommentsFetchResult,
+  type ReviewCommentsStartRequest,
+  type ReviewCommentsStartResult,
   type SetupDispatchResult,
   type SetupTaskView,
 } from '../shared/ipc';
@@ -180,6 +204,156 @@ export class FeatureService {
     return toSnapshot(response.feature);
   }
 
+  async startRebase(request: RebaseRequest): Promise<RebaseResult> {
+    const input = validateWithSchema(request, RebaseRequestSchema);
+    const body = await this.api(`/api/v1/features/${input.featureId}/actions/rebase`, {
+      method: 'POST',
+      body: {
+        ...(input.sourceRevision === undefined || input.sourceRevision === ''
+          ? {}
+          : { source_revision: input.sourceRevision }),
+      },
+    });
+    const response = validateWithSchema(body, RebaseStartResponseSchema);
+    return {
+      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      cycleType: response.cycle_type,
+      result: response.result,
+      ...(response.session_id === undefined || response.session_id === ''
+        ? {}
+        : { sessionId: response.session_id }),
+    };
+  }
+
+  async preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult> {
+    const input = validateWithSchema(request, RebasePreflightRequestSchema);
+    const body = await this.api(`/api/v1/features/${input.featureId}/rebase/preflight`);
+    const response = validateWithSchema(body, RebasePreflightResponseSchema);
+    return {
+      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      sourceRevision: response.source_revision,
+      repos: (response.repos ?? []).map((repo) => ({
+        repo: repo.repo,
+        target: repo.target,
+        publishable: repo.publishable,
+        freshness: repo.freshness,
+        behind: repo.behind,
+        ...(repo.blocker === undefined || repo.blocker === '' ? {} : { blocker: repo.blocker }),
+        ...(repo.conflict_files === undefined || repo.conflict_files.length === 0
+          ? {}
+          : { conflictFiles: repo.conflict_files }),
+      })),
+    };
+  }
+
+  async fetchReviewComments(
+    request: ReviewCommentsFetchRequest,
+  ): Promise<ReviewCommentsFetchResult> {
+    const input = validateWithSchema(request, ReviewCommentsFetchRequestSchema);
+    const body = await this.api(
+      `/api/v1/features/${input.featureId}/actions/review-comments/fetch`,
+      { method: 'POST', body: { repo: input.repo } },
+    );
+    const response = validateWithSchema(body, ReviewCommentsFetchResponseSchema);
+    return {
+      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      repo: response.repo,
+      comments: (response.comments ?? []).map((comment) => ({
+        id: comment.id,
+        ...(comment.file === undefined || comment.file === '' ? {} : { file: comment.file }),
+        ...(comment.line === undefined ? {} : { line: comment.line }),
+        ...(comment.body === undefined ? {} : { body: redactText(comment.body) }),
+        ...(comment.author === undefined || comment.author === ''
+          ? {}
+          : { author: comment.author }),
+        ...(comment.thread_id === undefined || comment.thread_id === ''
+          ? {}
+          : { threadId: comment.thread_id }),
+      })),
+      ...(response.revision === undefined || response.revision === ''
+        ? {}
+        : { revision: response.revision }),
+      ...(response.modes === undefined ? {} : { modes: response.modes }),
+    };
+  }
+
+  async startReviewComments(
+    request: ReviewCommentsStartRequest,
+  ): Promise<ReviewCommentsStartResult> {
+    const input = validateWithSchema(request, ReviewCommentsStartRequestSchema);
+    const body = await this.api(`/api/v1/features/${input.featureId}/actions/review-comments`, {
+      method: 'POST',
+      body: { repo: input.repo, mode: input.mode },
+    });
+    const response = validateWithSchema(body, ReviewCommentsStartResponseSchema);
+    return {
+      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      cycleType: response.cycle_type,
+      result: response.result,
+      ...(response.session_id === undefined || response.session_id === ''
+        ? {}
+        : { sessionId: response.session_id }),
+    };
+  }
+
+  async startRefactor(request: RefactorRequest): Promise<RefactorResult> {
+    const input = validateWithSchema(request, RefactorRequestSchema);
+    const body = await this.api(`/api/v1/features/${input.featureId}/actions/refactor`, {
+      method: 'POST',
+      body: {
+        prompt: input.prompt,
+        ...(input.repo === undefined || input.repo === '' ? {} : { repo: input.repo }),
+        ...(input.pipeline === undefined || input.pipeline === ''
+          ? {}
+          : { pipeline: input.pipeline }),
+        ...(input.sourceRevision === undefined || input.sourceRevision === ''
+          ? {}
+          : { source_revision: input.sourceRevision }),
+      },
+    });
+    const response = validateWithSchema(body, RefactorStartResponseSchema);
+    return {
+      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      cycleType: response.cycle_type,
+      result: response.result,
+      ...(response.repo === undefined || response.repo === '' ? {} : { repo: response.repo }),
+      ...(response.pipeline === undefined || response.pipeline === ''
+        ? {}
+        : { pipeline: response.pipeline }),
+      ...(response.session_id === undefined || response.session_id === ''
+        ? {}
+        : { sessionId: response.session_id }),
+    };
+  }
+
+  async preflightRefactor(request: RefactorPreflightRequest): Promise<RefactorPreflightResult> {
+    const input = validateWithSchema(request, RefactorPreflightRequestSchema);
+    const body = await this.api(`/api/v1/features/${input.featureId}/refactor/preflight`, {
+      method: 'POST',
+      body: {
+        prompt: input.prompt,
+        ...(input.repo === undefined || input.repo === '' ? {} : { repo: input.repo }),
+        ...(input.pipeline === undefined || input.pipeline === ''
+          ? {}
+          : { pipeline: input.pipeline }),
+      },
+    });
+    const response = validateWithSchema(body, RefactorPreflightResponseSchema);
+    return {
+      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      sourceRevision: response.source_revision,
+      scope: response.scope,
+      repos: response.repos ?? [],
+      prompt: response.prompt,
+      ...(response.pipeline === undefined || response.pipeline === ''
+        ? {}
+        : { pipeline: response.pipeline }),
+      ...(response.blockers === undefined || response.blockers.length === 0
+        ? {}
+        : { blockers: response.blockers }),
+    };
+  }
+
   // --- transport helpers -----------------------------------------------------
 
   /**
@@ -262,6 +436,49 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
             })),
           }),
     })),
+    ...(feature.repo_status === undefined || feature.repo_status.length === 0
+      ? {}
+      : {
+          repoStatus: feature.repo_status.map((repo) => ({
+            name: repo.name,
+            publishable: repo.publishable,
+            ...(repo.touched === undefined ? {} : { touched: repo.touched }),
+            ...(repo.pr_url === undefined || repo.pr_url === '' ? {} : { prUrl: repo.pr_url }),
+            ...(repo.freshness === undefined || repo.freshness === ''
+              ? {}
+              : { freshness: repo.freshness }),
+            ...(repo.last_error === undefined || repo.last_error === ''
+              ? {}
+              : { lastError: redactText(repo.last_error) }),
+            ...(repo.cycle_type === undefined || repo.cycle_type === ''
+              ? {}
+              : { cycleType: repo.cycle_type }),
+            ...(repo.cycle_status === undefined || repo.cycle_status === ''
+              ? {}
+              : { cycleStatus: repo.cycle_status }),
+            ...(repo.rebase_status === undefined || repo.rebase_status === ''
+              ? {}
+              : { rebaseStatus: repo.rebase_status }),
+            ...(repo.rebase_target === undefined || repo.rebase_target === ''
+              ? {}
+              : { rebaseTarget: repo.rebase_target }),
+            ...(repo.conflict_files === undefined || repo.conflict_files.length === 0
+              ? {}
+              : { conflictFiles: repo.conflict_files }),
+          })),
+        }),
+    ...(feature.cycle === undefined
+      ? {}
+      : {
+          cycle: {
+            type: feature.cycle.type,
+            status: feature.cycle.status,
+            ...(feature.cycle.count === undefined ? {} : { count: feature.cycle.count }),
+            ...(feature.cycle.iteration === undefined
+              ? {}
+              : { iteration: feature.cycle.iteration }),
+          },
+        }),
     ...(feature.failure === undefined
       ? {}
       : {

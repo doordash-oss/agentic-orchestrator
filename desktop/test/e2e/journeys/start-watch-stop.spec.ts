@@ -57,7 +57,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await handle.page.getByRole('tab', { name: 'Packaged Signal Journey' }).click();
 
     transcript.section('Start through the UI exactly once');
-    const start = cockpit.getByRole('button', { name: 'Start' });
+    const start = cockpit.getByRole('button', { name: 'Start', exact: true });
     await expect(start).toBeEnabled();
     await start.click();
     await expect(cockpit.getByText(/Start accepted|Starting from/)).toBeVisible();

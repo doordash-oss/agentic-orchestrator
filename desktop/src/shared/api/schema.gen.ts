@@ -183,6 +183,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/rebase/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read-only, server-authored rebase preflight — every affected repository, target branch, freshness, blocker, and source revision execution will use. No side effects; rejects stale, ineligible, or cross-feature execution before repository mutation. */
+        get: operations["getRebasePreflight"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/refactor/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read-only, server-authored refactor scope-resolution preflight — resolves an explicit one-repository or all-repositories choice into the exact repository impact, validates prompt/pipeline bounds, and returns the source revision. No side effects. */
+        post: operations["getRefactorPreflight"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/actions/{action}": {
         parameters: {
             query?: never;
@@ -616,6 +650,23 @@ export interface paths {
         put?: never;
         /** Execute recovery actions from a recovery snapshot. */
         post: operations["executeRecoveryActions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recovery/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a bounded, redacted log slice for one recovery item, resolved through the snapshot and item key. Rejects traversal, cross-item access, and stale snapshots; never returns raw host paths. */
+        get: operations["getRecoveryLog"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1177,6 +1228,44 @@ export interface components {
             session_id?: string;
         };
         RefactorRestartResponse: components["schemas"]["RefactorStartResponse"];
+        RebasePreflightRepo: {
+            repo: string;
+            /** @description Base ref a rebase will target for this repository. */
+            target: string;
+            publishable: boolean;
+            /** @description Server-authored freshness state (up_to_date, behind, unknown). */
+            freshness: string;
+            /** @description Whether the repository is behind its rebase target. */
+            behind: boolean;
+            /** @description Safe, server-authored reason a rebase cannot proceed for this repository, when non-empty. */
+            blocker?: string;
+            conflict_files?: string[];
+        };
+        RebasePreflightResponse: components["schemas"]["JSONResponse"] & {
+            feature_id: string;
+            /** @description Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect. */
+            source_revision: string;
+            repos: components["schemas"]["RebasePreflightRepo"][];
+        };
+        RefactorPreflightRequest: {
+            /** @description Explicit single repository, or empty to resolve all feature repositories. An empty choice is never treated as implicit all-repository authorization at execution — the desktop must send the resolved scope from this preflight. */
+            repo?: string;
+            prompt: string;
+            pipeline?: string;
+        };
+        RefactorPreflightResponse: components["schemas"]["JSONResponse"] & {
+            feature_id: string;
+            /** @description Authoritative revision of the repository state this preflight observed. Execution rejects a stale preflight before any side effect. */
+            source_revision: string;
+            /** @description Resolved scope — single or all. */
+            scope: string;
+            /** @description Exact resolved repository set the refactor will affect. */
+            repos: string[];
+            prompt: string;
+            pipeline?: string;
+            /** @description Safe, server-authored reasons the refactor cannot proceed, when non-empty. */
+            blockers?: string[];
+        };
         MarkDoneResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         CleanupFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             target?: string;
@@ -1285,6 +1374,8 @@ export interface components {
             iteration?: number;
             pid?: number;
             process_alive: boolean;
+            /** @description Whether a bounded log read is available for this item. */
+            log_available?: boolean;
             default_action: string;
             allowed_actions: string[];
         };
@@ -1910,6 +2001,28 @@ export interface components {
                 "application/json": components["schemas"]["RecoverySnapshotResponse"];
             };
         };
+        /** @description Read-only, server-authored rebase preflight. */
+        RebasePreflightResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RebasePreflightResponse"];
+            };
+        };
+        /** @description Read-only, server-authored refactor scope-resolution preflight. */
+        RefactorPreflightResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RefactorPreflightResponse"];
+            };
+        };
         /** @description Consolidated runtime readiness snapshot. */
         ReadinessResponse: {
             headers: {
@@ -2041,6 +2154,10 @@ export interface components {
         TrustedMutationHeader: "local";
         /** @description Opaque resource identity from the catalogue. */
         ResourceID: string;
+        /** @description Recovery snapshot identity returned by GET /api/v1/recovery. */
+        RecoverySnapshotID: string;
+        /** @description Recovery item key (feature id, or feature id and repo name joined by a colon). */
+        RecoveryItemKey: string;
     };
     requestBodies: {
         JSONMutation: {
@@ -2299,6 +2416,40 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["RewindPreviewResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getRebasePreflight: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RebasePreflightResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getRefactorPreflight: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefactorPreflightRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["RefactorPreflightResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -2742,6 +2893,26 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getRecoveryLog: {
+        parameters: {
+            query: {
+                /** @description Recovery snapshot identity returned by GET /api/v1/recovery. */
+                snapshot_id: components["parameters"]["RecoverySnapshotID"];
+                /** @description Recovery item key (feature id, or feature id and repo name joined by a colon). */
+                key: components["parameters"]["RecoveryItemKey"];
+                offset?: components["parameters"]["Offset"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["TextContentResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

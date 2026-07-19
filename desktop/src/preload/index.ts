@@ -42,6 +42,14 @@ import {
   type RunLogContentRequest,
   type RewindPreviewRequest,
   type RewindExecuteRequest,
+  type RebaseRequest,
+  type RebasePreflightRequest,
+  type ReviewCommentsFetchRequest,
+  type ReviewCommentsStartRequest,
+  type RefactorRequest,
+  type RefactorPreflightRequest,
+  type RecoveryExecuteRequest,
+  type RecoveryLogReadRequest,
 } from '../shared/ipc';
 import { assertNoPrototypePollution } from '../shared/sanitize';
 
@@ -166,6 +174,20 @@ const api: AgenticoApi = {
   getRunLogContent: (request: RunLogContentRequest) => call(IPC_CHANNELS.runLogContent, request),
   getRewindPreview: (request: RewindPreviewRequest) => call(IPC_CHANNELS.rewindPreview, request),
   executeRewind: (request: RewindExecuteRequest) => call(IPC_CHANNELS.rewindExecute, request),
+  startRebase: (request: RebaseRequest) => call(IPC_CHANNELS.featuresRebase, request),
+  preflightRebase: (request: RebasePreflightRequest) =>
+    call(IPC_CHANNELS.featuresRebasePreflight, request),
+  fetchReviewComments: (request: ReviewCommentsFetchRequest) =>
+    call(IPC_CHANNELS.featuresReviewCommentsFetch, request),
+  startReviewComments: (request: ReviewCommentsStartRequest) =>
+    call(IPC_CHANNELS.featuresReviewCommentsStart, request),
+  startRefactor: (request: RefactorRequest) => call(IPC_CHANNELS.featuresRefactor, request),
+  preflightRefactor: (request: RefactorPreflightRequest) =>
+    call(IPC_CHANNELS.featuresRefactorPreflight, request),
+  scanRecovery: () => call(IPC_CHANNELS.recoveryScan),
+  executeRecovery: (request: RecoveryExecuteRequest) => call(IPC_CHANNELS.recoveryExecute, request),
+  readRecoveryLog: (request: RecoveryLogReadRequest) => call(IPC_CHANNELS.recoveryLogRead, request),
+  bulkPreview: () => call(IPC_CHANNELS.bulkPreview),
   onAppEvent: (listener: (event: AppEvent) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

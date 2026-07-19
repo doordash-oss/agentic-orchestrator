@@ -84,7 +84,7 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     ]);
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
-    await cockpit.getByRole('button', { name: 'Start' }).click();
+    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
     await waitForAttentionItem(handle.page, 'perm-allow-once');
     await captureVisualMatrix(handle, [
       [1440, 900, 'visual_19d981d14d86', 'visual_5fb6b6a2bc0b'],
@@ -229,7 +229,7 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
       handle.page,
       'Packaged Attention Resolution',
     );
-    await cockpit.getByRole('button', { name: 'Start' }).click();
+    await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
 
     transcript.section('Global inbox badge and allow-once resolution');
     await waitForAttentionItem(handle.page, 'perm-allow-once');
@@ -1015,7 +1015,9 @@ async function waitForAttentionMissing(
     page,
     (items) =>
       !items.some((item) =>
-        kind === undefined ? item.id === id : item.kind === kind && item.featureId === id,
+        kind === undefined
+          ? item.id === id
+          : item.kind === kind && item.kind !== 'recovery' && item.featureId === id,
       ),
     30_000,
   );

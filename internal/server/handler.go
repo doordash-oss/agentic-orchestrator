@@ -131,6 +131,7 @@ const (
 	apiPathSessions         = "/api/v1/sessions"
 	apiPathRecovery         = "/api/v1/recovery"
 	apiPathRecoveryActions  = "/api/v1/recovery/actions"
+	apiPathRecoveryLogs     = "/api/v1/recovery/logs"
 	apiPathShutdown         = "/api/v1/shutdown"
 	apiPathEvents           = "/api/v1/events"
 	apiPathResources        = "/api/v1/resources"
@@ -170,6 +171,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathSessions + "/", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleSessionRoutes) }},
 	{apiPathRecovery, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
 	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
+	{apiPathRecoveryLogs, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryLogRoute }},
 	{apiPathShutdown, func(h *apiHandler) http.HandlerFunc { return h.handleShutdownMutationRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
 	{apiPathResources, func(h *apiHandler) http.HandlerFunc { return h.handleResourceRoutes }},
@@ -259,6 +261,26 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 	if len(parts) > 1 && parts[1] == "reviews" {
 		h.handleReviewSessionRoute(w, r, featureID, parts[2:])
 		return
+	}
+	if len(parts) == 3 && parts[2] == "preflight" {
+		switch parts[1] {
+		case "rebase":
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", "GET")
+				writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+				return
+			}
+			h.handleRebasePreflight(w, r, featureID)
+			return
+		case "refactor":
+			if r.Method != http.MethodPost {
+				w.Header().Set("Allow", "POST")
+				writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+				return
+			}
+			h.handleRefactorPreflight(w, r, featureID)
+			return
+		}
 	}
 	if h.handleFeatureMutationRoute(w, r, featureID, parts[1:]) {
 		return

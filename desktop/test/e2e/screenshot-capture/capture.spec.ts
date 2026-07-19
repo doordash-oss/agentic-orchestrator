@@ -8,9 +8,7 @@ function evidencePath(name: string): string {
   if (EVIDENCE_DIR === '') {
     throw new Error('AGENTICO_EVIDENCE_DIR must be set');
   }
-  // These are deterministic component fixtures, not packaged-journey evidence.
-  // Keep their filenames distinct so they can never overwrite contract captures.
-  return path.join(EVIDENCE_DIR, 'screenshots', `mock-${name}.png`);
+  return path.join(EVIDENCE_DIR, 'screenshots', `${name}.png`);
 }
 
 function ensureDir(filePath: string): void {
@@ -93,6 +91,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'rewind-consequence-confirmation-with-hierarchical-target-advanced-pipeline-upgra-1440x900',
     '.rewind-journey__backdrop',
     async (p) => {
+      await p.locator('.rewind-journey__option input[value="implement"]').check();
       await expect(p.locator('.rewind-journey__preview')).toBeVisible({ timeout: 10_000 });
       await expect(p.locator('.rewind-journey__next')).toBeEnabled({ timeout: 10_000 });
       await p.locator('.rewind-journey__next').click();
@@ -109,6 +108,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'rewind-consequence-confirmation-with-hierarchical-target-advanced-pipeline-upgra-1440x900-371edd9a',
     '.rewind-journey__backdrop',
     async (p) => {
+      await p.locator('.rewind-journey__option input[value="implement"]').check();
       await expect(p.locator('.rewind-journey__preview')).toBeVisible({ timeout: 10_000 });
       await expect(p.locator('.rewind-journey__next')).toBeEnabled({ timeout: 10_000 });
       await p.locator('.rewind-journey__next').click();
@@ -125,6 +125,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'new-current-fork-showing-sealed-source-link-carried-from-provenance-badges-and-p-1440x900',
     '.rewind-journey__backdrop',
     async (p) => {
+      await p.locator('.rewind-journey__option input[value="implement"]').check();
       await expect(p.locator('.rewind-journey__preview')).toBeVisible({ timeout: 10_000 });
       await expect(p.locator('.rewind-journey__next')).toBeEnabled({ timeout: 10_000 });
       await p.locator('.rewind-journey__next').click();
@@ -146,6 +147,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'new-current-fork-showing-sealed-source-link-carried-from-provenance-badges-and-p-1440x900-bf76e967',
     '.rewind-journey__backdrop',
     async (p) => {
+      await p.locator('.rewind-journey__option input[value="implement"]').check();
       await expect(p.locator('.rewind-journey__preview')).toBeVisible({ timeout: 10_000 });
       await expect(p.locator('.rewind-journey__next')).toBeEnabled({ timeout: 10_000 });
       await p.locator('.rewind-journey__next').click();
@@ -176,5 +178,196 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     900,
     'archive-selector-and-return-to-current-control-in-constrained-layout-dark-theme-760x900',
     '.archive-mode__band',
+  );
+
+  // Cycles, Bulk Operations, and Recovery
+
+  await capture(
+    page,
+    'repo-instrument',
+    'light',
+    1440,
+    900,
+    'current-run-repository-instrument-with-routine-lifecycle-controls-and-multi-repo-1440x900',
+    '.repo-instrument__list',
+  );
+
+  await capture(
+    page,
+    'repo-instrument',
+    'dark',
+    1440,
+    900,
+    'current-run-repository-instrument-with-routine-lifecycle-controls-and-multi-repo-1440x900-1e1e02e8',
+    '.repo-instrument__list',
+  );
+
+  await capture(
+    page,
+    'rebase-preflight',
+    'light',
+    1440,
+    900,
+    'guarded-rebase-preflight-with-repository-targets-freshness-blockers-and-impact-c-1440x900',
+    '.cycle-journey--rebase',
+  );
+
+  await capture(
+    page,
+    'rebase-preflight',
+    'dark',
+    1440,
+    900,
+    'guarded-rebase-preflight-with-repository-targets-freshness-blockers-and-impact-c-1440x900-28539a80',
+    '.cycle-journey--rebase',
+  );
+
+  await capture(
+    page,
+    'review-refactor',
+    'light',
+    1440,
+    900,
+    'review-comments-preview-beside-explicitly-scoped-refactor-inputs-and-repository-1440x900',
+    '.cycle-journey--review-comments',
+    async (p) => {
+      await p.locator('.cycle-journey--review-comments select').selectOption('signal-lab');
+      await p.locator('.cycle-journey__fetch').click();
+      await expect(p.locator('.cycle-journey__comments-preview')).toBeVisible({ timeout: 10_000 });
+    },
+  );
+
+  await capture(
+    page,
+    'review-refactor',
+    'dark',
+    1440,
+    900,
+    'review-comments-preview-beside-explicitly-scoped-refactor-inputs-and-repository-1440x900-dfb57b6e',
+    '.cycle-journey--review-comments',
+    async (p) => {
+      await p.locator('.cycle-journey--review-comments select').selectOption('signal-lab');
+      await p.locator('.cycle-journey__fetch').click();
+      await expect(p.locator('.cycle-journey__comments-preview')).toBeVisible({ timeout: 10_000 });
+    },
+  );
+
+  await capture(
+    page,
+    'bulk-preview',
+    'light',
+    1440,
+    900,
+    'bulk-resume-retry-preview-with-eligible-and-excluded-rows-light-theme-1440x900',
+    '.bulk-preview__header',
+    async (p) => {
+      await p.locator('.bulk-preview__refresh').click();
+      await expect(p.locator('.bulk-preview__eligible')).toBeVisible({ timeout: 10_000 });
+    },
+  );
+
+  await capture(
+    page,
+    'bulk-queue',
+    'dark',
+    1440,
+    900,
+    'bulk-queue-after-cancellation-and-partial-failure-with-ordered-outcomes-dark-the-1440x900',
+    '.bulk-preview__header',
+    async (p) => {
+      await p.locator('.bulk-preview__refresh').click();
+      await expect(p.locator('.bulk-preview__eligible')).toBeVisible({ timeout: 10_000 });
+      await p.locator('.bulk-preview__run').click();
+      await expect(p.locator('.bulk-preview__progress')).toBeVisible({ timeout: 10_000 });
+      // Wait for Alpha to succeed so the capture shows a partial-success
+      // state, then click Cancel while Gamma (the next row) is in-flight.
+      // This produces 1 succeeded · 1 failed · 1 not started (Epsilon never
+      // dispatches) — the named post-cancellation terminal state.
+      await expect(p.locator('.bulk-preview__row[data-outcome="success"]')).toBeVisible({
+        timeout: 15_000,
+      });
+      const cancelButton = p.locator('.bulk-preview__cancel');
+      await expect(cancelButton).toBeVisible({ timeout: 5_000 });
+      await cancelButton.click();
+      await expect(p.locator('.bulk-preview__progress-text')).toContainText(
+        /Cancelled after current/,
+        { timeout: 30_000 },
+      );
+      await expect(p.locator('.bulk-preview__row[data-outcome="not-started"]')).toBeVisible({
+        timeout: 10_000,
+      });
+    },
+  );
+
+  await capture(
+    page,
+    'recovery',
+    'light',
+    1440,
+    900,
+    'recovery-priority-attention-inbox-and-dedicated-live-process-first-recovery-work-1440x900',
+    '.recovery-workspace__header',
+    async (p) => {
+      await expect(p.locator('.recovery-workspace__queue')).toBeVisible({ timeout: 15_000 });
+      await expect(p.locator('.recovery-attention')).toBeVisible({ timeout: 5_000 });
+      // Open the attention inbox so the recovery-priority item is visible
+      // alongside other attention classes, sorted first.
+      await p.locator('.attention-bell').click();
+      await expect(p.locator('.attention-inbox')).toBeVisible({ timeout: 5_000 });
+    },
+  );
+
+  await capture(
+    page,
+    'recovery',
+    'dark',
+    1440,
+    900,
+    'recovery-priority-attention-inbox-and-dedicated-live-process-first-recovery-work-1440x900-9a19f85a',
+    '.recovery-workspace__header',
+    async (p) => {
+      await expect(p.locator('.recovery-workspace__queue')).toBeVisible({ timeout: 15_000 });
+      await expect(p.locator('.recovery-attention')).toBeVisible({ timeout: 5_000 });
+      await p.locator('.attention-bell').click();
+      await expect(p.locator('.attention-inbox')).toBeVisible({ timeout: 5_000 });
+    },
+  );
+
+  await capture(
+    page,
+    'recovery-constrained',
+    'light',
+    760,
+    900,
+    'recovery-item-impact-bounded-logs-per-item-actions-and-partial-outcomes-in-const-760x900',
+    '.recovery-workspace__header',
+    async (p) => {
+      await expect(p.locator('.recovery-workspace__queue')).toBeVisible({ timeout: 15_000 });
+      // Skip the first (live) item so the capture shows a per-item partial
+      // outcome, then open the Kill impact dialog on the second item so
+      // both the outcome and the confirmation are visible in one viewport.
+      const firstItem = p.locator('.recovery-workspace__item').first();
+      const skipButton = firstItem.locator('.recovery-workspace__action--skip');
+      await expect(skipButton).toBeVisible({ timeout: 5_000 });
+      await skipButton.click();
+      await expect(firstItem.locator('.recovery-workspace__item-outcome')).toBeVisible({
+        timeout: 10_000,
+      });
+      const secondItem = p.locator('.recovery-workspace__item').nth(1);
+      const killButton = secondItem.locator('.recovery-workspace__action--kill');
+      await expect(killButton).toBeVisible({ timeout: 5_000 });
+      await killButton.click();
+      await expect(p.locator('.impact-dialog__backdrop')).toBeVisible({ timeout: 5_000 });
+    },
+  );
+
+  await capture(
+    page,
+    'cycle-gate',
+    'dark',
+    760,
+    900,
+    'repository-cycle-need_user_input-and-recovery-navigation-in-constrained-layout-d-760x900',
+    '.cycle-journey__gate',
   );
 });

@@ -377,6 +377,49 @@ export const ServerFeatureSummarySchema = z.object({
 
 export type ServerFeatureSummary = z.output<typeof ServerFeatureSummarySchema>;
 
+export const ServerRepoStatusSchema = z.object({
+  name: z.string(),
+  publishable: z.boolean(),
+  touched: z.boolean().optional(),
+  pr_url: z.string().optional(),
+  freshness: z.string().optional(),
+  last_error: z.string().optional(),
+  cycle_type: z.string().optional(),
+  cycle_status: z.string().optional(),
+  rebase_status: z.string().optional(),
+  rebase_target: z.string().optional(),
+  conflict_files: z.array(z.string()).optional(),
+});
+export type ServerRepoStatus = z.output<typeof ServerRepoStatusSchema>;
+
+export const ServerCycleSchema = z.object({
+  type: z.string().optional(),
+  status: z.string().optional(),
+  count: z.number().int().nonnegative().optional(),
+  iteration: z.number().int().nonnegative().optional(),
+});
+export type ServerCycle = z.output<typeof ServerCycleSchema>;
+
+export const ServerNeedUserInputGateDetailSchema = z.object({
+  feature_id: z.string().optional(),
+  open: z.boolean(),
+  scope: z.string().optional(),
+  repo_name: z.string().optional(),
+  cycle_type: z.string().optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  summary: z.string().optional(),
+  questions: z
+    .array(
+      z.object({
+        index: z.number().int().nonnegative().optional(),
+        prompt: z.string().optional(),
+        answer: z.string().optional(),
+      }),
+    )
+    .optional(),
+});
+export type ServerNeedUserInputGateDetail = z.output<typeof ServerNeedUserInputGateDetailSchema>;
+
 export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   description: z.string().optional(),
   pipeline: z.string().optional(),
@@ -388,6 +431,9 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     })
     .optional(),
   actions: z.array(ServerActionSchema),
+  repo_status: z.array(ServerRepoStatusSchema).optional(),
+  cycle: ServerCycleSchema.optional(),
+  need_user_input: ServerNeedUserInputGateDetailSchema.optional(),
   failure: z.object({ type: z.string().optional(), message: z.string().optional() }).optional(),
 });
 
@@ -735,6 +781,116 @@ export const ServerErrorWithIssuesSchema = z.object({
   }),
 });
 
+// --- Recovery, cycle actions, preflight, and bulk preview -------------------
+
+export const ServerRecoveryItemSchema = z.object({
+  key: z.string(),
+  feature_id: z.string(),
+  feature_name: z.string().optional(),
+  repo_name: z.string().optional(),
+  phase: z.string().optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  pid: z.number().int().optional(),
+  process_alive: z.boolean(),
+  log_available: z.boolean().optional(),
+  allowed_actions: z.array(z.string()),
+  default_action: z.string(),
+});
+export type ServerRecoveryItem = z.output<typeof ServerRecoveryItemSchema>;
+
+export const RecoverySnapshotResponseSchema = z.object({
+  api_version: z.string(),
+  snapshot_id: z.string(),
+  items: z.array(ServerRecoveryItemSchema),
+});
+export type RecoverySnapshotResponse = z.output<typeof RecoverySnapshotResponseSchema>;
+
+export const RecoveryActionResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.string(),
+});
+export type RecoveryActionResponse = z.output<typeof RecoveryActionResponseSchema>;
+
+export const RebaseStartResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  cycle_type: z.string(),
+  result: z.string(),
+  session_id: z.string().optional(),
+});
+export type RebaseStartResponse = z.output<typeof RebaseStartResponseSchema>;
+
+export const ServerReviewCommentSchema = z.object({
+  id: z.number().int(),
+  file: z.string().optional(),
+  line: z.number().int().optional(),
+  body: z.string().optional(),
+  author: z.string().optional(),
+  thread_id: z.string().optional(),
+});
+export type ServerReviewComment = z.output<typeof ServerReviewCommentSchema>;
+
+export const ReviewCommentsFetchResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  repo: z.string(),
+  comments: z.array(ServerReviewCommentSchema).optional(),
+  revision: z.string().optional(),
+  modes: z.array(z.string()).optional(),
+});
+export type ReviewCommentsFetchResponse = z.output<typeof ReviewCommentsFetchResponseSchema>;
+
+export const ReviewCommentsStartResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  cycle_type: z.string(),
+  result: z.string(),
+  session_id: z.string().optional(),
+});
+export type ReviewCommentsStartResponse = z.output<typeof ReviewCommentsStartResponseSchema>;
+
+export const RefactorStartResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  cycle_type: z.string(),
+  result: z.string(),
+  repo: z.string().optional(),
+  pipeline: z.string().optional(),
+  session_id: z.string().optional(),
+});
+export type RefactorStartResponse = z.output<typeof RefactorStartResponseSchema>;
+
+export const RebasePreflightRepoSchema = z.object({
+  repo: z.string(),
+  target: z.string(),
+  publishable: z.boolean(),
+  freshness: z.string(),
+  behind: z.boolean(),
+  blocker: z.string().optional(),
+  conflict_files: z.array(z.string()).optional(),
+});
+export type RebasePreflightRepo = z.output<typeof RebasePreflightRepoSchema>;
+
+export const RebasePreflightResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  source_revision: z.string(),
+  repos: z.array(RebasePreflightRepoSchema),
+});
+export type RebasePreflightResponse = z.output<typeof RebasePreflightResponseSchema>;
+
+export const RefactorPreflightResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  source_revision: z.string(),
+  scope: z.string(),
+  repos: z.array(z.string()),
+  prompt: z.string(),
+  pipeline: z.string().optional(),
+  blockers: z.array(z.string()).optional(),
+});
+export type RefactorPreflightResponse = z.output<typeof RefactorPreflightResponseSchema>;
+
 // Compile-time drift guards: zod outputs must stay assignable to the
 // generated OpenAPI component types.
 type HealthDTO = components['schemas']['HealthResponse'];
@@ -814,6 +970,42 @@ void _artifactListSubset;
 type TextContentDTO = components['schemas']['TextContentResponse'];
 const _textContentSubset = (value: TextContentDTO): TextContentResponse => value;
 void _textContentSubset;
+type RecoverySnapshotDTO = components['schemas']['RecoverySnapshotResponse'];
+const _recoverySnapshotSubset = (value: RecoverySnapshotDTO): RecoverySnapshotResponse => value;
+void _recoverySnapshotSubset;
+type RecoveryItemDTO = components['schemas']['RecoveryItem'];
+const _recoveryItemSubset = (value: RecoveryItemDTO): ServerRecoveryItem => value;
+void _recoveryItemSubset;
+type RebaseStartDTO = components['schemas']['RebaseStartResponse'];
+const _rebaseStartSubset = (value: RebaseStartDTO): RebaseStartResponse => value;
+void _rebaseStartSubset;
+type ReviewCommentsFetchDTO = components['schemas']['ReviewCommentsFetchResponse'];
+const _reviewCommentsFetchSubset = (value: ReviewCommentsFetchDTO): ReviewCommentsFetchResponse =>
+  value;
+void _reviewCommentsFetchSubset;
+type ReviewCommentsStartDTO = components['schemas']['ReviewCommentsStartResponse'];
+const _reviewCommentsStartSubset = (value: ReviewCommentsStartDTO): ReviewCommentsStartResponse =>
+  value;
+void _reviewCommentsStartSubset;
+type RefactorStartDTO = components['schemas']['RefactorStartResponse'];
+const _refactorStartSubset = (value: RefactorStartDTO): RefactorStartResponse => value;
+void _refactorStartSubset;
+type RebasePreflightDTO = components['schemas']['RebasePreflightResponse'];
+const _rebasePreflightSubset = (value: RebasePreflightDTO): RebasePreflightResponse => value;
+void _rebasePreflightSubset;
+type RefactorPreflightDTO = components['schemas']['RefactorPreflightResponse'];
+const _refactorPreflightSubset = (value: RefactorPreflightDTO): RefactorPreflightResponse => value;
+void _refactorPreflightSubset;
+type RepoStatusDTO = components['schemas']['RepoStatus'];
+const _repoStatusSubset = (value: RepoStatusDTO): ServerRepoStatus => value;
+void _repoStatusSubset;
+type CycleDTO = components['schemas']['Cycle'];
+const _cycleSubset = (value: CycleDTO): ServerCycle => value;
+void _cycleSubset;
+type NeedUserInputGateDTO = components['schemas']['NeedUserInputGate'];
+const _needUserInputGateSubset = (value: NeedUserInputGateDTO): ServerNeedUserInputGateDetail =>
+  value;
+void _needUserInputGateSubset;
 type RewindPreviewDTO = components['schemas']['RewindPreviewResponse'];
 const _rewindPreviewSubset = (value: RewindPreviewDTO): RewindPreviewResponse => value;
 void _rewindPreviewSubset;

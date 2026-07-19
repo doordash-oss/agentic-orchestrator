@@ -122,6 +122,8 @@ type MutationTarget interface {
 	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error)
 	StartRefactor(featureID string, req RefactorActionRequest) (RefactorStartResponse, error)
 	RestartRefactor(featureID string, req RefactorActionRequest) (RefactorRestartResponse, error)
+	PreflightRebase(featureID string) (RebasePreflightResponse, error)
+	PreflightRefactor(featureID string, req RefactorPreflightRequest) (RefactorPreflightResponse, error)
 	MarkDone(featureID string) (MarkDoneResponse, error)
 	CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error)
 	DeleteFeature(featureID string) (DeleteFeatureResponse, error)
@@ -364,7 +366,14 @@ type RewindFeatureRequest struct {
 	SourceRevision  string `json:"source_revision,omitempty"`
 }
 
-type RebaseActionRequest struct{}
+type RebaseActionRequest struct {
+	// SourceRevision carries the rebase preflight's authoritative source
+	// revision. When set, execution rejects a stale preflight (repository
+	// state advanced since the preview) before any side effect. When
+	// omitted, the request is treated as unguarded for backward
+	// compatibility with older clients.
+	SourceRevision string `json:"source_revision,omitempty"`
+}
 
 type ReviewCommentsFetchRequest struct {
 	Repo string `json:"repo"`
@@ -382,6 +391,12 @@ type RefactorActionRequest struct {
 	Images      []string                `json:"images,omitempty"`
 	Attachments []string                `json:"attachments,omitempty"`
 	Pipeline    feature.PipelineProfile `json:"pipeline,omitempty"`
+	// SourceRevision carries the refactor preflight's authoritative source
+	// revision. When set, execution rejects a stale preflight (repository
+	// state advanced since the preview) before any side effect. When
+	// omitted, the request is treated as unguarded for backward
+	// compatibility with older clients.
+	SourceRevision string `json:"source_revision,omitempty"`
 }
 
 type CleanupActionRequest struct {

@@ -30,6 +30,16 @@ export const IPC_CHANNELS = {
   featuresCreate: 'agentico:features:create',
   featuresSetup: 'agentico:features:setup',
   featuresDispatchAction: 'agentico:features:dispatch-action',
+  featuresRebase: 'agentico:features:rebase',
+  featuresRebasePreflight: 'agentico:features:rebase:preflight',
+  featuresReviewCommentsFetch: 'agentico:features:review-comments:fetch',
+  featuresReviewCommentsStart: 'agentico:features:review-comments:start',
+  featuresRefactor: 'agentico:features:refactor',
+  featuresRefactorPreflight: 'agentico:features:refactor:preflight',
+  recoveryScan: 'agentico:recovery:scan',
+  recoveryExecute: 'agentico:recovery:execute',
+  recoveryLogRead: 'agentico:recovery:log-read',
+  bulkPreview: 'agentico:bulk:preview',
   attentionGet: 'agentico:attention:get',
   attentionAnswerPermission: 'agentico:attention:answer-permission',
   attentionAnswerQuestions: 'agentico:attention:answer-questions',
@@ -546,6 +556,31 @@ export const FeatureSummaryViewSchema = z.strictObject({
 
 export type FeatureSummaryView = z.output<typeof FeatureSummaryViewSchema>;
 
+/** Per-repository operational status from the server feature detail. */
+export const RepoStatusViewSchema = z.strictObject({
+  name: z.string(),
+  publishable: z.boolean(),
+  touched: z.boolean().optional(),
+  prUrl: z.string().optional(),
+  freshness: z.string().optional(),
+  lastError: z.string().optional(),
+  cycleType: z.string().optional(),
+  cycleStatus: z.string().optional(),
+  rebaseStatus: z.string().optional(),
+  rebaseTarget: z.string().optional(),
+  conflictFiles: z.array(z.string()).max(200).optional(),
+});
+export type RepoStatusView = z.output<typeof RepoStatusViewSchema>;
+
+/** Active cycle summary from the server feature detail. */
+export const CycleViewSchema = z.strictObject({
+  type: z.string().optional(),
+  status: z.string().optional(),
+  count: z.number().int().nonnegative().optional(),
+  iteration: z.number().int().nonnegative().optional(),
+});
+export type CycleView = z.output<typeof CycleViewSchema>;
+
 export const FeatureSnapshotSchema = z.strictObject({
   id: FeatureIdSchema,
   name: z.string(),
@@ -562,6 +597,10 @@ export const FeatureSnapshotSchema = z.strictObject({
   setup: FeatureSetupViewSchema.optional(),
   /** The authoritative server action catalogue (setup/start/…). */
   actions: z.array(FeatureActionViewSchema),
+  /** Per-repository operational status from the server. */
+  repoStatus: z.array(RepoStatusViewSchema).optional(),
+  /** Active cycle summary from the server. */
+  cycle: CycleViewSchema.optional(),
   failure: z
     .strictObject({ type: z.string().optional(), message: z.string().optional() })
     .optional(),
@@ -569,8 +608,15 @@ export const FeatureSnapshotSchema = z.strictObject({
 
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
 
-/** Renderer-visible operational actions are limited to this audited allowlist. */
-export const FeatureOperationalActionSchema = z.enum(['start', 'pause-stop', 'rewind']);
+/** Renderer-visible operational actions limited to this audited allowlist. */
+export const FeatureOperationalActionSchema = z.enum([
+  'start',
+  'pause-stop',
+  'rewind',
+  'resume',
+  'retry',
+  'restart',
+]);
 export type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
 
 export const FeatureActionRequestSchema = z.strictObject({
@@ -590,6 +636,202 @@ export const FeatureActionResultSchema = z.strictObject({
   warnings: z.array(z.string().max(500)).max(100).optional(),
 });
 export type FeatureActionResult = z.output<typeof FeatureActionResultSchema>;
+
+// --- Rebase, review-comments, refactor cycle actions ---------------------
+
+export const RebaseRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  sourceRevision: z.string().max(512).optional(),
+});
+export type RebaseRequest = z.output<typeof RebaseRequestSchema>;
+
+export const RebasePreflightRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+});
+export type RebasePreflightRequest = z.output<typeof RebasePreflightRequestSchema>;
+
+export const RebasePreflightRepoSchema = z.strictObject({
+  repo: z.string(),
+  target: z.string(),
+  publishable: z.boolean(),
+  freshness: z.string(),
+  behind: z.boolean(),
+  blocker: z.string().optional(),
+  conflictFiles: z.array(z.string()).optional(),
+});
+export type RebasePreflightRepo = z.output<typeof RebasePreflightRepoSchema>;
+
+export const RebasePreflightResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  sourceRevision: z.string(),
+  repos: z.array(RebasePreflightRepoSchema).max(200),
+});
+export type RebasePreflightResult = z.output<typeof RebasePreflightResultSchema>;
+
+export const RebaseResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  cycleType: z.string(),
+  result: z.string().max(500),
+  sessionId: z.string().min(1).max(200).optional(),
+});
+export type RebaseResult = z.output<typeof RebaseResultSchema>;
+
+export const ReviewCommentsFetchRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repo: z.string().min(1).max(200),
+});
+export type ReviewCommentsFetchRequest = z.output<typeof ReviewCommentsFetchRequestSchema>;
+
+export const ReviewCommentViewSchema = z.strictObject({
+  id: z.number().int(),
+  file: z.string().max(500).optional(),
+  line: z.number().int().optional(),
+  body: z
+    .string()
+    .max(64 * 1024)
+    .optional(),
+  author: z.string().max(200).optional(),
+  threadId: z.string().max(200).optional(),
+});
+export type ReviewCommentView = z.output<typeof ReviewCommentViewSchema>;
+
+export const ReviewCommentsFetchResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repo: z.string(),
+  comments: z.array(ReviewCommentViewSchema).max(500),
+  revision: z.string().max(512).optional(),
+  modes: z.array(z.string().max(200)).max(20).optional(),
+});
+export type ReviewCommentsFetchResult = z.output<typeof ReviewCommentsFetchResultSchema>;
+
+export const ReviewCommentsStartRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repo: z.string().min(1).max(200),
+  mode: z.string().min(1).max(200),
+});
+export type ReviewCommentsStartRequest = z.output<typeof ReviewCommentsStartRequestSchema>;
+
+export const ReviewCommentsStartResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  cycleType: z.string(),
+  result: z.string().max(500),
+  sessionId: z.string().min(1).max(200).optional(),
+});
+export type ReviewCommentsStartResult = z.output<typeof ReviewCommentsStartResultSchema>;
+
+export const RefactorRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repo: z.string().max(200).optional(),
+  prompt: z.string().min(1).max(4000),
+  pipeline: z.string().max(200).optional(),
+  sourceRevision: z.string().max(512).optional(),
+});
+export type RefactorRequest = z.output<typeof RefactorRequestSchema>;
+
+export const RefactorPreflightRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repo: z.string().max(200).optional(),
+  prompt: z.string().min(1).max(4000),
+  pipeline: z.string().max(200).optional(),
+});
+export type RefactorPreflightRequest = z.output<typeof RefactorPreflightRequestSchema>;
+
+export const RefactorPreflightResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  sourceRevision: z.string(),
+  scope: z.string(),
+  repos: z.array(z.string()).max(200),
+  prompt: z.string(),
+  pipeline: z.string().optional(),
+  blockers: z.array(z.string()).optional(),
+});
+export type RefactorPreflightResult = z.output<typeof RefactorPreflightResultSchema>;
+
+export const RefactorResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  cycleType: z.string(),
+  result: z.string().max(500),
+  repo: z.string().max(200).optional(),
+  pipeline: z.string().max(200).optional(),
+  sessionId: z.string().min(1).max(200).optional(),
+});
+export type RefactorResult = z.output<typeof RefactorResultSchema>;
+
+// --- Recovery ---------------------------------------------------------------
+
+export const RecoveryItemViewSchema = z.strictObject({
+  key: z.string().min(1).max(200),
+  featureId: FeatureIdSchema,
+  featureName: z.string().optional(),
+  repoName: z.string().max(500).optional(),
+  phase: z.string().max(200).optional(),
+  iteration: z.number().int().nonnegative().optional(),
+  pid: z.number().int().optional(),
+  processAlive: z.boolean(),
+  logAvailable: z.boolean().optional(),
+  allowedActions: z.array(z.string().max(50)).max(20),
+  defaultAction: z.string().max(50),
+});
+export type RecoveryItemView = z.output<typeof RecoveryItemViewSchema>;
+
+export const RecoverySnapshotSchema = z.strictObject({
+  snapshotId: z.string().min(1).max(200),
+  items: z.array(RecoveryItemViewSchema).max(1000),
+});
+export type RecoverySnapshot = z.output<typeof RecoverySnapshotSchema>;
+
+export const RecoveryExecuteRequestSchema = z.strictObject({
+  snapshotId: z.string().min(1).max(200),
+  actions: z.record(z.string().min(1).max(200), z.string().min(1).max(50)),
+});
+export type RecoveryExecuteRequest = z.output<typeof RecoveryExecuteRequestSchema>;
+
+export const RecoveryExecuteResultSchema = z.strictObject({
+  result: z.string().max(500),
+});
+export type RecoveryExecuteResult = z.output<typeof RecoveryExecuteResultSchema>;
+
+export const RecoveryLogReadRequestSchema = z.strictObject({
+  snapshotId: z.string().min(1).max(200),
+  key: z.string().min(1).max(512),
+  offset: z.number().int().nonnegative().optional(),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(256 * 1024)
+    .optional(),
+});
+export type RecoveryLogReadRequest = z.output<typeof RecoveryLogReadRequestSchema>;
+
+export const RecoveryLogReadResultSchema = z.strictObject({
+  id: z.string(),
+  offset: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  size: z.number().int().nonnegative(),
+  text: z.string(),
+  truncated: z.boolean(),
+});
+export type RecoveryLogReadResult = z.output<typeof RecoveryLogReadResultSchema>;
+
+// --- Bulk resume/retry preview ----------------------------------------------
+
+export const BulkPreviewRowSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  featureName: z.string().optional(),
+  action: z.enum(['resume', 'retry']),
+  enabled: z.boolean(),
+  disabledReason: z.string().optional(),
+  repos: z.array(z.string()).optional(),
+});
+export type BulkPreviewRow = z.output<typeof BulkPreviewRowSchema>;
+
+export const BulkPreviewSchema = z.strictObject({
+  previewId: z.string().min(1).max(200),
+  eligible: z.array(BulkPreviewRowSchema).max(500),
+  excluded: z.array(BulkPreviewRowSchema).max(500),
+});
+export type BulkPreview = z.output<typeof BulkPreviewSchema>;
 
 // --- Run history (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) ---------
 
@@ -842,12 +1084,22 @@ export const AttentionReviewSchema = z.strictObject({
   reviewKind: z.string().max(200),
   phase: z.string().max(200),
 });
+/** Recovery items are renderer-synthesized from the recovery scan and sorted
+ * ahead of all other attention so recovery receives contextual priority. */
+export const AttentionRecoverySchema = z.strictObject({
+  kind: z.literal('recovery'),
+  id: z.string().min(1).max(1000),
+  waitingSince: z.string().max(100),
+  liveCount: z.number().int().nonnegative(),
+  deadCount: z.number().int().nonnegative(),
+});
 export const AttentionItemSchema = z.discriminatedUnion('kind', [
   AttentionPermissionSchema,
   AttentionQuestionBundleSchema,
   AttentionHelpSchema,
   AttentionGateSchema,
   AttentionReviewSchema,
+  AttentionRecoverySchema,
 ]);
 export type AttentionItem = z.output<typeof AttentionItemSchema>;
 export const AttentionSnapshotSchema = z.strictObject({
@@ -1727,6 +1979,46 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RewindExecuteRequestSchema]),
     response: FeatureActionResultSchema,
   },
+  [IPC_CHANNELS.featuresRebase]: {
+    request: z.tuple([RebaseRequestSchema]),
+    response: RebaseResultSchema,
+  },
+  [IPC_CHANNELS.featuresRebasePreflight]: {
+    request: z.tuple([RebasePreflightRequestSchema]),
+    response: RebasePreflightResultSchema,
+  },
+  [IPC_CHANNELS.featuresReviewCommentsFetch]: {
+    request: z.tuple([ReviewCommentsFetchRequestSchema]),
+    response: ReviewCommentsFetchResultSchema,
+  },
+  [IPC_CHANNELS.featuresReviewCommentsStart]: {
+    request: z.tuple([ReviewCommentsStartRequestSchema]),
+    response: ReviewCommentsStartResultSchema,
+  },
+  [IPC_CHANNELS.featuresRefactor]: {
+    request: z.tuple([RefactorRequestSchema]),
+    response: RefactorResultSchema,
+  },
+  [IPC_CHANNELS.featuresRefactorPreflight]: {
+    request: z.tuple([RefactorPreflightRequestSchema]),
+    response: RefactorPreflightResultSchema,
+  },
+  [IPC_CHANNELS.recoveryScan]: {
+    request: z.tuple([]),
+    response: RecoverySnapshotSchema,
+  },
+  [IPC_CHANNELS.recoveryExecute]: {
+    request: z.tuple([RecoveryExecuteRequestSchema]),
+    response: RecoveryExecuteResultSchema,
+  },
+  [IPC_CHANNELS.recoveryLogRead]: {
+    request: z.tuple([RecoveryLogReadRequestSchema]),
+    response: RecoveryLogReadResultSchema,
+  },
+  [IPC_CHANNELS.bulkPreview]: {
+    request: z.tuple([]),
+    response: BulkPreviewSchema,
+  },
 };
 
 // --- The narrow window API the preload exposes -------------------------------
@@ -1791,5 +2083,15 @@ export interface AgenticoApi {
   getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
   getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;
   executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
+  startRebase(request: RebaseRequest): Promise<RebaseResult>;
+  preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
+  fetchReviewComments(request: ReviewCommentsFetchRequest): Promise<ReviewCommentsFetchResult>;
+  startReviewComments(request: ReviewCommentsStartRequest): Promise<ReviewCommentsStartResult>;
+  startRefactor(request: RefactorRequest): Promise<RefactorResult>;
+  preflightRefactor(request: RefactorPreflightRequest): Promise<RefactorPreflightResult>;
+  scanRecovery(): Promise<RecoverySnapshot>;
+  executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;
+  readRecoveryLog(request: RecoveryLogReadRequest): Promise<RecoveryLogReadResult>;
+  bulkPreview(): Promise<BulkPreview>;
   onAppEvent(listener: (event: AppEvent) => void): () => void;
 }

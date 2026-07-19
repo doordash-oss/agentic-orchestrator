@@ -139,11 +139,12 @@ export class AttentionService {
     ];
     const unique = new Map(items.map((item) => [item.id, item]));
     const classRank: Record<AttentionItem['kind'], number> = {
-      permission: 0,
-      questions: 1,
-      gate: 2,
-      review: 3,
-      help: 4,
+      recovery: 0,
+      permission: 1,
+      questions: 2,
+      gate: 3,
+      review: 4,
+      help: 5,
     };
     return validateWithSchema(
       {

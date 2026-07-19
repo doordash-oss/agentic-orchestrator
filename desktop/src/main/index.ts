@@ -12,6 +12,8 @@ import { resolveTestUserDataDir } from './testHooks';
 import { EventStreamSupervisor } from './gateway/events';
 import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
+import { RecoveryService } from './recovery';
+import { BulkService } from './bulk';
 import { AttentionService } from './attention';
 import { SessionService } from './serverClient';
 import { registerIpcHandlers, type IpcServices } from './ipcHandlers';
@@ -157,6 +159,8 @@ void app.whenReady().then(() => {
     transport: gateway,
     readReadiness: () => setup.getReadiness(),
   });
+  const recovery = new RecoveryService(gateway);
+  const bulk = new BulkService(features);
   const sessions = new SessionService(gateway);
   const reviews = new ReviewService(gateway);
   const resourceService = new ResourceService(gateway);
@@ -268,6 +272,16 @@ void app.whenReady().then(() => {
     getRunLogContent: (request) => runHistory.getRunLogContent(request),
     getRewindPreview: (request) => runHistory.getRewindPreview(request),
     executeRewind: (request) => runHistory.executeRewind(request),
+    startRebase: (request) => features.startRebase(request),
+    preflightRebase: (request) => features.preflightRebase(request),
+    fetchReviewComments: (request) => features.fetchReviewComments(request),
+    startReviewComments: (request) => features.startReviewComments(request),
+    startRefactor: (request) => features.startRefactor(request),
+    preflightRefactor: (request) => features.preflightRefactor(request),
+    scanRecovery: () => recovery.scan(),
+    executeRecovery: (request) => recovery.execute(request),
+    readRecoveryLog: (request) => recovery.readLog(request),
+    bulkPreview: () => bulk.preview(),
   };
   registerIpcHandlers(ipcMain, trusted, services);
 

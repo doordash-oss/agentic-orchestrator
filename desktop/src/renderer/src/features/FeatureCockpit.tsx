@@ -29,6 +29,8 @@ import { ReviewSurface } from './ReviewSurface';
 import { ResourceEditor, useResolvedTheme } from './ResourceWorkspace';
 import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
+import { RepositoryInstrument } from './RepositoryInstrument';
+import { CycleJourneys } from './CycleJourneys';
 import type { FeatureActionResult } from '../../../shared/ipc';
 import {
   AttentionDetail,
@@ -252,6 +254,9 @@ function InspectorContent({
         ) : null}
       </header>
       <SetupDetails snapshot={snapshot} />
+      {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
+        <RepositoryInstrument repos={snapshot.repoStatus} />
+      ) : null}
       {startAction?.disabledReasons.map((reason) => (
         <p key={reason.code} className="cockpit__action-reason">
           Start unavailable: {reason.message}
@@ -266,6 +271,12 @@ function CockpitActionBar({
   setupAction,
   startAction,
   stopAction,
+  resumeAction,
+  retryAction,
+  restartAction,
+  rebaseAction,
+  reviewCommentsAction,
+  refactorAction,
   busy,
   inspectorOpen,
   inspectorButtonRef,
@@ -274,15 +285,25 @@ function CockpitActionBar({
   onRetrySetup,
   onStart,
   onStop,
+  onResume,
+  onRetry,
+  onRestart,
   rewindEnabled,
   onOpenRewind,
   canOpenHistory,
   onOpenHistory,
+  onOpenCycles,
 }: {
   snapshot: FeatureSnapshot;
   setupAction: ReturnType<typeof actionById>;
   startAction: ReturnType<typeof actionById>;
   stopAction: ReturnType<typeof actionById>;
+  resumeAction: ReturnType<typeof actionById>;
+  retryAction: ReturnType<typeof actionById>;
+  restartAction: ReturnType<typeof actionById>;
+  rebaseAction: ReturnType<typeof actionById>;
+  reviewCommentsAction: ReturnType<typeof actionById>;
+  refactorAction: ReturnType<typeof actionById>;
   busy: boolean;
   inspectorOpen: boolean;
   inspectorButtonRef: RefObject<HTMLButtonElement | null>;
@@ -291,10 +312,14 @@ function CockpitActionBar({
   onRetrySetup(): void;
   onStart(): void;
   onStop(): void;
+  onResume(): void;
+  onRetry(): void;
+  onRestart(): void;
   rewindEnabled: boolean;
   onOpenRewind(): void;
   canOpenHistory: boolean;
   onOpenHistory(): void;
+  onOpenCycles(): void;
 }) {
   return (
     <div className="cockpit__actions" role="group" aria-label="Feature actions">
@@ -366,6 +391,39 @@ function CockpitActionBar({
             </ul>
           ) : null}
         </span>
+      ) : null}
+      {resumeAction !== undefined && resumeAction.enabled ? (
+        <span className="cockpit__action">
+          <button type="button" className="cockpit__resume" disabled={busy} onClick={onResume}>
+            {busy ? 'Resuming…' : 'Resume'}
+          </button>
+        </span>
+      ) : null}
+      {retryAction !== undefined && retryAction.enabled ? (
+        <span className="cockpit__action">
+          <button type="button" className="cockpit__retry" disabled={busy} onClick={onRetry}>
+            {busy ? 'Retrying…' : 'Retry'}
+          </button>
+        </span>
+      ) : null}
+      {restartAction !== undefined && restartAction.enabled ? (
+        <span className="cockpit__action">
+          <button type="button" className="cockpit__restart" disabled={busy} onClick={onRestart}>
+            {busy ? 'Restarting…' : 'Restart'}
+          </button>
+        </span>
+      ) : null}
+      {rebaseAction?.enabled === true ||
+      reviewCommentsAction?.enabled === true ||
+      refactorAction?.enabled === true ? (
+        <button
+          type="button"
+          className="cockpit__cycles-button"
+          onClick={onOpenCycles}
+          aria-label="Repository cycles"
+        >
+          ⟳ Cycles
+        </button>
       ) : null}
       {rewindEnabled ? (
         <button
@@ -534,6 +592,87 @@ function StopConfirmDialog({
   );
 }
 
+function RestartConfirmDialog({
+  snapshot,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  snapshot: FeatureSnapshot;
+  busy: boolean;
+  onClose(): void;
+  onConfirm(): void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || busy) return;
+      const controls = [
+        ...(dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []),
+      ];
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (first === undefined || last === undefined) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [busy, onClose]);
+
+  const repos = snapshot.repos.join(', ');
+  const hasFailure = snapshot.failure !== undefined && snapshot.failure.type !== undefined;
+
+  return (
+    <div className="impact-dialog__backdrop">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="restart-dialog-title"
+        className="impact-dialog"
+        tabIndex={-1}
+      >
+        <span className="impact-dialog__eyebrow">Operational impact</span>
+        <h3 id="restart-dialog-title">Restart {snapshot.name}?</h3>
+        <p>
+          This reruns the <strong>{snapshot.currentPhase}</strong> phase for this feature
+          {repos.length > 0 ? ` across ${repos}` : ''}.
+        </p>
+        {hasFailure ? (
+          <p className="impact-dialog__note">
+            A maximum-iteration restart applies the established extra iteration budget increments
+            for this phase.
+          </p>
+        ) : (
+          <p className="impact-dialog__note">
+            The current run is sealed and a fresh run begins from this phase.
+          </p>
+        )}
+        <div className="impact-dialog__actions">
+          <button type="button" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </button>
+          <button type="button" className="cockpit__restart" onClick={onConfirm} disabled={busy}>
+            {busy ? 'Restarting…' : 'Confirm restart'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FeatureConfigEditor({ featureId }: { featureId: string }) {
   const [configResourceId, setConfigResourceId] = useState<string | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -627,14 +766,16 @@ export function FeatureCockpit({
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [actionError, setActionError] = useState<{
-    action: 'Start' | 'Stop';
+    action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart';
     error: WizardError;
   } | null>(null);
   const [stopDialog, setStopDialog] = useState(false);
+  const [restartDialog, setRestartDialog] = useState(false);
   const [liveSessionCount, setLiveSessionCount] = useState(0);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [rewindDialog, setRewindDialog] = useState(false);
+  const [cyclesDialog, setCyclesDialog] = useState(false);
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
     run: RunDetailView | null;
@@ -711,7 +852,7 @@ export function FeatureCockpit({
     if (selectedRunNumber === undefined || selectedRunNumber === null || selectedRunNumber <= 0) {
       return;
     }
-    if (attentionItems.some((item) => item.featureId === featureId)) {
+    if (attentionItems.some((item) => item.kind !== 'recovery' && item.featureId === featureId)) {
       setCurrentRunBadges((badges) => ({ ...badges, attention: true }));
     }
   }, [attentionItems, featureId, selectedRunNumber]);
@@ -741,31 +882,83 @@ export function FeatureCockpit({
       });
   }, [featureId, load]);
 
-  const start = useCallback(() => {
-    if (actionInFlightRef.current) {
-      return;
-    }
-    actionInFlightRef.current = true;
-    setBusy(true);
-    setActionError(null);
-    setAnnouncement('Starting from the current server snapshot…');
-    window.agentico
-      .dispatchFeatureAction({ featureId, action: 'start' })
-      .then(() => {
-        setAnnouncement('Start accepted. Refreshing authoritative run state…');
-        return load({ silent: true });
-      })
-      .catch((err: unknown) => {
-        const parsed = parseIpcError(err);
-        setActionError({ action: 'Start', error: parsed });
-        setAnnouncement('');
-        return load({ silent: true });
-      })
-      .finally(() => {
-        actionInFlightRef.current = false;
-        setBusy(false);
-      });
-  }, [featureId, load]);
+  const dispatchLifecycleAction = useCallback(
+    (
+      action: 'start' | 'resume' | 'retry' | 'restart',
+      pendingAnnouncement: string,
+      acceptedAnnouncement: string,
+      errorLabel: 'Start' | 'Resume' | 'Retry' | 'Restart',
+    ) => {
+      if (actionInFlightRef.current) return;
+      actionInFlightRef.current = true;
+      setBusy(true);
+      setActionError(null);
+      setAnnouncement(pendingAnnouncement);
+      window.agentico
+        .dispatchFeatureAction({ featureId, action })
+        .then(() => {
+          setAnnouncement(acceptedAnnouncement);
+          return load({ silent: true });
+        })
+        .catch((err: unknown) => {
+          setActionError({ action: errorLabel, error: parseIpcError(err) });
+          setAnnouncement('');
+          return load({ silent: true });
+        })
+        .finally(() => {
+          actionInFlightRef.current = false;
+          setBusy(false);
+        });
+    },
+    [featureId, load],
+  );
+
+  const start = useCallback(
+    () =>
+      dispatchLifecycleAction(
+        'start',
+        'Starting from the current server snapshot…',
+        'Start accepted. Refreshing authoritative run state…',
+        'Start',
+      ),
+    [dispatchLifecycleAction],
+  );
+
+  const resume = useCallback(
+    () =>
+      dispatchLifecycleAction(
+        'resume',
+        'Resuming from the paused gate…',
+        'Resume accepted. Refreshing authoritative state…',
+        'Resume',
+      ),
+    [dispatchLifecycleAction],
+  );
+
+  const retry = useCallback(
+    () =>
+      dispatchLifecycleAction(
+        'retry',
+        'Retrying from the server snapshot…',
+        'Retry accepted. Refreshing authoritative state…',
+        'Retry',
+      ),
+    [dispatchLifecycleAction],
+  );
+
+  const confirmRestart = useCallback(() => {
+    setRestartDialog(false);
+    dispatchLifecycleAction(
+      'restart',
+      'Restarting from the server snapshot…',
+      'Restart accepted. Refreshing authoritative state…',
+      'Restart',
+    );
+  }, [dispatchLifecycleAction]);
+
+  const restart = useCallback(() => {
+    setRestartDialog(true);
+  }, []);
 
   const closeStopDialog = useCallback(() => {
     setStopDialog(false);
@@ -857,7 +1050,13 @@ export function FeatureCockpit({
   const setupAction = actionById(snapshot, 'setup');
   const startAction = actionById(snapshot, 'start');
   const stopAction = actionById(snapshot, 'pause-stop');
+  const resumeAction = actionById(snapshot, 'resume');
+  const retryAction = actionById(snapshot, 'retry');
+  const restartAction = actionById(snapshot, 'restart');
   const rewindAction = actionById(snapshot, 'rewind');
+  const rebaseAction = actionById(snapshot, 'rebase');
+  const reviewCommentsAction = actionById(snapshot, 'review-comments');
+  const refactorAction = actionById(snapshot, 'refactor');
   const hasPendingReview = isPendingReviewStatus(snapshot.status);
   const isArchiveMode =
     selectedRunNumber !== undefined && selectedRunNumber !== null && selectedRunNumber > 0;
@@ -958,6 +1157,12 @@ export function FeatureCockpit({
             setupAction={setupAction}
             startAction={startAction}
             stopAction={stopAction}
+            resumeAction={resumeAction}
+            retryAction={retryAction}
+            restartAction={restartAction}
+            rebaseAction={rebaseAction}
+            reviewCommentsAction={reviewCommentsAction}
+            refactorAction={refactorAction}
             busy={busy}
             inspectorOpen={isNarrow && inspectorOpen}
             inspectorButtonRef={inspectorButtonRef}
@@ -966,10 +1171,14 @@ export function FeatureCockpit({
             onRetrySetup={retrySetup}
             onStart={start}
             onStop={() => void openStopDialog()}
+            onResume={resume}
+            onRetry={retry}
+            onRestart={restart}
             rewindEnabled={rewindAction?.enabled === true}
             onOpenRewind={() => setRewindDialog(true)}
             canOpenHistory={onSelectRun !== undefined}
             onOpenHistory={openHistory}
+            onOpenCycles={() => setCyclesDialog(true)}
           />
 
           {isNarrow && inspectorOpen ? (
@@ -1108,6 +1317,15 @@ export function FeatureCockpit({
             />
           ) : null}
 
+          {restartDialog ? (
+            <RestartConfirmDialog
+              snapshot={snapshot}
+              busy={busy}
+              onClose={() => setRestartDialog(false)}
+              onConfirm={confirmRestart}
+            />
+          ) : null}
+
           {rewindDialog ? (
             <RewindJourney
               featureId={featureId}
@@ -1137,6 +1355,39 @@ export function FeatureCockpit({
                 void load({ silent: true });
               }}
             />
+          ) : null}
+
+          {cyclesDialog ? (
+            <div className="cockpit__drawer-backdrop" onMouseDown={() => setCyclesDialog(false)}>
+              <aside
+                className="cockpit__drawer cockpit__cycles-drawer"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Repository cycles"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <header className="cockpit__cycles-header">
+                  <h3>Repository cycles</h3>
+                  <button
+                    type="button"
+                    className="cockpit__cycles-close"
+                    onClick={() => setCyclesDialog(false)}
+                  >
+                    Close
+                  </button>
+                </header>
+                <CycleJourneys
+                  featureId={featureId}
+                  snapshot={snapshot}
+                  onComplete={() => load({ silent: true })}
+                  attentionItems={attentionItems}
+                  onOpenGate={() => {
+                    setCyclesDialog(false);
+                    attentionRegionRef.current?.focus();
+                  }}
+                />
+              </aside>
+            </div>
           ) : null}
         </>
       )}

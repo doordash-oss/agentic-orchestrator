@@ -139,23 +139,13 @@ func TestPhaseImplementUnified_3Repo_CrossRepoVerification(t *testing.T) {
 
 	// --- Part B: TestingContractCompiler emits per-repo baseline +
 	// plan-source items + `cross-repo` items, every item tagged with
-	// `repo:`.
-	//
-	// CrossRepoSteps are synthesized directly here. Production cross-
-	// repo extraction from the plan body is not yet wired (the
-	// implement/refactor loops construct MultiRepoContractInput without
-	// CrossRepoSteps today); the unit tests at testing_contract_multirepo_test.go
-	// pass them in directly via this same shape.
-	crossRepoSteps := []agent.VerificationStep{
-		{Description: "e2e smoke", Command: "scripts/e2e.sh"},
-		{Description: "contract test", Command: "scripts/contract-test.sh"},
-	}
+	// `repo:`. Cross-repo rows are extracted from the plan's
+	// `## Cross-Repo Verification` section (production path).
 	contract := agent.CompileTestingContractMultiRepo(agent.MultiRepoContractInput{
-		Repos:          scope.Repos,
-		PlanText:       planText,
-		PlanPath:       planPath,
-		PhaseType:      "tracer-bullet",
-		CrossRepoSteps: crossRepoSteps,
+		Repos:     scope.Repos,
+		PlanText:  planText,
+		PlanPath:  planPath,
+		PhaseType: "tracer-bullet",
 	})
 
 	// Every item must carry a `repo:` field — the unification invariant.

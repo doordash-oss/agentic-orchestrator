@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -375,5 +376,52 @@ func TestParseChecklistItem(t *testing.T) {
 				t.Errorf("command = %q, want %q", step.Command, tt.wantCmd)
 			}
 		})
+	}
+}
+
+func TestParseCrossRepoVerification(t *testing.T) {
+	plan := strings.Join([]string{
+		"## Tasks",
+		"### Task 1",
+		"**Repo:** api",
+		"## Cross-Repo Verification",
+		"- e2e smoke: `scripts/e2e.sh`",
+		"- [ ] contract test: `scripts/contract-test.sh`",
+		"- Keep `service-a` and `service-b` schemas in sync",
+		"## Manual Verification",
+		"- [ ] UI looks fine",
+	}, "\n")
+	got := ParseCrossRepoVerification(plan)
+	want := []VerificationStep{
+		{Description: "e2e smoke", Command: "scripts/e2e.sh"},
+		{Description: "contract test", Command: "scripts/contract-test.sh"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%+v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseCrossRepoItem_PlainBulletRequiresCommandShape(t *testing.T) {
+	if _, ok := parseCrossRepoItem("- Keep `service-a` and `service-b` schemas in sync"); ok {
+		t.Fatal("prose bullet with identifier backticks must not become a verification step")
+	}
+	step, ok := parseCrossRepoItem("- e2e smoke: `scripts/e2e.sh`")
+	if !ok {
+		t.Fatal("plain bullet with script path should parse")
+	}
+	if step.Command != "scripts/e2e.sh" {
+		t.Fatalf("command = %q, want scripts/e2e.sh", step.Command)
+	}
+	step, ok = parseCrossRepoItem("- [ ] single word: `make`")
+	if !ok {
+		t.Fatal("checklist items still allow last-span fallback for single-word commands")
+	}
+	if step.Command != "make" {
+		t.Fatalf("command = %q, want make", step.Command)
 	}
 }

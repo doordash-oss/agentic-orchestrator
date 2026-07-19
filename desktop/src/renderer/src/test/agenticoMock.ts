@@ -206,6 +206,11 @@ export interface AgenticoMock {
     getRunLogContent: ReturnType<typeof vi.fn>;
     getRewindPreview: ReturnType<typeof vi.fn>;
     executeRewind: ReturnType<typeof vi.fn>;
+    preflightCompletion: ReturnType<typeof vi.fn>;
+    getRepositoryDiff: ReturnType<typeof vi.fn>;
+    generatePublishDescription: ReturnType<typeof vi.fn>;
+    openExternal: ReturnType<typeof vi.fn>;
+    revealPath: ReturnType<typeof vi.fn>;
     startRebase: ReturnType<typeof vi.fn>;
     preflightRebase: ReturnType<typeof vi.fn>;
     fetchReviewComments: ReturnType<typeof vi.fn>;
@@ -358,6 +363,11 @@ export function installAgenticoMock(
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),
     executeRewind: vi.fn(() => Promise.reject(new Error('unused'))),
+    preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
+    generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
+    openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
+    revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
     startRebase: vi.fn(() => Promise.reject(new Error('unused'))),
     preflightRebase: vi.fn(() => Promise.reject(new Error('unused'))),
     fetchReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),

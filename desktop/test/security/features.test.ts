@@ -125,6 +125,11 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
     readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),
     bulkPreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
+    getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
+    generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
+    openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
+    revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
     ...overrides,
   };
 }

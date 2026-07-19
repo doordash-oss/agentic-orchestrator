@@ -50,9 +50,9 @@ func TestFastPublishCommitRepresentative(t *testing.T) {
 		}
 	}
 
-	previews, err := WorkingTreeDiffPreviews(repo)
+	previews, err := BranchDiffPreviews(repo, "main")
 	if err != nil {
-		t.Fatalf("WorkingTreeDiffPreviews() error = %v", err)
+		t.Fatalf("BranchDiffPreviews() error = %v", err)
 	}
 	if len(previews) < 3 {
 		t.Fatalf("len(previews) = %d, want at least 3", len(previews))

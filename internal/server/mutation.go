@@ -114,7 +114,7 @@ type MutationTarget interface {
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
 	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
 	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
-	MergeFeature(featureID string) (MergeFeatureResponse, error)
+	MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error)
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
 	RetryFeature(featureID string) (RetryFeatureResponse, error)
 	StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error)
@@ -124,9 +124,12 @@ type MutationTarget interface {
 	RestartRefactor(featureID string, req RefactorActionRequest) (RefactorRestartResponse, error)
 	PreflightRebase(featureID string) (RebasePreflightResponse, error)
 	PreflightRefactor(featureID string, req RefactorPreflightRequest) (RefactorPreflightResponse, error)
-	MarkDone(featureID string) (MarkDoneResponse, error)
+	CompletionPreflight(featureID string) (CompletionPreflightResponse, error)
+	RepositoryDiff(featureID, repoName, filePath string) (RepositoryDiffResponse, error)
+	RepositoryPath(featureID, repoName string) (RepositoryPathResponse, error)
+	MarkDone(featureID string, req GuardedFeatureActionRequest) (MarkDoneResponse, error)
 	CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error)
-	DeleteFeature(featureID string) (DeleteFeatureResponse, error)
+	DeleteFeature(featureID string, req GuardedFeatureActionRequest) (DeleteFeatureResponse, error)
 	ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error)
 	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (RecoveryActionResponse, error)
 }
@@ -339,18 +342,18 @@ func ModelConfigToPatch(m config.ModelConfig) ModelConfigPatch {
 }
 
 type PublishFeatureRequest struct {
-	Repos []string `json:"repos,omitempty"`
-	Title string   `json:"title,omitempty"`
-	Body  string   `json:"body,omitempty"`
+	SourceRevision string   `json:"source_revision,omitempty"`
+	Repos          []string `json:"repos,omitempty"`
+	Title          string   `json:"title,omitempty"`
+	Body           string   `json:"body,omitempty"`
+}
+
+type GuardedFeatureActionRequest struct {
+	SourceRevision string `json:"source_revision,omitempty"`
 }
 
 type PublishDescriptionRequest struct {
-	Model              string `json:"model,omitempty"`
-	FeatureName        string `json:"feature_name,omitempty"`
-	FeatureDescription string `json:"feature_description,omitempty"`
-	Roadmap            string `json:"roadmap,omitempty"`
-	CommitBodies       string `json:"commit_bodies,omitempty"`
-	DiffStat           string `json:"diff_stat,omitempty"`
+	Repos []string `json:"repos,omitempty"`
 }
 
 type RewindFeatureRequest struct {
@@ -400,7 +403,8 @@ type RefactorActionRequest struct {
 }
 
 type CleanupActionRequest struct {
-	Target string `json:"target,omitempty"`
+	SourceRevision string `json:"source_revision,omitempty"`
+	Target         string `json:"target,omitempty"`
 }
 
 func writeActionJSON(w http.ResponseWriter, status int, resp any) {
@@ -779,7 +783,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 	case actionPublish:
 		if subaction == phaseNameDescription {
 			var req PublishDescriptionRequest
-			if !decodeMutationJSON(w, r, &req) {
+			if !decodeMutationJSON(w, r, &req) || !validateRepoList(w, req.Repos, false) {
 				return true
 			}
 			resp, err := h.mutations.GeneratePublishDescription(featureID, req)
@@ -805,11 +809,11 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		}
 		defaultActionFields(&resp, featureID, "published")
 		writeActionJSON(w, http.StatusOK, &resp)
-	case actionMerge, actionRetry, actionMarkDone, actionDelete:
+	case actionMerge, actionMarkDone, actionDelete:
 		if subaction != "" {
 			return false
 		}
-		var req map[string]any
+		var req GuardedFeatureActionRequest
 		if !decodeMutationJSON(w, r, &req) {
 			return true
 		}
@@ -820,16 +824,13 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		)
 		switch action {
 		case actionMerge:
-			r, mergeErr := h.mutations.MergeFeature(featureID)
+			r, mergeErr := h.mutations.MergeFeature(featureID, req)
 			resp, err, defaultResult = &r, mergeErr, "merged"
-		case actionRetry:
-			r, retryErr := h.mutations.RetryFeature(featureID)
-			resp, err, defaultResult = &r, retryErr, "retried"
 		case actionMarkDone:
-			r, markDoneErr := h.mutations.MarkDone(featureID)
+			r, markDoneErr := h.mutations.MarkDone(featureID, req)
 			resp, err, defaultResult = &r, markDoneErr, "done"
 		case actionDelete:
-			r, deleteErr := h.mutations.DeleteFeature(featureID)
+			r, deleteErr := h.mutations.DeleteFeature(featureID, req)
 			resp, err, defaultResult = &r, deleteErr, "deleted"
 		}
 		if err != nil {
@@ -838,6 +839,21 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		}
 		defaultActionFields(resp, featureID, defaultResult)
 		writeActionJSON(w, http.StatusOK, resp)
+	case actionRetry:
+		if subaction != "" {
+			return false
+		}
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.RetryFeature(featureID)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "retried")
+		writeActionJSON(w, http.StatusOK, &resp)
 	case actionRewind:
 		if subaction != "" {
 			return false

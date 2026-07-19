@@ -64,12 +64,12 @@ func (a *PublishAdapter) DiffStat(worktreePath, baseBranch string) (string, erro
 // DiffAdapter wraps git package-level diff functions behind ports.DiffOperator.
 type DiffAdapter struct{}
 
-func (a *DiffAdapter) WorkingTreeDiffPreviews(worktreePath string) ([]DiffPreview, error) {
-	return WorkingTreeDiffPreviews(worktreePath)
+func (a *DiffAdapter) BranchDiffPreviews(worktreePath, baseBranch string) ([]DiffPreview, error) {
+	return BranchDiffPreviews(worktreePath, baseBranch)
 }
 
-func (a *DiffAdapter) SingleFileDiffPreview(worktreePath, relPath string) (*DiffPreview, error) {
-	return SingleFileDiffPreview(worktreePath, relPath)
+func (a *DiffAdapter) SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*DiffPreview, error) {
+	return SingleFileDiffPreview(worktreePath, baseBranch, relPath)
 }
 
 // RebaseAdapter wraps git package-level rebase functions behind ports.RebaseOperator.

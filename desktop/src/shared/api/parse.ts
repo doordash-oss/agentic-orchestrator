@@ -891,6 +891,73 @@ export const RefactorPreflightResponseSchema = z.object({
 });
 export type RefactorPreflightResponse = z.output<typeof RefactorPreflightResponseSchema>;
 
+export const CompletionPreflightRepoSchema = z.object({
+  repo: z.string(),
+  publishable: z.boolean(),
+  touched: z.boolean(),
+  status: z.string(),
+  pr_url: z.string().optional(),
+  blocker: z.string().optional(),
+  freshness: z.string().optional(),
+  last_error: z.string().optional(),
+  base_branch: z.string().optional(),
+  branch: z.string().optional(),
+});
+export type CompletionPreflightRepo = z.output<typeof CompletionPreflightRepoSchema>;
+
+export const CompletionPreflightResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  source_revision: z.string(),
+  can_mark_done: z.boolean().optional(),
+  mark_done_blocker: z.string().optional(),
+  repos: z.array(CompletionPreflightRepoSchema),
+});
+export type CompletionPreflightResponse = z.output<typeof CompletionPreflightResponseSchema>;
+
+export const RepositoryDiffFileSchema = z.object({
+  path: z.string(),
+  old_path: z.string().optional(),
+  operation: z.string(),
+  added_lines: z.number().optional(),
+  removed_lines: z.number().optional(),
+  binary: z.boolean().optional(),
+  fingerprint: z.string().optional(),
+});
+export type RepositoryDiffFile = z.output<typeof RepositoryDiffFileSchema>;
+
+export const RepositoryDiffResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  repo: z.string(),
+  source_revision: z.string().optional(),
+  truncated: z.boolean().optional(),
+  files: z.array(RepositoryDiffFileSchema),
+  file_diff: z.string().optional(),
+  file_truncated: z.boolean().optional(),
+  file_binary: z.boolean().optional(),
+  file_unavailable: z.boolean().optional(),
+  partial_failure: z.string().optional(),
+});
+export type RepositoryDiffResponse = z.output<typeof RepositoryDiffResponseSchema>;
+
+export const RepositoryPathResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  repo: z.string(),
+  path: z.string(),
+});
+export type RepositoryPathResponse = z.output<typeof RepositoryPathResponseSchema>;
+
+export const PublishDescriptionResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  result: z.string(),
+  title: z.string(),
+  body: z.string(),
+});
+export type PublishDescriptionResponse = z.output<typeof PublishDescriptionResponseSchema>;
+
 // Compile-time drift guards: zod outputs must stay assignable to the
 // generated OpenAPI component types.
 type HealthDTO = components['schemas']['HealthResponse'];
@@ -1012,3 +1079,17 @@ void _rewindPreviewSubset;
 type RewindActionDTO = components['schemas']['RewindFeatureResponse'];
 const _rewindActionSubset = (value: RewindActionDTO): RewindActionResponse => value;
 void _rewindActionSubset;
+type RepositoryPathDTO = components['schemas']['RepositoryPathDTO'];
+const _repositoryPathSubset = (value: RepositoryPathDTO): RepositoryPathResponse => value;
+void _repositoryPathSubset;
+type PublishDescriptionDTO = components['schemas']['PublishDescriptionResponse'];
+const _publishDescriptionSubset = (value: PublishDescriptionDTO): PublishDescriptionResponse =>
+  value;
+void _publishDescriptionSubset;
+type CompletionPreflightDTO = components['schemas']['CompletionPreflightResponse'];
+const _completionPreflightSubset = (value: CompletionPreflightDTO): CompletionPreflightResponse =>
+  value;
+void _completionPreflightSubset;
+type RepositoryDiffDTO = components['schemas']['RepositoryDiffResponse'];
+const _repositoryDiffSubset = (value: RepositoryDiffDTO): RepositoryDiffResponse => value;
+void _repositoryDiffSubset;

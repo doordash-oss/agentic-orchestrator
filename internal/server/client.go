@@ -383,8 +383,12 @@ func (c *Client) GeneratePublishDescription(ctx context.Context, featureID strin
 }
 
 func (c *Client) MergeFeature(ctx context.Context, featureID string) (MergeFeatureResponse, error) {
+	return c.MergeFeatureWithRequest(ctx, featureID, GuardedFeatureActionRequest{})
+}
+
+func (c *Client) MergeFeatureWithRequest(ctx context.Context, featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error) {
 	var out MergeFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionMerge), nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionMerge), nil, req, &out, true)
 	return out, err
 }
 
@@ -431,8 +435,12 @@ func (c *Client) RestartRefactor(ctx context.Context, featureID string, req Refa
 }
 
 func (c *Client) MarkDone(ctx context.Context, featureID string) (MarkDoneResponse, error) {
+	return c.MarkDoneWithRequest(ctx, featureID, GuardedFeatureActionRequest{})
+}
+
+func (c *Client) MarkDoneWithRequest(ctx context.Context, featureID string, req GuardedFeatureActionRequest) (MarkDoneResponse, error) {
 	var out MarkDoneResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionMarkDone), nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionMarkDone), nil, req, &out, true)
 	return out, err
 }
 
@@ -443,8 +451,12 @@ func (c *Client) CleanupFeature(ctx context.Context, featureID string, req Clean
 }
 
 func (c *Client) DeleteFeature(ctx context.Context, featureID string) (DeleteFeatureResponse, error) {
+	return c.DeleteFeatureWithRequest(ctx, featureID, GuardedFeatureActionRequest{})
+}
+
+func (c *Client) DeleteFeatureWithRequest(ctx context.Context, featureID string, req GuardedFeatureActionRequest) (DeleteFeatureResponse, error) {
 	var out DeleteFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionDelete), nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionDelete), nil, req, &out, true)
 	return out, err
 }
 

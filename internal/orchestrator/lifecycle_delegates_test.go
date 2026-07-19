@@ -1221,3 +1221,81 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 		t.Errorf("Phase = %v, want PhaseKnowledgeBase", outcome.Phase)
 	}
 }
+
+func TestOrchestrator_MergeFeatureLocal_DoesNotMarkDone(t *testing.T) {
+	notPublishable := false
+	f := &feature.Feature{
+		ID:     "feat-local-merge",
+		Slug:   "local-merge",
+		Status: feature.StatusPublished,
+		Repos: []feature.FeatureRepo{{
+			Name:         "repo-a",
+			Path:         "/repo/a",
+			WorktreePath: "/worktree/a",
+			Branch:       "feature/local-merge",
+			BaseBranch:   "main",
+			Publishable:  &notPublishable,
+		}},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	pub := mocks.NewMockPublisher()
+	pub.HasUncommittedChangesFn = func(worktreePath string) (bool, error) { return true, nil }
+	pub.CommitAllFn = func(worktreePath, message string) error { return nil }
+	rebaser := mocks.NewMockRebaseOperator()
+	rebaser.MergeFeatureBranchFn = func(repoPath, featureBranch, baseBranch string) error { return nil }
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		Publisher: pub,
+		Rebaser:   rebaser,
+	}, orchestrator.Hooks{})
+
+	if err := o.MergeFeatureLocal("feat-local-merge"); err != nil {
+		t.Fatalf("MergeFeatureLocal: %v", err)
+	}
+
+	refuteLifecycleCall(t, lc, "MarkDone")
+	if f.Status != feature.StatusPublished {
+		t.Fatalf("Status = %s; want unchanged %s", f.Status, feature.StatusPublished)
+	}
+	if got := len(rebaser.Calls); got != 1 {
+		t.Fatalf("rebaser calls = %d; want 1", got)
+	}
+	if rebaser.Calls[0].Method != "MergeFeatureBranch" {
+		t.Fatalf("rebaser call = %s; want MergeFeatureBranch", rebaser.Calls[0].Method)
+	}
+	if got := len(pub.Calls); got != 2 {
+		t.Fatalf("publisher calls = %d; want HasUncommittedChanges + CommitAll", got)
+	}
+}
+
+func TestOrchestrator_MarkDone_IsExplicitCompletionAction(t *testing.T) {
+	f := &feature.Feature{
+		ID:     "feat-mark-done",
+		Status: feature.StatusPublished,
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	var summaryNeeded bool
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+	}, orchestrator.Hooks{
+		OnFeatureSummaryNeeded: func(featureID string, f *feature.Feature) {
+			summaryNeeded = true
+		},
+	})
+
+	if err := o.MarkDone("feat-mark-done"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	if f.Status != feature.StatusDone {
+		t.Fatalf("Status = %s; want %s", f.Status, feature.StatusDone)
+	}
+	if !summaryNeeded {
+		t.Fatal("OnFeatureSummaryNeeded was not called")
+	}
+}

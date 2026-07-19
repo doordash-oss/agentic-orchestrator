@@ -27,17 +27,31 @@ import (
 // rejection, and response shape without a live orchestrator.
 type preflightMutationTarget struct {
 	MutationTarget
-	rebasePreflight      RebasePreflightResponse
-	rebasePreflightErr   error
-	rebasePreflightID    string
-	refactorPreflight    RefactorPreflightResponse
-	refactorPreflightErr error
-	refactorPreflightID  string
-	refactorReq          RefactorPreflightRequest
-	startRebaseCalls     []RebaseActionRequest
-	startRebaseErr       error
-	startRefactorCalls   []RefactorActionRequest
-	startRefactorErr     error
+	rebasePreflight        RebasePreflightResponse
+	rebasePreflightErr     error
+	rebasePreflightID      string
+	refactorPreflight      RefactorPreflightResponse
+	refactorPreflightErr   error
+	refactorPreflightID    string
+	refactorReq            RefactorPreflightRequest
+	startRebaseCalls       []RebaseActionRequest
+	startRebaseErr         error
+	startRefactorCalls     []RefactorActionRequest
+	startRefactorErr       error
+	completionPreflight    CompletionPreflightResponse
+	completionPreflightErr error
+	completionPreflightID  string
+	repoDiff               RepositoryDiffResponse
+	repoDiffErr            error
+	repoDiffID             string
+	repoDiffName           string
+	repoDiffFilePath       string
+	publishReq             PublishFeatureRequest
+	publishDescReq         PublishDescriptionRequest
+	mergeReq               GuardedFeatureActionRequest
+	markDoneReq            GuardedFeatureActionRequest
+	cleanupReq             CleanupActionRequest
+	deleteReq              GuardedFeatureActionRequest
 }
 
 func (t *preflightMutationTarget) PreflightRebase(featureID string) (RebasePreflightResponse, error) {

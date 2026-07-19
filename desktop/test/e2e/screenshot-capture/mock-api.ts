@@ -891,6 +891,160 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
         truncated: false,
       }),
     bulkPreview: () => Promise.resolve(BULK_PREVIEW_DATA),
+    preflightCompletion: () => {
+      const isPublishScene = scene === 'completion-publish';
+      const isDeleteScene = scene === 'completion-delete';
+      if (isPublishScene) {
+        return Promise.resolve({
+          featureId: 'feat-electron-app',
+          sourceRevision: 'rev-completion-mock',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'publish-api',
+              publishable: true,
+              touched: true,
+              status: 'already_published',
+              prUrl: 'https://github.example/agentico/publish-api/pull/42',
+              baseBranch: 'main',
+              branch: 'feature/electron-app',
+              freshness: 'up_to_date',
+            },
+            {
+              repo: 'publish-web',
+              publishable: true,
+              touched: true,
+              status: 'eligible',
+              lastError: 'push denied by completion fixture; retry only this repository',
+              baseBranch: 'main',
+              branch: 'feature/electron-app',
+              freshness: 'behind',
+            },
+            {
+              repo: 'local-core',
+              publishable: false,
+              touched: true,
+              status: 'ineligible',
+              blocker: 'local-only repository — not configured for publishing',
+              baseBranch: 'main',
+              branch: 'feature/electron-app',
+              freshness: 'up_to_date',
+            },
+          ],
+        });
+      }
+      if (isDeleteScene) {
+        return Promise.resolve({
+          featureId: 'feat-electron-app',
+          sourceRevision: 'rev-completion-mock',
+          canMarkDone: false,
+          markDoneBlocker: 'feature is already done',
+          repos: [
+            {
+              repo: 'publish-api',
+              publishable: true,
+              touched: true,
+              status: 'completed',
+              prUrl: 'https://github.example/agentico/publish-api/pull/42',
+            },
+            { repo: 'local-core', publishable: false, touched: true, status: 'completed' },
+          ],
+        });
+      }
+      return Promise.resolve({
+        featureId: 'feat-electron-app',
+        sourceRevision: 'rev-completion-mock',
+        canMarkDone: true,
+        repos: [
+          {
+            repo: 'agentic-orchestrator',
+            publishable: true,
+            touched: true,
+            status: 'eligible',
+            baseBranch: 'main',
+            branch: 'feature/electron-app',
+            freshness: 'up_to_date',
+          },
+          {
+            repo: 'publish-web',
+            publishable: true,
+            touched: true,
+            status: 'already_published',
+            prUrl: 'https://github.example/agentico/publish-web/pull/17',
+            baseBranch: 'main',
+            branch: 'feature/electron-app',
+            freshness: 'up_to_date',
+          },
+          {
+            repo: 'local-core',
+            publishable: false,
+            touched: true,
+            status: 'eligible',
+            baseBranch: 'main',
+            branch: 'feature/electron-app',
+            freshness: 'behind',
+            blocker: 'worktree not available',
+          },
+        ],
+      });
+    },
+    getRepositoryDiff: (_req: { featureId: string; repo: string; filePath?: string }) => {
+      const repo = _req.repo;
+      const filePath = _req.filePath;
+      const sampleDiff = `diff --git a/README.md b/README.md
+index 5c32b6a..8a9b3c1 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,5 @@
+ # Agentic Orchestrator
+
+-Old description here.
++New description with completion workspace support.
++The diff-to-merge journey is now guided.
+
+ ## Features`;
+      if (filePath !== undefined) {
+        return Promise.resolve({
+          featureId: 'feat-electron-app',
+          repo,
+          sourceRevision: 'rev-completion-mock',
+          files: [],
+          fileDiff: sampleDiff,
+        });
+      }
+      return Promise.resolve({
+        featureId: 'feat-electron-app',
+        repo,
+        sourceRevision: 'rev-completion-mock',
+        files: [
+          {
+            path: 'README.md',
+            operation: 'modify',
+            addedLines: 3,
+            removedLines: 1,
+          },
+          {
+            path: 'desktop/src/renderer/src/features/CompletionWorkspace.tsx',
+            operation: 'add',
+            addedLines: 722,
+          },
+          {
+            path: 'internal/orchestrator/completion.go',
+            operation: 'modify',
+            addedLines: 280,
+            removedLines: 15,
+          },
+        ],
+      });
+    },
+    generatePublishDescription: () =>
+      Promise.resolve({
+        featureId: 'feat-electron-app',
+        title: 'Complete repository-aware Electron workflow',
+        body: 'Adds the completion workspace, bounded diffs, explicit merge and mark-done controls, cleanup, and protected deletion.',
+      }),
+    openExternal: () => Promise.resolve({ ok: true }),
+    revealPath: () => Promise.resolve({ ok: true }),
     onAppEvent: (listener) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);

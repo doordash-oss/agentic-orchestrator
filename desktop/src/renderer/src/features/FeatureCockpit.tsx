@@ -20,6 +20,7 @@ import {
   type RunDetailView,
   type SetupTaskView,
   type ResourceEntry,
+  type FeatureActionRequest,
 } from '../../../shared/ipc';
 import { PhaseSpine } from '../components/PhaseSpine';
 import { useMediaQuery } from '../hooks';
@@ -31,6 +32,7 @@ import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { RepositoryInstrument } from './RepositoryInstrument';
 import { CycleJourneys } from './CycleJourneys';
+import { CompletionWorkspace } from './CompletionWorkspace';
 import type { FeatureActionResult } from '../../../shared/ipc';
 import {
   AttentionDetail,
@@ -90,6 +92,8 @@ const TASK_STATUS_ICON: Record<SetupTaskView['status'], string> = {
   done: '●',
   failed: '✕',
 };
+
+const COMPLETION_ACTION_IDS = ['publish', 'merge', 'mark-done', 'cleanup', 'delete'] as const;
 
 function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch: string | null }) {
   return (
@@ -293,6 +297,8 @@ function CockpitActionBar({
   canOpenHistory,
   onOpenHistory,
   onOpenCycles,
+  completionAvailable,
+  onOpenCompletion,
 }: {
   snapshot: FeatureSnapshot;
   setupAction: ReturnType<typeof actionById>;
@@ -320,6 +326,8 @@ function CockpitActionBar({
   canOpenHistory: boolean;
   onOpenHistory(): void;
   onOpenCycles(): void;
+  completionAvailable: boolean;
+  onOpenCompletion(): void;
 }) {
   return (
     <div className="cockpit__actions" role="group" aria-label="Feature actions">
@@ -433,6 +441,16 @@ function CockpitActionBar({
           aria-label="Rewind feature"
         >
           ↺ Rewind
+        </button>
+      ) : null}
+      {completionAvailable ? (
+        <button
+          type="button"
+          className="cockpit__completion-button"
+          onClick={onOpenCompletion}
+          aria-label="Open completion workspace"
+        >
+          Complete
         </button>
       ) : null}
       {canOpenHistory ? (
@@ -776,6 +794,7 @@ export function FeatureCockpit({
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [rewindDialog, setRewindDialog] = useState(false);
   const [cyclesDialog, setCyclesDialog] = useState(false);
+  const [completionOpen, setCompletionOpen] = useState(false);
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
     run: RunDetailView | null;
@@ -1057,6 +1076,9 @@ export function FeatureCockpit({
   const rebaseAction = actionById(snapshot, 'rebase');
   const reviewCommentsAction = actionById(snapshot, 'review-comments');
   const refactorAction = actionById(snapshot, 'refactor');
+  const completionAvailable = COMPLETION_ACTION_IDS.some(
+    (actionId) => actionById(snapshot, actionId) !== undefined,
+  );
   const hasPendingReview = isPendingReviewStatus(snapshot.status);
   const isArchiveMode =
     selectedRunNumber !== undefined && selectedRunNumber !== null && selectedRunNumber > 0;
@@ -1179,6 +1201,8 @@ export function FeatureCockpit({
             canOpenHistory={onSelectRun !== undefined}
             onOpenHistory={openHistory}
             onOpenCycles={() => setCyclesDialog(true)}
+            completionAvailable={completionAvailable}
+            onOpenCompletion={() => setCompletionOpen(true)}
           />
 
           {isNarrow && inspectorOpen ? (
@@ -1193,107 +1217,148 @@ export function FeatureCockpit({
 
           <div className="cockpit__content">
             <main className="cockpit__canvas">
-              {rewindLanding !== null ? (
-                <RewindLanding
-                  outcome={rewindLanding.outcome}
-                  run={rewindLanding.run}
-                  onOpenSource={(runNumber) => onSelectRun?.(runNumber)}
-                  onDismiss={() => setRewindLanding(null)}
-                />
-              ) : null}
-              <FeatureConfigEditor featureId={featureId} />
-              {hasPendingReview ? (
-                <ReviewSurface featureId={featureId} onResolved={() => load({ silent: true })} />
-              ) : null}
-              {visibleAttentionItems.length > 0 ? (
-                <section
-                  ref={attentionRegionRef}
-                  className="cockpit__attention"
-                  aria-label="Feature attention"
-                  tabIndex={-1}
-                >
-                  <h3>Blocking input</h3>
-                  {visibleAttentionItems.map((item) => (
-                    <AttentionDetail
-                      key={`${item.kind}:${item.id}`}
-                      item={item}
-                      busy={attentionBusy === item.id}
-                      drafts={attentionDrafts}
-                      setDrafts={setAttentionDrafts}
-                      saveDraft={(action, options) => saveAttentionDraft(item.id, action, options)}
-                      submit={async (action, options) => {
-                        if (attentionBusy !== null) return;
-                        const invoker =
-                          document.activeElement instanceof HTMLElement
-                            ? document.activeElement
-                            : null;
-                        setAttentionBusy(item.id);
-                        try {
-                          const { notice } = await runAttentionSubmit(
-                            action,
-                            async () => {
-                              const latest = await refreshAttention();
-                              await load({ silent: true });
-                              return latest;
-                            },
-                            options,
-                          );
-                          setAnnouncement(notice);
-                        } catch (error) {
-                          setAnnouncement(attentionErrorMessage(error));
-                        } finally {
-                          setAttentionBusy(null);
-                          requestAnimationFrame(() => {
-                            if (invoker !== null && document.body.contains(invoker)) {
-                              invoker.focus();
-                            } else {
-                              attentionRegionRef.current?.focus();
-                            }
-                          });
-                        }
-                      }}
-                    />
-                  ))}
-                </section>
-              ) : null}
-
-              {showsRun(snapshot) && !hasPendingReview ? (
-                <RunTimeline
+              {completionOpen ? (
+                <CompletionWorkspace
                   featureId={featureId}
-                  activeRun={snapshot.activeRun}
-                  currentPhase={snapshot.currentPhase}
-                  shouldStream={stopAction !== undefined}
+                  featureName={snapshot.name}
+                  onClose={() => {
+                    setCompletionOpen(false);
+                    void load({ silent: true });
+                  }}
+                  preflightCompletion={(id) =>
+                    window.agentico.preflightCompletion({ featureId: id })
+                  }
+                  getRepositoryDiff={(id, repo, filePath) =>
+                    window.agentico.getRepositoryDiff({
+                      featureId: id,
+                      repo,
+                      ...(filePath === undefined ? {} : { filePath }),
+                    })
+                  }
+                  dispatchAction={(id, action, body) =>
+                    window.agentico.dispatchFeatureAction({
+                      featureId: id,
+                      action,
+                      ...(body === undefined ? {} : { body }),
+                    } as FeatureActionRequest)
+                  }
+                  generatePublishDescription={(id, repos) =>
+                    window.agentico.generatePublishDescription({ featureId: id, repos })
+                  }
+                  openExternal={(url) => window.agentico.openExternal({ url })}
+                  revealPath={(id, repo) => window.agentico.revealPath({ featureId: id, repo })}
+                  onHandoffToRebase={() => setCyclesDialog(true)}
                 />
-              ) : null}
+              ) : (
+                <>
+                  {rewindLanding !== null ? (
+                    <RewindLanding
+                      outcome={rewindLanding.outcome}
+                      run={rewindLanding.run}
+                      onOpenSource={(runNumber) => onSelectRun?.(runNumber)}
+                      onDismiss={() => setRewindLanding(null)}
+                    />
+                  ) : null}
+                  <FeatureConfigEditor featureId={featureId} />
+                  {hasPendingReview ? (
+                    <ReviewSurface
+                      featureId={featureId}
+                      onResolved={() => load({ silent: true })}
+                    />
+                  ) : null}
+                  {visibleAttentionItems.length > 0 ? (
+                    <section
+                      ref={attentionRegionRef}
+                      className="cockpit__attention"
+                      aria-label="Feature attention"
+                      tabIndex={-1}
+                    >
+                      <h3>Blocking input</h3>
+                      {visibleAttentionItems.map((item) => (
+                        <AttentionDetail
+                          key={`${item.kind}:${item.id}`}
+                          item={item}
+                          busy={attentionBusy === item.id}
+                          drafts={attentionDrafts}
+                          setDrafts={setAttentionDrafts}
+                          saveDraft={(action, options) =>
+                            saveAttentionDraft(item.id, action, options)
+                          }
+                          submit={async (action, options) => {
+                            if (attentionBusy !== null) return;
+                            const invoker =
+                              document.activeElement instanceof HTMLElement
+                                ? document.activeElement
+                                : null;
+                            setAttentionBusy(item.id);
+                            try {
+                              const { notice } = await runAttentionSubmit(
+                                action,
+                                async () => {
+                                  const latest = await refreshAttention();
+                                  await load({ silent: true });
+                                  return latest;
+                                },
+                                options,
+                              );
+                              setAnnouncement(notice);
+                            } catch (error) {
+                              setAnnouncement(attentionErrorMessage(error));
+                            } finally {
+                              setAttentionBusy(null);
+                              requestAnimationFrame(() => {
+                                if (invoker !== null && document.body.contains(invoker)) {
+                                  invoker.focus();
+                                } else {
+                                  attentionRegionRef.current?.focus();
+                                }
+                              });
+                            }
+                          }}
+                        />
+                      ))}
+                    </section>
+                  ) : null}
 
-              {ready ? (
-                <div className="cockpit__empty-state" role="status">
-                  <span aria-hidden="true">●</span> Ready to start
-                  <p>Start runs the {snapshot.currentPhase} phase for this feature.</p>
-                </div>
-              ) : null}
+                  {showsRun(snapshot) && !hasPendingReview ? (
+                    <RunTimeline
+                      featureId={featureId}
+                      activeRun={snapshot.activeRun}
+                      currentPhase={snapshot.currentPhase}
+                      shouldStream={stopAction !== undefined}
+                    />
+                  ) : null}
 
-              {snapshot.failure?.message !== undefined ? (
-                <div role="alert" className="create-form__error">
-                  <span className="create-form__error-code">
-                    {snapshot.failure.type ?? 'failure'}
-                  </span>
-                  <p className="create-form__error-message">{snapshot.failure.message}</p>
-                </div>
-              ) : null}
+                  {ready ? (
+                    <div className="cockpit__empty-state" role="status">
+                      <span aria-hidden="true">●</span> Ready to start
+                      <p>Start runs the {snapshot.currentPhase} phase for this feature.</p>
+                    </div>
+                  ) : null}
 
-              {actionError !== null ? (
-                <div role="alert" className="create-form__error">
-                  <span className="create-form__error-code">{actionError.error.code}</span>
-                  <p className="create-form__error-message">
-                    {actionError.action} was rejected — {actionError.error.message}
+                  {snapshot.failure?.message !== undefined ? (
+                    <div role="alert" className="create-form__error">
+                      <span className="create-form__error-code">
+                        {snapshot.failure.type ?? 'failure'}
+                      </span>
+                      <p className="create-form__error-message">{snapshot.failure.message}</p>
+                    </div>
+                  ) : null}
+
+                  {actionError !== null ? (
+                    <div role="alert" className="create-form__error">
+                      <span className="create-form__error-code">{actionError.error.code}</span>
+                      <p className="create-form__error-message">
+                        {actionError.action} was rejected — {actionError.error.message}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <p className="cockpit__announcement" role="status" aria-live="polite">
+                    {announcement}
                   </p>
-                </div>
-              ) : null}
-
-              <p className="cockpit__announcement" role="status" aria-live="polite">
-                {announcement}
-              </p>
+                </>
+              )}
             </main>
             {!isNarrow ? (
               <aside className="cockpit__inspector" aria-label="Feature inspector">

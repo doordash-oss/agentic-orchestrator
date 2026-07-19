@@ -125,6 +125,28 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
 
+  it('opens the completion workspace from server-advertised completion actions', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'CodeReady',
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-complete',
+      canMarkDone: true,
+      repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'eligible' }],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Open completion workspace' }));
+
+    expect(await screen.findByRole('heading', { name: 'Completion' })).toBeInTheDocument();
+    expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
+  });
+
   it('moves focus into the inspector drawer and restores it after Escape', async () => {
     matchMediaState.narrowCockpit = true;
     renderCockpit();

@@ -50,6 +50,11 @@ import {
   type RefactorPreflightRequest,
   type RecoveryExecuteRequest,
   type RecoveryLogReadRequest,
+  type CompletionPreflightRequest,
+  type PublishDescriptionRequest,
+  type RepositoryDiffRequest,
+  type OpenExternalRequest,
+  type RevealPathRequest,
 } from '../shared/ipc';
 import { assertNoPrototypePollution } from '../shared/sanitize';
 
@@ -174,6 +179,13 @@ const api: AgenticoApi = {
   getRunLogContent: (request: RunLogContentRequest) => call(IPC_CHANNELS.runLogContent, request),
   getRewindPreview: (request: RewindPreviewRequest) => call(IPC_CHANNELS.rewindPreview, request),
   executeRewind: (request: RewindExecuteRequest) => call(IPC_CHANNELS.rewindExecute, request),
+  preflightCompletion: (request: CompletionPreflightRequest) =>
+    call(IPC_CHANNELS.completionPreflight, request),
+  getRepositoryDiff: (request: RepositoryDiffRequest) => call(IPC_CHANNELS.repositoryDiff, request),
+  generatePublishDescription: (request: PublishDescriptionRequest) =>
+    call(IPC_CHANNELS.publishDescription, request),
+  openExternal: (request: OpenExternalRequest) => call(IPC_CHANNELS.openExternal, request),
+  revealPath: (request: RevealPathRequest) => call(IPC_CHANNELS.revealPath, request),
   startRebase: (request: RebaseRequest) => call(IPC_CHANNELS.featuresRebase, request),
   preflightRebase: (request: RebasePreflightRequest) =>
     call(IPC_CHANNELS.featuresRebasePreflight, request),

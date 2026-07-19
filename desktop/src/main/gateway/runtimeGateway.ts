@@ -1047,6 +1047,10 @@ const REWIND_PREVIEW_PATH_PATTERN = new RegExp(
   `^/api/v1/features/${SAFE_API_SEGMENT}/rewind/preview$`,
   'i',
 );
+const REPOSITORY_DIFF_PATH_PATTERN = new RegExp(
+  `^/api/v1/features/${SAFE_API_SEGMENT}/repositories/${SAFE_API_SEGMENT}/diff$`,
+  'i',
+);
 
 function isAllowedApiPath(path: string): boolean {
   const parts = path.split('?');
@@ -1087,6 +1091,9 @@ function isAllowedApiPath(path: string): boolean {
   if (parts.length === 2 && REWIND_PREVIEW_PATH_PATTERN.test(pathname)) {
     return hasRewindPreviewQuery(parts[1] ?? '');
   }
+  if (parts.length === 2 && REPOSITORY_DIFF_PATH_PATTERN.test(pathname)) {
+    return hasRepositoryDiffQuery(parts[1] ?? '');
+  }
   if (parts.length !== 2 || !SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)) {
     return false;
   }
@@ -1125,6 +1132,22 @@ function hasRewindPreviewQuery(rawQuery: string): boolean {
     return false;
   }
   return seen.has('target_phase');
+}
+
+function hasRepositoryDiffQuery(rawQuery: string): boolean {
+  if (rawQuery === '') return false;
+  const seen = new Set<string>();
+  for (const [key, value] of new URLSearchParams(rawQuery)) {
+    if (seen.has(key) || key !== 'file_path') return false;
+    seen.add(key);
+    if (value === '' || value.length > 4096) return false;
+    if (value.startsWith('/') || value.startsWith('\\') || value.includes('\\')) return false;
+    const segments = value.split('/');
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      return false;
+    }
+  }
+  return seen.has('file_path');
 }
 
 function trimBase(baseUrl: string): string {

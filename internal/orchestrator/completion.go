@@ -22,9 +22,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -1446,4 +1448,348 @@ func (o *Orchestrator) markFinalReviewFailedWithEvent(featureID, failureType, er
 		return err
 	}
 	return errors.New(errMsg)
+}
+
+// Completion repo status values enumerate the server-authored completion
+// status per repo.
+const (
+	completionStatusEligible         = "eligible"
+	completionStatusAlreadyPublished = "already_published"
+	completionStatusCompleted        = "completed"
+	completionStatusIneligible       = "ineligible"
+	completionStatusUntouched        = "untouched"
+	completionStatusBlocked          = "blocked"
+)
+
+// CompletionRepoResult is the per-repository slice of a completion preflight.
+type CompletionRepoResult struct {
+	Repo        string
+	Publishable bool
+	Touched     bool
+	Status      string
+	PRURL       string
+	Blocker     string
+	Freshness   string
+	LastError   string
+	BaseBranch  string
+	Branch      string
+}
+
+// repoPublishable reports whether repo is publishable. A nil Publishable
+// pointer is treated as publishable for backward compatibility with older
+// feature manifests that predate the explicit flag.
+func repoPublishable(repo feature.FeatureRepo) bool {
+	return repo.Publishable == nil || *repo.Publishable
+}
+
+// CompletionPreflightResult is the feature-wide, side-effect-free completion
+// preview. SourceRevision captures the worktree state of every repository;
+// a publish/merge/mark-done mutation carrying a mismatched SourceRevision is
+// rejected as stale.
+type CompletionPreflightResult struct {
+	FeatureID       string
+	SourceRevision  string
+	CanMarkDone     bool
+	MarkDoneBlocker string
+	Repos           []CompletionRepoResult
+}
+
+// CompletionPreflight computes a side-effect-free preview of a feature's
+// completion readiness. It enumerates every repository with its completion
+// status, PR URL, blockers, and freshness, and returns a source revision
+// that mutations check for staleness. The worktree is never mutated.
+func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPreflightResult, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return CompletionPreflightResult{}, fmt.Errorf("load feature: %w", err)
+	}
+	result := CompletionPreflightResult{FeatureID: featureID}
+	prURLs := f.PRURLs()
+	for _, repo := range f.Repos {
+		state := f.RepoStates[repo.Name]
+		publishable := repoPublishable(repo)
+		repoResult := CompletionRepoResult{
+			Repo:        repo.Name,
+			Publishable: publishable,
+			BaseBranch:  repo.BaseBranch,
+			Branch:      repo.Branch,
+		}
+		if state != nil {
+			repoResult.Touched = state.Touched
+			repoResult.PRURL = state.PRURL
+			repoResult.LastError = safeCompletionTruncate(state.LastError, 200)
+		}
+		if prURLs[repo.Name] != "" {
+			repoResult.PRURL = prURLs[repo.Name]
+		}
+		repoResult.Status = completionRepoStatus(f, repo, state, publishable, repoResult.PRURL)
+		completionRepoFreshnessAndBlocker(o, f, repo, publishable, &repoResult)
+		if repoResult.Blocker != "" {
+			repoResult.Status = completionStatusBlocked
+		}
+		result.Repos = append(result.Repos, repoResult)
+	}
+	result.CanMarkDone, result.MarkDoneBlocker = completionCanMarkDone(f)
+	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f, nil))
+	return result, nil
+}
+
+// completionRepoFreshnessAndBlocker mirrors the freshness/blocker logic of
+// RebasePreflight for one repository, writing the safe, server-authored
+// Freshness and Blocker fields onto the completion repo result. The worktree
+// is never mutated; only local remote-tracking refs are inspected. The
+// constants (preflightFreshness* and preflightBlocker*) are shared with
+// preflight.go in this package.
+func completionRepoFreshnessAndBlocker(o *Orchestrator, f *feature.Feature, repo feature.FeatureRepo, publishable bool, repoResult *CompletionRepoResult) {
+	out := o.harnessRebaseOutcomeForRepo(f, repo)
+	switch {
+	case out.WorktreePath == "":
+		repoResult.Freshness = preflightFreshnessUnknown
+		repoResult.Blocker = preflightBlockerNoWorktree
+	case out.RebaseTarget == "":
+		repoResult.Freshness = preflightFreshnessUnknown
+		repoResult.Blocker = preflightBlockerNoTarget
+	case o.deps.Rebaser == nil:
+		repoResult.Freshness = preflightFreshnessUnknown
+		repoResult.Blocker = preflightBlockerNoRebaser
+	default:
+		if inProg, err := o.deps.Rebaser.RebaseInProgress(out.WorktreePath); err == nil && inProg {
+			repoResult.Freshness = preflightFreshnessUnknown
+			repoResult.Blocker = preflightBlockerRebaseInProg
+		} else if publishable {
+			behind, err := o.deps.Rebaser.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
+			if err != nil {
+				repoResult.Freshness = preflightFreshnessUnknown
+			} else if behind {
+				repoResult.Freshness = preflightFreshnessBehind
+			} else {
+				repoResult.Freshness = preflightFreshnessUpToDate
+			}
+		} else {
+			behind, err := o.deps.Rebaser.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
+			if err != nil {
+				repoResult.Freshness = preflightFreshnessUnknown
+			} else if behind {
+				repoResult.Freshness = preflightFreshnessBehind
+			} else {
+				repoResult.Freshness = preflightFreshnessUpToDate
+			}
+		}
+	}
+}
+
+// CompletionPreflightSourceRevision recomputes the current completion preview
+// revision so mutation adapters can reject stale renderer snapshots before any
+// side effect.
+func (o *Orchestrator) CompletionPreflightSourceRevision(featureID string) (string, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return "", fmt.Errorf("load feature: %w", err)
+	}
+	return preflightRevision(o.collectPreflightFingerprints(f, nil)), nil
+}
+
+func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *feature.RepoState, publishable bool, prURL string) string {
+	if state != nil && state.Touched {
+		if !publishable {
+			if f.Status == feature.StatusDone {
+				return completionStatusCompleted
+			}
+			return completionStatusEligible
+		}
+		if prURL != "" {
+			if f.Status == feature.StatusDone {
+				return completionStatusCompleted
+			}
+			return completionStatusAlreadyPublished
+		}
+		return completionStatusEligible
+	}
+	if !publishable {
+		return completionStatusIneligible
+	}
+	return completionStatusUntouched
+}
+
+func completionCanMarkDone(f *feature.Feature) (bool, string) {
+	if f.Status == feature.StatusDone {
+		return false, "feature is already done"
+	}
+	if f.Status == feature.StatusImplementing || f.Status == feature.StatusPlanning || f.Status == feature.StatusInquiring {
+		return false, "feature is not ready for completion"
+	}
+	if f.Status == feature.StatusCodeReady || f.Status == feature.StatusReviewPassed || f.Status == feature.StatusPublished {
+		return true, ""
+	}
+	if f.Status == feature.StatusFailed {
+		return false, "feature is in a failed state"
+	}
+	return false, "feature status does not allow mark-done"
+}
+
+// RepositoryDiffResult is the bounded, lazy diff inspection for one repository.
+type RepositoryDiffResult struct {
+	FeatureID       string
+	Repo            string
+	SourceRevision  string
+	Files           []RepositoryDiffFileResult
+	Truncated       bool
+	FileDiff        string
+	FileTruncated   bool
+	FileBinary      bool
+	FileUnavailable bool
+	PartialFailure  string
+}
+
+// RepositoryDiffFileResult is one changed file in a repository diff.
+type RepositoryDiffFileResult struct {
+	Path         string
+	OldPath      string
+	Operation    string
+	AddedLines   int
+	RemovedLines int
+	Binary       bool
+	Fingerprint  string
+}
+
+// MaxDiffFiles is the aggregate limit on changed files returned.
+const MaxDiffFiles = 500
+
+// MaxDiffContent is the per-request limit on single-file diff content.
+const MaxDiffContent = 64 * 1024
+
+// RepositoryDiff inspects one repository's working-tree diff. Without a
+// filePath, it lists all changed files with summaries. With a filePath, it
+// returns bounded diff content for that single file. It never exposes raw
+// host paths, credentials, or unbounded content.
+func (o *Orchestrator) RepositoryDiff(featureID, repoName, filePath string) (RepositoryDiffResult, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return RepositoryDiffResult{}, fmt.Errorf("load feature: %w", err)
+	}
+	repo, ok := findCompletionRepoByName(f, repoName)
+	if !ok {
+		return RepositoryDiffResult{FeatureID: featureID, Repo: repoName, PartialFailure: "repository not found"}, nil
+	}
+	workDir := repoWorkDir(repo)
+	if workDir == "" {
+		return RepositoryDiffResult{FeatureID: featureID, Repo: repoName, PartialFailure: "worktree not available"}, nil
+	}
+	result := RepositoryDiffResult{
+		FeatureID:      featureID,
+		Repo:           repoName,
+		SourceRevision: preflightRevision(o.collectPreflightFingerprints(f, nil)),
+	}
+	if filePath != "" {
+		return o.repositorySingleFileDiff(result, workDir, repo.BaseBranch, filePath)
+	}
+	return o.repositoryFileListDiff(result, workDir, repo.BaseBranch)
+}
+
+// RepositoryWorktreePath resolves the server-owned worktree target for a
+// feature repository and canonicalizes it for the desktop main process. The
+// renderer never receives this value.
+func (o *Orchestrator) RepositoryWorktreePath(featureID, repoName string) (string, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return "", fmt.Errorf("load feature: %w", err)
+	}
+	repo, ok := findCompletionRepoByName(f, repoName)
+	if !ok {
+		return "", fmt.Errorf("repository %q not found", repoName)
+	}
+	workDir := repoWorkDir(repo)
+	if workDir == "" {
+		return "", errors.New("worktree not available")
+	}
+	real, err := filepath.EvalSymlinks(workDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree: %w", err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return "", fmt.Errorf("stat worktree: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("worktree target is not a directory")
+	}
+	return real, nil
+}
+
+func (o *Orchestrator) repositoryFileListDiff(result RepositoryDiffResult, workDir, baseBranch string) (RepositoryDiffResult, error) {
+	previews, err := o.diffOperator().BranchDiffPreviews(workDir, baseBranch)
+	if err != nil {
+		result.PartialFailure = safeCompletionTruncate(err.Error(), 200)
+		return result, nil
+	}
+	for i, p := range previews {
+		if i >= MaxDiffFiles {
+			result.Truncated = true
+			break
+		}
+		result.Files = append(result.Files, RepositoryDiffFileResult{
+			Path:         p.Path,
+			OldPath:      p.OldPath,
+			Operation:    p.Operation,
+			AddedLines:   p.AddedLines,
+			RemovedLines: p.RemovedLines,
+			Binary:       isBinaryPatch(p.Patch),
+			Fingerprint:  p.Fingerprint,
+		})
+	}
+	return result, nil
+}
+
+func (o *Orchestrator) repositorySingleFileDiff(result RepositoryDiffResult, workDir, baseBranch, filePath string) (RepositoryDiffResult, error) {
+	preview, err := o.diffOperator().SingleFileDiffPreview(workDir, baseBranch, filePath)
+	if err != nil {
+		result.PartialFailure = safeCompletionTruncate(err.Error(), 200)
+		return result, nil
+	}
+	if preview == nil {
+		result.FileUnavailable = true
+		return result, nil
+	}
+	if isBinaryPatch(preview.Patch) {
+		result.FileBinary = true
+		return result, nil
+	}
+	diff := preview.Patch
+	if len(diff) > MaxDiffContent {
+		diff = safeCompletionTruncate(diff, MaxDiffContent)
+		result.FileTruncated = true
+	}
+	result.FileDiff = diff
+	return result, nil
+}
+
+func (o *Orchestrator) diffOperator() ports.DiffOperator {
+	if o != nil && o.deps.Differ != nil {
+		return o.deps.Differ
+	}
+	return &git.DiffAdapter{}
+}
+
+func findCompletionRepoByName(f *feature.Feature, name string) (feature.FeatureRepo, bool) {
+	for _, repo := range f.Repos {
+		if repo.Name == name {
+			return repo, true
+		}
+	}
+	return feature.FeatureRepo{}, false
+}
+
+func isBinaryPatch(patch string) bool {
+	return strings.Contains(patch, "Binary files") || strings.Contains(patch, "GIT binary patch")
+}
+
+func safeCompletionTruncate(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.ValidString(s[:max]) {
+		max--
+	}
+	return s[:max]
 }

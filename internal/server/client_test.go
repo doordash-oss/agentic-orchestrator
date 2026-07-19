@@ -20,6 +20,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -192,8 +193,8 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode publish description request: %v", err)
 			}
-			if req.Model != modelSonnet || req.FeatureName != testFeatureName {
-				t.Errorf("publish description request = %+v, want model and feature context", req)
+			if !reflect.DeepEqual(req.Repos, []string{"repo-a"}) {
+				t.Errorf("publish description request = %+v, want selected repo only", req)
 			}
 			writeJSON(w, http.StatusOK, PublishDescriptionResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, Title: testFeatureName, Body: "AI body", Result: resultGenerated})
 		default:
@@ -312,7 +313,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	if chat.SessionID != "chat-1" || chat.Result != resultStarted || !sawChatTrustedHeader {
 		t.Fatalf("StartChat() = %+v trusted=%v, want chat session with trusted header", chat, sawChatTrustedHeader)
 	}
-	desc, err := client.GeneratePublishDescription(ctx, fixtureFeatureID, PublishDescriptionRequest{Model: modelSonnet, FeatureName: testFeatureName})
+	desc, err := client.GeneratePublishDescription(ctx, fixtureFeatureID, PublishDescriptionRequest{Repos: []string{"repo-a"}})
 	if err != nil {
 		t.Fatalf("GeneratePublishDescription() error = %v", err)
 	}

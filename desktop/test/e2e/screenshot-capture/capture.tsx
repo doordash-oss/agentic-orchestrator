@@ -18,6 +18,7 @@ import { RepositoryInstrument } from '../../../src/renderer/src/features/Reposit
 import { CycleJourneys } from '../../../src/renderer/src/features/CycleJourneys';
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
+import { CompletionWorkspace } from '../../../src/renderer/src/features/CompletionWorkspace';
 import {
   AttentionInbox,
   emptyAttentionDrafts,
@@ -28,6 +29,8 @@ import {
   spineActiveIndex,
   spineTone,
 } from '../../../src/renderer/src/features/featureView';
+import type { AgenticoApi, FeatureActionRequest } from '../../../src/shared/ipc';
+import type { CompletionStep } from '../../../src/renderer/src/features/CompletionWorkspace';
 
 function getScene(): string {
   const params = new URLSearchParams(window.location.search);
@@ -317,6 +320,50 @@ function RecoveryScene({ scene }: { scene: string }) {
   );
 }
 
+function CompletionScene({ scene }: { scene: string }): React.ReactElement {
+  const api = (window as unknown as { agentico: AgenticoApi }).agentico;
+  const initialStep: CompletionStep =
+    scene === 'completion-publish'
+      ? 'publish'
+      : scene === 'completion-delete'
+        ? 'delete'
+        : 'inspect';
+  const isConstrained = scene === 'completion-constrained';
+  return (
+    <div
+      style={{
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: isConstrained ? '0' : '24px',
+        maxWidth: isConstrained ? '760px' : '100%',
+        margin: isConstrained ? '0 auto' : undefined,
+      }}
+    >
+      <CompletionWorkspace
+        featureId="feat-electron-app"
+        featureName="Electron App for Agentic Orchestrator"
+        initialStep={initialStep}
+        onClose={() => {}}
+        preflightCompletion={(id) => api.preflightCompletion({ featureId: id })}
+        getRepositoryDiff={(id, repo, filePath) =>
+          api.getRepositoryDiff({ featureId: id, repo, ...(filePath ? { filePath } : {}) })
+        }
+        dispatchAction={(id, action, body) =>
+          api.dispatchFeatureAction({
+            featureId: id,
+            action,
+            ...(body ? { body } : {}),
+          } as FeatureActionRequest)
+        }
+        generatePublishDescription={(id) => api.generatePublishDescription({ featureId: id })}
+        openExternal={(url) => api.openExternal({ url })}
+        revealPath={(id, repo) => api.revealPath({ featureId: id, repo })}
+      />
+    </div>
+  );
+}
+
 function App() {
   const scene = getScene();
 
@@ -337,6 +384,14 @@ function App() {
   }
   if (scene === 'recovery' || scene === 'recovery-constrained') {
     return <RecoveryScene scene={scene} />;
+  }
+  if (
+    scene === 'completion-inspect' ||
+    scene === 'completion-publish' ||
+    scene === 'completion-constrained' ||
+    scene === 'completion-delete'
+  ) {
+    return <CompletionScene scene={scene} />;
   }
   return <div>Unknown scene: {scene}</div>;
 }

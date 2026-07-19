@@ -217,6 +217,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/completion/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read-only, server-authored completion preflight — the exact eligible repository set, already-published or completed outcomes, blockers, PR URLs, and a source revision mutations can reject as stale before side effects. No staging, commits, or arbitrary Git operations. */
+        get: operations["getCompletionPreflight"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/repositories/{repo_name}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bounded, lazy, read-only diff inspection for one repository — lists changed files with stable identities, safe display paths, status (addition, modification, deletion, rename, binary, truncation, unavailable), and optional bounded diff content. Rejects traversal and symlink escape; imposes per-request and aggregate limits. */
+        get: operations["getRepositoryDiff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/repositories/{repo_name}/path": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve a server-approved repository worktree path for native reveal operations.
+         * @description Intended for trusted local desktop main-process use. The renderer calls only the narrow reveal IPC with feature and repository identifiers; raw host paths remain confined to the authenticated server and Electron main process.
+         */
+        get: operations["getRepositoryPath"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/actions/{action}": {
         parameters: {
             query?: never;
@@ -1267,6 +1321,74 @@ export interface components {
             blockers?: string[];
         };
         MarkDoneResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        CompletionPreflightResponse: components["schemas"]["JSONResponse"] & {
+            feature_id: string;
+            /** @description Authoritative revision of the repository state this preflight observed. Publish/merge/mark-done mutations reject a stale preflight before any side effect. */
+            source_revision: string;
+            /** @description Whether the server action catalogue currently allows mark-done. */
+            can_mark_done?: boolean;
+            /** @description Safe, server-authored reason mark-done is unavailable, when non-empty. */
+            mark_done_blocker?: string;
+            repos: components["schemas"]["CompletionPreflightRepo"][];
+        };
+        CompletionPreflightRepo: {
+            repo: string;
+            publishable: boolean;
+            touched: boolean;
+            /** @description Server-authored completion status — eligible, already_published, completed, ineligible, untouched, or blocked. */
+            status: string;
+            /** @description Current PR URL when the repository has been published. */
+            pr_url?: string;
+            /** @description Safe, server-authored reason this repository cannot proceed, when non-empty. */
+            blocker?: string;
+            /** @description Server-authored freshness state. */
+            freshness?: string;
+            /** @description Safe, bounded last error text. */
+            last_error?: string;
+            /** @description Server-authored base branch for this repository. */
+            base_branch?: string;
+            /** @description Server-authored feature branch for this repository. */
+            branch?: string;
+        };
+        RepositoryDiffResponse: components["schemas"]["JSONResponse"] & {
+            feature_id: string;
+            repo: string;
+            /** @description Authoritative revision of the repository state this diff observed. */
+            source_revision?: string;
+            /** @description Whether the file list was truncated to an aggregate limit. */
+            truncated?: boolean;
+            files: components["schemas"]["RepositoryDiffFile"][];
+            /** @description Bounded diff content for a single-file request, when available. */
+            file_diff?: string;
+            /** @description Whether the single-file diff content was truncated to a per-request limit. */
+            file_truncated?: boolean;
+            /** @description Whether the single-file content is binary and cannot be displayed. */
+            file_binary?: boolean;
+            /** @description Whether the single-file diff content is unavailable. */
+            file_unavailable?: boolean;
+            /** @description Safe, server-authored reason one repository could not be fully inspected, when non-empty. */
+            partial_failure?: string;
+        };
+        RepositoryPathDTO: components["schemas"]["JSONResponse"] & {
+            feature_id: string;
+            repo: string;
+            /** @description Canonical server-approved absolute worktree path for the desktop main process. */
+            path: string;
+        };
+        RepositoryDiffFile: {
+            /** @description Safe display path relative to the worktree root. */
+            path: string;
+            /** @description Previous path for a rename, when applicable. */
+            old_path?: string;
+            /** @description Change kind — add, modify, delete, or rename. */
+            operation: string;
+            added_lines?: number;
+            removed_lines?: number;
+            /** @description Whether the file is binary and diff content is unavailable. */
+            binary?: boolean;
+            /** @description Stable per-file identity for navigation and caching. */
+            fingerprint?: string;
+        };
         CleanupFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             target?: string;
         };
@@ -2023,6 +2145,39 @@ export interface components {
                 "application/json": components["schemas"]["RefactorPreflightResponse"];
             };
         };
+        /** @description Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision. */
+        CompletionPreflightResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CompletionPreflightResponse"];
+            };
+        };
+        /** @description Bounded, lazy, read-only diff inspection for one repository. */
+        RepositoryDiffResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RepositoryDiffResponse"];
+            };
+        };
+        /** @description Server-approved repository worktree path for desktop main-process reveal. */
+        RepositoryPathResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                ETag: components["headers"]["ETag"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RepositoryPathDTO"];
+            };
+        };
         /** @description Consolidated runtime readiness snapshot. */
         ReadinessResponse: {
             headers: {
@@ -2450,6 +2605,56 @@ export interface operations {
         };
         responses: {
             200: components["responses"]["RefactorPreflightResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getCompletionPreflight: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["CompletionPreflightResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getRepositoryDiff: {
+        parameters: {
+            query?: {
+                /** @description Optional single-file path to fetch bounded diff content for. Without this parameter, the response lists all changed files with summaries only. */
+                file_path?: string;
+            };
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+                repo_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RepositoryDiffResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getRepositoryPath: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+                repo_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RepositoryPathResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

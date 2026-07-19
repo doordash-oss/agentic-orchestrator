@@ -12,6 +12,7 @@ import { resolveTestUserDataDir } from './testHooks';
 import { EventStreamSupervisor } from './gateway/events';
 import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
+import { CompletionService } from './completion';
 import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
 import { AttentionService } from './attention';
@@ -159,6 +160,9 @@ void app.whenReady().then(() => {
     transport: gateway,
     readReadiness: () => setup.getReadiness(),
   });
+  const completion = new CompletionService({
+    transport: gateway,
+  });
   const recovery = new RecoveryService(gateway);
   const bulk = new BulkService(features);
   const sessions = new SessionService(gateway);
@@ -282,6 +286,12 @@ void app.whenReady().then(() => {
     executeRecovery: (request) => recovery.execute(request),
     readRecoveryLog: (request) => recovery.readLog(request),
     bulkPreview: () => bulk.preview(),
+    preflightCompletion: (request) => completion.preflightCompletion(request),
+    getRepositoryDiff: (request) => completion.getRepositoryDiff(request),
+    generatePublishDescription: (request) =>
+      features.generatePublishDescription(request.featureId, request.repos ?? []),
+    openExternal: (request) => completion.openExternal(request),
+    revealPath: (request) => completion.revealPath(request),
   };
   registerIpcHandlers(ipcMain, trusted, services);
 

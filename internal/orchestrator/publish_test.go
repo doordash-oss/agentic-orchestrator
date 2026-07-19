@@ -613,6 +613,59 @@ func TestOrchestrator_PublishRepo_FallsBackAndLogsDescriptionGenerationErrors(t 
 	}
 }
 
+func TestOrchestrator_GeneratePublishDescriptionDerivesSelectedRepoContext(t *testing.T) {
+	f := &feature.Feature{
+		ID:          "feat-pub-desc-selected",
+		Name:        "selected-feature",
+		Slug:        "selected-feature",
+		Description: "Ship selected repository changes.",
+		Status:      feature.StatusCodeReady,
+		Models:      config.ModelConfig{Planning: "sonnet"},
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: mainBranch},
+			{Name: "r2", Path: "/tmp/r2", WorktreePath: "/tmp/wt-r2", BaseBranch: mainBranch},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true},
+			"r2": {Touched: true},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	pub := mocks.NewMockPublisher()
+	var commitPaths []string
+	var diffPaths []string
+	pub.CommitBodiesFn = func(path, base string) (string, error) {
+		commitPaths = append(commitPaths, path)
+		return "commit bodies for " + path, nil
+	}
+	pub.DiffStatFn = func(path, base string) (string, error) {
+		diffPaths = append(diffPaths, path)
+		return "diff stat for " + path, nil
+	}
+	pr := newPublishDescriptionPhaseRunner(t, "TITLE: Generated selected title\nBODY:\nGenerated selected body", false)
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Publisher:   pub,
+		PhaseRunner: pr,
+	}, orchestrator.Hooks{})
+
+	title, body, err := o.GeneratePublishDescription("feat-pub-desc-selected", orchestrator.PublishDescriptionOptions{Repos: []string{"r1"}})
+	if err != nil {
+		t.Fatalf("GeneratePublishDescription: %v", err)
+	}
+	if title != "Generated selected title" || !strings.Contains(body, "Generated selected body") {
+		t.Fatalf("generated narrative = %q / %q, want phase-runner result", title, body)
+	}
+	if got, want := strings.Join(commitPaths, ","), "/tmp/wt-r1"; got != want {
+		t.Fatalf("CommitBodies paths = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(diffPaths, ","), "/tmp/wt-r1"; got != want {
+		t.Fatalf("DiffStat paths = %q, want %q", got, want)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DraftPublish — draft flag threaded from feature checkpoints to CreatePR
 // ---------------------------------------------------------------------------

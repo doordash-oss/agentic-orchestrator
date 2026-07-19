@@ -145,8 +145,8 @@ func (m *MockPublisher) DiffStat(worktreePath, baseBranch string) (string, error
 // MockDiffOperator implements ports.DiffOperator with configurable function
 // overrides and call tracking.
 type MockDiffOperator struct {
-	WorkingTreeDiffPreviewsFn func(worktreePath string) ([]git.DiffPreview, error)
-	SingleFileDiffPreviewFn   func(worktreePath, relPath string) (*git.DiffPreview, error)
+	BranchDiffPreviewsFn    func(worktreePath, baseBranch string) ([]git.DiffPreview, error)
+	SingleFileDiffPreviewFn func(worktreePath, baseBranch, relPath string) (*git.DiffPreview, error)
 
 	DefaultError error
 	Calls        []MockCall
@@ -155,18 +155,18 @@ type MockDiffOperator struct {
 // NewMockDiffOperator returns a MockDiffOperator with zero-value defaults.
 func NewMockDiffOperator() *MockDiffOperator { return &MockDiffOperator{} }
 
-func (m *MockDiffOperator) WorkingTreeDiffPreviews(worktreePath string) ([]git.DiffPreview, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "WorkingTreeDiffPreviews", Args: []any{worktreePath}})
-	if m.WorkingTreeDiffPreviewsFn != nil {
-		return m.WorkingTreeDiffPreviewsFn(worktreePath)
+func (m *MockDiffOperator) BranchDiffPreviews(worktreePath, baseBranch string) ([]git.DiffPreview, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "BranchDiffPreviews", Args: []any{worktreePath, baseBranch}})
+	if m.BranchDiffPreviewsFn != nil {
+		return m.BranchDiffPreviewsFn(worktreePath, baseBranch)
 	}
 	return nil, m.DefaultError
 }
 
-func (m *MockDiffOperator) SingleFileDiffPreview(worktreePath, relPath string) (*git.DiffPreview, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "SingleFileDiffPreview", Args: []any{worktreePath, relPath}})
+func (m *MockDiffOperator) SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*git.DiffPreview, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "SingleFileDiffPreview", Args: []any{worktreePath, baseBranch, relPath}})
 	if m.SingleFileDiffPreviewFn != nil {
-		return m.SingleFileDiffPreviewFn(worktreePath, relPath)
+		return m.SingleFileDiffPreviewFn(worktreePath, baseBranch, relPath)
 	}
 	return nil, m.DefaultError
 }

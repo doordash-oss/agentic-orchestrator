@@ -99,6 +99,14 @@ import {
   type RecoveryLogReadRequest,
   type RecoveryLogReadResult,
   type BulkPreview,
+  type CompletionPreflightRequest,
+  type CompletionPreflightResult,
+  type PublishDescriptionRequest,
+  type PublishDescriptionResult,
+  type RepositoryDiffRequest,
+  type RepositoryDiffResult,
+  type OpenExternalRequest,
+  type RevealPathRequest,
   ipcContracts,
 } from '../shared/ipc';
 import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './security';
@@ -172,6 +180,11 @@ export interface IpcServices {
   executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;
   readRecoveryLog(request: RecoveryLogReadRequest): Promise<RecoveryLogReadResult>;
   bulkPreview(): Promise<BulkPreview>;
+  preflightCompletion(request: CompletionPreflightRequest): Promise<CompletionPreflightResult>;
+  getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
+  generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
+  openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
+  revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
 }
 
 export interface IpcMainLike {
@@ -335,6 +348,15 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.recoveryLogRead]: (_event, request: RecoveryLogReadRequest) =>
       services.readRecoveryLog(request),
     [IPC_CHANNELS.bulkPreview]: () => services.bulkPreview(),
+    [IPC_CHANNELS.completionPreflight]: (_event, request: CompletionPreflightRequest) =>
+      services.preflightCompletion(request),
+    [IPC_CHANNELS.repositoryDiff]: (_event, request: RepositoryDiffRequest) =>
+      services.getRepositoryDiff(request),
+    [IPC_CHANNELS.publishDescription]: (_event, request: PublishDescriptionRequest) =>
+      services.generatePublishDescription(request),
+    [IPC_CHANNELS.openExternal]: (_event, request: OpenExternalRequest) =>
+      services.openExternal(request),
+    [IPC_CHANNELS.revealPath]: (_event, request: RevealPathRequest) => services.revealPath(request),
   };
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));

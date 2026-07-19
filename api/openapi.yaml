@@ -275,6 +275,62 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/features/{feature_id}/completion/preflight:
+    get:
+      operationId: getCompletionPreflight
+      summary: Read-only, server-authored completion preflight — the exact eligible repository set, already-published or completed outcomes, blockers, PR URLs, and a source revision mutations can reject as stale before side effects. No staging, commits, or arbitrary Git operations.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/CompletionPreflightResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/repositories/{repo_name}/diff:
+    get:
+      operationId: getRepositoryDiff
+      summary: Bounded, lazy, read-only diff inspection for one repository — lists changed files with stable identities, safe display paths, status (addition, modification, deletion, rename, binary, truncation, unavailable), and optional bounded diff content. Rejects traversal and symlink escape; imposes per-request and aggregate limits.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - name: repo_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: file_path
+          in: query
+          schema:
+            type: string
+          description: Optional single-file path to fetch bounded diff content for. Without this parameter, the response lists all changed files with summaries only.
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositoryDiffResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/repositories/{repo_name}/path:
+    get:
+      operationId: getRepositoryPath
+      summary: Resolve a server-approved repository worktree path for native reveal operations.
+      description: >-
+        Intended for trusted local desktop main-process use. The renderer calls
+        only the narrow reveal IPC with feature and repository identifiers; raw
+        host paths remain confined to the authenticated server and Electron main
+        process.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - name: repo_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/RepositoryPathResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/features/{feature_id}/actions/{action}:
     post:
       operationId: runFeatureAction
@@ -948,7 +1004,7 @@ components:
       required: true
       schema:
         type: string
-        pattern: '^[a-z0-9._-]{1,256}$'
+        pattern: "^[a-z0-9._-]{1,256}$"
       description: Opaque resource identity from the catalogue.
     RecoverySnapshotID:
       name: snapshot_id
@@ -1157,6 +1213,39 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RefactorPreflightResponse"
+    CompletionPreflightResponse:
+      description: Read-only, server-authored completion preflight — eligible repository set, outcomes, blockers, PR URLs, source revision.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CompletionPreflightResponse"
+    RepositoryDiffResponse:
+      description: Bounded, lazy, read-only diff inspection for one repository.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryDiffResponse"
+    RepositoryPathResponse:
+      description: Server-approved repository worktree path for desktop main-process reveal.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RepositoryPathDTO"
     ReadinessResponse:
       description: Consolidated runtime readiness snapshot.
       headers:
@@ -1202,8 +1291,8 @@ components:
       description: Session output SSE stream carrying `SessionOutputChunk` JSON payloads.
       content:
         text/event-stream:
-            schema:
-              $ref: "#/components/schemas/SessionOutputChunk"
+          schema:
+            $ref: "#/components/schemas/SessionOutputChunk"
     ResourceCatalogResponse:
       description: Editable resource catalogue.
       headers:
@@ -1386,7 +1475,15 @@ components:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
           required:
-            [status, runtime, launch_policy, started_at, owner, server_time, compatibility]
+            [
+              status,
+              runtime,
+              launch_policy,
+              started_at,
+              owner,
+              server_time,
+              compatibility,
+            ]
           properties:
             status:
               type: string
@@ -1429,7 +1526,13 @@ components:
         min_client_schema. A shared API major version alone is never
         sufficient. Contains no secrets.
       required:
-        [api_version, schema_version, min_client_schema, runtime_policy, server_build]
+        [
+          api_version,
+          schema_version,
+          min_client_schema,
+          runtime_policy,
+          server_build,
+        ]
       properties:
         api_version:
           type: string
@@ -1709,7 +1812,13 @@ components:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [provider_order, provider_models, phase_defaults, phase_provider_models]
+          required:
+            [
+              provider_order,
+              provider_models,
+              phase_defaults,
+              phase_provider_models,
+            ]
           properties:
             provider_order:
               type: array
@@ -1866,7 +1975,8 @@ components:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
-          required: [feature_id, review_id, applicable, valid, revision, findings]
+          required:
+            [feature_id, review_id, applicable, valid, revision, findings]
           properties:
             feature_id:
               type: string
@@ -2208,7 +2318,14 @@ components:
         - $ref: "#/components/schemas/RewindPreview"
     RewindPreview:
       type: object
-      required: [eligible, source_run_number, source_revision, target_phase, effective_phase]
+      required:
+        [
+          eligible,
+          source_run_number,
+          source_revision,
+          target_phase,
+          effective_phase,
+        ]
       properties:
         eligible:
           type: boolean
@@ -2462,6 +2579,131 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
+    CompletionPreflightResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, source_revision, repos]
+          properties:
+            feature_id:
+              type: string
+            source_revision:
+              type: string
+              description: Authoritative revision of the repository state this preflight observed. Publish/merge/mark-done mutations reject a stale preflight before any side effect.
+            can_mark_done:
+              type: boolean
+              description: Whether the server action catalogue currently allows mark-done.
+            mark_done_blocker:
+              type: string
+              description: Safe, server-authored reason mark-done is unavailable, when non-empty.
+            repos:
+              type: array
+              items:
+                $ref: "#/components/schemas/CompletionPreflightRepo"
+    CompletionPreflightRepo:
+      type: object
+      required: [repo, publishable, touched, status]
+      properties:
+        repo:
+          type: string
+        publishable:
+          type: boolean
+        touched:
+          type: boolean
+        status:
+          type: string
+          description: Server-authored completion status — eligible, already_published, completed, ineligible, untouched, or blocked.
+        pr_url:
+          type: string
+          description: Current PR URL when the repository has been published.
+        blocker:
+          type: string
+          description: Safe, server-authored reason this repository cannot proceed, when non-empty.
+        freshness:
+          type: string
+          description: Server-authored freshness state.
+        last_error:
+          type: string
+          description: Safe, bounded last error text.
+        base_branch:
+          type: string
+          maxLength: 128
+          description: Server-authored base branch for this repository.
+        branch:
+          type: string
+          maxLength: 128
+          description: Server-authored feature branch for this repository.
+    RepositoryDiffResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, repo, files]
+          properties:
+            feature_id:
+              type: string
+            repo:
+              type: string
+            source_revision:
+              type: string
+              description: Authoritative revision of the repository state this diff observed.
+            truncated:
+              type: boolean
+              description: Whether the file list was truncated to an aggregate limit.
+            files:
+              type: array
+              items:
+                $ref: "#/components/schemas/RepositoryDiffFile"
+            file_diff:
+              type: string
+              description: Bounded diff content for a single-file request, when available.
+            file_truncated:
+              type: boolean
+              description: Whether the single-file diff content was truncated to a per-request limit.
+            file_binary:
+              type: boolean
+              description: Whether the single-file content is binary and cannot be displayed.
+            file_unavailable:
+              type: boolean
+              description: Whether the single-file diff content is unavailable.
+            partial_failure:
+              type: string
+              description: Safe, server-authored reason one repository could not be fully inspected, when non-empty.
+    RepositoryPathDTO:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, repo, path]
+          properties:
+            feature_id:
+              type: string
+            repo:
+              type: string
+            path:
+              type: string
+              description: Canonical server-approved absolute worktree path for the desktop main process.
+    RepositoryDiffFile:
+      type: object
+      required: [path, operation]
+      properties:
+        path:
+          type: string
+          description: Safe display path relative to the worktree root.
+        old_path:
+          type: string
+          description: Previous path for a rename, when applicable.
+        operation:
+          type: string
+          description: Change kind — add, modify, delete, or rename.
+        added_lines:
+          type: integer
+        removed_lines:
+          type: integer
+        binary:
+          type: boolean
+          description: Whether the file is binary and diff content is unavailable.
+        fingerprint:
+          type: string
+          description: Stable per-file identity for navigation and caching.
     CleanupFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2726,7 +2968,8 @@ components:
           type: integer
     RecoveryItem:
       type: object
-      required: [key, feature_id, process_alive, default_action, allowed_actions]
+      required:
+        [key, feature_id, process_alive, default_action, allowed_actions]
       properties:
         key:
           type: string

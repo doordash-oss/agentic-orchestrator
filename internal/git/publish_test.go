@@ -103,7 +103,7 @@ func TestDiffSummary_NoChanges(t *testing.T) {
 	}
 }
 
-func TestWorkingTreeDiffPreviews_UpdateAndAdd(t *testing.T) {
+func TestBranchDiffPreviews_UpdateAndAdd(t *testing.T) {
 	t.Parallel()
 
 	repo := testutil.InitGitRepo(t)
@@ -116,9 +116,9 @@ func TestWorkingTreeDiffPreviews_UpdateAndAdd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	previews, err := WorkingTreeDiffPreviews(repo)
+	previews, err := BranchDiffPreviews(repo, "main")
 	if err != nil {
-		t.Fatalf("WorkingTreeDiffPreviews: %v", err)
+		t.Fatalf("BranchDiffPreviews: %v", err)
 	}
 	if len(previews) != 2 {
 		t.Fatalf("len(previews) = %d, want 2", len(previews))
@@ -129,24 +129,49 @@ func TestWorkingTreeDiffPreviews_UpdateAndAdd(t *testing.T) {
 	if previews[1].Path != "new.txt" || previews[1].Operation != "add" {
 		t.Errorf("preview[1] = %+v, want new.txt add", previews[1])
 	}
-	if previews[1].AddedLines == 0 {
-		t.Errorf("new.txt AddedLines = %d, want > 0", previews[1].AddedLines)
+	if previews[1].AddedLines != 2 {
+		t.Errorf("new.txt AddedLines = %d, want 2", previews[1].AddedLines)
 	}
 	if !strings.Contains(previews[1].Patch, "+hello") {
 		t.Errorf("new.txt patch = %q, want added content", previews[1].Patch)
 	}
 }
 
-func TestWorkingTreeDiffPreviews_DeleteAndRename(t *testing.T) {
+func TestBranchDiffPreviews_CommittedFeatureChange(t *testing.T) {
+	t.Parallel()
+
+	repo := testutil.InitGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/test")
+	testutil.CommitFile(t, repo, "README.md", "# Feature change\n", "feature change on feature branch")
+
+	previews, err := BranchDiffPreviews(repo, "main")
+	if err != nil {
+		t.Fatalf("BranchDiffPreviews: %v", err)
+	}
+	if len(previews) != 1 {
+		t.Fatalf("len(previews) = %d, want 1 (committed feature change vs main)", len(previews))
+	}
+	if previews[0].Path != "README.md" {
+		t.Fatalf("preview[0].Path = %q, want README.md", previews[0].Path)
+	}
+	if previews[0].Operation != "update" {
+		t.Errorf("preview[0].Operation = %q, want update (modified vs main)", previews[0].Operation)
+	}
+	if previews[0].AddedLines == 0 {
+		t.Errorf("README.md AddedLines = %d, want > 0", previews[0].AddedLines)
+	}
+}
+
+func TestBranchDiffPreviews_DeleteAndRename(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping rename/delete diff preview extended regression in short mode")
 	}
 	t.Parallel()
 
 	repo := testutil.InitGitRepo(t)
+	testutil.CommitFile(t, repo, "delete.txt", "gone\n", "add delete target on main")
+	testutil.CommitFile(t, repo, "rename.txt", "same\n", "add rename target on main")
 	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "delete.txt", "gone\n", "add delete target")
-	testutil.CommitFile(t, repo, "rename.txt", "same\n", "add rename target")
 
 	if err := os.Remove(filepath.Join(repo, "delete.txt")); err != nil {
 		t.Fatal(err)
@@ -155,10 +180,11 @@ func TestWorkingTreeDiffPreviews_DeleteAndRename(t *testing.T) {
 	if out, err := mv.CombinedOutput(); err != nil {
 		t.Fatalf("git mv: %s: %v", string(out), err)
 	}
+	runGit(t, repo, "add", "delete.txt", "renamed.txt")
 
-	previews, err := WorkingTreeDiffPreviews(repo)
+	previews, err := BranchDiffPreviews(repo, "main")
 	if err != nil {
-		t.Fatalf("WorkingTreeDiffPreviews: %v", err)
+		t.Fatalf("BranchDiffPreviews: %v", err)
 	}
 
 	var sawDelete, sawRename bool
@@ -228,7 +254,7 @@ func TestSingleFileDiffPreviewVariants(t *testing.T) {
 			repo := testutil.InitGitRepo(t)
 			tt.setup(t, repo)
 
-			preview, err := SingleFileDiffPreview(repo, tt.path)
+			preview, err := SingleFileDiffPreview(repo, "main", tt.path)
 			if err != nil {
 				t.Fatalf("SingleFileDiffPreview(%q) error = %v", tt.path, err)
 			}

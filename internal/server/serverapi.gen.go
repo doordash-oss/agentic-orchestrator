@@ -1024,6 +1024,50 @@ type CompatibilityDeclaration struct {
 	ServerBuild BuildIdentity `json:"server_build"`
 }
 
+// CompletionPreflightRepo defines model for CompletionPreflightRepo.
+type CompletionPreflightRepo struct {
+	// BaseBranch Server-authored base branch for this repository.
+	BaseBranch string `json:"base_branch,omitempty"`
+
+	// Blocker Safe, server-authored reason this repository cannot proceed, when non-empty.
+	Blocker string `json:"blocker,omitempty"`
+
+	// Branch Server-authored feature branch for this repository.
+	Branch string `json:"branch,omitempty"`
+
+	// Freshness Server-authored freshness state.
+	Freshness string `json:"freshness,omitempty"`
+
+	// LastError Safe, bounded last error text.
+	LastError string `json:"last_error,omitempty"`
+
+	// PrURL Current PR URL when the repository has been published.
+	PrURL       string `json:"pr_url,omitempty"`
+	Publishable bool   `json:"publishable"`
+	Repo        string `json:"repo"`
+
+	// Status Server-authored completion status — eligible, already_published, completed, ineligible, untouched, or blocked.
+	Status  string `json:"status"`
+	Touched bool   `json:"touched"`
+}
+
+// CompletionPreflightResponse defines model for CompletionPreflightResponse.
+type CompletionPreflightResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// CanMarkDone Whether the server action catalogue currently allows mark-done.
+	CanMarkDone bool   `json:"can_mark_done,omitempty"`
+	FeatureID   string `json:"feature_id"`
+
+	// MarkDoneBlocker Safe, server-authored reason mark-done is unavailable, when non-empty.
+	MarkDoneBlocker string                    `json:"mark_done_blocker,omitempty"`
+	Meta            ResponseMeta              `json:"meta,omitempty"`
+	Repos           []CompletionPreflightRepo `json:"repos"`
+
+	// SourceRevision Authoritative revision of the repository state this preflight observed. Publish/merge/mark-done mutations reject a stale preflight before any side effect.
+	SourceRevision string `json:"source_revision"`
+}
+
 // ConfigRepo defines model for ConfigRepo.
 type ConfigRepo struct {
 	Name          string                        `json:"name"`
@@ -1706,6 +1750,57 @@ type RepoStatus struct {
 	Touched       bool     `json:"touched"`
 }
 
+// RepositoryDiffFile defines model for RepositoryDiffFile.
+type RepositoryDiffFile struct {
+	AddedLines int `json:"added_lines,omitempty"`
+
+	// Binary Whether the file is binary and diff content is unavailable.
+	Binary bool `json:"binary,omitempty"`
+
+	// Fingerprint Stable per-file identity for navigation and caching.
+	Fingerprint string `json:"fingerprint,omitempty"`
+
+	// OldPath Previous path for a rename, when applicable.
+	OldPath string `json:"old_path,omitempty"`
+
+	// Operation Change kind — add, modify, delete, or rename.
+	Operation string `json:"operation"`
+
+	// Path Safe display path relative to the worktree root.
+	Path         string `json:"path"`
+	RemovedLines int    `json:"removed_lines,omitempty"`
+}
+
+// RepositoryDiffResponse defines model for RepositoryDiffResponse.
+type RepositoryDiffResponse struct {
+	APIVersion string `json:"api_version"`
+	FeatureID  string `json:"feature_id"`
+
+	// FileBinary Whether the single-file content is binary and cannot be displayed.
+	FileBinary bool `json:"file_binary,omitempty"`
+
+	// FileDiff Bounded diff content for a single-file request, when available.
+	FileDiff string `json:"file_diff,omitempty"`
+
+	// FileTruncated Whether the single-file diff content was truncated to a per-request limit.
+	FileTruncated bool `json:"file_truncated,omitempty"`
+
+	// FileUnavailable Whether the single-file diff content is unavailable.
+	FileUnavailable bool                 `json:"file_unavailable,omitempty"`
+	Files           []RepositoryDiffFile `json:"files"`
+	Meta            ResponseMeta         `json:"meta,omitempty"`
+
+	// PartialFailure Safe, server-authored reason one repository could not be fully inspected, when non-empty.
+	PartialFailure string `json:"partial_failure,omitempty"`
+	Repo           string `json:"repo"`
+
+	// SourceRevision Authoritative revision of the repository state this diff observed.
+	SourceRevision string `json:"source_revision,omitempty"`
+
+	// Truncated Whether the file list was truncated to an aggregate limit.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
 // RepositoryInitSchema defines model for RepositoryInitRequest.
 type RepositoryInitSchema struct {
 	// Consent Explicit user consent to create a git repository at the target path. Must be true.
@@ -1721,6 +1816,17 @@ type RepositoryInitResponse struct {
 	Meta       ResponseMeta        `json:"meta,omitempty"`
 	Repository WorkspaceRepository `json:"repository"`
 	Result     string              `json:"result"`
+}
+
+// RepositoryPathDTO defines model for RepositoryPathDTO.
+type RepositoryPathDTO struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+
+	// Path Canonical server-approved absolute worktree path for the desktop main process.
+	Path string `json:"path"`
+	Repo string `json:"repo"`
 }
 
 // RepositoryReadiness defines model for RepositoryReadiness.
@@ -2458,6 +2564,9 @@ type SessionID = string
 // TrustedMutationHeader defines model for TrustedMutationHeader.
 type TrustedMutationHeader string
 
+// RepositoryPathResponse defines model for RepositoryPathResponse.
+type RepositoryPathResponse = RepositoryPathDTO
+
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = ErrorResponse
 
@@ -2557,6 +2666,12 @@ type UpdateFeatureConfigParams struct {
 
 // UpdateFeatureConfigParamsXAgenticoClient defines parameters for UpdateFeatureConfig.
 type UpdateFeatureConfigParamsXAgenticoClient string
+
+// GetRepositoryDiffParams defines parameters for GetRepositoryDiff.
+type GetRepositoryDiffParams struct {
+	// FilePath Optional single-file path to fetch bounded diff content for. Without this parameter, the response lists all changed files with summaries only.
+	FilePath string `form:"file_path,omitempty" json:"file_path,omitempty"`
+}
 
 // CreateReviewSessionJSONBody defines parameters for CreateReviewSession.
 type CreateReviewSessionJSONBody map[string]interface{}

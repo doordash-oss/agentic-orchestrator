@@ -280,7 +280,33 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 			}
 			h.handleRefactorPreflight(w, r, featureID)
 			return
+		case "completion":
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", "GET")
+				writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+				return
+			}
+			h.handleCompletionPreflight(w, r, featureID)
+			return
 		}
+	}
+	if len(parts) == 4 && parts[1] == "repositories" && parts[3] == "diff" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+			return
+		}
+		h.handleRepositoryDiff(w, r, featureID, parts[2])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "repositories" && parts[3] == "path" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+			return
+		}
+		h.handleRepositoryPath(w, r, featureID, parts[2])
+		return
 	}
 	if h.handleFeatureMutationRoute(w, r, featureID, parts[1:]) {
 		return

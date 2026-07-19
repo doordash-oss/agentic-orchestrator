@@ -1493,6 +1493,9 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 	if t.orch == nil {
 		return serverruntime.PublishFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
 	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
 		Repos: req.Repos,
 		Title: req.Title,
@@ -1507,15 +1510,11 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 }
 
 func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
-	if t.phaseRunner == nil {
-		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("phase runner is not available")
+	if t.orch == nil {
+		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
-	title, body, err := t.phaseRunner.RunDescriptionGeneration(context.Background(), featureID, req.Model, agent.PRContext{
-		FeatureName:        req.FeatureName,
-		FeatureDescription: req.FeatureDescription,
-		Roadmap:            req.Roadmap,
-		CommitBodies:       req.CommitBodies,
-		DiffStat:           req.DiffStat,
+	title, body, err := t.orch.GeneratePublishDescription(featureID, orchestrator.PublishDescriptionOptions{
+		Repos: req.Repos,
 	})
 	if err != nil {
 		return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, err
@@ -1523,14 +1522,30 @@ func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req 
 	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, nil
 }
 
-func (t *serverMutationTarget) MergeFeature(featureID string) (serverruntime.MergeFeatureResponse, error) {
+func (t *serverMutationTarget) MergeFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MergeFeatureResponse, error) {
 	if t.orch == nil {
 		return serverruntime.MergeFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	if err := t.orch.MergeFeatureLocal(featureID); err != nil {
 		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: "merged"}, nil
+}
+
+func (t *serverMutationTarget) RepositoryPath(featureID, repoName string) (serverruntime.RepositoryPathResponse, error) {
+	resp := serverruntime.RepositoryPathResponse{FeatureID: featureID, Repo: repoName}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	path, err := t.orch.RepositoryWorktreePath(featureID, repoName)
+	if err != nil {
+		return resp, err
+	}
+	resp.Path = path
+	return resp, nil
 }
 
 func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime.RewindFeatureRequest) (serverruntime.RewindFeatureResponse, error) {
@@ -1758,6 +1773,72 @@ func (t *serverMutationTarget) PreflightRefactor(featureID string, req serverrun
 	}, nil
 }
 
+func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverruntime.CompletionPreflightResponse, error) {
+	if t.orch == nil {
+		return serverruntime.CompletionPreflightResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	result, err := t.orch.CompletionPreflight(featureID)
+	if err != nil {
+		return serverruntime.CompletionPreflightResponse{FeatureID: featureID}, err
+	}
+	resp := serverruntime.CompletionPreflightResponse{
+		APIVersion:      serverruntime.APIVersion,
+		FeatureID:       result.FeatureID,
+		SourceRevision:  result.SourceRevision,
+		CanMarkDone:     result.CanMarkDone,
+		MarkDoneBlocker: result.MarkDoneBlocker,
+	}
+	for _, r := range result.Repos {
+		resp.Repos = append(resp.Repos, serverruntime.CompletionPreflightRepo{
+			Repo:        r.Repo,
+			Publishable: r.Publishable,
+			Touched:     r.Touched,
+			Status:      r.Status,
+			PrURL:       r.PRURL,
+			Blocker:     r.Blocker,
+			Freshness:   r.Freshness,
+			LastError:   r.LastError,
+			BaseBranch:  r.BaseBranch,
+			Branch:      r.Branch,
+		})
+	}
+	return resp, nil
+}
+
+func (t *serverMutationTarget) RepositoryDiff(featureID, repoName, filePath string) (serverruntime.RepositoryDiffResponse, error) {
+	if t.orch == nil {
+		return serverruntime.RepositoryDiffResponse{FeatureID: featureID, Repo: repoName}, errors.New("orchestrator is not available")
+	}
+	result, err := t.orch.RepositoryDiff(featureID, repoName, filePath)
+	if err != nil {
+		return serverruntime.RepositoryDiffResponse{FeatureID: featureID, Repo: repoName}, err
+	}
+	resp := serverruntime.RepositoryDiffResponse{
+		APIVersion:      serverruntime.APIVersion,
+		FeatureID:       result.FeatureID,
+		Repo:            result.Repo,
+		SourceRevision:  result.SourceRevision,
+		Truncated:       result.Truncated,
+		FileDiff:        result.FileDiff,
+		FileTruncated:   result.FileTruncated,
+		FileBinary:      result.FileBinary,
+		FileUnavailable: result.FileUnavailable,
+		PartialFailure:  result.PartialFailure,
+	}
+	for _, f := range result.Files {
+		resp.Files = append(resp.Files, serverruntime.RepositoryDiffFile{
+			Path:         f.Path,
+			OldPath:      f.OldPath,
+			Operation:    f.Operation,
+			AddedLines:   f.AddedLines,
+			RemovedLines: f.RemovedLines,
+			Binary:       f.Binary,
+			Fingerprint:  f.Fingerprint,
+		})
+	}
+	return resp, nil
+}
+
 func (t *serverMutationTarget) FetchReviewComments(featureID string, req serverruntime.ReviewCommentsFetchRequest) (serverruntime.ReviewCommentsFetchResponse, error) {
 	comments, err := t.fetchUnaddressedReviewComments(featureID, req.Repo)
 	if err != nil {
@@ -1876,9 +1957,12 @@ func (t *serverMutationTarget) RestartRefactor(featureID string, req serverrunti
 	}, err
 }
 
-func (t *serverMutationTarget) MarkDone(featureID string) (serverruntime.MarkDoneResponse, error) {
+func (t *serverMutationTarget) MarkDone(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MarkDoneResponse, error) {
 	if t.orch == nil {
 		return serverruntime.MarkDoneResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	if err := t.orch.MarkDone(featureID); err != nil {
 		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
@@ -1894,6 +1978,10 @@ func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntim
 	resp := serverruntime.CleanupFeatureResponse{FeatureID: featureID, Target: target}
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		resp.Result = resultFailed
+		return resp, err
 	}
 	switch target {
 	case cleanupTargetWorktrees:
@@ -1917,14 +2005,38 @@ func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntim
 	return resp, nil
 }
 
-func (t *serverMutationTarget) DeleteFeature(featureID string) (serverruntime.DeleteFeatureResponse, error) {
+func (t *serverMutationTarget) DeleteFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.DeleteFeatureResponse, error) {
 	if t.orch == nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	if err := t.orch.Delete(featureID); err != nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
+}
+
+func (t *serverMutationTarget) rejectStaleCompletionPreflight(featureID, sourceRevision string) error {
+	if sourceRevision == "" {
+		return nil
+	}
+	if t.orch == nil {
+		return errors.New("orchestrator is not available")
+	}
+	current, err := t.orch.CompletionPreflightSourceRevision(featureID)
+	if err != nil {
+		return err
+	}
+	if current == sourceRevision {
+		return nil
+	}
+	return &serverruntime.ActionConflictError{
+		Err:     orchestrator.ErrStalePreflight,
+		Message: "stale completion preflight",
+		Target:  map[string]any{"reason": "stale_preflight"},
+	}
 }
 
 func actionConflictError(err error) error {

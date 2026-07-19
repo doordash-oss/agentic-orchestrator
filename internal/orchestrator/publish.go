@@ -188,6 +188,62 @@ func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRC
 	return title, body
 }
 
+type PublishDescriptionOptions struct {
+	Repos []string
+}
+
+// GeneratePublishDescription derives a shared editable PR title/body from
+// server-owned feature metadata plus bounded git summaries for the selected
+// publish set. The renderer may name repository identities; it never supplies
+// roadmap text, commit logs, diff stats, or fallback content.
+func (o *Orchestrator) GeneratePublishDescription(featureID string, opts PublishDescriptionOptions) (string, string, error) {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return "", "", fmt.Errorf("load feature: %w", err)
+	}
+	requestedRepos, err := publishRepoSelection(f, opts.Repos)
+	if err != nil {
+		return "", "", err
+	}
+	hasSelection := len(requestedRepos) > 0
+	prCtx := agent.PRContext{
+		FeatureName:        f.Name,
+		FeatureDescription: f.Description,
+		Roadmap:            o.readPhaseArtifact(f, "plan"),
+	}
+	var commitSections []string
+	var diffSections []string
+	selectedCount := 0
+	for _, repo := range f.Repos {
+		if hasSelection {
+			if !requestedRepos[repo.Name] {
+				continue
+			}
+		} else {
+			state := f.RepoStates[repo.Name]
+			publishable := repoPublishable(repo)
+			if !publishable || state == nil || !state.Touched || state.PRURL != "" {
+				continue
+			}
+		}
+		selectedCount++
+		repoCtx := o.buildPRContext(f, repoWorkDir(repo), repo.BaseBranch)
+		if strings.TrimSpace(repoCtx.CommitBodies) != "" {
+			commitSections = append(commitSections, "## "+repo.Name+"\n"+strings.TrimSpace(repoCtx.CommitBodies))
+		}
+		if strings.TrimSpace(repoCtx.DiffStat) != "" {
+			diffSections = append(diffSections, "## "+repo.Name+"\n"+strings.TrimSpace(repoCtx.DiffStat))
+		}
+	}
+	if selectedCount == 0 {
+		return "", "", errors.New("publish description: no eligible repositories")
+	}
+	prCtx.CommitBodies = strings.Join(commitSections, "\n\n")
+	prCtx.DiffStat = strings.Join(diffSections, "\n\n")
+	title, body := o.generatePRDescription(f, prCtx)
+	return title, body, nil
+}
+
 // buildPRContext assembles the lean PRContext from the feature metadata and
 // git introspection (commit bodies + diff stat). Individual fetch failures
 // degrade gracefully — empty fields are acceptable inputs to the prompt and

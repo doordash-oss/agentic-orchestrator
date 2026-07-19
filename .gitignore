@@ -47,6 +47,7 @@ desktop/out/
 desktop/test-results/
 desktop/dist/
 desktop/coverage/
+playwright-report/
 # Packaging staging area (server binary + build-identity.json), regenerated
 # by desktop/scripts/prepare-server.mjs on every package build.
 desktop/resources/

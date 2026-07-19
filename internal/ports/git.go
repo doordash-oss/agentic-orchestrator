@@ -29,10 +29,10 @@ type Publisher interface {
 	DiffStat(worktreePath, baseBranch string) (string, error)
 }
 
-// DiffOperator abstracts working-tree diff inspection.
+// DiffOperator abstracts branch-vs-base diff inspection.
 type DiffOperator interface {
-	WorkingTreeDiffPreviews(worktreePath string) ([]DiffPreview, error)
-	SingleFileDiffPreview(worktreePath, relPath string) (*DiffPreview, error)
+	BranchDiffPreviews(worktreePath, baseBranch string) ([]DiffPreview, error)
+	SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*DiffPreview, error)
 }
 
 // RebaseOperator abstracts git rebase and sync operations.

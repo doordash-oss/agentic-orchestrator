@@ -79,6 +79,14 @@ export async function launchApp(
     // app; xvfb provides the display, this provides a runnable renderer.
     args.push('--no-sandbox');
   }
+  if (process.env['AGENTICO_E2E_NO_SANDBOX'] === '1') {
+    // Harness sandboxed runs (macOS sandbox-exec, restricted CI containers)
+    // can fail at electron.launch with "sandbox initialization failed:
+    // Operation not permitted" before any test logic runs. An explicit env
+    // flag lets the harness environment opt out of the chromium sandbox
+    // without relying on platform detection.
+    args.push('--no-sandbox');
+  }
   const app = await electron.launch({
     executablePath,
     args,

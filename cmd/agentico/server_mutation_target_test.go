@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1479,6 +1480,89 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 	})
 }
 
+func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*serverMutationTarget, string, string) (string, error)
+	}{
+		{
+			name: "publish",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.PublishFeature(featureID, serverruntime.PublishFeatureRequest{
+					SourceRevision: staleRevision,
+					Repos:          []string{testRepoAName},
+					Title:          "Publish completion",
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "merge",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.MergeFeature(featureID, serverruntime.GuardedFeatureActionRequest{SourceRevision: staleRevision})
+				return result.Result, err
+			},
+		},
+		{
+			name: "mark done",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.MarkDone(featureID, serverruntime.GuardedFeatureActionRequest{SourceRevision: staleRevision})
+				return result.Result, err
+			},
+		},
+		{
+			name: "cleanup",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.CleanupFeature(featureID, serverruntime.CleanupActionRequest{
+					SourceRevision: staleRevision,
+					Target:         cleanupTargetWorktrees,
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "delete",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.DeleteFeature(featureID, serverruntime.GuardedFeatureActionRequest{SourceRevision: staleRevision})
+				return result.Result, err
+			},
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			target, _, store, f := newPublishActionTarget(t)
+			revision, err := target.orch.CompletionPreflightSourceRevision(f.ID)
+			if err != nil {
+				t.Fatalf("CompletionPreflightSourceRevision: %v", err)
+			}
+			if revision == "" {
+				t.Fatal("source revision is empty")
+			}
+			if err := os.WriteFile(filepath.Join(f.Repos[0].Path, "drift.txt"), []byte("changed\n"), 0o644); err != nil {
+				t.Fatalf("write drift file: %v", err)
+			}
+
+			result, err := tc.run(&target, f.ID, revision)
+			if err == nil {
+				t.Fatal("completion action error = nil; want stale preflight conflict")
+			}
+			var conflict *serverruntime.ActionConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("completion action error = %T %v; want ActionConflictError", err, err)
+			}
+			if result != resultFailed {
+				t.Fatalf("result = %q; want %q", result, resultFailed)
+			}
+			if conflict.Target["reason"] != "stale_preflight" {
+				t.Fatalf("conflict target = %+v; want stale_preflight reason", conflict.Target)
+			}
+			if _, err := store.Load(f.ID); err != nil {
+				t.Fatalf("feature was mutated or deleted despite stale preflight: %v", err)
+			}
+		})
+	}
+}
+
 func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testing.T) {
 	store, manager, f := newMutationTestFeature(t, "rewind via REST", feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
@@ -1943,7 +2027,7 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 	t.Run("delete", func(t *testing.T) {
 		target, store, f, worktrees := newCleanupActionTarget(t)
 
-		result, err := target.DeleteFeature(f.ID)
+		result, err := target.DeleteFeature(f.ID, serverruntime.GuardedFeatureActionRequest{})
 		if err != nil {
 			t.Fatalf("DeleteFeature() error = %v", err)
 		}
@@ -1997,7 +2081,9 @@ func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manage
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	repoPath := filepath.Join(runtimeDir, testRepoAName)
+	initMutationGitRepo(t, repoPath)
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	f, err := manager.Create("publish via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
@@ -2019,6 +2105,25 @@ func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manage
 	}
 	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
 	return serverMutationTarget{orch: orch, store: store}, manager, store, f
+}
+
+func initMutationGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir git repo: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init", "--initial-branch=main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s in %s: %s: %v", strings.Join(args, " "), dir, strings.TrimSpace(string(out)), err)
+		}
+	}
 }
 
 func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature) {

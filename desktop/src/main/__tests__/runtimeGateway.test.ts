@@ -778,6 +778,7 @@ describe('RuntimeGateway apiRequest', () => {
       '/api/v1/features/feature-1/runs/6/artifacts/history-6?offset=0&limit=262144',
       '/api/v1/features/feature-1/runs/6/logs/session-1?limit=4096',
       '/api/v1/features/feature-1/rewind/preview?target_phase=implement&roadmap_phase=2&upgrade_pipeline=large',
+      '/api/v1/features/feature-1/repositories/repo-a/diff?file_path=src%2FREADME.md',
     ]) {
       await expect(env.gateway.apiRequest(path)).resolves.toMatchObject({ status: 200 });
     }
@@ -846,6 +847,10 @@ describe('RuntimeGateway apiRequest', () => {
       '/api/v1/../secrets',
       '/api/v1/readiness?token=x',
       '//evil.example.com/api/v1/readiness',
+      '/api/v1/features/feature-1/repositories/repo-a/diff?file_path=../README.md',
+      '/api/v1/features/feature-1/repositories/repo-a/diff?file_path=/etc/passwd',
+      '/api/v1/features/feature-1/repositories/repo-a/diff?file_path=README.md&limit=1',
+      '/api/v1/features/feature-1/repositories/repo-a/diff?file_path=',
     ]) {
       await expect(env.gateway.apiRequest(path)).rejects.toMatchObject({
         safe: { code: 'E_BAD_API_PATH' },

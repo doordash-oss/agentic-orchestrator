@@ -4,8 +4,9 @@
  * renderer-facing views; nothing here caches server-domain data, reads
  * runtime files, or lets the renderer compose REST paths. Creating a feature
  * queues durable setup but does NOT dispatch it — callers must dispatch the
- * `setup` action afterwards. Start and stop remain separate, explicitly
- * allowlisted operations dispatched through `dispatchAction`.
+ * `setup` action afterwards. Runtime lifecycle and completion mutations remain
+ * separate, explicitly allowlisted operations dispatched through
+ * `dispatchAction`.
  */
 import { redactText } from '../shared/errors';
 import {
@@ -13,6 +14,7 @@ import {
   ServerFeatureOperationalActionResponseSchema,
   FeatureDetailResponseSchema,
   FeatureListResponseSchema,
+  PublishDescriptionResponseSchema,
   RuntimeConfigCreationSchema,
   RebaseStartResponseSchema,
   RebasePreflightResponseSchema,
@@ -42,6 +44,7 @@ import {
   type FeatureSnapshot,
   type FeatureActionRequest,
   type FeatureActionResult,
+  type PublishDescriptionResult,
   type FeatureSummaryView,
   type ReadinessSnapshot,
   type RebaseRequest,
@@ -162,6 +165,23 @@ export class FeatureService {
     return { result: response.result };
   }
 
+  async generatePublishDescription(
+    featureId: string,
+    repos: string[] = [],
+  ): Promise<PublishDescriptionResult> {
+    const id = validateWithSchema(featureId, FeatureIdSchema);
+    const body = await this.api(`/api/v1/features/${id}/actions/publish/description`, {
+      method: 'POST',
+      body: repos.length === 0 ? {} : { repos },
+    });
+    const response = validateWithSchema(body, PublishDescriptionResponseSchema);
+    return {
+      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      title: redactText(response.title).slice(0, 200),
+      body: redactText(response.body).slice(0, 4000),
+    };
+  }
+
   async listFeatures(): Promise<FeatureSummaryView[]> {
     const body = await this.api('/api/v1/features');
     const response = validateWithSchema(body, FeatureListResponseSchema);
@@ -184,10 +204,10 @@ export class FeatureService {
     }));
   }
 
-  /** Dispatches only allowlisted start/stop actions, single-flight per feature/action. */
+  /** Dispatches only allowlisted server-catalogue actions, single-flight per input. */
   async dispatchAction(request: FeatureActionRequest): Promise<FeatureActionResult> {
     const input = validateWithSchema(request, FeatureActionRequestSchema);
-    const key = `${input.featureId}:${input.action}`;
+    const key = `${input.featureId}:${input.action}:${JSON.stringify('body' in input ? input.body : {})}`;
     const existing = this.actionFlights.get(key);
     if (existing !== undefined) return existing;
     const flight = this.runOperationalAction(input).finally(() => {
@@ -372,7 +392,7 @@ export class FeatureService {
     try {
       const body = await this.api(`/api/v1/features/${input.featureId}/actions/${input.action}`, {
         method: 'POST',
-        body: {},
+        body: 'body' in input ? input.body : {},
       });
       const response = validateWithSchema(body, ServerFeatureOperationalActionResponseSchema);
       return {

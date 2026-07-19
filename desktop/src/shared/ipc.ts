@@ -75,6 +75,11 @@ export const IPC_CHANNELS = {
   runLogContent: 'agentico:runs:log-content',
   rewindPreview: 'agentico:rewind:preview',
   rewindExecute: 'agentico:rewind:execute',
+  completionPreflight: 'agentico:completion:preflight',
+  repositoryDiff: 'agentico:completion:repository-diff',
+  publishDescription: 'agentico:completion:publish-description',
+  openExternal: 'agentico:open:external',
+  revealPath: 'agentico:open:reveal',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -608,7 +613,7 @@ export const FeatureSnapshotSchema = z.strictObject({
 
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
 
-/** Renderer-visible operational actions limited to this audited allowlist. */
+/** Renderer-visible feature actions limited to this audited server catalogue subset. */
 export const FeatureOperationalActionSchema = z.enum([
   'start',
   'pause-stop',
@@ -616,14 +621,70 @@ export const FeatureOperationalActionSchema = z.enum([
   'resume',
   'retry',
   'restart',
+  'publish',
+  'merge',
+  'mark-done',
+  'cleanup',
+  'delete',
 ]);
 export type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
 
-export const FeatureActionRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  action: FeatureOperationalActionSchema,
-});
+const CompletionSourceRevisionSchema = z.string().min(1).max(512);
+const CompletionRepoNameSchema = z.string().min(1).max(128);
+
+export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry', 'restart']),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    action: z.literal('publish'),
+    body: z.strictObject({
+      source_revision: CompletionSourceRevisionSchema,
+      repos: z.array(CompletionRepoNameSchema).min(1).max(200),
+      title: z.string().trim().min(1).max(200),
+      body: z.string().max(4000).optional(),
+    }),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    action: z.enum(['merge', 'mark-done', 'delete']),
+    body: z.strictObject({
+      source_revision: CompletionSourceRevisionSchema,
+    }),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    action: z.literal('cleanup'),
+    body: z.strictObject({
+      source_revision: CompletionSourceRevisionSchema,
+      target: z.literal('worktrees').optional(),
+    }),
+  }),
+]);
 export type FeatureActionRequest = z.output<typeof FeatureActionRequestSchema>;
+
+// Compile-time drift guard: every FeatureOperationalActionSchema member must
+// appear as a FeatureActionRequestSchema branch's action literal. If an action
+// is added to the enum without a matching request branch, this expression
+// fails to typecheck.
+const _featureActionCatalogueSubset: {
+  [K in FeatureOperationalAction]: z.ZodTypeAny;
+} = {
+  start: z.never(),
+  'pause-stop': z.never(),
+  rewind: z.never(),
+  resume: z.never(),
+  retry: z.never(),
+  restart: z.never(),
+  publish: z.never(),
+  merge: z.never(),
+  'mark-done': z.never(),
+  cleanup: z.never(),
+  delete: z.never(),
+};
+void _featureActionCatalogueSubset;
 
 export const FeatureActionResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
@@ -667,6 +728,92 @@ export const RebasePreflightResultSchema = z.strictObject({
   repos: z.array(RebasePreflightRepoSchema).max(200),
 });
 export type RebasePreflightResult = z.output<typeof RebasePreflightResultSchema>;
+
+// --- Completion preflight + repository diff ------------------------------
+
+export const CompletionPreflightRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+});
+export type CompletionPreflightRequest = z.output<typeof CompletionPreflightRequestSchema>;
+
+export const CompletionPreflightRepoSchema = z.strictObject({
+  repo: z.string().max(128),
+  publishable: z.boolean(),
+  touched: z.boolean(),
+  status: z.string().max(50),
+  prUrl: z.string().max(2000).optional(),
+  blocker: z.string().max(500).optional(),
+  freshness: z.string().max(50).optional(),
+  lastError: z.string().max(500).optional(),
+  baseBranch: z.string().max(128).optional(),
+  branch: z.string().max(128).optional(),
+});
+export type CompletionPreflightRepo = z.output<typeof CompletionPreflightRepoSchema>;
+
+export const CompletionPreflightResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  sourceRevision: z.string().max(512),
+  canMarkDone: z.boolean(),
+  markDoneBlocker: z.string().max(500).optional(),
+  repos: z.array(CompletionPreflightRepoSchema).max(200),
+});
+export type CompletionPreflightResult = z.output<typeof CompletionPreflightResultSchema>;
+
+export const RepositoryDiffRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repo: z.string().max(128),
+  filePath: z.string().max(512).optional(),
+});
+export type RepositoryDiffRequest = z.output<typeof RepositoryDiffRequestSchema>;
+
+export const RepositoryDiffFileSchema = z.strictObject({
+  path: z.string().max(512),
+  oldPath: z.string().max(512).optional(),
+  operation: z.string().max(20),
+  addedLines: z.number().int().nonnegative().optional(),
+  removedLines: z.number().int().nonnegative().optional(),
+  binary: z.boolean().optional(),
+  fingerprint: z.string().max(128).optional(),
+});
+export type RepositoryDiffFile = z.output<typeof RepositoryDiffFileSchema>;
+
+export const RepositoryDiffResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repo: z.string().max(128),
+  sourceRevision: z.string().max(512).optional(),
+  truncated: z.boolean().optional(),
+  files: z.array(RepositoryDiffFileSchema).max(500),
+  fileDiff: z.string().max(70000).optional(),
+  fileTruncated: z.boolean().optional(),
+  fileBinary: z.boolean().optional(),
+  fileUnavailable: z.boolean().optional(),
+  partialFailure: z.string().max(500).optional(),
+});
+export type RepositoryDiffResult = z.output<typeof RepositoryDiffResultSchema>;
+
+export const PublishDescriptionRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repos: z.array(CompletionRepoNameSchema).max(200).optional(),
+});
+export type PublishDescriptionRequest = z.output<typeof PublishDescriptionRequestSchema>;
+
+export const PublishDescriptionResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  title: z.string().max(200),
+  body: z.string().max(4000),
+});
+export type PublishDescriptionResult = z.output<typeof PublishDescriptionResultSchema>;
+
+export const OpenExternalRequestSchema = z.strictObject({
+  url: z.string().max(2000),
+});
+export type OpenExternalRequest = z.output<typeof OpenExternalRequestSchema>;
+
+export const RevealPathRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  repo: z.string().max(128),
+});
+export type RevealPathRequest = z.output<typeof RevealPathRequestSchema>;
 
 export const RebaseResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
@@ -1979,6 +2126,26 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RewindExecuteRequestSchema]),
     response: FeatureActionResultSchema,
   },
+  [IPC_CHANNELS.completionPreflight]: {
+    request: z.tuple([CompletionPreflightRequestSchema]),
+    response: CompletionPreflightResultSchema,
+  },
+  [IPC_CHANNELS.repositoryDiff]: {
+    request: z.tuple([RepositoryDiffRequestSchema]),
+    response: RepositoryDiffResultSchema,
+  },
+  [IPC_CHANNELS.publishDescription]: {
+    request: z.tuple([PublishDescriptionRequestSchema]),
+    response: PublishDescriptionResultSchema,
+  },
+  [IPC_CHANNELS.openExternal]: {
+    request: z.tuple([OpenExternalRequestSchema]),
+    response: z.strictObject({ ok: z.boolean() }),
+  },
+  [IPC_CHANNELS.revealPath]: {
+    request: z.tuple([RevealPathRequestSchema]),
+    response: z.strictObject({ ok: z.boolean() }),
+  },
   [IPC_CHANNELS.featuresRebase]: {
     request: z.tuple([RebaseRequestSchema]),
     response: RebaseResultSchema,
@@ -2083,6 +2250,11 @@ export interface AgenticoApi {
   getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
   getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;
   executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
+  preflightCompletion(request: CompletionPreflightRequest): Promise<CompletionPreflightResult>;
+  getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
+  generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
+  openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
+  revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
   startRebase(request: RebaseRequest): Promise<RebaseResult>;
   preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
   fetchReviewComments(request: ReviewCommentsFetchRequest): Promise<ReviewCommentsFetchResult>;

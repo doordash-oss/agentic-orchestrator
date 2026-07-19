@@ -19,6 +19,7 @@ import {
   ipcContracts,
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
+  PublishDescriptionRequestSchema,
 } from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
 
@@ -40,7 +41,7 @@ describe('IPC channel registry', () => {
 });
 
 describe('operational IPC schemas', () => {
-  it('allows only the start and stop feature actions', () => {
+  it('allows only audited feature action catalogue entries', () => {
     expect(
       FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'start' }),
     ).toStrictEqual({ featureId: 'abcd1234', action: 'start' });
@@ -56,11 +57,47 @@ describe('operational IPC schemas', () => {
     expect(
       FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'restart' }),
     ).toStrictEqual({ featureId: 'abcd1234', action: 'restart' });
-    for (const action of ['delete', 'publish', '../start']) {
+    expect(
+      FeatureActionRequestSchema.parse({
+        featureId: 'abcd1234',
+        action: 'publish',
+        body: {
+          source_revision: 'rev-1',
+          repos: ['repo-a'],
+          title: 'Ship reviewed changes',
+        },
+      }),
+    ).toStrictEqual({
+      featureId: 'abcd1234',
+      action: 'publish',
+      body: {
+        source_revision: 'rev-1',
+        repos: ['repo-a'],
+        title: 'Ship reviewed changes',
+      },
+    });
+    expect(
+      FeatureActionRequestSchema.parse({
+        featureId: 'abcd1234',
+        action: 'delete',
+        body: { source_revision: 'rev-1' },
+      }),
+    ).toStrictEqual({
+      featureId: 'abcd1234',
+      action: 'delete',
+      body: { source_revision: 'rev-1' },
+    });
+    for (const action of ['../start', 'shell', 'publish/description']) {
       expect(FeatureActionRequestSchema.safeParse({ featureId: 'abcd1234', action }).success).toBe(
         false,
       );
     }
+    expect(
+      FeatureActionRequestSchema.safeParse({ featureId: 'abcd1234', action: 'publish' }).success,
+    ).toBe(false);
+    expect(
+      PublishDescriptionRequestSchema.parse({ featureId: 'abcd1234', repos: ['repo-a'] }),
+    ).toStrictEqual({ featureId: 'abcd1234', repos: ['repo-a'] });
   });
 
   it('bounds transcript windows and keeps row cursors distinct from global event cursors', () => {

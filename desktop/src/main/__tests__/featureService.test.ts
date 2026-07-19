@@ -295,10 +295,72 @@ describe('FeatureService.dispatchAction', () => {
     });
   });
 
-  it('rejects every action outside the start/stop allowlist before transport', async () => {
+  it('forwards completion action bodies to the server action endpoint', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        feature_id: 'abcd1234ef567890',
+        result: 'published',
+      },
+    }));
+    await expect(
+      service.dispatchAction({
+        featureId: 'abcd1234ef567890',
+        action: 'publish',
+        body: {
+          source_revision: 'rev-1',
+          repos: ['repo-a'],
+          title: 'Ship reviewed changes',
+        },
+      }),
+    ).resolves.toMatchObject({
+      featureId: 'abcd1234ef567890',
+      action: 'publish',
+      result: 'published',
+      sessionIds: [],
+    });
+    expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/publish');
+    expect(calls[0]?.init).toStrictEqual({
+      method: 'POST',
+      body: {
+        source_revision: 'rev-1',
+        repos: ['repo-a'],
+        title: 'Ship reviewed changes',
+      },
+    });
+  });
+
+  it('requests a server-authored publish narrative for selected repositories only', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        feature_id: 'abcd1234ef567890',
+        title: 'Ship reviewed changes',
+        body: 'Generated from server-owned feature and repository context.',
+        result: 'generated',
+      },
+    }));
+
+    await expect(
+      service.generatePublishDescription('abcd1234ef567890', ['repo-a']),
+    ).resolves.toStrictEqual({
+      featureId: 'abcd1234ef567890',
+      title: 'Ship reviewed changes',
+      body: 'Generated from server-owned feature and repository context.',
+    });
+    expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/publish/description');
+    expect(calls[0]?.init).toStrictEqual({
+      method: 'POST',
+      body: { repos: ['repo-a'] },
+    });
+  });
+
+  it('rejects every action outside the audited allowlist before transport', async () => {
     const { service, calls } = makeService(() => ({ status: 200, body: {} }));
     await expect(
-      service.dispatchAction({ featureId: 'abcd1234ef567890', action: 'delete' as never }),
+      service.dispatchAction({ featureId: 'abcd1234ef567890', action: '../start' as never }),
     ).rejects.toMatchObject({ safe: { code: 'E_SCHEMA_MISMATCH' } });
     expect(calls).toHaveLength(0);
   });

@@ -63,6 +63,23 @@ reducers, keyboard handlers, and event translators directly. Full Bubble Tea
 program drivers, process-launch, and terminal-lifecycle smoke flows belong in
 the extended `test/e2e` gate with `testing.Short` guards.
 
+## Web UI compatibility with the TUI
+
+Web UI and REST API changes must preserve existing TUI behavior. The browser UI
+is an additional client for the same Agentico runtime; it must not introduce
+read-path side effects, background polling, recovery scans, or mutations that
+can change feature/session state behind the TUI's back. In particular, `GET`
+endpoints consumed by the Web UI should be observational unless their contract
+explicitly documents a reconciliation side effect that is safe while another
+client is active.
+
+When touching `web/`, `internal/server/`, API client code, SSE/refresh logic,
+recovery, setup, or feature lifecycle actions, add or update coverage that
+exercises the API-backed TUI path as well as the browser path. At minimum, run
+the relevant targeted TUI/server tests plus `make test-fast`; add the E2E Go
+gate when the change affects Bubble Tea behavior, launch flow, session
+lifecycle, recovery, or setup.
+
 ## Test isolation and parallelism
 
 Tests are disqualified from `t.Parallel()` when they touch package-level

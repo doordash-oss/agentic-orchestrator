@@ -74,6 +74,13 @@ func (m *Manager) setupLock(featureID string) (func(), error) {
 	}, nil
 }
 
+func (m *Manager) setupLocked(featureID string) bool {
+	m.setupMu.Lock()
+	defer m.setupMu.Unlock()
+	_, ok := m.setupLocks[featureID]
+	return ok
+}
+
 func (m *Manager) RunSetup(featureID string, opts ...SetupRunnerOptions) error {
 	return m.runSetup(featureID, false, opts...)
 }
@@ -466,8 +473,7 @@ func (m *Manager) ReconcileAbandonedSetups() ([]string, error) {
 	}
 	var reconciled []string
 	for _, f := range features {
-		setup := f.Run().Setup
-		if setup == nil || setup.Status != SetupStatusRunning || f.Status != StatusSettingUpWorktrees {
+		if !m.shouldReconcileAbandonedSetup(f) {
 			continue
 		}
 		msg := "setup was interrupted by shutdown or crash; retry setup to continue"
@@ -477,6 +483,28 @@ func (m *Manager) ReconcileAbandonedSetups() ([]string, error) {
 		reconciled = append(reconciled, f.ID)
 	}
 	return reconciled, nil
+}
+
+func (m *Manager) shouldReconcileAbandonedSetup(f *Feature) bool {
+	if f == nil || f.Status != StatusSettingUpWorktrees {
+		return false
+	}
+	setup := f.Run().Setup
+	if setup == nil || setup.Status != SetupStatusRunning {
+		return false
+	}
+	if m.setupLocked(f.ID) {
+		return false
+	}
+	if strings.TrimSpace(setup.LatestLogPath) != "" {
+		return true
+	}
+	for _, key := range setupTaskOrder(setup) {
+		if setup.Tasks[key].Status == SetupStatusRunning {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) failAbandonedSetup(featureID, msg string) error {

@@ -33,6 +33,8 @@ Thumbs.db
 .env.*
 *.pem
 *.key
+*.p12
+*.cer
 id_rsa*
 id_ed25519*
 *.log

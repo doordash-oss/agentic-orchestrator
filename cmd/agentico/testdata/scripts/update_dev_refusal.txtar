@@ -1,32 +1,20 @@
-# Development-build update contract.
+# Development-build update bridge contract.
 #
 # The testscript binary is compiled by `go test`, so it is inherently a
 # development build: build info reports "(devel)", no release version is
-# injected, and it does not live in the Go bin dir. Every assertion below is
-# therefore network-free — the command classifies the install method offline
-# and never reaches the GitHub release lookup.
+# injected, and it does not live in the Go bin dir.
 
-# Bare `agentico update` on a dev build refuses with update-from-source
-# guidance on stderr, writes nothing to stdout, and exits non-zero. The binary
-# is never touched.
-! exec agentico update
-stderr 'built from source'
-stderr 'Update from source'
-! stdout .
-
-# `agentico update --check` on the same dev build is a non-destructive report:
-# it prints the current version, the detected method, and the would-do action
-# to stdout, writes nothing to stderr, and exits 0.
-exec agentico update --check
-stdout 'Current version:'
+# Bare `agentico update` on a dev build remains a discovery-compatible,
+# non-mutating command. If no desktop app is registered, it prints source
+# guidance without checking the network or touching the binary.
+env AGENTICO_UPDATE_DISABLE_DESKTOP_BRIDGE=1
+exec agentico update
 stdout 'Install method:'
 stdout 'development build'
-stdout 'Would update from source'
+stdout 'Pull the source checkout and rebuild'
 ! stderr .
 
-# The dev-build path must never print the network "Checking for updates" line
-# in either mode — classification happens before any GitHub call.
-! exec agentico update
-! stdout 'Checking for updates'
-exec agentico update --check
+# The dev-build bare path must never print the network "Checking for updates"
+# line — classification happens before any GitHub call.
+exec agentico update
 ! stdout 'Checking for updates'

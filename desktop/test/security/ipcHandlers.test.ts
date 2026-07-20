@@ -5,7 +5,9 @@ import {
   IPC_CHANNELS,
   IPC_EVENTS,
   defaultSettings,
+  type DiagnosticsSnapshot,
   type SessionOutputEvent,
+  type UpdateState,
 } from '../../src/shared/ipc';
 
 const trusted: TrustedSender = {
@@ -31,6 +33,43 @@ function emptyReadinessSnapshot() {
     workspaceRoots: [],
     repositories: [],
     issues: [],
+  };
+}
+
+function updateState(): UpdateState {
+  return {
+    status: 'ready' as const,
+    currentVersion: '0.1.0',
+    targetVersion: '0.2.0',
+    packageFormat: 'macos' as const,
+    signatureStatus: 'verified' as const,
+    checkedAt: '2026-07-20T10:00:00.000Z',
+    nextCheckAt: '2026-07-20T16:00:00.000Z',
+    releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+    message: 'A verified update is downloaded and ready to install.',
+  };
+}
+
+function diagnosticsSnapshot(): DiagnosticsSnapshot {
+  return {
+    retention: {
+      maxBytes: 25 * 1024 * 1024,
+      maxAgeDays: 7,
+      maxCrashRecords: 10,
+      currentBytes: 1024,
+      entryCount: 1,
+      crashCount: 0,
+    },
+    entries: [
+      {
+        id: 'evt-1',
+        time: '2026-07-20T10:00:00.000Z',
+        source: 'electron' as const,
+        level: 'info' as const,
+        message: 'Agentico desktop process started.',
+      },
+    ],
+    crashes: [],
   };
 }
 
@@ -135,6 +174,18 @@ function makeServices(): IpcServices {
     executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
     readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),
     bulkPreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    getUpdates: vi.fn(() => updateState()),
+    checkForUpdates: vi.fn(() => Promise.resolve(updateState())),
+    installUpdateWhenIdle: vi.fn(() =>
+      Promise.resolve({ ...updateState(), status: 'scheduled' as const }),
+    ),
+    installUpdateNow: vi.fn(() =>
+      Promise.resolve({ ...updateState(), status: 'installing' as const }),
+    ),
+    restartToUpdate: vi.fn(() => ({ ...updateState(), status: 'installing' as const })),
+    getDiagnostics: vi.fn(() => diagnosticsSnapshot()),
+    revealDiagnostics: vi.fn(() => Promise.resolve({ ok: true })),
+    clearDiagnostics: vi.fn(() => diagnosticsSnapshot()),
     preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
     getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -276,6 +327,37 @@ describe('registerIpcHandlers', () => {
       ok: boolean;
       error?: { code: string };
     };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+  });
+
+  it('validates update install consent before invoking the service', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.updatesInstallNow)!(goodEvent, {
+      consent: false,
+      stopActiveWork: true,
+    })) as { ok: boolean; error?: { code: string } };
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.installUpdateNow).not.toHaveBeenCalled();
+  });
+
+  it('rejects diagnostics responses that try to expose local paths', async () => {
+    const services = makeServices();
+    services.getDiagnostics = vi.fn(
+      () =>
+        ({
+          ...diagnosticsSnapshot(),
+          diagnosticsRoot: '/Users/somebody/Library/Application Support/Agentico',
+        }) as never,
+    );
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.diagnosticsGet)!(goodEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
   });

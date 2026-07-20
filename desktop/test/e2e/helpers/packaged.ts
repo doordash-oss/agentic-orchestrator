@@ -58,6 +58,14 @@ export function packagedExecutable(): string {
   return verification.unpacked_app;
 }
 
+export function packagedAppAsar(executablePath = packagedExecutable()): string {
+  const appAsar = path.join(packagedResourcesDir(executablePath), 'app.asar');
+  if (!fs.existsSync(appAsar)) {
+    throw new Error(`verified package resources do not contain app.asar: ${appAsar}`);
+  }
+  return appAsar;
+}
+
 /**
  * The packaged resources directory (bundled server + build identity),
  * derived from the verified executable path per platform layout.

@@ -71,6 +71,11 @@ export class NativeCommandController {
     this.deps.route({ target });
   }
 
+  private routeEvent(event: AppRouteEvent): void {
+    this.deps.showWindow();
+    this.deps.route(event);
+  }
+
   private commandItem(id: CommandId): MenuItemConstructorOptions {
     const command = commandById(id);
     const target = command.target;
@@ -120,6 +125,11 @@ export class NativeCommandController {
           { type: 'separator' },
           this.commandItem('global.home'),
           this.commandItem('global.settings'),
+          {
+            id: 'global.updates',
+            label: 'Updates',
+            click: () => this.routeEvent({ target: 'settings', settingsSection: 'updates' }),
+          },
           this.commandItem('global.attention'),
           this.commandItem('global.ama'),
           this.commandItem('global.bulk'),
@@ -170,6 +180,10 @@ export class NativeCommandController {
         {
           label: this.status.amaActive ? 'AMA (active)' : 'AMA',
           click: () => this.route('ama'),
+        },
+        {
+          label: 'Updates',
+          click: () => this.routeEvent({ target: 'settings', settingsSection: 'updates' }),
         },
         { type: 'separator' },
         this.quitItem(),

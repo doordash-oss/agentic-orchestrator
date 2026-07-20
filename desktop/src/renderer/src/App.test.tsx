@@ -8,7 +8,7 @@ import {
   type ConnectionState,
 } from '../../shared/ipc';
 import App from './App';
-import { installAgenticoMock, readySnapshot } from './test/agenticoMock';
+import { defaultUpdateState, installAgenticoMock, readySnapshot } from './test/agenticoMock';
 import { dispatchMediaChange, matchMediaState } from './test/setup';
 
 /** Builds a state through the schema, so tests can only emit valid variants. */
@@ -133,6 +133,190 @@ describe('App readiness gating', () => {
     });
 
     await waitFor(() => expect(mock.api.getAttention.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it('refreshes the passive update notice after an update invalidation', async () => {
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      updates: defaultUpdateState({ status: 'current' }),
+    });
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Home' });
+    expect(screen.queryByLabelText('Update available')).not.toBeInTheDocument();
+
+    mock.api.getUpdates.mockResolvedValueOnce(
+      defaultUpdateState({
+        status: 'ready',
+        targetVersion: '0.2.0',
+        packageFormat: 'macos',
+        signatureStatus: 'verified',
+        releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+        message: 'A verified update is downloaded and ready to install.',
+      }),
+    );
+    const before = mock.api.getUpdates.mock.calls.length;
+
+    act(() => {
+      mock.emitAppEvent({ type: 'invalidated', kind: 'updates.changed' });
+    });
+
+    await waitFor(() => expect(mock.api.getUpdates.mock.calls.length).toBeGreaterThan(before));
+    expect(await screen.findByLabelText('Update available')).toBeVisible();
+  });
+
+  it('renders DEB update guidance as a copyable package-manager command without install controls', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      updates: defaultUpdateState({
+        status: 'available',
+        targetVersion: '0.2.0',
+        packageFormat: 'deb',
+        signatureStatus: 'verified',
+        releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+        message: 'A verified DEB update is available.',
+        guidance: [
+          'DEB installs are updated by the package manager, not by in-app replacement.',
+          'Download the signed DEB and checksum from the GitHub release.',
+          'Install with: sudo apt install ./agentico_0.2.0_amd64.deb',
+        ],
+      }),
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    const updates = screen.getByRole('region', { name: 'Updates' });
+    expect(within(updates).getByText('sudo apt install ./agentico_0.2.0_amd64.deb')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Restart to Update' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Stop Work and Install Now' }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(updates).getByRole('button', { name: 'Copy the package-manager command' }),
+    );
+    await waitFor(() =>
+      expect(within(updates).getByRole('status')).toHaveTextContent(
+        'Copied the package-manager command.',
+      ),
+    );
+    await expect(window.navigator.clipboard.readText()).resolves.toBe(
+      'sudo apt install ./agentico_0.2.0_amd64.deb',
+    );
+  });
+
+  it('preserves direct restart in Settings when a verified update is idle', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      updates: defaultUpdateState({
+        status: 'ready',
+        targetVersion: '0.2.0',
+        packageFormat: 'macos',
+        signatureStatus: 'verified',
+        message: 'A verified update is downloaded and ready to install.',
+      }),
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    const updates = screen.getByRole('region', { name: 'Updates' });
+    expect(within(updates).getByRole('button', { name: 'Restart to Update' })).toBeVisible();
+    expect(within(updates).queryByRole('button', { name: 'Install When Idle' })).toBeNull();
+    expect(within(updates).queryByRole('button', { name: 'Stop Work and Install Now' })).toBeNull();
+  });
+
+  it('shows non-interrupting and explicit stop-work update controls only when work is active', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      updates: defaultUpdateState({
+        status: 'ready',
+        targetVersion: '0.2.0',
+        packageFormat: 'macos',
+        signatureStatus: 'verified',
+        message: 'A verified update is downloaded and ready to install.',
+        activeWorkSummary: '1 workflow and AMA session are active.',
+      }),
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    const updates = screen.getByRole('region', { name: 'Updates' });
+    expect(within(updates).getByText('1 workflow and AMA session are active.')).toBeVisible();
+    expect(within(updates).getByRole('button', { name: 'Install When Idle' })).toBeVisible();
+    expect(
+      within(updates).getByRole('button', { name: 'Stop Work and Install Now' }),
+    ).toBeVisible();
+    expect(within(updates).queryByRole('button', { name: 'Restart to Update' })).toBeNull();
+  });
+
+  it('keeps keyboard focus inside the stop-work install confirmation and restores the trigger', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+      updates: defaultUpdateState({
+        status: 'ready',
+        targetVersion: '0.2.0',
+        packageFormat: 'macos',
+        signatureStatus: 'verified',
+        message: 'A verified update is downloaded and ready to install.',
+        activeWorkSummary: '1 workflow and AMA session are active.',
+      }),
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    const trigger = screen.getByRole('button', { name: 'Stop Work and Install Now' });
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Install update confirmation' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    const confirm = within(dialog).getByRole('button', { name: 'Stop Work and Install Now' });
+    await waitFor(() => expect(cancel).toHaveFocus());
+
+    await user.tab();
+    expect(confirm).toHaveFocus();
+    await user.tab();
+    expect(cancel).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Install update confirmation' })).toBeNull(),
+    );
+    expect(trigger).toHaveFocus();
+  });
+
+  it('keeps keyboard focus inside Clear Diagnostics confirmation and restores the trigger', async () => {
+    const user = userEvent.setup();
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    const trigger = screen.getByRole('button', { name: 'Clear Diagnostics' });
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Clear diagnostics confirmation' });
+    expect(within(dialog).getByRole('heading', { name: 'Clear Diagnostics?' })).toBeVisible();
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    const confirm = within(dialog).getByRole('button', { name: 'Clear Diagnostics' });
+    await waitFor(() => expect(cancel).toHaveFocus());
+
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Clear diagnostics confirmation' })).toBeNull(),
+    );
+    expect(trigger).toHaveFocus();
   });
 
   it('shows the connection shell — never the wizard — before the gateway is ready', async () => {

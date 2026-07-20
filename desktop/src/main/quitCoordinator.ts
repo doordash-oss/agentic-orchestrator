@@ -55,12 +55,24 @@ export interface QuitCoordinatorDeps<TParent> {
   quitApplication(): void;
 }
 
+export interface QuitCoordinatorOptions {
+  /**
+   * Hermetic test launches (AGENTICO_E2E_USER_DATA) must never block quit on
+   * a native dialog: automation cannot answer it, so every launch would leak
+   * a live window. In test mode quit skips detection and dialogs entirely.
+   */
+  testMode?: boolean;
+}
+
 export class QuitCoordinator<TParent = unknown> {
   private quitPromptInFlight = false;
   private quitInProgress = false;
   private forceQuit = false;
 
-  constructor(private readonly deps: QuitCoordinatorDeps<TParent>) {}
+  constructor(
+    private readonly deps: QuitCoordinatorDeps<TParent>,
+    private readonly options: QuitCoordinatorOptions = {},
+  ) {}
 
   shouldAllowClose(): boolean {
     return this.forceQuit;
@@ -72,6 +84,10 @@ export class QuitCoordinator<TParent = unknown> {
     }
     this.quitPromptInFlight = true;
     try {
+      if (this.options.testMode === true) {
+        await this.shutdown({ quitAnyway: true });
+        return;
+      }
       const active = await this.deps.detectActiveWork();
       if (!hasActiveWork(active)) {
         await this.shutdown({ quitAnyway: false });

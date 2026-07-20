@@ -549,7 +549,7 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 // fresh must NOT attempt the forbidden StatusBuildingKB → StatusInquiring
 // transition.
 //
-// Background: iteration-04 review flagged that `startKB`'s `allFresh` branch
+	// Background: `startKB`'s `allFresh` branch previously
 // returned PhaseSkipped → PhaseInquire while the feature was still in
 // StatusBuildingKB. The recursive `startPhase(PhaseInquire)` → `startInquire`
 // then called `Lifecycle.StartInquire`, which resolves to

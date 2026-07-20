@@ -109,6 +109,9 @@ import {
   type RepositoryDiffResult,
   type OpenExternalRequest,
   type RevealPathRequest,
+  type UpdateInstallNowRequest,
+  type UpdateState,
+  type DiagnosticsSnapshot,
   ipcContracts,
 } from '../shared/ipc';
 import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './security';
@@ -189,6 +192,14 @@ export interface IpcServices {
   generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
   revealPath(request: RevealPathRequest): Promise<{ ok: boolean }>;
+  getUpdates(): Promise<UpdateState> | UpdateState;
+  checkForUpdates(): Promise<UpdateState>;
+  installUpdateWhenIdle(): Promise<UpdateState>;
+  installUpdateNow(request: UpdateInstallNowRequest): Promise<UpdateState>;
+  restartToUpdate(): Promise<UpdateState> | UpdateState;
+  getDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
+  revealDiagnostics(): Promise<{ ok: boolean }>;
+  clearDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
 }
 
 export interface IpcMainLike {
@@ -354,6 +365,15 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.recoveryLogRead]: (_event, request: RecoveryLogReadRequest) =>
       services.readRecoveryLog(request),
     [IPC_CHANNELS.bulkPreview]: () => services.bulkPreview(),
+    [IPC_CHANNELS.updatesGet]: () => services.getUpdates(),
+    [IPC_CHANNELS.updatesCheck]: () => services.checkForUpdates(),
+    [IPC_CHANNELS.updatesInstallWhenIdle]: () => services.installUpdateWhenIdle(),
+    [IPC_CHANNELS.updatesInstallNow]: (_event, request: UpdateInstallNowRequest) =>
+      services.installUpdateNow(request),
+    [IPC_CHANNELS.updatesRestart]: () => services.restartToUpdate(),
+    [IPC_CHANNELS.diagnosticsGet]: () => services.getDiagnostics(),
+    [IPC_CHANNELS.diagnosticsReveal]: () => services.revealDiagnostics(),
+    [IPC_CHANNELS.diagnosticsClear]: () => services.clearDiagnostics(),
     [IPC_CHANNELS.completionPreflight]: (_event, request: CompletionPreflightRequest) =>
       services.preflightCompletion(request),
     [IPC_CHANNELS.repositoryDiff]: (_event, request: RepositoryDiffRequest) =>

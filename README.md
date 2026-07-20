@@ -53,7 +53,10 @@ go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 # or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-Running `agentico` starts the local server in the foreground; it does not open the desktop dashboard. Use `agentico update` to update a standalone CLI installation.
+Running `agentico` starts the local server in the foreground; it does not open
+the desktop dashboard. Use `agentico update` to open desktop Settings >
+Updates when the app is registered, or to print non-mutating headless update
+guidance.
 
 On first desktop launch, Agentic Orchestrator walks you through selecting workspace directories and checking provider readiness. After that, the app opens the operational dashboard.
 
@@ -243,10 +246,11 @@ Flags:
 agentico update [--check|-n]
 ```
 
-Run `agentico update` to upgrade to the latest stable release. Use
-`agentico update --check` (alias `-n`) to report the current and latest
-available versions without installing anything; it exits `0` and prints an
-already-up-to-date message when you are on the newest release.
+Run `agentico update` to focus or launch the desktop app directly into Settings
+Updates when it is registered. In standalone headless installs it prints
+format-aware package-manager or signed GitHub artifact guidance without
+modifying the executable. Use `agentico update --check` (alias `-n`) to perform
+a read-only stable-release metadata check and report current/latest versions.
 
 ## Development
 

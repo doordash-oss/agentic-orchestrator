@@ -40,6 +40,14 @@ export const IPC_CHANNELS = {
   recoveryExecute: 'agentico:recovery:execute',
   recoveryLogRead: 'agentico:recovery:log-read',
   bulkPreview: 'agentico:bulk:preview',
+  updatesGet: 'agentico:updates:get',
+  updatesCheck: 'agentico:updates:check',
+  updatesInstallWhenIdle: 'agentico:updates:install-when-idle',
+  updatesInstallNow: 'agentico:updates:install-now',
+  updatesRestart: 'agentico:updates:restart',
+  diagnosticsGet: 'agentico:diagnostics:get',
+  diagnosticsReveal: 'agentico:diagnostics:reveal',
+  diagnosticsClear: 'agentico:diagnostics:clear',
   attentionGet: 'agentico:attention:get',
   attentionAnswerPermission: 'agentico:attention:answer-permission',
   attentionAnswerQuestions: 'agentico:attention:answer-questions',
@@ -455,6 +463,7 @@ export const AppRouteEventSchema = z.strictObject({
   target: z.enum(['palette', 'home', 'settings', 'attention', 'ama', 'bulk']),
   attentionId: z.string().min(1).max(500).optional(),
   featureId: z.string().min(1).max(200).optional(),
+  settingsSection: z.enum(['updates', 'diagnostics']).optional(),
 });
 
 export type AppRouteEvent = z.output<typeof AppRouteEventSchema>;
@@ -463,6 +472,109 @@ export interface RoutedRequest {
   id: number;
   event: AppRouteEvent;
 }
+
+// --- Desktop updates --------------------------------------------------------
+// Renderer-visible update state is a redacted state machine. Feed access,
+// staged filesystem paths, signatures, native install, and restart control stay
+// in the main process.
+
+export const UpdatePackageFormatSchema = z.enum(['macos', 'appimage', 'deb', 'unknown']);
+export type UpdatePackageFormat = z.output<typeof UpdatePackageFormatSchema>;
+
+export const UpdateStatusSchema = z.enum([
+  'idle',
+  'checking',
+  'current',
+  'available',
+  'downloading',
+  'ready',
+  'scheduled',
+  'installing',
+  'failed',
+]);
+export type UpdateStatus = z.output<typeof UpdateStatusSchema>;
+
+export const UpdateSignatureStatusSchema = z.enum(['unknown', 'verified', 'failed']);
+export type UpdateSignatureStatus = z.output<typeof UpdateSignatureStatusSchema>;
+
+export const UpdateProgressSchema = z.strictObject({
+  downloadedBytes: z.number().int().nonnegative(),
+  totalBytes: z.number().int().positive().optional(),
+});
+export type UpdateProgress = z.output<typeof UpdateProgressSchema>;
+
+export const UpdateStateSchema = z.strictObject({
+  status: UpdateStatusSchema,
+  currentVersion: z.string().min(1).max(80),
+  targetVersion: z.string().min(1).max(80).optional(),
+  packageFormat: UpdatePackageFormatSchema,
+  signatureStatus: UpdateSignatureStatusSchema,
+  checkedAt: z.string().datetime().optional(),
+  nextCheckAt: z.string().datetime().optional(),
+  releaseNotesUrl: z.string().url().optional(),
+  message: z.string().max(500),
+  guidance: z.array(z.string().max(240)).max(6).optional(),
+  progress: UpdateProgressSchema.optional(),
+  activeWorkSummary: z.string().max(240).optional(),
+});
+export type UpdateState = z.output<typeof UpdateStateSchema>;
+
+export const UpdateInstallNowRequestSchema = z.strictObject({
+  consent: z.literal(true),
+  stopActiveWork: z.boolean(),
+});
+export type UpdateInstallNowRequest = z.output<typeof UpdateInstallNowRequestSchema>;
+
+// --- Local diagnostics ------------------------------------------------------
+// Diagnostics payloads contain already-redacted bounded records only. They do
+// not expose the app-owned diagnostics root path, file names, transcripts,
+// prompts, arguments, environment values, or arbitrary read/delete targets.
+
+export const DiagnosticLevelSchema = z.enum(['info', 'warn', 'error']);
+export type DiagnosticLevel = z.output<typeof DiagnosticLevelSchema>;
+
+export const DiagnosticSourceSchema = z.enum(['electron', 'server', 'update', 'crash']);
+export type DiagnosticSource = z.output<typeof DiagnosticSourceSchema>;
+
+export const DiagnosticEntrySchema = z.strictObject({
+  id: z.string().min(1).max(80),
+  time: z.string().datetime(),
+  source: DiagnosticSourceSchema,
+  level: DiagnosticLevelSchema,
+  message: z.string().min(1).max(700),
+  detail: z.string().max(1200).optional(),
+});
+export type DiagnosticEntry = z.output<typeof DiagnosticEntrySchema>;
+
+export const CrashMetadataSchema = z.strictObject({
+  id: z.string().min(1).max(80),
+  time: z.string().datetime(),
+  version: z.string().max(80),
+  revision: z.string().max(80).optional(),
+  platform: z.string().max(40),
+  architecture: z.string().max(40),
+  processRole: z.enum(['main', 'renderer', 'server', 'utility']),
+  category: z.string().max(80),
+  context: z.string().max(700).optional(),
+});
+export type CrashMetadata = z.output<typeof CrashMetadataSchema>;
+
+export const DiagnosticsRetentionSchema = z.strictObject({
+  maxBytes: z.number().int().positive(),
+  maxAgeDays: z.number().int().positive(),
+  maxCrashRecords: z.number().int().positive(),
+  currentBytes: z.number().int().nonnegative(),
+  entryCount: z.number().int().nonnegative(),
+  crashCount: z.number().int().nonnegative(),
+});
+export type DiagnosticsRetention = z.output<typeof DiagnosticsRetentionSchema>;
+
+export const DiagnosticsSnapshotSchema = z.strictObject({
+  retention: DiagnosticsRetentionSchema,
+  entries: z.array(DiagnosticEntrySchema).max(200),
+  crashes: z.array(CrashMetadataSchema).max(10),
+});
+export type DiagnosticsSnapshot = z.output<typeof DiagnosticsSnapshotSchema>;
 
 // --- Workspace/setup operations ----------------------------------------------
 
@@ -2287,6 +2399,38 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([]),
     response: BulkPreviewSchema,
   },
+  [IPC_CHANNELS.updatesGet]: {
+    request: z.tuple([]),
+    response: UpdateStateSchema,
+  },
+  [IPC_CHANNELS.updatesCheck]: {
+    request: z.tuple([]),
+    response: UpdateStateSchema,
+  },
+  [IPC_CHANNELS.updatesInstallWhenIdle]: {
+    request: z.tuple([]),
+    response: UpdateStateSchema,
+  },
+  [IPC_CHANNELS.updatesInstallNow]: {
+    request: z.tuple([UpdateInstallNowRequestSchema]),
+    response: UpdateStateSchema,
+  },
+  [IPC_CHANNELS.updatesRestart]: {
+    request: z.tuple([]),
+    response: UpdateStateSchema,
+  },
+  [IPC_CHANNELS.diagnosticsGet]: {
+    request: z.tuple([]),
+    response: DiagnosticsSnapshotSchema,
+  },
+  [IPC_CHANNELS.diagnosticsReveal]: {
+    request: z.tuple([]),
+    response: z.strictObject({ ok: z.boolean() }),
+  },
+  [IPC_CHANNELS.diagnosticsClear]: {
+    request: z.tuple([]),
+    response: DiagnosticsSnapshotSchema,
+  },
 };
 
 // --- The narrow window API the preload exposes -------------------------------
@@ -2369,5 +2513,13 @@ export interface AgenticoApi {
   executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;
   readRecoveryLog(request: RecoveryLogReadRequest): Promise<RecoveryLogReadResult>;
   bulkPreview(): Promise<BulkPreview>;
+  getUpdates(): Promise<UpdateState>;
+  checkForUpdates(): Promise<UpdateState>;
+  installUpdateWhenIdle(): Promise<UpdateState>;
+  installUpdateNow(request: UpdateInstallNowRequest): Promise<UpdateState>;
+  restartToUpdate(): Promise<UpdateState>;
+  getDiagnostics(): Promise<DiagnosticsSnapshot>;
+  revealDiagnostics(): Promise<{ ok: boolean }>;
+  clearDiagnostics(): Promise<DiagnosticsSnapshot>;
   onAppEvent(listener: (event: AppEvent) => void): () => void;
 }

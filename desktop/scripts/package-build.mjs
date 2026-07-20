@@ -14,9 +14,13 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { flipFuses, FuseVersion } from '@electron/fuses';
+import { PRODUCTION_FUSE_POLICY } from './lib/fuse-policy.mjs';
+import { unpackedExecutablePath } from './lib/package-layout.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
+const unpackedOnly = process.argv.slice(2).includes('--unpacked');
 
 function run(command, args) {
   console.log(`package-build: ${command} ${args.join(' ')}`);
@@ -32,7 +36,7 @@ function nodeBin(pkg, relBin) {
 // installed version explicitly so packaging always matches the dev runtime.
 const electronVersion = require('electron/package.json').version;
 const builderArgs = ['--publish', 'never', `--config.electronVersion=${electronVersion}`];
-if (process.argv.slice(2).includes('--unpacked')) {
+if (unpackedOnly) {
   builderArgs.push('--dir');
   if (process.platform === 'darwin') {
     builderArgs.push('--universal');
@@ -46,3 +50,20 @@ if (process.platform === 'linux') {
 run(process.execPath, [nodeBin('electron-vite', 'bin/electron-vite.js'), 'build']);
 run(process.execPath, [join(desktopDir, 'scripts', 'prepare-server.mjs')]);
 run(process.execPath, [nodeBin('electron-builder', 'cli.js'), ...builderArgs]);
+if (unpackedOnly) {
+  await enforceUnpackedFuses();
+}
+
+async function enforceUnpackedFuses() {
+  const executable = unpackedExecutablePath(
+    desktopDir,
+    process.platform,
+    process.env.AGENTICO_PACKAGE_ARCH ?? process.arch,
+  );
+  await flipFuses(executable, {
+    version: FuseVersion.V1,
+    strictlyRequireAllFuses: false,
+    ...Object.fromEntries(PRODUCTION_FUSE_POLICY.map((fuse) => [fuse.option, fuse.expected])),
+  });
+  console.log(`package-build: enforced production Electron fuses on ${executable}`);
+}

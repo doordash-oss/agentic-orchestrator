@@ -51,3 +51,76 @@ export function resolveTestUserDataDir(
   }
   return null;
 }
+
+export interface TestPackagedResourcesDeps {
+  realpath(candidate: string): string;
+  isAbsolute(candidate: string): boolean;
+  exists(candidate: string): boolean;
+  join(...parts: string[]): string;
+}
+
+export function resolveTestPackagedResourcesDir(
+  candidate: string | undefined,
+  testUserDataDir: string | null,
+  deps: TestPackagedResourcesDeps,
+): string | null {
+  if (
+    testUserDataDir === null ||
+    candidate === undefined ||
+    candidate === '' ||
+    !deps.isAbsolute(candidate)
+  ) {
+    return null;
+  }
+  let real: string;
+  try {
+    real = deps.realpath(candidate);
+  } catch {
+    return null;
+  }
+  for (const required of [
+    deps.join(real, 'app.asar'),
+    deps.join(real, 'build-identity.json'),
+    deps.join(real, 'bin', 'agentico'),
+  ]) {
+    if (!deps.exists(required)) {
+      return null;
+    }
+  }
+  return real;
+}
+
+export interface TestOutputFileDeps {
+  realpath(candidate: string): string;
+  dirname(candidate: string): string;
+  tmpdir(): string;
+  isAbsolute(candidate: string): boolean;
+  sep: string;
+}
+
+export function resolveTestOutputFile(
+  candidate: string | undefined,
+  testUserDataDir: string | null,
+  deps: TestOutputFileDeps,
+): string | null {
+  if (
+    testUserDataDir === null ||
+    candidate === undefined ||
+    candidate === '' ||
+    !deps.isAbsolute(candidate)
+  ) {
+    return null;
+  }
+  let parent: string;
+  let tempRoot: string;
+  try {
+    parent = deps.realpath(deps.dirname(candidate));
+    tempRoot = deps.realpath(deps.tmpdir());
+  } catch {
+    return null;
+  }
+  if (parent === tempRoot || parent.startsWith(tempRoot + deps.sep)) {
+    return candidate;
+  }
+  return null;
+}

@@ -5,7 +5,9 @@ import {
   type FeatureSummaryView,
   type RoutedRequest,
   type ThemePreference,
+  type UpdateState,
 } from '../../shared/ipc';
+import { canInstallInApp, hasActiveWork, installWhenIdleLabel } from '../../shared/updateState';
 import { ConnectionShell } from './components/ConnectionShell';
 import { AmaDock } from './components/AmaDock';
 import { CommandPalette } from './components/CommandPalette';
@@ -37,6 +39,9 @@ export default function App() {
   const [featureNames, setFeatureNames] = useState<Record<string, string>>({});
   const [attentionJump, setAttentionJump] = useState<string | null>(null);
   const [routeRequest, setRouteRequest] = useState<RoutedRequest | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateState | null>(null);
+  const [updateDismissedVersion, setUpdateDismissedVersion] = useState<string | null>(null);
+  const [schedulingUpdate, setSchedulingUpdate] = useState(false);
   const routeSequence = useRef(0);
 
   const requestRoute = useCallback((event: AppRouteEvent) => {
@@ -45,6 +50,30 @@ export default function App() {
   }, []);
 
   useEffect(() => window.agentico.onRouteRequest(requestRoute), [requestRoute]);
+
+  const refreshUpdates = useCallback(async () => {
+    try {
+      setUpdateState(await window.agentico.getUpdates());
+    } catch {
+      setUpdateState(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshUpdates();
+    const interval = setInterval(() => void refreshUpdates(), 60000);
+    return () => clearInterval(interval);
+  }, [refreshUpdates]);
+
+  useEffect(
+    () =>
+      window.agentico.onAppEvent((event) => {
+        if (event.type === 'invalidated' && event.kind === 'updates.changed') {
+          void refreshUpdates();
+        }
+      }),
+    [refreshUpdates],
+  );
 
   const refreshAttention = useCallback(async () => {
     const snapshot = await window.agentico.getAttention();
@@ -187,6 +216,21 @@ export default function App() {
           ))}
         </fieldset>
       </header>
+      <UpdateNotice
+        update={updateState}
+        dismissedVersion={updateDismissedVersion}
+        scheduling={schedulingUpdate}
+        onDismiss={(version) => setUpdateDismissedVersion(version)}
+        onOpenSettings={() => requestRoute({ target: 'settings', settingsSection: 'updates' })}
+        onInstallWhenIdle={async () => {
+          try {
+            setSchedulingUpdate(true);
+            setUpdateState(await window.agentico.installUpdateWhenIdle());
+          } finally {
+            setSchedulingUpdate(false);
+          }
+        }}
+      />
       {connection.status === 'ready' ? (
         <>
           <ReadinessGate
@@ -215,6 +259,65 @@ export default function App() {
         onRoute={requestRoute}
       />
     </div>
+  );
+}
+
+export function UpdateNotice({
+  update,
+  dismissedVersion,
+  scheduling,
+  onDismiss,
+  onOpenSettings,
+  onInstallWhenIdle,
+}: {
+  update: UpdateState | null;
+  dismissedVersion: string | null;
+  scheduling: boolean;
+  onDismiss(version: string): void;
+  onOpenSettings(): void;
+  onInstallWhenIdle(): Promise<void>;
+}) {
+  if (
+    update === null ||
+    update.targetVersion === undefined ||
+    dismissedVersion === update.targetVersion ||
+    !['ready', 'scheduled', 'available'].includes(update.status)
+  ) {
+    return null;
+  }
+  const updateHasActiveWork = hasActiveWork(update);
+  const isScheduled = update.status === 'scheduled';
+  return (
+    <section className="update-notice" aria-label="Update available">
+      <div>
+        <strong>Agentico {update.targetVersion} is available</strong>
+        <span>{update.message}</span>
+        {update.activeWorkSummary && <span>{update.activeWorkSummary}</span>}
+      </div>
+      <div className="update-notice__actions">
+        <button type="button" className="setup-wizard__action" onClick={onOpenSettings}>
+          Updates
+        </button>
+        {canInstallInApp(update) && updateHasActiveWork && (
+          <button
+            type="button"
+            className="setup-wizard__action setup-wizard__action--primary"
+            onClick={() => void onInstallWhenIdle()}
+            disabled={scheduling || isScheduled}
+          >
+            {installWhenIdleLabel({ scheduling, scheduled: isScheduled })}
+          </button>
+        )}
+        <button
+          type="button"
+          className="settings-panel__root-btn"
+          aria-label="Dismiss update notice"
+          onClick={() => onDismiss(update.targetVersion!)}
+        >
+          Dismiss
+        </button>
+      </div>
+    </section>
   );
 }
 

@@ -20,6 +20,8 @@ import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreview
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
 import { CompletionWorkspace } from '../../../src/renderer/src/features/CompletionWorkspace';
 import { SettingsPanel } from '../../../src/renderer/src/features/SettingsPanel';
+import { WorkspaceShell } from '../../../src/renderer/src/features/WorkspaceShell';
+import { UpdateNotice } from '../../../src/renderer/src/App';
 import { AmaDock } from '../../../src/renderer/src/components/AmaDock';
 import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
 import {
@@ -489,8 +491,94 @@ function CloseDialogScene(): React.ReactElement {
   );
 }
 
-function App() {
+function UpdateAppScene(): React.ReactElement {
+  const [update, setUpdate] = React.useState<Awaited<ReturnType<AgenticoApi['getUpdates']>> | null>(
+    null,
+  );
+  const [showSettings, setShowSettings] = React.useState(false);
+  React.useEffect(() => {
+    void window.agentico.getUpdates().then(setUpdate);
+  }, []);
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <header className="global-bar">
+        <div className="global-bar__brand">
+          <span className="global-bar__mark" aria-hidden="true">
+            A
+          </span>
+          <h1>Agentico</h1>
+        </div>
+        <p className="global-bar__runtime" role="status" data-tone="ready">
+          <span aria-hidden="true">●</span> Runtime ready
+        </p>
+      </header>
+      <UpdateNotice
+        update={update}
+        dismissedVersion={null}
+        scheduling={false}
+        onDismiss={() => {}}
+        onOpenSettings={() => setShowSettings(true)}
+        onInstallWhenIdle={async () => {
+          setUpdate(await window.agentico.installUpdateWhenIdle());
+        }}
+      />
+      <WorkspaceShell
+        routeRequest={
+          showSettings
+            ? {
+                id: 1,
+                event: { target: 'settings', settingsSection: 'updates' },
+              }
+            : null
+        }
+      />
+    </div>
+  );
+}
+
+function SettingsUpdateScene({ scene }: { scene: string }): React.ReactElement {
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <header className="global-bar">
+        <div className="global-bar__brand">
+          <span className="global-bar__mark" aria-hidden="true">
+            A
+          </span>
+          <h1>Agentico</h1>
+        </div>
+        <p className="global-bar__runtime" role="status" data-tone="ready">
+          <span aria-hidden="true">●</span> Runtime ready
+        </p>
+      </header>
+      <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
+        <SettingsPanel
+          routeRequest={{
+            id: 1,
+            event: {
+              target: 'settings',
+              settingsSection: scene === 'settings-diagnostics' ? 'diagnostics' : 'updates',
+            },
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CaptureApp() {
   const scene = getScene();
+
+  if (scene === 'update-passive-active' || scene === 'update-constrained') {
+    return <UpdateAppScene />;
+  }
+  if (
+    scene === 'settings-updates-ready' ||
+    scene === 'settings-updates-deb' ||
+    scene === 'settings-install-now-confirm' ||
+    scene === 'settings-diagnostics'
+  ) {
+    return <SettingsUpdateScene scene={scene} />;
+  }
 
   if (scene === 'archive' || scene === 'pinned' || scene === 'constrained') {
     return <ArchiveScene scene={scene} />;
@@ -527,10 +615,11 @@ function App() {
 const container = document.getElementById('root');
 if (!container) throw new Error('#root missing');
 
-installMockApi(getScene());
+const mockControls = installMockApi(getScene());
+(window as typeof window & { __agenticoMock?: typeof mockControls }).__agenticoMock = mockControls;
 
 createRoot(container).render(
   <React.StrictMode>
-    <App />
+    <CaptureApp />
   </React.StrictMode>,
 );

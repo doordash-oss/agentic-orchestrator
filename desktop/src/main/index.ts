@@ -13,11 +13,16 @@ import {
   ipcMain,
   nativeTheme,
   session,
+  shell,
   type Event as ElectronEvent,
   type MessageBoxReturnValue,
 } from 'electron';
 import { createRuntimeGateway } from './gateway/wiring';
-import { resolveTestUserDataDir } from './testHooks';
+import {
+  resolveTestOutputFile,
+  resolveTestPackagedResourcesDir,
+  resolveTestUserDataDir,
+} from './testHooks';
 import { EventStreamSupervisor } from './gateway/events';
 import type { RuntimeGateway } from './gateway/runtimeGateway';
 import { FeatureService } from './features';
@@ -45,6 +50,7 @@ import {
   CHAT_SESSION_ID,
   IPC_EVENTS,
   isActiveChatSession,
+  type AppEvent,
   type AppRouteEvent,
   type AttentionSnapshot,
   type FeatureSnapshot,
@@ -52,6 +58,13 @@ import {
 import { toSafeError } from '../shared/errors';
 import { AttentionNotificationCoordinator, electronNotificationSink } from './notifications';
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
+import { DiagnosticsService } from './diagnostics';
+import {
+  UpdateCoordinator,
+  createUpdateFixtureFetch,
+  detectCanInstallInApp,
+  detectPackageFormat,
+} from './updates';
 import {
   QuitCoordinator,
   activeWorkDialog,
@@ -78,6 +91,32 @@ const testUserData = resolveTestUserDataDir(process.env['AGENTICO_E2E_USER_DATA'
 if (testUserData !== null) {
   app.setPath('userData', testUserData);
 }
+const forceQuitDialogsInE2E =
+  testUserData !== null && process.env['AGENTICO_E2E_FORCE_QUIT_DIALOGS'] === '1';
+
+const testPackagedResources = resolveTestPackagedResourcesDir(
+  process.env['AGENTICO_E2E_RESOURCES_PATH'],
+  testUserData,
+  {
+    realpath: (candidate) => fs.realpathSync(candidate),
+    isAbsolute: (candidate) => path.isAbsolute(candidate),
+    exists: (candidate) => fs.existsSync(candidate),
+    join: (...parts) => path.join(...parts),
+  },
+);
+const testReadyFile = resolveTestOutputFile(process.env['AGENTICO_E2E_READY_FILE'], testUserData, {
+  realpath: (candidate) => fs.realpathSync(candidate),
+  dirname: (candidate) => path.dirname(candidate),
+  tmpdir: () => os.tmpdir(),
+  isAbsolute: (candidate) => path.isAbsolute(candidate),
+  sep: path.sep,
+});
+const isPackagedRuntime = app.isPackaged || testPackagedResources !== null;
+const runtimeResourcesPath = testPackagedResources ?? process.resourcesPath;
+const runtimeExecPath =
+  testPackagedResources !== null && process.env['AGENTICO_E2E_INSTALL_EXECUTABLE'] !== undefined
+    ? process.env['AGENTICO_E2E_INSTALL_EXECUTABLE']
+    : process.execPath;
 
 const devRendererUrl = process.env['ELECTRON_RENDERER_URL'];
 const appOrigins = new Set<string>(['file://']);
@@ -93,6 +132,8 @@ const trusted: TrustedSender & { webContentsId: number } = {
   webContentsId: -1,
   allowedOrigins: appOrigins,
 };
+
+app.setAsDefaultProtocolClient('agentico');
 
 function createMainWindow(
   settings: SettingsStore,
@@ -120,6 +161,13 @@ function createMainWindow(
 
   window.on('ready-to-show', () => {
     window.show();
+    if (testReadyFile !== null) {
+      fs.writeFileSync(
+        testReadyFile,
+        `${JSON.stringify({ readyAt: new Date().toISOString(), title: 'Agentico' })}\n`,
+        { mode: 0o600 },
+      );
+    }
     void gateway.start();
   });
 
@@ -162,13 +210,20 @@ if (!hasSingleInstanceLock) {
     const settings = new SettingsStore(app.getPath('userData'));
     const localDrafts = new LocalDraftStore(app.getPath('userData'));
     const resourceDrafts = new ResourceDraftStore(app.getPath('userData'));
-    const { gateway } = createRuntimeGateway({
+    const { gateway, logBuffer } = createRuntimeGateway({
       getRuntimeSelection: () => settings.get().runtime.selection,
-      isPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
+      isPackaged: isPackagedRuntime,
+      resourcesPath: runtimeResourcesPath,
       // out/main → out → desktop → repository root (development layout).
       appRoot: path.resolve(import.meta.dirname, '../../..'),
     });
+    const diagnostics = new DiagnosticsService({
+      userDataDir: app.getPath('userData'),
+      version: app.getVersion(),
+      revision: process.env['AGENTICO_REVISION'],
+      readServerLines: () => logBuffer.snapshot(),
+    });
+    diagnostics.record('electron', 'info', 'Agentico desktop process started.');
 
     const theme = new ThemeController(
       nativeTheme,
@@ -225,10 +280,25 @@ if (!hasSingleInstanceLock) {
       }
     };
 
+    const broadcastAppEvent = (event: AppEvent): void => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send(IPC_EVENTS.appEvent, event);
+        }
+      }
+    };
+
     const showMainWindow = (): BrowserWindow => {
       if (mainWindow === null || mainWindow.isDestroyed()) {
         mainWindow = createMainWindow(settings, gateway, handleWindowClose);
         const created = mainWindow;
+        created.webContents.on('render-process-gone', (_event, details) => {
+          diagnostics.recordCrash({
+            processRole: 'renderer',
+            category: details.reason,
+            context: `exitCode=${details.exitCode}`,
+          });
+        });
         created.on('closed', () => {
           if (mainWindow === created) {
             mainWindow = null;
@@ -277,42 +347,45 @@ if (!hasSingleInstanceLock) {
       },
     });
 
-    const quitCoordinator = new QuitCoordinator<BrowserWindow>({
-      detectActiveWork,
-      stopWork: stopActiveWork,
-      showActiveWorkDialog: async (active, parent) => {
-        const result = await showMessageBox(parent, activeWorkDialog(active));
-        return activeWorkDecision(result.response);
+    const quitCoordinator = new QuitCoordinator<BrowserWindow>(
+      {
+        detectActiveWork,
+        stopWork: stopActiveWork,
+        showActiveWorkDialog: async (active, parent) => {
+          const result = await showMessageBox(parent, activeWorkDialog(active));
+          return activeWorkDecision(result.response);
+        },
+        showStopFailureDialog: async (result, ownership, parent) => {
+          const response = await showMessageBox(parent, stopFailureDialog(result, ownership));
+          return stopFailureDecision(response.response);
+        },
+        confirmQuitAnyway: async (result, ownership, parent) => {
+          const response = await showMessageBox(parent, quitAnywayDialog(result, ownership));
+          return response.response === 0;
+        },
+        hide: (parent) => {
+          if (parent !== null && !parent.isDestroyed()) {
+            parent.hide();
+          } else {
+            mainWindow?.hide();
+          }
+        },
+        focusMainWindow: () => {
+          showMainWindow();
+        },
+        runtimeOwnership: () => gateway.getState().ownership,
+        shutdown: async () => {
+          stopStreams();
+          await gateway.shutdown();
+        },
+        quitApplication: () => {
+          nativeCommands?.destroy();
+          publishNativeCommandTestState(nativeCommands);
+          app.quit();
+        },
       },
-      showStopFailureDialog: async (result, ownership, parent) => {
-        const response = await showMessageBox(parent, stopFailureDialog(result, ownership));
-        return stopFailureDecision(response.response);
-      },
-      confirmQuitAnyway: async (result, ownership, parent) => {
-        const response = await showMessageBox(parent, quitAnywayDialog(result, ownership));
-        return response.response === 0;
-      },
-      hide: (parent) => {
-        if (parent !== null && !parent.isDestroyed()) {
-          parent.hide();
-        } else {
-          mainWindow?.hide();
-        }
-      },
-      focusMainWindow: () => {
-        showMainWindow();
-      },
-      runtimeOwnership: () => gateway.getState().ownership,
-      shutdown: async () => {
-        stopStreams();
-        await gateway.shutdown();
-      },
-      quitApplication: () => {
-        nativeCommands?.destroy();
-        publishNativeCommandTestState(nativeCommands);
-        app.quit();
-      },
-    });
+      { testMode: testUserData !== null && !forceQuitDialogsInE2E },
+    );
 
     nativeCommands = new NativeCommandController({
       app,
@@ -327,11 +400,28 @@ if (!hasSingleInstanceLock) {
     nativeCommands.install();
     publishNativeCommandTestState(nativeCommands);
 
-    app.on('second-instance', () => {
+    app.on('second-instance', (_event, argv) => {
       showMainWindow();
+      const requestedRoute = routeFromArgv(argv);
+      if (requestedRoute !== null) {
+        route(requestedRoute);
+      }
+    });
+
+    app.on('open-url', (event, url) => {
+      event.preventDefault();
+      showMainWindow();
+      const requestedRoute = routeFromUrl(url);
+      if (requestedRoute !== null) {
+        route(requestedRoute);
+      }
     });
 
     async function detectActiveWork(): Promise<ActiveWorkCheck> {
+      const forced = forcedActiveWorkForE2E(featureLabels);
+      if (forced !== null) {
+        return forced;
+      }
       const featureIds: string[] = [];
       let detectionFailed = false;
       try {
@@ -439,6 +529,46 @@ if (!hasSingleInstanceLock) {
       return { unresolved };
     }
 
+    const updatePackageFormat = detectPackageFormat(process.platform, process.env, runtimeExecPath);
+    const updates = new UpdateCoordinator({
+      currentVersion: app.getVersion(),
+      isPackaged: isPackagedRuntime,
+      packageFormat: updatePackageFormat,
+      canInstallInApp: detectCanInstallInApp(updatePackageFormat, process.env, runtimeExecPath),
+      userDataDir: app.getPath('userData'),
+      diagnostics,
+      ...(process.env.AGENTICO_UPDATE_FIXTURE === undefined
+        ? {}
+        : { fetch: createUpdateFixtureFetch(process.env.AGENTICO_UPDATE_FIXTURE) }),
+      onStateChanged: () => broadcastAppEvent({ type: 'invalidated', kind: 'updates.changed' }),
+      detectActiveWork: async () => {
+        const active = await detectActiveWork();
+        return {
+          featureCount: active.featureIds.length,
+          amaActive: active.chatActive,
+          detectionFailed: active.detectionFailed,
+        };
+      },
+      stopActiveWork: async () => {
+        const result = await stopActiveWork(await detectActiveWork());
+        return {
+          stopped: result.unresolved.length === 0,
+          ...(result.unresolved.length === 0
+            ? {}
+            : {
+                message: result.unresolved
+                  .slice(0, 3)
+                  .map((item) => `${item.label}: ${item.reason}`)
+                  .join('\n'),
+              }),
+        };
+      },
+      restart: () => {
+        app.relaunch();
+        void quitCoordinator.requestQuitDecision();
+      },
+    });
+
     async function refreshBackgroundState(): Promise<void> {
       if (gateway.getState().status !== 'ready') {
         nativeCommands?.update({ attentionCount: 0, amaActive: false });
@@ -461,6 +591,7 @@ if (!hasSingleInstanceLock) {
           amaActive: sessionList.some(isActiveChatSession),
         });
         publishNativeCommandTestState(nativeCommands);
+        await updates.reconcileScheduledInstall();
       } catch {
         nativeCommands?.update({ attentionCount: 0, amaActive: false });
         publishNativeCommandTestState(nativeCommands);
@@ -484,11 +615,7 @@ if (!hasSingleInstanceLock) {
       log: (line) => console.warn(`[agentico-events] ${line}`),
       onStale: () => gateway.handleGlobalStreamStale(),
       onPush: (event) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed()) {
-            window.webContents.send(IPC_EVENTS.appEvent, event);
-          }
-        }
+        broadcastAppEvent(event);
         void refreshBackgroundState();
       },
     });
@@ -499,12 +626,23 @@ if (!hasSingleInstanceLock) {
     gateway.subscribe((state) => {
       if (state.status === 'ready') {
         eventSupervisor.start();
+        updates.startAutomaticChecks();
         void refreshBackgroundState();
       } else {
         eventSupervisor.stop();
         sessions.cancelAll();
         nativeCommands?.update({ attentionCount: 0, amaActive: false });
         publishNativeCommandTestState(nativeCommands);
+      }
+      if (state.status === 'launch-failed' || state.status === 'crashed') {
+        diagnostics.record('server', 'error', state.detail, state.diagnostics?.logTail?.join('\n'));
+        if (state.status === 'crashed') {
+          diagnostics.recordCrash({
+            processRole: 'server',
+            category: state.detail,
+            context: state.diagnostics?.commandContext,
+          });
+        }
       }
     });
     app.on('before-quit', (event) => {
@@ -539,15 +677,27 @@ if (!hasSingleInstanceLock) {
       getFeature: (featureId) => features.getFeature(featureId),
       createFeature: (input) => features.createFeature(input),
       dispatchFeatureSetup: (featureId) => features.dispatchSetup(featureId),
-      dispatchFeatureAction: (request) => features.dispatchAction(request),
+      dispatchFeatureAction: async (request) => {
+        const result = await features.dispatchAction(request);
+        void updates.reconcileScheduledInstall();
+        return result;
+      },
       getAttention: () => attention.getSnapshot(),
       answerPermission: (request) => attention.answerPermission(request),
       answerQuestions: (request) => attention.answerQuestions(request),
       sendHelp: (request) => attention.sendHelp(request),
       saveGateDraft: (request) => attention.saveGateDraft(request),
       resolveGate: (request) => attention.resolveGate(request),
-      startChat: (request) => sessions.startChat(request),
-      endChat: () => sessions.endChat(),
+      startChat: async (request) => {
+        const result = await sessions.startChat(request);
+        void updates.refreshActiveWorkSummary();
+        return result;
+      },
+      endChat: async () => {
+        const result = await sessions.endChat();
+        void updates.reconcileScheduledInstall();
+        return result;
+      },
       listSessions: () => sessions.list(),
       getSession: (sessionId) => sessions.get(sessionId),
       getSessionTranscript: (request) => sessions.transcript(request),
@@ -608,6 +758,19 @@ if (!hasSingleInstanceLock) {
       executeRecovery: (request) => recovery.execute(request),
       readRecoveryLog: (request) => recovery.readLog(request),
       bulkPreview: () => bulk.preview(),
+      getUpdates: () => updates.getState(),
+      checkForUpdates: () => updates.checkNow(),
+      installUpdateWhenIdle: () => updates.installWhenIdle(),
+      installUpdateNow: (request) => updates.installNow(request),
+      restartToUpdate: () => updates.restartToUpdate(),
+      getDiagnostics: () => diagnostics.snapshot(),
+      revealDiagnostics: async () => {
+        // Snapshot first so reveal also enforces diagnostics root creation and pruning.
+        diagnostics.snapshot();
+        const result = await shell.openPath(diagnostics.rootPath());
+        return { ok: result === '' };
+      },
+      clearDiagnostics: () => diagnostics.clear(),
       preflightCompletion: (request) => completion.preflightCompletion(request),
       getRepositoryDiff: (request) => completion.getRepositoryDiff(request),
       generatePublishDescription: (request) =>
@@ -618,6 +781,10 @@ if (!hasSingleInstanceLock) {
     registerIpcHandlers(ipcMain, trusted, services);
 
     showMainWindow();
+    const initialRoute = routeFromArgv(process.argv);
+    if (initialRoute !== null) {
+      route(initialRoute);
+    }
 
     app.on('activate', () => {
       showMainWindow();
@@ -665,6 +832,33 @@ function publishMainWindowFocusTestState(focused: boolean): void {
   global.__agenticoMainWindowFocusState = { focused };
 }
 
+function routeFromArgv(argv: readonly string[]): AppRouteEvent | null {
+  if (argv.some((arg) => arg === '--agentico-route=updates')) {
+    return { target: 'settings', settingsSection: 'updates' };
+  }
+  const url = argv.find((arg) => arg.startsWith('agentico://'));
+  return url === undefined ? null : routeFromUrl(url);
+}
+
+function routeFromUrl(raw: string): AppRouteEvent | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'agentico:') {
+    return null;
+  }
+  if (parsed.hostname === 'updates' || parsed.pathname === '/updates') {
+    return { target: 'settings', settingsSection: 'updates' };
+  }
+  if (parsed.hostname === 'diagnostics' || parsed.pathname === '/diagnostics') {
+    return { target: 'settings', settingsSection: 'diagnostics' };
+  }
+  return { target: 'settings' };
+}
+
 function consumeForcedStopFailure(
   active: ActiveWorkCheck,
   featureLabels: ReadonlyMap<string, string>,
@@ -703,6 +897,32 @@ function consumeForcedStopFailure(
     });
   }
   return { unresolved };
+}
+
+function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkCheck | null {
+  if (testUserData === null) {
+    return null;
+  }
+  const global = globalThis as typeof globalThis & {
+    __agenticoForcedActiveWork?: {
+      featureIds?: string[];
+      featureLabels?: Record<string, string>;
+      chatActive?: boolean;
+      detectionFailed?: boolean;
+    };
+  };
+  const forced = global.__agenticoForcedActiveWork;
+  if (forced === undefined) {
+    return null;
+  }
+  for (const [id, label] of Object.entries(forced.featureLabels ?? {})) {
+    featureLabels.set(id, label);
+  }
+  return {
+    featureIds: forced.featureIds ?? [],
+    chatActive: forced.chatActive ?? false,
+    detectionFailed: forced.detectionFailed ?? false,
+  };
 }
 
 function safeStopReason(error: unknown): string {

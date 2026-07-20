@@ -2,7 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveTestUserDataDir, type TestUserDataDeps } from '../testHooks';
+import {
+  resolveTestOutputFile,
+  resolveTestPackagedResourcesDir,
+  resolveTestUserDataDir,
+  type TestPackagedResourcesDeps,
+  type TestUserDataDeps,
+} from '../testHooks';
 
 const realDeps: TestUserDataDeps = {
   realpath: (candidate) => fs.realpathSync(candidate),
@@ -65,5 +71,66 @@ describe('resolveTestUserDataDir', () => {
     };
     expect(resolveTestUserDataDir('/tmp2/evil', deps)).toBeNull();
     expect(resolveTestUserDataDir('/tmp/fine', deps)).toBe('/tmp/fine');
+  });
+});
+
+describe('resolveTestPackagedResourcesDir', () => {
+  const deps: TestPackagedResourcesDeps = {
+    realpath: (candidate) => fs.realpathSync(candidate),
+    isAbsolute: (candidate) => path.isAbsolute(candidate),
+    exists: (candidate) => fs.existsSync(candidate),
+    join: (...parts) => path.join(...parts),
+  };
+
+  it('accepts a package resources directory only during a temp-backed E2E launch', () => {
+    const userData = makeTempDir();
+    const resources = makeTempDir();
+    fs.mkdirSync(path.join(resources, 'bin'));
+    fs.writeFileSync(path.join(resources, 'app.asar'), '');
+    fs.writeFileSync(path.join(resources, 'build-identity.json'), '{}');
+    fs.writeFileSync(path.join(resources, 'bin', 'agentico'), '');
+
+    expect(resolveTestPackagedResourcesDir(resources, userData, deps)).toBe(
+      fs.realpathSync(resources),
+    );
+  });
+
+  it('rejects missing resources and non-E2E launches', () => {
+    const userData = makeTempDir();
+    const resources = makeTempDir();
+    expect(resolveTestPackagedResourcesDir(resources, userData, deps)).toBeNull();
+    expect(resolveTestPackagedResourcesDir(resources, null, deps)).toBeNull();
+    expect(resolveTestPackagedResourcesDir('relative', userData, deps)).toBeNull();
+  });
+});
+
+describe('resolveTestOutputFile', () => {
+  it('accepts files below the temp directory only during a temp-backed E2E launch', () => {
+    const userData = makeTempDir();
+    const outputDir = makeTempDir();
+    const output = path.join(outputDir, 'ready.json');
+    expect(
+      resolveTestOutputFile(output, userData, {
+        realpath: (candidate) => fs.realpathSync(candidate),
+        dirname: (candidate) => path.dirname(candidate),
+        tmpdir: () => os.tmpdir(),
+        isAbsolute: (candidate) => path.isAbsolute(candidate),
+        sep: path.sep,
+      }),
+    ).toBe(output);
+  });
+
+  it('rejects files outside temp, relative files, and non-E2E launches', () => {
+    const userData = makeTempDir();
+    const deps = {
+      realpath: (candidate: string) => candidate,
+      dirname: (candidate: string) => path.dirname(candidate),
+      tmpdir: () => '/tmp',
+      isAbsolute: (candidate: string) => candidate.startsWith('/'),
+      sep: '/',
+    };
+    expect(resolveTestOutputFile('/Users/example/ready.json', userData, deps)).toBeNull();
+    expect(resolveTestOutputFile('ready.json', userData, deps)).toBeNull();
+    expect(resolveTestOutputFile('/tmp/ready.json', null, deps)).toBeNull();
   });
 });

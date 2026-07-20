@@ -6,6 +6,7 @@ import type {
   AttentionItem,
   ConnectionState,
   CreationDefaults,
+  DiagnosticsSnapshot,
   FeatureSnapshot,
   FeatureActionRequest,
   FeatureSummaryView,
@@ -16,6 +17,7 @@ import type {
   SessionTranscript,
   Settings,
   ThemeInfo,
+  UpdateState,
 } from '../../../shared/ipc';
 import { defaultSettings } from '../../../shared/ipc';
 
@@ -225,6 +227,14 @@ export interface AgenticoMock {
     executeRecovery: ReturnType<typeof vi.fn>;
     readRecoveryLog: ReturnType<typeof vi.fn>;
     bulkPreview: ReturnType<typeof vi.fn>;
+    getUpdates: ReturnType<typeof vi.fn>;
+    checkForUpdates: ReturnType<typeof vi.fn>;
+    installUpdateWhenIdle: ReturnType<typeof vi.fn>;
+    installUpdateNow: ReturnType<typeof vi.fn>;
+    restartToUpdate: ReturnType<typeof vi.fn>;
+    getDiagnostics: ReturnType<typeof vi.fn>;
+    revealDiagnostics: ReturnType<typeof vi.fn>;
+    clearDiagnostics: ReturnType<typeof vi.fn>;
   };
   /** Push a connection change to every subscribed listener. */
   emitConnection(state: ConnectionState): void;
@@ -251,6 +261,8 @@ export function installAgenticoMock(
     session?: SessionDetail;
     transcript?: SessionTranscript;
     attention?: { items: AttentionItem[] };
+    updates?: UpdateState;
+    diagnostics?: DiagnosticsSnapshot;
   } = {},
 ): AgenticoMock {
   const connection: ConnectionState = overrides.connection ?? {
@@ -270,6 +282,8 @@ export function installAgenticoMock(
   const appEventListeners = new Set<(event: AppEvent) => void>();
   const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
   const sessions = overrides.sessions ?? [];
+  const updates = overrides.updates ?? defaultUpdateState();
+  const diagnostics = overrides.diagnostics ?? defaultDiagnostics();
 
   const api = {
     getConnectionStatus: vi.fn(() => Promise.resolve(connection)),
@@ -391,6 +405,39 @@ export function installAgenticoMock(
     executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
     readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),
     bulkPreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    getUpdates: vi.fn(() => Promise.resolve(updates)),
+    checkForUpdates: vi.fn(() => Promise.resolve(updates)),
+    installUpdateWhenIdle: vi.fn(() =>
+      Promise.resolve({
+        ...updates,
+        status: 'scheduled',
+        message: 'Update installation is scheduled for the next idle window.',
+      }),
+    ),
+    installUpdateNow: vi.fn(() =>
+      Promise.resolve({
+        ...updates,
+        status: 'installing',
+        message: 'Restarting to apply the verified update.',
+      }),
+    ),
+    restartToUpdate: vi.fn(() =>
+      Promise.resolve({
+        ...updates,
+        status: 'installing',
+        message: 'Restarting to apply the verified update.',
+      }),
+    ),
+    getDiagnostics: vi.fn(() => Promise.resolve(diagnostics)),
+    revealDiagnostics: vi.fn(() => Promise.resolve({ ok: true })),
+    clearDiagnostics: vi.fn(() =>
+      Promise.resolve({
+        ...diagnostics,
+        entries: [],
+        crashes: [],
+        retention: { ...diagnostics.retention, entryCount: 0, crashCount: 0 },
+      }),
+    ),
     onAppEvent: vi.fn((listener: (event: AppEvent) => void) => {
       appEventListeners.add(listener);
       return () => appEventListeners.delete(listener);
@@ -417,5 +464,51 @@ export function installAgenticoMock(
       for (const listener of sessionOutputListeners) listener(event);
     },
     sessionOutputListenerCount: () => sessionOutputListeners.size,
+  };
+}
+
+export function defaultUpdateState(overrides: Partial<UpdateState> = {}): UpdateState {
+  return {
+    status: 'current',
+    currentVersion: '0.1.0',
+    packageFormat: 'macos',
+    signatureStatus: 'unknown',
+    checkedAt: '2026-07-20T10:00:00.000Z',
+    nextCheckAt: '2026-07-20T16:00:00.000Z',
+    message: 'Agentico is up to date.',
+    ...overrides,
+  };
+}
+
+export function defaultDiagnostics(
+  overrides: Partial<DiagnosticsSnapshot> = {},
+): DiagnosticsSnapshot {
+  return {
+    retention: {
+      maxBytes: 25 * 1024 * 1024,
+      maxAgeDays: 7,
+      maxCrashRecords: 10,
+      currentBytes: 2048,
+      entryCount: 2,
+      crashCount: 0,
+    },
+    entries: [
+      {
+        id: 'evt-1',
+        time: '2026-07-20T10:00:00.000Z',
+        source: 'electron',
+        level: 'info',
+        message: 'Agentico desktop process started.',
+      },
+      {
+        id: 'evt-2',
+        time: '2026-07-20T10:01:00.000Z',
+        source: 'server',
+        level: 'warn',
+        message: 'Gateway retry scheduled with token redacted.',
+      },
+    ],
+    crashes: [],
+    ...overrides,
   };
 }

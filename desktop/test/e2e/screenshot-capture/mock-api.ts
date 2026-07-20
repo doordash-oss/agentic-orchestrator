@@ -29,6 +29,8 @@ import type {
   SetupDispatchResult,
   ThemeInfo,
   ResourceCatalogue,
+  UpdateState,
+  DiagnosticsSnapshot,
 } from '../../../src/shared/ipc';
 import { CHAT_SESSION_ID, defaultSettings } from '../../../src/shared/ipc';
 
@@ -610,13 +612,16 @@ function backgroundAttentionItems(scene: string): AttentionSnapshot['items'] {
   ];
 }
 
-function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): AgenticoApi {
+function makeMockApi(
+  scene: string,
+  listeners: Set<(event: AppEvent) => void>,
+  sessionOutputListeners: Set<(event: SessionOutputEvent) => void>,
+): AgenticoApi {
   const requestedTheme = requestedCaptureTheme();
   let theme: ThemeInfo = { preference: requestedTheme, resolved: requestedTheme };
   const appEventListeners = listeners;
   const routeListeners = new Set<(event: AppRouteEvent) => void>();
   const connectionListeners = new Set<(state: ConnectionState) => void>();
-  const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
   let currentSettings: Settings = {
     ...defaultSettings(),
     theme: requestedTheme,
@@ -633,7 +638,10 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
               : null,
         },
       ],
-      activeFeatureId: 'abcd1234ef567890',
+      activeFeatureId:
+        scene === 'update-passive-active' || scene === 'update-constrained'
+          ? null
+          : 'abcd1234ef567890',
     },
   };
 
@@ -850,9 +858,40 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
     saveReview: () => Promise.reject(new Error('unused')),
     validateReview: () => Promise.reject(new Error('unused')),
     decideReview: () => Promise.reject(new Error('unused')),
-    listResources: () => Promise.resolve({ resources: [] } as ResourceCatalogue),
-    readResource: () => Promise.reject(new Error('unused')),
-    validateResource: () => Promise.reject(new Error('unused')),
+    listResources: () =>
+      Promise.resolve({
+        resources: [
+          {
+            id: 'runtime:config.yaml',
+            kind: 'runtime_config',
+            label: 'config.yaml',
+            contentType: 'yaml',
+            revision: 'rev-resource-001',
+            effect: 'restart_required',
+            validatable: true,
+            hierarchy: ['runtime', 'config.yaml'],
+          },
+        ],
+      } as ResourceCatalogue),
+    readResource: () =>
+      Promise.resolve({
+        id: 'runtime:config.yaml',
+        kind: 'runtime_config',
+        label: 'config.yaml',
+        contentType: 'yaml',
+        revision: 'rev-resource-001',
+        text: 'providers:\n  claude:\n    cli: /usr/local/bin/claude\n',
+        effect: 'restart_required',
+        validatable: true,
+        hierarchy: ['runtime', 'config.yaml'],
+      }),
+    validateResource: () =>
+      Promise.resolve({
+        id: 'runtime:config.yaml',
+        valid: true,
+        revision: 'rev-resource-001',
+        findings: [],
+      }),
     writeResource: () => Promise.reject(new Error('unused')),
     loadLocalResourceDraft: () => Promise.resolve(null),
     saveLocalResourceDraft: () => Promise.reject(new Error('unused')),
@@ -1006,6 +1045,40 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
         truncated: false,
       }),
     bulkPreview: () => Promise.resolve(BULK_PREVIEW_DATA),
+    getUpdates: () => Promise.resolve(updateStateForScene(scene)),
+    checkForUpdates: () => Promise.resolve(updateStateForScene(scene)),
+    installUpdateWhenIdle: () =>
+      Promise.resolve({
+        ...updateStateForScene(scene),
+        status: 'scheduled' as const,
+        message: 'Update installation is scheduled for the next idle window.',
+      }),
+    installUpdateNow: () =>
+      Promise.resolve({
+        ...updateStateForScene(scene),
+        status: 'installing' as const,
+        message: 'Restarting to apply the verified update.',
+      }),
+    restartToUpdate: () =>
+      Promise.resolve({
+        ...updateStateForScene(scene),
+        status: 'installing' as const,
+        message: 'Restarting to apply the verified update.',
+      }),
+    getDiagnostics: () => Promise.resolve(diagnosticsSnapshotForScene(scene)),
+    revealDiagnostics: () => Promise.resolve({ ok: true }),
+    clearDiagnostics: () =>
+      Promise.resolve({
+        ...diagnosticsSnapshotForScene(scene),
+        entries: [],
+        crashes: [],
+        retention: {
+          ...diagnosticsSnapshotForScene(scene).retention,
+          entryCount: 0,
+          crashCount: 0,
+          currentBytes: 0,
+        },
+      }),
     preflightCompletion: () => {
       const isPublishScene = scene === 'completion-publish';
       const isDeleteScene = scene === 'completion-delete';
@@ -1167,12 +1240,106 @@ index 5c32b6a..8a9b3c1 100644
   };
 }
 
+function updateStateForScene(scene: string): UpdateState {
+  if (scene === 'settings-updates-deb') {
+    return {
+      status: 'available',
+      currentVersion: '0.1.0',
+      targetVersion: '0.2.0',
+      packageFormat: 'deb',
+      signatureStatus: 'verified',
+      checkedAt: '2026-07-20T10:00:00.000Z',
+      nextCheckAt: '2026-07-20T16:00:00.000Z',
+      releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+      message: 'A verified DEB update is available.',
+      guidance: [
+        'DEB installs are updated by the package manager, not by in-app replacement.',
+        'Download the signed DEB and checksum from the GitHub release.',
+        'Install with: sudo apt install ./agentico_0.2.0_amd64.deb',
+      ],
+    };
+  }
+  if (scene === 'update-passive-active' || scene === 'settings-install-now-confirm') {
+    return {
+      ...readyUpdateState(),
+      activeWorkSummary: '1 workflow and AMA session are active.',
+    };
+  }
+  return readyUpdateState();
+}
+
+function readyUpdateState(): UpdateState {
+  return {
+    status: 'ready',
+    currentVersion: '0.1.0',
+    targetVersion: '0.2.0',
+    packageFormat: 'macos',
+    signatureStatus: 'verified',
+    checkedAt: '2026-07-20T10:00:00.000Z',
+    nextCheckAt: '2026-07-20T16:00:00.000Z',
+    releaseNotesUrl: 'https://github.com/doordash-oss/agentic-orchestrator/releases/tag/v0.2.0',
+    message: 'A verified update is downloaded and ready to install.',
+  };
+}
+
+function diagnosticsSnapshotForScene(_scene: string): DiagnosticsSnapshot {
+  return {
+    retention: {
+      maxBytes: 25 * 1024 * 1024,
+      maxAgeDays: 7,
+      maxCrashRecords: 10,
+      currentBytes: 4096,
+      entryCount: 4,
+      crashCount: 1,
+    },
+    entries: [
+      {
+        id: 'evt-update',
+        time: '2026-07-20T10:06:00.000Z',
+        source: 'update',
+        level: 'info',
+        message: 'Verified update metadata staged.',
+        detail: 'v0.2.0 Agentico-mac-universal.dmg',
+      },
+      {
+        id: 'evt-server',
+        time: '2026-07-20T10:04:00.000Z',
+        source: 'server',
+        level: 'warn',
+        message: 'Gateway retry scheduled with token redacted.',
+      },
+      {
+        id: 'evt-electron',
+        time: '2026-07-20T10:00:00.000Z',
+        source: 'electron',
+        level: 'info',
+        message: 'Agentico desktop process started.',
+      },
+    ],
+    crashes: [
+      {
+        id: 'crash-1',
+        time: '2026-07-20T09:55:00.000Z',
+        version: '0.1.0',
+        platform: 'darwin',
+        architecture: 'arm64',
+        processRole: 'renderer',
+        category: 'crashed',
+        context: 'exitCode=9',
+      },
+    ],
+  };
+}
+
 export function installMockApi(scene: string): {
   emitAppEvent: (event: AppEvent) => void;
+  emitSessionOutput: (event: SessionOutputEvent) => void;
+  sessionOutputListenerCount: () => number;
   setTheme: (theme: 'light' | 'dark') => void;
 } {
   const appEventListeners = new Set<(event: AppEvent) => void>();
-  const api = makeMockApi(scene, appEventListeners);
+  const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
+  const api = makeMockApi(scene, appEventListeners, sessionOutputListeners);
   Object.defineProperty(window, 'agentico', {
     value: api,
     writable: true,
@@ -1183,6 +1350,10 @@ export function installMockApi(scene: string): {
     emitAppEvent: (event) => {
       appEventListeners.forEach((l) => l(event));
     },
+    emitSessionOutput: (event) => {
+      sessionOutputListeners.forEach((listener) => listener(event));
+    },
+    sessionOutputListenerCount: () => sessionOutputListeners.size,
     setTheme: (themeMode) => {
       document.documentElement.dataset['theme'] = themeMode;
     },

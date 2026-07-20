@@ -39,6 +39,27 @@ async function capture(
   await page.screenshot({ path: target, fullPage: false });
 }
 
+async function scrollSettingsSectionIntoCapture(
+  page: Page,
+  name: 'Updates' | 'Diagnostics',
+): Promise<void> {
+  await page.addStyleTag({ content: '* { scroll-behavior: auto !important; }' });
+  const target = page.getByRole('region', { name });
+  await expect(target).toBeVisible({ timeout: 10_000 });
+  await target.evaluate((element) => {
+    const scroller = element.closest('.tab-panel');
+    if (scroller instanceof HTMLElement) {
+      const scrollerRect = scroller.getBoundingClientRect();
+      const targetRect = element.getBoundingClientRect();
+      scroller.scrollTop += targetRect.top - scrollerRect.top - 16;
+      return;
+    }
+    element.scrollIntoView({ block: 'start', inline: 'nearest' });
+  });
+  await expect(target.getByRole('heading', { name })).toBeInViewport({ timeout: 5_000 });
+  await expect(target).toBeInViewport({ timeout: 5_000 });
+}
+
 test('capture all visual evidence screenshots', async ({ page }) => {
   test.setTimeout(180_000);
 
@@ -95,6 +116,123 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     900,
     'constrained-workspace-with-compact-ama-question-badge-expanded-exact-question-ta-760x900',
     '.command-palette',
+  );
+
+  await capture(
+    page,
+    'update-passive-active',
+    'dark',
+    1440,
+    900,
+    'passive-verified-update-notice-with-active-workflow-and-non-interrupting-install-1440x900',
+    '.update-notice',
+    async (p) => {
+      await p.getByRole('tab', { name: 'History and Rewind' }).click();
+      await expect(p.getByRole('group', { name: 'Feature actions' })).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(p.getByLabel('Current feature status')).toBeVisible({ timeout: 15_000 });
+      await expect(p.getByRole('button', { name: 'Install When Idle' })).toBeVisible({
+        timeout: 5_000,
+      });
+    },
+  );
+
+  await capture(
+    page,
+    'settings-updates-ready',
+    'light',
+    1440,
+    900,
+    'settings-updates-panel-with-downloaded-version-signature-state-release-note-link-1440x900',
+    '.settings-panel__section--updates',
+    async (p) => {
+      await scrollSettingsSectionIntoCapture(p, 'Updates');
+      await p.getByRole('button', { name: 'Restart to Update' }).scrollIntoViewIfNeeded();
+      await expect(p.getByRole('button', { name: 'Restart to Update' })).toBeInViewport({
+        timeout: 5_000,
+      });
+    },
+  );
+
+  await capture(
+    page,
+    'settings-updates-deb',
+    'dark',
+    1440,
+    900,
+    'settings-updates-panel-for-a-deb-install-with-verified-package-manager-guidance-1440x900',
+    '.settings-panel__section--updates',
+    async (p) => {
+      await scrollSettingsSectionIntoCapture(p, 'Updates');
+      await expect(p.getByText(/package manager/)).toBeVisible({ timeout: 5_000 });
+      await p
+        .getByRole('button', { name: 'Copy the package-manager command' })
+        .scrollIntoViewIfNeeded();
+      await expect(
+        p.getByRole('button', { name: 'Copy the package-manager command' }),
+      ).toBeInViewport({
+        timeout: 5_000,
+      });
+      await expect(p.getByRole('button', { name: 'Restart to Update' })).toHaveCount(0);
+      await expect(p.getByRole('button', { name: 'Stop Work and Install Now' })).toHaveCount(0);
+    },
+  );
+
+  await capture(
+    page,
+    'settings-install-now-confirm',
+    'light',
+    1440,
+    900,
+    'stop-work-and-install-now-impact-confirmation-showing-workflow-and-ama-consequen-1440x900',
+    '.settings-panel__section--updates',
+    async (p) => {
+      await scrollSettingsSectionIntoCapture(p, 'Updates');
+      await p.getByRole('button', { name: 'Stop Work and Install Now' }).click();
+      await expect(p.getByRole('dialog', { name: 'Install update confirmation' })).toBeVisible({
+        timeout: 5_000,
+      });
+    },
+  );
+
+  await capture(
+    page,
+    'settings-diagnostics',
+    'dark',
+    1440,
+    900,
+    'settings-diagnostics-panel-with-bounded-redacted-entries-retention-summary-revea-1440x900',
+    '.settings-panel__section--diagnostics',
+    async (p) => {
+      await scrollSettingsSectionIntoCapture(p, 'Diagnostics');
+      await expect(p.getByRole('button', { name: 'Reveal Folder' })).toBeInViewport({
+        timeout: 5_000,
+      });
+      await expect(p.getByRole('button', { name: 'Clear Diagnostics' })).toBeInViewport({
+        timeout: 5_000,
+      });
+      await expect(p.locator('.settings-panel__diagnostic').first()).toBeInViewport({
+        timeout: 5_000,
+      });
+    },
+  );
+
+  await capture(
+    page,
+    'update-constrained',
+    'light',
+    760,
+    900,
+    'constrained-workspace-with-passive-update-notice-and-reachable-updates-status-li-760x900',
+    '.update-notice',
+    async (p) => {
+      await p.getByRole('button', { name: 'Updates' }).click();
+      await expect(p.locator('.settings-panel__section--updates')).toBeVisible({
+        timeout: 10_000,
+      });
+      await scrollSettingsSectionIntoCapture(p, 'Updates');
+    },
   );
 
   await capture(

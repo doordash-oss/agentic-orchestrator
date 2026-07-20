@@ -6,17 +6,18 @@
  * trace zips) are additionally copied to AGENTICO_E2E_EVIDENCE_DIR when the
  * run is an evidence run.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
 import type { ElectronApplication, Locator, Page, TestInfo } from '@playwright/test';
-import { packagedExecutable } from './packaged';
+import { packagedAppAsar, packagedExecutable, packagedResourcesDir } from './packaged';
 import { killProcessTree } from './processes';
 import { minimalEnv, type JourneyWorld } from './world';
 
 export interface AppHandle {
   app: ElectronApplication;
+  appProcess: ChildProcess;
   page: Page;
   /** Combined stdout+stderr of the app process (redacted logs, gateway notes). */
   logs: string[];
@@ -31,6 +32,8 @@ export interface LaunchOptions {
   executablePath?: string;
   /** Trace zip base name; defaults to the journey file name. */
   traceName?: string;
+  /** Narrow per-journey environment additions, merged onto the hermetic base. */
+  env?: Record<string, string>;
 }
 
 export interface CreateFeatureOptions {
@@ -73,7 +76,8 @@ export async function launchApp(
   testInfo: TestInfo,
   options: LaunchOptions = {},
 ): Promise<AppHandle> {
-  const executablePath = options.executablePath ?? packagedExecutable();
+  const installExecutablePath = options.executablePath ?? packagedExecutable();
+  const resourcesPath = packagedResourcesDir(installExecutablePath);
   const args: string[] = [];
   if (process.platform === 'linux' && process.env['CI'] !== undefined) {
     // GitHub runners have no setuid chrome-sandbox helper for the unpacked
@@ -88,20 +92,27 @@ export async function launchApp(
     // without relying on platform detection.
     args.push('--no-sandbox');
   }
+  args.unshift(packagedAppAsar(installExecutablePath));
   const app = await electron.launch({
-    executablePath,
     args,
-    env: minimalEnv(world),
+    env: {
+      ...minimalEnv(world),
+      AGENTICO_E2E_RESOURCES_PATH: resourcesPath,
+      AGENTICO_E2E_INSTALL_EXECUTABLE: installExecutablePath,
+      ...(options.env ?? {}),
+    },
     timeout: 60_000,
   });
   const logs: string[] = [];
-  app.process().stdout?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
-  app.process().stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
+  const appProcess = app.process();
+  appProcess.stdout?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
+  appProcess.stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
   await app.context().tracing.start({ screenshots: true, snapshots: true });
   const page = await app.firstWindow({ timeout: 30_000 });
   await page.bringToFront();
   return {
     app,
+    appProcess,
     page,
     logs,
     world,
@@ -128,7 +139,7 @@ export async function closeApp(handle: AppHandle): Promise<void> {
   } catch {
     // Tracing is evidence, not correctness — never fail teardown on it.
   }
-  const appProcess = handle.app.process();
+  const appProcess = handle.appProcess;
   await installTeardownQuitDialogAnswer(handle).catch(() => undefined);
   await handle.app.close();
   const deadline = Date.now() + 15_000;
@@ -139,6 +150,47 @@ export async function closeApp(handle: AppHandle): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}
+
+export async function installRelaunchProbe(handle: AppHandle): Promise<void> {
+  await handle.app.evaluate(({ app }) => {
+    const global = globalThis as typeof globalThis & {
+      __agenticoOriginalQuit?: typeof app.quit;
+      __agenticoOriginalRelaunch?: typeof app.relaunch;
+      __agenticoRelaunchCount?: number;
+    };
+    global.__agenticoOriginalQuit = global.__agenticoOriginalQuit ?? app.quit.bind(app);
+    global.__agenticoOriginalRelaunch = global.__agenticoOriginalRelaunch ?? app.relaunch.bind(app);
+    global.__agenticoRelaunchCount = 0;
+    app.relaunch = () => {
+      global.__agenticoRelaunchCount = (global.__agenticoRelaunchCount ?? 0) + 1;
+    };
+    app.quit = (() => undefined) as typeof app.quit;
+  });
+}
+
+export async function restoreRelaunchProbe(handle: AppHandle): Promise<void> {
+  await handle.app.evaluate(({ app }) => {
+    const global = globalThis as typeof globalThis & {
+      __agenticoOriginalQuit?: typeof app.quit;
+      __agenticoOriginalRelaunch?: typeof app.relaunch;
+    };
+    if (global.__agenticoOriginalQuit !== undefined) {
+      app.quit = global.__agenticoOriginalQuit;
+      global.__agenticoOriginalQuit = undefined;
+    }
+    if (global.__agenticoOriginalRelaunch !== undefined) {
+      app.relaunch = global.__agenticoOriginalRelaunch;
+      global.__agenticoOriginalRelaunch = undefined;
+    }
+  });
+}
+
+export function relaunchCount(handle: AppHandle): Promise<number> {
+  return handle.app.evaluate(() => {
+    const global = globalThis as typeof globalThis & { __agenticoRelaunchCount?: number };
+    return global.__agenticoRelaunchCount ?? 0;
+  });
 }
 
 async function installTeardownQuitDialogAnswer(handle: AppHandle): Promise<void> {

@@ -53,6 +53,7 @@ import {
   type RefactorPreflightRequest,
   type RecoveryExecuteRequest,
   type RecoveryLogReadRequest,
+  type UpdateInstallNowRequest,
   type CompletionPreflightRequest,
   type PublishDescriptionRequest,
   type RepositoryDiffRequest,
@@ -222,6 +223,15 @@ const api: AgenticoApi = {
   executeRecovery: (request: RecoveryExecuteRequest) => call(IPC_CHANNELS.recoveryExecute, request),
   readRecoveryLog: (request: RecoveryLogReadRequest) => call(IPC_CHANNELS.recoveryLogRead, request),
   bulkPreview: () => call(IPC_CHANNELS.bulkPreview),
+  getUpdates: () => call(IPC_CHANNELS.updatesGet),
+  checkForUpdates: () => call(IPC_CHANNELS.updatesCheck),
+  installUpdateWhenIdle: () => call(IPC_CHANNELS.updatesInstallWhenIdle),
+  installUpdateNow: (request: UpdateInstallNowRequest) =>
+    call(IPC_CHANNELS.updatesInstallNow, request),
+  restartToUpdate: () => call(IPC_CHANNELS.updatesRestart),
+  getDiagnostics: () => call(IPC_CHANNELS.diagnosticsGet),
+  revealDiagnostics: () => call(IPC_CHANNELS.diagnosticsReveal),
+  clearDiagnostics: () => call(IPC_CHANNELS.diagnosticsClear),
   onAppEvent: (listener: (event: AppEvent) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

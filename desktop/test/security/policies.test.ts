@@ -1,4 +1,11 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  auditElectronBuilderFuseConfig,
+  expectedElectronBuilderFuses,
+  parseElectronBuilderFuses,
+} from '../../scripts/lib/fuse-policy.mjs';
 import {
   buildCsp,
   isAllowedNavigation,
@@ -19,6 +26,14 @@ describe('mainWindowWebPreferences', () => {
     expect(prefs.allowRunningInsecureContent).toBe(false);
     expect(prefs.experimentalFeatures).toBe(false);
     expect(prefs.preload).toBe('/app/out/preload/index.cjs');
+  });
+});
+
+describe('production Electron fuses', () => {
+  it('keeps hardened fuse settings in electron-builder config', () => {
+    const config = readFileSync(path.join(process.cwd(), 'electron-builder.yml'), 'utf8');
+    expect(parseElectronBuilderFuses(config)).toEqual(expectedElectronBuilderFuses());
+    expect(auditElectronBuilderFuseConfig(config)).toEqual([]);
   });
 });
 

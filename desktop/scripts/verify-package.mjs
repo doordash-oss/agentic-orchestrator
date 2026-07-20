@@ -36,6 +36,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getCurrentFuseWire } from '@electron/fuses';
 
 import {
   crossCheckServerBinary,
@@ -43,6 +44,8 @@ import {
   parseGoBuildInfo,
   validateBuildIdentity,
 } from './lib/identity.mjs';
+import { auditFuseWire } from './lib/fuse-policy.mjs';
+import { unpackedExecutablePath } from './lib/package-layout.mjs';
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = join(desktopDir, 'dist');
@@ -154,7 +157,7 @@ function verifyResources(resourcesDir, { expectUniversalBinary }) {
   return identity;
 }
 
-function verifyDmg(dmgPath) {
+async function verifyDmg(dmgPath) {
   const mountPoint = mkdtempSync(join(tmpdir(), 'agentico-verify-dmg-'));
   execFileSync(
     'hdiutil',
@@ -168,6 +171,7 @@ function verifyDmg(dmgPath) {
     if (!existsSync(appDir)) {
       fail(`DMG does not contain Agentico.app (${dmgPath})`);
     }
+    await verifyElectronFuses(join(appDir, 'Contents', 'MacOS', 'Agentico'));
     return verifyResources(join(appDir, 'Contents', 'Resources'), {
       expectUniversalBinary: true,
     });
@@ -177,12 +181,13 @@ function verifyDmg(dmgPath) {
   }
 }
 
-function verifyAppImage(appImagePath) {
+async function verifyAppImage(appImagePath) {
   const workDir = mkdtempSync(join(tmpdir(), 'agentico-verify-appimage-'));
   try {
     // --appimage-extract works without FUSE and always unpacks to
     // ./squashfs-root under the current working directory.
     execFileSync(appImagePath, ['--appimage-extract'], { cwd: workDir, stdio: 'ignore' });
+    await verifyElectronFuses(join(workDir, 'squashfs-root', 'agentico'));
     return verifyResources(join(workDir, 'squashfs-root', 'resources'), {
       expectUniversalBinary: false,
     });
@@ -191,7 +196,7 @@ function verifyAppImage(appImagePath) {
   }
 }
 
-function verifyDeb(debPath) {
+async function verifyDeb(debPath) {
   const workDir = mkdtempSync(join(tmpdir(), 'agentico-verify-deb-'));
   try {
     execFileSync('dpkg-deb', ['-x', debPath, workDir], { stdio: 'inherit' });
@@ -199,6 +204,7 @@ function verifyDeb(debPath) {
     if (!existsSync(resourcesDir)) {
       fail(`deb payload has no resources dir at opt/Agentico/resources (${debPath})`);
     }
+    await verifyElectronFuses(join(workDir, 'opt', 'Agentico', 'agentico'));
     return verifyResources(resourcesDir, { expectUniversalBinary: false });
   } finally {
     rmSync(workDir, { recursive: true, force: true });
@@ -206,20 +212,20 @@ function verifyDeb(debPath) {
 }
 
 function unpackedExecutable() {
-  if (process.platform === 'darwin') {
-    return join(distDir, 'mac-universal', 'Agentico.app', 'Contents', 'MacOS', 'Agentico');
+  try {
+    return unpackedExecutablePath(desktopDir);
+  } catch (error) {
+    fail(
+      error instanceof Error ? error.message : `unsupported verification host: ${process.platform}`,
+    );
   }
-  if (process.platform === 'linux') {
-    const unpackedDir = process.arch === 'arm64' ? 'linux-arm64-unpacked' : 'linux-unpacked';
-    return join(distDir, unpackedDir, 'agentico');
-  }
-  fail(`unsupported verification host: ${process.platform}`);
 }
 
-function verifyUnpackedApp(executablePath) {
+async function verifyUnpackedApp(executablePath) {
   if (!existsSync(executablePath)) {
     fail(`expected unpacked app for packaged E2E at ${executablePath}`);
   }
+  await verifyElectronFuses(executablePath);
   const resourcesDir =
     process.platform === 'darwin'
       ? join(dirname(dirname(executablePath)), 'Resources')
@@ -227,28 +233,41 @@ function verifyUnpackedApp(executablePath) {
   return verifyResources(resourcesDir, { expectUniversalBinary: process.platform === 'darwin' });
 }
 
-function main() {
+async function verifyElectronFuses(executablePath) {
+  let fuses;
+  try {
+    fuses = await getCurrentFuseWire(executablePath);
+  } catch (error) {
+    fail(`could not read Electron fuses from ${executablePath}: ${error.message}`);
+  }
+  const mismatches = auditFuseWire(fuses);
+  if (mismatches.length > 0) {
+    fail(`Electron fuses are not hardened:\n  ${mismatches.join('\n  ')}`);
+  }
+}
+
+async function main() {
   const startedAt = Date.now();
   const verified = [];
   let identity;
   const unpackedApp = unpackedExecutable();
   if (unpackedOnly) {
     console.log(`verify-package: inspecting unpacked app ${unpackedApp}`);
-    identity = verifyUnpackedApp(unpackedApp);
+    identity = await verifyUnpackedApp(unpackedApp);
     verified.push({ target: 'unpacked', path: unpackedApp });
   } else if (process.platform === 'darwin') {
     const dmg = findArtifact('.dmg');
     console.log(`verify-package: inspecting ${dmg}`);
-    identity = verifyDmg(dmg);
+    identity = await verifyDmg(dmg);
     verified.push({ target: 'dmg', path: dmg });
   } else if (process.platform === 'linux') {
     const appImage = findArtifact('.AppImage');
     console.log(`verify-package: inspecting ${appImage}`);
-    identity = verifyAppImage(appImage);
+    identity = await verifyAppImage(appImage);
     verified.push({ target: 'AppImage', path: appImage });
     const deb = findArtifact('.deb');
     console.log(`verify-package: inspecting ${deb}`);
-    identity = verifyDeb(deb);
+    identity = await verifyDeb(deb);
     verified.push({ target: 'deb', path: deb });
   } else {
     fail(`unsupported verification host: ${process.platform}`);
@@ -279,7 +298,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   if (error instanceof VerificationFailure) {
     console.error(`verify-package: FAIL: ${error.message}`);

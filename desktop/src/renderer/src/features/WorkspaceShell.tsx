@@ -476,7 +476,9 @@ export function WorkspaceShell({
           aria-labelledby="tab-settings"
           className="tab-panel"
         >
-          <SettingsPanel />
+          <SettingsPanel
+            routeRequest={routeRequest?.event.target === 'settings' ? routeRequest : null}
+          />
         </div>
       ) : (
         <div

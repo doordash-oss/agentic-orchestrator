@@ -99,6 +99,14 @@ describe('preload surface', () => {
         'executeRecovery',
         'readRecoveryLog',
         'bulkPreview',
+        'getUpdates',
+        'checkForUpdates',
+        'installUpdateWhenIdle',
+        'installUpdateNow',
+        'restartToUpdate',
+        'getDiagnostics',
+        'revealDiagnostics',
+        'clearDiagnostics',
       ].sort(),
     );
   });
@@ -215,7 +223,12 @@ describe('preload surface', () => {
     expect(cb).toHaveBeenCalledWith({ target: 'ama' });
 
     cb.mockClear();
+    listener({}, { target: 'settings', settingsSection: 'updates' });
+    expect(cb).toHaveBeenCalledWith({ target: 'settings', settingsSection: 'updates' });
+
+    cb.mockClear();
     listener({}, { target: 'shell' });
+    listener({}, { target: 'settings', settingsSection: 'secrets' });
     listener({}, { target: 'attention', token: 'tok-leak' });
     listener({}, JSON.parse('{"__proto__": {}, "target": "home"}'));
     expect(cb).not.toHaveBeenCalled();

@@ -142,6 +142,22 @@ describe('QuitCoordinator', () => {
     expect(deps.shutdown).toHaveBeenCalledWith({ quitAnyway: true });
   });
 
+  it('in test mode, quits immediately without dialogs even when detection would fail', async () => {
+    const deps = makeDeps({
+      detectActiveWork: vi.fn().mockResolvedValue(active(['feature-1'], true, true)),
+    });
+    const coordinator = new QuitCoordinator(deps, { testMode: true });
+
+    await coordinator.requestQuitDecision('window');
+
+    expect(deps.detectActiveWork).not.toHaveBeenCalled();
+    expect(deps.showActiveWorkDialog).not.toHaveBeenCalled();
+    expect(deps.showStopFailureDialog).not.toHaveBeenCalled();
+    expect(deps.shutdown).toHaveBeenCalledWith({ quitAnyway: true });
+    expect(deps.quitApplication).toHaveBeenCalledOnce();
+    expect(coordinator.shouldAllowClose()).toBe(true);
+  });
+
   it('ignores duplicate quit requests while a stop is in progress', async () => {
     let releaseStop!: () => void;
     const deps = makeDeps({

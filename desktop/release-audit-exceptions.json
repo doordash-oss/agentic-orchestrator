@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "allowedLicenses": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "MPL-2.0 OR Apache-2.0",
+    "OFL-1.1"
+  ],
+  "shippedDevDependencies": [
+    "@fontsource/atkinson-hyperlegible",
+    "@fontsource/barlow-condensed",
+    "@fontsource/ibm-plex-mono"
+  ],
+  "licenseExceptions": [
+    {
+      "source": "go",
+      "name": "github.com/ugorji/go/codec",
+      "license": "UNKNOWN",
+      "reason": "The local module cache contains checksum metadata but not the expanded module source; upstream package metadata records MIT. Re-review after the module is refreshed in CI.",
+      "expires": "2027-07-20"
+    }
+  ],
+  "vulnerabilityExceptions": [
+    {
+      "source": "go",
+      "id": "GO-2026-4970",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.5",
+      "expires": "2026-08-20",
+      "reason": "Local runner Go 1.26.4 standard library finding. Protected release runners must upgrade to Go 1.26.5 or newer before promotion."
+    },
+    {
+      "source": "go",
+      "id": "GO-2026-5856",
+      "name": "stdlib",
+      "fixedVersion": "v1.26.5",
+      "expires": "2026-08-20",
+      "reason": "Local runner Go 1.26.4 standard library finding. Protected release runners must upgrade to Go 1.26.5 or newer before promotion."
+    }
+  ]
+}

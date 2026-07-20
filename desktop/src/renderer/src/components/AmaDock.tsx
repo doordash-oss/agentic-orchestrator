@@ -37,6 +37,7 @@ type TranscriptState =
   | { phase: 'error'; message: string; messages: TranscriptMessage[]; cursor: TranscriptCursor };
 
 const EMPTY_CURSOR: TranscriptCursor = { total: 0, start: 0, end: 0 };
+const MAX_TRANSCRIPT_MESSAGES = 200;
 
 export function AmaDock({
   attentionItems,
@@ -409,7 +410,9 @@ function upsertMessage(
 ): TranscriptMessage[] {
   const byIndex = new Map(messages.map((message) => [message.index, message]));
   byIndex.set(incoming.index, incoming);
-  return [...byIndex.values()].sort((left, right) => left.index - right.index);
+  return [...byIndex.values()]
+    .sort((left, right) => left.index - right.index)
+    .slice(-MAX_TRANSCRIPT_MESSAGES);
 }
 
 function messageText(entry: TranscriptMessage): string {

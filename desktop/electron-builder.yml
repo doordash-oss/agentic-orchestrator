@@ -1,9 +1,12 @@
-# Unsigned development packaging: universal macOS DMG plus
-# Linux AppImage/deb. Signing, notarization, publishing, and update delivery
-# are all explicitly out of scope — no publish config may be added here
-# without a release-engineering task.
+# Local packaging remains unsigned and unpublished by default. Protected tag
+# release jobs provide Developer ID/notarization and GPG material through CI
+# environment only; release verification rejects strict runs without them.
 appId: com.doordash.agentico
 productName: Agentico
+protocols:
+  - name: Agentico
+    schemes:
+      - agentico
 directories:
   buildResources: build
   output: dist
@@ -11,6 +14,15 @@ files:
   - out/**
   - package.json
 asar: true
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: true
+  grantFileProtocolExtraPrivileges: false
 npmRebuild: false
 # No publishing or update delivery: a null publish config also stops
 # electron-builder from emitting auto-update metadata (latest-*.yml).
@@ -24,11 +36,16 @@ publish: null
 extraResources:
   - from: resources
     to: .
+  - from: ../LICENSE.txt
+    to: LICENSE.txt
+  - from: ../NOTICE.txt
+    to: NOTICE.txt
 mac:
   target:
     - target: dmg
       arch: universal
   category: public.app-category.developer-tools
+  hardenedRuntime: true
   # Unsigned development build: never look up a signing identity and never
   # notarize. macOS arm64 still requires a signature to execute, so
   # electron-builder falls back to ad-hoc signing — which is not a

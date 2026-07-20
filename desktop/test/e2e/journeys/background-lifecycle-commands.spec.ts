@@ -29,7 +29,10 @@ test('packaged command palette, native menu routes, and active close policy stay
   let handle: AppHandle | null = null;
 
   try {
-    handle = await launchApp(world, testInfo, { traceName: 'background-lifecycle-commands' });
+    handle = await launchApp(world, testInfo, {
+      traceName: 'background-lifecycle-commands',
+      env: { AGENTICO_E2E_FORCE_QUIT_DIALOGS: '1' },
+    });
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
@@ -173,7 +176,10 @@ test('packaged close policy exposes partial-stop Retry controls', async ({}, tes
   let handle: AppHandle | null = null;
 
   try {
-    handle = await launchApp(world, testInfo, { traceName: 'background-lifecycle-partial-retry' });
+    handle = await launchApp(world, testInfo, {
+      traceName: 'background-lifecycle-partial-retry',
+      env: { AGENTICO_E2E_FORCE_QUIT_DIALOGS: '1' },
+    });
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
@@ -211,7 +217,10 @@ test('packaged close policy exposes highest-risk Quit Anyway controls', async ({
   let handle: AppHandle | null = null;
 
   try {
-    handle = await launchApp(world, testInfo, { traceName: 'background-lifecycle-quit-anyway' });
+    handle = await launchApp(world, testInfo, {
+      traceName: 'background-lifecycle-quit-anyway',
+      env: { AGENTICO_E2E_FORCE_QUIT_DIALOGS: '1' },
+    });
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });

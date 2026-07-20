@@ -428,8 +428,9 @@ Usage: agentico [flags]
 
 Starts the foreground loopback HTTP server. The 'server' subcommand is retained
 as an explicit alias for Electron and service launchers.
-Run 'agentico update' to upgrade the binary, or 'agentico update --check'
-(alias -n) to report the latest available release without installing.
+Run 'agentico update' to open the desktop Updates panel when Agentico is
+registered, or print package-manager guidance otherwise. Run
+'agentico update --check' (alias -n) for a read-only stable-version check.
 Run 'agentico validate-artifacts' from agent sessions before phase_complete
 to parse and validate role output artifacts without starting the server.
 Run 'agentico verify-evidence' from implementer sessions before phase_complete

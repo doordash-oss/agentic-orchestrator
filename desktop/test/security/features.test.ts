@@ -8,7 +8,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
 import type { TrustedSender } from '../../src/main/security';
-import { IPC_CHANNELS, defaultSettings } from '../../src/shared/ipc';
+import {
+  IPC_CHANNELS,
+  defaultSettings,
+  type DiagnosticsSnapshot,
+  type UpdateState,
+} from '../../src/shared/ipc';
 
 const trusted: TrustedSender = {
   webContentsId: 1,
@@ -35,6 +40,31 @@ function snapshot() {
     createdAt: '2026-07-14T10:00:00Z',
     activeRun: 1,
     actions: [{ id: 'start', enabled: true, disabledReasons: [] }],
+  };
+}
+
+function updateState(): UpdateState {
+  return {
+    status: 'current' as const,
+    currentVersion: '0.1.0',
+    packageFormat: 'macos' as const,
+    signatureStatus: 'unknown' as const,
+    message: 'Agentico is up to date.',
+  };
+}
+
+function diagnosticsSnapshot(): DiagnosticsSnapshot {
+  return {
+    retention: {
+      maxBytes: 25 * 1024 * 1024,
+      maxAgeDays: 7,
+      maxCrashRecords: 10,
+      currentBytes: 0,
+      entryCount: 0,
+      crashCount: 0,
+    },
+    entries: [],
+    crashes: [],
   };
 }
 
@@ -127,6 +157,14 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
     readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),
     bulkPreview: vi.fn(() => Promise.reject(new Error('unused'))),
+    getUpdates: vi.fn(() => updateState()),
+    checkForUpdates: vi.fn(() => Promise.resolve(updateState())),
+    installUpdateWhenIdle: vi.fn(() => Promise.resolve(updateState())),
+    installUpdateNow: vi.fn(() => Promise.resolve(updateState())),
+    restartToUpdate: vi.fn(() => updateState()),
+    getDiagnostics: vi.fn(() => diagnosticsSnapshot()),
+    revealDiagnostics: vi.fn(() => Promise.resolve({ ok: true })),
+    clearDiagnostics: vi.fn(() => diagnosticsSnapshot()),
     preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
     getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
     generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),

@@ -609,6 +609,31 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
+				if i < cfg.MaxIterations && meta.Context != nil && meta.Context.HandoffTriggered {
+					receipt := ImplementationHandoffReceipt{
+						Version:               1,
+						FeatureID:             cfg.Feature.ID,
+						Phase:                 "implement",
+						RoadmapPhase:          cfg.Feature.CurrentRoadmapPhase,
+						Repo:                  cfg.RepoName,
+						FromIterationID:       fmt.Sprintf("iteration-%02d", i),
+						ToIterationID:         fmt.Sprintf("iteration-%02d", i+1),
+						SessionID:             sessionID,
+						Provider:              meta.Context.Provider,
+						Trigger:               "context_threshold",
+						ObservedPct:           meta.Context.HandoffPct,
+						ThresholdPct:          meta.Context.ThresholdPct,
+						ObservedTotalTokens:   meta.Context.HandoffTotalTokens,
+						ContextWindowTokens:   meta.Context.WindowTokens,
+						ContextBaselineTokens: meta.Context.BaselineTokens,
+						IntentionallyDropped:  []string{"prior interactive transcript"},
+						NextSafeAction:        "Resume implementation from progress.md and verify its fingerprint before taking new work.",
+						CreatedAt:             time.Now().UTC(),
+					}
+					if err := am.WriteImplementationHandoffReceipt(iterDir, receipt); err != nil {
+						return nil, fmt.Errorf("writing implementation handoff receipt: %w", err)
+					}
+				}
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0

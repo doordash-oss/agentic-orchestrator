@@ -23,6 +23,8 @@ import {
   type ServerTranscriptMessage,
 } from '../shared/api/parse';
 import {
+  ChatActionResultSchema,
+  ChatStartRequestSchema,
   SessionDetailSchema,
   SessionIdSchema,
   SessionOutputEventSchema,
@@ -37,6 +39,8 @@ import {
   type SessionTranscript,
   type SessionTranscriptRequest,
   type TranscriptMessage,
+  type ChatActionResult,
+  type ChatStartRequest,
 } from '../shared/ipc';
 import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
@@ -97,6 +101,12 @@ const SESSION_REMEDIES: Readonly<Record<string, string>> = {
   conflict: 'Refresh the feature and session snapshots, then retry.',
 };
 
+const CHAT_REMEDIES: Readonly<Record<string, string>> = {
+  bad_request: 'Enter a bounded message and retry.',
+  conflict: 'Refresh the AMA transcript, then retry.',
+  not_found: 'The AMA session is no longer active. Refresh before retrying.',
+};
+
 export class SessionService {
   private readonly subscriptions = new Map<
     string,
@@ -142,6 +152,41 @@ export class SessionService {
         messages: response.messages.map(toTranscriptMessage),
       },
       SessionTranscriptSchema,
+    );
+  }
+
+  async startChat(request: ChatStartRequest): Promise<ChatActionResult> {
+    const input = validateWithSchema(request, ChatStartRequestSchema);
+    const response = await serverRequest(
+      this.transport,
+      '/api/v1/prompts/chat/start',
+      { method: 'POST', body: { message: input.message } } as ApiRequestInit,
+      { remedyByCode: CHAT_REMEDIES },
+    );
+    const raw = response as { session_id?: unknown; result?: unknown };
+    return validateWithSchema(
+      {
+        sessionId: raw.session_id,
+        result: raw.result,
+      },
+      ChatActionResultSchema,
+    );
+  }
+
+  async endChat(): Promise<ChatActionResult> {
+    const response = await serverRequest(
+      this.transport,
+      '/api/v1/prompts/chat/end',
+      { method: 'POST', body: {} } as ApiRequestInit,
+      { remedyByCode: CHAT_REMEDIES },
+    );
+    const raw = response as { session_id?: unknown; result?: unknown };
+    return validateWithSchema(
+      {
+        sessionId: raw.session_id,
+        result: raw.result,
+      },
+      ChatActionResultSchema,
     );
   }
 

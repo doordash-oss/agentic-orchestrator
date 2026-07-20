@@ -175,6 +175,17 @@ export function SettingsPanel() {
     [setThemePref],
   );
 
+  const handleNotificationPreviewChange = useCallback(async (previewEnabled: boolean) => {
+    try {
+      const updated = await window.agentico.updateSettings({
+        notifications: { previewEnabled },
+      });
+      setSettings(updated);
+    } catch (e: unknown) {
+      setError(parseIpcError(e).message);
+    }
+  }, []);
+
   const handleRecheckProvider = useCallback(async () => {
     try {
       setRechecking(true);
@@ -380,6 +391,24 @@ export function SettingsPanel() {
             </label>
           ))}
         </div>
+      </section>
+
+      <section className="settings-panel__section" aria-label="Notifications">
+        <h2 className="settings-panel__section-title">Notifications</h2>
+        <label className="settings-panel__toggle">
+          <input
+            type="checkbox"
+            checked={settings?.notifications.previewEnabled ?? false}
+            onChange={(event) => void handleNotificationPreviewChange(event.currentTarget.checked)}
+          />
+          <span>
+            <strong>Show attention previews</strong>
+            <span>
+              Off keeps native notifications generic. On includes feature name, attention type, and
+              a bounded summary.
+            </span>
+          </span>
+        </label>
       </section>
 
       <section className="settings-panel__section" aria-label="Advanced runtime path">

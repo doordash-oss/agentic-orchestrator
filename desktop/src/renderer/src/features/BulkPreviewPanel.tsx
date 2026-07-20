@@ -4,7 +4,7 @@
  * in attention-first order, requires an impact confirmation, and streams
  * per-row outcomes as the main-process queue dispatches sequentially.
  */
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { parseIpcError } from '../wizard/ipcError';
 import type { BulkPreview, BulkPreviewRow } from '../../../shared/ipc';
 
@@ -24,7 +24,7 @@ function humanizeAction(action: 'resume' | 'retry'): string {
   return action.charAt(0).toUpperCase() + action.slice(1);
 }
 
-export function BulkPreviewPanel() {
+export function BulkPreviewPanel({ autoPreviewKey = null }: { autoPreviewKey?: number | null }) {
   const [phase, setPhase] = useState<BulkPhase>('idle');
   const [preview, setPreview] = useState<BulkPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +48,11 @@ export function BulkPreviewPanel() {
       setPhase('idle');
     }
   }, []);
+
+  useEffect(() => {
+    if (autoPreviewKey === null) return;
+    void loadPreview();
+  }, [autoPreviewKey, loadPreview]);
 
   const runQueue = useCallback(async (rows: BulkPreviewRow[]) => {
     setPhase('running');

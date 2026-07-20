@@ -25,7 +25,7 @@ async function capture(
   waitFor: string,
   preScreenshot?: (page: Page) => Promise<void>,
 ): Promise<void> {
-  await page.goto(`http://localhost:9871/?scene=${scene}`);
+  await page.goto(`http://localhost:9871/?scene=${scene}&theme=${theme}`);
   await page.evaluate((t) => {
     document.documentElement.dataset['theme'] = t;
   }, theme);
@@ -40,7 +40,62 @@ async function capture(
 }
 
 test('capture all visual evidence screenshots', async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
+
+  await capture(
+    page,
+    'background-ama-expanded',
+    'dark',
+    1440,
+    900,
+    'expanded-bottom-docked-ama-streaming-transcript-with-an-inline-question-and-glob-1440x900',
+    '.ama-dock[data-mode="expanded"]',
+  );
+
+  await capture(
+    page,
+    'background-ama-compact',
+    'light',
+    1440,
+    900,
+    'persistent-compact-ama-composer-with-background-attention-inbox-and-preview-pref-1440x900',
+    '.settings-panel__toggle',
+    async (p) => {
+      const previewToggle = p.locator('.settings-panel__toggle');
+      await previewToggle.scrollIntoViewIfNeeded();
+      await expect(previewToggle).toBeInViewport({ timeout: 5_000 });
+    },
+  );
+
+  await capture(
+    page,
+    'background-command-palette',
+    'dark',
+    1728,
+    1117,
+    'current-feature-command-palette-showing-enabled-actions-and-authoritative-disabl-1728x1117',
+    '.command-palette',
+  );
+
+  await capture(
+    page,
+    'background-close-dialog',
+    'light',
+    1440,
+    900,
+    'active-workflow-plus-ama-close-dialog-with-keep-running-stop-work-and-quit-and-c-1440x900',
+    '.impact-dialog',
+  );
+
+  await capture(
+    page,
+    'background-ama-constrained',
+    'dark',
+    760,
+    900,
+    'constrained-workspace-with-compact-ama-question-badge-expanded-exact-question-ta-760x900',
+    '.command-palette',
+  );
 
   await capture(
     page,

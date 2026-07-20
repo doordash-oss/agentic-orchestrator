@@ -7,6 +7,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import {
   AppEventSchema,
+  AppRouteEventSchema,
   SessionOutputEventSchema,
   ConnectionStateSchema,
   IPC_CHANNELS,
@@ -14,7 +15,9 @@ import {
   IpcEnvelopeSchema,
   type AgenticoApi,
   type AppEvent,
+  type AppRouteEvent,
   type ConnectionState,
+  type ChatStartRequest,
   type CreateFeatureInput,
   type FeatureActionRequest,
   type InitRepositoryRequest,
@@ -93,6 +96,23 @@ const api: AgenticoApi = {
       ipcRenderer.removeListener(IPC_EVENTS.connectionChanged, wrapped);
     };
   },
+  onRouteRequest: (listener: (event: AppRouteEvent) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return;
+      }
+      const event = AppRouteEventSchema.safeParse(payload);
+      if (event.success) {
+        listener(event.data);
+      }
+    };
+    ipcRenderer.on(IPC_EVENTS.routeRequested, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.routeRequested, wrapped);
+    };
+  },
   getSettings: () => call(IPC_CHANNELS.settingsGet),
   updateSettings: (patch: SettingsPatch) => call(IPC_CHANNELS.settingsUpdate, patch),
   getThemePreference: () => call(IPC_CHANNELS.themeGet),
@@ -118,6 +138,8 @@ const api: AgenticoApi = {
   sendHelp: (request) => call(IPC_CHANNELS.attentionSendHelp, request),
   saveGateDraft: (request) => call(IPC_CHANNELS.attentionSaveGateDraft, request),
   resolveGate: (request) => call(IPC_CHANNELS.attentionResolveGate, request),
+  startChat: (request: ChatStartRequest) => call(IPC_CHANNELS.chatStart, request),
+  endChat: () => call(IPC_CHANNELS.chatEnd),
   listSessions: () => call(IPC_CHANNELS.sessionsList),
   getSession: (sessionId: string) => call(IPC_CHANNELS.sessionsGet, sessionId),
   getSessionTranscript: (request) => call(IPC_CHANNELS.sessionsTranscript, request),

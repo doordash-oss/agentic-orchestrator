@@ -634,6 +634,49 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	assertJSONDoesNotContain(t, result, "What is running?")
 }
 
+func TestServerMutationTargetEndChatStopsOnlySingletonChat(t *testing.T) {
+	sessions := &mutationTargetSessionManager{
+		sessions: []ports.SessionView{
+			&mutationTargetSessionView{id: "feature-session", featureID: "feature-1", status: ports.SessionRunning, active: true},
+			&mutationTargetSessionView{id: serverChatSessionID, featureID: serverChatSessionID, status: ports.SessionRunning, active: true},
+		},
+	}
+	target := serverMutationTarget{sessions: sessions}
+
+	result, err := target.EndChat()
+	if err != nil {
+		t.Fatalf("EndChat() error = %v", err)
+	}
+
+	if result.SessionID != serverChatSessionID || result.Result != "ended" {
+		t.Fatalf("EndChat() = %+v, want singleton chat ended", result)
+	}
+	if !reflect.DeepEqual(sessions.stopCalls, []string{serverChatSessionID}) {
+		t.Fatalf("StopSession calls = %v, want only singleton chat", sessions.stopCalls)
+	}
+}
+
+func TestServerMutationTargetEndChatIsIdempotentWhenInactive(t *testing.T) {
+	sessions := &mutationTargetSessionManager{
+		sessions: []ports.SessionView{
+			&mutationTargetSessionView{id: serverChatSessionID, featureID: serverChatSessionID, status: ports.SessionDone, active: false},
+		},
+	}
+	target := serverMutationTarget{sessions: sessions}
+
+	result, err := target.EndChat()
+	if err != nil {
+		t.Fatalf("EndChat() error = %v", err)
+	}
+
+	if result.SessionID != serverChatSessionID || result.Result != "not_active" {
+		t.Fatalf("EndChat() = %+v, want not_active singleton chat", result)
+	}
+	if len(sessions.stopCalls) != 0 {
+		t.Fatalf("StopSession calls = %v, want none", sessions.stopCalls)
+	}
+}
+
 func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPromptAndIndex(t *testing.T) {
 	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
 	original := agent.NeedUserInputRecord{

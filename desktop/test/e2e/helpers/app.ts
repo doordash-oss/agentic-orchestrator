@@ -12,6 +12,7 @@ import path from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
 import type { ElectronApplication, Locator, Page, TestInfo } from '@playwright/test';
 import { packagedExecutable } from './packaged';
+import { killProcessTree } from './processes';
 import { minimalEnv, type JourneyWorld } from './world';
 
 export interface AppHandle {
@@ -98,6 +99,7 @@ export async function launchApp(
   app.process().stderr?.on('data', (chunk: Buffer) => logs.push(chunk.toString()));
   await app.context().tracing.start({ screenshots: true, snapshots: true });
   const page = await app.firstWindow({ timeout: 30_000 });
+  await page.bringToFront();
   return {
     app,
     page,
@@ -127,14 +129,34 @@ export async function closeApp(handle: AppHandle): Promise<void> {
     // Tracing is evidence, not correctness — never fail teardown on it.
   }
   const appProcess = handle.app.process();
+  await installTeardownQuitDialogAnswer(handle).catch(() => undefined);
   await handle.app.close();
   const deadline = Date.now() + 15_000;
   while (appProcess.exitCode === null && appProcess.signalCode === null) {
     if (Date.now() > deadline) {
+      killProcessTree(appProcess.pid);
       throw new Error('the app process did not exit within 15s of close()');
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}
+
+async function installTeardownQuitDialogAnswer(handle: AppHandle): Promise<void> {
+  await handle.app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = (async (...args: unknown[]) => {
+      const options = args[args.length - 1] as { buttons?: string[] } | undefined;
+      const buttons = Array.isArray(options?.buttons) ? options.buttons : [];
+      const stopWork = buttons.indexOf('Stop Work and Quit');
+      if (stopWork >= 0) {
+        return { response: stopWork, checkboxChecked: false };
+      }
+      const quitAnyway = buttons.indexOf('Quit Anyway');
+      if (quitAnyway >= 0) {
+        return { response: quitAnyway, checkboxChecked: false };
+      }
+      return { response: 0, checkboxChecked: false };
+    }) as typeof dialog.showMessageBox;
+  });
 }
 
 /** Writes app logs alongside the test output (and returns the joined text). */

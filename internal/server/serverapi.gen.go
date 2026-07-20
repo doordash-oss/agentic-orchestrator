@@ -715,6 +715,21 @@ func (e AnswerAskUserPromptParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for EndChatPromptParamsXAgenticoClient.
+const (
+	EndChatPromptParamsXAgenticoClientLocal EndChatPromptParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the EndChatPromptParamsXAgenticoClient enum.
+func (e EndChatPromptParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case EndChatPromptParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for StartChatPromptParamsXAgenticoClient.
 const (
 	StartChatPromptParamsXAgenticoClientLocal StartChatPromptParamsXAgenticoClient = "local"
@@ -822,13 +837,13 @@ func (e ShutdownRuntimeParamsXAgenticoClient) Valid() bool {
 
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -866,6 +881,7 @@ type ActionInput struct {
 type ActionResponse struct {
 	APIVersion                  string                      `json:"api_version"`
 	AskUserAnswerResponse       AskUserAnswerResponse       `json:"ask_user_answer_response,omitempty"`
+	ChatEndResponse             ChatEndResponse             `json:"chat_end_response,omitempty"`
 	ChatStartResponse           ChatStartResponse           `json:"chat_start_response,omitempty"`
 	CleanupFeatureResponse      CleanupFeatureResponse      `json:"cleanup_feature_response,omitempty"`
 	CreateFeatureResponse       CreateFeatureResponse       `json:"create_feature_response,omitempty"`
@@ -976,6 +992,14 @@ type BuildIdentity struct {
 
 	// Version Human-readable build version (e.g. a git describe string).
 	Version string `json:"version"`
+}
+
+// ChatEndResponse defines model for ChatEndResponse.
+type ChatEndResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
+	SessionID  string       `json:"session_id"`
 }
 
 // ChatStartResponse defines model for ChatStartResponse.
@@ -2766,6 +2790,18 @@ type AnswerAskUserPromptParams struct {
 // AnswerAskUserPromptParamsXAgenticoClient defines parameters for AnswerAskUserPrompt.
 type AnswerAskUserPromptParamsXAgenticoClient string
 
+// EndChatPromptJSONBody defines parameters for EndChatPrompt.
+type EndChatPromptJSONBody map[string]interface{}
+
+// EndChatPromptParams defines parameters for EndChatPrompt.
+type EndChatPromptParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient EndChatPromptParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// EndChatPromptParamsXAgenticoClient defines parameters for EndChatPrompt.
+type EndChatPromptParamsXAgenticoClient string
+
 // StartChatPromptJSONBody defines parameters for StartChatPrompt.
 type StartChatPromptJSONBody map[string]interface{}
 
@@ -2919,6 +2955,9 @@ type AnswerPermissionJSONRequestBody = PermissionAnswerSchema
 
 // AnswerAskUserPromptJSONRequestBody defines body for AnswerAskUserPrompt for application/json ContentType.
 type AnswerAskUserPromptJSONRequestBody AnswerAskUserPromptJSONBody
+
+// EndChatPromptJSONRequestBody defines body for EndChatPrompt for application/json ContentType.
+type EndChatPromptJSONRequestBody EndChatPromptJSONBody
 
 // StartChatPromptJSONRequestBody defines body for StartChatPrompt for application/json ContentType.
 type StartChatPromptJSONRequestBody StartChatPromptJSONBody

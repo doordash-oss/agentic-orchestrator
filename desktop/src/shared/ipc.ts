@@ -46,6 +46,8 @@ export const IPC_CHANNELS = {
   attentionSendHelp: 'agentico:attention:send-help',
   attentionSaveGateDraft: 'agentico:attention:save-gate-draft',
   attentionResolveGate: 'agentico:attention:resolve-gate',
+  chatStart: 'agentico:chat:start',
+  chatEnd: 'agentico:chat:end',
   sessionsList: 'agentico:sessions:list',
   sessionsGet: 'agentico:sessions:get',
   sessionsTranscript: 'agentico:sessions:transcript',
@@ -89,6 +91,7 @@ export const IPC_EVENTS = {
   connectionChanged: 'agentico:connection:changed',
   appEvent: 'agentico:events:app',
   sessionOutput: 'agentico:sessions:output',
+  routeRequested: 'agentico:route:requested',
 } as const;
 
 // --- Safe error shape crossing the boundary --------------------------------
@@ -447,6 +450,19 @@ export const AppEventSchema = z.discriminatedUnion('type', [
 ]);
 
 export type AppEvent = z.output<typeof AppEventSchema>;
+
+export const AppRouteEventSchema = z.strictObject({
+  target: z.enum(['palette', 'home', 'settings', 'attention', 'ama', 'bulk']),
+  attentionId: z.string().min(1).max(500).optional(),
+  featureId: z.string().min(1).max(200).optional(),
+});
+
+export type AppRouteEvent = z.output<typeof AppRouteEventSchema>;
+
+export interface RoutedRequest {
+  id: number;
+  event: AppRouteEvent;
+}
 
 // --- Workspace/setup operations ----------------------------------------------
 
@@ -1297,6 +1313,15 @@ export const AttentionActionResultSchema = z.strictObject({
 });
 export type AttentionActionResult = z.output<typeof AttentionActionResultSchema>;
 
+// --- Singleton AMA chat -----------------------------------------------------
+
+export const CHAT_SESSION_ID = '__chat__';
+
+export const ChatStartRequestSchema = z.strictObject({
+  message: AttentionTextSchema.refine((value) => value.trim() !== ''),
+});
+export type ChatStartRequest = z.output<typeof ChatStartRequestSchema>;
+
 // --- Sessions and bounded transcript/output operations ---------------------
 
 /** Canonical safe URL-segment syntax for server-owned session identifiers. */
@@ -1304,6 +1329,12 @@ export const SESSION_ID_SEGMENT_PATTERN = '[a-z0-9._-]{1,200}';
 
 export const SessionIdSchema = z.string().regex(new RegExp(`^${SESSION_ID_SEGMENT_PATTERN}$`, 'i'));
 export type SessionId = z.output<typeof SessionIdSchema>;
+
+export const ChatActionResultSchema = z.strictObject({
+  sessionId: SessionIdSchema,
+  result: z.string().max(500),
+});
+export type ChatActionResult = z.output<typeof ChatActionResultSchema>;
 
 const BoundedTextSchema = z.string().max(1024 * 1024);
 const OptionalBoundedTextSchema = BoundedTextSchema.optional();
@@ -1332,6 +1363,34 @@ export const SessionSummarySchema = z.strictObject({
   usage: SessionUsageSchema,
 });
 export type SessionSummary = z.output<typeof SessionSummarySchema>;
+
+export const TERMINAL_CHAT_STATUSES = [
+  'complete',
+  'completed',
+  'done',
+  'ended',
+  'failed',
+  'cancelled',
+  'canceled',
+  'stopped',
+  'not_active',
+] as const;
+
+const TERMINAL_CHAT_STATUS_SET = new Set<string>(TERMINAL_CHAT_STATUSES);
+
+export function isTerminalChatStatus(status: string): boolean {
+  return TERMINAL_CHAT_STATUS_SET.has(status.toLocaleLowerCase());
+}
+
+export function isActiveChatSession(
+  session: Pick<SessionSummary, 'id' | 'featureId' | 'kind' | 'status'>,
+): boolean {
+  const isChat =
+    session.id === CHAT_SESSION_ID ||
+    session.featureId === CHAT_SESSION_ID ||
+    session.kind.toLocaleLowerCase() === 'chat';
+  return isChat && !isTerminalChatStatus(session.status);
+}
 
 export const RunSessionsListResultSchema = z.strictObject({
   runNumber: z.number().int().positive(),
@@ -1552,6 +1611,34 @@ export function defaultWizardPrefs(): WizardPrefs {
 }
 
 /**
+ * AMA presentation preferences ONLY. Transcript rows and chat archive live on
+ * the server; the app stores only whether the drawer is compact or expanded.
+ */
+export const AmaPrefsSchema = z.strictObject({
+  drawer: z.enum(['compact', 'expanded']),
+});
+
+export type AmaPrefs = z.output<typeof AmaPrefsSchema>;
+
+export function defaultAmaPrefs(): AmaPrefs {
+  return { drawer: 'compact' };
+}
+
+/**
+ * Native notification presentation preference ONLY. Preview is off by default
+ * so OS notifications contain no domain content unless explicitly enabled.
+ */
+export const NotificationPrefsSchema = z.strictObject({
+  previewEnabled: z.boolean(),
+});
+
+export type NotificationPrefs = z.output<typeof NotificationPrefsSchema>;
+
+export function defaultNotificationPrefs(): NotificationPrefs {
+  return { previewEnabled: false };
+}
+
+/**
  * Open feature tabs: strictly identity plus presentation. The title is a
  * *hint* used only until the authoritative feature loads; feature state,
  * setup progress, and any other server-domain data are never stored here.
@@ -1593,6 +1680,8 @@ export const SettingsSchema = z.strictObject({
   }),
   theme: ThemePreferenceSchema,
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
+  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   tabs: TabsPrefsSchema.default(defaultTabsPrefs()),
 });
 
@@ -1603,6 +1692,8 @@ export const SettingsPatchSchema = z.strictObject({
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }).optional(),
   theme: ThemePreferenceSchema.optional(),
   wizard: WizardPrefsSchema.optional(),
+  ama: AmaPrefsSchema.optional(),
+  notifications: NotificationPrefsSchema.optional(),
   tabs: TabsPrefsSchema.optional(),
 });
 
@@ -1615,6 +1706,8 @@ export function defaultSettings(): Settings {
     window: {},
     theme: 'system',
     wizard: defaultWizardPrefs(),
+    ama: defaultAmaPrefs(),
+    notifications: defaultNotificationPrefs(),
     tabs: defaultTabsPrefs(),
   };
 }
@@ -2010,6 +2103,14 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([GateResolutionRequestSchema]),
     response: AttentionActionResultSchema,
   },
+  [IPC_CHANNELS.chatStart]: {
+    request: z.tuple([ChatStartRequestSchema]),
+    response: ChatActionResultSchema,
+  },
+  [IPC_CHANNELS.chatEnd]: {
+    request: z.tuple([]),
+    response: ChatActionResultSchema,
+  },
   [IPC_CHANNELS.sessionsList]: {
     request: z.tuple([]),
     response: z.array(SessionSummarySchema).max(1000),
@@ -2195,6 +2296,7 @@ export interface AgenticoApi {
   retryConnection(): Promise<ConnectionState>;
   restartConnection(): Promise<ConnectionState>;
   onConnectionChanged(listener: (state: ConnectionState) => void): () => void;
+  onRouteRequest(listener: (event: AppRouteEvent) => void): () => void;
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
   getThemePreference(): Promise<ThemeInfo>;
@@ -2218,6 +2320,8 @@ export interface AgenticoApi {
   sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult>;
   saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
   resolveGate(request: GateResolutionRequest): Promise<AttentionActionResult>;
+  startChat(request: ChatStartRequest): Promise<ChatActionResult>;
+  endChat(): Promise<ChatActionResult>;
   listSessions(): Promise<SessionSummary[]>;
   getSession(sessionId: string): Promise<SessionDetail>;
   getSessionTranscript(request: SessionTranscriptRequest): Promise<SessionTranscript>;

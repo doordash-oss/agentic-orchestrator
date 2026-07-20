@@ -69,6 +69,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	var sawResumeTrustedHeader bool
 	var sawRecoveryTrustedHeader bool
 	var sawChatTrustedHeader bool
+	var sawChatEndTrustedHeader bool
 	var sawPublishDescriptionTrustedHeader bool
 	var sawReviewCreateTrustedHeader bool
 	var sawReviewSaveTrustedHeader bool
@@ -187,6 +188,16 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 				t.Errorf("chat request message = %q, want prompt", req.Message)
 			}
 			writeJSON(w, http.StatusOK, ChatStartResponse{APIVersion: APIVersion, SessionID: "chat-1", Result: resultStarted})
+		case "POST /api/v1/prompts/chat/end":
+			sawChatEndTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode chat end request: %v", err)
+			}
+			if len(req) != 0 {
+				t.Errorf("chat end request = %+v, want empty JSON object", req)
+			}
+			writeJSON(w, http.StatusOK, ChatEndResponse{APIVersion: APIVersion, SessionID: ChatSessionID, Result: "ended"})
 		case "POST /api/v1/features/feat-1/actions/publish/description":
 			sawPublishDescriptionTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
 			var req PublishDescriptionRequest
@@ -312,6 +323,13 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	}
 	if chat.SessionID != "chat-1" || chat.Result != resultStarted || !sawChatTrustedHeader {
 		t.Fatalf("StartChat() = %+v trusted=%v, want chat session with trusted header", chat, sawChatTrustedHeader)
+	}
+	ended, err := client.EndChat(ctx)
+	if err != nil {
+		t.Fatalf("EndChat() error = %v", err)
+	}
+	if ended.SessionID != ChatSessionID || ended.Result != "ended" || !sawChatEndTrustedHeader {
+		t.Fatalf("EndChat() = %+v trusted=%v, want ended singleton chat with trusted header", ended, sawChatEndTrustedHeader)
 	}
 	desc, err := client.GeneratePublishDescription(ctx, fixtureFeatureID, PublishDescriptionRequest{Repos: []string{"repo-a"}})
 	if err != nil {

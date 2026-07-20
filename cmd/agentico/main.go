@@ -1384,6 +1384,20 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultStarted}, nil
 }
 
+func (t *serverMutationTarget) EndChat() (serverruntime.ChatEndResponse, error) {
+	if t.sessions == nil {
+		return serverruntime.ChatEndResponse{}, errors.New("session manager is not available")
+	}
+	sess := t.sessions.GetSession(serverChatSessionID)
+	if sess == nil || !sess.IsActive() {
+		return serverruntime.ChatEndResponse{SessionID: serverChatSessionID, Result: "not_active"}, nil
+	}
+	if err := t.sessions.StopSession(serverChatSessionID); err != nil {
+		return serverruntime.ChatEndResponse{}, fmt.Errorf("end chat session: %w", err)
+	}
+	return serverruntime.ChatEndResponse{SessionID: serverChatSessionID, Result: "ended"}, nil
+}
+
 func serverChatSkillInstruction(skillsDir string) string {
 	skillPath := serverChatSkillPath(skillsDir)
 	if skillPath == "" {

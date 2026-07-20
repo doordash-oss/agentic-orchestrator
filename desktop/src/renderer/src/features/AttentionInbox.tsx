@@ -36,6 +36,7 @@ export interface AttentionInboxProps {
   drafts: AttentionDrafts;
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
   onJump(featureId: string): void;
+  openRequest?: { id: number; attentionId?: string } | null;
 }
 
 export interface AttentionSubmitOptions {
@@ -85,6 +86,7 @@ export function AttentionInbox({
   drafts,
   setDrafts,
   onJump,
+  openRequest = null,
 }: AttentionInboxProps) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -96,19 +98,34 @@ export function AttentionInbox({
   const draftSaves = useRef(new Map<string, Promise<void>>());
 
   useEffect(() => {
-    if (pendingFocus === null) return;
-    itemButtons.current.get(pendingFocus)?.focus();
-    setPendingFocus(null);
-  }, [items, pendingFocus]);
+    if (openRequest === null) return;
+    setOpen(true);
+    if (openRequest.attentionId !== undefined) {
+      setExpanded(openRequest.attentionId);
+      setPendingFocus(openRequest.attentionId);
+    }
+  }, [openRequest]);
 
   useEffect(() => {
+    if (!open) return;
+    if (pendingFocus === null) return;
+    if (hasActiveModalDialog()) {
+      setPendingFocus(null);
+      return;
+    }
+    itemButtons.current.get(pendingFocus)?.focus();
+    setPendingFocus(null);
+  }, [items, open, pendingFocus]);
+
+  useEffect(() => {
+    if (!open) return;
     if (expanded === null || busy !== null) return;
     if (items.some((item) => item.id === expanded)) return;
     const next = items[0];
     setNotice(ATTENTION_ALREADY_RESOLVED_NOTICE);
     setExpanded(next?.id ?? null);
-    setPendingFocus(next?.id ?? null);
-  }, [busy, expanded, items]);
+    setPendingFocus(hasActiveModalDialog() ? null : (next?.id ?? null));
+  }, [busy, expanded, items, open]);
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -750,6 +767,10 @@ function handleItemKeyDown(
     event.preventDefault();
     focusRelativeItem(id, -1);
   }
+}
+
+function hasActiveModalDialog(): boolean {
+  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
 }
 
 function attentionKindLabel(item: AttentionItem): string {

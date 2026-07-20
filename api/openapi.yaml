@@ -581,6 +581,20 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/prompts/chat/end:
+    post:
+      operationId: endChatPrompt
+      summary: End the active singleton chat prompt session.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/permissions:
     get:
       operationId: listPermissions
@@ -2102,6 +2116,8 @@ components:
               $ref: "#/components/schemas/HelpSendResponse"
             chat_start_response:
               $ref: "#/components/schemas/ChatStartResponse"
+            chat_end_response:
+              $ref: "#/components/schemas/ChatEndResponse"
             runtime_config_update_response:
               $ref: "#/components/schemas/RuntimeConfigUpdateResponse"
             publish_feature_response:
@@ -2253,6 +2269,16 @@ components:
             result:
               type: string
     ChatStartResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [session_id, result]
+          properties:
+            session_id:
+              type: string
+            result:
+              type: string
+    ChatEndResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - type: object

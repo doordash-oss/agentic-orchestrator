@@ -120,6 +120,8 @@ describe('SettingsStore', () => {
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: false, lastRepositoryPathHint: null },
+      ama: { drawer: 'compact' },
+      notifications: { previewEnabled: false },
       tabs: { open: [], activeFeatureId: null },
     });
   });
@@ -177,6 +179,8 @@ describe('SettingsStore', () => {
     const upgraded = makeStore();
     expect(upgraded.get().theme).toBe('dark');
     expect(upgraded.get().wizard).toEqual({ collapsedHelp: false, lastRepositoryPathHint: null });
+    expect(upgraded.get().ama).toEqual({ drawer: 'compact' });
+    expect(upgraded.get().notifications).toEqual({ previewEnabled: false });
   });
 
   it('never throws while loading a corrupt file', () => {

@@ -1,12 +1,16 @@
 import {
   isConnectionErrorState,
+  type AppRouteEvent,
   type AttentionItem,
   type FeatureSummaryView,
+  type RoutedRequest,
   type ThemePreference,
 } from '../../shared/ipc';
 import { ConnectionShell } from './components/ConnectionShell';
+import { AmaDock } from './components/AmaDock';
+import { CommandPalette } from './components/CommandPalette';
 import { ReadinessGate } from './components/ReadinessGate';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AttentionInbox,
   emptyAttentionDrafts,
@@ -32,6 +36,15 @@ export default function App() {
   const [attentionDrafts, setAttentionDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   const [featureNames, setFeatureNames] = useState<Record<string, string>>({});
   const [attentionJump, setAttentionJump] = useState<string | null>(null);
+  const [routeRequest, setRouteRequest] = useState<RoutedRequest | null>(null);
+  const routeSequence = useRef(0);
+
+  const requestRoute = useCallback((event: AppRouteEvent) => {
+    routeSequence.current += 1;
+    setRouteRequest({ id: routeSequence.current, event });
+  }, []);
+
+  useEffect(() => window.agentico.onRouteRequest(requestRoute), [requestRoute]);
 
   const refreshAttention = useCallback(async () => {
     const snapshot = await window.agentico.getAttention();
@@ -149,6 +162,14 @@ export default function App() {
           drafts={attentionDrafts}
           setDrafts={setAttentionDrafts}
           onJump={setAttentionJump}
+          openRequest={
+            routeRequest?.event.target === 'attention'
+              ? {
+                  id: routeRequest.id,
+                  attentionId: routeRequest.event.attentionId,
+                }
+              : null
+          }
         />
         <fieldset className="theme-switcher" role="radiogroup" aria-label="Theme">
           <legend className="sr-only">Theme</legend>
@@ -167,17 +188,32 @@ export default function App() {
         </fieldset>
       </header>
       {connection.status === 'ready' ? (
-        <ReadinessGate
-          attentionItems={attentionItems}
-          refreshAttention={refreshAttention}
-          attentionDrafts={attentionDrafts}
-          setAttentionDrafts={setAttentionDrafts}
-          attentionJump={attentionJump}
-          onAttentionJumpHandled={() => setAttentionJump(null)}
-        />
+        <>
+          <ReadinessGate
+            attentionItems={attentionItems}
+            refreshAttention={refreshAttention}
+            attentionDrafts={attentionDrafts}
+            setAttentionDrafts={setAttentionDrafts}
+            attentionJump={attentionJump}
+            onAttentionJumpHandled={() => setAttentionJump(null)}
+            routeRequest={routeRequest}
+          />
+          <AmaDock
+            attentionItems={attentionItems}
+            refreshAttention={refreshAttention}
+            attentionDrafts={attentionDrafts}
+            setAttentionDrafts={setAttentionDrafts}
+            routeRequest={routeRequest}
+          />
+        </>
       ) : (
         <ConnectionShell />
       )}
+      <CommandPalette
+        ready={connection.status === 'ready'}
+        routeRequest={routeRequest}
+        onRoute={requestRoute}
+      />
     </div>
   );
 }

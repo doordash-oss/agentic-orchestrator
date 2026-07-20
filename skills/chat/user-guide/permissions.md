@@ -6,7 +6,7 @@ Agentic Orchestrator mediates provider tool use through session handlers and cac
 
 Permission request cards and Approve, Approve and remember, and Deny controls are **pending** in the Electron app. The current live **Signal trace** can show validated tool activity, but it is not a permission prompt and cannot answer one.
 
-Do not use retired single-key permission shortcuts. When a workflow is blocked on a permission request, the current desktop release has no supported control for resolving it. Start workflows only with permission rules appropriate for the provider and repository, or use the server launch option described below in a trusted environment.
+Do not use superseded single-key permission shortcuts. When a workflow is blocked on a permission request, the current desktop release has no supported control for resolving it. Start workflows only with permission rules appropriate for the provider and repository, or use the server launch option described below in a trusted environment.
 
 ## Runtime Permission Types
 
@@ -112,7 +112,7 @@ agentico --dangerously-skip-permissions
 
 OpenCode’s question surface still pauses for you so `AskUserQuestion` retains the same semantics as Claude and Codex. Read-only mounts remain non-writable.
 
-This flag removes a significant safety boundary. Use it only for trusted repositories, prompts, dependencies, and provider sessions. The current Electron app does not provide the retired terminal client’s warning badges or color treatment, so confirm the server launch arguments outside the app.
+This flag removes a significant safety boundary. Use it only for trusted repositories, prompts, dependencies, and provider sessions. The current Electron app does not provide the previous client’s warning badges or color treatment, so confirm the server launch arguments outside the app.
 
 ## Evaluation Order
 

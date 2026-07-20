@@ -89,6 +89,8 @@ function makeServices(): IpcServices {
     sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
     saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
     resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
+    startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
+    endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
     listSessions: vi.fn(() => Promise.resolve([])),
     getSession: vi.fn(() => Promise.reject(new Error('unused'))),
     getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),

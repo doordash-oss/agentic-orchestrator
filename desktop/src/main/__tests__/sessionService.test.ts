@@ -108,6 +108,55 @@ describe('SessionService snapshots', () => {
   });
 });
 
+describe('SessionService singleton chat mutations', () => {
+  it('starts and ends the server-owned singleton chat through trusted mutation paths', async () => {
+    const apiRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'started' },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: { api_version: 'v1', session_id: '__chat__', result: 'ended' },
+      });
+    const service = new SessionService({ ...transport(), apiRequest });
+
+    await expect(service.startChat({ message: 'What is running?' })).resolves.toStrictEqual({
+      sessionId: '__chat__',
+      result: 'started',
+    });
+    await expect(service.endChat()).resolves.toStrictEqual({
+      sessionId: '__chat__',
+      result: 'ended',
+    });
+    expect(apiRequest).toHaveBeenNthCalledWith(1, '/api/v1/prompts/chat/start', {
+      method: 'POST',
+      body: { message: 'What is running?' },
+    });
+    expect(apiRequest).toHaveBeenNthCalledWith(2, '/api/v1/prompts/chat/end', {
+      method: 'POST',
+      body: {},
+    });
+  });
+
+  it('rejects malformed singleton chat mutation responses', async () => {
+    const service = new SessionService(
+      transport({
+        apiRequest: () =>
+          Promise.resolve({
+            status: 200,
+            body: { api_version: 'v1', session_id: 'chat/unsafe', result: 'started' },
+          }),
+      }),
+    );
+
+    await expect(service.startChat({ message: 'hello' })).rejects.toMatchObject({
+      safe: { code: 'E_SCHEMA_MISMATCH' },
+    });
+  });
+});
+
 describe('SessionService output subscriptions', () => {
   it('uses only the transcript row cursor and replaces repeated indexes', async () => {
     const source = stream([

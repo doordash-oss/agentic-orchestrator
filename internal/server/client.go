@@ -364,6 +364,12 @@ func (c *Client) StartChat(ctx context.Context, req ChatStartRequest) (ChatStart
 	return out, err
 }
 
+func (c *Client) EndChat(ctx context.Context) (ChatEndResponse, error) {
+	var out ChatEndResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/prompts/chat/end", nil, map[string]any{}, &out, true)
+	return out, err
+}
+
 func (c *Client) UpdateRuntimeConfig(ctx context.Context, req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
 	var out RuntimeConfigUpdateResponse
 	err := c.doJSON(ctx, http.MethodPatch, "/api/v1/config/runtime", nil, req, &out, true)

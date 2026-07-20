@@ -111,6 +111,7 @@ type MutationTarget interface {
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
 	StartChat(req ChatStartRequest) (ChatStartResponse, error)
+	EndChat() (ChatEndResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
 	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
 	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
@@ -516,7 +517,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathShutdown:
 		return []string{http.MethodPost}, true
-	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start":
+	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start", "/api/v1/prompts/chat/end":
 		return []string{http.MethodPost}, true
 	}
 	if strings.HasPrefix(path, apiPathResources+"/") {
@@ -1068,6 +1069,18 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			return
 		}
 		defaultActionFields(&resp, "", resultStarted)
+		writeActionJSON(w, http.StatusOK, &resp)
+	case "chat/end":
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return
+		}
+		resp, err := h.mutations.EndChat()
+		if err != nil {
+			writeMutationError(w, err)
+			return
+		}
+		defaultActionFields(&resp, "", "ended")
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)

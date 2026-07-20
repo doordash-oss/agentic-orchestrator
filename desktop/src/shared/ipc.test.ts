@@ -10,9 +10,12 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
   FeatureActionRequestSchema,
+  ChatStartRequestSchema,
   SessionIdSchema,
   SessionTranscriptRequestSchema,
   SessionOutputEventSchema,
+  isActiveChatSession,
+  isTerminalChatStatus,
   defaultSettings,
   defaultTabsPrefs,
   defaultWizardPrefs,
@@ -125,6 +128,16 @@ describe('operational IPC schemas', () => {
     expect(SessionIdSchema.safeParse('session/a-1').success).toBe(false);
   });
 
+  it('bounds singleton AMA chat start requests', () => {
+    expect(ChatStartRequestSchema.parse({ message: 'What is running?' })).toStrictEqual({
+      message: 'What is running?',
+    });
+    expect(ChatStartRequestSchema.safeParse({ message: '   ' }).success).toBe(false);
+    expect(ChatStartRequestSchema.safeParse({ message: 'hello', sessionId: 'other' }).success).toBe(
+      false,
+    );
+  });
+
   it('rejects foreign and prototype-polluting output records', () => {
     const valid = {
       subscriptionId: 'sub-1',
@@ -142,6 +155,51 @@ describe('operational IPC schemas', () => {
         ),
       ),
     ).toThrow();
+  });
+});
+
+describe('singleton AMA session helpers', () => {
+  it('uses one terminal status vocabulary for active-chat decisions', () => {
+    for (const status of [
+      'complete',
+      'completed',
+      'done',
+      'ended',
+      'failed',
+      'cancelled',
+      'canceled',
+      'stopped',
+      'not_active',
+    ]) {
+      expect(isTerminalChatStatus(status), status).toBe(true);
+      expect(isTerminalChatStatus(status.toLocaleUpperCase()), status).toBe(true);
+      expect(
+        isActiveChatSession({
+          id: '__chat__',
+          featureId: '__chat__',
+          kind: 'chat',
+          status,
+        }),
+        status,
+      ).toBe(false);
+    }
+
+    expect(
+      isActiveChatSession({
+        id: '__chat__',
+        featureId: '__chat__',
+        kind: 'chat',
+        status: 'running',
+      }),
+    ).toBe(true);
+    expect(
+      isActiveChatSession({
+        id: 'feature-session',
+        featureId: 'feature1',
+        kind: 'agent',
+        status: 'running',
+      }),
+    ).toBe(false);
   });
 });
 
@@ -367,6 +425,8 @@ describe('SettingsSchema', () => {
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: true, lastRepositoryPathHint: '/work/repo' },
+      ama: { drawer: 'expanded' },
+      notifications: { previewEnabled: true },
       tabs: { open: [{ featureId: 'abcd1234', titleHint: 'Search' }], activeFeatureId: null },
     };
     expect(SettingsSchema.parse(doc)).toEqual(doc);
@@ -382,6 +442,8 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.parse(doc)).toEqual({
       ...doc,
       wizard: defaultWizardPrefs(),
+      ama: { drawer: 'compact' },
+      notifications: { previewEnabled: false },
       tabs: defaultTabsPrefs(),
     });
   });
@@ -392,6 +454,12 @@ describe('SettingsPatchSchema', () => {
     expect(SettingsPatchSchema.parse({ theme: 'light' })).toEqual({ theme: 'light' });
     expect(SettingsPatchSchema.parse({ runtime: { selection: null } })).toEqual({
       runtime: { selection: null },
+    });
+    expect(SettingsPatchSchema.parse({ ama: { drawer: 'expanded' } })).toEqual({
+      ama: { drawer: 'expanded' },
+    });
+    expect(SettingsPatchSchema.parse({ notifications: { previewEnabled: true } })).toEqual({
+      notifications: { previewEnabled: true },
     });
   });
 

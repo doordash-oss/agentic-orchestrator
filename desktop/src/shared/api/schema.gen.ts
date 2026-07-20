@@ -551,6 +551,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prompts/chat/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** End the active singleton chat prompt session. */
+        post: operations["endChatPrompt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/permissions": {
         parameters: {
             query?: never;
@@ -1128,6 +1145,7 @@ export interface components {
             ask_user_answer_response?: components["schemas"]["AskUserAnswerResponse"];
             help_send_response?: components["schemas"]["HelpSendResponse"];
             chat_start_response?: components["schemas"]["ChatStartResponse"];
+            chat_end_response?: components["schemas"]["ChatEndResponse"];
             runtime_config_update_response?: components["schemas"]["RuntimeConfigUpdateResponse"];
             publish_feature_response?: components["schemas"]["PublishFeatureResponse"];
             publish_description_response?: components["schemas"]["PublishDescriptionResponse"];
@@ -1187,6 +1205,10 @@ export interface components {
             result: string;
         };
         ChatStartResponse: components["schemas"]["ActionBaseResponse"] & {
+            session_id: string;
+            result: string;
+        };
+        ChatEndResponse: components["schemas"]["ActionBaseResponse"] & {
             session_id: string;
             result: string;
         };
@@ -2938,6 +2960,22 @@ export interface operations {
         };
     };
     startChatPrompt: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["JSONMutation"];
+        responses: {
+            200: components["responses"]["ActionResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    endChatPrompt: {
         parameters: {
             query?: never;
             header: {

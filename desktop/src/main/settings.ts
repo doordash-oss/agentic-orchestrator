@@ -64,6 +64,10 @@ export class SettingsStore {
       ...(parsed.data.window !== undefined ? { window: parsed.data.window } : {}),
       ...(parsed.data.theme !== undefined ? { theme: parsed.data.theme } : {}),
       ...(parsed.data.wizard !== undefined ? { wizard: parsed.data.wizard } : {}),
+      ...(parsed.data.ama !== undefined ? { ama: parsed.data.ama } : {}),
+      ...(parsed.data.notifications !== undefined
+        ? { notifications: parsed.data.notifications }
+        : {}),
       ...(parsed.data.tabs !== undefined ? { tabs: parsed.data.tabs } : {}),
       schemaVersion: this.settings.schemaVersion,
     };

@@ -19,6 +19,9 @@ import { CycleJourneys } from '../../../src/renderer/src/features/CycleJourneys'
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
 import { CompletionWorkspace } from '../../../src/renderer/src/features/CompletionWorkspace';
+import { SettingsPanel } from '../../../src/renderer/src/features/SettingsPanel';
+import { AmaDock } from '../../../src/renderer/src/components/AmaDock';
+import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
 import {
   AttentionInbox,
   emptyAttentionDrafts,
@@ -29,7 +32,12 @@ import {
   spineActiveIndex,
   spineTone,
 } from '../../../src/renderer/src/features/featureView';
-import type { AgenticoApi, FeatureActionRequest } from '../../../src/shared/ipc';
+import type {
+  AgenticoApi,
+  AppRouteEvent,
+  AttentionItem,
+  FeatureActionRequest,
+} from '../../../src/shared/ipc';
 import type { CompletionStep } from '../../../src/renderer/src/features/CompletionWorkspace';
 
 function getScene(): string {
@@ -364,6 +372,123 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
   );
 }
 
+function BackgroundScene({ scene }: { scene: string }): React.ReactElement {
+  const [drafts, setDrafts] = React.useState(emptyAttentionDrafts());
+  const [attentionItems, setAttentionItems] = React.useState<AttentionItem[]>([]);
+  const amaRoute =
+    scene === 'background-ama-expanded' || scene === 'background-ama-constrained'
+      ? { id: 1, event: { target: 'ama' as const } }
+      : null;
+  const paletteRoute =
+    scene === 'background-command-palette' || scene === 'background-ama-constrained'
+      ? { id: 2, event: { target: 'palette' as const } }
+      : null;
+
+  React.useEffect(() => {
+    void window.agentico.getAttention().then((snapshot) => setAttentionItems(snapshot.items));
+  }, []);
+
+  const refreshAttention = React.useCallback(async () => {
+    const snapshot = await window.agentico.getAttention();
+    setAttentionItems(snapshot.items);
+    return snapshot.items;
+  }, []);
+
+  const route = React.useCallback((_event: AppRouteEvent) => {}, []);
+
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <header className="global-bar">
+        <div className="global-bar__brand">
+          <span className="global-bar__mark" aria-hidden="true">
+            A
+          </span>
+          <h1>Agentico</h1>
+        </div>
+        <p className="global-bar__runtime" role="status" data-tone="ready">
+          <span aria-hidden="true">●</span> Runtime ready
+        </p>
+        <AttentionInbox
+          items={attentionItems}
+          refresh={refreshAttention}
+          featureLabel={() => 'History and Rewind'}
+          drafts={drafts}
+          setDrafts={setDrafts}
+          onJump={() => {}}
+          openRequest={scene === 'background-ama-compact' ? { id: 1 } : null}
+        />
+      </header>
+      {scene === 'background-ama-compact' ? (
+        <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
+          <SettingsPanel />
+        </div>
+      ) : (
+        <div className="tab-panel" style={{ flex: 1, minHeight: 0 }}>
+          <header className="home-surface__header">
+            <div>
+              <p className="home-surface__eyebrow">Background supervision</p>
+              <h1>History and Rewind</h1>
+            </div>
+            <button type="button" className="create-form__submit">
+              New feature
+            </button>
+          </header>
+          <section className="cockpit__actions" role="group" aria-label="Feature actions">
+            <button type="button" className="cockpit__stop">
+              Stop
+            </button>
+            <button type="button" className="cockpit__restart">
+              Restart
+            </button>
+            <button type="button" className="cockpit__rewind-button">
+              Rewind
+            </button>
+            <p className="cockpit__phase-status" aria-label="Current feature status">
+              <code>implementing</code>
+            </p>
+          </section>
+          {scene === 'background-close-dialog' ? <CloseDialogScene /> : null}
+        </div>
+      )}
+      <AmaDock
+        attentionItems={attentionItems}
+        refreshAttention={refreshAttention}
+        attentionDrafts={drafts}
+        setAttentionDrafts={setDrafts}
+        routeRequest={amaRoute}
+      />
+      <CommandPalette ready={true} routeRequest={paletteRoute} onRoute={route} />
+    </div>
+  );
+}
+
+function CloseDialogScene(): React.ReactElement {
+  return (
+    <div className="impact-dialog__backdrop" style={{ position: 'absolute' }}>
+      <div
+        className="impact-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Work is still running"
+      >
+        <h2>Work is still running</h2>
+        <p>Agentico has background work that may continue without the window.</p>
+        <p>
+          1 feature run is stoppable. The AMA session is active. Keep Running hides the window and
+          leaves work attached.
+        </p>
+        <div className="impact-dialog__actions">
+          <button type="button">Keep Running</button>
+          <button type="button" className="cockpit__stop">
+            Stop Work and Quit
+          </button>
+          <button type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const scene = getScene();
 
@@ -392,6 +517,9 @@ function App() {
     scene === 'completion-delete'
   ) {
     return <CompletionScene scene={scene} />;
+  }
+  if (scene.startsWith('background-')) {
+    return <BackgroundScene scene={scene} />;
   }
   return <div>Unknown scene: {scene}</div>;
 }

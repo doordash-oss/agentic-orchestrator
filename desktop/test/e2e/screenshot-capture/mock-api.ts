@@ -1,6 +1,7 @@
 import type {
   AgenticoApi,
   AppEvent,
+  AppRouteEvent,
   AttentionActionResult,
   AttentionSnapshot,
   ConnectionState,
@@ -29,7 +30,7 @@ import type {
   ThemeInfo,
   ResourceCatalogue,
 } from '../../../src/shared/ipc';
-import { defaultSettings } from '../../../src/shared/ipc';
+import { CHAT_SESSION_ID, defaultSettings } from '../../../src/shared/ipc';
 
 const SEALED_RUNS: RunSummaryView[] = [
   {
@@ -240,11 +241,24 @@ const SESSIONS: SessionSummary[] = [
   },
 ];
 
+const CHAT_SESSION: SessionSummary = {
+  id: CHAT_SESSION_ID,
+  featureId: CHAT_SESSION_ID,
+  runNumber: 0,
+  phase: 'AMA',
+  kind: 'chat',
+  label: 'Ask Agentico',
+  provider: 'claude',
+  status: 'running',
+  startedAt: '2026-07-19T14:20:00Z',
+  usage: { inputTokens: 3200, outputTokens: 900, costUsd: 0.08 },
+};
+
 const FEATURE_SUMMARY: FeatureSummaryView[] = [
   {
     id: 'abcd1234ef567890',
     name: 'History and Rewind',
-    status: 'StatusImplementing',
+    status: 'implementing',
     currentPhase: 'Implement',
     repos: ['signal-lab', 'orchestrator-core'],
     createdAt: '2026-07-14T10:00:00Z',
@@ -259,7 +273,7 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   id: 'abcd1234ef567890',
   name: 'History and Rewind',
   slug: 'history-and-rewind',
-  status: 'StatusImplementing',
+  status: 'implementing',
   currentPhase: 'Implement',
   pipeline: 'large',
   description:
@@ -282,7 +296,7 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
   id: 'abcd1234ef567890',
   name: 'Signal Lab telemetry',
   slug: 'signal-lab-telemetry',
-  status: 'Ready',
+  status: 'ready',
   currentPhase: 'Implement',
   pipeline: 'large',
   description: 'Complete desktop operational parity for routine lifecycle actions and cycles.',
@@ -511,14 +525,101 @@ const CONNECTION_STATE: ConnectionState = {
   ownership: 'app-owned',
 };
 
+const AMA_TRANSCRIPT: SessionTranscript = {
+  sessionId: CHAT_SESSION_ID,
+  cursor: { total: 4, start: 0, end: 4 },
+  messages: [
+    {
+      index: 0,
+      role: 'user',
+      type: 'text',
+      text: 'How should I finish the background supervision phase?',
+    },
+    {
+      index: 1,
+      role: 'assistant',
+      type: 'text',
+      text: 'Start with the singleton AMA dock, then verify notifications, close policy, and native command parity.',
+    },
+    {
+      index: 2,
+      role: 'assistant',
+      type: 'text',
+      text: 'Streaming update 042: the transcript is bounded, deduplicated by row index, and still readable after the session ends.',
+    },
+    {
+      index: 3,
+      role: 'assistant',
+      type: 'text',
+      text: 'Next question is waiting inline without stealing focus from the command palette or attention inbox.',
+    },
+  ],
+};
+
+function isBackgroundScene(scene: string): boolean {
+  return scene.startsWith('background-');
+}
+
+function backgroundAttentionItems(scene: string): AttentionSnapshot['items'] {
+  if (scene === 'background-ama-compact') {
+    return [
+      {
+        kind: 'permission',
+        id: 'perm-background-preview',
+        featureId: 'abcd1234ef567890',
+        sessionId: 'sess-impl-03',
+        phase: 'Implement',
+        toolName: 'Bash',
+        summary: 'Run the bounded verification command.',
+        input: { command: 'npm run check' },
+        waitingSince: '2026-07-19T14:18:00Z',
+      },
+    ];
+  }
+  return [
+    {
+      kind: 'questions',
+      id: 'ask-ama-exact-target',
+      sessionId: CHAT_SESSION_ID,
+      waitingSince: '2026-07-19T14:19:00Z',
+      questions: [
+        {
+          key: 'Which background behavior should be verified first?',
+          header: 'Verification target',
+          multiSelect: false,
+          options: [
+            {
+              label: 'Close coordinator',
+              description: 'Exercise Keep Running before quit.',
+              confidence: 0.83,
+            },
+            {
+              label: 'Notification preview',
+              description: 'Check generic body by default.',
+              confidence: 0.64,
+            },
+            {
+              label: 'Native menu',
+              description: 'Confirm command routing parity.',
+              confidence: 0.58,
+            },
+          ],
+        },
+      ],
+    },
+  ];
+}
+
 function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): AgenticoApi {
-  let theme: ThemeInfo = { preference: 'dark', resolved: 'dark' };
+  const requestedTheme = requestedCaptureTheme();
+  let theme: ThemeInfo = { preference: requestedTheme, resolved: requestedTheme };
   const appEventListeners = listeners;
+  const routeListeners = new Set<(event: AppRouteEvent) => void>();
   const connectionListeners = new Set<(state: ConnectionState) => void>();
   const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
   let currentSettings: Settings = {
     ...defaultSettings(),
-    theme: 'dark',
+    theme: requestedTheme,
     tabs: {
       open: [
         {
@@ -543,6 +644,10 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
     onConnectionChanged: (listener) => {
       connectionListeners.add(listener);
       return () => connectionListeners.delete(listener);
+    },
+    onRouteRequest: (listener) => {
+      routeListeners.add(listener);
+      return () => routeListeners.delete(listener);
     },
     getSettings: () => Promise.resolve(currentSettings),
     updateSettings: (patch) => {
@@ -569,7 +674,7 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
           ...FEATURE_SNAPSHOT,
           activeRun: 9,
           runCount: 9,
-          status: 'StatusImplementing',
+          status: 'implementing',
           actions: [
             {
               id: 'start',
@@ -596,7 +701,7 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
             ...CYCLES_FEATURE_SNAPSHOT,
             id,
             name: 'Alpha Feature',
-            status: 'Paused',
+            status: 'paused',
             actions: [
               { id: 'start', enabled: false, disabledReasons: [] },
               { id: 'pause-stop', enabled: false, disabledReasons: [] },
@@ -612,7 +717,7 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
             ...CYCLES_FEATURE_SNAPSHOT,
             id,
             name: 'Gamma Feature',
-            status: 'Failed',
+            status: 'failed',
             actions: [
               { id: 'start', enabled: false, disabledReasons: [] },
               { id: 'pause-stop', enabled: false, disabledReasons: [] },
@@ -628,7 +733,7 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
             ...CYCLES_FEATURE_SNAPSHOT,
             id,
             name: 'Epsilon Feature',
-            status: 'Paused',
+            status: 'paused',
             actions: [
               { id: 'start', enabled: false, disabledReasons: [] },
               { id: 'pause-stop', enabled: false, disabledReasons: [] },
@@ -674,8 +779,9 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
     },
     getAttention: () =>
       Promise.resolve({
-        items:
-          scene === 'recovery' || scene === 'recovery-constrained'
+        items: isBackgroundScene(scene)
+          ? backgroundAttentionItems(scene)
+          : scene === 'recovery' || scene === 'recovery-constrained'
             ? ([
                 {
                   kind: 'recovery' as const,
@@ -692,9 +798,14 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
     sendHelp: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     saveGateDraft: () => Promise.resolve({ result: 'drafted' } as AttentionActionResult),
     resolveGate: () => Promise.resolve({ result: 'resolved' } as AttentionActionResult),
-    listSessions: () => Promise.resolve(SESSIONS),
+    startChat: () => Promise.resolve({ sessionId: '__chat__', result: 'started' }),
+    endChat: () => Promise.resolve({ sessionId: '__chat__', result: 'ended' }),
+    listSessions: () =>
+      Promise.resolve(isBackgroundScene(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS),
     getSession: (sessionId) => {
-      const summary = SESSIONS.find((s) => s.id === sessionId);
+      const summary = (isBackgroundScene(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS).find(
+        (s) => s.id === sessionId,
+      );
       if (!summary) return Promise.reject(new Error('not_found: session not found'));
       return Promise.resolve({
         ...summary,
@@ -705,11 +816,15 @@ function makeMockApi(scene: string, listeners: Set<(event: AppEvent) => void>): 
       } as SessionDetail);
     },
     getSessionTranscript: ({ sessionId }) =>
-      Promise.resolve({
-        sessionId,
-        cursor: { total: 0, start: 0, end: 0 },
-        messages: [],
-      } as SessionTranscript),
+      Promise.resolve(
+        sessionId === CHAT_SESSION_ID
+          ? AMA_TRANSCRIPT
+          : ({
+              sessionId,
+              cursor: { total: 0, start: 0, end: 0 },
+              messages: [],
+            } as SessionTranscript),
+      ),
     openSessionOutput: () =>
       Promise.resolve({ subscriptionId: 'subscription-1' } as SessionOutputOpenResult),
     cancelSessionOutput: () => Promise.resolve(true),
@@ -1072,6 +1187,11 @@ export function installMockApi(scene: string): {
       document.documentElement.dataset['theme'] = themeMode;
     },
   };
+}
+
+function requestedCaptureTheme(): 'light' | 'dark' {
+  const param = new URLSearchParams(window.location.search).get('theme');
+  return param === 'light' ? 'light' : 'dark';
 }
 
 export {

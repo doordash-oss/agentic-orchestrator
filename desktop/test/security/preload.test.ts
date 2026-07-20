@@ -47,6 +47,7 @@ describe('preload surface', () => {
         'listSessions',
         'onAppEvent',
         'onConnectionChanged',
+        'onRouteRequest',
         'onSessionOutput',
         'openSessionOutput',
         'cancelSessionOutput',
@@ -72,6 +73,8 @@ describe('preload surface', () => {
         'saveGateDraft',
         'sendHelp',
         'setThemePreference',
+        'startChat',
+        'endChat',
         'updateSettings',
         'listRuns',
         'getRun',
@@ -195,6 +198,30 @@ describe('preload surface', () => {
 
     unsubscribe();
     expect(removeListener).toHaveBeenCalledWith('agentico:events:app', expect.any(Function));
+  });
+
+  it('validates route requests fail-closed', () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      onRouteRequest(cb: (e: unknown) => void): () => void;
+    };
+    const cb = vi.fn();
+    const unsubscribe = api.onRouteRequest(cb);
+    expect(on).toHaveBeenCalledWith('agentico:route:requested', expect.any(Function));
+    const listener = on.mock.calls.find(
+      ([channel]) => channel === 'agentico:route:requested',
+    )?.[1] as (event: unknown, payload: unknown) => void;
+
+    listener({}, { target: 'ama' });
+    expect(cb).toHaveBeenCalledWith({ target: 'ama' });
+
+    cb.mockClear();
+    listener({}, { target: 'shell' });
+    listener({}, { target: 'attention', token: 'tok-leak' });
+    listener({}, JSON.parse('{"__proto__": {}, "target": "home"}'));
+    expect(cb).not.toHaveBeenCalled();
+
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('agentico:route:requested', expect.any(Function));
   });
 
   it('validates session output events and removes the exact listener on cleanup', () => {

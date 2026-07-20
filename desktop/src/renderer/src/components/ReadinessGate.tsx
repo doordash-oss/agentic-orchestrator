@@ -6,7 +6,7 @@
  * fresh on every reconnect, so resume always starts from the server truth.
  */
 import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
-import type { AttentionItem, ReadinessSnapshot } from '../../../shared/ipc';
+import type { AttentionItem, ReadinessSnapshot, RoutedRequest } from '../../../shared/ipc';
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
 import { deriveWizardState } from '../wizard/deriveWizardState';
@@ -25,6 +25,7 @@ export function ReadinessGate({
   refreshAttention = async () => [],
   attentionJump = null,
   onAttentionJumpHandled = () => {},
+  routeRequest = null,
 }: {
   attentionDrafts?: AttentionDrafts;
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
@@ -32,6 +33,7 @@ export function ReadinessGate({
   refreshAttention?: () => Promise<AttentionItem[]>;
   attentionJump?: string | null;
   onAttentionJumpHandled?: () => void;
+  routeRequest?: RoutedRequest | null;
 }) {
   const [state, setState] = useState<GateState>({ phase: 'loading' });
 
@@ -86,6 +88,7 @@ export function ReadinessGate({
         setAttentionDrafts={setAttentionDrafts}
         attentionJump={attentionJump}
         onAttentionJumpHandled={onAttentionJumpHandled}
+        routeRequest={routeRequest}
       />
     );
   }

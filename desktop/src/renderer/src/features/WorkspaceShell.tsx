@@ -17,7 +17,7 @@ import {
   type KeyboardEvent,
   type SetStateAction,
 } from 'react';
-import type { AttentionItem, FeatureSnapshot, TabsPrefs } from '../../../shared/ipc';
+import type { AttentionItem, FeatureSnapshot, RoutedRequest, TabsPrefs } from '../../../shared/ipc';
 import { defaultTabsPrefs } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { CreateFeatureForm } from './CreateFeatureForm';
@@ -45,6 +45,7 @@ export function WorkspaceShell({
   setAttentionDrafts,
   attentionJump = null,
   onAttentionJumpHandled = () => {},
+  routeRequest = null,
 }: {
   attentionItems?: AttentionItem[];
   refreshAttention?: () => Promise<AttentionItem[]>;
@@ -52,6 +53,7 @@ export function WorkspaceShell({
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
   attentionJump?: string | null;
   onAttentionJumpHandled?: () => void;
+  routeRequest?: RoutedRequest | null;
 }) {
   // null while the local tab prefs are being restored.
   const [tabs, setTabs] = useState<TabsPrefs | null>(null);
@@ -62,8 +64,10 @@ export function WorkspaceShell({
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const newFeatureButtonRef = useRef<HTMLButtonElement | null>(null);
   const handledAttentionJump = useRef<string | null>(null);
+  const handledRouteRequest = useRef<number | null>(null);
   const listRequestRef = useRef(0);
   const [view, setView] = useState<'home' | 'create'>('home');
+  const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
 
   // Restore ONLY identity/presentation state locally; corrupt or missing
   // settings fall back to an empty tab strip.
@@ -249,6 +253,38 @@ export function WorkspaceShell({
   }, []);
   const creationGuard = useCreationGuard(completeCreationExit);
 
+  const showHome = useCallback(() => {
+    if (tabs === null) return;
+    persist({ ...tabs, activeFeatureId: null });
+    setView('home');
+  }, [persist, tabs]);
+
+  useEffect(() => {
+    if (tabs === null || routeRequest === null) return;
+    if (handledRouteRequest.current === routeRequest.id) return;
+    handledRouteRequest.current = routeRequest.id;
+    if (routeRequest.event.target === 'home') {
+      if (view === 'create') {
+        creationGuard.leave({ kind: 'home' });
+      } else {
+        showHome();
+      }
+    } else if (routeRequest.event.target === 'settings') {
+      if (view === 'create') {
+        creationGuard.leave({ kind: 'settings' });
+      } else {
+        persist({ ...tabs, activeFeatureId: SETTINGS_TAB_ID });
+      }
+    } else if (routeRequest.event.target === 'bulk') {
+      setBulkPreviewRequest(routeRequest.id);
+      if (view === 'create') {
+        creationGuard.leave({ kind: 'home' });
+      } else {
+        showHome();
+      }
+    }
+  }, [creationGuard, persist, routeRequest, showHome, tabs, view]);
+
   if (tabs === null) {
     return (
       <section className="shell-card workspace" aria-label="Workspace">
@@ -278,11 +314,6 @@ export function WorkspaceShell({
       event.preventDefault();
       focusTab(index - 1);
     }
-  };
-
-  const showHome = () => {
-    persist({ ...tabs, activeFeatureId: null });
-    setView('home');
   };
 
   const activateFeatureTab = (featureId: string) => {
@@ -434,7 +465,7 @@ export function WorkspaceShell({
               <RecoveryWorkspace
                 onNavigateToFeature={(featureId) => openFeature(featureId, featureLabel(featureId))}
               />
-              <BulkPreviewPanel />
+              <BulkPreviewPanel autoPreviewKey={bulkPreviewRequest} />
             </>
           )}
         </div>

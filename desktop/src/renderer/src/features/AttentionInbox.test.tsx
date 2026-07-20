@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -419,5 +419,84 @@ describe('AttentionInbox stale refreshes', () => {
       within(inbox).getByText('This item was already resolved. The inbox has been refreshed.'),
     ).toBeVisible();
     expect(screen.getByRole('button', { name: /Attention inbox, 0 pending/ })).toBeVisible();
+  });
+
+  it('does not move focus for a stale expanded item while the inbox is closed', async () => {
+    let replaceItems!: (items: AttentionItem[]) => void;
+    function Harness() {
+      const [currentItems, setCurrentItems] = useState<AttentionItem[]>([
+        permissionItem,
+        secondPermissionItem,
+      ]);
+      const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+      replaceItems = setCurrentItems;
+      return (
+        <>
+          <input aria-label="Search commands" />
+          <AttentionInbox
+            items={currentItems}
+            refresh={() => Promise.resolve(currentItems)}
+            featureLabel={() => 'Search revamp'}
+            drafts={drafts}
+            setDrafts={setDrafts}
+            onJump={() => undefined}
+          />
+        </>
+      );
+    }
+
+    render(<Harness />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: /Attention inbox, 2 pending/ }));
+    const inbox = screen.getByRole('complementary', { name: 'Attention inbox' });
+    await user.click(within(inbox).getAllByRole('button', { name: /Permission/ })[0]!);
+    await user.click(within(inbox).getByRole('button', { name: 'Close inbox' }));
+    const search = screen.getByLabelText('Search commands');
+    search.focus();
+
+    act(() => replaceItems([secondPermissionItem]));
+
+    expect(search).toHaveFocus();
+  });
+
+  it('does not move focus from an active modal dialog while the inbox is open behind it', async () => {
+    let replaceItems!: (items: AttentionItem[]) => void;
+    function Harness() {
+      const [currentItems, setCurrentItems] = useState<AttentionItem[]>([
+        permissionItem,
+        secondPermissionItem,
+      ]);
+      const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+      replaceItems = setCurrentItems;
+      return (
+        <>
+          <AttentionInbox
+            items={currentItems}
+            refresh={() => Promise.resolve(currentItems)}
+            featureLabel={() => 'Search revamp'}
+            drafts={drafts}
+            setDrafts={setDrafts}
+            onJump={() => undefined}
+          />
+          <div role="dialog" aria-modal="true" aria-label="Command palette">
+            <input aria-label="Search commands" />
+          </div>
+        </>
+      );
+    }
+
+    render(<Harness />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: /Attention inbox, 2 pending/ }));
+    const inbox = screen.getByRole('complementary', { name: 'Attention inbox' });
+    await user.click(within(inbox).getAllByRole('button', { name: /Permission/ })[0]!);
+    const search = screen.getByLabelText('Search commands');
+    search.focus();
+
+    act(() => replaceItems([secondPermissionItem]));
+
+    expect(search).toHaveFocus();
   });
 });

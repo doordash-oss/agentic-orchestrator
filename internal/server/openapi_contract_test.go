@@ -365,6 +365,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: "/api/v1/prompts/ask-user/answer", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/prompts/help/send", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/prompts/chat/start", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/prompts/chat/end", mutation: true},
 		{method: httpMethodGet, path: apiPathPermissions},
 		{method: httpMethodPost, path: apiPathPermissionsAnswer, mutation: true},
 		{method: httpMethodGet, path: apiPathSessions},

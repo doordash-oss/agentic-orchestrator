@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import type {
   AgenticoApi,
   AppEvent,
+  AppRouteEvent,
   AttentionItem,
   ConnectionState,
   CreationDefaults,
@@ -163,6 +164,7 @@ export interface AgenticoMock {
     getConnectionStatus: ReturnType<typeof vi.fn>;
     retryConnection: ReturnType<typeof vi.fn>;
     restartConnection: ReturnType<typeof vi.fn>;
+    onRouteRequest: ReturnType<typeof vi.fn>;
     getSettings: ReturnType<typeof vi.fn>;
     updateSettings: ReturnType<typeof vi.fn>;
     setThemePreference: ReturnType<typeof vi.fn>;
@@ -191,6 +193,8 @@ export interface AgenticoMock {
     sendHelp: ReturnType<typeof vi.fn>;
     saveGateDraft: ReturnType<typeof vi.fn>;
     resolveGate: ReturnType<typeof vi.fn>;
+    startChat: ReturnType<typeof vi.fn>;
+    endChat: ReturnType<typeof vi.fn>;
     listResources: ReturnType<typeof vi.fn>;
     readResource: ReturnType<typeof vi.fn>;
     validateResource: ReturnType<typeof vi.fn>;
@@ -228,6 +232,8 @@ export interface AgenticoMock {
   /** Push a validated app event (invalidation/stream status) to listeners. */
   emitAppEvent(event: AppEvent): void;
   appEventListenerCount(): number;
+  emitRouteRequest(event: AppRouteEvent): void;
+  routeListenerCount(): number;
   emitSessionOutput(event: SessionOutputEvent): void;
   sessionOutputListenerCount(): number;
 }
@@ -260,6 +266,7 @@ export function installAgenticoMock(
   const defaults = overrides.defaults ?? creationDefaults();
 
   const listeners = new Set<(state: ConnectionState) => void>();
+  const routeListeners = new Set<(event: AppRouteEvent) => void>();
   const appEventListeners = new Set<(event: AppEvent) => void>();
   const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
   const sessions = overrides.sessions ?? [];
@@ -271,6 +278,10 @@ export function installAgenticoMock(
     onConnectionChanged: vi.fn((listener: (state: ConnectionState) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    }),
+    onRouteRequest: vi.fn((listener: (event: AppRouteEvent) => void) => {
+      routeListeners.add(listener);
+      return () => routeListeners.delete(listener);
     }),
     getSettings: vi.fn(() => Promise.resolve(settings)),
     updateSettings: vi.fn(() => Promise.resolve(settings)),
@@ -300,6 +311,8 @@ export function installAgenticoMock(
     sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
     saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
     resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
+    startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
+    endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
     listSessions: vi.fn(() => Promise.resolve(sessions)),
     getSession: vi.fn((sessionId: string) => {
       if (overrides.session !== undefined) return Promise.resolve(overrides.session);
@@ -396,6 +409,10 @@ export function installAgenticoMock(
       for (const listener of appEventListeners) listener(event);
     },
     appEventListenerCount: () => appEventListeners.size,
+    emitRouteRequest: (event) => {
+      for (const listener of routeListeners) listener(event);
+    },
+    routeListenerCount: () => routeListeners.size,
     emitSessionOutput: (event) => {
       for (const listener of sessionOutputListeners) listener(event);
     },

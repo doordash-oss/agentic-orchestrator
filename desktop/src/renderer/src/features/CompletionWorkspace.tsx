@@ -479,7 +479,7 @@ export function CompletionWorkspace({
   );
 
   return (
-    <div className="completion-workspace" data-step={step}>
+    <section className="completion-workspace" data-step={step} aria-label="Completion workspace">
       <div className="completion-workspace__header">
         <h2 className="completion-workspace__title">Completion</h2>
         <div className="completion-workspace__steps">
@@ -946,6 +946,6 @@ export function CompletionWorkspace({
           )}
         </div>
       )}
-    </div>
+    </section>
   );
 }

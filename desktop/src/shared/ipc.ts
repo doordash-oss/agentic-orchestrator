@@ -62,6 +62,9 @@ export const IPC_CHANNELS = {
   sessionsOutputOpen: 'agentico:sessions:output-open',
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
   creationDefaults: 'agentico:creation:defaults',
+  creationPickFiles: 'agentico:creation:pick-files',
+  creationSearchFiles: 'agentico:creation:search-files',
+  creationCancelFileSearch: 'agentico:creation:cancel-file-search',
   reviewDraftsLoad: 'agentico:review-drafts:load',
   reviewDraftsSave: 'agentico:review-drafts:save',
   reviewDraftsDiscard: 'agentico:review-drafts:discard',
@@ -80,6 +83,7 @@ export const IPC_CHANNELS = {
   runsList: 'agentico:runs:list',
   runsGet: 'agentico:runs:get',
   runSessionsList: 'agentico:runs:sessions-list',
+  livePreviewGet: 'agentico:runs:live-preview',
   runArtifactsList: 'agentico:runs:artifacts-list',
   runArtifactContent: 'agentico:runs:artifact-content',
   runLogContent: 'agentico:runs:log-content',
@@ -460,7 +464,7 @@ export const AppEventSchema = z.discriminatedUnion('type', [
 export type AppEvent = z.output<typeof AppEventSchema>;
 
 export const AppRouteEventSchema = z.strictObject({
-  target: z.enum(['palette', 'home', 'settings', 'attention', 'ama', 'bulk']),
+  target: z.enum(['palette', 'help', 'home', 'settings', 'attention', 'ama', 'bulk']),
   attentionId: z.string().min(1).max(500).optional(),
   featureId: z.string().min(1).max(200).optional(),
   settingsSection: z.enum(['updates', 'diagnostics']).optional(),
@@ -1476,6 +1480,16 @@ export const SessionSummarySchema = z.strictObject({
 });
 export type SessionSummary = z.output<typeof SessionSummarySchema>;
 
+export const LivePreviewViewSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  activity: z.string().max(1000),
+  session: SessionSummarySchema.optional(),
+  contextPercentage: z.number().int(),
+  totalSeconds: z.number().int().nonnegative(),
+  totalUsd: z.number().nonnegative(),
+});
+export type LivePreviewView = z.output<typeof LivePreviewViewSchema>;
+
 export const TERMINAL_CHAT_STATUSES = [
   'complete',
   'completed',
@@ -1635,6 +1649,24 @@ export type SessionOutputEvent = z.output<typeof SessionOutputEventSchema>;
 
 // --- Feature creation ---------------------------------------------------------
 
+export const CREATION_IMAGE_LIMIT = 12;
+export const CREATION_ATTACHMENT_LIMIT = 24;
+export const CREATION_REPOSITORY_FILE_LIMIT = 24;
+export const CREATION_FILE_SEARCH_RESULT_LIMIT = 50;
+export const CREATION_IMAGE_FORMATS = [
+  { extension: 'png', mime: 'image/png' },
+  { extension: 'jpg', mime: 'image/jpeg' },
+  { extension: 'jpeg', mime: 'image/jpeg' },
+  { extension: 'gif', mime: 'image/gif' },
+  { extension: 'webp', mime: 'image/webp' },
+] as const;
+
+export const RepositoryFileRefSchema = z.strictObject({
+  repoKey: z.string().min(1).max(200),
+  path: z.string().min(1).max(1000),
+});
+export type RepositoryFileRef = z.output<typeof RepositoryFileRefSchema>;
+
 /** The narrow creation input, validated at both IPC boundaries. */
 export const CreateFeatureInputSchema = z.strictObject({
   name: z
@@ -1647,9 +1679,43 @@ export const CreateFeatureInputSchema = z.strictObject({
   repoKeys: z.array(z.string().min(1).max(200)).min(1).max(32),
   /** Branch choice: reuse the current branch instead of a feature branch. */
   useCurrentBranch: z.boolean(),
+  /** Native-picker approved inputs; main/server revalidate before reading. */
+  images: z.array(AbsolutePathSchema).max(CREATION_IMAGE_LIMIT).default([]),
+  attachments: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT).default([]),
+  repositoryFiles: z.array(RepositoryFileRefSchema).max(CREATION_REPOSITORY_FILE_LIMIT).default([]),
+  pipeline: z.enum(['medium', 'large', 'moonshot']).default('medium'),
+  riskLevel: z.enum(['low', 'medium', 'high']).default('medium'),
+  inquireness: z.enum(['minimal', 'balanced', 'thorough', 'always']).default('balanced'),
+  exitCriteria: z.string().max(4000).default(''),
+  models: z.record(z.string().min(1).max(64), z.string().min(1).max(200)).default({}),
+  checkpoints: z
+    .strictObject({
+      inquiryReview: z.boolean(),
+      researchReview: z.boolean(),
+      designReview: z.boolean(),
+      roadmapReview: z.boolean(),
+      phasePlanReview: z.boolean(),
+      manualPublish: z.boolean(),
+      draftPublish: z.boolean(),
+    })
+    .default({
+      inquiryReview: false,
+      researchReview: false,
+      designReview: false,
+      roadmapReview: true,
+      phasePlanReview: true,
+      manualPublish: true,
+      draftPublish: false,
+    }),
+  skills: z.array(z.string().min(1).max(256)).max(32).default([]),
+  /** Stable for the lifetime of one draft so a retry cannot duplicate it. */
+  idempotencyKey: z
+    .string()
+    .uuid()
+    .default(() => crypto.randomUUID()),
 });
 
-export type CreateFeatureInput = z.output<typeof CreateFeatureInputSchema>;
+export type CreateFeatureInput = z.input<typeof CreateFeatureInputSchema>;
 
 export const CreateFeatureResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
@@ -1680,6 +1746,26 @@ export const CreationDefaultsSchema = z.strictObject({
 });
 
 export type CreationDefaults = z.output<typeof CreationDefaultsSchema>;
+
+export const CreationFileKindSchema = z.enum(['image', 'attachment']);
+export type CreationFileKind = z.output<typeof CreationFileKindSchema>;
+export const PickedCreationFilesSchema = z.strictObject({
+  paths: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT),
+});
+export type PickedCreationFiles = z.output<typeof PickedCreationFilesSchema>;
+export const CreationFileSearchRequestSchema = z.strictObject({
+  requestId: z.string().uuid(),
+  repoKeys: z.array(z.string().min(1).max(200)).min(1).max(32),
+  query: z.string().max(200),
+});
+export type CreationFileSearchRequest = z.output<typeof CreationFileSearchRequestSchema>;
+export const CreationFileSearchResultSchema = z.strictObject({
+  requestId: z.string().uuid(),
+  files: z.array(RepositoryFileRefSchema).max(CREATION_FILE_SEARCH_RESULT_LIMIT),
+  truncated: z.boolean(),
+  cancelled: z.boolean(),
+});
+export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultSchema>;
 
 // --- Theme ------------------------------------------------------------------
 
@@ -2247,6 +2333,18 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([]),
     response: CreationDefaultsSchema,
   },
+  [IPC_CHANNELS.creationPickFiles]: {
+    request: z.tuple([CreationFileKindSchema]),
+    response: PickedCreationFilesSchema,
+  },
+  [IPC_CHANNELS.creationSearchFiles]: {
+    request: z.tuple([CreationFileSearchRequestSchema]),
+    response: CreationFileSearchResultSchema,
+  },
+  [IPC_CHANNELS.creationCancelFileSearch]: {
+    request: z.tuple([z.string().uuid()]),
+    response: z.strictObject({ cancelled: z.boolean() }),
+  },
   [IPC_CHANNELS.reviewDraftsLoad]: {
     request: z.tuple([LocalReviewDraftLookupRequestSchema]),
     response: LocalReviewDraftSchema.nullable(),
@@ -2318,6 +2416,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.runSessionsList]: {
     request: z.tuple([RunGetRequestSchema]),
     response: RunSessionsListResultSchema,
+  },
+  [IPC_CHANNELS.livePreviewGet]: {
+    request: z.tuple([FeatureIdSchema]),
+    response: LivePreviewViewSchema,
   },
   [IPC_CHANNELS.runArtifactsList]: {
     request: z.tuple([RunArtifactsListRequestSchema]),
@@ -2473,6 +2575,10 @@ export interface AgenticoApi {
   cancelSessionOutput(subscriptionId: string): Promise<boolean>;
   onSessionOutput(listener: (event: SessionOutputEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
+  pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
+  importDroppedCreationFiles(kind: CreationFileKind, files: readonly File[]): PickedCreationFiles;
+  searchCreationFiles(request: CreationFileSearchRequest): Promise<CreationFileSearchResult>;
+  cancelCreationFileSearch(requestId: string): Promise<boolean>;
   loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): Promise<LocalReviewDraft | null>;
   saveLocalReviewDraft(request: LocalReviewDraftSaveRequest): Promise<LocalReviewDraft>;
   discardLocalReviewDraft(request: LocalReviewDraftDiscardRequest): Promise<boolean>;
@@ -2493,6 +2599,7 @@ export interface AgenticoApi {
   listRuns(request: RunListRequest): Promise<RunListResult>;
   getRun(request: RunGetRequest): Promise<RunDetailView>;
   listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
+  getLivePreview(featureId: string): Promise<LivePreviewView>;
   listRunArtifacts(request: RunArtifactsListRequest): Promise<RunArtifactsListResult>;
   getRunArtifactContent(request: RunArtifactContentRequest): Promise<RunTextContent>;
   getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;

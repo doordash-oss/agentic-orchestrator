@@ -34,3 +34,15 @@ export function killProcessTree(rootPid: number | undefined): void {
     }
   }
 }
+
+/** Returns live process IDs whose command lines reference an isolated journey root. */
+export function worldProcessPIDs(worldRoot: string): number[] {
+  try {
+    return execFileSync('pgrep', ['-f', worldRoot], { encoding: 'utf8' })
+      .split('\n')
+      .map((value) => Number(value.trim()))
+      .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+  } catch {
+    return [];
+  }
+}

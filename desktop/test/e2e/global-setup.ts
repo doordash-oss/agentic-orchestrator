@@ -140,6 +140,10 @@ function hasChangesNewerThan(verifiedAt: string): boolean {
       ...gitPaths(repository, ['ls-files', '--others', '--exclude-standard', '-z']),
     ];
     return changed.some((file) => {
+      // Packaged tests are not included by electron-builder (`files: out/**,
+      // package.json`), so changing only their orchestration must not trigger
+      // an identical application rebuild before every retry.
+      if (file.startsWith('desktop/test/')) return false;
       try {
         return fs.statSync(path.join(repository, file)).mtimeMs > verifiedAtMs;
       } catch {

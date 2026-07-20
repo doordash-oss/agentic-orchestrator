@@ -4,12 +4,15 @@
  * no channel parameter accepted from the renderer, and no token, URL, node,
  * or process material in scope.
  */
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import {
   AppEventSchema,
   AppRouteEventSchema,
   SessionOutputEventSchema,
   ConnectionStateSchema,
+  CREATION_ATTACHMENT_LIMIT,
+  CREATION_IMAGE_FORMATS,
+  CREATION_IMAGE_LIMIT,
   IPC_CHANNELS,
   IPC_EVENTS,
   IpcEnvelopeSchema,
@@ -19,6 +22,8 @@ import {
   type ConnectionState,
   type ChatStartRequest,
   type CreateFeatureInput,
+  type CreationFileKind,
+  type CreationFileSearchRequest,
   type FeatureActionRequest,
   type InitRepositoryRequest,
   type SettingsPatch,
@@ -166,6 +171,27 @@ const api: AgenticoApi = {
     };
   },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),
+  pickCreationFiles: (kind: CreationFileKind) => call(IPC_CHANNELS.creationPickFiles, kind),
+  importDroppedCreationFiles: (kind: CreationFileKind, files: readonly File[]) => {
+    const limit = kind === 'image' ? CREATION_IMAGE_LIMIT : CREATION_ATTACHMENT_LIMIT;
+    const imageMimeTypes = new Set(CREATION_IMAGE_FORMATS.map((format) => format.mime));
+    const paths = files.slice(0, limit).flatMap((file) => {
+      if (
+        kind === 'image' &&
+        !imageMimeTypes.has(file.type as (typeof CREATION_IMAGE_FORMATS)[number]['mime'])
+      )
+        return [];
+      const filePath = webUtils.getPathForFile(file);
+      return filePath === '' ? [] : [filePath];
+    });
+    return { paths };
+  },
+  searchCreationFiles: (request: CreationFileSearchRequest) =>
+    call(IPC_CHANNELS.creationSearchFiles, request),
+  cancelCreationFileSearch: (requestId: string) =>
+    call<{ cancelled: boolean }>(IPC_CHANNELS.creationCancelFileSearch, requestId).then(
+      ({ cancelled }) => cancelled,
+    ),
   loadLocalReviewDraft: (request: LocalReviewDraftLookupRequest) =>
     call(IPC_CHANNELS.reviewDraftsLoad, request),
   saveLocalReviewDraft: (request: LocalReviewDraftSaveRequest) =>
@@ -195,6 +221,7 @@ const api: AgenticoApi = {
   listRuns: (request: RunListRequest) => call(IPC_CHANNELS.runsList, request),
   getRun: (request: RunGetRequest) => call(IPC_CHANNELS.runsGet, request),
   listRunSessions: (request: RunGetRequest) => call(IPC_CHANNELS.runSessionsList, request),
+  getLivePreview: (featureId: string) => call(IPC_CHANNELS.livePreviewGet, featureId),
   listRunArtifacts: (request: RunArtifactsListRequest) =>
     call(IPC_CHANNELS.runArtifactsList, request),
   getRunArtifactContent: (request: RunArtifactContentRequest) =>

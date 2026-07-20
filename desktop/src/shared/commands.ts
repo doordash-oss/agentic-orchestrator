@@ -4,6 +4,7 @@ export type CommandGroup = 'window' | 'navigation' | 'attention' | 'assistant' |
 
 export type CommandId =
   | 'global.palette'
+  | 'global.help'
   | 'global.show'
   | 'global.home'
   | 'global.settings'
@@ -38,6 +39,13 @@ export const COMMAND_CATALOGUE: readonly CommandDescriptor[] = [
     group: 'navigation',
     accelerator: 'CommandOrControl+K',
     target: 'palette',
+  },
+  {
+    id: 'global.help',
+    label: 'Keyboard shortcuts',
+    group: 'navigation',
+    accelerator: 'CommandOrControl+/',
+    target: 'help',
   },
   {
     id: 'global.home',
@@ -93,4 +101,10 @@ export function commandById(id: CommandId): CommandDescriptor {
     throw new Error(`Unknown command: ${id}`);
   }
   return command;
+}
+
+export function displayAccelerator(accelerator: string, platform = navigator.platform): string {
+  return accelerator
+    .replace('CommandOrControl', platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl')
+    .replaceAll('+', ' ');
 }

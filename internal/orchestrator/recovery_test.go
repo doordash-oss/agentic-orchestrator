@@ -549,7 +549,7 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 // fresh must NOT attempt the forbidden StatusBuildingKB → StatusInquiring
 // transition.
 //
-	// Background: `startKB`'s `allFresh` branch previously
+// Background: `startKB`'s `allFresh` branch previously
 // returned PhaseSkipped → PhaseInquire while the feature was still in
 // StatusBuildingKB. The recursive `startPhase(PhaseInquire)` → `startInquire`
 // then called `Lifecycle.StartInquire`, which resolves to
@@ -1099,6 +1099,8 @@ func TestExecuteRecovery_Resume_InterruptedCycle_RestartsCycleNotPhase(t *testin
 			},
 		},
 	}
+	sourceStatePath := filepath.Join(f.ID, "runs", "run-001", "review-comments-1", "repo-a")
+	t.Cleanup(func() { _ = os.RemoveAll(f.ID) })
 	items := fakeRecoveryItems(itemSpec{
 		FeatureID:    "feat-interrupted-cycle",
 		RepoName:     "repo-a",
@@ -1132,6 +1134,9 @@ func TestExecuteRecovery_Resume_InterruptedCycle_RestartsCycleNotPhase(t *testin
 	}
 	if !strings.Contains(err.Error(), "restart cycle") {
 		t.Fatalf("error = %v; want a cycle-restart error", err)
+	}
+	if _, statErr := os.Stat(sourceStatePath); !os.IsNotExist(statErr) {
+		t.Errorf("recovery state path exists before a phase runner is available; stat error = %v", statErr)
 	}
 	if spy.numCalls() != 0 {
 		t.Errorf("runMultiRepoImplFn called %d times; want 0 (cycle restart must not dispatch a feature phase)", spy.numCalls())

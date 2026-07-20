@@ -14,6 +14,32 @@ export interface DashboardState {
   tone: DashboardTone;
 }
 
+const STATUS_LABELS: Readonly<Record<string, string>> = {
+  BuildingKB: 'Building knowledge base',
+  CodeReady: 'Code ready',
+  NeedUserInput: 'Input needed',
+  SettingUpWorktrees: 'Setting up worktrees',
+};
+
+/** User-facing copy for the server's stable enum spelling. */
+export function displayStatusLabel(status: string): string {
+  const known = STATUS_LABELS[status];
+  if (known !== undefined) return known;
+
+  const words = status
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+  return words.length === 0 ? status : words[0] + words.slice(1).toLocaleLowerCase();
+}
+
+/** Replaces stable server status tokens when they appear inside explanatory copy. */
+export function displayFeatureMessage(message: string): string {
+  return Object.entries(STATUS_LABELS).reduce(
+    (copy, [status, label]) => copy.replaceAll(status, label),
+    message,
+  );
+}
+
 const ACTIVE_STATUSES = new Set([
   'SettingUpWorktrees',
   'BuildingKB',

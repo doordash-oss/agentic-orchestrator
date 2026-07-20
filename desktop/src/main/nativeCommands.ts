@@ -122,6 +122,7 @@ export class NativeCommandController {
         label: 'Navigate',
         submenu: [
           this.commandItem('global.palette'),
+          this.commandItem('global.help'),
           { type: 'separator' },
           this.commandItem('global.home'),
           this.commandItem('global.settings'),

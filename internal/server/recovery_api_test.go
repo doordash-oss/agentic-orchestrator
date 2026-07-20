@@ -172,6 +172,33 @@ func TestRecoveryLogReadRejectsMissingParams(t *testing.T) {
 	}
 }
 
+func TestRecoveryItemDTOOffersOnlyResumeAndKill(t *testing.T) {
+	t.Parallel()
+	item := ports.RecoveryItem{
+		PIDFile:  ports.PIDFile{FeatureID: fixtureFeatureID, RepoName: "repo-a"},
+		RepoName: "repo-a",
+	}
+	dto := recoveryItemDTO(item)
+	if dto.DefaultAction != actionResume {
+		t.Fatalf("default action = %q; want %q", dto.DefaultAction, actionResume)
+	}
+	if len(dto.AllowedActions) != 2 || dto.AllowedActions[0] != actionResume || dto.AllowedActions[1] != recoveryActionKill {
+		t.Fatalf("allowed actions = %v; want [resume kill]", dto.AllowedActions)
+	}
+}
+
+func TestDecodeRecoveryActionsRejectsLegacySkip(t *testing.T) {
+	t.Parallel()
+	item := ports.RecoveryItem{
+		PIDFile:  ports.PIDFile{FeatureID: fixtureFeatureID, RepoName: "repo-a"},
+		RepoName: "repo-a",
+	}
+	key := ports.RecoveryActionKey(fixtureFeatureID, "repo-a")
+	if _, err := decodeRecoveryActions([]ports.RecoveryItem{item}, map[string]string{key: recoveryActionSkip}); err == nil {
+		t.Fatal("decode legacy skip action succeeded; want fail-closed rejection")
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && (haystack == needle || indexOf(haystack, needle) >= 0)
 }

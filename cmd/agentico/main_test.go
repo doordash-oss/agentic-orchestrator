@@ -852,34 +852,57 @@ func TestCanonicalizeStateDir_FallsBackWhenUnresolvable(t *testing.T) {
 	}
 }
 
-func TestRunArgsLaunchesServerByDefault(t *testing.T) {
+func TestRunArgsLaunchesDesktopByDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	var launched bool
-	wantParent := pickRuntimeParent(os.Stat)
-	code := runArgs(nil, &stdout, &stderr, func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
-		launched = true
-		if configPath != filepath.Join(wantParent, defaultConfigBasename) {
-			t.Errorf("configPath = %q, want default", configPath)
-		}
-		if stateDir != filepath.Join(wantParent, defaultStateBasename) {
-			t.Errorf("stateDir = %q, want default", stateDir)
-		}
-		if dangerouslySkipPerms {
-			t.Error("dangerouslySkipPerms = true, want false")
-		}
-		if enabledProviders != nil {
-			t.Errorf("enabledProviders = %v, want nil", enabledProviders)
-		}
-		return 0
-	}, failingUpdater(t))
+	var desktopLaunched, serverLaunched bool
+	code := runArgsWithDesktop(
+		nil,
+		&stdout,
+		&stderr,
+		func() error {
+			desktopLaunched = true
+			return nil
+		},
+		func(string, string, bool, []string, bool) int {
+			serverLaunched = true
+			return 0
+		},
+		failingUpdater(t),
+	)
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)
 	}
-	if !launched {
-		t.Fatal("launcher was not called")
+	if !desktopLaunched {
+		t.Fatal("desktop launcher was not called")
+	}
+	if serverLaunched {
+		t.Fatal("server launcher was called for a bare invocation")
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("stdout = %q stderr = %q, want both empty", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunArgsDesktopFailurePrintsInstallAndHeadlessGuidance(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runArgsWithDesktop(
+		nil,
+		&stdout,
+		&stderr,
+		func() error { return errors.New("application is not registered") },
+		failingServerLauncher(t),
+		failingUpdater(t),
+	)
+	if code != 1 {
+		t.Errorf("runArgs() code = %d, want 1", code)
+	}
+	for _, want := range []string{"application is not registered", "signed Agentico desktop package", "agentico server"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want %q", stderr.String(), want)
+		}
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
 	}
 }
 
@@ -889,7 +912,7 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 	var gotDangerouslySkipPerms bool
 	var gotProviders []string
 	code := runArgs(
-		[]string{"--config", "/tmp/agentic-config.yaml", "--state-dir", "/tmp/agentic-features", "--providers", "codex, claude", "--dangerously-skip-permissions"},
+		[]string{cliSubcommandServer, "--config", "/tmp/agentic-config.yaml", "--state-dir", "/tmp/agentic-features", "--providers", "codex, claude", "--dangerously-skip-permissions"},
 		&stdout,
 		&stderr,
 		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
@@ -925,7 +948,7 @@ func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var gotRefresh bool
 	code := runArgs(
-		[]string{"--refresh-models"},
+		[]string{cliSubcommandServer, "--refresh-models"},
 		&stdout,
 		&stderr,
 		func(_ string, _ string, _ bool, _ []string, refreshModels bool) int {
@@ -1090,6 +1113,21 @@ func TestParseLaunchArgsServerSurface(t *testing.T) {
 	}
 	if !slices.Equal(opts.enabledProviders, []string{providerNameCodex}) {
 		t.Fatalf("enabledProviders = %v; want [codex]", opts.enabledProviders)
+	}
+}
+
+func TestParseLaunchArgsRejectsServerFlagsWithoutServerSubcommand(t *testing.T) {
+	for _, args := range [][]string{
+		{"--config", testServerConfigPath},
+		{"--state-dir", testStateFeaturesDir},
+		{"--providers", providerNameCodex},
+		{"--dangerously-skip-permissions"},
+		{"--refresh-models"},
+	} {
+		_, err := parseLaunchArgs(args)
+		if err == nil || !strings.Contains(err.Error(), "agentico server") {
+			t.Errorf("parseLaunchArgs(%v) error = %v, want server-subcommand guidance", args, err)
+		}
 	}
 }
 
@@ -1679,7 +1717,7 @@ func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	out := b.String()
 	for _, want := range []string{
 		"Agentic Orchestrator",
-		"agentico [flags]",
+		"Usage: agentico\n",
 		"agentico server [flags]",
 		"~/.agentic-orchestrator/config.yaml",
 		"~/.agentic-orchestrator/features",

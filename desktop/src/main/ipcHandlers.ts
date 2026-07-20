@@ -18,6 +18,10 @@ import {
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
+  type CreationFileKind,
+  type CreationFileSearchRequest,
+  type CreationFileSearchResult,
+  type PickedCreationFiles,
   type FeatureSnapshot,
   type FeatureSummaryView,
   type FeatureActionRequest,
@@ -75,6 +79,7 @@ import {
   type RunGetRequest,
   type RunDetailView,
   type RunSessionsListResult,
+  type LivePreviewView,
   type RunArtifactsListRequest,
   type RunArtifactsListResult,
   type RunArtifactContentRequest,
@@ -146,6 +151,9 @@ export interface IpcServices {
   ): string;
   cancelSessionOutput(subscriptionId: string): boolean;
   getCreationDefaults(): Promise<CreationDefaults>;
+  pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
+  searchCreationFiles(request: CreationFileSearchRequest): Promise<CreationFileSearchResult>;
+  cancelCreationFileSearch(requestId: string): Promise<boolean> | boolean;
   getAttention(): Promise<AttentionSnapshot>;
   answerPermission(request: PermissionDecisionRequest): Promise<AttentionActionResult>;
   answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult>;
@@ -172,6 +180,7 @@ export interface IpcServices {
   listRuns(request: RunListRequest): Promise<RunListResult>;
   getRun(request: RunGetRequest): Promise<RunDetailView>;
   listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
+  getLivePreview(featureId: string): Promise<LivePreviewView>;
   listRunArtifacts(request: RunArtifactsListRequest): Promise<RunArtifactsListResult>;
   getRunArtifactContent(request: RunArtifactContentRequest): Promise<RunTextContent>;
   getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
@@ -303,6 +312,14 @@ export function registerIpcHandlers(
       cancelled: services.cancelSessionOutput(request.subscriptionId),
     }),
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
+    [IPC_CHANNELS.creationPickFiles]: (_event, kind: CreationFileKind) =>
+      services.pickCreationFiles(kind),
+    [IPC_CHANNELS.creationSearchFiles]: (_event, request: CreationFileSearchRequest) =>
+      services.searchCreationFiles(request),
+    [IPC_CHANNELS.creationCancelFileSearch]: (_event, requestId: string) =>
+      Promise.resolve(services.cancelCreationFileSearch(requestId)).then((cancelled) => ({
+        cancelled,
+      })),
     [IPC_CHANNELS.reviewDraftsLoad]: (_event, request: LocalReviewDraftLookupRequest) =>
       services.loadLocalReviewDraft(request),
     [IPC_CHANNELS.reviewDraftsSave]: (_event, request: LocalReviewDraftSaveRequest) =>
@@ -337,6 +354,8 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.runsGet]: (_event, request: RunGetRequest) => services.getRun(request),
     [IPC_CHANNELS.runSessionsList]: (_event, request: RunGetRequest) =>
       services.listRunSessions(request),
+    [IPC_CHANNELS.livePreviewGet]: (_event, featureId: string) =>
+      services.getLivePreview(featureId),
     [IPC_CHANNELS.runArtifactsList]: (_event, request: RunArtifactsListRequest) =>
       services.listRunArtifacts(request),
     [IPC_CHANNELS.runArtifactContent]: (_event, request: RunArtifactContentRequest) =>

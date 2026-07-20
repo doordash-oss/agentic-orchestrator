@@ -142,6 +142,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     listRuns: vi.fn(() => Promise.reject(new Error('unused'))),
     getRun: vi.fn(() => Promise.reject(new Error('unused'))),
     listRunSessions: vi.fn(() => Promise.reject(new Error('unused'))),
+    getLivePreview: vi.fn(() => Promise.reject(new Error('unused'))),
     listRunArtifacts: vi.fn(() => Promise.reject(new Error('unused'))),
     getRunArtifactContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -171,6 +172,18 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
     ...overrides,
+    pickCreationFiles: overrides.pickCreationFiles ?? vi.fn(() => Promise.resolve({ paths: [] })),
+    searchCreationFiles:
+      overrides.searchCreationFiles ??
+      vi.fn((request) =>
+        Promise.resolve({
+          requestId: request.requestId,
+          files: [],
+          truncated: false,
+          cancelled: false,
+        }),
+      ),
+    cancelCreationFileSearch: overrides.cancelCreationFileSearch ?? vi.fn(() => false),
   };
 }
 

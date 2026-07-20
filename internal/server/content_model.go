@@ -269,6 +269,7 @@ func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, f
 		Timing:     timingDTO(f),
 		Cost:       costDTO(f),
 		Context:    ContextDTO{Percentage: -1},
+		Transcript: []TranscriptMessage{},
 	}
 	if sess != nil {
 		summary := sessionSummaryDTO(sess)

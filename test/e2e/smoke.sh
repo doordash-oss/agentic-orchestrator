@@ -68,9 +68,9 @@ if [ -d "commands" ]; then
 fi
 echo "PASS: commands/ directory correctly removed"
 
-# 8. Default launch smoke: plain agentico starts the foreground server path.
-go test ./cmd/agentico -run '^TestRunArgsLaunchesServerByDefault$' -race -timeout 120s
-echo "PASS: default foreground server launch (TestRunArgsLaunchesServerByDefault)"
+# 8. Default launch smoke: plain agentico hands off to the registered desktop app.
+go test ./cmd/agentico -run '^TestRunArgsLaunchesDesktopByDefault$' -race -timeout 120s
+echo "PASS: default desktop handoff (TestRunArgsLaunchesDesktopByDefault)"
 
 echo ""
 echo "PASS: all smoke tests passed"

@@ -87,7 +87,7 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 		}
 		text := string(body)
 		for _, want := range []string{
-			"agentico [flags]",
+			"agentico server [flags]",
 			"--config <path>",
 			"--state-dir <path>",
 			"--providers <list>",

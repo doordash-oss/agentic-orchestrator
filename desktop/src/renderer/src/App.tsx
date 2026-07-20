@@ -11,6 +11,7 @@ import { canInstallInApp, hasActiveWork, installWhenIdleLabel } from '../../shar
 import { ConnectionShell } from './components/ConnectionShell';
 import { AmaDock } from './components/AmaDock';
 import { CommandPalette } from './components/CommandPalette';
+import { HelpOverlay } from './components/HelpOverlay';
 import { ReadinessGate } from './components/ReadinessGate';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -258,6 +259,7 @@ export default function App() {
         routeRequest={routeRequest}
         onRoute={requestRoute}
       />
+      <HelpOverlay routeRequest={routeRequest} />
     </div>
   );
 }

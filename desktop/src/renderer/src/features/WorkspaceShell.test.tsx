@@ -117,7 +117,10 @@ describe('WorkspaceShell tabs', () => {
     await screen.findByRole('form', { name: /create a feature/i });
 
     await user.type(screen.getByLabelText('Name'), 'Search revamp');
+    await user.click(screen.getByRole('button', { name: 'Next: Where' }));
     await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
+    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
     await user.click(screen.getByRole('button', { name: 'Create feature' }));
 
     const tab = await screen.findByRole('tab', { name: 'Search revamp' });

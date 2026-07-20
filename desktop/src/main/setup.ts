@@ -1,9 +1,7 @@
 /**
- * Main-process first-launch setup service. Every operation talks to the
- * authoritative server through the runtime gateway's bearer transport and
- * returns the renderer-facing readiness snapshot; nothing here caches
- * server-domain data, stores tokens, or trusts renderer-provided paths
- * beyond the validated absolute-path schema.
+ * Main-process first-launch setup service. Every operation uses the gateway's
+ * bearer transport or the native directory picker; creation-file concerns
+ * live in CreationFilesService.
  */
 import { SafeErrorException, safeError } from '../shared/errors';
 import {

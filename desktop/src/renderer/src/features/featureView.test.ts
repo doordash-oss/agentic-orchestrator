@@ -3,7 +3,9 @@ import { featureSnapshot } from '../test/agenticoMock';
 import {
   actionById,
   dashboardState,
+  displayFeatureMessage,
   displayPhaseLabel,
+  displayStatusLabel,
   featureBranch,
   fieldForCreationError,
   isReadyToStart,
@@ -14,6 +16,28 @@ import {
   spineStages,
   spineTone,
 } from './featureView';
+
+describe('displayStatusLabel', () => {
+  it('translates server enum spellings into user-facing status labels', () => {
+    expect(displayStatusLabel('SettingUpWorktrees')).toBe('Setting up worktrees');
+    expect(displayStatusLabel('BuildingKB')).toBe('Building knowledge base');
+    expect(displayStatusLabel('CodeReady')).toBe('Code ready');
+    expect(displayStatusLabel('NeedUserInput')).toBe('Input needed');
+    expect(displayStatusLabel('ResearchNeedsReview')).toBe('Research needs review');
+  });
+
+  it('keeps unknown status text readable without losing words', () => {
+    expect(displayStatusLabel('AwaitingExternalGate')).toBe('Awaiting external gate');
+  });
+});
+
+describe('displayFeatureMessage', () => {
+  it('translates embedded server status tokens without rewriting the explanation', () => {
+    expect(displayFeatureMessage('action unavailable while feature status is BuildingKB')).toBe(
+      'action unavailable while feature status is Building knowledge base',
+    );
+  });
+});
 
 describe('intervention-first dashboard ordering', () => {
   const snapshot = (id: string, status: string, createdAt: string, startEnabled = false) =>

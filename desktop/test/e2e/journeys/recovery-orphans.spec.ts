@@ -169,14 +169,15 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     transcript.section('Stale snapshot — remaining actions still visible');
     if (itemCount > 1) {
       const secondItem = items.nth(1);
-      const skipButton = secondItem.locator('.recovery-workspace__action--skip');
-      await expect(skipButton).toBeVisible({ timeout: 5_000 });
+      await expect(secondItem.getByRole('button', { name: 'Resume' })).toBeVisible({
+        timeout: 5_000,
+      });
       transcript.step(
         'remaining item actions visible after direct action (server enforces stale rejection)',
       );
     }
 
-    transcript.section('Fresh scan and Skip on remaining dead orphan');
+    transcript.section('Fresh scan and Resume on remaining dead orphan');
     const freshScanButton = recoveryPanel.locator('.recovery-workspace__rescan').last();
     await expect(freshScanButton).toBeVisible({ timeout: 5_000 });
     await freshScanButton.click();
@@ -190,16 +191,16 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     const rescannedCount = await rescannedItems.count();
     if (rescannedCount > 0) {
       const deadItem = rescannedItems.first();
-      const skipButton = deadItem.locator('.recovery-workspace__action--skip');
-      await expect(skipButton).toBeVisible({ timeout: 10_000 });
-      await skipButton.click();
+      const resumeButton = deadItem.getByRole('button', { name: 'Resume' });
+      await expect(resumeButton).toBeVisible({ timeout: 10_000 });
+      await resumeButton.click();
       await expect(deadItem.locator('.recovery-workspace__item-outcome')).toContainText(
-        /Skipped/i,
+        /Resume submitted/i,
         { timeout: 15_000 },
       );
-      transcript.step('Skip executed directly on remaining dead orphan item after fresh scan');
+      transcript.step('Resume executed directly on remaining dead orphan item after fresh scan');
     } else {
-      transcript.step('fresh scan resolved all orphans — no items to skip');
+      transcript.step('fresh scan resolved all orphans — no items to resume');
     }
   } finally {
     if (handle !== null) {

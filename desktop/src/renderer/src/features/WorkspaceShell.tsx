@@ -15,6 +15,7 @@ import {
   useState,
   type Dispatch,
   type KeyboardEvent,
+  type RefObject,
   type SetStateAction,
 } from 'react';
 import type { AttentionItem, FeatureSnapshot, RoutedRequest, TabsPrefs } from '../../../shared/ipc';
@@ -24,7 +25,7 @@ import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
 import { SettingsPanel } from './SettingsPanel';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
-import { dashboardState, orderDashboardFeatures } from './featureView';
+import { dashboardState, displayStatusLabel, orderDashboardFeatures } from './featureView';
 import { BulkPreviewPanel } from './BulkPreviewPanel';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
 
@@ -445,14 +446,16 @@ export function WorkspaceShell({
                   <p className="home-surface__eyebrow">Authoritative feature queue</p>
                   <h1>Home</h1>
                 </div>
-                <button
-                  ref={newFeatureButtonRef}
-                  type="button"
-                  className="create-form__submit"
-                  onClick={() => setView('create')}
-                >
-                  New feature
-                </button>
+                {list.phase !== 'loaded' || list.features.length > 0 ? (
+                  <button
+                    ref={newFeatureButtonRef}
+                    type="button"
+                    className="create-form__submit"
+                    onClick={() => setView('create')}
+                  >
+                    New feature
+                  </button>
+                ) : null}
               </header>
               <FeatureList
                 state={list}
@@ -461,6 +464,7 @@ export function WorkspaceShell({
                 onOpen={openFeature}
                 onRetry={loadList}
                 onCreate={() => setView('create')}
+                createButtonRef={newFeatureButtonRef}
               />
               <RecoveryWorkspace
                 onNavigateToFeature={(featureId) => openFeature(featureId, featureLabel(featureId))}
@@ -711,6 +715,7 @@ interface FeatureListProps {
   onOpen(featureId: string, titleHint: string): void;
   onRetry(): void;
   onCreate(): void;
+  createButtonRef: RefObject<HTMLButtonElement | null>;
 }
 
 function FeatureList({
@@ -720,6 +725,7 @@ function FeatureList({
   onOpen,
   onRetry,
   onCreate,
+  createButtonRef,
 }: FeatureListProps) {
   return (
     <section className="feature-list" aria-label="Existing features">
@@ -739,9 +745,19 @@ function FeatureList({
         </div>
       ) : state.features.length === 0 ? (
         <div className="feature-list__empty">
-          <p>No features exist yet. Create your first feature.</p>
-          <button type="button" className="setup-wizard__action" onClick={onCreate}>
-            Create a feature
+          <p className="home-surface__eyebrow">Runtime ready · workspace clear</p>
+          <h3>Turn a goal into a supervised run.</h3>
+          <p>
+            Define the work, choose its repositories, set the pipeline, then review the exact run
+            contract before anything is created.
+          </p>
+          <button
+            ref={createButtonRef}
+            type="button"
+            className="setup-wizard__action"
+            onClick={onCreate}
+          >
+            New feature
           </button>
         </div>
       ) : (
@@ -771,7 +787,7 @@ function FeatureList({
                     </div>
                     <div>
                       <dt>Status</dt>
-                      <dd>{feature.status}</dd>
+                      <dd>{displayStatusLabel(feature.status)}</dd>
                     </div>
                     <div>
                       <dt>Current phase</dt>

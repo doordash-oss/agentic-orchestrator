@@ -69,6 +69,13 @@ type apiHandler struct {
 	readinessMu       sync.Mutex
 	providerReadiness []ProviderReadiness
 	readinessProbedAt time.Time
+	creationMu        sync.Mutex
+	creationResults   map[string]creationResult
+}
+
+type creationResult struct {
+	fingerprint string
+	response    CreateFeatureResponse
 }
 
 func newAPIHandler(opts HandlerOptions) *apiHandler {
@@ -104,6 +111,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		disableHostValidation: opts.DisableHostValidation,
 		initGitRepository:     opts.InitGitRepository,
 		reviewSessionLocks:    newReviewSessionLockSet(),
+		creationResults:       make(map[string]creationResult),
 	}
 	handler.resourceSvc = newResourceService(store, handler.configOrDefault, opts.Registry, opts.Mutations, opts.Runtime)
 	return handler

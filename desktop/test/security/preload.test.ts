@@ -4,10 +4,12 @@ const exposeInMainWorld = vi.fn();
 const invoke = vi.fn();
 const on = vi.fn();
 const removeListener = vi.fn();
+const getPathForFile = vi.fn((file: File) => `/chosen/${file.name}`);
 
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld },
   ipcRenderer: { invoke, on, removeListener },
+  webUtils: { getPathForFile },
 }));
 
 describe('preload surface', () => {
@@ -32,6 +34,10 @@ describe('preload surface', () => {
         'getConnectionStatus',
         'getAttention',
         'getCreationDefaults',
+        'pickCreationFiles',
+        'importDroppedCreationFiles',
+        'searchCreationFiles',
+        'cancelCreationFileSearch',
         'loadLocalReviewDraft',
         'saveLocalReviewDraft',
         'discardLocalReviewDraft',
@@ -79,6 +85,7 @@ describe('preload surface', () => {
         'listRuns',
         'getRun',
         'listRunSessions',
+        'getLivePreview',
         'listRunArtifacts',
         'getRunArtifactContent',
         'getRunLogContent',
@@ -116,6 +123,18 @@ describe('preload surface', () => {
     for (const forbidden of ['invoke', 'send', 'sendSync', 'require', 'process', 'ipcRenderer']) {
       expect(api[forbidden]).toBeUndefined();
     }
+  });
+
+  it('maps only explicit dropped image File objects through the narrow webUtils seam', () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      importDroppedCreationFiles(kind: 'image', files: File[]): { paths: string[] };
+    };
+    const result = api.importDroppedCreationFiles('image', [
+      new File(['ok'], 'screen.png', { type: 'image/png' }),
+      new File(['no'], 'notes.txt', { type: 'text/plain' }),
+    ]);
+    expect(result.paths).toEqual(['/chosen/screen.png']);
+    expect(getPathForFile).toHaveBeenCalledTimes(1);
   });
 
   it('unwraps ok envelopes returned by main', async () => {

@@ -25,6 +25,7 @@
     "package:verify": "node scripts/package-build.mjs && node scripts/verify-package.mjs",
     "package:verify:e2e": "node scripts/package-build.mjs --unpacked && node scripts/verify-package.mjs --unpacked",
     "audit:release": "node scripts/audit-release.mjs",
+    "verify:cutover": "node scripts/verify-cutover.mjs",
     "test:performance": "node scripts/performance-check.mjs",
     "release:credentials:check": "node scripts/release-credentials-check.mjs",
     "release:verify": "node scripts/release-verify.mjs"

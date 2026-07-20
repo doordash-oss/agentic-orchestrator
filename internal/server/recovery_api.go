@@ -158,11 +158,9 @@ func safeRecoveryKey(key string) bool {
 	return true
 }
 
-// recoveryActionKill and recoveryActionSkip are RecoveryItemDTO action-name
-// strings for ports.RecoveryKill/ports.RecoverySkip, shared between the DTO
-// builder and action decoder.
 const (
 	recoveryActionKill = "kill"
+	// recoveryActionSkip preserves the legacy spelling solely for fail-closed rejection tests.
 	recoveryActionSkip = "skip"
 )
 
@@ -180,8 +178,8 @@ func recoveryItemDTO(item ports.RecoveryItem) RecoveryItemDTO {
 	if item.Feature != nil {
 		dto.FeatureName = item.Feature.Name
 	}
-	dto.DefaultAction = recoveryActionSkip
-	dto.AllowedActions = []string{actionResume, recoveryActionKill, recoveryActionSkip}
+	dto.DefaultAction = actionResume
+	dto.AllowedActions = []string{actionResume, recoveryActionKill}
 	return dto
 }
 
@@ -232,7 +230,6 @@ func decodeRecoveryActions(items []ports.RecoveryItem, raw map[string]string) (m
 		itemAllowed := map[string]ports.RecoveryAction{
 			recoveryActionKill: ports.RecoveryKill,
 			actionResume:       ports.RecoveryResume,
-			recoveryActionSkip: ports.RecoverySkip,
 		}
 		allowed[key] = itemAllowed
 	}

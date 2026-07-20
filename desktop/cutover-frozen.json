@@ -1,0 +1,475 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "7caa76a1540a85bf48f0924ab9c9ec49b9589eb8",
+  "auditCoverage": {
+    "navigation": [
+      "cap-79a28d7969ea",
+      "cap-4b6aaa02a9b8",
+      "cap-592750908e72",
+      "cap-f8d6efc1829a",
+      "cap-7bf65012c95d",
+      "cap-5bfebbe42861"
+    ],
+    "creation": [
+      "cap-7acf69df46c2",
+      "cap-3df22a0e536f",
+      "cap-ab9594ec71c6",
+      "cap-c86c716a79a5",
+      "cap-c6f33cac16fd",
+      "cap-a059e8cca9ce",
+      "cap-dbb25dcedbbd",
+      "cap-4faed8411676"
+    ],
+    "live_supervision": [
+      "cap-0f4fe125be7a",
+      "cap-c92be660208c",
+      "cap-bd415bb7c0de",
+      "cap-f99293caafaa",
+      "cap-897414e484b3",
+      "cap-aea2e532e80b",
+      "cap-0e5d6873018e",
+      "cap-6a8064633835"
+    ],
+    "intervention": [
+      "cap-fa33fadb7f44",
+      "cap-d5f46277f695",
+      "cap-c864e6ce1971",
+      "cap-3320c1b3ac18",
+      "cap-3d0abf90ae51",
+      "cap-db563c67866d",
+      "cap-33f88be79a6f",
+      "cap-f46b724abc78",
+      "cap-7f08d54c347c"
+    ],
+    "review_editing": ["cap-d76d46750319", "cap-73c4b9524cbf", "cap-77568f378c52"],
+    "configuration": [
+      "cap-d47cc555fc5b",
+      "cap-a6205480a1f7",
+      "cap-77568f378c52",
+      "cap-5c4fffc25374",
+      "cap-c58bd4a6f635",
+      "cap-aef06caff576"
+    ],
+    "history": [
+      "cap-ffce42b9dbf4",
+      "cap-7bf65012c95d",
+      "cap-1fd5809a2c59",
+      "cap-3062ca0b2603",
+      "cap-09d95f49b55d",
+      "cap-c938dbdccb49"
+    ],
+    "lifecycle_recovery": [
+      "cap-79a28d7969ea",
+      "cap-796bf69261c6",
+      "cap-11ee403fdd08",
+      "cap-afc8dfed0de8",
+      "cap-34bbd1ffd897",
+      "cap-8bbca0ec1605",
+      "cap-3df22a0e536f",
+      "cap-f8d6efc1829a",
+      "cap-596db5636fb3",
+      "cap-4050f3d3b000",
+      "cap-25520af26dc9",
+      "cap-09d95f49b55d",
+      "cap-6352a5e7e890",
+      "cap-4308f69ec1d1",
+      "cap-a0c504483ea3",
+      "cap-894288d9b8bb"
+    ],
+    "completion_publication": [
+      "cap-4b6aaa02a9b8",
+      "cap-d76d46750319",
+      "cap-d591ceaca887",
+      "cap-62160b6c5454",
+      "cap-c5c04ed5ecc6",
+      "cap-f59b6579c4a9",
+      "cap-a471409260c9",
+      "cap-c3bffdfab85e",
+      "cap-1217e07bc923",
+      "cap-a0c504483ea3"
+    ],
+    "chat": ["cap-d12fbf77bbad"],
+    "notifications": [
+      "cap-4b6aaa02a9b8",
+      "cap-ff1efe263252",
+      "cap-cb14f68ffbce",
+      "cap-6352a5e7e890"
+    ],
+    "native_commands": [
+      "cap-d47cc555fc5b",
+      "cap-a61f777cb408",
+      "cap-7e2fab724924",
+      "cap-d5f46277f695",
+      "cap-7f08d54c347c",
+      "cap-5bfebbe42861"
+    ],
+    "shutdown": ["cap-34bbd1ffd897", "cap-f56445ba16f5"]
+  },
+  "rows": [
+    {
+      "id": "cap-79a28d7969ea",
+      "capability": "Connection shell: branded startup surface showing the connect lifecycle (resolve runtime → discover → attach → authenticate → ready) with status detail, error + retry",
+      "frozenHash": "f5bd496420f19c2e1335a5e1339af8cc467c0202a866e8c98c848f150b499494"
+    },
+    {
+      "id": "cap-796bf69261c6",
+      "capability": "Attach to a compatible externally owned server: owner-only loopback discovery validation, explicit compatibility declaration check (API/schema series + runtime policy, never API major alone), incompatible servers hard-block with guidance and are never stopped",
+      "frozenHash": "fc7be11c0b80cfb5b1269264b1ebbb0a670fcc6e94db02dbed19861574866d6b"
+    },
+    {
+      "id": "cap-11ee403fdd08",
+      "capability": "Launch the bundled matched server: resource resolution across macOS/Linux packaged layouts (spaces, non-ASCII, read-only roots), argv-array spawn without shell interpolation, bounded wait for health + authenticated readiness, app-owned status without exposing the bearer token",
+      "frozenHash": "3623441b900496938bab03e9898e0c470f064c407c0107828dff8c28bc4dd5a4"
+    },
+    {
+      "id": "cap-afc8dfed0de8",
+      "capability": "Recover an unexpectedly exited app-owned server without hiding a crash loop; never restart or signal an external server",
+      "frozenHash": "887a8fea2df6333bf1ff9d05b51e73e80ca2c16ce72121bfd19cabf6399afe5f"
+    },
+    {
+      "id": "cap-34bbd1ffd897",
+      "capability": "Ownership-aware shutdown: app quit gracefully stops only the app-owned child (SIGTERM, bounded, then SIGKILL, reaped); externally owned servers survive app exit and are never signalled",
+      "frozenHash": "83db6419024221f277049c84ce2c9e184f5d8fb03022a84797d81b36eec4b224"
+    },
+    {
+      "id": "cap-d47cc555fc5b",
+      "capability": "App-local settings: runtime selection, window state persistence",
+      "frozenHash": "38453b3dd2218201c1ef9e7b32984f6bbcd26d7b389b08d49560dd14f506a64d"
+    },
+    {
+      "id": "cap-a6205480a1f7",
+      "capability": "Theme: light / dark / system with OS-follow",
+      "frozenHash": "bd17446f7d3981001b052615859879a854f25c674340f65ba346b885611d5e96"
+    },
+    {
+      "id": "cap-decf30ccf0c6",
+      "capability": "Launch or focus the installed desktop app from a no-subcommand `agentico` invocation, with deterministic install and headless guidance when registration is unavailable",
+      "frozenHash": "358132589050e7987104c44dd75eb78f9db6f7a7f220ed53c35d1d622c0737b2"
+    },
+    {
+      "id": "cap-8bbca0ec1605",
+      "capability": "Retain explicit headless server, artifact validation, and non-mutating update automation without entering an interactive client",
+      "frozenHash": "a3b57c5d34399d8bb54ee827167998993339220df74024930d5a1c374eaaae51"
+    },
+    {
+      "id": "cap-4b6aaa02a9b8",
+      "capability": "Feature dashboard grouped by status (In Progress / Published / Completed) with attention indicators",
+      "frozenHash": "97c150ba55bd70ca17f2664942e4a4696792a2acaaec5bb6aff387fb743e4669"
+    },
+    {
+      "id": "cap-592750908e72",
+      "capability": "Feature detail overview",
+      "frozenHash": "22252e7ff00700664303345d28c49d935d96efe15dc953096ffcdbac1a0c4b71"
+    },
+    {
+      "id": "cap-0f4fe125be7a",
+      "capability": "Live event stream keeping all views current (seq/epoch resume)",
+      "frozenHash": "bc4d99cc26887b3f895ef868f06a3ea18d28e4a6c0b1527dea1046c0b85491f9"
+    },
+    {
+      "id": "cap-02f8e5f7ab0e",
+      "capability": "Welcome / first-run screen",
+      "frozenHash": "aedad1c7080a439d3c0ba3afe99f2b7d17b47b33c037f808ccd3437febf15859"
+    },
+    {
+      "id": "cap-a61f777cb408",
+      "capability": "Help / keybinding reference",
+      "frozenHash": "c3b0d44d4c5e66fb6e910a76c8d665bd209b3a7ca7944c78952a57fade754e24"
+    },
+    {
+      "id": "cap-7e2fab724924",
+      "capability": "Native command catalogue shared by application menus, accelerators, command palette, and help overlay",
+      "frozenHash": "e8104e5a1943799f957e4258a99c14118c3b6d84a8e5695c9bd9d30b1ea4ffe0"
+    },
+    {
+      "id": "cap-f56445ba16f5",
+      "capability": "Quit / force quit",
+      "frozenHash": "0829149cd3ff1a4717f8c4467952fec050ab144bddac1aa2f63fcfc4e3c5bf05"
+    },
+    {
+      "id": "cap-7acf69df46c2",
+      "capability": "New-feature wizard: What → Where → Pipeline → Review",
+      "frozenHash": "56c7985cf05da12e222be81edb87e0a4f8ed5e40d30729c1aafac25cf5a28f0e"
+    },
+    {
+      "id": "cap-3df22a0e536f",
+      "capability": "Narrow creation flow (Phase 1): name, description, repository multi-select with server eligibility, branch choice, server defaults; validated at IPC and server boundaries; single-flight submit; structured errors mapped to the owning control",
+      "frozenHash": "dfbb5f345fcd84637bf60c09e0fdc65627524d1d99c005896f44dd512bb1c16c"
+    },
+    {
+      "id": "cap-f8d6efc1829a",
+      "capability": "Persistent feature tab + restart restore: one tab per open feature, local storage limited to feature identity/presentation, feature state always reloaded from the server; vanished features degrade to a close affordance",
+      "frozenHash": "a181ee2c3378d9660e7755ad675e892345d8236f77ebdd002f5785dcab659e5f"
+    },
+    {
+      "id": "cap-596db5636fb3",
+      "capability": "Durable setup progress: server-owned task order, per-task status/repo/attempt, safe failure data with diagnostics, live convergence via SSE invalidation",
+      "frozenHash": "9bc5b786f3d6f618409f42079415450f46ebd5c7400cf7ea8ddf7b5dd6d23208"
+    },
+    {
+      "id": "cap-4050f3d3b000",
+      "capability": "Durable setup retry: server-authorized retry of only unfinished tasks on the same feature (never a duplicate create, never orchestration start)",
+      "frozenHash": "3f363880a433016c865e4854998e79c7e8ed53225e96621f1d8fcecef7cf1ed3"
+    },
+    {
+      "id": "cap-25520af26dc9",
+      "capability": "Ready-to-start gate: completed setup is labeled \"Ready to start\" and Start is rendered and dispatched exactly as the authoritative action catalogue authorizes",
+      "frozenHash": "802dff20c095e8121dd1aa3fc397bc8072b6d5b1e719c08101cd2d83e0aea28c"
+    },
+    {
+      "id": "cap-ab9594ec71c6",
+      "capability": "Attach images to feature description",
+      "frozenHash": "88cedb7bedac9c284edb8fda1b0e5022afbf4bb1dc9e69d3d86f8276017420d3"
+    },
+    {
+      "id": "cap-c86c716a79a5",
+      "capability": "Attach files via picker",
+      "frozenHash": "beaea682462fc814c9343d8eea15ddaff477e0f323ce197b0f4a1bd91db209be"
+    },
+    {
+      "id": "cap-c6f33cac16fd",
+      "capability": "Repo selection incl. browsing new directories and creating repos on the fly",
+      "frozenHash": "c85366c37abda1f75932c91c5281bf2d712aaf6abe4d73e6cd4bf12384a66d07"
+    },
+    {
+      "id": "cap-a059e8cca9ce",
+      "capability": "Pipeline profile choice (Medium / Large / Moonshot) with gate options",
+      "frozenHash": "4845a46891f2d9d2eaa110b4450c5d1484d05bf991b68064629a08efb465f65d"
+    },
+    {
+      "id": "cap-dbb25dcedbbd",
+      "capability": "Review step: risk level, per-phase models, checkpoints, exit criteria",
+      "frozenHash": "4ef7254be8fc079f5e59038e256dd8efb44a1ca566c4ddb8409e6b8088fc714b"
+    },
+    {
+      "id": "cap-4faed8411676",
+      "capability": "Skill picker for feature scoping",
+      "frozenHash": "be17694c12c4c5357eb4fb2d36ebeb49692df020b952a913c5b532e6cc083ace"
+    },
+    {
+      "id": "cap-c92be660208c",
+      "capability": "Watch active work live",
+      "frozenHash": "d441959f8fe2c39690ba23f6809380b6dac923bcf77792b2c1e0f0591f4064c3"
+    },
+    {
+      "id": "cap-bd415bb7c0de",
+      "capability": "Session transcript scrollback",
+      "frozenHash": "8398e21e09c5ca4fe9da82d704caeed9e21e4e9b3b3d2ebac203b3a5c65e41a2"
+    },
+    {
+      "id": "cap-f99293caafaa",
+      "capability": "Stop watching without stopping the agent",
+      "frozenHash": "d8012c449a7eb8d3b7575b022fc3ff456947e0639f6570ece58f8a10edb4691a"
+    },
+    {
+      "id": "cap-fa33fadb7f44",
+      "capability": "Answer agent questions (ask-user)",
+      "frozenHash": "6c26a0e03c84faa8cf55cef29003d357f53f45ef094b986a9cf98af0f370d0ff"
+    },
+    {
+      "id": "cap-d5f46277f695",
+      "capability": "Answer agent help requests",
+      "frozenHash": "18680b04a78d478e219db166ae8aecc8f03313d1f064a9a26b0fcc7f44b9f7c2"
+    },
+    {
+      "id": "cap-c864e6ce1971",
+      "capability": "Approve pending permissions",
+      "frozenHash": "eba4c28e9f11d4d2372dd7e55b41448fbd9bac0de200c5e53dcabda312fe05eb"
+    },
+    {
+      "id": "cap-3320c1b3ac18",
+      "capability": "Approve & remember permissions",
+      "frozenHash": "6791751e75405e713fe733f50c4a361496b57be0dca94f449e9cf483b9e14eb7"
+    },
+    {
+      "id": "cap-3d0abf90ae51",
+      "capability": "Resume all interrupted features",
+      "frozenHash": "bae937e112894d7b376f3fb99fdbbb6ace4623db46dc82255e9c8f444bae24b4"
+    },
+    {
+      "id": "cap-db563c67866d",
+      "capability": "Stop a running feature",
+      "frozenHash": "76631084624d4368d96b798954f5dd3d5e4caf6f4bc2fd87865a8254fc48414f"
+    },
+    {
+      "id": "cap-33f88be79a6f",
+      "capability": "Restart current phase",
+      "frozenHash": "6643b9a6747ef2b4d9aed7b8a6e5a0aa2175a928f4e4ec1c2af40464da8c5f7b"
+    },
+    {
+      "id": "cap-ffce42b9dbf4",
+      "capability": "Rewind to an earlier phase",
+      "frozenHash": "62caaf28bab660b136e2885bdf590880e4364dbe0b13cc03ebfd405c8f77af03"
+    },
+    {
+      "id": "cap-7bf65012c95d",
+      "capability": "Complete sealed-run history and immutable inspection",
+      "frozenHash": "1fb9f2cf9928dd67f8d892a163f791374cc910320c6e20d26d8f4c7f34ed06ad"
+    },
+    {
+      "id": "cap-1fd5809a2c59",
+      "capability": "Rewind partial roadmap phases",
+      "frozenHash": "62f4c6a4006a01b7532e1306d600b1272e64fe455c25014237da048d78f2848b"
+    },
+    {
+      "id": "cap-3062ca0b2603",
+      "capability": "Rewind pipeline upgrade",
+      "frozenHash": "e407bb0e13cf1e8bc4bdfb82635276c2555aaf4f60fdc199a11ad22db200f175"
+    },
+    {
+      "id": "cap-09d95f49b55d",
+      "capability": "Rewind crash and disconnect recovery",
+      "frozenHash": "b306f1f4a126e6e8a5eb5c2a1d6aee3464e83fe231e321308920fb27a19a2aea"
+    },
+    {
+      "id": "cap-f46b724abc78",
+      "capability": "Retry a failed step",
+      "frozenHash": "453a10d2487dacc0c6ea3c7280188d2eb750373f1aed79db34b9b7e060cf54a6"
+    },
+    {
+      "id": "cap-897414e484b3",
+      "capability": "Live Preview / logs",
+      "frozenHash": "3337929de8fe0c8a4707318d10b999551b77bd6720444a2348c395818aeb5213"
+    },
+    {
+      "id": "cap-aea2e532e80b",
+      "capability": "Run artifacts browsing (plans, roadmaps, Q&A, diffs)",
+      "frozenHash": "b03927a2e4fca8928a2467bbc16824974bac54ef3681cb8f5d1a66040027039c"
+    },
+    {
+      "id": "cap-0e5d6873018e",
+      "capability": "View diff",
+      "frozenHash": "875bc3bc5ef8abf52fc78ca1985eb3830af2038d31532f0e1107ad7d5bd95700"
+    },
+    {
+      "id": "cap-ff1efe263252",
+      "capability": "Desktop notifications for attention events",
+      "frozenHash": "d896e6cf2f9dcf38b59ed0446635174445447397c882b46280f04418c8f4a61e"
+    },
+    {
+      "id": "cap-cb14f68ffbce",
+      "capability": "Global blocking-attention inbox shell",
+      "frozenHash": "807740c7d04543d801ef1984b53ec80eade7462b6e1cb44dc79608b9901f9eaf"
+    },
+    {
+      "id": "cap-7f08d54c347c",
+      "capability": "Permission, AskUser, help, and NEED_USER_INPUT resolution",
+      "frozenHash": "3a57f3b684b1dacd3a9ff14c9c8c236f1a42adb057cc959b69c322819863c361"
+    },
+    {
+      "id": "cap-6352a5e7e890",
+      "capability": "Reviews, native notifications, and recovery attention",
+      "frozenHash": "a88cecef3c209c72720d60319a6874e7377fec35e66bad7114052b313645df03"
+    },
+    {
+      "id": "cap-d76d46750319",
+      "capability": "Checkpoint reviews (inquiry, research, design, roadmap, phase plan, manual publish)",
+      "frozenHash": "46cd4ddc35d90c61ececed077f4466f17b94e5c861660edde708a9d950dcc809"
+    },
+    {
+      "id": "cap-d591ceaca887",
+      "capability": "Publish flow: diff review → commit log → PR description → confirm",
+      "frozenHash": "14c3d13ce3a8646c779e560f4eaa75da3e577908e476d2753bd810475b60411c"
+    },
+    {
+      "id": "cap-62160b6c5454",
+      "capability": "Rebase on main",
+      "frozenHash": "21715d643609010b341f4174ecc41ac2de367a5fb7274d8d978111ae71638a5a"
+    },
+    {
+      "id": "cap-c5c04ed5ecc6",
+      "capability": "Merge to base branch (local repos)",
+      "frozenHash": "5ef34a68ce8927f32658d93d78f1b0d8ac7e141b4e6bc81910ea13e596525fae"
+    },
+    {
+      "id": "cap-f59b6579c4a9",
+      "capability": "Refactor implementation with a prompt",
+      "frozenHash": "b50aceeed31dadbc04e1f6bfed6ca1d62a8ae856ab3fb1374a9852fc8635ef4f"
+    },
+    {
+      "id": "cap-73c4b9524cbf",
+      "capability": "View and resolve PR review comments",
+      "frozenHash": "39fa92db35389743684cdffca853d2d75eb097b41c82b6bddf3ccd88f549aa91"
+    },
+    {
+      "id": "cap-a471409260c9",
+      "capability": "Mark feature as done",
+      "frozenHash": "6ba1def027eeff0913a8cd90d12fa2243ba735a650f24e6ee147169bc1910396"
+    },
+    {
+      "id": "cap-c3bffdfab85e",
+      "capability": "Clean worktree",
+      "frozenHash": "0187adbf17169cb328316df7c8cc6ea1c68bd273b33872f8ca22454820de1cb3"
+    },
+    {
+      "id": "cap-1217e07bc923",
+      "capability": "Delete feature",
+      "frozenHash": "f879361624f524fea8f3ca1a00124cb8da8d49a1952a82923ba098c828c19325"
+    },
+    {
+      "id": "cap-9181745e3ad5",
+      "capability": "Confirmation prompts (y/Y confirm, any other key cancels)",
+      "frozenHash": "64fa7b803730fff5c997c26291fb0151844818ecd8c68fdd9425d4dad3c14a4c"
+    },
+    {
+      "id": "cap-77568f378c52",
+      "capability": "Edit feature config",
+      "frozenHash": "2f93b0439c0cfad74e10dc09183ccf57eca54910d99e208006487986c29d14c9"
+    },
+    {
+      "id": "cap-5c4fffc25374",
+      "capability": "Edit workspace/runtime config",
+      "frozenHash": "270670a587c9f71bcf2758f64e2bc0c2e4e7b23c89e64943bfb002b1adb434b5"
+    },
+    {
+      "id": "cap-c58bd4a6f635",
+      "capability": "Model overrides per phase",
+      "frozenHash": "b7a7065455ec38cb92405a94a65dc06c87a5cc95ab837f9b286ad97177974d71"
+    },
+    {
+      "id": "cap-d12fbf77bbad",
+      "capability": "Ask Me Anything (read-only AI chat)",
+      "frozenHash": "9ff23b20e67816e84a677d6611b906108404144c35a6e0e329f1a6dfbf70df4d"
+    },
+    {
+      "id": "cap-aef06caff576",
+      "capability": "Provider readiness / prerequisite checks",
+      "frozenHash": "da293fdce88514c830554b10ed50107cb4ecc398ce39713c7689fb7f057446bd"
+    },
+    {
+      "id": "cap-4308f69ec1d1",
+      "capability": "Session recovery (orphaned sessions from a crashed/other instance; Kill or Resume)",
+      "frozenHash": "792fe99f9b29b6468fe4c16e4a0fe606a135950c6056a94514b09c4d48e54da5"
+    },
+    {
+      "id": "cap-5bfebbe42861",
+      "capability": "Keyboard-first operation (every action reachable without pointer)",
+      "frozenHash": "7061177919a6cc77e370be94e193404173b6f5df35adf6515b07dc739657f98a"
+    },
+    {
+      "id": "cap-c938dbdccb49",
+      "capability": "Phase 7 packaged history and rewind journeys",
+      "frozenHash": "3347892e748d53e3d034085499581416806fc234f14f951be403b1eac470af3a"
+    },
+    {
+      "id": "cap-a0c504483ea3",
+      "capability": "Unsigned development packages containing the desktop app, offline @fontsource assets, and the target-matched Go server: universal macOS DMG (lipo'd universal `bin/agentico`), Linux x64/arm64 AppImage + deb; signing/notarization/publishing explicitly disabled",
+      "frozenHash": "e45e406156301d3124e788c774c3566211c10ae2f8dedab9adc7bbe130bdb7f0"
+    },
+    {
+      "id": "cap-894288d9b8bb",
+      "capability": "Build identity bound into every package and enforced at inspection: `resources/build-identity.json` (`desktop_version`, `api_version`, `schema_version`, `server_version`, `server_revision`, `os`, `arch`, `built_at`) cross-checked against the bundled binary's `agentico --version` (version + revision) and Go-stamped GOOS; missing/tampered/mismatched identity fails verification",
+      "frozenHash": "36e66dc0f6de32b9427ca7aff3a52076170d10443ed9f8cfde6bb2fcbdee7065"
+    },
+    {
+      "id": "cap-3785e58aab7e",
+      "capability": "Native CI package gates: per-platform matrix (macos-latest, ubuntu-latest) failing on contract drift (Go OpenAPI generate `--check`, TypeScript API drift), strict type/lint/format errors, unit/component/security failures, package construction or inspection failures; packaging evidence uploaded on failure",
+      "frozenHash": "6f1a4ffbdce7eec27480b2dc5687fa4b5c6104bd828f33dd9cb747e5fd80f716"
+    },
+    {
+      "id": "cap-6a8064633835",
+      "capability": "Packaged E2E journeys against the built packages with logs, traces, behavioral transcripts, and screenshots preserved",
+      "frozenHash": "bf9df3b40c64af9455b5098fcd96b52df51eef72dce71fe963354be15121d5c3"
+    }
+  ]
+}

@@ -367,7 +367,7 @@ export function AmaDock({
         </div>
       ) : null}
       {drawer === 'expanded' ? (
-        <div className="ama-dock__drawer">
+        <div className="ama-dock__drawer" data-has-attention={amaAttentionItems.length > 0}>
           {amaAttentionItems.length > 0 ? (
             <section className="ama-dock__attention" aria-label="AMA questions">
               {amaAttentionItems.map((item) => (

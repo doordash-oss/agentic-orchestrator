@@ -1164,6 +1164,24 @@ export interface components {
             shutdown_response?: components["schemas"]["ShutdownResponse"];
         };
         CreateFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        CreateFeatureMutationRequest: {
+            name: string;
+            description?: string;
+            repos?: string[];
+            models?: components["schemas"]["ModelDefaults"];
+            exit_criteria?: string;
+            inquireness?: string;
+            images?: string[];
+            attachments?: string[];
+            use_current_branch?: boolean;
+            checkpoints?: components["schemas"]["Checkpoints"];
+            /** @enum {string} */
+            risk_level?: "low" | "medium" | "high";
+            /** @enum {string} */
+            pipeline?: "medium" | "large" | "moonshot";
+            skills?: string[];
+            idempotency_key?: string;
+        };
         /** @description Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state. */
         FeatureSetupResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         FeatureStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
@@ -2392,7 +2410,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFeatureMutationRequest"];
+            };
+        };
         responses: {
             201: components["responses"]["ActionResponse"];
             400: components["responses"]["ErrorResponse"];

@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
@@ -18,6 +17,7 @@ import {
   createWorld,
   destroyWorld,
   processAlive,
+  providerInvocationCount,
   readDiscovery,
   waitFor,
 } from '../helpers/world';
@@ -250,14 +250,3 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     destroyWorld(world);
   }
 });
-
-function providerInvocationCount(logPath: string): number {
-  try {
-    return fs
-      .readFileSync(logPath, 'utf8')
-      .split('\n')
-      .filter((line) => line === 'session').length;
-  } catch {
-    return 0;
-  }
-}

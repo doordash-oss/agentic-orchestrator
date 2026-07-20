@@ -45,9 +45,11 @@ import { ResourceService } from './resources';
 import { RunHistoryService } from './runHistory';
 import { ResourceDraftStore } from './resourceDraftStore';
 import { SetupService } from './setup';
+import { CreationFilesService } from './creationFiles';
 import { ThemeController } from './theme';
 import {
   CHAT_SESSION_ID,
+  CREATION_IMAGE_FORMATS,
   IPC_EVENTS,
   isActiveChatSession,
   type AppEvent,
@@ -232,6 +234,27 @@ if (!hasSingleInstanceLock) {
     );
     theme.applyStored();
 
+    const pickCreationFiles = async (kind: 'image' | 'attachment'): Promise<string[]> => {
+      const focused = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const options = {
+        title: kind === 'image' ? 'Choose images' : 'Choose attachments',
+        properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
+        ...(kind === 'image'
+          ? {
+              filters: [
+                {
+                  name: 'Images',
+                  extensions: CREATION_IMAGE_FORMATS.map((format) => format.extension),
+                },
+              ],
+            }
+          : {}),
+      };
+      const result = focused
+        ? await dialog.showOpenDialog(focused, options)
+        : await dialog.showOpenDialog(options);
+      return result.canceled ? [] : result.filePaths;
+    };
     const setup = new SetupService({
       transport: gateway,
       dialogs: {
@@ -252,10 +275,15 @@ if (!hasSingleInstanceLock) {
         },
       },
     });
+    const creationFiles = new CreationFilesService({
+      pickFiles: pickCreationFiles,
+      readReadiness: () => setup.getReadiness(),
+    });
 
     const features = new FeatureService({
       transport: gateway,
       readReadiness: () => setup.getReadiness(),
+      resolveRepositoryFiles: (refs) => creationFiles.resolve(refs),
     });
     const completion = new CompletionService({
       transport: gateway,
@@ -704,6 +732,9 @@ if (!hasSingleInstanceLock) {
       openSessionOutput: (request, emit) => sessions.subscribe(request, emit),
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
       getCreationDefaults: () => features.creationDefaults(),
+      pickCreationFiles: (kind) => creationFiles.pickFiles(kind),
+      searchCreationFiles: (request) => creationFiles.search(request),
+      cancelCreationFileSearch: (requestId) => creationFiles.cancelSearch(requestId),
       loadLocalReviewDraft: (request) => localDrafts.load(request),
       saveLocalReviewDraft: (request) => localDrafts.save(request),
       discardLocalReviewDraft: (request) => localDrafts.discard(request),
@@ -743,6 +774,7 @@ if (!hasSingleInstanceLock) {
       listRuns: (request) => runHistory.listRuns(request),
       getRun: (request) => runHistory.getRun(request),
       listRunSessions: (request) => runHistory.listRunSessions(request),
+      getLivePreview: (featureId) => runHistory.getLivePreview(featureId),
       listRunArtifacts: (request) => runHistory.listRunArtifacts(request),
       getRunArtifactContent: (request) => runHistory.getRunArtifactContent(request),
       getRunLogContent: (request) => runHistory.getRunLogContent(request),

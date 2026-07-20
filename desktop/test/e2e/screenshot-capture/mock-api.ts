@@ -850,6 +850,16 @@ function makeMockApi(
           useCurrentBranch: false,
         },
       } as CreationDefaults),
+    pickCreationFiles: () => Promise.resolve({ paths: [] }),
+    importDroppedCreationFiles: () => ({ paths: [] }),
+    searchCreationFiles: (request) =>
+      Promise.resolve({
+        requestId: request.requestId,
+        files: [],
+        truncated: false,
+        cancelled: false,
+      }),
+    cancelCreationFileSearch: () => Promise.resolve(false),
     loadLocalReviewDraft: () => Promise.resolve(null),
     saveLocalReviewDraft: () => Promise.reject(new Error('unused')),
     discardLocalReviewDraft: () => Promise.resolve(false),
@@ -926,6 +936,14 @@ function makeMockApi(
         runNumber,
         sessions: SESSIONS,
       } as RunSessionsListResult),
+    getLivePreview: (featureId) =>
+      Promise.resolve({
+        featureId,
+        activity: 'Inspecting the current implementation run',
+        contextPercentage: 42,
+        totalSeconds: 73,
+        totalUsd: 0.12,
+      }),
     listRunArtifacts: ({ runNumber }) =>
       Promise.resolve({
         artifacts: RUN_ARTIFACTS.map((a) => ({ ...a, runNumber })),

@@ -129,7 +129,8 @@ func main() {
 type launchMode int
 
 const (
-	launchModeServer launchMode = iota
+	launchModeDesktop launchMode = iota
+	launchModeServer
 	launchModeHelp
 	launchModeVersion
 	launchModeUpdate
@@ -200,6 +201,12 @@ func run() {
 }
 
 func runArgs(args []string, stdout, stderr io.Writer, launchServer serverLauncher, update updater) int {
+	return runArgsWithDesktop(args, stdout, stderr, openRegisteredDesktop, launchServer, update)
+}
+
+type desktopLauncher func() error
+
+func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop desktopLauncher, launchServer serverLauncher, update updater) int {
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -222,8 +229,15 @@ func runArgs(args []string, stdout, stderr io.Writer, launchServer serverLaunche
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
 	case launchModeVerifyEvidence:
 		return runVerifyEvidence(opts.verifyEvidence, stdout, stderr)
-	default:
+	case launchModeServer:
 		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
+	default:
+		if err := launchDesktop(); err != nil {
+			fmt.Fprintf(stderr, "Could not open the Agentico desktop app: %v\n", err)
+			fmt.Fprintln(stderr, "Install the signed Agentico desktop package from GitHub Releases, or run 'agentico server' for headless automation.")
+			return 1
+		}
+		return 0
 	}
 }
 
@@ -256,6 +270,7 @@ func canonicalizeStateDir(stateDir string) string {
 
 func parseLaunchArgs(args []string) (launchOptions, error) {
 	opts := defaultLaunchOptions()
+	serverOnlyFlag := ""
 	// `update` is a standalone subcommand recognized only as the first
 	// argument. Its sub-flags (--check / -n) are valid only in this context;
 	// elsewhere they fall through to the launch-flag loop and reject as
@@ -278,6 +293,9 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if isServerOnlyLaunchFlag(arg) {
+			serverOnlyFlag = arg
+		}
 		switch arg {
 		case "--config":
 			if i+1 >= len(args) {
@@ -314,7 +332,19 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 			return opts, fmt.Errorf("unknown command: %s", arg)
 		}
 	}
+	if opts.mode == launchModeDesktop && serverOnlyFlag != "" {
+		return opts, fmt.Errorf("%s is available only with the headless server; run 'agentico server %s ...'", serverOnlyFlag, serverOnlyFlag)
+	}
 	return opts, nil
+}
+
+func isServerOnlyLaunchFlag(flag string) bool {
+	switch flag {
+	case "--config", "--state-dir", "--dangerously-skip-permissions", "--providers", "--refresh-models":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseValidateArtifactsArgs(opts launchOptions, args []string) (launchOptions, error) {
@@ -420,14 +450,14 @@ func runVerifyEvidence(opts verifyEvidenceOptions, stdout, stderr io.Writer) int
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
-Usage: agentico [flags]
+Usage: agentico
        agentico server [flags]
        agentico update [--check|-n]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
        agentico verify-evidence --contract <testing-contract.yaml> --dir <iteration_dir>
 
-Starts the foreground loopback HTTP server. The 'server' subcommand is retained
-as an explicit alias for Electron and service launchers.
+Starts or focuses the installed Agentico desktop app. Use the explicit 'server'
+subcommand to start the foreground loopback HTTP server for headless automation.
 Run 'agentico update' to open the desktop Updates panel when Agentico is
 registered, or print package-manager guidance otherwise. Run
 'agentico update --check' (alias -n) for a read-only stable-version check.
@@ -437,7 +467,7 @@ Run 'agentico verify-evidence' from implementer sessions before phase_complete
 to confirm required agent-owned captures are present, correctly sized, and not
 duplicates — catching gaps before the post-handoff integrity gate does.
 
-Flags:
+Server flags (use with 'agentico server'):
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
   --state-dir <path>               State directory path (default: ~/.agentic-orchestrator/features)
   --providers <list>               Comma-separated provider list (default: all)
@@ -445,6 +475,7 @@ Flags:
   --refresh-models                 Refresh provider model catalogs before starting the server
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
+Global flags:
   --help, -h                       Show this help
   --version, -v                    Show version
 
@@ -941,6 +972,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
 		Pipeline:                req.Pipeline,
+		Skills:                  req.Skills,
 	})
 	if err != nil {
 		return serverruntime.CreateFeatureResponse{}, err

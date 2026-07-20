@@ -67,6 +67,48 @@ func (e AutomaticReviewStateSource) Valid() bool {
 	}
 }
 
+// Defines values for CreateFeatureMutationRequestPipeline.
+const (
+	CreateFeatureMutationRequestPipelineLarge    CreateFeatureMutationRequestPipeline = "large"
+	CreateFeatureMutationRequestPipelineMedium   CreateFeatureMutationRequestPipeline = "medium"
+	CreateFeatureMutationRequestPipelineMoonshot CreateFeatureMutationRequestPipeline = "moonshot"
+)
+
+// Valid indicates whether the value is a known member of the CreateFeatureMutationRequestPipeline enum.
+func (e CreateFeatureMutationRequestPipeline) Valid() bool {
+	switch e {
+	case CreateFeatureMutationRequestPipelineLarge:
+		return true
+	case CreateFeatureMutationRequestPipelineMedium:
+		return true
+	case CreateFeatureMutationRequestPipelineMoonshot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateFeatureMutationRequestRiskLevel.
+const (
+	CreateFeatureMutationRequestRiskLevelHigh   CreateFeatureMutationRequestRiskLevel = "high"
+	CreateFeatureMutationRequestRiskLevelLow    CreateFeatureMutationRequestRiskLevel = "low"
+	CreateFeatureMutationRequestRiskLevelMedium CreateFeatureMutationRequestRiskLevel = "medium"
+)
+
+// Valid indicates whether the value is a known member of the CreateFeatureMutationRequestRiskLevel enum.
+func (e CreateFeatureMutationRequestRiskLevel) Valid() bool {
+	switch e {
+	case CreateFeatureMutationRequestRiskLevelHigh:
+		return true
+	case CreateFeatureMutationRequestRiskLevelLow:
+		return true
+	case CreateFeatureMutationRequestRiskLevelMedium:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureConfigAutomaticReviewMode.
 const (
 	FeatureConfigAutomaticReviewModeDefault  FeatureConfigAutomaticReviewMode = "default"
@@ -1130,6 +1172,30 @@ type Cost struct {
 	ByPhase  map[string]float64 `json:"by_phase"`
 	TotalUSD float64            `json:"total_usd"`
 }
+
+// CreateFeatureMutationRequest defines model for CreateFeatureMutationRequest.
+type CreateFeatureMutationRequest struct {
+	Attachments      []string                              `json:"attachments,omitempty"`
+	Checkpoints      Checkpoints                           `json:"checkpoints,omitempty"`
+	Description      string                                `json:"description,omitempty"`
+	ExitCriteria     string                                `json:"exit_criteria,omitempty"`
+	IdempotencyKey   string                                `json:"idempotency_key,omitempty"`
+	Images           []string                              `json:"images,omitempty"`
+	Inquireness      string                                `json:"inquireness,omitempty"`
+	Models           ModelDefaults                         `json:"models,omitempty"`
+	Name             string                                `json:"name"`
+	Pipeline         CreateFeatureMutationRequestPipeline  `json:"pipeline,omitempty"`
+	Repos            []string                              `json:"repos,omitempty"`
+	RiskLevel        CreateFeatureMutationRequestRiskLevel `json:"risk_level,omitempty"`
+	Skills           []string                              `json:"skills,omitempty"`
+	UseCurrentBranch bool                                  `json:"use_current_branch,omitempty"`
+}
+
+// CreateFeatureMutationRequestPipeline defines model for CreateFeatureMutationRequest.Pipeline.
+type CreateFeatureMutationRequestPipeline string
+
+// CreateFeatureMutationRequestRiskLevel defines model for CreateFeatureMutationRequest.RiskLevel.
+type CreateFeatureMutationRequestRiskLevel string
 
 // CreateFeatureResponse defines model for CreateFeatureResponse.
 type CreateFeatureResponse struct {
@@ -2634,9 +2700,6 @@ type StreamEventsParams struct {
 	HeartbeatMs int    `form:"heartbeat_ms,omitempty" json:"heartbeat_ms,omitempty"`
 }
 
-// CreateFeatureJSONBody defines parameters for CreateFeature.
-type CreateFeatureJSONBody map[string]interface{}
-
 // CreateFeatureParams defines parameters for CreateFeature.
 type CreateFeatureParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -2924,7 +2987,7 @@ type PatchRuntimeConfigJSONRequestBody PatchRuntimeConfigJSONBody
 type PutRuntimeConfigJSONRequestBody PutRuntimeConfigJSONBody
 
 // CreateFeatureJSONRequestBody defines body for CreateFeature for application/json ContentType.
-type CreateFeatureJSONRequestBody CreateFeatureJSONBody
+type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest
 
 // RunFeatureActionJSONRequestBody defines body for RunFeatureAction for application/json ContentType.
 type RunFeatureActionJSONRequestBody RunFeatureActionJSONBody

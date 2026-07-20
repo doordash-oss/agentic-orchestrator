@@ -52,6 +52,18 @@ export interface WorldOptions {
 
 const STUB_VERSION = '2.99.0 (Claude Code)';
 
+/** Counts authoritative workflow provider sessions recorded by the stub CLI. */
+export function providerInvocationCount(logPath: string): number {
+  try {
+    return fs
+      .readFileSync(logPath, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() === 'session').length;
+  } catch {
+    return 0;
+  }
+}
+
 export function createWorld(name: string, options: WorldOptions = {}): JourneyWorld {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `agentico-e2e-${name}-`));
   const home = path.join(root, 'home');

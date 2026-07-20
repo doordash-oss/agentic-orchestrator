@@ -138,6 +138,16 @@ function makeServices(): IpcServices {
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
     ),
+    pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    searchCreationFiles: vi.fn((request) =>
+      Promise.resolve({
+        requestId: request.requestId,
+        files: [],
+        truncated: false,
+        cancelled: false,
+      }),
+    ),
+    cancelCreationFileSearch: vi.fn(() => false),
     loadLocalReviewDraft: vi.fn(() => null),
     saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),
     discardLocalReviewDraft: vi.fn(() => false),
@@ -159,6 +169,7 @@ function makeServices(): IpcServices {
     listRuns: vi.fn(() => Promise.reject(new Error('unused'))),
     getRun: vi.fn(() => Promise.reject(new Error('unused'))),
     listRunSessions: vi.fn(() => Promise.reject(new Error('unused'))),
+    getLivePreview: vi.fn(() => Promise.reject(new Error('unused'))),
     listRunArtifacts: vi.fn(() => Promise.reject(new Error('unused'))),
     getRunArtifactContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),

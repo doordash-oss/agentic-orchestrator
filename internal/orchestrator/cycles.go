@@ -220,12 +220,12 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 
 	cycleDirName := feature.RepoCycleDirName(rc.Type, rc.Count)
 	cycleBaseDir := filepath.Join(agent.ActiveRunDir(baseDir, f), cycleDirName, repoName)
-	_ = os.MkdirAll(cycleBaseDir, 0o755)
 
 	pr := o.deps.PhaseRunner
 	if pr == nil {
 		return "", errors.New("phase runner not configured")
 	}
+	_ = os.MkdirAll(cycleBaseDir, 0o755)
 
 	kbInfos := o.computeKBInfos(f)
 	implModel := f.Models.Implementation

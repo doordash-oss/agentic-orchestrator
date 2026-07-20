@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -282,6 +283,65 @@ func TestReadinessInvalidConfigurationReported(t *testing.T) {
 type createFeatureRecorder struct {
 	MutationTarget
 	created atomic.Int64
+}
+
+func TestCreateFeatureIdempotencyKeyReturnsOriginalResult(t *testing.T) {
+	t.Parallel()
+	target := &createFeatureRecorder{}
+	handler := NewHandler(HandlerOptions{
+		Config: config.NewDefault(), Mutations: target, DisableHostValidation: true,
+	})
+	body := map[string]any{
+		"name": "one feature", "idempotency_key": "3d7fa9f5-7417-4785-9981-fbfc9988bd8f",
+		"pipeline": "large", "risk_level": "high", "skills": []string{"frontend-design"},
+	}
+	for range 2 {
+		w := postTrustedJSON(handler, apiPathFeatures, body)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create status = %d body=%s; want 201", w.Code, w.Body.String())
+		}
+	}
+	if got := target.created.Load(); got != 1 {
+		t.Fatalf("CreateFeature called %d times; want one authoritative mutation", got)
+	}
+}
+
+func TestCreateFeatureReportsFieldSpecificCreationLimits(t *testing.T) {
+	t.Parallel()
+	target := &createFeatureRecorder{}
+	handler := NewHandler(HandlerOptions{
+		Config: config.NewDefault(), Mutations: target, DisableHostValidation: true,
+	})
+	tests := []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{
+			name: "idempotency key",
+			body: map[string]any{"name": "feature", "idempotency_key": strings.Repeat("k", 129)},
+			want: "idempotency_key exceeds the 128 character limit",
+		},
+		{
+			name: "skills",
+			body: map[string]any{"name": "feature", "skills": make([]string, 33)},
+			want: "skills exceeds the 32 item limit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := postTrustedJSON(handler, apiPathFeatures, tt.body)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("create status = %d body=%s; want 400", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tt.want) {
+				t.Errorf("create body = %s; want field-specific message %q", w.Body.String(), tt.want)
+			}
+		})
+	}
+	if got := target.created.Load(); got != 0 {
+		t.Errorf("CreateFeature called %d times; want 0 for invalid input", got)
+	}
 }
 
 func (t *createFeatureRecorder) CreateFeature(req CreateFeatureRequest) (CreateFeatureResponse, error) {

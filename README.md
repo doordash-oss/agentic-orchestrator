@@ -222,20 +222,22 @@ Each feature can override default models during creation via the wizard (step 4)
 - The explicit **`opencode:<provider>/<model>` prefix** always routes to OpenCode, passing the backend id straight through (it works even for a backend OpenCode discovers but Agentico does not pre-list).
 - A **bare slash-form backend id** such as `anthropic/claude-sonnet-4-5` (no prefix) resolves to OpenCode when it matches OpenCode's catalog. This is the form Agentico persists for the provider-neutral per-phase defaults when OpenCode is the only ready provider, so an OpenCode model **can** be a default without any `opencode:` prefix in the config.
 
-Use `agentico --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
+Use `agentico server --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
 
 ### Launch Flags
 
 ```text
-agentico [flags]
+agentico
 agentico server [flags]
 
-Flags:
+Server flags:
   --config <path>                  Config file (default: ~/.agentic-orchestrator/config.yaml)
   --state-dir <path>               State directory (default: ~/.agentic-orchestrator/features)
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --providers <list>               Restrict to specific providers (claude,codex,opencode)
   --refresh-models                 Refresh provider model catalogs before starting the server
+
+Global flags:
   --help, -h                       Show help
   --version, -v                    Show version
 ```

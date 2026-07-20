@@ -1,6 +1,6 @@
 /**
  * Recovery workspace: shows the risk-first orphan-session queue with
- * per-item context, bounded logs, and Resume/Kill/Skip actions. Recovery
+ * per-item context, bounded logs, and Resume/Kill actions. Recovery
  * receives contextual priority — it appears first in attention and opens
  * a dedicated workspace, while unrelated features remain usable.
  */
@@ -13,7 +13,7 @@ type RecoveryPhase = 'idle' | 'scanning' | 'ready' | 'executing' | 'complete' | 
 interface RecoveryOutcome {
   key: string;
   action: string;
-  result: 'submitted' | 'skipped' | 'not-started';
+  result: 'submitted' | 'not-started';
 }
 
 function humanizeAction(action: string): string {
@@ -22,8 +22,6 @@ function humanizeAction(action: string): string {
       return 'Resume';
     case 'kill':
       return 'Kill';
-    case 'skip':
-      return 'Skip';
     default:
       return action.charAt(0).toUpperCase() + action.slice(1);
   }
@@ -118,7 +116,7 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
           next.set(item.key, {
             key: item.key,
             action,
-            result: action === 'skip' ? 'skipped' : 'submitted',
+            result: 'submitted',
           });
           return next;
         });
@@ -209,7 +207,11 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
   const hasOutcomes = outcomes.size > 0;
 
   return (
-    <section className="recovery-workspace" aria-label="Recovery workspace">
+    <section
+      className="recovery-workspace"
+      aria-label="Recovery workspace"
+      data-attention={items.length > 0}
+    >
       <header className="recovery-workspace__header">
         <div>
           <h3 className="recovery-workspace__title">Recovery</h3>
@@ -343,9 +345,7 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                   >
                     {outcome.result === 'submitted'
                       ? `↳ ${humanizeAction(outcome.action)} submitted`
-                      : outcome.result === 'not-started'
-                        ? '⊘ Not started'
-                        : `⊘ Skipped`}
+                      : '⊘ Not started'}
                   </p>
                 ) : (
                   <div className="recovery-workspace__item-actions">
@@ -370,16 +370,6 @@ export function RecoveryWorkspace({ onNavigateToFeature }: RecoveryWorkspaceProp
                         }}
                       >
                         Kill
-                      </button>
-                    ) : null}
-                    {item.allowedActions.includes('skip') ? (
-                      <button
-                        type="button"
-                        className="recovery-workspace__action recovery-workspace__action--skip"
-                        disabled={executingKey !== null}
-                        onClick={() => void executeSingle(item, 'skip')}
-                      >
-                        {isExecuting ? 'Skipping…' : 'Skip'}
                       </button>
                     ) : null}
                   </div>

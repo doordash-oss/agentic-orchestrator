@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test';
-import fs from 'node:fs';
 import {
   assertNoLeakedProcesses,
   closeApp,
@@ -8,7 +7,13 @@ import {
   persistAppLogs,
   type AppHandle,
 } from '../helpers/app';
-import { createRepo, createWorld, destroyWorld, waitFor } from '../helpers/world';
+import {
+  createRepo,
+  createWorld,
+  destroyWorld,
+  providerInvocationCount,
+  waitFor,
+} from '../helpers/world';
 
 test('packaged AMA dock streams singleton chat, restores drawer state, and retains ended transcripts', async ({}, testInfo) => {
   const world = createWorld('background-ama-notifications', {
@@ -53,7 +58,7 @@ test('packaged AMA dock streams singleton chat, restores drawer state, and retai
         .then((sessions) => sessions.filter((session) => session.id === '__chat__')),
     );
     expect(chatSessions).toHaveLength(1);
-    expect(providerInvocationCount(world)).toBe(1);
+    expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
 
     const settings = await handle.page.evaluate(() => window.agentico.getSettings());
     expect(settings.notifications.previewEnabled).toBe(false);
@@ -200,17 +205,6 @@ test('packaged attention notifications are private, deduplicated, bounded, exact
     destroyWorld(world);
   }
 });
-
-function providerInvocationCount(world: ReturnType<typeof createWorld>): number {
-  try {
-    return fs
-      .readFileSync(world.providerInvocationLog, 'utf8')
-      .split('\n')
-      .filter((line) => line.trim() === 'session').length;
-  } catch {
-    return 0;
-  }
-}
 
 async function openPalette(handle: AppHandle): Promise<void> {
   await handle.page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');

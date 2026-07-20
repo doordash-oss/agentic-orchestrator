@@ -730,6 +730,23 @@ export const SessionOutputChunkSchema = z.object({
   done: z.boolean().optional(),
 });
 
+export const LivePreviewResponseSchema = z.object({
+  api_version: z.string(),
+  feature: ServerFeatureSummarySchema,
+  session: ServerSessionSummarySchema.optional(),
+  activity: z.string().max(1000),
+  context: z.object({ percentage: z.number().int() }),
+  timing: z.object({
+    total_seconds: z.number().int().nonnegative(),
+    by_phase: z.record(z.string(), z.number().int().nonnegative()),
+  }),
+  cost: z.object({
+    total_usd: z.number().nonnegative(),
+    by_phase: z.record(z.string(), z.number().nonnegative()),
+  }),
+  transcript: z.array(ServerTranscriptMessageSchema).max(500),
+});
+
 // --- Runtime config (GET /api/v1/config/runtime) — creation-defaults subset --
 
 export const ServerModelDefaultsSchema = z.object({

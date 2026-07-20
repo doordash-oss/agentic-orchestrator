@@ -106,7 +106,7 @@ To run an isolated server against a real workspace without disturbing another
 runtime, isolate **both** state and config:
 
 ```bash
-agentico --config /tmp/agentico2/config.yaml --state-dir /tmp/agentico2/features
+agentico server --config /tmp/agentico2/config.yaml --state-dir /tmp/agentico2/features
 ```
 
 Sibling dirs (`permissions/`, `worktrees/`, `skills/`, `guidelines/`,

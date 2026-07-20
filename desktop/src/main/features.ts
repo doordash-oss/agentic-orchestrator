@@ -47,6 +47,7 @@ import {
   type PublishDescriptionResult,
   type FeatureSummaryView,
   type ReadinessSnapshot,
+  type RepositoryFileRef,
   type RebaseRequest,
   type RebasePreflightRequest,
   type RebasePreflightResult,
@@ -72,6 +73,7 @@ export interface FeatureServiceDeps {
   transport: FeatureTransport;
   /** Fresh authoritative readiness (repository eligibility for creation). */
   readReadiness(): Promise<ReadinessSnapshot>;
+  resolveRepositoryFiles(refs: readonly RepositoryFileRef[]): Promise<string[]>;
 }
 
 /** Concrete, safe next steps per structured server error code. */
@@ -138,6 +140,7 @@ export class FeatureService {
   async createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult> {
     // Defense in depth: the IPC layer already validated this shape.
     const validated = validateWithSchema(input, CreateFeatureInputSchema);
+    const repositoryAttachments = await this.deps.resolveRepositoryFiles(validated.repositoryFiles);
     const body = await this.api('/api/v1/features', {
       method: 'POST',
       body: {
@@ -145,6 +148,26 @@ export class FeatureService {
         ...(validated.description.trim() === '' ? {} : { description: validated.description }),
         repos: validated.repoKeys,
         ...(validated.useCurrentBranch ? { use_current_branch: true } : {}),
+        images: validated.images,
+        attachments: [...validated.attachments, ...repositoryAttachments],
+        pipeline: validated.pipeline,
+        risk_level: validated.riskLevel,
+        inquireness: validated.inquireness,
+        ...(validated.exitCriteria.trim() === ''
+          ? {}
+          : { exit_criteria: validated.exitCriteria.trim() }),
+        models: validated.models,
+        checkpoints: {
+          inquiry_review: validated.checkpoints.inquiryReview,
+          research_review: validated.checkpoints.researchReview,
+          design_review: validated.checkpoints.designReview,
+          roadmap_review: validated.checkpoints.roadmapReview,
+          phase_plan_review: validated.checkpoints.phasePlanReview,
+          manual_publish: validated.checkpoints.manualPublish,
+          draft_publish: validated.checkpoints.draftPublish,
+        },
+        skills: validated.skills,
+        idempotency_key: validated.idempotencyKey,
       },
     });
     const response = validateWithSchema(body, FeatureActionResponseSchema);

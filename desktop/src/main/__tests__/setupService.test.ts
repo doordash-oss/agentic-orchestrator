@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { SafeErrorException } from '../../shared/errors';
 import { ReadinessSnapshotSchema } from '../../shared/ipc';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 import { SetupService, type SetupServiceDeps } from '../setup';
+import { CreationFilesService } from '../creationFiles';
 
 function serverReadiness(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -99,6 +102,56 @@ describe('SetupService.getReadiness', () => {
     const snapshot = await service.getReadiness();
     expect(snapshot.probedAt).toBeUndefined();
     expect(snapshot.issues).toEqual([]);
+  });
+});
+
+describe('CreationFilesService', () => {
+  it('applies the shared kind-specific picker limits', async () => {
+    const service = new CreationFilesService({
+      pickFiles: () => Promise.resolve(Array.from({ length: 30 }, (_, index) => `/safe/${index}`)),
+      readReadiness: () => Promise.reject(new Error('not used')),
+    });
+    await expect(service.pickFiles('image')).resolves.toMatchObject({ paths: { length: 12 } });
+    await expect(service.pickFiles('attachment')).resolves.toMatchObject({ paths: { length: 24 } });
+  });
+
+  it('searches only eligible repository files, skips generated trees, and resolves regular files', async () => {
+    const root = fs.mkdtempSync(path.join(process.env['TMPDIR'] ?? '/tmp', 'agentico-index-'));
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'node_modules', 'hidden'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'src', 'creation.ts'), 'export const creation = true;');
+    fs.writeFileSync(path.join(root, 'src', 'creation-context.md'), '# context');
+    fs.writeFileSync(path.join(root, 'node_modules', 'hidden', 'creation.ts'), 'hidden');
+    const { service: setup } = makeService(() => ({
+      status: 200,
+      body: serverReadiness({
+        workspace: {
+          roots: [{ path: root, valid: true }],
+          repositories: [{ name: 'repo-a', path: root, valid: true }],
+        },
+      }),
+    }));
+    const service = new CreationFilesService({
+      pickFiles: () => Promise.resolve([]),
+      readReadiness: () => setup.getReadiness(),
+    });
+    try {
+      const requestId = crypto.randomUUID();
+      const result = await service.search({
+        requestId,
+        repoKeys: ['repo-a'],
+        query: 'creation context',
+      });
+      expect(result.files).toEqual([{ repoKey: 'repo-a', path: 'src/creation-context.md' }]);
+      await expect(service.resolve(result.files)).resolves.toEqual([
+        path.join(fs.realpathSync(root), 'src', 'creation-context.md'),
+      ]);
+      await expect(
+        service.resolve([{ repoKey: 'repo-a', path: '../outside' }]),
+      ).rejects.toMatchObject({ safe: { code: 'E_INVALID_REPOSITORY_FILE' } });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

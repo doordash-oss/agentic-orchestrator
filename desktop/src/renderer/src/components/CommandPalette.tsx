@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import {
   COMMAND_CATALOGUE,
   commandById,
+  displayAccelerator,
   type CommandDescriptor,
   type CommandGroup,
   type CommandId,
@@ -370,10 +371,4 @@ function selectedFeatureIdFromDom(): string | null {
     return null;
   }
   return id;
-}
-
-function displayAccelerator(accelerator: string): string {
-  return accelerator
-    .replace('CommandOrControl', navigator.platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl')
-    .replaceAll('+', ' ');
 }

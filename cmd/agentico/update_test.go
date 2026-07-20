@@ -139,18 +139,22 @@ func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 	}
 }
 
-func TestRunArgsDefaultStillLaunchesServerNotUpdate(t *testing.T) {
+func TestRunArgsDefaultLaunchesDesktopNotServerOrUpdate(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	var launchCalled, updateCalled bool
-	code := runArgs(nil, &stdout, &stderr,
+	var desktopCalled, serverCalled, updateCalled bool
+	code := runArgsWithDesktop(nil, &stdout, &stderr,
+		func() error { desktopCalled = true; return nil },
 		func(string, string, bool, []string, bool) int {
-			launchCalled = true
+			serverCalled = true
 			return 0
 		},
 		func(bool, io.Writer, io.Writer) int { updateCalled = true; return 1 },
 	)
-	if !launchCalled {
-		t.Fatal("default mode must launch the server")
+	if !desktopCalled {
+		t.Fatal("default mode must launch the desktop app")
+	}
+	if serverCalled {
+		t.Fatal("default mode must not launch the server")
 	}
 	if updateCalled {
 		t.Fatal("default mode must not invoke the update seam")

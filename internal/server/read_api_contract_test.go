@@ -1788,6 +1788,21 @@ func TestLivePreviewUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	}
 }
 
+func TestLivePreviewWithoutSessionReturnsEmptyTranscriptArray(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
+	transcript, ok := body["transcript"].([]any)
+	if !ok {
+		t.Fatalf("live preview transcript = %T; want array", body["transcript"])
+	}
+	if len(transcript) != 0 {
+		t.Fatalf("live preview transcript = %+v; want empty array", transcript)
+	}
+}
+
 func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

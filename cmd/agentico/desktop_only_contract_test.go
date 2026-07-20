@@ -46,15 +46,22 @@ func TestDistributionHasNoLegacyTerminalUI(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	serverCalls := 0
-	code := runArgs(nil, &stdout, &stderr, func(string, string, bool, []string, bool) int {
+	desktopCalls := 0
+	code := runArgsWithDesktop(nil, &stdout, &stderr, func() error {
+		desktopCalls++
+		return nil
+	}, func(string, string, bool, []string, bool) int {
 		serverCalls++
 		return 0
 	}, failingUpdater(t))
 	if code != 0 {
 		t.Fatalf("runArgs() code = %d; stderr = %q", code, stderr.String())
 	}
-	if serverCalls != 1 {
-		t.Fatalf("default server launch calls = %d, want 1", serverCalls)
+	if desktopCalls != 1 {
+		t.Fatalf("default desktop launch calls = %d, want 1", desktopCalls)
+	}
+	if serverCalls != 0 {
+		t.Fatalf("default server launch calls = %d, want 0", serverCalls)
 	}
 }
 

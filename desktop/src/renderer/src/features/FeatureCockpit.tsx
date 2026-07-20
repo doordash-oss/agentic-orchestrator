@@ -26,6 +26,7 @@ import { PhaseSpine } from '../components/PhaseSpine';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { RunTimeline } from './RunTimeline';
+import { CurrentRunInspection } from './CurrentRunInspection';
 import { ReviewSurface } from './ReviewSurface';
 import { ResourceEditor, useResolvedTheme } from './ResourceWorkspace';
 import { ArchiveMode } from './ArchiveMode';
@@ -46,7 +47,9 @@ import {
 import type { AttentionItem } from '../../../shared/ipc';
 import {
   actionById,
+  displayFeatureMessage,
   displayPhaseLabel,
+  displayStatusLabel,
   featureBranch,
   isReadyToStart,
   setupProgress,
@@ -101,7 +104,7 @@ function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch
       <div className="cockpit__fact">
         <dt>Status</dt>
         <dd aria-label={snapshot.status}>
-          <code data-status={snapshot.status} />
+          <code data-status={snapshot.status}>{displayStatusLabel(snapshot.status)}</code>
         </dd>
       </div>
       {branch !== null ? (
@@ -263,7 +266,7 @@ function InspectorContent({
       ) : null}
       {startAction?.disabledReasons.map((reason) => (
         <p key={reason.code} className="cockpit__action-reason">
-          Start unavailable: {reason.message}
+          Start unavailable: {displayFeatureMessage(reason.message)}
         </p>
       ))}
     </>
@@ -339,7 +342,7 @@ function CockpitActionBar({
             disabled={!setupAction.enabled || busy}
             onClick={onRetrySetup}
             {...(setupAction.disabledReasons[0] !== undefined
-              ? { title: setupAction.disabledReasons[0].message }
+              ? { title: displayFeatureMessage(setupAction.disabledReasons[0].message) }
               : {})}
           >
             {busy
@@ -350,7 +353,7 @@ function CockpitActionBar({
           </button>
           {!setupAction.enabled && setupAction.disabledReasons[0] !== undefined ? (
             <ul className="cockpit__action-reasons">
-              <li>{setupAction.disabledReasons[0].message}</li>
+              <li>{displayFeatureMessage(setupAction.disabledReasons[0].message)}</li>
             </ul>
           ) : null}
         </span>
@@ -371,7 +374,9 @@ function CockpitActionBar({
           {startAction.disabledReasons.length > 0 ? (
             <ul id="start-disabled-reasons" className="cockpit__action-reasons">
               {startAction.disabledReasons.map((reason) => (
-                <li key={`${reason.code}:${reason.message}`}>{reason.message}</li>
+                <li key={`${reason.code}:${reason.message}`}>
+                  {displayFeatureMessage(reason.message)}
+                </li>
               ))}
             </ul>
           ) : null}
@@ -394,7 +399,9 @@ function CockpitActionBar({
           {stopAction.disabledReasons.length > 0 ? (
             <ul id="stop-disabled-reasons" className="cockpit__action-reasons">
               {stopAction.disabledReasons.map((reason) => (
-                <li key={`${reason.code}:${reason.message}`}>{reason.message}</li>
+                <li key={`${reason.code}:${reason.message}`}>
+                  {displayFeatureMessage(reason.message)}
+                </li>
               ))}
             </ul>
           ) : null}
@@ -463,9 +470,6 @@ function CockpitActionBar({
           ▦ History
         </button>
       ) : null}
-      <p className="cockpit__phase-status" aria-label="Current feature status">
-        <code>{snapshot.status}</code>
-      </p>
       <button
         ref={inspectorButtonRef}
         type="button"
@@ -1321,12 +1325,15 @@ export function FeatureCockpit({
                   ) : null}
 
                   {showsRun(snapshot) && !hasPendingReview ? (
-                    <RunTimeline
-                      featureId={featureId}
-                      activeRun={snapshot.activeRun}
-                      currentPhase={snapshot.currentPhase}
-                      shouldStream={stopAction !== undefined}
-                    />
+                    <>
+                      <CurrentRunInspection featureId={featureId} runNumber={snapshot.activeRun} />
+                      <RunTimeline
+                        featureId={featureId}
+                        activeRun={snapshot.activeRun}
+                        currentPhase={snapshot.currentPhase}
+                        shouldStream={stopAction !== undefined}
+                      />
+                    </>
                   ) : null}
 
                   {ready ? (

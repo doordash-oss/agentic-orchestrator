@@ -6,13 +6,13 @@
  * trace zips) are additionally copied to AGENTICO_E2E_EVIDENCE_DIR when the
  * run is an evidence run.
  */
-import { execFileSync, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
 import type { ElectronApplication, Locator, Page, TestInfo } from '@playwright/test';
 import { packagedAppAsar, packagedExecutable, packagedResourcesDir } from './packaged';
-import { killProcessTree } from './processes';
+import { killProcessTree, worldProcessPIDs } from './processes';
 import { minimalEnv, type JourneyWorld } from './world';
 
 export interface AppHandle {
@@ -59,12 +59,22 @@ export async function createFeatureViaForm(
   await expect(handle.page.getByRole('form', { name: 'Create a feature' })).toBeVisible();
   await handle.page.locator('#feature-name').fill(name);
   if (description !== '') await handle.page.locator('#feature-description').fill(description);
+  await handle.page.getByRole('button', { name: 'Next: Where' }).click();
   for (const repoPattern of repoPatterns) {
     await handle.page.getByRole('checkbox', { name: repoPattern }).check();
   }
+  await handle.page.getByRole('button', { name: 'Next: Pipeline' }).click();
+  await handle.page.getByRole('button', { name: 'Next: Review' }).click();
   await beforeSubmit?.();
-  await handle.page.getByRole('button', { name: 'Create feature' }).click();
   const cockpit = handle.page.getByLabel(`Feature ${name}`);
+  // Creation immediately replaces the wizard with a cockpit. Some Electron
+  // builds keep Playwright's click action pending after that intentional
+  // detach, so bound the dispatch and use the authoritative cockpit as the
+  // success condition.
+  await handle.page
+    .getByRole('button', { name: 'Create feature' })
+    .click({ timeout: 2_000 })
+    .catch(() => undefined);
   await expect(cockpit).toBeVisible({ timeout: 30_000 });
   if (waitForReady)
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
@@ -261,6 +271,27 @@ export async function evidenceShot(handle: AppHandle, name: string): Promise<voi
   }
 }
 
+/**
+ * Final testing-contract evidence is deliberately opt-in: normal packaged
+ * journeys do not mutate the phase evidence directory or spend time laying
+ * out screenshot-only viewports.
+ */
+export async function contractEvidenceShot(
+  handle: AppHandle,
+  name: string,
+  width: number,
+  height: number,
+  theme: 'light' | 'dark',
+): Promise<void> {
+  const dir = process.env['AGENTICO_EVIDENCE_DIR'];
+  if (dir === undefined || dir === '') return;
+  await setWindowSize(handle, width, height);
+  await setTheme(handle, theme);
+  const target = path.join(dir, 'screenshots', `${name}.png`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  await handle.page.screenshot({ path: target, fullPage: false, scale: 'css' });
+}
+
 // --- window/theme helpers -------------------------------------------------------
 
 export async function setWindowSize(
@@ -350,15 +381,6 @@ export async function mockDirectoryPicker(handle: AppHandle, directory: string):
  * process-table needle: every journey process carries it in argv or env.
  */
 export function assertNoLeakedProcesses(world: JourneyWorld): void {
-  let out = '';
-  try {
-    out = execFileSync('pgrep', ['-f', world.root], { encoding: 'utf8' });
-  } catch {
-    return; // pgrep exits 1 when nothing matches — the desired outcome
-  }
-  const pids = out
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '' && Number(line) !== process.pid);
+  const pids = worldProcessPIDs(world.root);
   expect(pids, `leaked processes still reference ${world.root}`).toEqual([]);
 }

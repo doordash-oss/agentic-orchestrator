@@ -51,7 +51,11 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFeatureMutationRequest"
       responses:
         "201":
           $ref: "#/components/responses/ActionResponse"
@@ -2154,6 +2158,43 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
+    CreateFeatureMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 10000 }
+        repos:
+          type: array
+          maxItems: 32
+          items: { type: string }
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        exit_criteria: { type: string, maxLength: 4000 }
+        inquireness: { type: string }
+        images:
+          type: array
+          maxItems: 12
+          items: { type: string }
+        attachments:
+          type: array
+          maxItems: 24
+          items: { type: string }
+        use_current_branch: { type: boolean }
+        checkpoints:
+          $ref: "#/components/schemas/Checkpoints"
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        pipeline:
+          type: string
+          enum: [medium, large, moonshot]
+        skills:
+          type: array
+          maxItems: 32
+          items: { type: string, maxLength: 256 }
+        idempotency_key: { type: string, maxLength: 128 }
     FeatureSetupResponse:
       description: >-
         Result of the setup action: durable server-owned setup (fresh run or

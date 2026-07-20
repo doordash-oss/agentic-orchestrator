@@ -13,6 +13,7 @@ import {
   RewindPreviewResponseSchema,
   RewindActionResponseSchema,
   TextContentResponseSchema,
+  LivePreviewResponseSchema,
   validateWithSchema,
   type ServerRunSummary,
   type ServerRunDetail,
@@ -32,6 +33,7 @@ import {
   type RunDetailView,
   type RunSessionsListResult,
   type RunArtifactsListResult,
+  type LivePreviewView,
   type RunTextContent,
   type RewindPreviewView,
   type RunSummaryView,
@@ -82,6 +84,20 @@ export class RunHistoryService {
     return {
       runNumber: response.run_number,
       sessions: response.sessions.map(toSessionSummary),
+    };
+  }
+
+  async getLivePreview(featureId: unknown): Promise<LivePreviewView> {
+    const id = validateWithSchema(featureId, FeatureIdSchema);
+    const body = await this.api(`/api/v1/features/${id}/live-preview`);
+    const response = validateWithSchema(body, LivePreviewResponseSchema);
+    return {
+      featureId: validateWithSchema(response.feature.id, FeatureIdSchema),
+      activity: redactText(response.activity),
+      ...(response.session === undefined ? {} : { session: toSessionSummary(response.session) }),
+      contextPercentage: response.context.percentage,
+      totalSeconds: response.timing.total_seconds,
+      totalUsd: response.cost.total_usd,
     };
   }
 

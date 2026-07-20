@@ -116,6 +116,7 @@ function makeService(
       },
     },
     readReadiness: () => Promise.resolve(readiness()),
+    resolveRepositoryFiles: () => Promise.resolve([]),
   });
   return { service, calls };
 }
@@ -152,10 +153,20 @@ describe('FeatureService.createFeature', () => {
     const result = await service.createFeature(input);
     expect(result).toEqual({ featureId: 'abcd1234ef567890' });
     expect(calls[0]?.path).toBe('/api/v1/features');
-    expect(calls[0]?.init).toEqual({
-      method: 'POST',
-      body: { name: 'Search revamp', repos: ['repo-a'] },
-    });
+    expect(calls[0]?.init).toEqual(
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.objectContaining({ name: 'Search revamp', repos: ['repo-a'] }),
+      }),
+    );
+    expect(calls[0]?.init?.body).toEqual(
+      expect.objectContaining({
+        pipeline: 'medium',
+        risk_level: 'medium',
+        inquireness: 'balanced',
+        idempotency_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      }),
+    );
   });
 
   it('carries the current-branch choice and description when provided', async () => {
@@ -168,12 +179,14 @@ describe('FeatureService.createFeature', () => {
       description: 'Improve search.',
       useCurrentBranch: true,
     });
-    expect(calls[0]?.init?.body).toEqual({
-      name: 'Search revamp',
-      description: 'Improve search.',
-      repos: ['repo-a'],
-      use_current_branch: true,
-    });
+    expect(calls[0]?.init?.body).toEqual(
+      expect.objectContaining({
+        name: 'Search revamp',
+        description: 'Improve search.',
+        repos: ['repo-a'],
+        use_current_branch: true,
+      }),
+    );
   });
 
   it('maps the structured 409 not_ready rejection with its issues, redacted', async () => {

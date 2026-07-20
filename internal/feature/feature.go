@@ -651,13 +651,16 @@ type FeatureRepo struct {
 // (yaml:"-") so the thousands of call sites that read/write them keep
 // compiling; Store synchronises shadows <-> Run on every save/load.
 type Feature struct {
-	ID           string    `yaml:"id"`
-	Name         string    `yaml:"name"`
-	Slug         string    `yaml:"slug"`
-	Description  string    `yaml:"description"`
-	Summary      string    `yaml:"summary,omitempty"`
-	Images       []string  `yaml:"images,omitempty"`
-	Attachments  []string  `yaml:"attachments,omitempty"`
+	ID          string   `yaml:"id"`
+	Name        string   `yaml:"name"`
+	Slug        string   `yaml:"slug"`
+	Description string   `yaml:"description"`
+	Summary     string   `yaml:"summary,omitempty"`
+	Images      []string `yaml:"images,omitempty"`
+	Attachments []string `yaml:"attachments,omitempty"`
+	// Skills is inert metadata retained for feature.yaml load/save compatibility.
+	// Runtime prompt construction and skill discovery do not consume it yet.
+	Skills       []string  `yaml:"selected_skills,omitempty"`
 	Created      time.Time `yaml:"created"`
 	Status       Status    `yaml:"status"`
 	CurrentPhase Phase     `yaml:"current_phase"`

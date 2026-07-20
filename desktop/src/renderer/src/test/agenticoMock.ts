@@ -189,6 +189,10 @@ export interface AgenticoMock {
     openSessionOutput: ReturnType<typeof vi.fn>;
     cancelSessionOutput: ReturnType<typeof vi.fn>;
     getCreationDefaults: ReturnType<typeof vi.fn>;
+    pickCreationFiles: ReturnType<typeof vi.fn>;
+    importDroppedCreationFiles: ReturnType<typeof vi.fn>;
+    searchCreationFiles: ReturnType<typeof vi.fn>;
+    cancelCreationFileSearch: ReturnType<typeof vi.fn>;
     getAttention: ReturnType<typeof vi.fn>;
     answerPermission: ReturnType<typeof vi.fn>;
     answerQuestions: ReturnType<typeof vi.fn>;
@@ -207,6 +211,7 @@ export interface AgenticoMock {
     listRuns: ReturnType<typeof vi.fn>;
     getRun: ReturnType<typeof vi.fn>;
     listRunSessions: ReturnType<typeof vi.fn>;
+    getLivePreview: ReturnType<typeof vi.fn>;
     listRunArtifacts: ReturnType<typeof vi.fn>;
     getRunArtifactContent: ReturnType<typeof vi.fn>;
     getRunLogContent: ReturnType<typeof vi.fn>;
@@ -356,6 +361,17 @@ export function installAgenticoMock(
       return () => sessionOutputListeners.delete(listener);
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
+    pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    importDroppedCreationFiles: vi.fn(() => ({ paths: [] })),
+    searchCreationFiles: vi.fn((request) =>
+      Promise.resolve({
+        requestId: request.requestId,
+        files: [],
+        truncated: false,
+        cancelled: false,
+      }),
+    ),
+    cancelCreationFileSearch: vi.fn(() => Promise.resolve(false)),
     loadLocalReviewDraft: vi.fn(() => Promise.resolve(null)),
     saveLocalReviewDraft: vi.fn(() =>
       Promise.resolve({
@@ -385,6 +401,15 @@ export function installAgenticoMock(
     ),
     getRun: vi.fn(() => Promise.reject(new Error('unused'))),
     listRunSessions: vi.fn(() => Promise.resolve({ runNumber: 1, sessions: [] })),
+    getLivePreview: vi.fn(() =>
+      Promise.resolve({
+        featureId: feature.id,
+        activity: feature.status,
+        contextPercentage: -1,
+        totalSeconds: 0,
+        totalUsd: 0,
+      }),
+    ),
     listRunArtifacts: vi.fn(() => Promise.resolve({ artifacts: [] })),
     getRunArtifactContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),

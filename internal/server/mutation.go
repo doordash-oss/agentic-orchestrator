@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -31,6 +32,12 @@ import (
 
 const MaxMutationBodyBytes = 64 * 1024
 const MaxActionTextBytes = 4000
+
+const (
+	maxCreationIdempotencyKeyLength = 128
+	maxCreationSkills               = 32
+	maxRememberedCreationResults    = 1000
+)
 
 // reviewCommentsModeAuto is the "auto" value of the review-comments action's
 // mode enum, shared with its option list in read_model.go.
@@ -176,6 +183,8 @@ type CreateFeatureRequest struct {
 	Attachments             []string                `json:"attachments,omitempty"`
 	RiskLevel               feature.RiskLevel       `json:"risk_level,omitempty"`
 	Pipeline                feature.PipelineProfile `json:"pipeline,omitempty"`
+	Skills                  []string                `json:"skills,omitempty"`
+	IdempotencyKey          string                  `json:"idempotency_key,omitempty"`
 }
 
 type RestartFeatureRequest struct {
@@ -633,19 +642,52 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
 		return
 	}
+	if len(req.IdempotencyKey) > maxCreationIdempotencyKeyLength {
+		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("idempotency_key exceeds the %d character limit", maxCreationIdempotencyKeyLength), nil)
+		return
+	}
+	if len(req.Skills) > maxCreationSkills {
+		writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("skills exceeds the %d item limit", maxCreationSkills), nil)
+		return
+	}
 	if !h.requireTrustedMutation(w, r) {
 		return
 	}
 	if h.rejectNotReadyForCreation(w, r) {
 		return
 	}
-	resp, err := h.mutations.CreateFeature(req)
+	resp, err := h.createFeatureOnce(req)
 	if err != nil {
 		writeMutationError(w, err)
 		return
 	}
 	defaultActionFields(&resp, "", resultCreated)
 	writeActionJSON(w, http.StatusCreated, &resp)
+}
+
+func (h *apiHandler) createFeatureOnce(req CreateFeatureRequest) (CreateFeatureResponse, error) {
+	if req.IdempotencyKey == "" {
+		return h.mutations.CreateFeature(req)
+	}
+	payload, _ := json.Marshal(req)
+	fingerprint := string(payload)
+	h.creationMu.Lock()
+	defer h.creationMu.Unlock()
+	if prior, ok := h.creationResults[req.IdempotencyKey]; ok {
+		if prior.fingerprint != fingerprint {
+			return CreateFeatureResponse{}, &ActionConflictError{Message: "idempotency key was already used for different creation input"}
+		}
+		return prior.response, nil
+	}
+	resp, err := h.mutations.CreateFeature(req)
+	if err == nil {
+		if len(h.creationResults) >= maxRememberedCreationResults {
+			// Bound process memory at the cost of forgetting older retry identities.
+			clear(h.creationResults)
+		}
+		h.creationResults[req.IdempotencyKey] = creationResult{fingerprint: fingerprint, response: resp}
+	}
+	return resp, err
 }
 
 func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.Request, featureID string, parts []string) bool {

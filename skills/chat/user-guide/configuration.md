@@ -29,14 +29,14 @@ defaults:
     kb_build: "sonnet[200K]"
 ```
 
-| Role | Default | Used For |
-|------|---------|----------|
-| `research` | `sonnet[200K]` | Research, inquiry, design phases |
-| `planning` | `opus[1M]` | Plan creation and roadmap generation |
-| `implementation` | `opus[1M]` | Code implementation |
-| `review` | `gpt-5.4[272K]` | Final Review loop |
-| `utilities` | `sonnet[200K]` | Chat (AMA), utility skills |
-| `kb_build` | `sonnet[200K]` | Knowledge base construction |
+| Role             | Default         | Used For                             |
+| ---------------- | --------------- | ------------------------------------ |
+| `research`       | `sonnet[200K]`  | Research, inquiry, design phases     |
+| `planning`       | `opus[1M]`      | Plan creation and roadmap generation |
+| `implementation` | `opus[1M]`      | Code implementation                  |
+| `review`         | `gpt-5.4[272K]` | Final Review loop                    |
+| `utilities`      | `sonnet[200K]`  | Chat (AMA), utility skills           |
+| `kb_build`       | `sonnet[200K]`  | Knowledge base construction          |
 
 ## Automatic Bash Review
 
@@ -169,7 +169,7 @@ An OpenCode selection can take three forms, and they resolve differently:
 
 When a ready OpenCode CLI is detected, Agentico discovers its live model catalog with `opencode models --verbose` and contributes those entries to the runtime model catalogue; if discovery fails it falls back to a small built-in OpenCode catalog. Context-window suffixes such as `[200K]` are Agentico selection metadata and are stripped before the native backend id is handed to OpenCode. When OpenCode does not report pricing for a model (for example a local Ollama model), Agentico records that session at zero cost rather than guessing — the run still completes; only the cost roll-up shows `$0.00`.
 
-Use `agentico --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
+Use `agentico server --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
 
 See [Provider Selection](#provider-selection) for installing, authenticating, and troubleshooting OpenCode.
 
@@ -177,11 +177,11 @@ See [Provider Selection](#provider-selection) for installing, authenticating, an
 
 Agentic Orchestrator needs at least one authenticated provider CLI. Claude, Codex, and OpenCode are co-equal: each phase's default is the best available model for that role across every detected provider, and you can override any phase per the table above.
 
-| Provider | CLI | Minimum version | Authenticate | Readiness check |
-|----------|-----|-----------------|--------------|-----------------|
-| Claude | `claude` | 2.1.81 | `claude auth login` or `ANTHROPIC_API_KEY` | `claude auth status` |
-| Codex | `codex` | 0.116.0 | `codex login` | `codex login status` |
-| OpenCode | `opencode` | 1.17.9 | `opencode auth login` | `opencode models` |
+| Provider | CLI        | Minimum version | Authenticate                               | Readiness check      |
+| -------- | ---------- | --------------- | ------------------------------------------ | -------------------- |
+| Claude   | `claude`   | 2.1.81          | `claude auth login` or `ANTHROPIC_API_KEY` | `claude auth status` |
+| Codex    | `codex`    | 0.116.0         | `codex login`                              | `codex login status` |
+| OpenCode | `opencode` | 1.17.9          | `opencode auth login`                      | `opencode models`    |
 
 Restrict the orchestrator to the CLIs you actually have with `--providers <list>` (e.g. `--providers claude,codex,opencode` or `--providers opencode`). With no flag, every installed and ready provider is registered.
 
@@ -209,13 +209,13 @@ Startup gates OpenCode on three checks before it can route a session: the `openc
 
 ### Troubleshooting providers
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Provider opencode CLI was not found` | OpenCode is not installed | `curl -fsSL https://opencode.ai/install \| bash`, then relaunch |
-| `opencode … below the minimum supported version` | Installed OpenCode is older than `1.17.9` | Upgrade OpenCode, then relaunch |
-| `Provider opencode is not configured` | No backend provider authenticated | `opencode auth login`, confirm with `opencode models` |
-| OpenCode models missing from runtime defaults | Live catalog discovery failed | Agentico falls back to a small built-in OpenCode catalog; rerun `opencode models --verbose` to debug, or configure the explicit `opencode:<backend/model>` form |
-| OpenCode session cost shows `$0.00` | OpenCode reported no pricing for that model (e.g. a local model) | Expected — the run still completes; only the cost roll-up is zero |
+| Symptom                                          | Cause                                                            | Fix                                                                                                                                                             |
+| ------------------------------------------------ | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Provider opencode CLI was not found`            | OpenCode is not installed                                        | `curl -fsSL https://opencode.ai/install \| bash`, then relaunch                                                                                                 |
+| `opencode … below the minimum supported version` | Installed OpenCode is older than `1.17.9`                        | Upgrade OpenCode, then relaunch                                                                                                                                 |
+| `Provider opencode is not configured`            | No backend provider authenticated                                | `opencode auth login`, confirm with `opencode models`                                                                                                           |
+| OpenCode models missing from runtime defaults    | Live catalog discovery failed                                    | Agentico falls back to a small built-in OpenCode catalog; rerun `opencode models --verbose` to debug, or configure the explicit `opencode:<backend/model>` form |
+| OpenCode session cost shows `$0.00`              | OpenCode reported no pricing for that model (e.g. a local model) | Expected — the run still completes; only the cost roll-up is zero                                                                                               |
 
 ## Pipeline Configuration
 
@@ -236,14 +236,14 @@ defaults:
     manual_publish: true
 ```
 
-| Checkpoint | Gates Before | Default |
-|------------|-------------|---------|
-| `inquiry_review` | Research phase | `true` |
-| `research_review` | Design phase | `true` |
-| `design_review` | Plan phase | `true` |
-| `roadmap_review` | Phase planning | `true` |
-| `phase_plan_review` | Implementation phase | `true` |
-| `manual_publish` | Publish step | `true` |
+| Checkpoint          | Gates Before         | Default |
+| ------------------- | -------------------- | ------- |
+| `inquiry_review`    | Research phase       | `true`  |
+| `research_review`   | Design phase         | `true`  |
+| `design_review`     | Plan phase           | `true`  |
+| `roadmap_review`    | Phase planning       | `true`  |
+| `phase_plan_review` | Implementation phase | `true`  |
+| `manual_publish`    | Publish step         | `true`  |
 
 When a feature is created, these defaults are projected through the selected pipeline profile (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints)). The current Electron creation form does not edit individual checkpoints; change `config.yaml` before creation when different defaults are required.
 
@@ -253,12 +253,12 @@ The runtime honors `phase_plan_review: true` with `roadmap_review: false`, altho
 
 ## Iteration Limits
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `max_iterations` | `10` | Maximum iterations per phase before failing |
-| `max_consecutive_failures` | `3` | Consecutive failures before aborting a phase |
-| `max_consecutive_no_progress` | `3` | Consecutive no-progress signals before aborting |
-| `max_phase_plan_iterations` | `10` | Maximum iterations for plan creation/validation |
+| Field                         | Default | Description                                     |
+| ----------------------------- | ------- | ----------------------------------------------- |
+| `max_iterations`              | `10`    | Maximum iterations per phase before failing     |
+| `max_consecutive_failures`    | `3`     | Consecutive failures before aborting a phase    |
+| `max_consecutive_no_progress` | `3`     | Consecutive no-progress signals before aborting |
+| `max_phase_plan_iterations`   | `10`    | Maximum iterations for plan creation/validation |
 
 ## Inquireness
 
@@ -319,8 +319,8 @@ The `pipeline_gates` map is keyed by pipeline profile name and overrides the def
 
 The runtime configuration retains one notification preference:
 
-| Field | Description |
-|-------|-------------|
+| Field                              | Description                                                        |
+| ---------------------------------- | ------------------------------------------------------------------ |
 | `notifications.mute_feature_input` | Suppresses notifications when an agent is waiting for manual input |
 
 Electron notification controls and OS attention notifications are pending. Edit `config.yaml` directly if this runtime setting is needed.
@@ -336,27 +336,27 @@ observability:
   otel_service_name: agentico
 ```
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `events` | `true` | Enable JSONL event recording per feature |
-| `otel_enabled` | `false` | Enable OpenTelemetry trace export |
-| `otel_endpoint` | `""` | OTLP endpoint URL |
-| `otel_insecure` | `false` | Allow insecure OTLP connections |
-| `otel_service_name` | `"agentico"` | Service name for OTel traces |
+| Field               | Default      | Description                              |
+| ------------------- | ------------ | ---------------------------------------- |
+| `events`            | `true`       | Enable JSONL event recording per feature |
+| `otel_enabled`      | `false`      | Enable OpenTelemetry trace export        |
+| `otel_endpoint`     | `""`         | OTLP endpoint URL                        |
+| `otel_insecure`     | `false`      | Allow insecure OTLP connections          |
+| `otel_service_name` | `"agentico"` | Service name for OTel traces             |
 
 ## Launch Flags
 
-Launch flags configure the foreground server. `agentico [flags]` and `agentico server [flags]` both start the local loopback REST runtime; neither command opens the Electron dashboard. The packaged desktop app launches and supervises its matched bundled runtime automatically. The current desktop creation form accepts a feature name, description, repositories, and branch choice while using server-owned pipeline defaults.
+Plain `agentico` starts or focuses the installed Electron desktop app. Launch flags configure the explicit `agentico server [flags]` foreground loopback REST runtime for headless automation. The packaged desktop app launches and supervises its matched bundled runtime automatically.
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--config <path>` | Config file path | `~/.agentic-orchestrator/config.yaml` |
-| `--state-dir <path>` | State directory path | `~/.agentic-orchestrator/features` |
-| `--providers <list>` | Comma-separated provider list (e.g., `claude,codex,opencode`) | all detected |
-| `--refresh-models` | Refresh provider model catalogs before the server becomes ready | `false` |
-| `--dangerously-skip-permissions` | Skip all permission prompts | `false` |
-| `--help`, `-h` | Print usage | - |
-| `--version`, `-v` | Print version | - |
+| Flag                             | Description                                                     | Default                               |
+| -------------------------------- | --------------------------------------------------------------- | ------------------------------------- |
+| `--config <path>`                | Config file path                                                | `~/.agentic-orchestrator/config.yaml` |
+| `--state-dir <path>`             | State directory path                                            | `~/.agentic-orchestrator/features`    |
+| `--providers <list>`             | Comma-separated provider list (e.g., `claude,codex,opencode`)   | all detected                          |
+| `--refresh-models`               | Refresh provider model catalogs before the server becomes ready | `false`                               |
+| `--dangerously-skip-permissions` | Skip all permission prompts                                     | `false`                               |
+| `--help`, `-h`                   | Print usage                                                     | -                                     |
+| `--version`, `-v`                | Print version                                                   | -                                     |
 
 The same launch flags are accepted by `agentico server`.
 
@@ -364,9 +364,9 @@ The same launch flags are accepted by `agentico server`.
 
 Run `agentico update` to upgrade to the latest stable release, or `agentico update [--check|-n]` to report the current and latest available versions without installing. The `--check` form (alias `-n`) exits `0` and prints an already-up-to-date message when you are already on the newest release.
 
-| Invocation | Description |
-|------------|-------------|
-| `agentico update` | Upgrade to the latest stable release |
+| Invocation                                       | Description                                  |
+| ------------------------------------------------ | -------------------------------------------- |
+| `agentico update`                                | Upgrade to the latest stable release         |
 | `agentico update --check` / `agentico update -n` | Check for a newer release without installing |
 
 ## State Directory Layout

@@ -1261,15 +1261,20 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 	rebaseControl.mu.Unlock()
 
 	featureInterrupted := false
-	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&
+	f, getErr := o.deps.Lifecycle.Get(featureID)
+	switch {
+	case getErr == nil &&
 		(f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) &&
-		hasActiveRepoCycles(f) {
+		hasActiveRepoCycles(f):
 		interruptFeature := hasInterruptibleRepoCycles(f)
 		if err := o.interruptActiveRepoCycles(featureID, interruptFeature); err != nil {
 			return fmt.Errorf("interrupt active repo cycles: %w", err)
 		}
 		featureInterrupted = interruptFeature
-	} else {
+	case getErr == nil && isSettledFeatureStatus(f.Status):
+		// Stop is idempotent when work completed after the caller's activity
+		// check, or when legacy state retains an inactive cycle marker.
+	default:
 		// Transition to interrupted FIRST so racing completion handlers
 		// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal
 		// state and skip their failure paths.
@@ -1311,6 +1316,16 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 		o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID})
 	}
 	return nil
+}
+
+func isSettledFeatureStatus(status feature.Status) bool {
+	switch status {
+	case feature.StatusCodeReady, feature.StatusPublished, feature.StatusDone,
+		feature.StatusFailed, feature.StatusInterrupted:
+		return true
+	default:
+		return false
+	}
 }
 
 // InterruptAllRunning iterates all features; running ones are interrupted
@@ -1380,15 +1395,18 @@ func (o *Orchestrator) InterruptAllRunning() error {
 	return nil
 }
 
-// hasActiveRepoCycles returns true if the feature has any running/reviewing
-// post-publish cycle. Legacy cycles live in RepoCycles; feature-level rebase,
-// review-comment, and refactor flows live only in ActiveCycle.
+// hasActiveRepoCycles returns true if the feature has any running, reviewing,
+// or input-paused post-publish cycle. Legacy cycles live in RepoCycles;
+// feature-level cycles live in ActiveCycle.
 func hasActiveRepoCycles(f *feature.Feature) bool {
-	if hasActiveFeatureLevelInterruptibleCycle(f) {
+	if f == nil {
+		return false
+	}
+	if f.ActiveCycle != nil && isActiveRepoCycleStatus(f.ActiveCycle.Status) {
 		return true
 	}
 	for _, rc := range f.RepoCycles {
-		if rc != nil && (rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing) {
+		if rc != nil && isActiveRepoCycleStatus(rc.Status) {
 			return true
 		}
 	}
@@ -1408,7 +1426,7 @@ func hasInterruptibleRepoCycles(f *feature.Feature) bool {
 		default:
 			continue
 		}
-		if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
+		if isActiveRepoCycleStatus(rc.Status) {
 			return true
 		}
 	}
@@ -1419,7 +1437,7 @@ func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
 	if f == nil || f.ActiveCycle == nil {
 		return false
 	}
-	if f.ActiveCycle.Status != feature.RepoCycleRunning && f.ActiveCycle.Status != feature.RepoCycleReviewing {
+	if !isActiveRepoCycleStatus(f.ActiveCycle.Status) {
 		return false
 	}
 	cycleType := f.ActiveCycle.Type
@@ -1434,19 +1452,27 @@ func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
 	}
 }
 
+func isActiveRepoCycleStatus(status string) bool {
+	switch status {
+	case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
+		return true
+	default:
+		return false
+	}
+}
+
 func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeature bool) error {
 	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 		for _, rc := range ff.RepoCycles {
 			if rc == nil {
 				continue
 			}
-			if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
+			if isActiveRepoCycleStatus(rc.Status) {
 				rc.Status = feature.RepoCycleInterrupted
 				rc.LastError = ""
 			}
 		}
-		if ff.ActiveCycle != nil &&
-			(ff.ActiveCycle.Status == feature.RepoCycleRunning || ff.ActiveCycle.Status == feature.RepoCycleReviewing) {
+		if ff.ActiveCycle != nil && isActiveRepoCycleStatus(ff.ActiveCycle.Status) {
 			ff.ActiveCycle.Status = feature.RepoCycleInterrupted
 			ff.ActiveCycle.LastError = ""
 		}

@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -1529,10 +1530,30 @@ func (s *Session) SendUserMessage(text string) error {
 	}
 	s.mu.Unlock()
 
+	var err error
 	if s.protocol != nil {
-		return s.protocol.SendUserMessage(text)
+		err = s.protocol.SendUserMessage(text)
+	} else {
+		err = s.writeJSON(llm.NewUserInput(text))
 	}
-	return s.writeJSON(llm.NewUserInput(text))
+	if err != nil {
+		return err
+	}
+
+	if s.Kind() == ports.KindChat && strings.TrimSpace(text) != "" {
+		s.messageLog.Append(llm.SDKMessage{
+			Type:            "user",
+			LocallyAppended: true,
+			User: &llm.UserMessage{Message: llm.ConversationMsg{
+				Role:    "user",
+				Content: []llm.ContentBlock{{Type: "text", Text: text}},
+			}},
+		})
+		if err := s.persistTranscriptTail(); err != nil {
+			log.Printf("session %s: persist chat user message: %v", s.id, err)
+		}
+	}
+	return nil
 }
 
 // RespondToControl sends a control response to a pending control request.

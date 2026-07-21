@@ -36,6 +36,9 @@ type TranscriptState =
   | { phase: 'loading'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'ready'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'error'; message: string; messages: TranscriptMessage[]; cursor: TranscriptCursor };
+type ConversationItem =
+  | { kind: 'message'; key: string; role: 'user' | 'assistant'; text: string }
+  | { kind: 'activity'; key: string; labels: string[] };
 
 const EMPTY_CURSOR: TranscriptCursor = { total: 0, start: 0, end: 0 };
 const MAX_TRANSCRIPT_MESSAGES = 200;
@@ -61,6 +64,7 @@ export function AmaDock({
     cursor: EMPTY_CURSOR,
   });
   const [message, setMessage] = useState('');
+  const [optimisticMessage, setOptimisticMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [confirmingEnd, setConfirmingEnd] = useState(false);
@@ -68,7 +72,10 @@ export function AmaDock({
   const [localDrafts, setLocalDrafts] = useState(emptyAttentionDrafts);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const confirmEndRef = useRef<HTMLButtonElement>(null);
+  const transcriptRef = useRef<HTMLElement>(null);
+  const stickToBottom = useRef(true);
   const subscriptionId = useRef<string | null>(null);
+  const subscriptionGeneration = useRef(0);
   const activeDrafts = attentionDrafts ?? localDrafts;
   const updateDrafts = setAttentionDrafts ?? setLocalDrafts;
 
@@ -78,10 +85,53 @@ export function AmaDock({
     [attentionItems],
   );
   const sessionActive = session !== null && !isTerminalChatStatus(session.status);
+  const conversation = useMemo(
+    () => buildConversation(transcript.messages, session?.initialPrompt, optimisticMessage),
+    [optimisticMessage, session?.initialPrompt, transcript.messages],
+  );
+  const lastConversationItem = conversation.at(-1);
+  const waitingForAssistant =
+    busy ||
+    (sessionActive &&
+      session?.turnState === 'running' &&
+      lastConversationItem?.kind !== 'message') ||
+    (sessionActive &&
+      lastConversationItem?.kind === 'message' &&
+      lastConversationItem.role === 'user');
+
+  useEffect(() => {
+    const element = transcriptRef.current;
+    if (element !== null && stickToBottom.current) element.scrollTop = element.scrollHeight;
+  }, [conversation, waitingForAssistant]);
 
   const persistDrawer = useCallback((next: DrawerMode) => {
     setDrawer(next);
     window.agentico.updateSettings({ ama: { drawer: next } }).catch(() => undefined);
+  }, []);
+
+  const closeOutputSubscription = useCallback(() => {
+    subscriptionGeneration.current += 1;
+    const id = subscriptionId.current;
+    subscriptionId.current = null;
+    if (id !== null) void window.agentico.cancelSessionOutput(id);
+  }, []);
+
+  const replaceOutputSubscription = useCallback(async (from: number): Promise<void> => {
+    const generation = subscriptionGeneration.current + 1;
+    subscriptionGeneration.current = generation;
+    const previous = subscriptionId.current;
+    subscriptionId.current = null;
+    if (previous !== null) void window.agentico.cancelSessionOutput(previous);
+
+    const opened = await window.agentico.openSessionOutput({
+      sessionId: CHAT_SESSION_ID,
+      from,
+    });
+    if (subscriptionGeneration.current !== generation) {
+      void window.agentico.cancelSessionOutput(opened.subscriptionId);
+      return;
+    }
+    subscriptionId.current = opened.subscriptionId;
   }, []);
 
   const refreshSession = useCallback(async () => {
@@ -143,28 +193,17 @@ export function AmaDock({
     void loadTranscript().then(async (from) => {
       if (cancelled || from === null) return;
       try {
-        const opened = await window.agentico.openSessionOutput({
-          sessionId: CHAT_SESSION_ID,
-          from,
-        });
-        if (cancelled) {
-          void window.agentico.cancelSessionOutput(opened.subscriptionId);
-          return;
-        }
-        subscriptionId.current = opened.subscriptionId;
+        await replaceOutputSubscription(from);
+        if (!cancelled) await loadTranscript();
       } catch {
-        subscriptionId.current = null;
+        // A chat may not exist yet. Sending a message retries the subscription.
       }
     });
     return () => {
       cancelled = true;
-      const id = subscriptionId.current;
-      subscriptionId.current = null;
-      if (id !== null) {
-        void window.agentico.cancelSessionOutput(id);
-      }
+      closeOutputSubscription();
     };
-  }, [drawer, loadTranscript, refreshSession]);
+  }, [closeOutputSubscription, drawer, loadTranscript, refreshSession, replaceOutputSubscription]);
 
   useEffect(
     () =>
@@ -195,6 +234,7 @@ export function AmaDock({
             },
           }));
           void refreshSession();
+          void loadTranscript();
         } else {
           setTranscript((current) => ({
             phase: 'error',
@@ -204,22 +244,35 @@ export function AmaDock({
           }));
         }
       }),
-    [refreshSession],
+    [loadTranscript, refreshSession],
   );
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     const text = message.trim();
     if (text === '' || busy) return;
+    setOptimisticMessage(text);
+    setMessage('');
+    stickToBottom.current = true;
     setBusy(true);
     setNotice('');
+    persistDrawer('expanded');
     try {
       await window.agentico.startChat({ message: text });
-      setMessage('');
-      persistDrawer('expanded');
       await refreshSession();
-      await loadTranscript();
+      const from = await loadTranscript();
+      if (from !== null) {
+        try {
+          await replaceOutputSubscription(from);
+          await loadTranscript();
+        } catch {
+          setNotice('Message sent, but live updates could not reconnect. Reopen AMA to retry.');
+        }
+      }
+      setOptimisticMessage(null);
     } catch (error) {
+      setOptimisticMessage(null);
+      setMessage(text);
       setNotice(error instanceof Error ? error.message : 'Could not send AMA message.');
     } finally {
       setBusy(false);
@@ -311,19 +364,68 @@ export function AmaDock({
           </button>
         ) : null}
       </header>
-      <form className="ama-dock__composer" onSubmit={(event) => void submit(event)}>
-        <textarea
-          ref={inputRef}
-          aria-label="Ask Agentico"
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          placeholder="Ask about this workspace"
-          rows={1}
-        />
-        <button type="submit" disabled={busy || message.trim() === ''}>
-          Send
-        </button>
-      </form>
+      {drawer === 'expanded' ? (
+        <div className="ama-dock__drawer" data-has-attention={amaAttentionItems.length > 0}>
+          {amaAttentionItems.length > 0 ? (
+            <section className="ama-dock__attention" aria-label="AMA questions">
+              {amaAttentionItems.map((item) => (
+                <div key={`${item.kind}:${item.id}`} className="ama-dock__attention-item">
+                  <AttentionDetail
+                    item={item}
+                    busy={attentionBusy === item.id}
+                    drafts={activeDrafts}
+                    setDrafts={updateDrafts}
+                    submit={(action, options) => void submitAttention(item.id, action, options)}
+                    saveDraft={(action, options) => saveDraft(item.id, action, options)}
+                  />
+                </div>
+              ))}
+            </section>
+          ) : null}
+          <section
+            ref={transcriptRef}
+            className="ama-dock__transcript"
+            aria-label="AMA transcript"
+            aria-live="polite"
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              stickToBottom.current =
+                element.scrollHeight - element.scrollTop - element.clientHeight < 40;
+            }}
+          >
+            {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
+            {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
+            {conversation.length === 0 && !waitingForAssistant ? (
+              <div className="ama-dock__empty">
+                <strong>Ask anything about this workspace.</strong>
+                <span>
+                  I can inspect the project, explain what is happening, and help you decide what to
+                  do next.
+                </span>
+              </div>
+            ) : null}
+            {conversation.map((item, index) =>
+              item.kind === 'message' ? (
+                <article key={item.key} className="ama-dock__message" data-role={item.role}>
+                  <span className="ama-dock__message-role">
+                    {item.role === 'user' ? 'You' : 'Agentico'}
+                  </span>
+                  <p>{item.text}</p>
+                </article>
+              ) : (
+                <ActivityIndicator
+                  key={item.key}
+                  labels={item.labels}
+                  active={waitingForAssistant && index === conversation.length - 1}
+                />
+              ),
+            )}
+            {waitingForAssistant && conversation.at(-1)?.kind !== 'activity' ? (
+              <ActivityIndicator labels={[]} active />
+            ) : null}
+          </section>
+        </div>
+      ) : null}
       {notice !== '' ? (
         <p className="ama-dock__notice" role="status" aria-live="polite">
           {notice}
@@ -359,40 +461,24 @@ export function AmaDock({
           </div>
         </div>
       ) : null}
-      {drawer === 'expanded' ? (
-        <div className="ama-dock__drawer" data-has-attention={amaAttentionItems.length > 0}>
-          {amaAttentionItems.length > 0 ? (
-            <section className="ama-dock__attention" aria-label="AMA questions">
-              {amaAttentionItems.map((item) => (
-                <div key={`${item.kind}:${item.id}`} className="ama-dock__attention-item">
-                  <AttentionDetail
-                    item={item}
-                    busy={attentionBusy === item.id}
-                    drafts={activeDrafts}
-                    setDrafts={updateDrafts}
-                    submit={(action, options) => void submitAttention(item.id, action, options)}
-                    saveDraft={(action, options) => saveDraft(item.id, action, options)}
-                  />
-                </div>
-              ))}
-            </section>
-          ) : null}
-          <section className="ama-dock__transcript" aria-label="AMA transcript">
-            {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
-            {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
-            {transcript.messages.length === 0 ? (
-              <p className="ama-dock__empty">No AMA transcript yet.</p>
-            ) : (
-              transcript.messages.map((entry) => (
-                <article key={entry.index} className="ama-dock__message" data-role={entry.role}>
-                  <span className="ama-dock__message-role">{entry.role}</span>
-                  <p>{messageText(entry)}</p>
-                </article>
-              ))
-            )}
-          </section>
-        </div>
-      ) : null}
+      <form className="ama-dock__composer" onSubmit={(event) => void submit(event)}>
+        <textarea
+          ref={inputRef}
+          aria-label="Ask Agentico"
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            event.currentTarget.form?.requestSubmit();
+          }}
+          placeholder="Ask about this workspace"
+          rows={1}
+        />
+        <button type="submit" disabled={busy || message.trim() === ''}>
+          Send
+        </button>
+      </form>
     </aside>
   );
 }
@@ -408,13 +494,113 @@ function upsertMessage(
     .slice(-MAX_TRANSCRIPT_MESSAGES);
 }
 
-function messageText(entry: TranscriptMessage): string {
+function buildConversation(
+  messages: readonly TranscriptMessage[],
+  initialPrompt?: string,
+  optimisticMessage?: string | null,
+): ConversationItem[] {
+  const items: ConversationItem[] = [];
+  const initial = initialPrompt?.trim();
+  const visibleUserMessages = messages.filter(
+    (entry) => entry.role.toLocaleLowerCase() === 'user' && entry.text?.trim() !== '',
+  );
+
+  if (
+    initial !== undefined &&
+    initial !== '' &&
+    !visibleUserMessages.some((entry) => entry.text?.trim() === initial)
+  ) {
+    items.push({ kind: 'message', key: 'initial-prompt', role: 'user', text: initial });
+  }
+
+  for (const entry of messages) {
+    const role = entry.role.toLocaleLowerCase();
+    const text = entry.text?.trim();
+    const operational =
+      entry.tool !== undefined ||
+      entry.toolCall !== undefined ||
+      entry.task !== undefined ||
+      entry.type.toLocaleLowerCase().includes('tool') ||
+      entry.type.toLocaleLowerCase().includes('task');
+    if (
+      (role === 'user' || (role === 'assistant' && !operational)) &&
+      text !== undefined &&
+      text !== ''
+    ) {
+      items.push({
+        kind: 'message',
+        key: `message-${entry.index}`,
+        role,
+        text,
+      });
+      continue;
+    }
+
+    const label = activityLabel(entry);
+    if (label === null) continue;
+    const previous = items.at(-1);
+    if (previous?.kind === 'activity') {
+      if (!previous.labels.includes(label)) previous.labels.push(label);
+    } else {
+      items.push({ kind: 'activity', key: `activity-${entry.index}`, labels: [label] });
+    }
+  }
+
+  const optimistic = optimisticMessage?.trim();
+  if (
+    optimistic !== undefined &&
+    optimistic !== '' &&
+    !items.some(
+      (item) => item.kind === 'message' && item.role === 'user' && item.text === optimistic,
+    )
+  ) {
+    items.push({ kind: 'message', key: 'optimistic-message', role: 'user', text: optimistic });
+  }
+  return items;
+}
+
+function activityLabel(entry: TranscriptMessage): string | null {
+  const type = entry.type.toLocaleLowerCase();
+  if (['usage_update', 'success', 'result', 'system'].includes(type)) return null;
+
+  const tool = entry.tool ?? entry.task?.lastToolName;
+  if (tool !== undefined && tool.trim() !== '') return `Using ${friendlyToolName(tool)}`;
+  if (entry.task?.description?.trim()) return entry.task.description.trim();
+  if (entry.toolCall?.summary?.trim()) return entry.toolCall.summary.trim();
+  if (type === 'read') {
+    const target = entry.text?.split(/[\\/]/).at(-1)?.trim();
+    return target ? `Reading ${target}` : 'Reading workspace files';
+  }
+  if (type.includes('tool')) return 'Using a workspace tool';
+  if (type.includes('task')) return 'Working on a task';
+  return null;
+}
+
+function friendlyToolName(tool: string): string {
+  return tool
+    .trim()
+    .replaceAll('_', ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLocaleLowerCase();
+}
+
+function ActivityIndicator({ labels, active }: { labels: string[]; active: boolean }) {
+  const shownLabels = labels.slice(-3);
   return (
-    entry.text ??
-    entry.task?.summary ??
-    entry.toolCall?.summary ??
-    entry.tool ??
-    entry.status ??
-    entry.type
+    <div className="ama-dock__activity" data-active={active} role={active ? 'status' : undefined}>
+      <span className="ama-dock__thinking" aria-hidden="true">
+        {Array.from({ length: 8 }, (_, index) => (
+          <span key={index} />
+        ))}
+      </span>
+      <div className="ama-dock__activity-copy">
+        <strong>{active ? 'Working' : 'Worked'}</strong>
+        {shownLabels.length > 0 ? (
+          <span>{shownLabels.join(' · ')}</span>
+        ) : (
+          <span>Thinking through your question</span>
+        )}
+      </div>
+    </div>
   );
 }

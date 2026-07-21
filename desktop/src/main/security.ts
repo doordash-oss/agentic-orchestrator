@@ -80,6 +80,17 @@ export function originOf(url: string): string | null {
   if (parsed.protocol === 'file:') {
     return 'file://';
   }
+  // Node treats non-special schemes as opaque even when Electron registered
+  // them as standard schemes. Reconstruct the tuple origin Electron uses so
+  // packaged renderer IPC and navigation checks remain origin-bound.
+  if (
+    parsed.origin === 'null' &&
+    parsed.hostname !== '' &&
+    parsed.username === '' &&
+    parsed.password === ''
+  ) {
+    return `${parsed.protocol}//${parsed.host}`;
+  }
   return parsed.origin;
 }
 

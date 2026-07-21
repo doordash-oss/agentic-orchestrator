@@ -21,7 +21,9 @@ electronFuses:
   enableNodeCliInspectArguments: false
   enableEmbeddedAsarIntegrityValidation: true
   onlyLoadAppFromAsar: true
-  loadBrowserProcessSpecificV8Snapshot: true
+  # Standard Electron packages do not ship browser_v8_context_snapshot.bin;
+  # enabling this fuse makes the browser process fail before main starts.
+  loadBrowserProcessSpecificV8Snapshot: false
   grantFileProtocolExtraPrivileges: false
 npmRebuild: false
 # No publishing or update delivery: a null publish config also stops

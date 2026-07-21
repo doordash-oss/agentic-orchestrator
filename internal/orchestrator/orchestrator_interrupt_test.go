@@ -150,6 +150,45 @@ func TestOrchestrator_InterruptFeature_NoSessions(t *testing.T) {
 	assertLifecycleCall(t, lc, "Transition")
 }
 
+func TestOrchestrator_InterruptFeature_SettledFeatureIsIdempotent(t *testing.T) {
+	for _, status := range []feature.Status{
+		feature.StatusCodeReady,
+		feature.StatusPublished,
+		feature.StatusDone,
+		feature.StatusFailed,
+		feature.StatusInterrupted,
+	} {
+		t.Run(status.String(), func(t *testing.T) {
+			f := &feature.Feature{
+				ID:     "feat-settled",
+				Status: status,
+				ActiveCycle: &feature.CycleState{
+					Type:   "tweak",
+					Status: feature.RepoCycleInterrupted,
+				},
+			}
+			f.SetActiveCycleType("tweak")
+			lc := lifecycleForFeature(f)
+			fs := newFeatureStore(f)
+			o := orchestrator.New(orchestrator.Deps{
+				Lifecycle: lc,
+				Store:     fs,
+				Sessions:  mocks.NewMockSessionManager(),
+			}, orchestrator.Hooks{})
+
+			if err := o.InterruptFeature(f.ID); err != nil {
+				t.Fatalf("InterruptFeature: %v", err)
+			}
+			if f.Status != status {
+				t.Fatalf("status = %s, want unchanged %s", f.Status, status)
+			}
+			if call := findInterruptLifecycleCall(lc, "Transition"); call != nil {
+				t.Fatalf("Transition called for settled feature: %+v", call)
+			}
+		})
+	}
+}
+
 func TestOrchestrator_InterruptFeature_CodeReadyFeatureLevelRebaseCycle(t *testing.T) {
 	f := &feature.Feature{
 		ID:     "feat-rebase-active",
@@ -311,6 +350,7 @@ func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
 			"r1": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 			"r2": {Type: feature.CycleReviewComments, Status: feature.RepoCycleReviewing},
 			"r3": {Type: feature.CycleReviewComments, Status: kbStatusCompleted},
+			"r4": {Type: feature.CycleReviewComments, Status: feature.RepoCycleNeedUserInput},
 		},
 	}
 
@@ -339,6 +379,9 @@ func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
 	}
 	if published.RepoCycles["r2"].Status != feature.RepoCycleInterrupted {
 		t.Errorf("r2 Status = %q, want interrupted", published.RepoCycles["r2"].Status)
+	}
+	if published.RepoCycles["r4"].Status != feature.RepoCycleInterrupted {
+		t.Errorf("r4 Status = %q, want interrupted", published.RepoCycles["r4"].Status)
 	}
 	// completed cycle unchanged.
 	if published.RepoCycles["r3"].Status != kbStatusCompleted {

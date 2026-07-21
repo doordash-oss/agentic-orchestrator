@@ -8,6 +8,7 @@ import {
   displayStatusLabel,
   featureBranch,
   fieldForCreationError,
+  groupDashboardFeatures,
   isReadyToStart,
   orderDashboardFeatures,
   setupProgress,
@@ -86,6 +87,27 @@ describe('intervention-first dashboard ordering', () => {
     expect(
       dashboardState(snapshot('ready', 'UnexpectedStatus', '2026-07-15T08:00:00Z', true)),
     ).toStrictEqual({ bucket: 'startable', label: 'Ready to start', tone: 'ready' });
+  });
+
+  it('groups dashboard rows into in-progress, published, and done sections', () => {
+    const features = [
+      snapshot('published', 'Published', '2026-07-15T08:00:00Z'),
+      snapshot('failed', 'Failed', '2026-07-14T08:00:00Z'),
+      snapshot('done', 'Done', '2026-07-13T08:00:00Z'),
+      snapshot('ready', 'CodeReady', '2026-07-12T08:00:00Z'),
+    ];
+
+    expect(
+      groupDashboardFeatures(features).map((group) => ({
+        id: group.id,
+        label: group.label,
+        featureIds: group.features.map((feature) => feature.id),
+      })),
+    ).toStrictEqual([
+      { id: 'in-progress', label: 'In Progress', featureIds: ['failed', 'ready'] },
+      { id: 'published', label: 'Published', featureIds: ['published'] },
+      { id: 'done', label: 'Done', featureIds: ['done'] },
+    ]);
   });
 });
 

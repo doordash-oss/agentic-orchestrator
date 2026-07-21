@@ -7,11 +7,18 @@ import type { FeatureSnapshot, FeatureSetupView } from '../../../shared/ipc';
 
 export type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
 export type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
+export type DashboardGroupId = 'in-progress' | 'published' | 'done';
 
 export interface DashboardState {
   bucket: DashboardBucket;
   label: string;
   tone: DashboardTone;
+}
+
+export interface DashboardGroup {
+  id: DashboardGroupId;
+  label: string;
+  features: FeatureSnapshot[];
 }
 
 const STATUS_LABELS: Readonly<Record<string, string>> = {
@@ -101,6 +108,26 @@ export function orderDashboardFeatures(features: readonly FeatureSnapshot[]): Fe
       return idDelta === 0 ? left.index - right.index : idDelta;
     })
     .map(({ feature }) => feature);
+}
+
+const DASHBOARD_GROUPS: readonly { id: DashboardGroupId; label: string }[] = [
+  { id: 'in-progress', label: 'In Progress' },
+  { id: 'published', label: 'Published' },
+  { id: 'done', label: 'Done' },
+];
+
+export function dashboardGroupId(snapshot: FeatureSnapshot): DashboardGroupId {
+  if (snapshot.status === 'Done') return 'done';
+  if (snapshot.status === 'Published') return 'published';
+  return 'in-progress';
+}
+
+/** Groups already-ordered dashboard features into the home screen sections. */
+export function groupDashboardFeatures(features: readonly FeatureSnapshot[]): DashboardGroup[] {
+  return DASHBOARD_GROUPS.map((group) => ({
+    ...group,
+    features: features.filter((feature) => dashboardGroupId(feature) === group.id),
+  })).filter((group) => group.features.length > 0);
 }
 
 export interface SpineStage {

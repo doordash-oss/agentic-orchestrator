@@ -261,7 +261,8 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	}
 	status := f.Status
 	running := status.IsRunning()
-	activeCycle := f.HasActiveRepoCycles() || f.ActiveCycleType() != ""
+	cyclePresent := f.HasActiveRepoCycles() || f.ActiveCycleType() != ""
+	stoppableCycle := f.HasActiveRepoCycles() || hasActiveFeatureCycle(f)
 	publishedOrManualReady := status == feature.StatusPublished ||
 		(status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
 
@@ -288,13 +289,13 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	repoRequired := ActionScopeDTO{Type: entityFeature, RepoSelection: "required"}
 
 	canSetup := setupActionEligible(f)
-	canStart := !running && !activeCycle && (status == feature.StatusCreated ||
+	canStart := !running && !cyclePresent && (status == feature.StatusCreated ||
 		status == feature.StatusInquireReady ||
 		status == feature.StatusPlanReady ||
 		status == feature.StatusDesignReady ||
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
-	canStop := running || activeCycle
+	canStop := running || stoppableCycle
 	canResume := status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != "" ||
@@ -303,8 +304,8 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
-	canPostPublishCycle := publishedOrManualReady && !activeCycle
-	canRefactor := publishedOrManualReady && !activeCycle
+	canPostPublishCycle := publishedOrManualReady && !cyclePresent
+	canRefactor := publishedOrManualReady && !cyclePresent
 	canRetry := status == feature.StatusFailed
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
@@ -339,6 +340,18 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
 		}, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"}),
 		action(actionDelete, canDelete, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"}),
+	}
+}
+
+func hasActiveFeatureCycle(f *feature.Feature) bool {
+	if f == nil || f.ActiveCycle == nil {
+		return false
+	}
+	switch f.ActiveCycle.Status {
+	case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
+		return true
+	default:
+		return false
 	}
 }
 

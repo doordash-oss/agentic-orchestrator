@@ -25,7 +25,12 @@ import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
 import { SettingsPanel } from './SettingsPanel';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
-import { dashboardState, displayStatusLabel, orderDashboardFeatures } from './featureView';
+import {
+  dashboardState,
+  displayStatusLabel,
+  groupDashboardFeatures,
+  orderDashboardFeatures,
+} from './featureView';
 import { BulkPreviewPanel } from './BulkPreviewPanel';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
 
@@ -766,62 +771,77 @@ function FeatureList({
           </button>
         </div>
       ) : (
-        <ul className="feature-list__items">
-          {state.features.map((feature) => {
-            const rowState = dashboardState(feature);
-            const attentionCount = attentionByFeature.get(feature.id) ?? 0;
-            return (
-              <li key={feature.id} className="feature-list__item" data-tone={rowState.tone}>
-                <span className="feature-list__signal" aria-hidden="true" />
-                <div className="feature-list__facts">
-                  <div className="feature-list__heading">
-                    <span className="feature-list__name">{feature.name}</span>
-                    <span className="feature-list__state" data-tone={rowState.tone}>
-                      <span aria-hidden="true">{rowState.bucket === 'active' ? '◉' : '◆'}</span>{' '}
-                      {rowState.label}
-                    </span>
-                    <AttentionBadge
-                      count={attentionCount}
-                      label={`Blocking input for ${feature.name}`}
-                    />
-                  </div>
-                  <dl className="feature-list__details">
-                    <div>
-                      <dt>Repository</dt>
-                      <dd>{feature.repos.join(', ')}</dd>
-                    </div>
-                    <div>
-                      <dt>Status</dt>
-                      <dd>{displayStatusLabel(feature.status)}</dd>
-                    </div>
-                    <div>
-                      <dt>Current phase</dt>
-                      <dd>{feature.currentPhase || 'Not started'}</dd>
-                    </div>
-                    <div>
-                      <dt>Priority</dt>
-                      <dd>
-                        {rowState.bucket === 'intervention' ? 'Intervention' : rowState.label}
-                      </dd>
-                    </div>
-                  </dl>
-                  {feature.failure?.message !== undefined ? (
-                    <p className="feature-list__failure">
-                      <span aria-hidden="true">!</span> {feature.failure.message}
-                    </p>
-                  ) : null}
-                </div>
-                <button
-                  type="button"
-                  className="setup-wizard__action"
-                  onClick={() => onOpen(feature.id, feature.name)}
-                >
-                  {openTabIds.includes(feature.id) ? 'Show tab' : 'Open'}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="feature-list__groups">
+          {groupDashboardFeatures(state.features).map((group) => (
+            <section
+              key={group.id}
+              className="feature-list__group"
+              aria-labelledby={`feature-list-group-${group.id}`}
+            >
+              <h3 id={`feature-list-group-${group.id}`} className="feature-list__group-title">
+                {group.label}
+              </h3>
+              <ul className="feature-list__items">
+                {group.features.map((feature) => {
+                  const rowState = dashboardState(feature);
+                  const attentionCount = attentionByFeature.get(feature.id) ?? 0;
+                  return (
+                    <li key={feature.id} className="feature-list__item" data-tone={rowState.tone}>
+                      <span className="feature-list__signal" aria-hidden="true" />
+                      <div className="feature-list__facts">
+                        <div className="feature-list__heading">
+                          <span className="feature-list__name">{feature.name}</span>
+                          <span className="feature-list__state" data-tone={rowState.tone}>
+                            <span aria-hidden="true">
+                              {rowState.bucket === 'active' ? '◉' : '◆'}
+                            </span>{' '}
+                            {rowState.label}
+                          </span>
+                          <AttentionBadge
+                            count={attentionCount}
+                            label={`Blocking input for ${feature.name}`}
+                          />
+                        </div>
+                        <dl className="feature-list__details">
+                          <div>
+                            <dt>Repository</dt>
+                            <dd>{feature.repos.join(', ')}</dd>
+                          </div>
+                          <div>
+                            <dt>Status</dt>
+                            <dd>{displayStatusLabel(feature.status)}</dd>
+                          </div>
+                          <div>
+                            <dt>Current phase</dt>
+                            <dd>{feature.currentPhase || 'Not started'}</dd>
+                          </div>
+                          <div>
+                            <dt>Priority</dt>
+                            <dd>
+                              {rowState.bucket === 'intervention' ? 'Intervention' : rowState.label}
+                            </dd>
+                          </div>
+                        </dl>
+                        {feature.failure?.message !== undefined ? (
+                          <p className="feature-list__failure">
+                            <span aria-hidden="true">!</span> {feature.failure.message}
+                          </p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="setup-wizard__action"
+                        onClick={() => onOpen(feature.id, feature.name)}
+                      >
+                        {openTabIds.includes(feature.id) ? 'Show tab' : 'Open'}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
       )}
     </section>
   );

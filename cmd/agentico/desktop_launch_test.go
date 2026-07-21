@@ -21,21 +21,48 @@ import (
 	"testing"
 )
 
-func TestDesktopLaunchCommandUsesRegisteredApplication(t *testing.T) {
+func TestDesktopLaunchCommandPrefersInstalledApplication(t *testing.T) {
 	tests := []struct {
 		name     string
 		goos     string
+		homeDir  string
+		existing []string
 		wantName string
 		wantArgs []string
 		wantErr  bool
 	}{
-		{name: "macOS bundle", goos: "darwin", wantName: "open", wantArgs: []string{"-b", "com.doordash.agentico"}},
+		{
+			name:     "macOS system install",
+			goos:     "darwin",
+			homeDir:  "/Users/tester",
+			existing: []string{"/Applications/Agentico.app"},
+			wantName: "open",
+			wantArgs: []string{"/Applications/Agentico.app"},
+		},
+		{
+			name:     "macOS user install",
+			goos:     "darwin",
+			homeDir:  "/Users/tester",
+			existing: []string{"/Users/tester/Applications/Agentico.app"},
+			wantName: "open",
+			wantArgs: []string{"/Users/tester/Applications/Agentico.app"},
+		},
+		{
+			name:     "macOS registered fallback",
+			goos:     "darwin",
+			homeDir:  "/Users/tester",
+			wantName: "open",
+			wantArgs: []string{"-b", "com.doordash.agentico"},
+		},
 		{name: "Linux protocol", goos: "linux", wantName: "xdg-open", wantArgs: []string{"agentico://"}},
 		{name: "unsupported platform", goos: "windows", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name, args, err := desktopLaunchCommand(tt.goos)
+			exists := func(candidate string) bool {
+				return slices.Contains(tt.existing, candidate)
+			}
+			name, args, err := desktopLaunchCommandFor(tt.goos, tt.homeDir, exists)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("desktopLaunchCommand(%q) error = %v, wantErr %v", tt.goos, err, tt.wantErr)
 			}

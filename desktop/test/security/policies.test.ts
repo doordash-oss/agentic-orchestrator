@@ -12,6 +12,7 @@ import {
   isSafeExternalUrl,
   mainWindowWebPreferences,
   openExternalSafely,
+  originOf,
   permissionRequestPolicy,
   resolveWithinRoot,
   windowOpenPolicy,
@@ -58,6 +59,9 @@ describe('isAllowedNavigation', () => {
   it('allows navigation within the app origin only', () => {
     expect(isAllowedNavigation(`${devOrigin}/index.html`, devOrigin)).toBe(true);
     expect(isAllowedNavigation('file:///app/out/renderer/index.html', 'file://')).toBe(true);
+    expect(isAllowedNavigation('agentico-app://bundle/index.html', 'agentico-app://bundle')).toBe(
+      true,
+    );
   });
 
   it('denies external, scheme-swapped, and javascript navigations', () => {
@@ -66,6 +70,12 @@ describe('isAllowedNavigation', () => {
     expect(isAllowedNavigation('javascript:alert(1)', devOrigin)).toBe(false);
     expect(isAllowedNavigation('file:///etc/passwd', devOrigin)).toBe(false);
     expect(isAllowedNavigation('not a url', devOrigin)).toBe(false);
+  });
+});
+
+describe('originOf', () => {
+  it('normalizes Electron standard custom schemes to their tuple origin', () => {
+    expect(originOf('agentico-app://bundle/assets/app.js')).toBe('agentico-app://bundle');
   });
 });
 

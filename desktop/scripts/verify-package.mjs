@@ -21,6 +21,7 @@
 // instead of re-deriving it. The identity-rejection logic itself is
 // unit-tested in scripts/lib/identity.test.mjs against tampered fixtures.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   accessSync,
   constants,
@@ -76,6 +77,9 @@ function verifyResources(resourcesDir, { expectUniversalBinary }) {
   const asarPath = join(resourcesDir, 'app.asar');
   if (!existsSync(asarPath)) {
     fail(`missing app.asar in ${resourcesDir}`);
+  }
+  if (process.platform === 'darwin' && expectUniversalBinary) {
+    verifyMacAsarIntegrity(resourcesDir, asarPath);
   }
   const asar = require('@electron/asar');
   const entries = asar.listPackage(asarPath).map((entry) => entry.replaceAll('\\', '/'));
@@ -157,6 +161,49 @@ function verifyResources(resourcesDir, { expectUniversalBinary }) {
   return identity;
 }
 
+function verifyMacAsarIntegrity(resourcesDir, asarPath) {
+  // Electron validates the serialized ASAR header, matching the algorithm
+  // used by electron-builder and @electron/universal. A whole-file digest is
+  // a different value and would make a valid archive fail closed at launch.
+  const asar = require('@electron/asar');
+  const actual = createHash('sha256')
+    .update(asar.getRawHeader(asarPath).headerString)
+    .digest('hex');
+  const appDir = dirname(resourcesDir);
+  const declarations = [];
+  const pending = [appDir];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const candidate = join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(candidate);
+      } else if (entry.isFile() && entry.name === 'Info.plist') {
+        try {
+          const expected = execFileSync(
+            '/usr/libexec/PlistBuddy',
+            ['-c', 'Print :ElectronAsarIntegrity:Resources/app.asar:hash', candidate],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+          ).trim();
+          declarations.push({ path: candidate, expected });
+        } catch {
+          // Not every nested bundle carries the app ASAR declaration.
+        }
+      }
+    }
+  }
+  if (declarations.length === 0) {
+    fail(`macOS app has no embedded ASAR integrity declarations under ${appDir}`);
+  }
+  const mismatch = declarations.find(({ expected }) => expected !== actual);
+  if (mismatch !== undefined) {
+    fail(
+      `macOS embedded ASAR integrity mismatch in ${mismatch.path}: ` +
+        `Info.plist=${mismatch.expected}, app.asar=${actual}`,
+    );
+  }
+}
+
 async function verifyDmg(dmgPath) {
   const mountPoint = mkdtempSync(join(tmpdir(), 'agentico-verify-dmg-'));
   execFileSync(
@@ -171,6 +218,7 @@ async function verifyDmg(dmgPath) {
     if (!existsSync(appDir)) {
       fail(`DMG does not contain Agentico.app (${dmgPath})`);
     }
+    verifyMacAppSignature(appDir);
     await verifyElectronFuses(join(appDir, 'Contents', 'MacOS', 'Agentico'));
     return verifyResources(join(appDir, 'Contents', 'Resources'), {
       expectUniversalBinary: true,
@@ -225,12 +273,26 @@ async function verifyUnpackedApp(executablePath) {
   if (!existsSync(executablePath)) {
     fail(`expected unpacked app for packaged E2E at ${executablePath}`);
   }
+  if (process.platform === 'darwin') {
+    verifyMacAppSignature(dirname(dirname(dirname(executablePath))));
+  }
   await verifyElectronFuses(executablePath);
   const resourcesDir =
     process.platform === 'darwin'
       ? join(dirname(dirname(executablePath)), 'Resources')
       : join(dirname(executablePath), 'resources');
   return verifyResources(resourcesDir, { expectUniversalBinary: process.platform === 'darwin' });
+}
+
+function verifyMacAppSignature(appDir) {
+  try {
+    execFileSync('codesign', ['--verify', '--deep', '--strict', appDir], { stdio: 'pipe' });
+  } catch (error) {
+    const detail = error.stderr?.toString().trim();
+    fail(
+      `macOS app is not runnable with a valid code signature (${appDir})${detail ? `: ${detail}` : ''}`,
+    );
+  }
 }
 
 async function verifyElectronFuses(executablePath) {

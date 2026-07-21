@@ -3,7 +3,7 @@ import { isTrustedSender, type TrustedSender } from '../../src/main/security';
 
 const trusted: TrustedSender = {
   webContentsId: 7,
-  allowedOrigins: new Set(['http://localhost:5173', 'file://']),
+  allowedOrigins: new Set(['http://localhost:5173', 'file://', 'agentico-app://bundle']),
 };
 
 function event(senderId: number, frameUrl: string | null) {
@@ -17,6 +17,7 @@ describe('isTrustedSender', () => {
   it('accepts the main window webContents with an app-origin frame', () => {
     expect(isTrustedSender(event(7, 'http://localhost:5173/index.html'), trusted)).toBe(true);
     expect(isTrustedSender(event(7, 'file:///app/out/renderer/index.html'), trusted)).toBe(true);
+    expect(isTrustedSender(event(7, 'agentico-app://bundle/index.html'), trusted)).toBe(true);
   });
 
   it('rejects a different webContents id', () => {

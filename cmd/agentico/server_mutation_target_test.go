@@ -625,8 +625,8 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	if start.id != serverChatSessionID || start.featureID != serverChatSessionID || start.phase != feature.PhaseResearch || start.workdir != testWorkspaceDir {
 		t.Fatalf("StartSession call = %+v, want chat utility identity and research session in workspace", start)
 	}
-	if start.opts == nil || start.opts.Kind != ports.KindChat || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != chatName || start.opts.InitialPrompt != build.Prompt {
-		t.Fatalf("StartSession opts = %+v, want chat-kind interactive session with initial prompt", start.opts)
+	if start.opts == nil || start.opts.Kind != ports.KindChat || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != chatName || start.opts.InitialPrompt != "What is running?" {
+		t.Fatalf("StartSession opts = %+v, want chat-kind interactive session with the user-visible prompt", start.opts)
 	}
 	if start.opts.StderrPath != filepath.Join(stateDir, chatName, "stderr.log") {
 		t.Fatalf("StartSession StderrPath = %q, want chat stderr capture", start.opts.StderrPath)

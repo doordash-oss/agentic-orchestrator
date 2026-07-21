@@ -77,7 +77,11 @@ export interface GatewayTimeouts {
 
 const DEFAULT_TIMEOUTS: GatewayTimeouts = {
   healthProbeMs: 1500,
-  launchReadyMs: 20000,
+  // Server bootstrap performs bounded provider readiness checks before its
+  // concurrent model-catalog discovery, whose own ceiling is 45 seconds.
+  // Leave enough room for those legitimate stages plus filesystem setup while
+  // retaining a finite bound that reaps a genuinely hung bundled child.
+  launchReadyMs: 90000,
   pollIntervalMs: 250,
   shutdownGraceMs: 5000,
   apiRequestMs: 30000,
@@ -937,7 +941,9 @@ export class RuntimeGateway {
     try {
       const result = await this.deps.fetchJson(`${trimBase(baseUrl)}/api/v1/readiness`, {
         token: this.token,
-        timeoutMs: this.timeouts.healthProbeMs,
+        // The first readiness request may perform bounded provider CLI probes.
+        // It is authenticated API work, not the tiny liveness health check.
+        timeoutMs: this.timeouts.apiRequestMs,
       });
       return result.status === 200;
     } catch {

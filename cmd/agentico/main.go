@@ -1404,7 +1404,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	if sessOpts == nil {
 		sessOpts = &ports.SessionOpts{}
 	}
-	sessOpts.InitialPrompt = prompt
+	sessOpts.InitialPrompt = message
 	sessOpts.Kind = ports.KindChat
 	sessOpts.TurnMode = ports.TurnModeInteractive
 	sessOpts.Label = chatName

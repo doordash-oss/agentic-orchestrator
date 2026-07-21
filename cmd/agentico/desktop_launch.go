@@ -17,7 +17,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -52,8 +54,29 @@ func runDesktopLaunchCommand(ctx context.Context, name string, args []string) er
 }
 
 func desktopLaunchCommand(goos string) (string, []string, error) {
+	homeDir, _ := os.UserHomeDir()
+	return desktopLaunchCommandFor(goos, homeDir, func(candidate string) bool {
+		info, err := os.Stat(candidate)
+		return err == nil && info.IsDir()
+	})
+}
+
+// desktopLaunchCommandFor resolves conventional macOS install locations
+// before falling back to LaunchServices registration. Development and
+// installed builds share a bundle identifier, so `open -b` alone can select a
+// stale build tree even when /Applications contains the current app.
+func desktopLaunchCommandFor(goos, homeDir string, exists func(string) bool) (string, []string, error) {
 	switch goos {
 	case "darwin":
+		candidates := []string{"/Applications/Agentico.app"}
+		if homeDir != "" {
+			candidates = append(candidates, filepath.Join(homeDir, "Applications", "Agentico.app"))
+		}
+		for _, candidate := range candidates {
+			if exists(candidate) {
+				return "open", []string{candidate}, nil
+			}
+		}
 		return "open", []string{"-b", "com.doordash.agentico"}, nil
 	case "linux":
 		return "xdg-open", []string{"agentico://"}, nil

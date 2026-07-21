@@ -107,7 +107,7 @@ interface Env {
   secrets: string[];
   spawned: FakeChild[];
   spawnCalls: Array<{ binaryPath: string; args: readonly string[] }>;
-  fetchCalls: Array<{ url: string; token?: string }>;
+  fetchCalls: Array<{ url: string; token?: string; timeoutMs: number }>;
   setDiscovery(content: string | null): void;
   alive: Set<number>;
 }
@@ -125,6 +125,8 @@ interface EnvOptions {
   timeouts?: Partial<GatewayTimeouts>;
   now?: () => number;
   diagnosticLines?: readonly string[];
+  useDefaultTimeouts?: boolean;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 function makeEnv(options: EnvOptions = {}): Env {
@@ -163,7 +165,11 @@ function makeEnv(options: EnvOptions = {}): Env {
       isProcessAlive: (pid) => alive.has(pid),
     },
     fetchJson: async (url, opts) => {
-      env.fetchCalls.push(opts.token === undefined ? { url } : { url, token: opts.token });
+      env.fetchCalls.push(
+        opts.token === undefined
+          ? { url, timeoutMs: opts.timeoutMs }
+          : { url, token: opts.token, timeoutMs: opts.timeoutMs },
+      );
       const base = url.replace(/\/api\/v1\/.*$/, '');
       if (url.endsWith('/api/v1/health')) {
         const entry = health[base];
@@ -192,11 +198,13 @@ function makeEnv(options: EnvOptions = {}): Env {
       return child;
     },
     registerSecret: (secret) => env.secrets.push(secret),
-    sleep: () => Promise.resolve(),
+    sleep: options.sleep ?? (() => Promise.resolve()),
     log: (line) => env.logs.push(line),
     readDiagnosticLines: () => options.diagnosticLines ?? [],
     ...(options.now === undefined ? {} : { now: options.now }),
-    timeouts: { pollIntervalMs: 1, launchReadyMs: 20, shutdownGraceMs: 50, ...options.timeouts },
+    timeouts: options.useDefaultTimeouts
+      ? options.timeouts
+      : { pollIntervalMs: 1, launchReadyMs: 20, shutdownGraceMs: 50, ...options.timeouts },
   };
 
   const gateway = new RuntimeGateway(deps);
@@ -260,13 +268,18 @@ describe('RuntimeGateway attach', () => {
   });
 
   it('authenticates readiness with the discovery token kept in main-process memory', async () => {
-    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord()),
+      timeouts: { healthProbeMs: 11, apiRequestMs: 22 },
+    });
     await env.gateway.start();
     const readiness = env.fetchCalls.find((c) => c.url.endsWith('/api/v1/readiness'));
     expect(readiness?.token).toBe(EXTERNAL_TOKEN);
+    expect(readiness?.timeoutMs).toBe(22);
     // The unauthenticated health probe never sends the token.
     const health = env.fetchCalls.find((c) => c.url.endsWith('/api/v1/health'));
     expect(health?.token).toBeUndefined();
+    expect(health?.timeoutMs).toBe(11);
     expectNoTokenLeak(env);
   });
 
@@ -409,6 +422,39 @@ describe('RuntimeGateway launch', () => {
     expect(env.secrets).toContain(LAUNCH_TOKEN);
     const readiness = env.fetchCalls.filter((c) => c.url.endsWith('/api/v1/readiness'));
     expect(readiness.at(-1)?.token).toBe(LAUNCH_TOKEN);
+    expectNoTokenLeak(env);
+  });
+
+  it('allows a healthy bundled runtime to finish a slow provider-discovery startup', async () => {
+    let elapsedMs = 0;
+    const env = makeEnv({
+      useDefaultTimeouts: true,
+      onSpawn: (innerEnv, child) => {
+        innerEnv.alive.add(child.pid ?? -1);
+      },
+      sleep: async (ms) => {
+        elapsedMs += ms;
+        if (elapsedMs < 28_000) {
+          return;
+        }
+        env.setDiscovery(
+          JSON.stringify(
+            discoveryRecord({ base_url: LAUNCH_BASE, auth_token: LAUNCH_TOKEN, pid: 777 }),
+          ),
+        );
+      },
+      health: {
+        [LAUNCH_BASE]: healthBody({
+          owner: { pid: 777, started_at: '2026-07-14T00:00:02Z' },
+        }),
+      },
+    });
+
+    await env.gateway.start();
+
+    expect(elapsedMs).toBeGreaterThanOrEqual(28_000);
+    expect(env.gateway.getState()).toMatchObject({ status: 'ready', ownership: 'app-owned' });
+    expect(env.spawned[0]?.stopCalls).toHaveLength(0);
     expectNoTokenLeak(env);
   });
 

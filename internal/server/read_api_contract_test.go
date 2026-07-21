@@ -1011,9 +1011,44 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
+				actionPauseStop:      {enabled: true},
 				actionRebase:         {disabledCode: disabledCycleActive},
 				actionReviewComments: {disabledCode: disabledCycleActive},
 				actionRefactor:       {disabledCode: disabledCycleActive},
+			},
+		},
+		{
+			name: "published active feature cycle",
+			f: func() *feature.Feature {
+				f := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil)
+				f.SetActiveCycleType(feature.CycleRebase)
+				f.ActiveCycle = &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning}
+				return f
+			}(),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				actionPauseStop: {enabled: true},
+				actionRebase:    {disabledCode: disabledCycleActive},
+			},
+		},
+		{
+			name: "published interrupted legacy cycle",
+			f: func() *feature.Feature {
+				f := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
+					repoNameSelf: {Type: "tweak", Status: feature.RepoCycleInterrupted},
+				})
+				f.SetActiveCycleType("tweak")
+				f.ActiveCycle = &feature.CycleState{Type: "tweak", Status: feature.RepoCycleInterrupted}
+				return f
+			}(),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				actionPauseStop: {disabledCode: "not_running"},
+				actionRefactor:  {disabledCode: disabledCycleActive},
 			},
 		},
 		{

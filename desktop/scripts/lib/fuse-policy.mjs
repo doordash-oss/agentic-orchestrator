@@ -52,8 +52,11 @@ export const PRODUCTION_FUSE_POLICY = Object.freeze([
     option: FuseV1Options.LoadBrowserProcessSpecificV8Snapshot,
     name: 'LoadBrowserProcessSpecificV8Snapshot',
     configKey: 'loadBrowserProcessSpecificV8Snapshot',
-    expected: true,
-    expectedWireValue: FUSE_WIRE_VALUES.enabled,
+    // Electron's standard packages carry architecture-specific context
+    // snapshots, not browser_v8_context_snapshot.bin. Enabling this fuse
+    // without that custom artifact makes the browser process fatal at launch.
+    expected: false,
+    expectedWireValue: FUSE_WIRE_VALUES.disabled,
   }),
   Object.freeze({
     option: FuseV1Options.GrantFileProtocolExtraPrivileges,

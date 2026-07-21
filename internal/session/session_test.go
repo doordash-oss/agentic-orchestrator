@@ -1162,6 +1162,37 @@ func TestSessionSendUserMessage(t *testing.T) {
 	}
 }
 
+func TestSessionSendUserMessageRecordsChatTurn(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: in-process protocol double with per-test session state.
+	s := NewSession("chat-user-test", "__chat__", feature.PhaseResearch)
+	s.SetKind(ports.KindChat)
+	s.protocol = &interruptTrackingProtocol{}
+	s.transcriptPath = filepath.Join(t.TempDir(), "transcript.jsonl")
+
+	if err := s.SendUserMessage("What changed?"); err != nil {
+		t.Fatalf("SendUserMessage: %v", err)
+	}
+	messages := s.MessageLog().Messages()
+	if len(messages) != 1 || messages[0].User == nil {
+		t.Fatalf("messages = %+v, want one user message", messages)
+	}
+	if !messages[0].LocallyAppended || messages[0].User.Message.Role != "user" {
+		t.Fatalf("user message = %+v, want locally appended user role", messages[0])
+	}
+	if got := messages[0].User.Message.Content; len(got) != 1 || got[0].Text != "What changed?" {
+		t.Fatalf("user content = %+v, want follow-up text", got)
+	}
+
+	persisted, err := readPersistedTranscript(s.transcriptPath)
+	if err != nil {
+		t.Fatalf("readPersistedTranscript: %v", err)
+	}
+	if len(persisted) != 1 || persisted[0].User == nil || persisted[0].User.Message.Content[0].Text != "What changed?" {
+		t.Fatalf("persisted messages = %+v, want follow-up user message", persisted)
+	}
+}
+
 func TestSessionWriteJSON(t *testing.T) {
 	resp := llm.NewAllowResponse("req_1")
 	data, err := json.Marshal(resp)

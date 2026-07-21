@@ -12,6 +12,8 @@ import {
   dialog,
   ipcMain,
   nativeTheme,
+  net,
+  protocol,
   session,
   shell,
   type Event as ElectronEvent,
@@ -58,6 +60,12 @@ import {
   type FeatureSnapshot,
 } from '../shared/ipc';
 import { toSafeError } from '../shared/errors';
+import {
+  RENDERER_ENTRY_URL,
+  RENDERER_ORIGIN,
+  RENDERER_SCHEME,
+  installRendererProtocol,
+} from './rendererProtocol';
 import { AttentionNotificationCoordinator, electronNotificationSink } from './notifications';
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
 import { DiagnosticsService } from './diagnostics';
@@ -121,7 +129,7 @@ const runtimeExecPath =
     : process.execPath;
 
 const devRendererUrl = process.env['ELECTRON_RENDERER_URL'];
-const appOrigins = new Set<string>(['file://']);
+const appOrigins = new Set<string>([RENDERER_ORIGIN]);
 if (devRendererUrl !== undefined) {
   const devOrigin = originOf(devRendererUrl);
   if (devOrigin !== null) {
@@ -136,6 +144,15 @@ const trusted: TrustedSender & { webContentsId: number } = {
 };
 
 app.setAsDefaultProtocolClient('agentico');
+
+// Must be registered before app readiness. The private standard/secure origin
+// lets Chromium resolve relative renderer assets without file:// privileges.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: RENDERER_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false },
+  },
+]);
 
 function createMainWindow(
   settings: SettingsStore,
@@ -197,7 +214,7 @@ function createMainWindow(
   if (devRendererUrl !== undefined) {
     void window.loadURL(devRendererUrl);
   } else {
-    void window.loadFile(path.join(import.meta.dirname, '../renderer/index.html'));
+    void window.loadURL(RENDERER_ENTRY_URL);
   }
   return window;
 }
@@ -207,6 +224,11 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   void app.whenReady().then(() => {
+    installRendererProtocol(
+      session.defaultSession.protocol,
+      path.join(import.meta.dirname, '../renderer'),
+      (fileUrl) => net.fetch(fileUrl),
+    );
     installSecurityPolicies({ app, session: session.defaultSession, appOrigins });
 
     const settings = new SettingsStore(app.getPath('userData'));

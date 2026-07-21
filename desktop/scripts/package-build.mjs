@@ -66,4 +66,12 @@ async function enforceUnpackedFuses() {
     ...Object.fromEntries(PRODUCTION_FUSE_POLICY.map((fuse) => [fuse.option, fuse.expected])),
   });
   console.log(`package-build: enforced production Electron fuses on ${executable}`);
+  if (process.platform === 'darwin') {
+    const appDir = dirname(dirname(dirname(executable)));
+    // Flipping Electron fuses mutates the Mach-O after electron-builder's
+    // packaging step and invalidates its linker signature. Re-sign the whole
+    // unpacked development bundle so `make install` produces a runnable app.
+    run('codesign', ['--force', '--deep', '--sign', '-', appDir]);
+    console.log(`package-build: ad-hoc signed unpacked macOS app ${appDir}`);
+  }
 }

@@ -109,6 +109,64 @@ describe('WorkspaceShell tabs', () => {
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
 
+  it('groups Home features by lifecycle state', async () => {
+    const inProgress = featureSnapshot({
+      id: 'feature-in-progress',
+      name: 'Electron app',
+      status: 'CodeReady',
+      currentPhase: 'Final Review',
+      createdAt: '2026-07-16T10:00:00Z',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+    });
+    const published = featureSnapshot({
+      id: 'feature-published',
+      name: 'Review automation',
+      status: 'Published',
+      currentPhase: 'Publish',
+      createdAt: '2026-07-15T10:00:00Z',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+    });
+    const done = featureSnapshot({
+      id: 'feature-done',
+      name: 'MCP server',
+      status: 'Done',
+      currentPhase: 'Publish',
+      createdAt: '2026-07-14T10:00:00Z',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+    });
+    const snapshots = [inProgress, published, done];
+    const mock = installAgenticoMock({
+      features: snapshots.map((feature) => ({
+        id: feature.id,
+        name: feature.name,
+        status: feature.status,
+        currentPhase: feature.currentPhase,
+        repos: feature.repos,
+        createdAt: feature.createdAt,
+        activeRun: feature.activeRun,
+        runCount: 1,
+        warnings: [],
+      })),
+    });
+    mock.api.getFeature.mockImplementation((featureId: string) => {
+      const snapshot = snapshots.find((feature) => feature.id === featureId);
+      return snapshot === undefined
+        ? Promise.reject(new Error('not_found: feature not found'))
+        : Promise.resolve(snapshot);
+    });
+
+    render(<WorkspaceShell />);
+
+    const inProgressGroup = await screen.findByRole('region', { name: 'In Progress' });
+    const publishedGroup = screen.getByRole('region', { name: 'Published' });
+    const doneGroup = screen.getByRole('region', { name: 'Done' });
+
+    expect(within(inProgressGroup).getByText('Electron app')).toBeInTheDocument();
+    expect(within(inProgressGroup).queryByText('Review automation')).not.toBeInTheDocument();
+    expect(within(publishedGroup).getByText('Review automation')).toBeInTheDocument();
+    expect(within(doneGroup).getByText('MCP server')).toBeInTheDocument();
+  });
+
   it('opens a persistent tab after creation and stores only identity/presentation', async () => {
     const mock = installAgenticoMock();
     render(<WorkspaceShell />);

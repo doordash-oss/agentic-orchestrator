@@ -33,6 +33,7 @@ const (
 	testingContractManualSource              = "manual"
 	testingContractVisualSource              = "visual"
 	testingContractBehavioralSource          = "behavioral"
+	testingContractCrossRepoSource           = "cross-repo"
 	testingContractEvidenceKind              = "command_result"
 	testingContractEvidenceMatcher           = "exit_code_zero"
 	testingContractManualKind                = "manual_observation"
@@ -462,7 +463,7 @@ func ReadTestingContract(path string) (*TestingContract, error) {
 
 func defaultTestingContractPolicy(source string) TestingContractItemPolicy {
 	switch strings.TrimSpace(source) {
-	case testingContractPlanSource:
+	case testingContractPlanSource, testingContractCrossRepoSource:
 		return TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true, AllowWaiver: true}
 	case testingContractManualSource:
 		return TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}
@@ -853,7 +854,7 @@ func evidenceRequirementCommand(source string, step EvidenceRequirement) string 
 
 func testingContractRunFor(source, command string) *TestingContractRun {
 	switch strings.TrimSpace(source) {
-	case testingContractPlanSource:
+	case testingContractPlanSource, testingContractCrossRepoSource:
 		return &TestingContractRun{Shell: strings.TrimSpace(command), Cwd: ".", Timeout: "10m"}
 	default:
 		return nil

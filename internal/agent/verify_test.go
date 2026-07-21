@@ -426,7 +426,8 @@ func TestParseCrossRepoVerification(t *testing.T) {
 		t.Fatalf("len = %d, want %d (%+v)", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if got[i].Description != want[i].Description || got[i].Command != want[i].Command ||
+			got[i].Repo != want[i].Repo || len(got[i].Capabilities) != 0 {
 			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}

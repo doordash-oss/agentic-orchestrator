@@ -50,7 +50,7 @@ const (
 	testFeatureName     = "Client cutover"
 	testRuntimeStateDir = "/runtime/features"
 
-	inquirenessAlways = "always"
+	inquirenessHigh = "high"
 
 	sessionStatusWaitingHelp = "WaitingHelp"
 	sessionStatusDone        = "Done"
@@ -390,7 +390,7 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 				APIVersion: APIVersion,
 				FeatureID:  fixtureFeatureID,
 				Current: FeatureConfigDTO{
-					Inquireness: inquirenessAlways,
+					Inquireness: inquirenessHigh,
 					Pipeline:    string(feature.PipelineLarge),
 					Checkpoints: CheckpointsDTO{ManualPublish: true},
 				},
@@ -412,7 +412,7 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FeatureConfig() error = %v", err)
 		}
-		if config.FeatureID != fixtureFeatureID || config.Current.Inquireness != inquirenessAlways || config.Current.Pipeline != string(feature.PipelineLarge) {
+		if config.FeatureID != fixtureFeatureID || config.Current.Inquireness != inquirenessHigh || config.Current.Pipeline != string(feature.PipelineLarge) {
 			t.Fatalf("FeatureConfig() = %+v, want structured current config for feat-1", config)
 		}
 		if !config.Current.Checkpoints.ManualPublish || !config.Publish.ManualPublish || !config.Publish.Repos["app"] {
@@ -435,7 +435,7 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode update request: %v", err)
 			}
-			if req.Inquireness != inquirenessAlways || req.Pipeline != feature.PipelineLarge {
+			if req.Inquireness != inquirenessHigh || req.Pipeline != feature.PipelineLarge {
 				t.Fatalf("update request = %+v, want inquireness always pipeline large", req)
 			}
 			if req.AutomaticReviewMode == nil || *req.AutomaticReviewMode != automaticReviewMode {
@@ -453,7 +453,7 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 			t.Fatalf("NewClient() error = %v", err)
 		}
 		updated, err := client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{
-			Inquireness:         inquirenessAlways,
+			Inquireness:         inquirenessHigh,
 			Pipeline:            feature.PipelineLarge,
 			AutomaticReviewMode: &automaticReviewMode,
 		})
@@ -486,7 +486,7 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient() error = %v", err)
 		}
-		_, err = client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{Inquireness: inquirenessAlways})
+		_, err = client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{Inquireness: inquirenessHigh})
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) {
 			t.Fatalf("UpdateFeatureConfig() error = %v, want APIError", err)

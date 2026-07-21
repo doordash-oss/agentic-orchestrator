@@ -619,7 +619,7 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 	cfg := h.configOrDefault()
 	defaults := FeatureConfigDTO{
 		Models:             cfg.Defaults.Models,
-		Inquireness:        cfg.Defaults.Inquireness,
+		Inquireness:        FeatureConfigInquireness(cfg.Defaults.Inquireness),
 		Checkpoints:        checkpointsDTO(featureCheckpoints(cfg.Defaults.Checkpoints)),
 		Pipeline:           cfg.Defaults.Pipeline,
 		InputNotifications: FeatureConfigInputNotifications(feature.InputNotificationsModeForMuted(cfg.Notifications.MuteFeatureInput)),
@@ -1066,7 +1066,7 @@ func featureConfigDTO(f *feature.Feature) FeatureConfigDTO {
 	return FeatureConfigDTO{
 		Models:              f.Models,
 		Effort:              f.Effort,
-		Inquireness:         string(f.Inquireness),
+		Inquireness:         FeatureConfigInquireness(f.Inquireness),
 		Checkpoints:         checkpointsDTO(pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())),
 		Pipeline:            string(pipeline),
 		InputNotifications:  FeatureConfigInputNotifications(feature.NormalizeInputNotificationsMode(f.InputNotifications)),

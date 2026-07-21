@@ -749,7 +749,7 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	cfg.Defaults.Models.Research = "old-research"
 	cfg.Defaults.Models.Implementation = "old-implementation"
 	cfg.Defaults.MaxIterations = 3
-	cfg.Defaults.Inquireness = "low"
+	cfg.Defaults.Inquireness = "none"
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatalf("Save config error = %v", err)
 	}

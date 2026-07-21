@@ -28,7 +28,8 @@ import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { RunTimeline } from './RunTimeline';
 import { CurrentRunInspection } from './CurrentRunInspection';
 import { ReviewSurface } from './ReviewSurface';
-import { ResourceEditor, useResolvedTheme } from './ResourceWorkspace';
+import { ResourceEditor } from './ResourceWorkspace';
+import { useResolvedTheme } from '../components/monaco';
 import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { RepositoryInstrument } from './RepositoryInstrument';
@@ -40,10 +41,9 @@ import {
   attentionActionNotice,
   attentionErrorMessage,
   runAttentionSubmit,
-  type AttentionAction,
   type AttentionDrafts,
-  type AttentionSubmitOptions,
 } from './AttentionInbox';
+import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 import type { AttentionItem } from '../../../shared/ipc';
 import {
   actionById,
@@ -334,6 +334,12 @@ function CockpitActionBar({
 }) {
   return (
     <div className="cockpit__actions" role="group" aria-label="Feature actions">
+      {/* Always-visible status: the inspector aside is hidden in narrow mode,
+        so the cockpit shell surfaces the feature status here rather than only
+        in the inspector drawer. */}
+      <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
+        <code data-status={snapshot.status}>{displayStatusLabel(snapshot.status)}</code>
+      </p>
       {setupAction !== undefined ? (
         <span className="cockpit__action">
           <button
@@ -807,7 +813,6 @@ export function FeatureCockpit({
   const isNarrow = useMediaQuery('(max-width: 900px)');
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
-  const attentionDraftSaves = useRef(new Map<string, Promise<void>>());
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const attentionRegionRef = useRef<HTMLElement>(null);
   const inspectorButtonRef = useRef<HTMLButtonElement>(null);
@@ -988,35 +993,14 @@ export function FeatureCockpit({
     stopButtonRef.current?.focus();
   }, []);
 
-  const saveAttentionDraft = (
-    id: string,
-    action: AttentionAction,
-    options: AttentionSubmitOptions = { successNotice: 'Draft saved.' },
-  ): Promise<void> => {
-    const previous = attentionDraftSaves.current.get(id) ?? Promise.resolve();
-    const run = previous
-      .catch(() => undefined)
-      .then(async () => {
-        try {
-          const result = await action();
-          setAnnouncement(attentionActionNotice(result, options));
-          if (result.alreadyResolved === true) {
-            await refreshAttention();
-            await load({ silent: true });
-          }
-        } catch (error) {
-          setAnnouncement(attentionErrorMessage(error));
-          throw error;
-        }
-      });
-    const tracked = run.finally(() => {
-      if (attentionDraftSaves.current.get(id) === tracked) {
-        attentionDraftSaves.current.delete(id);
-      }
-    });
-    attentionDraftSaves.current.set(id, tracked);
-    return tracked;
-  };
+  const saveAttentionDraft = useAttentionDraftSaves({
+    notify: (result, options) => setAnnouncement(attentionActionNotice(result, options)),
+    notifyError: (error) => setAnnouncement(attentionErrorMessage(error)),
+    onAlreadyResolved: async () => {
+      await refreshAttention();
+      await load({ silent: true });
+    },
+  });
 
   const closeInspector = useCallback(() => {
     setInspectorOpen(false);

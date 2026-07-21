@@ -845,7 +845,7 @@ function makeMockApi(
         repositories: READY_SNAPSHOT.repositories!.map((r) => ({ ...r, valid: true })),
         defaults: {
           pipeline: 'large',
-          inquireness: 'balanced',
+          inquireness: 'medium',
           models: [],
           useCurrentBranch: false,
         },

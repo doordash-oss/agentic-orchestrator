@@ -101,7 +101,7 @@ export function creationDefaults(overrides: Partial<CreationDefaults> = {}): Cre
     ],
     defaults: {
       pipeline: 'medium',
-      inquireness: 'balanced',
+      inquireness: 'medium',
       models: [{ phase: 'Planning', model: 'model-plan' }],
       useCurrentBranch: false,
     },

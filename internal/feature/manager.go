@@ -283,6 +283,9 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	if inq == "" {
 		inq = Inquireness(m.Config.Defaults.Inquireness)
 	}
+	if !inq.IsValid() {
+		return nil, fmt.Errorf("invalid inquireness level %q: must be one of none, medium, high", inq)
+	}
 
 	now := time.Now()
 	status := StatusCreated

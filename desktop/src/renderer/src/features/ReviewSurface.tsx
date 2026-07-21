@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import type * as Monaco from 'monaco-editor';
+import { useEffect, useState } from 'react';
 import { DEFAULT_RUNTIME_ID } from '../../../shared/ipc';
 import type { ReviewDraftKey, ReviewSession, ReviewValidation } from '../../../shared/ipc';
+import { MonacoBuffer, MonacoDiff, useResolvedTheme } from '../components/monaco';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 
 type View = 'edit' | 'preview' | 'split';
-type ThemeMode = 'light' | 'dark';
 
 interface ReconcileState {
   current: ReviewSession;
@@ -16,27 +15,6 @@ interface ReconcileState {
   localKey: ReviewDraftKey;
 }
 
-/** Tracks the resolved theme on <html data-theme> without duplicating the IPC listener. */
-function useResolvedTheme(): ThemeMode {
-  const [theme, setTheme] = useState<ThemeMode>(() =>
-    document.documentElement.dataset['theme'] === 'dark' ? 'dark' : 'light',
-  );
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setTheme(document.documentElement.dataset['theme'] === 'dark' ? 'dark' : 'light');
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme'],
-    });
-    return () => observer.disconnect();
-  }, []);
-  return theme;
-}
-
-const MONACO_LIGHT_THEME = 'vs';
-const MONACO_DARK_THEME = 'vs-dark';
-
 function MarkdownPreview({ text }: { text: string }) {
   const html = renderSanitizedMarkdown(text);
   return (
@@ -44,108 +22,6 @@ function MarkdownPreview({ text }: { text: string }) {
       className="review-surface__preview"
       aria-label="Sanitized Markdown preview"
       dangerouslySetInnerHTML={{ __html: html }}
-    />
-  );
-}
-
-/**
- * Monaco editor wrapper.
- *
- * `defaultValue` is read only at mount. To reset the editor's content
- * (after save, discard, or reconcile resolution), change the `key` prop
- * so React remounts a fresh instance. Do not call `setValue` after mount
- * — it fires `onDidChangeModelContent` during typing and corrupts state.
- */
-function MonacoBuffer({
-  defaultValue,
-  onChange,
-  theme,
-}: {
-  defaultValue: string;
-  onChange(value: string): void;
-  theme: ThemeMode;
-}) {
-  const host = useRef<HTMLDivElement>(null);
-  const editor = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  useEffect(() => {
-    let disposed = false;
-    void import('monaco-editor').then((monaco) => {
-      if (disposed || host.current === null) return;
-      editor.current = monaco.editor.create(host.current, {
-        value: defaultValue,
-        language: 'markdown',
-        theme: theme === 'dark' ? MONACO_DARK_THEME : MONACO_LIGHT_THEME,
-        minimap: { enabled: false },
-        automaticLayout: true,
-        wordWrap: 'on',
-        fontFamily: 'IBM Plex Mono, monospace',
-        fontSize: 14,
-        scrollBeyondLastLine: false,
-        ariaLabel: 'Review draft',
-      });
-      editor.current.onDidChangeModelContent(() =>
-        onChangeRef.current(editor.current?.getValue() ?? ''),
-      );
-    });
-    return () => {
-      disposed = true;
-      editor.current?.dispose();
-      editor.current = null;
-    };
-  }, []);
-  // Switch Monaco theme when the app theme changes.
-  useEffect(() => {
-    if (editor.current === null) return;
-    void import('monaco-editor').then((monaco) => {
-      monaco.editor.setTheme(theme === 'dark' ? MONACO_DARK_THEME : MONACO_LIGHT_THEME);
-    });
-  }, [theme]);
-  return <div className="review-surface__editor" ref={host} />;
-}
-
-function MonacoDiff({
-  localText,
-  currentText,
-  theme,
-}: {
-  localText: string;
-  currentText: string;
-  theme: ThemeMode;
-}) {
-  const host = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    let disposed = false;
-    let diff: Monaco.editor.IStandaloneDiffEditor | null = null;
-    let original: Monaco.editor.ITextModel | null = null;
-    let modified: Monaco.editor.ITextModel | null = null;
-    void import('monaco-editor').then((monaco) => {
-      if (disposed || host.current === null) return;
-      original = monaco.editor.createModel(currentText, 'markdown');
-      modified = monaco.editor.createModel(localText, 'markdown');
-      diff = monaco.editor.createDiffEditor(host.current, {
-        automaticLayout: true,
-        readOnly: true,
-        minimap: { enabled: false },
-        renderSideBySide: true,
-        theme: theme === 'dark' ? MONACO_DARK_THEME : MONACO_LIGHT_THEME,
-        ariaLabel: 'Local draft compared with current server draft',
-      });
-      diff.setModel({ original, modified });
-    });
-    return () => {
-      disposed = true;
-      diff?.dispose();
-      original?.dispose();
-      modified?.dispose();
-    };
-  }, [currentText, localText, theme]);
-  return (
-    <div
-      className="review-surface__diff"
-      ref={host}
-      aria-label="Local draft compared with current server draft"
     />
   );
 }
@@ -468,7 +344,10 @@ export function ReviewSurface({
         <MonacoDiff
           currentText={reconcile.current.text}
           localText={reconcile.localText}
+          language="markdown"
           theme={theme}
+          ariaLabel="Local draft compared with current server draft"
+          className="review-surface__diff"
         />
         {reconcile.baseText !== null ? (
           <details className="review-surface__base">
@@ -582,12 +461,28 @@ export function ReviewSurface({
         ) : null}
       </div>
       {view === 'edit' ? (
-        <MonacoBuffer key={editorKey} defaultValue={text} onChange={setText} theme={theme} />
+        <MonacoBuffer
+          key={editorKey}
+          defaultValue={text}
+          language="markdown"
+          theme={theme}
+          ariaLabel="Review draft"
+          className="review-surface__editor"
+          onChange={setText}
+        />
       ) : view === 'preview' ? (
         <MarkdownPreview text={text} />
       ) : (
         <div className="review-surface__split">
-          <MonacoBuffer key={editorKey} defaultValue={text} onChange={setText} theme={theme} />
+          <MonacoBuffer
+            key={editorKey}
+            defaultValue={text}
+            language="markdown"
+            theme={theme}
+            ariaLabel="Review draft"
+            className="review-surface__editor"
+            onChange={setText}
+          />
           <MarkdownPreview text={text} />
         </div>
       )}

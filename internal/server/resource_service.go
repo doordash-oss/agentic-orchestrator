@@ -1027,21 +1027,11 @@ func validateFrontmatter(text, kind string, requiredFields []string) []ResourceF
 }
 
 func isValidPipeline(p string) bool {
-	switch feature.PipelineProfile(p) {
-	case feature.PipelineLarge, feature.PipelineMoonshot, feature.PipelineMedium:
-		return true
-	default:
-		return false
-	}
+	return feature.PipelineProfile(p).IsValid()
 }
 
 func isValidInquireness(s string) bool {
-	switch s {
-	case "low", "medium", "high", "":
-		return true
-	default:
-		return false
-	}
+	return feature.Inquireness(s).IsValid()
 }
 
 func isValidInputNotifications(s string) bool {

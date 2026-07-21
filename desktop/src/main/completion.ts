@@ -16,6 +16,7 @@ import {
   RepositoryPathResponseSchema,
 } from '../shared/api/parse';
 import { serverRequest, type ServerTransport } from './serverClient';
+import { openExternalSafely } from './security';
 import {
   CompletionPreflightRequestSchema,
   RepositoryDiffRequestSchema,
@@ -35,20 +36,6 @@ const COMPLETION_REMEDIES: Readonly<Record<string, string>> = {
   bad_request: 'The server rejected the request. Refresh and retry.',
   conflict: 'The server state has changed. Refresh the completion preview.',
 };
-
-const ALLOWED_URL_SCHEMES = new Set(['https:', 'http:']);
-
-function safeUrl(url: string): URL | null {
-  try {
-    const parsed = new URL(url);
-    if (!ALLOWED_URL_SCHEMES.has(parsed.protocol)) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 export interface CompletionServiceDeps {
   transport: ServerTransport;
@@ -122,12 +109,8 @@ export class CompletionService {
 
   async openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }> {
     const input = validateWithSchema(request, OpenExternalRequestSchema);
-    const parsed = safeUrl(input.url);
-    if (!parsed) {
-      return { ok: false };
-    }
-    await shell.openExternal(parsed.toString());
-    return { ok: true };
+    const opened = await openExternalSafely(input.url, (url) => shell.openExternal(url));
+    return { ok: opened };
   }
 
   async revealPath(request: RevealPathRequest): Promise<{ ok: boolean }> {

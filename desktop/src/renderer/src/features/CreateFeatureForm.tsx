@@ -121,9 +121,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const [useCurrentBranch, setUseCurrentBranch] = useState(false);
   const [pipeline, setPipeline] = useState<Pipeline>('medium');
   const [riskLevel, setRiskLevel] = useState<'low' | 'medium' | 'high'>('medium');
-  const [inquireness, setInquireness] = useState<'minimal' | 'balanced' | 'thorough' | 'always'>(
-    'balanced',
-  );
+  const [inquireness, setInquireness] = useState<'none' | 'medium' | 'high'>('medium');
   const [exitCriteria, setExitCriteria] = useState('');
   const [images, setImages] = useState<readonly string[]>([]);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
@@ -618,10 +616,9 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
                 value={inquireness}
                 onChange={(e) => setInquireness(e.target.value as typeof inquireness)}
               >
-                <option value="minimal">Minimal</option>
-                <option value="balanced">Balanced</option>
-                <option value="thorough">Thorough</option>
-                <option value="always">Always</option>
+                <option value="none">None</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
               </select>
             </label>
           </div>
@@ -881,8 +878,6 @@ function unique(items: readonly string[]): string[] {
 function isPipeline(value: string | undefined): value is Pipeline {
   return value === 'medium' || value === 'large' || value === 'moonshot';
 }
-function normalizeInquireness(
-  value: string | undefined,
-): 'minimal' | 'balanced' | 'thorough' | 'always' {
-  return value === 'minimal' || value === 'thorough' || value === 'always' ? value : 'balanced';
+function normalizeInquireness(value: string | undefined): 'none' | 'medium' | 'high' {
+  return value === 'none' || value === 'high' ? value : 'medium';
 }

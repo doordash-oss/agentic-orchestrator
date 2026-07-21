@@ -6,6 +6,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { JourneyWorld } from './world';
+import { escapeRegExp, replaceTopLevelBlock, upsertYamlScalar } from './yaml';
+
+// Re-export the canonical YAML splicing helpers so journey specs that import
+// them from ./completionFixture keep a single source of truth in ./yaml.
+export { replaceTopLevelBlock, upsertYamlScalar };
 
 export interface CompletionWorktrees {
   worktrees: Record<string, string>;
@@ -67,30 +72,6 @@ export function writeWorktreeChange(worktree: string, relPath: string, content: 
 export function activeRunNumber(featureYaml: string): number {
   const match = featureYaml.match(/^active_run:\s*(\d+)/m);
   return match === null ? 1 : Number.parseInt(match[1]!, 10);
-}
-
-/** Upserts a top-level YAML scalar key. */
-export function upsertYamlScalar(yaml: string, key: string, value: string): string {
-  const line = `${key}: ${value}`;
-  const pattern = new RegExp(`^${escapeRegExp(key)}:.*$`, 'm');
-  return pattern.test(yaml)
-    ? yaml.replace(pattern, line)
-    : `${yaml.endsWith('\n') ? yaml : `${yaml}\n`}${line}\n`;
-}
-
-/** Replaces a top-level YAML block (key + indented children). */
-export function replaceTopLevelBlock(yaml: string, key: string, block: string[]): string {
-  const lines = yaml.replaceAll('\r\n', '\n').split('\n');
-  const start = lines.findIndex((line) => line === `${key}:` || line.startsWith(`${key}: `));
-  if (start < 0) {
-    return `${yaml.endsWith('\n') ? yaml : `${yaml}\n`}${block.join('\n')}\n`;
-  }
-  let end = start + 1;
-  while (end < lines.length && (lines[end]!.startsWith(' ') || lines[end]!.trim() === '')) {
-    end += 1;
-  }
-  const next = [...lines.slice(0, start), ...block, ...lines.slice(end)].join('\n');
-  return next.endsWith('\n') ? next : `${next}\n`;
 }
 
 /** Finds the line range of a repo block in feature.yaml. Returns [start, end) or null. */
@@ -184,8 +165,4 @@ export function activeRunYamlPath(world: JourneyWorld, featureId: string): strin
 /** Removes failure_type and last_error lines from run.yaml. */
 export function clearRunFailures(runYaml: string): string {
   return runYaml.replace(/^failure_type:.*$\n?/m, '').replace(/^last_error:.*$\n?/m, '');
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

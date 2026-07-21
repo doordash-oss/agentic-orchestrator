@@ -1685,7 +1685,7 @@ export const CreateFeatureInputSchema = z.strictObject({
   repositoryFiles: z.array(RepositoryFileRefSchema).max(CREATION_REPOSITORY_FILE_LIMIT).default([]),
   pipeline: z.enum(['medium', 'large', 'moonshot']).default('medium'),
   riskLevel: z.enum(['low', 'medium', 'high']).default('medium'),
-  inquireness: z.enum(['minimal', 'balanced', 'thorough', 'always']).default('balanced'),
+  inquireness: z.enum(['none', 'medium', 'high']).default('medium'),
   exitCriteria: z.string().max(4000).default(''),
   models: z.record(z.string().min(1).max(64), z.string().min(1).max(200)).default({}),
   checkpoints: z

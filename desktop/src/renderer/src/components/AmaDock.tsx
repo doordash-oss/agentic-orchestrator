@@ -28,6 +28,7 @@ import {
   type AttentionDrafts,
   type AttentionSubmitOptions,
 } from '../features/AttentionInbox';
+import { useAttentionDraftSaves } from '../features/useAttentionDraftSaves';
 
 type DrawerMode = 'compact' | 'expanded';
 type TranscriptState =
@@ -271,21 +272,13 @@ export function AmaDock({
     }
   };
 
-  const saveDraft = async (
-    action: AttentionAction,
-    options: AttentionSubmitOptions = { successNotice: 'Draft saved.' },
-  ): Promise<void> => {
-    try {
-      const result = await action();
-      setNotice(attentionActionNotice(result, options));
-      if (result.alreadyResolved === true) {
-        await refreshAttention();
-      }
-    } catch (error) {
-      setNotice(attentionErrorMessage(error));
-      throw error;
-    }
-  };
+  const saveDraft = useAttentionDraftSaves({
+    notify: (result, options) => setNotice(attentionActionNotice(result, options)),
+    notifyError: (error) => setNotice(attentionErrorMessage(error)),
+    onAlreadyResolved: async () => {
+      await refreshAttention();
+    },
+  });
 
   return (
     <aside className="ama-dock" data-mode={drawer} aria-label="Ask Agentico">
@@ -378,7 +371,7 @@ export function AmaDock({
                     drafts={activeDrafts}
                     setDrafts={updateDrafts}
                     submit={(action, options) => void submitAttention(item.id, action, options)}
-                    saveDraft={(action, options) => saveDraft(action, options)}
+                    saveDraft={(action, options) => saveDraft(item.id, action, options)}
                   />
                 </div>
               ))}

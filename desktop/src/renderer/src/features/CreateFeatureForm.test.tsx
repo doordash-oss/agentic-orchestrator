@@ -55,7 +55,7 @@ describe('CreateFeatureForm four-step contract', () => {
     await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
     await user.click(screen.getByRole('radio', { name: /Moonshot/ }));
     await user.click(screen.getByRole('button', { name: 'Next: Review' }));
-    await user.selectOptions(screen.getByLabelText('Inquireness'), 'always');
+    await user.selectOptions(screen.getByLabelText('Inquireness'), 'high');
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('button', { name: 'Back' }));
     await user.click(screen.getByRole('button', { name: 'Browse for folder' }));
@@ -67,7 +67,7 @@ describe('CreateFeatureForm four-step contract', () => {
     await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
     expect(screen.getByRole('radio', { name: /Moonshot/ })).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Next: Review' }));
-    expect(screen.getByLabelText('Inquireness')).toHaveValue('always');
+    expect(screen.getByLabelText('Inquireness')).toHaveValue('high');
   });
 
   it('adds ordered native-picked files and permits removal without reading their contents', async () => {
@@ -167,7 +167,7 @@ describe('CreateFeatureForm four-step contract', () => {
       creationDefaults({
         defaults: {
           pipeline: 'medium',
-          inquireness: 'balanced',
+          inquireness: 'medium',
           models: [
             { phase: 'Planning', model: 'model-plan' },
             { phase: 'Knowledge base', model: 'model-kb' },

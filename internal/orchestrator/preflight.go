@@ -73,55 +73,57 @@ func (o *Orchestrator) RebasePreflight(featureID string) (RebasePreflightResult,
 	result := RebasePreflightResult{FeatureID: featureID}
 	for _, repo := range f.Repos {
 		out := o.harnessRebaseOutcomeForRepo(f, repo)
+		freshness, blocker, behind := o.repoFreshnessAndBlocker(out)
 		repoResult := RebasePreflightRepoResult{
 			Repo:        out.RepoName,
 			Target:      out.RebaseTarget,
 			Publishable: out.Publishable,
-		}
-		switch {
-		case out.WorktreePath == "":
-			repoResult.Freshness = preflightFreshnessUnknown
-			repoResult.Blocker = preflightBlockerNoWorktree
-		case out.RebaseTarget == "":
-			repoResult.Freshness = preflightFreshnessUnknown
-			repoResult.Blocker = preflightBlockerNoTarget
-		case o.deps.Rebaser == nil:
-			repoResult.Freshness = preflightFreshnessUnknown
-			repoResult.Blocker = preflightBlockerNoRebaser
-		default:
-			if inProg, err := o.deps.Rebaser.RebaseInProgress(out.WorktreePath); err == nil && inProg {
-				repoResult.Freshness = preflightFreshnessUnknown
-				repoResult.Blocker = preflightBlockerRebaseInProg
-			} else if out.Publishable {
-				behind, err := o.deps.Rebaser.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
-				if err != nil {
-					repoResult.Freshness = preflightFreshnessUnknown
-				} else {
-					repoResult.Behind = behind
-					if behind {
-						repoResult.Freshness = preflightFreshnessBehind
-					} else {
-						repoResult.Freshness = preflightFreshnessUpToDate
-					}
-				}
-			} else {
-				behind, err := o.deps.Rebaser.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
-				if err != nil {
-					repoResult.Freshness = preflightFreshnessUnknown
-				} else {
-					repoResult.Behind = behind
-					if behind {
-						repoResult.Freshness = preflightFreshnessBehind
-					} else {
-						repoResult.Freshness = preflightFreshnessUpToDate
-					}
-				}
-			}
+			Behind:      behind,
+			Freshness:   freshness,
+			Blocker:     blocker,
 		}
 		result.Repos = append(result.Repos, repoResult)
 	}
 	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f, nil))
 	return result, nil
+}
+
+// repoFreshnessAndBlocker is the single source of truth for the
+// side-effect-free freshness/blocker decision shared by RebasePreflight and
+// CompletionPreflight. It inspects only local remote-tracking refs and never
+// mutates a worktree. It returns the freshness label, a non-empty blocker
+// when the repo cannot be safely operated on, and the behind flag.
+func (o *Orchestrator) repoFreshnessAndBlocker(out HarnessRebaseRepoOutcome) (freshness, blocker string, behind bool) {
+	switch {
+	case out.WorktreePath == "":
+		return preflightFreshnessUnknown, preflightBlockerNoWorktree, false
+	case out.RebaseTarget == "":
+		return preflightFreshnessUnknown, preflightBlockerNoTarget, false
+	case o.deps.Rebaser == nil:
+		return preflightFreshnessUnknown, preflightBlockerNoRebaser, false
+	default:
+		if inProg, err := o.deps.Rebaser.RebaseInProgress(out.WorktreePath); err == nil && inProg {
+			return preflightFreshnessUnknown, preflightBlockerRebaseInProg, false
+		}
+		if out.Publishable {
+			b, err := o.deps.Rebaser.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
+			if err != nil {
+				return preflightFreshnessUnknown, "", false
+			}
+			if b {
+				return preflightFreshnessBehind, "", true
+			}
+			return preflightFreshnessUpToDate, "", false
+		}
+		b, err := o.deps.Rebaser.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
+		if err != nil {
+			return preflightFreshnessUnknown, "", false
+		}
+		if b {
+			return preflightFreshnessBehind, "", true
+		}
+		return preflightFreshnessUpToDate, "", false
+	}
 }
 
 // RefactorPreflightResult describes the resolved repository impact of a

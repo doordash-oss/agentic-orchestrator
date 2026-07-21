@@ -1523,7 +1523,9 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 			repoResult.PRURL = prURLs[repo.Name]
 		}
 		repoResult.Status = completionRepoStatus(f, repo, state, publishable, repoResult.PRURL)
-		completionRepoFreshnessAndBlocker(o, f, repo, publishable, &repoResult)
+		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.harnessRebaseOutcomeForRepo(f, repo))
+		repoResult.Freshness = freshness
+		repoResult.Blocker = blocker
 		if repoResult.Blocker != "" {
 			repoResult.Status = completionStatusBlocked
 		}
@@ -1532,50 +1534,6 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 	result.CanMarkDone, result.MarkDoneBlocker = completionCanMarkDone(f)
 	result.SourceRevision = preflightRevision(o.collectPreflightFingerprints(f, nil))
 	return result, nil
-}
-
-// completionRepoFreshnessAndBlocker mirrors the freshness/blocker logic of
-// RebasePreflight for one repository, writing the safe, server-authored
-// Freshness and Blocker fields onto the completion repo result. The worktree
-// is never mutated; only local remote-tracking refs are inspected. The
-// constants (preflightFreshness* and preflightBlocker*) are shared with
-// preflight.go in this package.
-func completionRepoFreshnessAndBlocker(o *Orchestrator, f *feature.Feature, repo feature.FeatureRepo, publishable bool, repoResult *CompletionRepoResult) {
-	out := o.harnessRebaseOutcomeForRepo(f, repo)
-	switch {
-	case out.WorktreePath == "":
-		repoResult.Freshness = preflightFreshnessUnknown
-		repoResult.Blocker = preflightBlockerNoWorktree
-	case out.RebaseTarget == "":
-		repoResult.Freshness = preflightFreshnessUnknown
-		repoResult.Blocker = preflightBlockerNoTarget
-	case o.deps.Rebaser == nil:
-		repoResult.Freshness = preflightFreshnessUnknown
-		repoResult.Blocker = preflightBlockerNoRebaser
-	default:
-		if inProg, err := o.deps.Rebaser.RebaseInProgress(out.WorktreePath); err == nil && inProg {
-			repoResult.Freshness = preflightFreshnessUnknown
-			repoResult.Blocker = preflightBlockerRebaseInProg
-		} else if publishable {
-			behind, err := o.deps.Rebaser.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
-			if err != nil {
-				repoResult.Freshness = preflightFreshnessUnknown
-			} else if behind {
-				repoResult.Freshness = preflightFreshnessBehind
-			} else {
-				repoResult.Freshness = preflightFreshnessUpToDate
-			}
-		} else {
-			behind, err := o.deps.Rebaser.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
-			if err != nil {
-				repoResult.Freshness = preflightFreshnessUnknown
-			} else if behind {
-				repoResult.Freshness = preflightFreshnessBehind
-			} else {
-				repoResult.Freshness = preflightFreshnessUpToDate
-			}
-		}
-	}
 }
 
 // CompletionPreflightSourceRevision recomputes the current completion preview
@@ -1667,7 +1625,7 @@ func (o *Orchestrator) RepositoryDiff(featureID, repoName, filePath string) (Rep
 	if err != nil {
 		return RepositoryDiffResult{}, fmt.Errorf("load feature: %w", err)
 	}
-	repo, ok := findCompletionRepoByName(f, repoName)
+	repo, ok := findRepo(f, repoName)
 	if !ok {
 		return RepositoryDiffResult{FeatureID: featureID, Repo: repoName, PartialFailure: "repository not found"}, nil
 	}
@@ -1694,7 +1652,7 @@ func (o *Orchestrator) RepositoryWorktreePath(featureID, repoName string) (strin
 	if err != nil {
 		return "", fmt.Errorf("load feature: %w", err)
 	}
-	repo, ok := findCompletionRepoByName(f, repoName)
+	repo, ok := findRepo(f, repoName)
 	if !ok {
 		return "", fmt.Errorf("repository %q not found", repoName)
 	}
@@ -1768,15 +1726,6 @@ func (o *Orchestrator) diffOperator() ports.DiffOperator {
 		return o.deps.Differ
 	}
 	return &git.DiffAdapter{}
-}
-
-func findCompletionRepoByName(f *feature.Feature, name string) (feature.FeatureRepo, bool) {
-	for _, repo := range f.Repos {
-		if repo.Name == name {
-			return repo, true
-		}
-	}
-	return feature.FeatureRepo{}, false
 }
 
 func isBinaryPatch(patch string) bool {

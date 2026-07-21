@@ -89,7 +89,7 @@ export function isAllowedNavigation(targetUrl: string, appOrigin: string): boole
   return origin !== null && origin === appOrigin;
 }
 
-/** All window creation is denied; external links go through openExternalSafely. */
+/** All window creation is denied. */
 export function windowOpenPolicy(): { action: 'deny' } {
   return { action: 'deny' };
 }
@@ -122,16 +122,17 @@ export function isSafeExternalUrl(url: string): boolean {
 
 /**
  * Opens a URL in the system browser only if it passes the allowlist.
- * Returns whether the URL was accepted.
+ * Resolves to whether the URL was accepted; rejects if the opener fails so
+ * callers can surface the error instead of silently dropping it.
  */
-export function openExternalSafely(
+export async function openExternalSafely(
   url: string,
   openExternal: (url: string) => Promise<void>,
-): boolean {
+): Promise<boolean> {
   if (!isSafeExternalUrl(url)) {
     return false;
   }
-  void openExternal(url);
+  await openExternal(url);
   return true;
 }
 
@@ -224,8 +225,8 @@ export function installSecurityPolicies({ app, session, appOrigins }: SecurityWi
   app.on('web-contents-created', (_event, contents) => {
     contents.on('will-navigate', (event, url) => {
       const target = typeof url === 'string' ? url : '';
-      const origin = originOf(target);
-      if (origin === null || !appOrigins.has(origin)) {
+      const allowed = [...appOrigins].some((origin) => isAllowedNavigation(target, origin));
+      if (!allowed) {
         event.preventDefault();
       }
     });

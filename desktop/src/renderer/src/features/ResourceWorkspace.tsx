@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type * as Monaco from 'monaco-editor';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DEFAULT_RUNTIME_ID,
   type ResourceCatalogue,
@@ -10,10 +9,10 @@ import {
   type ResourceValidateResult,
   type ResourceWriteResult,
 } from '../../../shared/ipc';
+import { MonacoBuffer, MonacoDiff, useResolvedTheme, type ThemeMode } from '../components/monaco';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 
-type ThemeMode = 'light' | 'dark';
 type EditorState =
   | 'idle'
   | 'loading'
@@ -32,9 +31,6 @@ interface ReconcileState {
   localText: string;
   localKey: ResourceDraftKey;
 }
-
-const MONACO_LIGHT_THEME = 'vs';
-const MONACO_DARK_THEME = 'vs-dark';
 
 const EFFECT_LABELS: Record<string, string> = {
   immediate: 'Takes effect immediately',
@@ -78,23 +74,6 @@ const STATE_LABELS: Record<EditorState, string> = {
   failed: 'Failed',
 };
 
-export function useResolvedTheme(): ThemeMode {
-  const [theme, setTheme] = useState<ThemeMode>(() =>
-    document.documentElement.dataset['theme'] === 'dark' ? 'dark' : 'light',
-  );
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setTheme(document.documentElement.dataset['theme'] === 'dark' ? 'dark' : 'light');
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme'],
-    });
-    return () => observer.disconnect();
-  }, []);
-  return theme;
-}
-
 function languageForContentType(ct: string): string {
   switch (ct) {
     case 'yaml':
@@ -104,125 +83,6 @@ function languageForContentType(ct: string): string {
     default:
       return 'plaintext';
   }
-}
-
-function MonacoBuffer({
-  defaultValue,
-  language,
-  theme,
-  readOnly,
-  onChange,
-}: {
-  defaultValue: string;
-  language: string;
-  theme: ThemeMode;
-  readOnly: boolean;
-  onChange(value: string): void;
-}) {
-  const host = useRef<HTMLDivElement>(null);
-  const editor = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  const readOnlyRef = useRef(readOnly);
-  readOnlyRef.current = readOnly;
-
-  useEffect(() => {
-    let disposed = false;
-    void import('monaco-editor').then((monaco) => {
-      if (disposed || host.current === null) return;
-      editor.current = monaco.editor.create(host.current, {
-        value: defaultValue,
-        language,
-        theme: theme === 'dark' ? MONACO_DARK_THEME : MONACO_LIGHT_THEME,
-        minimap: { enabled: false },
-        automaticLayout: true,
-        wordWrap: 'on',
-        fontFamily: 'IBM Plex Mono, monospace',
-        fontSize: 14,
-        scrollBeyondLastLine: false,
-        readOnly: readOnlyRef.current,
-        ariaLabel: 'Resource editor',
-      });
-      // Expose for e2e tests: setValue bypasses Monaco auto-indent that
-      // corrupts multi-line YAML when text is inserted via the textarea.
-      (host.current as unknown as Record<string, unknown>).__monacoEditor = editor.current;
-      editor.current.onDidChangeModelContent(() =>
-        onChangeRef.current(editor.current?.getValue() ?? ''),
-      );
-    });
-    return () => {
-      disposed = true;
-      editor.current?.dispose();
-      editor.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (editor.current === null) return;
-    editor.current.updateOptions({ readOnly });
-  }, [readOnly]);
-
-  useEffect(() => {
-    if (editor.current === null) return;
-    void import('monaco-editor').then((monaco) => {
-      monaco.editor.setTheme(theme === 'dark' ? MONACO_DARK_THEME : MONACO_LIGHT_THEME);
-    });
-  }, [theme]);
-
-  return <div className="resource-editor__monaco" ref={host} />;
-}
-
-function MonacoDiff({
-  localText,
-  currentText,
-  language,
-  theme,
-}: {
-  localText: string;
-  currentText: string;
-  language: string;
-  theme: ThemeMode;
-}) {
-  const host = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    let disposed = false;
-    let diff: Monaco.editor.IStandaloneDiffEditor | null = null;
-    let original: Monaco.editor.ITextModel | null = null;
-    let modified: Monaco.editor.ITextModel | null = null;
-    void import('monaco-editor').then((monaco) => {
-      if (disposed || host.current === null) return;
-      original = monaco.editor.createModel(currentText, language);
-      modified = monaco.editor.createModel(localText, language);
-      diff = monaco.editor.createDiffEditor(host.current, {
-        automaticLayout: true,
-        readOnly: true,
-        minimap: { enabled: false },
-        renderSideBySide: true,
-        theme: theme === 'dark' ? MONACO_DARK_THEME : MONACO_LIGHT_THEME,
-        ariaLabel: 'Your draft compared with the current server content',
-      });
-      diff.setModel({ original, modified });
-    });
-    return () => {
-      disposed = true;
-      diff?.dispose();
-      original?.dispose();
-      modified?.dispose();
-    };
-  }, [currentText, localText, language, theme]);
-  return (
-    <div className="resource-editor__diff-wrapper">
-      <div className="resource-editor__diff-panes">
-        <span className="resource-editor__diff-pane-label">Server content</span>
-        <span className="resource-editor__diff-pane-label">Your draft</span>
-      </div>
-      <div
-        className="resource-editor__diff"
-        ref={host}
-        aria-label="Your draft compared with the current server content"
-      />
-    </div>
-  );
 }
 
 interface TreeNode {
@@ -803,12 +663,20 @@ export function ResourceEditor({ resourceId, theme }: { resourceId: string; them
           <p className="resource-editor__reconcile-notice" role="status">
             {notice}
           </p>
-          <MonacoDiff
-            localText={reconcile.localText}
-            currentText={reconcile.currentText}
-            language={language}
-            theme={theme}
-          />
+          <div className="resource-editor__diff-wrapper">
+            <div className="resource-editor__diff-panes">
+              <span className="resource-editor__diff-pane-label">Server content</span>
+              <span className="resource-editor__diff-pane-label">Your draft</span>
+            </div>
+            <MonacoDiff
+              localText={reconcile.localText}
+              currentText={reconcile.currentText}
+              language={language}
+              theme={theme}
+              ariaLabel="Your draft compared with the current server content"
+              className="resource-editor__diff"
+            />
+          </div>
           <div className="resource-editor__reconcile-actions">
             <button
               className="resource-editor__btn resource-editor__btn--primary"
@@ -842,6 +710,9 @@ export function ResourceEditor({ resourceId, theme }: { resourceId: string; them
               language={language}
               theme={theme}
               readOnly={state === 'loading'}
+              ariaLabel="Resource editor"
+              className="resource-editor__monaco"
+              exposeForE2E
               onChange={setText}
             />
           </div>

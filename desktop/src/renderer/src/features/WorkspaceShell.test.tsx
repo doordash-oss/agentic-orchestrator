@@ -173,7 +173,7 @@ describe('WorkspaceShell tabs', () => {
     const mock = installAgenticoMock();
     mock.api.getCreationDefaults.mockResolvedValue({
       repositories: [],
-      defaults: { pipeline: 'medium', inquireness: 'balanced', models: [], useCurrentBranch: true },
+      defaults: { pipeline: 'medium', inquireness: 'medium', models: [], useCurrentBranch: true },
     });
     render(<WorkspaceShell />);
     const user = userEvent.setup();

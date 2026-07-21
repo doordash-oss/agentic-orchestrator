@@ -13,6 +13,7 @@ import {
   type AttentionActionResult,
   type AttentionItem,
 } from '../../../shared/ipc';
+import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 
 interface QuestionAnswerDraft {
   selected: string[];
@@ -95,7 +96,6 @@ export function AttentionInbox({
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   const bell = useRef<HTMLButtonElement>(null);
   const itemButtons = useRef(new Map<string, HTMLButtonElement>());
-  const draftSaves = useRef(new Map<string, Promise<void>>());
 
   useEffect(() => {
     if (openRequest === null) return;
@@ -169,34 +169,13 @@ export function AttentionInbox({
     }
   };
 
-  const saveDraft = (
-    id: string,
-    action: AttentionAction,
-    options: AttentionSubmitOptions = { successNotice: 'Draft saved.' },
-  ): Promise<void> => {
-    const previous = draftSaves.current.get(id) ?? Promise.resolve();
-    const run = previous
-      .catch(() => undefined)
-      .then(async () => {
-        try {
-          const result = await action();
-          setNotice(attentionActionNotice(result, options));
-          if (result.alreadyResolved === true) {
-            await refresh();
-          }
-        } catch (error) {
-          setNotice(attentionErrorMessage(error));
-          throw error;
-        }
-      });
-    const tracked = run.finally(() => {
-      if (draftSaves.current.get(id) === tracked) {
-        draftSaves.current.delete(id);
-      }
-    });
-    draftSaves.current.set(id, tracked);
-    return tracked;
-  };
+  const saveDraft = useAttentionDraftSaves({
+    notify: (result, options) => setNotice(attentionActionNotice(result, options)),
+    notifyError: (error) => setNotice(attentionErrorMessage(error)),
+    onAlreadyResolved: async () => {
+      await refresh();
+    },
+  });
 
   const focusRelativeItem = (currentId: string, direction: 1 | -1) => {
     const index = items.findIndex((item) => item.id === currentId);

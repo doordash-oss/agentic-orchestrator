@@ -1170,7 +1170,8 @@ export interface components {
             repos?: string[];
             models?: components["schemas"]["ModelDefaults"];
             exit_criteria?: string;
-            inquireness?: string;
+            /** @enum {string} */
+            inquireness?: "none" | "medium" | "high";
             images?: string[];
             attachments?: string[];
             use_current_branch?: boolean;
@@ -1484,7 +1485,8 @@ export interface components {
         };
         FeatureConfig: {
             models: components["schemas"]["ModelDefaults"];
-            inquireness: string;
+            /** @enum {string} */
+            inquireness: "none" | "medium" | "high";
             checkpoints: components["schemas"]["Checkpoints"];
             pipeline?: string;
             /** @enum {string} */

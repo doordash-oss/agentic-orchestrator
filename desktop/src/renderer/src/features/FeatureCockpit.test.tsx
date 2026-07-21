@@ -347,7 +347,8 @@ describe('FeatureCockpit ready-to-start', () => {
 
     await user.click(screen.getByRole('button', { name: 'Start' }));
 
-    expect(await screen.findByText('Planning')).toBeInTheDocument();
+    const statusBadge = screen.getByRole('status', { name: 'Current feature status' });
+    expect(await within(statusBadge).findByText('Planning')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
   });
 });
@@ -652,7 +653,8 @@ describe('FeatureCockpit Stop', () => {
     });
     expect(confirm).toBeDisabled();
     resolveStop();
-    expect(await screen.findByText('Interrupted')).toBeInTheDocument();
+    const statusBadge = screen.getByRole('status', { name: 'Current feature status' });
+    expect(await within(statusBadge).findByText('Interrupted')).toBeInTheDocument();
   });
 
   it('refreshes a rejected Stop and presents the structured safe error', async () => {

@@ -171,6 +171,16 @@ const (
 	InquirenessHigh   Inquireness = "high"
 )
 
+// IsValid returns true for known inquireness levels. The empty string is
+// treated as valid so callers can apply defaults after the fact.
+func (i Inquireness) IsValid() bool {
+	switch i {
+	case InquirenessNone, InquirenessMedium, InquirenessHigh, "":
+		return true
+	}
+	return false
+}
+
 // RepoState carries the minimal per-repo signal orchestration needs:
 // whether any phase touched the repo, the optional PR URL, and the most
 // recent error message. Persisted on Run.RepoStates.

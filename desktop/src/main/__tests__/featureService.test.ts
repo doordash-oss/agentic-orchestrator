@@ -33,7 +33,7 @@ function runtimeConfigBody(): Record<string, unknown> {
     api_version: 'v1',
     feature_defaults: {
       models: { planning: 'model-plan', implementation: 'model-impl', utilities: '' },
-      inquireness: 'balanced',
+      inquireness: 'medium',
       pipeline: 'medium',
       checkpoints: {},
     },
@@ -128,7 +128,7 @@ describe('FeatureService.creationDefaults', () => {
     expect(defaults.repositories).toHaveLength(2);
     expect(defaults.repositories[1]?.valid).toBe(false);
     expect(defaults.defaults.pipeline).toBe('medium');
-    expect(defaults.defaults.inquireness).toBe('balanced');
+    expect(defaults.defaults.inquireness).toBe('medium');
     expect(defaults.defaults.useCurrentBranch).toBe(false);
     expect(defaults.defaults.models).toEqual([
       { phase: 'Planning', model: 'model-plan' },
@@ -163,7 +163,7 @@ describe('FeatureService.createFeature', () => {
       expect.objectContaining({
         pipeline: 'medium',
         risk_level: 'medium',
-        inquireness: 'balanced',
+        inquireness: 'medium',
         idempotency_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     );

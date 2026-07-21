@@ -114,7 +114,7 @@ test('four-step creation covers scoped files, initialization, review, setup, and
     await evidenceShot(app, SHOTS.pipeline);
     await app.page.getByRole('button', { name: 'Next: Review' }).click();
     await app.page.getByLabel('Risk').selectOption('high');
-    await app.page.getByLabel('Inquireness').selectOption('thorough');
+    await app.page.getByLabel('Inquireness').selectOption('high');
     await app.page
       .getByText('Exit criteria')
       .locator('..')

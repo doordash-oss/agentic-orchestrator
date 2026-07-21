@@ -1882,6 +1882,15 @@ body {
   gap: var(--space-5);
 }
 
+/* The creation wizard's sticky action bar pins at bottom: 0 of its scroll
+ * container's content box. A bottom padding on the scroll container would
+ * leave a strip below the bar where panel content keeps painting and clips at
+ * the pane edge, so the create-view panel drops that bottom padding; the
+ * wizard's own panel padding-bottom still clears the bar at scroll-bottom. */
+.tab-panel--create {
+  padding-bottom: 0;
+}
+
 .home-surface__header {
   width: min(1440px, 100%);
   margin: 0 auto;
@@ -1967,7 +1976,9 @@ body {
 }
 .creation-wizard__panel {
   min-height: 30rem;
-  padding: 2rem 0 5rem;
+  /* Bottom padding clears the sticky action bar so no form group renders
+     under it at rest; the bar's gradient mask handles the scroll case. */
+  padding: 2rem 0 7rem;
 }
 .creation-wizard__panel h2 {
   margin: 0 0 1.5rem;
@@ -1979,9 +1990,26 @@ body {
   align-items: center;
   position: sticky;
   bottom: 0;
+  z-index: 2;
   padding: 1rem 0;
   border-top: 1px solid var(--color-hairline);
   background: var(--color-bg);
+  /* Upward elevation so the bar reads as a surface floating above scrolling
+     content instead of a page-colored gap that lets card borders show through. */
+  box-shadow: 0 -0.75rem 1.25rem -0.5rem color-mix(in srgb, var(--color-bg) 85%, transparent);
+}
+/* Fade the pane edge above the sticky action bar so scrolling card borders and
+   form labels dissolve before reaching the bar instead of painting as slivers
+   above it. */
+.creation-wizard__actions::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 1.5rem;
+  background: linear-gradient(to top, var(--color-bg), transparent);
+  pointer-events: none;
 }
 
 .creation-wizard__panel button:not([class]),
@@ -2688,6 +2716,57 @@ body {
   padding: var(--space-2) 0;
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-hairline);
+}
+
+/* Always-visible status badge: the cockpit shell surfaces the feature status
+ * in the action bar so it remains readable in narrow mode, where the inspector
+ * aside is hidden and the status otherwise lives only in the drawer. The dot
+ * color tracks the dashboard tone for the status. */
+.cockpit__phase-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  align-self: center;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  font: 600 12px var(--font-mono);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+.cockpit__phase-status code {
+  font: inherit;
+  color: inherit;
+}
+.cockpit__phase-status code::before {
+  content: '●';
+  margin-right: var(--space-2);
+  color: var(--color-muted);
+}
+.cockpit__phase-status code[data-status='Failed']::before {
+  color: var(--color-danger);
+}
+.cockpit__phase-status code[data-status='Interrupted']::before,
+.cockpit__phase-status code[data-status='NeedUserInput']::before,
+.cockpit__phase-status code[data-status='ResearchNeedsReview']::before,
+.cockpit__phase-status code[data-status='FinalReviewNeedsReview']::before {
+  color: var(--color-accent);
+}
+.cockpit__phase-status code[data-status='Created']::before {
+  color: var(--color-success);
+}
+.cockpit__phase-status code[data-status='SettingUpWorktrees']::before,
+.cockpit__phase-status code[data-status='BuildingKB']::before,
+.cockpit__phase-status code[data-status='Inquiring']::before,
+.cockpit__phase-status code[data-status='Researching']::before,
+.cockpit__phase-status code[data-status='Designing']::before,
+.cockpit__phase-status code[data-status='Planning']::before,
+.cockpit__phase-status code[data-status='Implementing']::before,
+.cockpit__phase-status code[data-status='Reviewing']::before,
+.cockpit__phase-status code[data-status='FinalReviewing']::before {
+  color: var(--color-signal);
 }
 
 /* Current-run utilities stay in the cockpit control language, with rewind
@@ -3591,6 +3670,15 @@ body {
   min-height: 0;
   overflow: auto;
   padding: var(--space-4);
+  /* Mask the top scroll edge so scrolling card borders and diff lines
+     dissolve before leaving the pane instead of painting as clipped slivers. */
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 1rem,
+    black calc(100% - 1rem),
+    transparent 100%
+  );
 }
 
 .completion-workspace__loading,

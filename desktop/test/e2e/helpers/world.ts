@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { upsertYamlScalar } from './yaml';
 
 export interface StubAuthState {
   loggedIn: boolean;
@@ -515,14 +516,6 @@ export function seedRunHistory(
   featureYaml = upsertYamlScalar(featureYaml, 'active_run', String(runCount));
   featureYaml = upsertYamlScalar(featureYaml, 'run_count', String(runCount));
   fs.writeFileSync(featurePath, featureYaml);
-}
-
-function upsertYamlScalar(yaml: string, key: string, value: string): string {
-  const line = `${key}: ${value}`;
-  const pattern = new RegExp(`^${key}:.*$`, 'm');
-  return pattern.test(yaml)
-    ? yaml.replace(pattern, line)
-    : `${yaml.endsWith('\n') ? yaml : `${yaml}\n`}${line}\n`;
 }
 
 // --- discovery / processes -----------------------------------------------------

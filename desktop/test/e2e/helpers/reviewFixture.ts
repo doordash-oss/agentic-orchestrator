@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { JourneyWorld } from './world';
+import { upsertYamlScalar } from './yaml';
 
 export const VALID_PLAN = [
   '# Packaged review fixture',
@@ -68,16 +69,6 @@ function activeRunNumber(featureYaml: string): number {
   if (value === undefined) return 1;
   const activeRun = Number.parseInt(value, 10);
   return Number.isSafeInteger(activeRun) && activeRun > 0 ? activeRun : 1;
-}
-
-function upsertYamlScalar(yaml: string, key: string, value: string): string {
-  const line = `${key}: ${value}`;
-  const pattern = new RegExp(`^${key}:.*$`, 'm');
-  return pattern.test(yaml)
-    ? yaml.replace(pattern, line)
-    : yaml.endsWith('\n')
-      ? `${yaml}${line}\n`
-      : `${yaml}\n${line}\n`;
 }
 
 function upsertYamlMapScalar(yaml: string, mapKey: string, key: string, value: string): string {

@@ -2172,7 +2172,9 @@ components:
         models:
           $ref: "#/components/schemas/ModelDefaults"
         exit_criteria: { type: string, maxLength: 4000 }
-        inquireness: { type: string }
+        inquireness:
+          type: string
+          enum: [none, medium, high]
         images:
           type: array
           maxItems: 12
@@ -2913,6 +2915,7 @@ components:
           $ref: "#/components/schemas/EffortConfig"
         inquireness:
           type: string
+          enum: [none, medium, high]
         checkpoints:
           $ref: "#/components/schemas/Checkpoints"
         pipeline:

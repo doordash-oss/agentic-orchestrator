@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   auditElectronBuilderFuseConfig,
   expectedElectronBuilderFuses,
@@ -11,6 +11,7 @@ import {
   isAllowedNavigation,
   isSafeExternalUrl,
   mainWindowWebPreferences,
+  openExternalSafely,
   permissionRequestPolicy,
   resolveWithinRoot,
   windowOpenPolicy,
@@ -95,6 +96,28 @@ describe('isSafeExternalUrl', () => {
     expect(isSafeExternalUrl('file:///etc/passwd')).toBe(false);
     expect(isSafeExternalUrl('https://github.com.evil.example.com/x')).toBe(false);
     expect(isSafeExternalUrl('garbage')).toBe(false);
+  });
+});
+
+describe('openExternalSafely', () => {
+  it('opens allowlisted URLs and reports acceptance', async () => {
+    const openExternal = vi.fn(() => Promise.resolve());
+    await expect(openExternalSafely('https://github.com/x', openExternal)).resolves.toBe(true);
+    expect(openExternal).toHaveBeenCalledOnce();
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/x');
+  });
+
+  it('rejects non-allowlisted URLs without invoking the opener', async () => {
+    const openExternal = vi.fn(() => Promise.resolve());
+    await expect(openExternalSafely('https://evil.example.com/x', openExternal)).resolves.toBe(
+      false,
+    );
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('propagates opener failures so callers can surface them', async () => {
+    const openExternal = vi.fn(() => Promise.reject(new Error('boom')));
+    await expect(openExternalSafely('https://github.com/x', openExternal)).rejects.toThrow('boom');
   });
 });
 

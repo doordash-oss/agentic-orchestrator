@@ -67,6 +67,27 @@ func (e AutomaticReviewStateSource) Valid() bool {
 	}
 }
 
+// Defines values for CreateFeatureMutationRequestInquireness.
+const (
+	CreateFeatureMutationRequestInquirenessHigh   CreateFeatureMutationRequestInquireness = "high"
+	CreateFeatureMutationRequestInquirenessMedium CreateFeatureMutationRequestInquireness = "medium"
+	CreateFeatureMutationRequestInquirenessNone   CreateFeatureMutationRequestInquireness = "none"
+)
+
+// Valid indicates whether the value is a known member of the CreateFeatureMutationRequestInquireness enum.
+func (e CreateFeatureMutationRequestInquireness) Valid() bool {
+	switch e {
+	case CreateFeatureMutationRequestInquirenessHigh:
+		return true
+	case CreateFeatureMutationRequestInquirenessMedium:
+		return true
+	case CreateFeatureMutationRequestInquirenessNone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateFeatureMutationRequestPipeline.
 const (
 	CreateFeatureMutationRequestPipelineLarge    CreateFeatureMutationRequestPipeline = "large"
@@ -145,6 +166,27 @@ func (e FeatureConfigInputNotifications) Valid() bool {
 	case Enabled:
 		return true
 	case Muted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FeatureConfigInquireness.
+const (
+	FeatureConfigInquirenessHigh   FeatureConfigInquireness = "high"
+	FeatureConfigInquirenessMedium FeatureConfigInquireness = "medium"
+	FeatureConfigInquirenessNone   FeatureConfigInquireness = "none"
+)
+
+// Valid indicates whether the value is a known member of the FeatureConfigInquireness enum.
+func (e FeatureConfigInquireness) Valid() bool {
+	switch e {
+	case FeatureConfigInquirenessHigh:
+		return true
+	case FeatureConfigInquirenessMedium:
+		return true
+	case FeatureConfigInquirenessNone:
 		return true
 	default:
 		return false
@@ -1175,21 +1217,24 @@ type Cost struct {
 
 // CreateFeatureMutationRequest defines model for CreateFeatureMutationRequest.
 type CreateFeatureMutationRequest struct {
-	Attachments      []string                              `json:"attachments,omitempty"`
-	Checkpoints      Checkpoints                           `json:"checkpoints,omitempty"`
-	Description      string                                `json:"description,omitempty"`
-	ExitCriteria     string                                `json:"exit_criteria,omitempty"`
-	IdempotencyKey   string                                `json:"idempotency_key,omitempty"`
-	Images           []string                              `json:"images,omitempty"`
-	Inquireness      string                                `json:"inquireness,omitempty"`
-	Models           ModelDefaults                         `json:"models,omitempty"`
-	Name             string                                `json:"name"`
-	Pipeline         CreateFeatureMutationRequestPipeline  `json:"pipeline,omitempty"`
-	Repos            []string                              `json:"repos,omitempty"`
-	RiskLevel        CreateFeatureMutationRequestRiskLevel `json:"risk_level,omitempty"`
-	Skills           []string                              `json:"skills,omitempty"`
-	UseCurrentBranch bool                                  `json:"use_current_branch,omitempty"`
+	Attachments      []string                                `json:"attachments,omitempty"`
+	Checkpoints      Checkpoints                             `json:"checkpoints,omitempty"`
+	Description      string                                  `json:"description,omitempty"`
+	ExitCriteria     string                                  `json:"exit_criteria,omitempty"`
+	IdempotencyKey   string                                  `json:"idempotency_key,omitempty"`
+	Images           []string                                `json:"images,omitempty"`
+	Inquireness      CreateFeatureMutationRequestInquireness `json:"inquireness,omitempty"`
+	Models           ModelDefaults                           `json:"models,omitempty"`
+	Name             string                                  `json:"name"`
+	Pipeline         CreateFeatureMutationRequestPipeline    `json:"pipeline,omitempty"`
+	Repos            []string                                `json:"repos,omitempty"`
+	RiskLevel        CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
+	Skills           []string                                `json:"skills,omitempty"`
+	UseCurrentBranch bool                                    `json:"use_current_branch,omitempty"`
 }
+
+// CreateFeatureMutationRequestInquireness defines model for CreateFeatureMutationRequest.Inquireness.
+type CreateFeatureMutationRequestInquireness string
 
 // CreateFeatureMutationRequestPipeline defines model for CreateFeatureMutationRequest.Pipeline.
 type CreateFeatureMutationRequestPipeline string
@@ -1263,7 +1308,7 @@ type FeatureConfig struct {
 	Checkpoints         Checkpoints                      `json:"checkpoints"`
 	Effort              EffortConfig                     `json:"effort,omitempty"`
 	InputNotifications  FeatureConfigInputNotifications  `json:"input_notifications,omitempty"`
-	Inquireness         string                           `json:"inquireness"`
+	Inquireness         FeatureConfigInquireness         `json:"inquireness"`
 	Models              ModelDefaults                    `json:"models"`
 	Pipeline            string                           `json:"pipeline,omitempty"`
 }
@@ -1273,6 +1318,9 @@ type FeatureConfigAutomaticReviewMode string
 
 // FeatureConfigInputNotifications defines model for FeatureConfig.InputNotifications.
 type FeatureConfigInputNotifications string
+
+// FeatureConfigInquireness defines model for FeatureConfig.Inquireness.
+type FeatureConfigInquireness string
 
 // FeatureConfigResponse defines model for FeatureConfigResponse.
 type FeatureConfigResponse struct {

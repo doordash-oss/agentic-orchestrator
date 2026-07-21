@@ -428,7 +428,12 @@ export function WorkspaceShell({
       </div>
 
       {active === null ? (
-        <div id="panel-home" role="tabpanel" aria-labelledby="tab-home" className="tab-panel">
+        <div
+          id="panel-home"
+          role="tabpanel"
+          aria-labelledby="tab-home"
+          className={`tab-panel${view === 'create' ? ' tab-panel--create' : ''}`}
+        >
           {view === 'create' ? (
             <CreationFlow
               guard={creationGuard}

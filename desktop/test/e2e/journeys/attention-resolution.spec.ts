@@ -21,6 +21,7 @@ import {
   type JourneyWorld,
   waitFor,
 } from '../helpers/world';
+import { replaceTopLevelBlock, upsertYamlScalar } from '../helpers/yaml';
 
 type AttentionItems = Awaited<ReturnType<Window['agentico']['getAttention']>>['items'];
 type AttentionItem = AttentionItems[number];
@@ -71,7 +72,10 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await handle.page
       .locator('#feature-description')
       .fill('A real packaged feature used to exercise the spatial shell journey.');
+    await handle.page.getByRole('button', { name: 'Next: Where' }).click();
     await handle.page.getByRole('checkbox', { name: /spatial-shell-lab/ }).check();
+    await handle.page.getByRole('button', { name: 'Next: Pipeline' }).click();
+    await handle.page.getByRole('button', { name: 'Next: Review' }).click();
     await handle.page.getByRole('button', { name: 'Create feature' }).click();
 
     const cockpit = handle.page.getByLabel('Feature Spatial Shell Attention Fixture');
@@ -792,10 +796,11 @@ function seedFeatureHelpQueue(world: JourneyWorld, featureId: string): string {
   let featureYaml = fs.readFileSync(featurePath, 'utf8');
   featureYaml = upsertYamlScalar(featureYaml, 'status', 'Published');
   featureYaml = upsertYamlScalar(featureYaml, 'current_phase', '3');
-  featureYaml = upsertYamlTopLevelBlock(featureYaml, 'help_queue', [
-    '- question: Which cockpit help path should continue?',
-    '  time: 2026-07-15T10:00:00Z',
-    '  pending: true',
+  featureYaml = replaceTopLevelBlock(featureYaml, 'help_queue', [
+    'help_queue:',
+    '  - question: Which cockpit help path should continue?',
+    '    time: 2026-07-15T10:00:00Z',
+    '    pending: true',
   ]);
   fs.writeFileSync(featurePath, featureYaml);
   return featurePath;
@@ -847,15 +852,6 @@ function seedCycleNeedUserInputGate(
   return { ...fixture, featureId, gatePath };
 }
 
-function upsertYamlScalar(yaml: string, key: string, value: string): string {
-  const line = `${key}: ${value}`;
-  const pattern = new RegExp(`^${key}:.*$`, 'm');
-  if (pattern.test(yaml)) {
-    return yaml.replace(pattern, line);
-  }
-  return yaml.endsWith('\n') ? `${yaml}${line}\n` : `${yaml}\n${line}\n`;
-}
-
 function upsertYamlMapScalar(yaml: string, mapKey: string, key: string, value: string): string {
   const lines = yaml.split('\n');
   const parentIndex = lines.findIndex((line) => line === `${mapKey}:`);
@@ -874,24 +870,6 @@ function upsertYamlMapScalar(yaml: string, mapKey: string, key: string, value: s
     insertIndex += 1;
   }
   lines.splice(insertIndex, 0, `  ${key}: ${value}`);
-  return lines.join('\n');
-}
-
-function upsertYamlTopLevelBlock(yaml: string, key: string, blockLines: string[]): string {
-  const lines = yaml.split('\n');
-  const start = lines.findIndex((line) => line === `${key}:` || line.startsWith(`${key}: `));
-  const replacement = [`${key}:`, ...blockLines.map((line) => `  ${line}`)];
-  if (start === -1) {
-    const suffix = yaml.endsWith('\n') ? '' : '\n';
-    return `${yaml}${suffix}${replacement.join('\n')}\n`;
-  }
-  let end = start + 1;
-  while (end < lines.length) {
-    const line = lines[end] ?? '';
-    if (line !== '' && !line.startsWith(' ')) break;
-    end += 1;
-  }
-  lines.splice(start, end - start, ...replacement);
   return lines.join('\n');
 }
 

@@ -122,6 +122,12 @@ test('packaged attention notifications are private, deduplicated, bounded, exact
       timeout: 60_000,
     });
     await installNotificationCapture(handle);
+    // The line-134 assertion expects zero notifications, which holds only when
+    // the main window is focused (shouldNotify returns false). OS focus is an
+    // ambient resource the test does not otherwise control, so deterministically
+    // focus the window and confirm via the published test hook before any
+    // attention item can arrive.
+    await ensureMainWindowFocus(handle);
 
     const cockpit = await createFeatureViaForm(handle, {
       name: 'Background Notification Questions',
@@ -129,6 +135,7 @@ test('packaged attention notifications are private, deduplicated, bounded, exact
       repoPatterns: [/notify-lab/],
       waitForReady: true,
     });
+    await ensureMainWindowFocus(handle);
     await cockpit.getByRole('button', { name: 'Start', exact: true }).click();
     await waitForAttentionItem(handle, 'perm-allow-once');
     expect(await capturedNotifications(handle)).toHaveLength(0);
@@ -296,6 +303,31 @@ async function hideMainWindow(
       global.__agenticoRefreshBackgroundState?.();
     }
   }, options.refreshBackground !== false);
+}
+
+async function ensureMainWindowFocus(handle: AppHandle): Promise<void> {
+  await handle.app.evaluate(({ BrowserWindow, app }) => {
+    const global = globalThis as typeof globalThis & {
+      __agenticoMainWindowFocusState?: { focused: boolean };
+    };
+    if (global.__agenticoMainWindowFocusState?.focused === true) return;
+    const window = BrowserWindow.getAllWindows()[0];
+    if (window === undefined) throw new Error('main window missing');
+    if (!window.isVisible()) window.show();
+    app.focus({ steal: true });
+    window.focus();
+  });
+  await waitFor(
+    async () =>
+      handle.app.evaluate(() => {
+        const global = globalThis as typeof globalThis & {
+          __agenticoMainWindowFocusState?: { focused: boolean };
+        };
+        return global.__agenticoMainWindowFocusState?.focused === true;
+      }),
+    'main window to report focused',
+    5_000,
+  );
 }
 
 async function waitForAttentionItem(handle: AppHandle, id: string): Promise<void> {

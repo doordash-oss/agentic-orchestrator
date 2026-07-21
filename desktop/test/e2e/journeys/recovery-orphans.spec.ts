@@ -181,9 +181,20 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     const freshScanButton = recoveryPanel.locator('.recovery-workspace__rescan').last();
     await expect(freshScanButton).toBeVisible({ timeout: 5_000 });
     await freshScanButton.click();
-    await expect(recoveryPanel.locator('.recovery-workspace__scan')).toContainText(/Scanning/, {
-      timeout: 15_000,
+    // The orphan re-scan against the local server can settle in ~1ms, so
+    // asserting the transient "Scanning…" label races the scan and flips
+    // red once latency drops. Assert the scan's outcome instead: wait for
+    // the stale-snapshot notice to clear, then for either a refreshed
+    // item list or the empty state. The not.toContainText(/Scanning/)
+    // guard below stays as a settle check, never a transient positive.
+    await expect(recoveryPanel.locator('.recovery-workspace__complete')).not.toBeVisible({
+      timeout: 30_000,
     });
+    await expect(
+      recoveryPanel
+        .locator('.recovery-workspace__queue')
+        .or(recoveryPanel.locator('.recovery-workspace__empty')),
+    ).toBeVisible({ timeout: 30_000 });
     await expect(recoveryPanel.locator('.recovery-workspace__scan')).not.toContainText(/Scanning/, {
       timeout: 30_000,
     });

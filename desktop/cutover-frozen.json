@@ -454,7 +454,7 @@
     {
       "id": "cap-a0c504483ea3",
       "capability": "Unsigned development packages containing the desktop app, offline @fontsource assets, and the target-matched Go server: universal macOS DMG (lipo'd universal `bin/agentico`), Linux x64/arm64 AppImage + deb; signing/notarization/publishing explicitly disabled",
-      "frozenHash": "e45e406156301d3124e788c774c3566211c10ae2f8dedab9adc7bbe130bdb7f0"
+      "frozenHash": "c6df5f6c9756eefeba503d16ee422f62c5ec95938d626f34ee8e73b69b6f43fb"
     },
     {
       "id": "cap-894288d9b8bb",
@@ -462,9 +462,9 @@
       "frozenHash": "36e66dc0f6de32b9427ca7aff3a52076170d10443ed9f8cfde6bb2fcbdee7065"
     },
     {
-      "id": "cap-3785e58aab7e",
-      "capability": "Native CI package gates: per-platform matrix (macos-latest, ubuntu-latest) failing on contract drift (Go OpenAPI generate `--check`, TypeScript API drift), strict type/lint/format errors, unit/component/security failures, package construction or inspection failures; packaging evidence uploaded on failure",
-      "frozenHash": "6f1a4ffbdce7eec27480b2dc5687fa4b5c6104bd828f33dd9cb747e5fd80f716"
+      "id": "cap-8a8b40fc8d4a",
+      "capability": "Native CI package gates: per-platform matrix (macos-latest, ubuntu-latest, ubuntu-24.04-arm) failing on contract drift (Go OpenAPI generate `--check`, TypeScript API drift), strict type/lint/format errors, unit/component/security failures, package construction or inspection failures; packaging evidence uploaded on failure",
+      "frozenHash": "dc9f278adbf5e1bb9c6edaa68643a9da909213b3180b85f318ca6376727cec01"
     },
     {
       "id": "cap-6a8064633835",

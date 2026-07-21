@@ -53,8 +53,10 @@ go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 # or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-Running `agentico` starts the local server in the foreground; it does not open
-the desktop dashboard. Use `agentico update` to open desktop Settings >
+Running `agentico` with no subcommand launches or focuses the installed
+desktop app, which in turn starts and supervises its matched bundled server.
+Use `agentico server [flags]` to run the foreground loopback server for
+headless automation. Use `agentico update` to open desktop Settings >
 Updates when the app is registered, or to print non-mutating headless update
 guidance.
 

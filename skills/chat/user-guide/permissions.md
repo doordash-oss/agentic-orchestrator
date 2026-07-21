@@ -1,12 +1,12 @@
 # Permissions
 
-Agentic Orchestrator mediates provider tool use through session handlers and cached permission rules. This page separates the runtime permission model from the controls that exist in the current Electron app.
+Agentic Orchestrator mediates provider tool use through session handlers and cached permission rules. This page separates the runtime permission model from the controls exposed by the Electron app.
 
-## Current Desktop Availability
+## Desktop Availability
 
-Permission request cards and Approve, Approve and remember, and Deny controls are **pending** in the Electron app. The current live **Signal trace** can show validated tool activity, but it is not a permission prompt and cannot answer one.
+Permission request cards with **Approve**, **Approve and remember**, and **Deny** controls are delivered in the Electron app. They surface in the global attention inbox and in the feature cockpit. The live **Signal trace** can show validated tool activity, but resolving a permission request uses the dedicated prompt cards.
 
-Do not use superseded single-key permission shortcuts. When a workflow is blocked on a permission request, the current desktop release has no supported control for resolving it. Start workflows only with permission rules appropriate for the provider and repository, or use the server launch option described below in a trusted environment.
+Do not use superseded single-key permission shortcuts. When a workflow is blocked on a permission request, use the inbox or cockpit card to answer it, or start workflows with permission rules appropriate for the provider and repository, or use the server launch option described below in a trusted environment.
 
 ## Runtime Permission Types
 
@@ -112,7 +112,7 @@ agentico --dangerously-skip-permissions
 
 OpenCode’s question surface still pauses for you so `AskUserQuestion` retains the same semantics as Claude and Codex. Read-only mounts remain non-writable.
 
-This flag removes a significant safety boundary. Use it only for trusted repositories, prompts, dependencies, and provider sessions. The current Electron app does not provide the previous client’s warning badges or color treatment, so confirm the server launch arguments outside the app.
+This flag removes a significant safety boundary. Use it only for trusted repositories, prompts, dependencies, and provider sessions. The Electron app surfaces permission state through the attention inbox and cockpit cards; confirm the server launch arguments outside the app when you start the server headless.
 
 ## Evaluation Order
 
@@ -132,7 +132,8 @@ single retry. Two consecutive timeouts start a 30-second cooldown with a
 half-open retry; two consecutive provider or protocol failures disable the
 model path for the session. If no reviewer is available, deterministic
 approvals still fast-path while other requests proceed to the compatible
-permission client. The Electron permission client is still pending.
+permission client. Step 5 is resolved through the Electron attention inbox or
+feature cockpit permission cards.
 
 See
 [Configuration — Automatic Bash Review](configuration.md#automatic-bash-review)

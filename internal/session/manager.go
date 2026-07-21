@@ -311,13 +311,6 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	return s, nil
 }
 
-// isChildExitedWriteError reports whether a stdin write failed because the
-// child process already closed its end of the pipe (it exited). Both EPIPE and
-// io.ErrClosedPipe surface this race.
-func isChildExitedWriteError(err error) bool {
-	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)
-}
-
 func (m *Manager) restoreLiveSessions(stateDir string) error {
 	pidFiles, err := FindPIDFiles(stateDir)
 	if err != nil {
@@ -421,6 +414,13 @@ func readPersistedTranscript(path string) ([]llm.SDKMessage, error) {
 		return nil, fmt.Errorf("reading transcript: %w", err)
 	}
 	return messages, nil
+}
+
+// isChildExitedWriteError reports whether a stdin write failed because the
+// child process already closed its end of the pipe (it exited). Both EPIPE and
+// io.ErrClosedPipe surface this race.
+func isChildExitedWriteError(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)
 }
 
 func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase feature.Phase, msg llm.SDKMessage) {

@@ -57,6 +57,31 @@ describe('cutover ledger verifier', () => {
     );
   });
 
+  it('rejects an unexercised-architecture gap in a delivered row', () => {
+    const manifest = completeFixtureManifest();
+    const withArchGap = matrix.replace(
+      'macOS+Linux | `desktop/test/e2e/watch.spec.ts`',
+      'macOS+Linux (Linux arm64 has no native runner yet) | `desktop/test/e2e/watch.spec.ts`',
+    );
+    const withArchGapManifest = buildFrozenManifest(withArchGap, 'baseline-revision');
+    for (const category of Object.keys(manifest.auditCoverage)) {
+      withArchGapManifest.auditCoverage[category] = [manifest.rows[0].id];
+    }
+    const failures = verifyCutover({
+      matrixText: withArchGap,
+      manifest: withArchGapManifest,
+      evidenceExists: () => true,
+      residueFiles: [],
+    });
+    expect(failures).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'platform scope names an unexercised architecture gap, inconsistent with a delivered status',
+        ),
+      ]),
+    );
+  });
+
   it('rejects stale evidence, duplicate rows, and terminal-client residue', () => {
     const manifest = completeFixtureManifest();
     const duplicated = `${matrix}${matrix.split('\n').find((line) => line.startsWith('| Watch work'))}\n`;

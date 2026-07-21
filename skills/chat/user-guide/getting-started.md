@@ -2,7 +2,7 @@
 
 Agentic Orchestrator is an Electron desktop application for supervising the **KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish** lifecycle. It runs AI agent sessions in isolated git worktrees so multiple features can progress without sharing branches or state.
 
-The desktop app is the primary interface. `agentico` is the local server and administration CLI; running `agentico` starts the loopback server in the foreground and does **not** open the desktop app. A packaged desktop app launches and supervises its matched bundled server automatically.
+The desktop app is the primary interface. `agentico` is the local server and administration CLI; running `agentico` with no subcommand launches or focuses the installed desktop app, which starts and supervises its matched bundled server. Use `agentico server` only for an explicit foreground loopback server.
 
 ## Prerequisites
 
@@ -32,7 +32,7 @@ cd agentic-orchestrator
 go build -o bin/agentico ./cmd/agentico
 ```
 
-Run `agentico` or `agentico server` only when you want a foreground server. See [Configuration](configuration.md#launch-flags) for its flags.
+Run `agentico server` only when you want a foreground server. See [Configuration](configuration.md#launch-flags) for its flags.
 
 ## First Desktop Launch
 
@@ -47,14 +47,14 @@ When every readiness gate passes, the app opens the **Home** workspace. Fresh in
 
 ## Create a Feature
 
-The **Features** list appears first on Home so work needing intervention stays prominent. The **New feature** form appears below it.
+The **Features** list appears first on Home so work needing intervention stays prominent. Select **New feature** to open the creation wizard, which has four steps:
 
-1. Enter a **Name** and optional **Description**.
-2. Select one or more currently discovered **Repositories**.
-3. Choose **New feature branch (server default)** or **Use each repository's current branch**.
-4. Review the read-only **Server defaults** summary, then select **Create feature**.
+1. **What** — enter a **Name** and optional **Description**. Paste or drop images into the description, and use the `@` file picker to attach files with fuzzy autocomplete.
+2. **Where** — select one or more currently discovered **Repositories**. Browse workspace directories and initialize new repositories on the fly with explicit consent.
+3. **Pipeline** — choose a profile (Medium / Large / Moonshot) and review the effective checkpoint summary.
+4. **Review** — adjust per-phase models, risk level, checkpoints, exit criteria, inquireness, and skill scoping, then select **Create feature**.
 
-The current desktop form uses the runtime’s pipeline, model, and inquireness defaults. Editing those defaults, per-feature checkpoints, models, risk, or exit criteria in the desktop app is not delivered yet; edit `config.yaml` before creation when those values must differ.
+The wizard prefills from the runtime's pipeline, model, and inquireness defaults; every value on the Review step can be overridden per feature before creation.
 
 Creation opens a feature tab and starts durable setup. The tab shows setup tasks, attempts, safe errors, and a server-authorized **Retry setup** control when setup fails. Retry continues the same feature and re-runs only unfinished setup tasks.
 
@@ -72,7 +72,7 @@ Once the runtime reports an active run, the same tab updates in place with:
 
 The timeline follows new output while you are at the newest entry. Scrolling back preserves your reading position and reveals **Jump to live**. Select an entry to inspect its validated source record; select **Close raw inspector** to clear the inspector.
 
-The only workspace-tab shortcuts currently implemented are Left Arrow and Right Arrow while focus is on a tab. Other actions use the labeled desktop controls.
+Workspace tabs respond to Left Arrow and Right Arrow while focus is on a tab. The desktop app also exposes a full keyboard map, a command palette (Cmd/Ctrl+K), and a help overlay (Cmd/Ctrl+/) listing every reachable action and its shortcut.
 
 ## Stop Work
 
@@ -81,13 +81,13 @@ When the server action catalogue authorizes Stop, select **Stop** in the feature
 - **Keep running** or Escape closes the dialog without changing the feature.
 - **Confirm stop** asks the runtime to stop the feature and waits for authoritative refreshed state.
 
-Validated transcript content remains available after the stream finishes. Stop does not expose Resume, Retry phase, Rewind, or post-publish actions; those desktop capabilities are pending.
+Validated transcript content remains available after the stream finishes. After Stop, the feature cockpit continues to expose catalogue-driven Resume, Retry phase, Rewind, and post-publish actions as the server authorizes them.
 
 ## Current Desktop Scope
 
-The current Electron app delivers first-launch readiness, the intervention-first Home list, feature creation and durable setup, server-authorized Start/Stop, live transcript history, raw inspection, reconnect/reset presentation, theme selection, and app-owned server recovery.
+The Electron app delivers first-launch readiness, the intervention-first Home list, the four-step creation wizard, feature creation and durable setup, server-authorized Start/Stop/Resume/Retry/Rewind, live transcript history, raw inspection, reconnect/reset presentation, theme selection, app-owned server recovery, permission decisions, planning and review gates, artifact browsing and editing, runtime and feature configuration editing, post-publish actions (publish, rebase, merge, refactor, review comments, Done, cleanup, delete), desktop notifications, recovery, Ask Me Anything chat, and in-app updates.
 
-These workflow-engine capabilities do **not** yet have Electron controls: permission decisions, planning questions and review gates, phase resume/retry/rewind, artifact browsing or editing, runtime configuration editing, post-publish actions, notifications, tray behavior, signing, and in-app updates. Do not use terminal-era shortcuts for them; wait for a labeled desktop control in a later release.
+Every action is reachable through a labeled desktop control and is authorized by the current server action catalogue. Do not use retired terminal-era shortcuts; the desktop app exposes its own keyboard map, command palette, and help overlay.
 
 ## State Directory
 
@@ -110,5 +110,5 @@ Existing installs with `~/.agentic-workflow/` retain the same layout beneath tha
 
 - Learn the engine states and the currently exposed controls in [Feature Lifecycle](feature-lifecycle.md).
 - Review the runtime schema in [Configuration](configuration.md).
-- Understand current permission behavior and desktop limitations in [Permissions](permissions.md).
+- Understand current permission behavior in [Permissions](permissions.md).
 - Review [Verification](verification.md) before contributing source changes.

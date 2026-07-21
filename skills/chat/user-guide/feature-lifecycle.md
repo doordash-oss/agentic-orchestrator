@@ -10,7 +10,7 @@ A feature is Agentic Orchestrator’s durable unit of work. It owns isolated git
 | **Large** | KB Build → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features |
 | **Moonshot** | Same sequence as Large, with higher effort and per-iteration implementation review | High-risk or ambiguous work |
 
-The current Electron creation form shows the server’s selected pipeline as a read-only default. It does not yet provide a pipeline-profile picker or per-feature model/checkpoint editors. Configure defaults in `config.yaml` before creating the feature.
+The Electron creation wizard exposes a pipeline-profile picker (Medium / Large / Moonshot) and a Review step for per-feature model, checkpoint, risk, exit-criteria, and inquireness editors. Defaults still come from `config.yaml`, but every value can be overridden per feature before creation.
 
 ## Phases
 
@@ -82,33 +82,29 @@ Frequently seen states include:
 
 Review checkpoints can also pause the runtime in states such as `PromptNeedsReview`, `InquiryNeedsReview`, `ResearchNeedsReview`, `DesignNeedsReview`, and `PlanNeedsReview`.
 
-## Current Electron Controls
+## Electron Lifecycle Controls
 
 Home orders feature rows by operational need: intervention states first, active work next, startable work after that, then inactive and completed work. Each row shows repository, server status, current phase, priority, and a safe failure message when present. Select **Open** or **Show tab** to enter the feature cockpit.
 
-The cockpit currently exposes only actions present in the server action catalogue:
+The cockpit exposes every action present in the server action catalogue:
 
 - **Run setup** or **Retry setup** for durable setup tasks;
-- **Start** for a ready feature; and
-- **Stop** for active work, behind an impact confirmation.
+- **Start** for a ready feature;
+- **Stop** for active work, behind an impact confirmation;
+- **Resume** interrupted work, including a bulk resume action on the dashboard;
+- **Retry** a failed orchestration phase;
+- **Rewind** to an earlier phase, with a server-authored target picker, consequence preview, typed confirmation, and optional Advanced pipeline upgrade;
+- **Review** gates for inquiry, research, design, roadmap, phase plan, and manual publish checkpoints;
+- **Artifact browsing** for plans, roadmaps, Q&A, and diffs, with markdown rendering;
+- **Live preview / logs** per run;
+- **Publish, Rebase, Merge, Refactor, Review comments, Done, Clean worktree, and Delete** from the completion workspace; and
+- **Ask Me Anything** read-only chat.
 
-Disabled Start and Stop controls display every server-provided reason. Successful actions are confirmed only after refreshed feature and session snapshots arrive.
+Disabled controls display every server-provided reason. Successful actions are confirmed only after refreshed feature and session snapshots arrive.
 
 An active run appears as a semantic **Signal trace**. It combines bounded transcript history with live output, groups routine records, preserves selected raw records, and shows stream health. After a confirmed Stop, the completed transcript remains inspectable and Home reorders from the new authoritative state.
 
-## Pending Desktop Lifecycle Controls
-
-The engine contains lifecycle paths that the current Electron renderer does not yet expose. There are no supported desktop controls for:
-
-- answering planning or review-gate questions;
-- resuming interrupted work or resuming all features;
-- retrying a failed orchestration phase;
-- rewinding to an earlier phase;
-- browsing or editing run artifacts;
-- publishing, marking Done, or cleaning a worktree; or
-- rebase, review-comments, refactor, merge, and other post-publish cycles.
-
-Do not substitute retired terminal keybindings for these actions. A capability becomes available in the desktop app only when a labeled control is present and authorized by the current server snapshot.
+A capability becomes available in the desktop app only when a labeled control is present and authorized by the current server snapshot. Do not substitute retired terminal keybindings for these actions.
 
 ## Checkpoints
 
@@ -123,8 +119,8 @@ Checkpoint defaults are runtime configuration:
 | Phase Plan Review | Implementation |
 | Manual Publish | Publish |
 
-The current desktop app can display the resulting status in its feature list or cockpit, but resolving these checkpoint states is pending.
+The desktop app displays checkpoint status in its feature list and cockpit, and resolving these checkpoint states is delivered through the review workspace.
 
 ## Timing and Cost
 
-The runtime records phase timing and accumulated provider cost in feature state. A dedicated Electron timing/cost presentation is not part of the current cockpit; inspect runtime artifacts only through supported development tooling until that surface is delivered.
+The runtime records phase timing and accumulated provider cost in feature state. The feature cockpit surfaces elapsed time and accumulated cost in the current-run inspection panel.

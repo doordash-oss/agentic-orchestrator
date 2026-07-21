@@ -245,7 +245,7 @@ defaults:
 | `phase_plan_review` | Implementation phase | `true`  |
 | `manual_publish`    | Publish step         | `true`  |
 
-When a feature is created, these defaults are projected through the selected pipeline profile (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints)). The current Electron creation form does not edit individual checkpoints; change `config.yaml` before creation when different defaults are required.
+When a feature is created, these defaults are projected through the selected pipeline profile (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints)). The Electron creation wizard's Review step edits individual checkpoints per feature before creation; change `config.yaml` only when you want different persistent defaults.
 
 Omitted checkpoint fields in `defaults.checkpoints` or repo `pipeline_gates` default to `true` when the checkpoint is compatible with the selected pipeline. Config saves write all checkpoint fields explicitly. The legacy `plan_review` key is ignored by new config handling; replace it with `roadmap_review` and `phase_plan_review`.
 
@@ -289,7 +289,7 @@ workspace_roots:
   - /Users/you/Work
 ```
 
-Directories scanned for git repositories at startup. Discovered repositories appear in the Electron **New feature** form. A workspace root is selected during first launch; editing workspace roots after setup is not yet exposed in the desktop app, so use `config.yaml` and restart the runtime.
+Directories scanned for git repositories at startup. Discovered repositories appear in the Electron **New feature** form. A workspace root is selected during first launch; you can add and remove workspace roots later from the desktop Settings panel, which refreshes discovery immediately.
 
 ## Repository Configuration
 
@@ -313,7 +313,7 @@ The `pipeline_gates` map is keyed by pipeline profile name and overrides the def
 
 ## Pipeline Preferences
 
-`defaults.pipeline_preferences` stores model and inquireness preferences by pipeline profile. The current Electron creation form displays server defaults but does not edit these preferences.
+`defaults.pipeline_preferences` stores model and inquireness preferences by pipeline profile. The Electron creation wizard's Review step overrides these preferences per feature before creation; edit `config.yaml` only when you want different persistent defaults.
 
 ## Notifications
 
@@ -323,7 +323,7 @@ The runtime configuration retains one notification preference:
 | ---------------------------------- | ------------------------------------------------------------------ |
 | `notifications.mute_feature_input` | Suppresses notifications when an agent is waiting for manual input |
 
-Electron notification controls and OS attention notifications are pending. Edit `config.yaml` directly if this runtime setting is needed.
+Electron notification controls and OS attention notifications are delivered. The desktop Settings panel toggles a notification preview that includes feature name, attention type, and detail when enabled, and the app fires native OS notifications for attention events honoring the runtime mute setting. Edit `config.yaml` directly only for headless server installs.
 
 ## Observability
 

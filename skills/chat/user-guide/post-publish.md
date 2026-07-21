@@ -1,8 +1,8 @@
 # Post-Publish Workflows
 
-The Agentic Orchestrator runtime has workflows for continuing work after a feature reaches `CodeReady` or `Published`. The current Electron app does **not** expose controls for these workflows. This page explains their engine semantics for diagnosis and codebase exploration; it is not a set of desktop operating instructions.
+The Agentic Orchestrator runtime has workflows for continuing work after a feature reaches `CodeReady` or `Published`. The Electron app exposes these workflows through the completion workspace and feature cockpit, authorized by the server action catalogue. This page explains their engine semantics and where each one surfaces in the desktop app.
 
-Do not use retired terminal shortcuts to start these actions. Rebase, review-comments, refactor, merge, Done, and worktree cleanup remain pending in the desktop parity matrix.
+Do not use retired terminal shortcuts to start these actions. Each post-publish action is reachable through a labeled desktop control.
 
 ## Rebase
 
@@ -10,7 +10,7 @@ Rebase updates a feature branch against its base branch. For a publishable repos
 
 If conflicts occur, the runtime can build a conflict plan and run an implementation session to resolve it before continuing. Multi-repository features track this cycle per repository.
 
-**Electron status:** pending; no Rebase button or repository selector is currently available.
+**Desktop control:** the completion workspace exposes a Rebase handoff for code-ready and published features.
 
 ## Review Comments
 
@@ -18,7 +18,7 @@ The review-comments cycle fetches unresolved pull-request feedback through `gh`,
 
 If a required worktree was previously removed, the runtime can recreate it from durable feature state before the cycle.
 
-**Electron status:** pending; no review-comments inbox or action is currently available.
+**Desktop control:** the completion workspace exposes a review-comments inbox with a resolve flow.
 
 ## Refactor
 
@@ -27,28 +27,28 @@ A refactor cycle accepts a new objective and sends an existing feature back thro
 - Medium starts from planning.
 - Large and Moonshot include the earlier inquiry, research, and design work.
 
-The runtime retains the feature’s repository identity and publish state while tracking the refactor cycle per repository.
+The runtime retains the feature's repository identity and publish state while tracking the refactor cycle per repository.
 
-**Electron status:** pending; there is no refactor prompt, pipeline selector, or submit control in the current app.
+**Desktop control:** the completion workspace exposes a refactor prompt with an optional pipeline selector and submit control.
 
 ## Merge
 
 For a non-publishable local repository, merge can commit remaining work, merge the feature branch into its local base branch, and mark the feature complete.
 
-**Electron status:** pending; no Merge control is currently available.
+**Desktop control:** the completion workspace exposes a Merge action with confirmation.
 
 ## Done
 
 Marking a feature Done transitions its durable status and writes summary data such as timing, cost, and per-repository state after eligible work is complete.
 
-**Electron status:** pending; the current app can display a feature already reported as Done but cannot initiate the transition.
+**Desktop control:** the completion workspace exposes a Done action on the detail view.
 
 ## Clean Worktree
 
 Worktree cleanup removes an isolated feature worktree after it is no longer needed. Durable feature state remains, and a later engine workflow can recreate the worktree when supported.
 
-**Electron status:** pending; cleanup is manual outside the app in the current release. Confirm that no active session uses the worktree before changing it.
+**Desktop control:** the completion workspace exposes a Cleanup action after completion; confirm that no active session uses the worktree before triggering it.
 
-## What the Current App Can Do
+## What the App Surfaces
 
-For a feature that has reached a terminal or post-implementation state, the Electron app can show its authoritative row on Home and open its feature tab. Current-run transcript content remains available when the runtime exposes it. Do not expect post-publish action controls, an artifact browser, a diff editor, or a pull-request review surface until those capabilities are marked delivered.
+For a feature that has reached a terminal or post-implementation state, the Electron app shows its authoritative row on Home and opens its feature tab. Current-run transcript content remains available when the runtime exposes it. The completion workspace delivers publish, rebase, merge, refactor, review-comments, Done, worktree cleanup, and delete controls, plus an artifact browser, a diff viewer, and a pull-request review surface.

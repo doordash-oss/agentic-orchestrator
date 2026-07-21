@@ -480,15 +480,13 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
                       checked={repoKeys.includes(repo.name)}
                       disabled={!repo.valid || pending}
                       onChange={() => {
-                        setRepoKeys((items) => {
-                          const next = items.includes(repo.name)
-                            ? items.filter((item) => item !== repo.name)
-                            : [...items, repo.name];
-                          setRepositoryFiles((files) =>
-                            files.filter((file) => next.includes(file.repoKey)),
-                          );
-                          return next;
-                        });
+                        const nextRepoKeys = repoKeys.includes(repo.name)
+                          ? repoKeys.filter((item) => item !== repo.name)
+                          : [...repoKeys, repo.name];
+                        setRepoKeys(nextRepoKeys);
+                        setRepositoryFiles((files) =>
+                          files.filter((file) => nextRepoKeys.includes(file.repoKey)),
+                        );
                         setRepoError(null);
                       }}
                     />

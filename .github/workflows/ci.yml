@@ -31,14 +31,15 @@ jobs:
   # Native package gate per platform: strict checks (typecheck, lint, format,
   # OpenAPI->TypeScript drift), unit/component/security suites, production
   # build, then construct and inspect the unsigned package for this host
-  # (universal DMG on macOS; x64 AppImage + deb on ubuntu-latest). Linux
-  # arm64 packages are configured (AGENTICO_PACKAGE_ARCH=arm64) but have no
-  # native runner in this matrix yet.
+  # (universal DMG on macOS; x64 AppImage + deb on ubuntu-latest x64; arm64
+  # AppImage + deb on ubuntu-24.04-arm). Every supported Linux architecture
+  # is built and inspected on a native runner so the parity ledger's
+  # delivered package results cover Linux x64 and arm64 without gaps.
   desktop:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

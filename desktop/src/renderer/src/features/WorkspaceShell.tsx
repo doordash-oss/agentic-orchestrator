@@ -448,7 +448,7 @@ export function WorkspaceShell({
             <>
               <header className="home-surface__header">
                 <div>
-                  <p className="home-surface__eyebrow">Authoritative feature queue</p>
+                  <p className="home-surface__eyebrow">Feature queue</p>
                   <h1>Home</h1>
                 </div>
                 {list.phase !== 'loaded' || list.features.length > 0 ? (

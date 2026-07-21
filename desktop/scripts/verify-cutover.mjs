@@ -141,6 +141,21 @@ function validateRow(row, baseline, evidenceExists) {
   if (!/macOS/i.test(platform) || !/Linux/i.test(platform)) {
     failures.push(`${label} line ${line}: macOS and Linux results are required`);
   }
+  // The ledger is zero-gap, so a delivered row's platform/status cells must
+  // not admit an unexercised-architecture gap (e.g. "no native runner" or
+  // "not natively exercised"). Without this, a row can pass while naming an
+  // unsupported architecture gap, leaving the cutover artifact inconsistent.
+  const archGapPattern = /no native runner|not natively exercised|pending a native runner/i;
+  if (archGapPattern.test(platform)) {
+    failures.push(
+      `${label} line ${line}: platform scope names an unexercised architecture gap, inconsistent with a delivered status`,
+    );
+  }
+  if (archGapPattern.test(status)) {
+    failures.push(
+      `${label} line ${line}: status names an unexercised architecture gap, inconsistent with a delivered status`,
+    );
+  }
   if (!/^delivered(?:\b|\s|\()/i.test(status)) {
     failures.push(`${label} line ${line}: status is not fully delivered`);
   }

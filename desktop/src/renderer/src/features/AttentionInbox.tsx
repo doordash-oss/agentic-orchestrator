@@ -202,7 +202,11 @@ export function AttentionInbox({
         <span className="attention-bell__label" aria-hidden="true">
           Attention
         </span>
-        <span className="attention-bell__count" aria-hidden="true" data-empty={actionableCount === 0}>
+        <span
+          className="attention-bell__count"
+          aria-hidden="true"
+          data-empty={actionableCount === 0}
+        >
           {actionableCount}
         </span>
       </button>

@@ -24,6 +24,10 @@ type finishOrViolateNudgeProvider interface {
 	SupportsFinishOrViolateNudge() bool
 }
 
+type sessionResumeProvider interface {
+	SupportsSessionResume() bool
+}
+
 // finishOrViolateNudgeForModel reports whether the provider backing model opts
 // into the finish-or-violate auto-continuation retry. It returns false when the
 // registry is nil, the model is unresolved, or the provider does not implement

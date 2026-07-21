@@ -96,6 +96,47 @@ func TestResolvePlanArtifactPath(t *testing.T) {
 	})
 }
 
+func TestRecordApprovedPhasePlanArtifactRecordsFrontendFlag(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "phase-plan.md")
+	planText := "# Phase 1 Plan\n\n" +
+		"## Metadata\n\n" +
+		"**Frontend:** true\n\n" +
+		"## Overview\nShip UI.\n\n" +
+		"## Success Criteria\n\n" +
+		"### Visual Evidence\n- [ ] Capture the UI.\n"
+	if err := os.WriteFile(planPath, []byte(planText), 0o644); err != nil {
+		t.Fatalf("WriteFile(plan) error = %v", err)
+	}
+
+	store := feature.NewStore(dir)
+	f := newTestPlanFeature(t, dir)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature) error = %v", err)
+	}
+	cfg := PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:      f,
+			FeatureStore: store,
+		},
+		Phase: RoadmapPhase{Number: 2},
+	}
+
+	if err := recordApprovedPhasePlanArtifact(cfg, planPath); err != nil {
+		t.Fatalf("recordApprovedPhasePlanArtifact() error = %v", err)
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load(feature) error = %v", err)
+	}
+	if got := loaded.Artifacts["phase-2-plan"]; got != planPath {
+		t.Fatalf("Artifacts[phase-2-plan] = %q, want %q", got, planPath)
+	}
+	if !loaded.RoadmapPhaseFrontend(2) || !loaded.AnyRoadmapPhaseFrontend() {
+		t.Fatalf("frontend flag not recorded: %#v", loaded.Run().RoadmapPhaseFrontendByPhase)
+	}
+}
+
 // --- Integration tests for RunRoadmapPlanningLoop ---
 // These tests follow the same pattern as TestImplementLoop* in integration_test.go:
 // they use mock bash scripts that emit the expected signals.

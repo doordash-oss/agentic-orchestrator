@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -381,15 +382,13 @@ echo "iteration $ITER" >> "$PROGRESS_FILE"
 `+testutil.JSONLSuccess+`
 `)
 
-	// Review script: first call rejects, second call approves
-	reviewStateFile := filepath.Join(tmpDir, "review-count")
+	// Review script: every axis rejects iteration 1, then every axis approves
+	// iteration 2. The decision is based on the active iteration directory
+	// rather than process invocation count because review axes run in parallel.
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh", `
-STATE_FILE="`+reviewStateFile+`"
-COUNT=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
-COUNT=$((COUNT + 1))
-echo "$COUNT" > "$STATE_FILE"
+for _d in "`+artifactDir+`"/iteration-*; do :; done
 `+testutil.JSONLInit+`
-if [ "$COUNT" -eq 1 ]; then
+if [ "$(basename "$_d")" = "iteration-01" ]; then
     `+testutil.WriteReviewChangesRequested(artifactDir, "- **High**: Please add error handling")+`
 else
     `+testutil.WriteReviewApproved(artifactDir)+`
@@ -438,6 +437,144 @@ fi
 		if _, err := os.Stat(metaFile); os.IsNotExist(err) {
 			t.Errorf("expected %s/meta.yaml to exist", dir)
 		}
+	}
+}
+
+func TestImplementLoopReviewAxisErrorPreservesPooledFeedbackForNextIteration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-001")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	progressFile := filepath.Join(workDir, "progress.md")
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `
+PROGRESS_FILE="`+progressFile+`"
+ITER=$(($(cat "$PROGRESS_FILE" 2>/dev/null | wc -l) + 1))
+echo "iteration $ITER" >> "$PROGRESS_FILE"
+`+testutil.JSONLInit+`
+`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.JSONLSuccess+`
+`)
+
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh", `
+for _d in "`+artifactDir+`"/iteration-*; do :; done
+`+testutil.JSONLInit+`
+if [ "$(basename "$_d")" = "iteration-01" ]; then
+  for _try in $(seq 1 50); do
+    _count=$(find "$_d/review" -path '*/review-prompt.md' -type f 2>/dev/null | wc -l | tr -d ' ')
+    [ "${_count:-0}" -ge 3 ] && break
+    sleep 0.02
+  done
+  while IFS= read -r _prompt; do
+    _dir=$(dirname "$_prompt")
+    case "$_dir" in
+      *craft)
+        cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
+## Findings
+- (none)
+
+## Suggestions
+- **Medium**: Preserve this pooled craft suggestion for the implementer.
+
+## Verdict
+APPROVED
+REVIEWEOF
+        touch "$_dir/phase_complete"
+        ;;
+      *functionality-evidence)
+        cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
+## Findings
+- (none)
+
+## Suggestions
+- (none)
+
+## Verdict
+APPROVED
+REVIEWEOF
+        ;;
+      *cleanliness)
+        cat > "$_dir/review-feedback.md" <<'REVIEWEOF'
+## Findings
+- (none)
+
+## Suggestions
+- (none)
+
+## Verdict
+APPROVED
+REVIEWEOF
+        touch "$_dir/phase_complete"
+        ;;
+    esac
+  done < <(find "$_d/review" -path '*/review-prompt.md' -type f | sort)
+else
+  `+testutil.WriteReviewApproved(artifactDir)+`
+fi
+`+testutil.JSONLSuccess+`
+`)
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	planPath := writePlanFile(t, artifactDir, "Implement with error handling")
+
+	baseBuildSession := mockBuildSession(agentScript, reviewScript)
+	var mu sync.Mutex
+	var implementPrompts []string
+	capturingBuildSession := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		if !isReviewHelper(opts.PermHandler) {
+			mu.Lock()
+			implementPrompts = append(implementPrompts, opts.Prompt)
+			mu.Unlock()
+		}
+		return baseBuildSession(opts)
+	}
+
+	cfg := ImplementConfig{
+		Feature:             f,
+		WorkDir:             workDir,
+		PlanPath:            planPath,
+		MaxIterations:       3,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "Tests pass with error handling",
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		BuildSession:        capturingBuildSession,
+	}
+
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop error: %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %s, want review_passed; last error: %s", result.FinalStatus, result.LastError)
+	}
+
+	mu.Lock()
+	prompts := append([]string(nil), implementPrompts...)
+	mu.Unlock()
+	if len(prompts) < 2 {
+		t.Fatalf("captured %d implement prompts, want at least 2", len(prompts))
+	}
+	if !strings.Contains(prompts[1], "Preserve this pooled craft suggestion for the implementer.") {
+		t.Fatalf("second implement prompt did not preserve pooled axis feedback; prompt:\n%s", prompts[1])
+	}
+	if strings.Contains(prompts[1], "Review failed to execute:") {
+		t.Fatalf("second implement prompt fell back to generic review error despite non-empty aggregate feedback:\n%s", prompts[1])
 	}
 }
 
@@ -876,6 +1013,96 @@ func TestImplementLoopResumesReviewerFeedbackAcrossFailures(t *testing.T) {
 	}
 	if !strings.Contains(string(promptData), "Fix the widget tests") {
 		t.Error("expected resumed prompt to contain reviewer feedback from iteration 1 across a FAILED iteration 2")
+	}
+}
+
+// TestImplementLoopResumesFeedbackReminderAcrossRetry verifies that when a
+// RETRY iteration sits between the last CHANGES_REQUESTED review and the
+// resume point, restart recovers a pointer to the on-disk feedback (not the
+// full text, which the RETRY may have partially addressed, and not nothing,
+// which would trust the RETRY handoff to have captured every finding).
+func TestImplementLoopResumesFeedbackReminderAcrossRetry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-001")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	// Pre-populate: iteration 1 = CHANGES_REQUESTED, iteration 2 = RETRY
+	am := NewArtifactManager(artifactDir)
+
+	iter1Dir, _ := am.CreateIterationDir(1)
+	am.WriteMeta(iter1Dir, IterationMeta{
+		Iteration:    1,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusChangesRequested,
+	})
+	feedbackPath := filepath.Join(iter1Dir, "review-feedback.md")
+	os.WriteFile(feedbackPath, []byte("Fix the widget tests"), 0o644)
+
+	iter2Dir, _ := am.CreateIterationDir(2)
+	am.WriteMeta(iter2Dir, IterationMeta{
+		Iteration:    2,
+		AgentStatus:  "RETRY",
+		ReviewStatus: "skipped_retry",
+	})
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	planPath := writePlanFile(t, artifactDir, "Plan with feedback reminder across retry")
+
+	cfg := ImplementConfig{
+		Feature:             f,
+		WorkDir:             workDir,
+		PlanPath:            planPath,
+		MaxIterations:       10,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "Tests pass",
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		BuildSession:        mockBuildSession(agentScript, reviewScript),
+	}
+
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop error: %v", err)
+	}
+
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
+	}
+	if result.Iterations != 3 {
+		t.Errorf("expected Iterations=3, got %d", result.Iterations)
+	}
+
+	promptData, err := os.ReadFile(filepath.Join(artifactDir, "iteration-03", "user-prompt.md"))
+	if err != nil {
+		t.Fatalf("reading prompt: %v", err)
+	}
+	prompt := string(promptData)
+	if !strings.Contains(prompt, feedbackPath) {
+		t.Errorf("expected resumed prompt to point at %s across a RETRY iteration 2", feedbackPath)
+	}
+	if strings.Contains(prompt, "Fix the widget tests") {
+		t.Error("expected resumed prompt to carry a pointer, not the full feedback text")
 	}
 }
 

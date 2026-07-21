@@ -32,11 +32,61 @@ func TestCodexProtocol_SessionIDAndTranscriptPath(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 
 	if got := p.SessionID(); got != "" {
-		t.Errorf("SessionID() = %q, want empty", got)
+		t.Errorf("SessionID() = %q, want empty before thread start", got)
 	}
 	if got := p.TranscriptPath(); got != "" {
 		t.Errorf("TranscriptPath() = %q, want empty", got)
 	}
+
+	if _, err := p.ParseLine([]byte(`{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-abc"}}}`)); err != nil {
+		t.Fatalf("ParseLine error: %v", err)
+	}
+	if got := p.SessionID(); got != "thread-abc" {
+		t.Errorf("SessionID() = %q, want thread-abc after thread start", got)
+	}
+}
+
+func TestCodexProtocol_StartThread_FreshVsResume(t *testing.T) {
+	t.Run("fresh_sends_thread_start", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/w", Model: "test-model"})
+		var buf bytes.Buffer
+		p.SetStdin(&buf)
+		if err := p.startThread(); err != nil {
+			t.Fatalf("startThread error: %v", err)
+		}
+		var req struct {
+			Method string                 `json:"method"`
+			Params map[string]interface{} `json:"params"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &req); err != nil {
+			t.Fatalf("unmarshal request: %v", err)
+		}
+		if req.Method != "thread/start" {
+			t.Errorf("method = %q, want thread/start", req.Method)
+		}
+	})
+
+	t.Run("resume_sends_thread_resume_with_thread_id", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/w", Model: "test-model", ResumeSessionID: "thread-abc"})
+		var buf bytes.Buffer
+		p.SetStdin(&buf)
+		if err := p.startThread(); err != nil {
+			t.Fatalf("startThread error: %v", err)
+		}
+		var req struct {
+			Method string                 `json:"method"`
+			Params map[string]interface{} `json:"params"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &req); err != nil {
+			t.Fatalf("unmarshal request: %v", err)
+		}
+		if req.Method != "thread/resume" {
+			t.Errorf("method = %q, want thread/resume", req.Method)
+		}
+		if got := req.Params["threadId"]; got != "thread-abc" {
+			t.Errorf("params.threadId = %v, want thread-abc", got)
+		}
+	})
 }
 
 func TestCodexProtocol_Interrupt_ReturnsNotSupported(t *testing.T) {

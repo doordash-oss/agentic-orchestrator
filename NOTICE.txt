@@ -20,6 +20,60 @@ upgrade a bundled dependency, this NOTICE.txt MUST be updated to match (and
 any new dependency license MUST be reviewed by Legal for approval).
 
 --------------------------------------------------------------------------------
+Embedded Agent Skills and Research Agents
+--------------------------------------------------------------------------------
+
+Agentic Orchestrator embeds and redistributes adapted skill instructions and
+research-agent instructions. Commit-pinned sources, attributions, and the
+applicable license text are embedded beside the affected assets; skill
+companion files are also reconciled into each Agentic Orchestrator state
+directory.
+
+anthropics/skills (https://github.com/anthropics/skills)
+
+    skills/frontend-design is adapted from Anthropic's frontend-design skill,
+    originally authored by Keith Lazuka and updated by William Qian.
+
+    Pinned source:
+    https://github.com/anthropics/skills/blob/2235be7c60b551f5de82ade908fd3816455afcda/skills/frontend-design/SKILL.md
+
+    Licensed under the Apache License, Version 2.0. The complete license and
+    attribution are embedded beside the Agentic Orchestrator skill.
+
+mattpocock/skills (https://github.com/mattpocock/skills)
+
+    Copyright (c) 2026 Matt Pocock
+
+    Portions of skills/design, skills/create-roadmap, skills/plan-phase (and
+    its format.md), and skills/review-implementation-craft are adapted from
+    Matt Pocock's MIT-licensed to-prd, to-issues, and code-review skills.
+    Commit-pinned sources, attributions, and the complete MIT license are
+    embedded beside each affected Agentic Orchestrator skill.
+
+humanlayer/humanlayer (https://github.com/humanlayer/humanlayer)
+
+    Copyright (c) 2024, humanlayer Authors
+
+    skills/research-codebase and four embedded research agents are adapted
+    from HumanLayer's Apache-2.0 research command and agents, originally
+    authored by Allison Durham and subsequently maintained by HumanLayer
+    contributors.
+    skills/build-knowledge-base is informed by the same documentation-only
+    methodology and retains limited explanatory language from it. Pinned
+    sources and attributions are embedded beside the affected assets.
+
+Acknowledged methodology inspiration (no substantive verbatim overlap found):
+
+obra/superpowers (https://github.com/obra/superpowers)
+
+    Copyright (c) 2025 Jesse Vincent
+
+    Agentic Orchestrator's implementation skill was informed by Superpowers'
+    test-driven development, subagent-driven development, and verification-
+    before-completion methodology. The acknowledgement and MIT license are
+    embedded beside skills/implement.
+
+--------------------------------------------------------------------------------
 Upstream NOTICE files (reproduced per Apache License 2.0, Section 4(d))
 --------------------------------------------------------------------------------
 

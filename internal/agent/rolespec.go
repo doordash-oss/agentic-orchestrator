@@ -28,27 +28,30 @@ import (
 type Role = roles.Role
 
 const (
-	RoleImplementer                 = roles.RoleImplementer
-	RoleFinalReviewFixer            = roles.RoleFinalReviewFixer
-	RoleFinalReviewer               = roles.RoleFinalReviewer
-	RolePlanRoadmapPlanner          = roles.RolePlanRoadmapPlanner
-	RolePlanRoadmapReviser          = roles.RolePlanRoadmapReviser
-	RolePlanPhasePlanner            = roles.RolePlanPhasePlanner
-	RolePlanPhaseReviser            = roles.RolePlanPhaseReviser
-	RoleValidateRoadmapArchitecture = roles.RoleValidateRoadmapArchitecture
-	RoleValidateRoadmapScope        = roles.RoleValidateRoadmapScope
-	RoleValidatePhasePlanStructural = roles.RoleValidatePhasePlanStructural
-	RoleValidatePhasePlanScope      = roles.RoleValidatePhasePlanScope
-	RoleValidatePhasePlanGrounding  = roles.RoleValidatePhasePlanGrounding
-	RoleValidatePlanSecurity        = roles.RoleValidatePlanSecurity
-	RoleValidatePlanPerformance     = roles.RoleValidatePlanPerformance
-	RoleValidatePlanTesting         = roles.RoleValidatePlanTesting
-	RoleIterationReviewer           = roles.RoleIterationReviewer
-	RoleRefactorPlanStep            = roles.RoleRefactorPlanStep
-	RoleKnowledgeBaseBuilder        = roles.RoleKnowledgeBaseBuilder
-	RoleInquirer                    = roles.RoleInquirer
-	RoleResearcher                  = roles.RoleResearcher
-	RoleDesigner                    = roles.RoleDesigner
+	RoleImplementer                                    = roles.RoleImplementer
+	RoleFinalReviewFixer                               = roles.RoleFinalReviewFixer
+	RolePlanRoadmapPlanner                             = roles.RolePlanRoadmapPlanner
+	RolePlanRoadmapReviser                             = roles.RolePlanRoadmapReviser
+	RolePlanPhasePlanner                               = roles.RolePlanPhasePlanner
+	RolePlanPhaseReviser                               = roles.RolePlanPhaseReviser
+	RoleValidateRoadmapArchitecture                    = roles.RoleValidateRoadmapArchitecture
+	RoleValidateRoadmapScope                           = roles.RoleValidateRoadmapScope
+	RoleValidatePhasePlanStructural                    = roles.RoleValidatePhasePlanStructural
+	RoleValidatePhasePlanScope                         = roles.RoleValidatePhasePlanScope
+	RoleValidatePhasePlanGrounding                     = roles.RoleValidatePhasePlanGrounding
+	RoleValidatePlanSecurity                           = roles.RoleValidatePlanSecurity
+	RoleValidatePlanPerformance                        = roles.RoleValidatePlanPerformance
+	RoleValidatePlanTesting                            = roles.RoleValidatePlanTesting
+	RoleImplementationReviewCraft                      = roles.RoleImplementationReviewCraft
+	RoleImplementationReviewFunctionalityEvidence      = roles.RoleImplementationReviewFunctionalityEvidence
+	RoleImplementationReviewCleanliness                = roles.RoleImplementationReviewCleanliness
+	RoleImplementationReviewQA                         = roles.RoleImplementationReviewQA
+	RoleImplementationReviewDesign                     = roles.RoleImplementationReviewDesign
+	RoleRefactorPlanStep                               = roles.RoleRefactorPlanStep
+	RoleKnowledgeBaseBuilder                           = roles.RoleKnowledgeBaseBuilder
+	RoleInquirer                                       = roles.RoleInquirer
+	RoleResearcher                                     = roles.RoleResearcher
+	RoleDesigner                                       = roles.RoleDesigner
 )
 
 type ArtifactPresence = roles.ArtifactPresence
@@ -119,15 +122,17 @@ func RefactorPlanRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.RefactorPlanRoleSpec())
 }
 
-// IterationReviewerRoleSpec returns the RoleSpec-backed implementation review
-// helper role.
-func IterationReviewerRoleSpec() RoleSpec {
-	return wrapRoleSpec(roles.IterationReviewerRoleSpec())
+// ImplementationReviewAxisRoleSpecs returns the RoleSpec-backed per-axis
+// implementation review roles.
+func ImplementationReviewAxisRoleSpecs() []RoleSpec {
+	return wrapRoleSpecs(roles.ImplementationReviewAxisRoleSpecs())
 }
 
-// FinalReviewerRoleSpec returns the RoleSpec-backed final-review gate role.
-func FinalReviewerRoleSpec() RoleSpec {
-	return wrapRoleSpec(roles.FinalReviewerRoleSpec())
+// ImplementationReviewAxisRoleForSkill returns the implementation review axis
+// RoleSpec for a skill name such as "review-implementation-craft".
+func ImplementationReviewAxisRoleForSkill(skillName string) (RoleSpec, bool) {
+	spec, ok := roles.ImplementationReviewAxisRoleForSkill(skillName)
+	return wrapRoleSpec(spec), ok
 }
 
 // FinalReviewFixerRoleSpec returns the RoleSpec-backed final-review fix role.

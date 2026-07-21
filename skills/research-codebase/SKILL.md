@@ -1,5 +1,7 @@
 ---
 description: Document codebase as-is through comprehensive research
+license: Apache-2.0; see LICENSE.upstream.txt
+provenance: upstream-adapted
 ---
 
 # Research Codebase

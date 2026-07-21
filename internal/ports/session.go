@@ -247,6 +247,11 @@ type SessionOpts struct {
 	// re-resolving the provider (its own runner may carry no provider registry).
 	SupportsFinishOrViolateNudge bool
 	UsesBoundedHelperSandbox     bool
+	// SupportsSessionResume reports that the resolved provider can resume a
+	// prior provider-native session via BuildSessionOpts.ResumeSessionID.
+	// Used by crash-resume: when a provider process dies mid-turn, the loop
+	// may start a fresh process that continues the same conversation.
+	SupportsSessionResume bool
 }
 
 // MessageLog is the interface consumers use to observe a session's SDK

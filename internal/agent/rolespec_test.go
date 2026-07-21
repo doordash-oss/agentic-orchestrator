@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -154,6 +155,44 @@ func TestBuildImplementSystemPromptFromRoleSpec(t *testing.T) {
 	}
 }
 
+func TestBuildImplementSystemPromptRequiresFrontendDesignForFrontendPhase(t *testing.T) {
+	got := BuildImplementSystemPrompt(BuildImplementSystemPromptInput{
+		IterationDir: "/state/feat-x/run-001/phase-01/implement/iteration-02",
+		SkillsDir:    "/skills",
+		Frontend:     true,
+	})
+
+	for _, want := range []string{
+		"## Required Skills",
+		"frontend-design",
+		"/skills/frontend-design/SKILL.md",
+		"mandatory",
+		"when: this iteration creates new UI or visually reshapes existing UI",
+		"skip for mechanical fixes",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("BuildImplementSystemPrompt(frontend) missing %q in:\n%s", want, got)
+		}
+	}
+	if count := strings.Count(got, "/skills/frontend-design/SKILL.md"); count != 1 {
+		t.Fatalf("BuildImplementSystemPrompt(frontend) frontend-design path count = %d, want exactly one required entry:\n%s", count, got)
+	}
+}
+
+func TestBuildImplementSystemPromptKeepsFrontendDesignOptionalForNonFrontendPhase(t *testing.T) {
+	got := BuildImplementSystemPrompt(BuildImplementSystemPromptInput{
+		IterationDir: "/state/feat-x/run-001/phase-01/implement/iteration-02",
+		SkillsDir:    "/skills",
+	})
+
+	if strings.Contains(got, "## Required Skills") || strings.Contains(got, "mandatory for this assignment") {
+		t.Fatalf("BuildImplementSystemPrompt(non-frontend) unexpectedly requires a utility skill:\n%s", got)
+	}
+	if !strings.Contains(got, "/skills/frontend-design/SKILL.md") {
+		t.Fatalf("BuildImplementSystemPrompt(non-frontend) should retain optional frontend-design discovery:\n%s", got)
+	}
+}
+
 func TestRoleSpecCarriesRequiredPhasesAndAskingClauseProvider(t *testing.T) {
 	spec := ImplementRoleSpec()
 	if !slices.Equal(spec.Required, []feature.Phase{feature.PhasePlan}) {
@@ -176,14 +215,14 @@ func TestRoleSpecCarriesRequiredPhasesAndAskingClauseProvider(t *testing.T) {
 
 func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 	got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:         FinalReviewerRoleSpec(),
+		Spec:         FinalReviewFixerRoleSpec(),
 		IterationDir: "/state/feat-x/runs/run-001/review/iteration-03",
 		SkillsDir:    "/skills",
 	})
 	for _, want := range []string{
 		"## Artifact Preflight",
 		"`AGENTICO_BIN` is set to the current Agentico executable",
-		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_reviewer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
+		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_review_fixer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
 		"run it before creating `phase_complete`",
 	} {
 		if !strings.Contains(got, want) {
@@ -466,6 +505,50 @@ func TestPlanValidatorRoleSpecs(t *testing.T) {
 	}
 }
 
+func TestImplementationReviewAxisRoleSpecs(t *testing.T) {
+	specs := ImplementationReviewAxisRoleSpecs()
+	if len(specs) != 5 {
+		t.Fatalf("ImplementationReviewAxisRoleSpecs() length = %d, want 5", len(specs))
+	}
+
+	wantSkills := map[string]Role{
+		"review-implementation-craft":                  RoleImplementationReviewCraft,
+		"review-implementation-functionality-evidence": RoleImplementationReviewFunctionalityEvidence,
+		"review-implementation-cleanliness":            RoleImplementationReviewCleanliness,
+		"review-implementation-qa":                     RoleImplementationReviewQA,
+		"review-implementation-design":                 RoleImplementationReviewDesign,
+	}
+	for _, spec := range specs {
+		if spec.Phase != feature.PhaseReview {
+			t.Fatalf("%s Phase = %v, want PhaseReview", spec.SkillName, spec.Phase)
+		}
+		if spec.UserTemplate != "implementation_review_axis.user" {
+			t.Fatalf("%s UserTemplate = %q, want implementation_review_axis.user", spec.SkillName, spec.UserTemplate)
+		}
+		if wantRole, ok := wantSkills[spec.SkillName]; !ok || spec.Role != wantRole {
+			t.Fatalf("unexpected implementation review axis spec skill=%q role=%q", spec.SkillName, spec.Role)
+		}
+		if got := spec.MarkerPath(RoleRuntime{IterationDir: "/tmp/iter-01/review/craft"}); got != "/tmp/iter-01/review/craft/phase_complete" {
+			t.Fatalf("%s marker path = %q, want helper-local phase_complete", spec.SkillName, got)
+		}
+		if len(spec.Artifacts) != 1 {
+			t.Fatalf("%s artifact count = %d, want review feedback only", spec.SkillName, len(spec.Artifacts))
+		}
+		if artifact := spec.Artifacts[0]; artifact.RootName != "helper_dir" || artifact.RelativePath != "review-feedback.md" || artifact.Validate != roles.ValidatorReviewFeedback {
+			t.Fatalf("%s feedback artifact = %+v, want helper_dir review-feedback.md review validator", spec.SkillName, artifact)
+		}
+	}
+	for skill, wantRole := range wantSkills {
+		spec, ok := ImplementationReviewAxisRoleForSkill(skill)
+		if !ok {
+			t.Fatalf("ImplementationReviewAxisRoleForSkill(%q) ok = false, want true", skill)
+		}
+		if spec.Role != wantRole {
+			t.Fatalf("ImplementationReviewAxisRoleForSkill(%q).Role = %q, want %q", skill, spec.Role, wantRole)
+		}
+	}
+}
+
 func TestReviewFamilyRoleSpecs(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -478,30 +561,6 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 		wantPaths  map[string]string
 		wantNoOp   bool
 	}{
-		{
-			name:       "iteration reviewer",
-			phase:      feature.PhaseReview,
-			role:       RoleIterationReviewer,
-			iterDir:    "/state/feat/run-001/phase-04/implement/iteration-01/review",
-			wantSkill:  "review-implementation",
-			wantRoots:  []string{"helper_dir"},
-			wantMarker: "/state/feat/run-001/phase-04/implement/iteration-01/review/phase_complete",
-			wantPaths: map[string]string{
-				"review_feedback": "/state/feat/run-001/phase-04/implement/iteration-01/review/review-feedback.md",
-			},
-		},
-		{
-			name:       "final reviewer",
-			phase:      feature.PhaseReview,
-			role:       RoleFinalReviewer,
-			iterDir:    "/state/feat/run-001/review/iteration-01",
-			wantSkill:  "final-review",
-			wantRoots:  []string{"iteration_dir"},
-			wantMarker: "/state/feat/run-001/review/iteration-01/phase_complete",
-			wantPaths: map[string]string{
-				"review_feedback": "/state/feat/run-001/review/iteration-01/review-feedback.md",
-			},
-		},
 		{
 			name:       "final review fixer",
 			phase:      feature.PhaseReview,
@@ -569,20 +628,6 @@ func TestBuildReviewFamilySystemPromptsFromRoleSpec(t *testing.T) {
 		wantSkill string
 	}{
 		{
-			name:      "iteration reviewer",
-			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, RoleIterationReviewer),
-			iterDir:   "/state/feat/run-001/phase-04/implement/iteration-01/review",
-			wantRoots: []string{"`helper_dir`: /state/feat/run-001/phase-04/implement/iteration-01/review"},
-			wantSkill: "/skills/review-implementation/SKILL.md",
-		},
-		{
-			name:      "final reviewer",
-			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, RoleFinalReviewer),
-			iterDir:   "/state/feat/run-001/review/iteration-01",
-			wantRoots: []string{"`iteration_dir`: /state/feat/run-001/review/iteration-01"},
-			wantSkill: "/skills/final-review/SKILL.md",
-		},
-		{
 			name:      "final review fixer",
 			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, RoleFinalReviewFixer),
 			iterDir:   "/state/feat/run-001/review/iteration-01",
@@ -636,10 +681,10 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 }
 
 func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
-	// Only the four planning/research/design role families are document-only
-	// agents that must refuse to touch source code. Implementer, validators,
-	// reviewers, refactor-plan, KB-builder, and InteractivePTY all have
-	// legitimate non-document writes (code, working-tree artifacts, etc.).
+	// Document-only planning roles and bounded implementation-review axes must
+	// refuse source writes outside their declared output roots. Implementer,
+	// validators, refactor-plan, KB-builder, and InteractivePTY all have
+	// legitimate non-document writes.
 	readOnly := []struct {
 		name string
 		spec RoleSpec
@@ -650,6 +695,15 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 		{"roadmap reviser", RoadmapReviserRoleSpec()},
 		{"phase plan creator", PhasePlanCreatorRoleSpec()},
 		{"phase plan reviser", PhasePlanReviserRoleSpec()},
+	}
+	for _, spec := range ImplementationReviewAxisRoleSpecs() {
+		readOnly = append(readOnly, struct {
+			name string
+			spec RoleSpec
+		}{
+			name: string(spec.Role),
+			spec: spec,
+		})
 	}
 	for _, tt := range readOnly {
 		t.Run(tt.name+"_flag_set", func(t *testing.T) {
@@ -678,9 +732,7 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 		spec RoleSpec
 	}{
 		{"implementer", ImplementRoleSpec()},
-		{"final reviewer", FinalReviewerRoleSpec()},
 		{"final review fixer", FinalReviewFixerRoleSpec()},
-		{"iteration reviewer", IterationReviewerRoleSpec()},
 		{"researcher", ResearcherRoleSpec()},
 		{"knowledge base builder", KnowledgeBaseBuilderRoleSpec()},
 		{"refactor plan", RefactorPlanRoleSpec()},
@@ -709,7 +761,7 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 
 func TestBuildRoleSystemPromptSuppressSubagents(t *testing.T) {
 	const clause = "Sub-agents are available."
-	spec := IterationReviewerRoleSpec()
+	spec := ImplementationReviewAxisRoleSpecs()[0]
 
 	// Default: the subagent clause is present (unchanged behavior for every
 	// session that does have subagents).

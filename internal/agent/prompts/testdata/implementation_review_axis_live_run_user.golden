@@ -1,0 +1,51 @@
+Axis under review: Design
+Review feedback output: /state/feat-x/run-1/phase-2/implement/iteration-01/review/design/review-feedback.md
+
+Iteration under review: 1
+Iteration artifacts directory: /state/feat-x/run-1/phase-2/implement/iteration-01
+
+## Approved Design Grounding
+
+Approved design: /state/feat-x/run-1/design/design.md
+
+Approved intent:
+Launch a polished settings dashboard.
+
+## Live-Run Posture
+
+- Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.
+- Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.
+- Judge from the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.
+
+## Approved Roadmap
+
+This phase is one step in a larger plan. Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md
+
+Scope guidance:
+- Your review MUST be scoped to the current phase's objectives only.
+- Consult the roadmap to understand what this phase is responsible for and what later phases will handle.
+- Do NOT flag missing functionality that is explicitly deferred to a subsequent phase in the roadmap.
+- Do NOT request changes for incomplete features that are scheduled for later phases.
+- DO flag issues where this phase's specific objectives are not met.
+
+## Implementation Plan
+
+Read the implementation plan (source of truth) at: /state/feat-x/run-1/phase-2/plan.md
+
+## Exit Criteria
+
+Settings dashboard matches the approved design.
+
+## Verification Report
+
+Read the verification report at: /state/feat-x/run-1/phase-2/implement/iteration-01/verification-report.yaml
+
+Apply the "Review Rules (Without Verification Items)" section from the axis methodology.
+
+## Progress
+
+Read the current progress at: /state/feat-x/run-1/phase-2/implement/progress.md
+
+## Phase Type
+
+This is a **tdd-fill-in** phase. If the axis methodology defines phase-aware criteria, apply them; otherwise use the phase type as scope context.

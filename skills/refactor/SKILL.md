@@ -1,5 +1,7 @@
 ---
 description: Execute a feature-level refactor cycle — author a refactor plan with per-Task **Repo:** tags, then implement the plan across every Feature.Repos worktree, supporting cross-repo edits in a single iteration
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Refactor Cycle

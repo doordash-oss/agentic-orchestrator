@@ -35,9 +35,12 @@ import (
 // on ParseReviewFeedback(FeedbackPath) after the turn ends. FeedbackPath,
 // HelperIterDir, and Role are required.
 type ReviewHelperConfig struct {
-	SessionID              string
-	FeatureID              string
-	Phase                  feature.Phase
+	SessionID string
+	FeatureID string
+	Phase     feature.Phase
+	// ContractPhase selects the RoleSpec and artifact contract when it differs
+	// from the lifecycle phase shown for the session. It defaults to Phase.
+	ContractPhase          feature.Phase
 	ParentSpanCtx          observe.SpanContext
 	Model                  string
 	Prompt                 string
@@ -117,9 +120,13 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
 	}
 
-	spec, ok := lookupRoleSpec(cfg.Phase, cfg.Role)
+	contractPhase := cfg.ContractPhase
+	if contractPhase == 0 {
+		contractPhase = cfg.Phase
+	}
+	spec, ok := lookupRoleSpec(contractPhase, cfg.Role)
 	if !ok {
-		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", cfg.Phase, cfg.Role)
+		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
 	}
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          spec,
@@ -134,6 +141,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		Model:                          cfg.Model,
 		Prompt:                         cfg.Prompt,
 		SystemPrompt:                   systemPrompt,
+		DisallowedTools:                boundedHelperDisallowedTools,
 		AdditionalDirs:                 cfg.AdditionalDirs,
 		WritableRoots:                  allowedPaths,
 		PIDDir:                         pidDir,
@@ -202,7 +210,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		sessOpts:             sessOpts,
 		requireOutput:        false,
 		phaseCompleteDir:     cfg.HelperIterDir,
-		contractPhase:        cfg.Phase,
+		contractPhase:        contractPhase,
 		contractRole:         cfg.Role,
 		parentSpanCtx:        cfg.ParentSpanCtx,
 		finishOrViolateNudge: nudgeSupported,
@@ -248,6 +256,273 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		return result, runErr
 	}
 	return result, nil
+}
+
+// RunLiveRunReviewHelper runs a review helper with the live-run posture: broad
+// shell access plus harness-owned writable scratch roots, while file tools stay
+// scoped away from the reviewed source tree.
+func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
+	if cfg.SessionID == "" {
+		return nil, fmt.Errorf("running live-run review helper: missing session id")
+	}
+	if cfg.Model == "" {
+		return nil, fmt.Errorf("running live-run review helper: missing model")
+	}
+	if cfg.Prompt == "" {
+		return nil, fmt.Errorf("running live-run review helper: missing prompt")
+	}
+	if cfg.WorkDir == "" {
+		return nil, fmt.Errorf("running live-run review helper: missing work dir")
+	}
+	if cfg.FeedbackPath == "" {
+		return nil, fmt.Errorf("running live-run review helper: missing feedback path (file-based handoff is required)")
+	}
+	if cfg.HelperIterDir == "" {
+		return nil, fmt.Errorf("running live-run review helper: missing helper iteration directory")
+	}
+	if cfg.Role == "" {
+		return nil, fmt.Errorf("running live-run review helper: missing helper role")
+	}
+
+	scratch, err := prepareLiveRunReviewScratch(cfg.HelperIterDir)
+	if err != nil {
+		return nil, err
+	}
+	prompt := liveRunReviewPrompt(cfg.Prompt, scratch)
+	if cfg.PromptPath != "" {
+		if err := os.WriteFile(cfg.PromptPath, []byte(prompt), 0o644); err != nil {
+			return nil, fmt.Errorf("running live-run review helper: writing prompt: %w", err)
+		}
+	}
+
+	pidDir := pr.StateDir
+	if cfg.FeatureID != "" {
+		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
+	}
+
+	contractPhase := cfg.ContractPhase
+	if contractPhase == 0 {
+		contractPhase = cfg.Phase
+	}
+	spec, ok := lookupRoleSpec(contractPhase, cfg.Role)
+	if !ok {
+		return nil, fmt.Errorf("running live-run review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
+	}
+	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+		Spec:          spec,
+		IterationDir:  cfg.HelperIterDir,
+		SkillsDir:     pr.SkillsDir,
+		GuidelinesDir: pr.GuidelinesDir,
+		AskingClause:  cfg.CompletionAskingClause,
+	})
+	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
+	writableRoots := append([]string(nil), allowedPaths...)
+	writableRoots = append(writableRoots, scratch.roots()...)
+	liveHandler := &permission.LiveRunReviewHandler{
+		AllowedPaths:  allowedPaths,
+		ScratchRoots:  scratch.roots(),
+		DenyWriteHint: "live-run review may write only review-feedback.md, phase_complete, and files under its scratch roots",
+	}
+	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:                          cfg.Model,
+		Prompt:                         prompt,
+		SystemPrompt:                   systemPrompt,
+		DisallowedTools:                boundedHelperDisallowedTools,
+		AdditionalDirs:                 cfg.AdditionalDirs,
+		WritableRoots:                  writableRoots,
+		PIDDir:                         pidDir,
+		PermHandler:                    permission.Guarded(liveHandler),
+		RepoName:                       cfg.RepoName,
+		WorkDir:                        cfg.WorkDir,
+		LogPath:                        cfg.LogPath,
+		EffortLevel:                    cfg.EffortLevel,
+		AgentNames:                     explorationAgentNames(),
+		Phase:                          cfg.Phase,
+		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(cfg.HelperIterDir, PhaseCompleteFile),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("running live-run review helper: building session: %w", err)
+	}
+	env = mergeSessionEnv(env, scratch.env()...)
+
+	nudgeSupported := sessOpts != nil && sessOpts.SupportsFinishOrViolateNudge
+	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
+	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
+		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
+	}
+	if sessOpts != nil {
+		if cfg.Kind != 0 {
+			sessOpts.Kind = cfg.Kind
+		} else {
+			sessOpts.Kind = ports.KindReviewHelper
+		}
+		if cfg.Label != "" {
+			sessOpts.Label = cfg.Label
+		}
+		if nudgeSupported {
+			sessOpts.TurnMode = ports.TurnModeInteractive
+		}
+	}
+
+	var sandboxCleanup func()
+	if sessOpts != nil {
+		command, _, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
+	}
+	if sandboxCleanup != nil {
+		defer sandboxCleanup()
+	}
+
+	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
+		sessionID:            cfg.SessionID,
+		featureID:            cfg.FeatureID,
+		phase:                cfg.Phase,
+		label:                "live-run review helper",
+		observerPhase:        "review",
+		model:                cfg.Model,
+		responsePath:         cfg.ResponsePath,
+		repoName:             cfg.RepoName,
+		workDir:              cfg.WorkDir,
+		command:              command,
+		env:                  env,
+		sessOpts:             sessOpts,
+		requireOutput:        false,
+		phaseCompleteDir:     cfg.HelperIterDir,
+		contractPhase:        contractPhase,
+		contractRole:         cfg.Role,
+		parentSpanCtx:        cfg.ParentSpanCtx,
+		finishOrViolateNudge: nudgeSupported,
+	})
+	if boundedResult == nil {
+		return nil, runErr
+	}
+
+	result := &ReviewHelperResult{
+		Output: boundedResult.Output,
+		Usage:  boundedResult.Usage,
+	}
+
+	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath)
+	if parseErr != nil {
+		if runErr != nil {
+			return result, runErr
+		}
+		return result, fmt.Errorf("running live-run review helper: parsing review-feedback.md: %w", parseErr)
+	}
+	if parsed.OK() {
+		result.Status = parsed.Verdict
+		result.Feedback = strings.TrimSpace(parsed.Body)
+		result.Markers = parsed.Markers
+	} else {
+		synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
+		_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
+		result.Status = ReviewChangesRequested
+		result.Feedback = strings.TrimSpace(synth)
+	}
+
+	if runErr != nil {
+		if isProtocolViolationError(runErr) && parsed.OK() {
+			synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
+			_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
+			result.Status = ReviewChangesRequested
+			result.Feedback = strings.TrimSpace(synth)
+			result.Markers = ValidatorMarkers{}
+		}
+		return result, runErr
+	}
+	return result, nil
+}
+
+type liveRunReviewScratch struct {
+	EvidenceRoot   string
+	BuildCacheRoot string
+	TempRoot       string
+}
+
+func prepareLiveRunReviewScratch(helperDir string) (liveRunReviewScratch, error) {
+	scratch := liveRunReviewScratch{
+		EvidenceRoot:   filepath.Join(helperDir, "evidence"),
+		BuildCacheRoot: filepath.Join(helperDir, "build-cache"),
+		TempRoot:       filepath.Join(helperDir, "tmp"),
+	}
+	for _, dir := range append(scratch.roots(), scratch.cacheSubdirs()...) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return liveRunReviewScratch{}, fmt.Errorf("preparing live-run review scratch root %s: %w", dir, err)
+		}
+	}
+	return scratch, nil
+}
+
+func (s liveRunReviewScratch) roots() []string {
+	return []string{s.EvidenceRoot, s.BuildCacheRoot, s.TempRoot}
+}
+
+func (s liveRunReviewScratch) cacheSubdirs() []string {
+	return []string{
+		filepath.Join(s.BuildCacheRoot, "go-build"),
+		filepath.Join(s.BuildCacheRoot, "go-mod"),
+		filepath.Join(s.BuildCacheRoot, "xdg"),
+		filepath.Join(s.BuildCacheRoot, "npm"),
+		filepath.Join(s.BuildCacheRoot, "yarn"),
+		filepath.Join(s.BuildCacheRoot, "pnpm"),
+		filepath.Join(s.BuildCacheRoot, "pip"),
+		filepath.Join(s.BuildCacheRoot, "cargo"),
+		filepath.Join(s.BuildCacheRoot, "rustup"),
+	}
+}
+
+func (s liveRunReviewScratch) env() []string {
+	return []string{
+		"TMPDIR=" + s.TempRoot,
+		"TMP=" + s.TempRoot,
+		"TEMP=" + s.TempRoot,
+		"XDG_CACHE_HOME=" + filepath.Join(s.BuildCacheRoot, "xdg"),
+		"GOCACHE=" + filepath.Join(s.BuildCacheRoot, "go-build"),
+		"GOMODCACHE=" + filepath.Join(s.BuildCacheRoot, "go-mod"),
+		"npm_config_cache=" + filepath.Join(s.BuildCacheRoot, "npm"),
+		"YARN_CACHE_FOLDER=" + filepath.Join(s.BuildCacheRoot, "yarn"),
+		"PNPM_HOME=" + filepath.Join(s.BuildCacheRoot, "pnpm"),
+		"PIP_CACHE_DIR=" + filepath.Join(s.BuildCacheRoot, "pip"),
+		"CARGO_HOME=" + filepath.Join(s.BuildCacheRoot, "cargo"),
+		"RUSTUP_HOME=" + filepath.Join(s.BuildCacheRoot, "rustup"),
+	}
+}
+
+func liveRunReviewPrompt(prompt string, scratch liveRunReviewScratch) string {
+	var b strings.Builder
+	b.WriteString("## Live-Run Scratch Roots\n\n")
+	fmt.Fprintf(&b, "Evidence root: %s\n", scratch.EvidenceRoot)
+	fmt.Fprintf(&b, "Build cache root: %s\n", scratch.BuildCacheRoot)
+	fmt.Fprintf(&b, "Temp root: %s\n\n", scratch.TempRoot)
+	b.WriteString("Cache and temp environment variables are already pointed at these roots. ")
+	b.WriteString("Write screenshots, recordings, command logs, and other QA evidence under the evidence root. ")
+	b.WriteString("Do not write into the reviewed source tree.\n\n")
+	b.WriteString(prompt)
+	return b.String()
+}
+
+func mergeSessionEnv(env []string, overrides ...string) []string {
+	out := append([]string(nil), env...)
+	index := make(map[string]int, len(out))
+	for i, entry := range out {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			index[key] = i
+		}
+	}
+	for _, entry := range overrides {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		if i, exists := index[key]; exists {
+			out[i] = entry
+			continue
+		}
+		index[key] = len(out)
+		out = append(out, entry)
+	}
+	return out
 }
 
 func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr error) string {

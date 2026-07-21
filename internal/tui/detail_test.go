@@ -898,6 +898,27 @@ func TestDetailViewTerminalFinalReviewFailureOverridesCodeReadyProjection(t *tes
 	}
 }
 
+func TestFormatValidatorStatusesIncludesFinalReviewQAOrder(t *testing.T) {
+	t.Parallel()
+
+	got := stripANSI(formatValidatorStatuses(map[string]string{
+		"QA":          "running",
+		"Design":      "running",
+		"Cleanliness": "APPROVED",
+		"Craft":       "APPROVED",
+	}))
+	for _, want := range []string{"Craft ✓", "Clean ✓", "QA ⟳", "Design ⟳"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatValidatorStatuses() missing %q in %q", want, got)
+		}
+	}
+	if strings.Index(got, "Craft ✓") > strings.Index(got, "Clean ✓") ||
+		strings.Index(got, "Clean ✓") > strings.Index(got, "QA ⟳") ||
+		strings.Index(got, "QA ⟳") > strings.Index(got, "Design ⟳") {
+		t.Fatalf("formatValidatorStatuses() order = %q, want Craft, Clean, QA, Design", got)
+	}
+}
+
 func TestDetailViewContextPercentage(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

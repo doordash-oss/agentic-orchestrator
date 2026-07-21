@@ -2,6 +2,8 @@
 name: guideline-reader
 description: Navigate the language-specific coding guidelines to follow best practices, idioms, and conventions when writing or reviewing code.
 topics: guidelines, coding standards, best practices, idioms, conventions, error handling, concurrency, naming, testing, style
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Guideline Reader

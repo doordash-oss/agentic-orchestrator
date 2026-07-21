@@ -244,6 +244,31 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_NoRootsIsNoop(t *testing.T) {
 	}
 }
 
+func TestLiveRunReviewHandler_AllowsBroadShellAndScratchWritesOnly(t *testing.T) {
+	helperDir := t.TempDir()
+	sourceDir := t.TempDir()
+	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
+	markerPath := filepath.Join(helperDir, "phase_complete")
+	evidenceRoot := filepath.Join(helperDir, "evidence")
+	tempRoot := filepath.Join(helperDir, "tmp")
+
+	handler := &LiveRunReviewHandler{
+		AllowedPaths:  []string{feedbackPath, markerPath},
+		ScratchRoots:  []string{evidenceRoot, tempRoot},
+		DenyWriteHint: "live-run review may write only helper artifacts and scratch roots",
+	}
+
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"npm install && npm run build > build.log"}`)
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"for f in $(find . -name '*.go'); do go test ./...; done"}`)
+	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+filepath.Join(evidenceRoot, "screenshots", "home.png")+`"}`)
+	requirePermissionAllowed(t, handler, "Edit", `{"file_path":"`+filepath.Join(tempRoot, "server.log")+`"}`)
+	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+feedbackPath+`"}`)
+	requirePermissionAllowed(t, handler, "NotebookEdit", `{"file_path":"`+markerPath+`"}`)
+
+	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(sourceDir, "main.go")+`"}`)
+	requirePermissionDenied(t, handler, "Edit", `{"file_path":"`+filepath.Join(helperDir, "notes.md")+`"}`)
+}
+
 func requirePermissionAllowed(t *testing.T, handler ports.PermissionHandler, toolName, input string) {
 	t.Helper()
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolName, Input: input})
@@ -383,7 +408,7 @@ func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
 		{name: "find", command: `{"command":"find src -type f"}`},
 		// agentico's own artifact-validation preflight, run by every agent
 		// session before phase_complete (see rolespec_prompt.go).
-		{name: "validate-artifacts", command: `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_reviewer --dir \"/state/feat-x/runs/run-001/review/iteration-03\""}`},
+		{name: "validate-artifacts", command: `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_review_fixer --dir \"/state/feat-x/runs/run-001/review/iteration-03\""}`},
 		{name: "cd then validate-artifacts", command: `{"command":"cd /repo && \"$AGENTICO_BIN\" validate-artifacts --phase plan --role designer --dir \"/state/feat-x/plan\""}`},
 	}
 

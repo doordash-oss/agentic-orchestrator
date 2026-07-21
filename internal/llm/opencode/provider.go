@@ -130,6 +130,12 @@ func (p *Provider) UsesBoundedHelperSandbox() bool { return true }
 // live session and nudges it to finish before declaring a protocol violation.
 func (p *Provider) SupportsFinishOrViolateNudge() bool { return true }
 
+// SupportsSessionResume reports that a prior ACP session can be resumed via
+// ProtocolOpts.ResumeSessionID (session/load). Agents that do not advertise
+// the loadSession capability fail the resume handshake with a clear error,
+// which callers treat as "resume unavailable" and fall back.
+func (p *Provider) SupportsSessionResume() bool { return true }
+
 // MatchesModel reports whether this provider handles the given model string.
 //
 // An explicit "opencode:" routing prefix always matches when a backend model

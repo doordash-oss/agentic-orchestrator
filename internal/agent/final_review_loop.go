@@ -444,170 +444,198 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 // worktree. The reviewer reads the cumulative diff across all repos and
 // writes review-feedback.md at iterDir.
 func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (ReviewStatus, string, error) {
-	cfg := s.cfg
-
-	// Read previous iteration's feedback (re-review).
-	previousFeedback := ""
-	if iteration > 1 {
-		prevIterDir := filepath.Join(s.artifactDir, fmt.Sprintf("iteration-%02d", iteration-1))
-		if data, err := os.ReadFile(filepath.Join(prevIterDir, "review-feedback.md")); err == nil {
-			previousFeedback = strings.TrimSpace(string(data))
-		}
-	}
-
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	_ = os.Remove(feedbackPath)
 	RemovePhaseComplete(iterDir)
 
-	// Use the configured diff-base from the FR-driver feature; the
-	// feature-level FR uses the first repo's BaseBranch as a reasonable
-	// default, since per-repo BaseBranch is normally identical
-	// ("main"/"master") across a feature's repos. Callers may want a
-	// more sophisticated rule later, but consolidating to one base
-	// matches the "one verdict over the cumulative diff" semantics.
+	status, feedback, err := s.runFinalReviewAxes(iteration, iterDir)
+	if err != nil {
+		return status, feedback, err
+	}
+	if err := os.WriteFile(feedbackPath, []byte(feedback), 0o644); err != nil {
+		return ReviewFailed, "", fmt.Errorf("writing final review aggregate feedback: %w", err)
+	}
+	return status, feedback, nil
+}
+
+func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir string) (ReviewStatus, string, error) {
+	cfg := s.cfg
+	if err := RecordReadOnlyRepoBaseline(context.Background(), cfg.CommandRunner, cfg.Feature, iterDir); err != nil {
+		return ReviewFailed, "", fmt.Errorf("record final review axes read-only repo baseline: %w", err)
+	}
+	profile := feature.PipelineMoonshot
+	if cfg.Feature != nil {
+		profile = cfg.Feature.EffectivePipeline()
+	}
+	axes := implementationReviewAxesForGate(implementationReviewGateFinal, implementationReviewAxisSelection{
+		Profile:          profile,
+		AnyPhaseFrontend: cfg.Feature.AnyRoadmapPhaseFrontend(),
+	})
+	if len(axes) == 0 {
+		feedback := FormatStructuredReviewFeedback("Multi-Axis Final Review", "", "", ReviewApproved)
+		return ReviewApproved, feedback, nil
+	}
+
+	axisNames := make([]string, 0, len(axes))
+	for _, axis := range axes {
+		axisNames = append(axisNames, axis.Name)
+	}
+	setMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID, axisNames)
+	defer clearMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID)
+
+	validationCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun).Child()
+	validationStart := time.Now()
+	cfg.Observer.ValidationStarted(validationCtx, "final_review", len(axes))
+
+	results := make([]reviewAxisResult, len(axes))
+	runMultiAxisReviews(len(axes), func(i int) {
+		axis := axes[i]
+		axisCtx := validationCtx.Child()
+		axisStart := time.Now()
+		cfg.Observer.ValidatorStarted(axisCtx, axis.Name)
+
+		status, feedback, err := s.runFinalReviewAxis(iteration, iterDir, axis, axisCtx)
+		results[i] = reviewAxisResult{Axis: axis.Name, Status: status, Feedback: feedback, Error: err}
+
+		verdict := status.String()
+		if err != nil {
+			verdict = "error"
+		}
+		cfg.Observer.ValidatorCompleted(axisCtx, axis.Name, verdict, time.Since(axisStart))
+		updateMultiAxisValidatorStatus(cfg.FeatureStore, cfg.Feature.ID, axis.Name, status, err)
+	})
+	if !isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		violations, guardErr := EnforceReadOnlyRepoMutations(context.Background(), cfg.CommandRunner, cfg.Feature, feature.PhaseFinalReview, iterDir)
+		if guardErr != nil {
+			return ReviewFailed, "", fmt.Errorf("enforce final review axes read-only repo guard: %w", guardErr)
+		}
+		if len(violations) > 0 {
+			return ReviewFailed, "", newProtocolViolationError(RoleImplementationReviewCleanliness, iterDir, violations)
+		}
+	}
+
+	status, feedback, err := composeMultiAxisReviewFeedback("Multi-Axis Final Review", results, len(axes))
+	verdict := status.String()
+	if err != nil {
+		verdict = "error"
+	}
+	cfg.Observer.ValidationCompleted(validationCtx, "final_review", verdict, time.Since(validationStart), len(axes))
+	return status, feedback, err
+}
+
+func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir string, axis implementationReviewAxis, parentCtx observe.SpanContext) (ReviewStatus, string, error) {
+	cfg := s.cfg
+	axisSlug := implementationReviewAxisSlug(axis.Name)
+	axisDir := filepath.Join(iterDir, axisSlug)
+	if err := os.MkdirAll(axisDir, 0o755); err != nil {
+		return ReviewFailed, "", fmt.Errorf("creating %s final review helper directory: %w", axis.Name, err)
+	}
+	RemovePhaseComplete(axisDir)
+
+	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
+	_ = os.Remove(feedbackPath)
+
 	diffBase := featureDefaultDiffBase(cfg.Feature)
 	priorEvidence := priorImplementationEvidenceContextForRun(filepath.Dir(s.artifactDir))
-
-	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
+	prompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:                                 implementationReviewGateFinal,
+		AxisLabel:                            axis.Name,
 		FeatureDescription:                   cfg.Feature.Description,
+		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
+		LiveRunAxis:                          axis.ExecutionPosture == implementationReviewPostureLiveRun,
 		ExitCriteria:                         cfg.Feature.ExitCriteria,
 		DiffBase:                             diffBase,
-		WorkDir:                              s.workspace.Cwd,
-		PreviousFeedback:                     previousFeedback,
+		PreviousFeedback:                     s.previousAggregateFeedback(iteration),
 		Iteration:                            iteration,
-		RoadmapPath:                          cfg.Feature.Artifacts["roadmap"],
-		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
-		Images:                               cfg.Feature.Images,
+		RoadmapPath:                          finalReviewArtifactPath(s.stateDir, cfg.Feature, "roadmap"),
+		PlanPath:                             finalReviewArtifactPath(s.stateDir, cfg.Feature, "plan"),
 		PhaseType:                            cfg.Feature.RoadmapPhaseType,
+		IterDir:                              iterDir,
 		FeedbackPath:                         feedbackPath,
-		Publishable:                          cfg.Feature.IsPublishable(),
 		PriorImplementationReportPaths:       priorEvidence.ReportPaths,
 		PriorImplementationEvidenceRootDirs:  priorEvidence.EvidenceRootDirs,
 		PriorImplementationEvidenceArtifacts: priorEvidence.EvidenceArtifactPaths,
 	})
+	if cfg.Feature != nil {
+		if block := visualReferencesSection(cfg.Feature.Images, "conducting this final review"); block != "" {
+			prompt = block + prompt
+		}
+	}
 
-	_ = os.WriteFile(filepath.Join(iterDir, "review-prompt.md"), []byte(prompt), 0o644)
-
-	additionalDirs := append([]string(nil), additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
+	additionalDirs := append([]string{s.stateDir}, additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
 	additionalDirs = append(additionalDirs, guidelineAdditionalDirs(cfg.GuidelinesDir)...)
-	// Only the active run is mounted; the containing feature state directory
-	// also contains sealed predecessor runs.
+	// Mount the active run first; the state dir stays available so the agent can
+	// navigate ./<run>/<phase>/... to read prior artifacts.
 	additionalDirs = append([]string{s.workspace.Cwd}, additionalDirs...)
 
-	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:          FinalReviewerRoleSpec(),
-		IterationDir:  iterDir,
-		SkillsDir:     cfg.SkillsDir,
-		GuidelinesDir: cfg.GuidelinesDir,
-		KBInfos:       cfg.KBInfos,
-		AskingClause:  cfg.AskingClause,
-	})
-
-	command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
-		Model:                          cfg.ReviewModel,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     explorationAgentNames(),
-		PIDDir:                         s.stateDir,
-		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
-		WorkDir:                        s.workspace.Cwd,
-		EffortLevel:                    cfg.EffortLevel,
-		Phase:                          feature.PhaseReview,
-		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
-	})
-	if buildErr != nil {
-		return ReviewFailed, "", fmt.Errorf("building feature final review session: %w", buildErr)
+	helper := &PhaseRunner{
+		SessionManager: s.sm,
+		FeatureStore:   cfg.FeatureStore,
+		StateDir:       cfg.StateDir,
+		SkillsDir:      cfg.SkillsDir,
+		GuidelinesDir:  cfg.GuidelinesDir,
+		Observer:       cfg.Observer,
+		BuildSessionFn: cfg.BuildSession,
 	}
-	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-	if cfg.FinishOrViolateNudge {
-		sessOpts.TurnMode = ports.TurnModeInteractive
+	helperCfg := ReviewHelperConfig{
+		SessionID:              s.featureFinalReviewSessionID(axisSlug, iteration),
+		FeatureID:              cfg.Feature.ID,
+		Phase:                  feature.PhaseFinalReview,
+		ContractPhase:          feature.PhaseReview,
+		ParentSpanCtx:          parentCtx,
+		Model:                  cfg.ReviewModel,
+		Prompt:                 prompt,
+		PromptPath:             filepath.Join(axisDir, "review-prompt.md"),
+		FeedbackPath:           feedbackPath,
+		HelperIterDir:          axisDir,
+		Role:                   axis.Role,
+		WorkDir:                s.workspace.Cwd,
+		AdditionalDirs:         additionalDirs,
+		LogPath:                filepath.Join(axisDir, "review-output.txt"),
+		SystemPromptPrefix:     "final-review-" + axisSlug,
+		CompletionAskingClause: cfg.AskingClause,
+		EffortLevel:            cfg.EffortLevel,
+		Kind:                   ports.KindValidator,
+		Label:                  axis.Name,
 	}
-	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
-
-	if err := RecordReadOnlyRepoBaseline(context.Background(), cfg.CommandRunner, cfg.Feature, iterDir); err != nil {
-		return ReviewFailed, "", fmt.Errorf("record final reviewer read-only repo baseline: %w", err)
+	var helperResult *ReviewHelperResult
+	var err error
+	switch axis.ExecutionPosture {
+	case implementationReviewPostureLiveRun:
+		helperResult, err = helper.RunLiveRunReviewHelper(context.Background(), helperCfg)
+	default:
+		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), helperCfg)
 	}
-
-	sessionID := s.featureFinalReviewSessionID("final-review", iteration)
-
-	sess, err := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseFinalReview, command, s.workspace.Cwd, env, sessOpts)
 	if err != nil {
-		if errors.Is(err, ports.ErrSessionShuttingDown) {
-			return ReviewFailed, "", fmt.Errorf("session manager shutting down")
+		feedback := ""
+		if helperResult != nil {
+			feedback = helperResult.Feedback
 		}
-		return ReviewFailed, "", fmt.Errorf("starting feature final review session: %w", err)
-	}
-	providerName := ""
-	if sessOpts != nil {
-		providerName = sessOpts.ProviderName
-	}
-	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.ReviewModel)
-	defer func() {
-		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, SessionCostMetadata{
-			SessionID:     sessionID,
-			ObserverPhase: feature.PhaseFinalReview.String(),
-		})
-		if observed {
-			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
+		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
+			stub := FormatStructuredReviewFeedback(
+				fmt.Sprintf("%s Final Review — Helper Failed", axis.Name),
+				fmt.Sprintf("- **Critical**: %s final review axis terminated before writing review-feedback.md: %v", axis.Name, err),
+				"",
+				ReviewChangesRequested,
+			)
+			_ = os.WriteFile(feedbackPath, []byte(stub), 0o644)
+			feedback = stub
 		}
-	}()
+		return ReviewChangesRequested, feedback, err
+	}
+	return helperResult.Status, helperResult.Feedback, nil
+}
 
-	logFile, err := os.Create(filepath.Join(iterDir, "review-response.txt"))
+func (s *featureFinalReviewLoopState) previousAggregateFeedback(iteration int) string {
+	if iteration <= 1 {
+		return ""
+	}
+	prevIterDir := filepath.Join(s.artifactDir, fmt.Sprintf("iteration-%02d", iteration-1))
+	data, err := os.ReadFile(filepath.Join(prevIterDir, "review-feedback.md"))
 	if err != nil {
-		return ReviewFailed, "", fmt.Errorf("creating review log file: %w", err)
+		return ""
 	}
-	sess.SetLogFile(logFile)
-
-	agentStatus := waitForStatusDetailed(sess, s.sm, sessionID, waitForStatusOptions{
-		ReadyCheck: func() bool {
-			if HasPhaseComplete(iterDir) {
-				sess.SetHasUnansweredQuestion(false)
-				return true
-			}
-			return false
-		},
-		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-		MissingArtifacts:     []string{"review-feedback.md"},
-	}).Status
-
-	if !isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
-		repoMutationViolations, err := EnforceReadOnlyRepoMutations(context.Background(), cfg.CommandRunner, cfg.Feature, feature.PhaseFinalReview, iterDir)
-		if err != nil {
-			return ReviewFailed, "", fmt.Errorf("enforce final reviewer read-only repo guard: %w", err)
-		}
-		if len(repoMutationViolations) > 0 {
-			return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, repoMutationViolations)
-		}
-	}
-
-	if agentStatus == agentStatusMissingMarker {
-		return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, []ProtocolViolation{{
-			Artifact: PhaseCompleteFile,
-			Reason:   "SDK reported success but phase_complete was not present",
-		}})
-	}
-	if agentStatus != agentStatusSuccess {
-		return ReviewFailed, "", fmt.Errorf("feature final review session did not complete successfully (status: %s)", agentStatus)
-	}
-
-	outcome, violations, validateErr := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
-	if validateErr != nil {
-		return ReviewFailed, "", fmt.Errorf("validating final reviewer contract: %w", validateErr)
-	}
-	if !outcome.OK {
-		if outcome.ReviewFeedback != nil && !outcome.ReviewFeedback.OK() {
-			synth := FormatReviewProtocolViolationFeedback(outcome.ReviewFeedback)
-			_ = os.WriteFile(feedbackPath, []byte(synth), 0o644)
-		}
-		return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, violations)
-	}
-	if outcome.ReviewFeedback == nil {
-		return ReviewFailed, "", fmt.Errorf("validating final reviewer contract: validated without review feedback")
-	}
-	return outcome.ReviewFeedback.Verdict, strings.TrimSpace(outcome.ReviewFeedback.Body), nil
+	return strings.TrimSpace(string(data))
 }
 
 // runFix launches one feature-level fix session for iteration i. Same

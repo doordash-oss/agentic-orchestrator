@@ -16,21 +16,22 @@ package roles
 
 import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
-var roleSpecs = append([]RoleSpec{
-	implementRoleSpec,
-	roadmapCreatorRoleSpec,
-	roadmapReviserRoleSpec,
-	phasePlanCreatorRoleSpec,
-	phasePlanReviserRoleSpec,
-	knowledgeBaseBuilderRoleSpec,
-	inquirerRoleSpec,
-	researcherRoleSpec,
-	designerRoleSpec,
-	refactorPlanRoleSpec,
-	iterationReviewerRoleSpec,
-	finalReviewerRoleSpec,
-	finalReviewFixerRoleSpec,
-}, planValidatorRoleSpecs...)
+var roleSpecs = append(
+	append([]RoleSpec{
+		implementRoleSpec,
+		roadmapCreatorRoleSpec,
+		roadmapReviserRoleSpec,
+		phasePlanCreatorRoleSpec,
+		phasePlanReviserRoleSpec,
+		knowledgeBaseBuilderRoleSpec,
+		inquirerRoleSpec,
+		researcherRoleSpec,
+		designerRoleSpec,
+		refactorPlanRoleSpec,
+		finalReviewFixerRoleSpec,
+	}, planValidatorRoleSpecs...),
+	implementationReviewAxisRoleSpecs...,
+)
 
 // All returns every canonical RoleSpec declaration.
 func All() []RoleSpec {

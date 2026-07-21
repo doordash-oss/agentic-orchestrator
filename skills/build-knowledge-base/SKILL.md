@@ -1,5 +1,7 @@
 ---
 description: Build or update a persistent repo knowledge base graph
+license: Apache-2.0; HumanLayer inspiration acknowledged in ATTRIBUTION.md
+provenance: upstream-inspired
 ---
 
 # Build Knowledge Base Graph

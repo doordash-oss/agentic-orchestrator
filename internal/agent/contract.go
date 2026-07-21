@@ -301,7 +301,17 @@ func validatePhasePlanMarkdownArtifact(iterDir string, path string, _ *Outcome) 
 func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
 	var violations []ProtocolViolation
 	success := extractMarkdownSection(planText, "## Success Criteria")
+	frontend := ParsePhasePlanFrontend(planText)
 	for _, heading := range []string{"### Visual Evidence", "### Behavioral Evidence"} {
+		if frontend && heading == "### Visual Evidence" {
+			if reason := validateFrontendVisualEvidenceSection(success); reason != "" {
+				violations = append(violations, ProtocolViolation{
+					Artifact: "phase plan markdown",
+					Reason:   reason,
+				})
+				continue
+			}
+		}
 		if !hasMarkdownHeading(success, heading) {
 			violations = append(violations, ProtocolViolation{
 				Artifact: "phase plan markdown",
@@ -318,6 +328,23 @@ func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
 	}
 	violations = append(violations, taskScopedEvidenceViolations(planText)...)
 	return violations
+}
+
+func validateFrontendVisualEvidenceSection(successCriteria string) string {
+	const heading = "### Visual Evidence"
+	if !hasMarkdownHeading(successCriteria, heading) {
+		return frontendVisualEvidenceRuleMessage()
+	}
+	body := extractMarkdownSection(successCriteria, heading)
+	requirements, _ := countEvidenceChecklistItems(body)
+	if requirements > 0 {
+		return ""
+	}
+	return frontendVisualEvidenceRuleMessage()
+}
+
+func frontendVisualEvidenceRuleMessage() string {
+	return "frontend/visual-evidence rule: phase plan metadata declares `frontend: true`, so `### Visual Evidence` must contain at least one real checklist visual evidence requirement; `None required` or an empty/missing section is not allowed"
 }
 
 func validateEvidenceSectionBody(successCriteria, heading string) string {

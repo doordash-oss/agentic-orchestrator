@@ -1,5 +1,7 @@
 ---
 description: Execute a feature-level review-comments cycle — aggregate unaddressed PR comments across every Feature.Repos PR, address or dismiss each one, and emit the standard handoff
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Review-Comments Cycle

@@ -211,6 +211,49 @@ func TestPhaseRequiresGrilling(t *testing.T) {
 	}
 }
 
+func TestRoadmapPhaseFrontendHelpersAndPersistence(t *testing.T) {
+	t.Parallel()
+
+	f := &Feature{ID: "frontend-feature", Name: "Frontend Feature", Slug: "frontend-feature", ActiveRun: 1, RunCount: 1, SchemaVersion: SchemaVersionCurrent}
+	if f.AnyRoadmapPhaseFrontend() {
+		t.Fatal("AnyRoadmapPhaseFrontend() = true, want false for an unrecorded feature")
+	}
+	f.SetRoadmapPhaseFrontend(1, false)
+	f.SetRoadmapPhaseFrontend(2, true)
+	f.SetRoadmapPhaseFrontend(3, false)
+	f.SetRoadmapPhaseFrontend(0, true)
+	if f.RoadmapPhaseFrontend(0) {
+		t.Fatal("RoadmapPhaseFrontend(0) = true, want false for invalid phase")
+	}
+	if !f.AnyRoadmapPhaseFrontend() {
+		t.Fatal("AnyRoadmapPhaseFrontend() = false, want true after phase 2 was recorded frontend")
+	}
+	if f.RoadmapPhaseFrontend(1) {
+		t.Error("RoadmapPhaseFrontend(1) = true, want false")
+	}
+	if !f.RoadmapPhaseFrontend(2) {
+		t.Error("RoadmapPhaseFrontend(2) = false, want true")
+	}
+	if f.RoadmapPhaseFrontend(99) {
+		t.Error("RoadmapPhaseFrontend(99) = true, want false for absent phase")
+	}
+
+	store := NewStore(t.TempDir())
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature) error = %v", err)
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load(feature) error = %v", err)
+	}
+	if !loaded.AnyRoadmapPhaseFrontend() || !loaded.RoadmapPhaseFrontend(2) {
+		t.Fatalf("loaded frontend map lost: %#v", loaded.RoadmapPhaseFrontendByPhase)
+	}
+	if got := loaded.Run().RoadmapPhaseFrontendByPhase[2]; !got {
+		t.Fatalf("loaded run RoadmapPhaseFrontendByPhase[2] = %v, want true", got)
+	}
+}
+
 func TestPhaseDirName(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.

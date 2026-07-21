@@ -313,14 +313,14 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 		t.Errorf("review.completed Status = %q, want %q", reviewCompleted[0].Status, agentStatusApproved)
 	}
 
-	// Verify session events (2 sessions: impl + review)
+	// Verify session events (1 implementation + 3 implementation-review axes)
 	sessionStarted := filterEventsByType(events, "session.started")
-	if len(sessionStarted) != 2 {
-		t.Fatalf("expected 2 session.started events (impl + review), got %d", len(sessionStarted))
+	if len(sessionStarted) != 4 {
+		t.Fatalf("expected 4 session.started events (impl + 3 review axes), got %d", len(sessionStarted))
 	}
 	sessionEnded := filterEventsByType(events, "session.ended")
-	if len(sessionEnded) != 2 {
-		t.Fatalf("expected 2 session.ended events (impl + review), got %d", len(sessionEnded))
+	if len(sessionEnded) != 4 {
+		t.Fatalf("expected 4 session.ended events (impl + 3 review axes), got %d", len(sessionEnded))
 	}
 
 	// Verify SpanContext hierarchy: iteration.parentSpanID == phase.spanID
@@ -865,12 +865,12 @@ fi
 	// Each iteration should have its own session.started/ended pair
 	sessionStarted := filterEventsByType(events, "session.started")
 	sessionEnded := filterEventsByType(events, "session.ended")
-	// Iteration 1: 1 impl session; Iteration 2: 1 impl session + 1 review session = 3 total
-	if len(sessionStarted) != 3 {
-		t.Errorf("expected 3 session.started events (2 impl + 1 review), got %d", len(sessionStarted))
+	// Iteration 1: 1 impl session; Iteration 2: 1 impl session + 3 review axes = 5 total
+	if len(sessionStarted) != 5 {
+		t.Errorf("expected 5 session.started events (2 impl + 3 review axes), got %d", len(sessionStarted))
 	}
-	if len(sessionEnded) != 3 {
-		t.Errorf("expected 3 session.ended events, got %d", len(sessionEnded))
+	if len(sessionEnded) != 5 {
+		t.Errorf("expected 5 session.ended events, got %d", len(sessionEnded))
 	}
 
 	// Review events should only appear once (iteration 2)

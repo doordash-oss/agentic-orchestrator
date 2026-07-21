@@ -14,6 +14,8 @@
 
 package prompts
 
+import "strings"
+
 // GrillMeInquireness renders the grillme_inquireness partial for a given
 // inquireness level. level is the raw "none" / "medium" / "high" string;
 // any other value falls through to the medium branch.
@@ -144,6 +146,12 @@ func ReviewUserPrompt(in any) string {
 	return MustRender("review.user", in)
 }
 
+// ImplementationReviewAxisUserPrompt renders the per-axis implementation
+// review prompt (implementation_review_axis.user.tmpl).
+func ImplementationReviewAxisUserPrompt(in any) string {
+	return strings.TrimSpace(MustRender("implementation_review_axis.user", in)) + "\n"
+}
+
 // SummaryUserPrompt renders the bounded-helper summary-generation prompt
 // (summary.user.tmpl).
 func SummaryUserPrompt(in SummaryUserInput) string {
@@ -160,12 +168,6 @@ func PRDescriptionUserPrompt(in PRDescriptionUserInput) string {
 // (final_fix.user.tmpl).
 func FinalFixUserPrompt(in any) string {
 	return MustRender("final_fix.user", in)
-}
-
-// FinalReviewUserPrompt renders the Final-Review interactive-reviewer
-// user prompt (final_review.user.tmpl).
-func FinalReviewUserPrompt(in any) string {
-	return MustRender("final_review.user", in)
 }
 
 // ScoutUserPrompt renders the per-scout subprocess prompt (scout.user.tmpl).

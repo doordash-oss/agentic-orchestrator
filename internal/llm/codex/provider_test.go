@@ -747,3 +747,10 @@ func TestCodexProvider_CheckReadinessUsesCustomBinary(t *testing.T) {
 		t.Errorf("CheckReadiness probed %q, want my-codex", gotName)
 	}
 }
+
+func TestProviderSupportsSessionResume(t *testing.T) {
+	p := &Provider{}
+	if !p.SupportsSessionResume() {
+		t.Error("SupportsSessionResume() = false, want true")
+	}
+}

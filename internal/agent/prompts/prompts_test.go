@@ -211,6 +211,15 @@ type ImplementUserInput struct {
 type ReviewUserInput struct {
 	Iteration int
 	IterDir   string
+	AxisLabel string
+
+	GateLabel          string
+	FinalGate          bool
+	LiveRunAxis        bool
+	DiffBase           string
+	FeatureDescription string
+	DesignArtifactPath string
+	PreviousFeedback   string
 
 	RoadmapPath            string
 	PlanPath               string
@@ -219,6 +228,10 @@ type ReviewUserInput struct {
 
 	ContractPath         string
 	RequiredVerification []VerificationItemView
+
+	PriorImplementationReportPaths       []string
+	PriorImplementationEvidenceRootDirs  []string
+	PriorImplementationEvidenceArtifacts []string
 
 	ProgressPath string
 	PhaseType    string
@@ -237,30 +250,6 @@ type FinalFixUserInput struct {
 
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool
-}
-
-type FinalReviewUserInput struct {
-	VisualReferences VisualReferencesInput
-
-	Iteration     int
-	IsCycleReview bool
-
-	PhaseType          string
-	DiffBase           string
-	RoadmapPath        string
-	DesignArtifactPath string
-
-	FeatureDescription string
-	ExitCriteria       string
-	CycleFocus         string
-
-	PriorImplementationReportPaths       []string
-	PriorImplementationEvidenceRootDirs  []string
-	PriorImplementationEvidenceArtifacts []string
-
-	FeedbackPath     string
-	Publishable      bool
-	PreviousFeedback string
 }
 
 type ValidateSpecializedUserInput struct {
@@ -514,6 +503,68 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			name: "implementation_review_axis_user",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:              2,
+					IterDir:                "/state/feat-x/run-1/phase-1/implement/iteration-02",
+					AxisLabel:              "Functionality/Evidence",
+					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:               "/state/feat-x/run-1/phase-1/plan.md",
+					ExitCriteria:           "Relevant tests pass.",
+					VerificationReportPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml",
+					ContractPath:           "/state/feat-x/run-1/testing-contract.yaml",
+					ProgressPath:           "/state/feat-x/run-1/phase-1/implement/progress.md",
+					PhaseType:              "tdd-fill-in",
+					FeedbackPath:           "/state/feat-x/run-1/phase-1/implement/iteration-02/review/functionality-evidence/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_live_run_user",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:              1,
+					IterDir:                "/state/feat-x/run-1/phase-2/implement/iteration-01",
+					AxisLabel:              "Design",
+					LiveRunAxis:            true,
+					FeatureDescription:     "Launch a polished settings dashboard.",
+					DesignArtifactPath:     "/state/feat-x/run-1/design/design.md",
+					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:               "/state/feat-x/run-1/phase-2/plan.md",
+					ExitCriteria:           "Settings dashboard matches the approved design.",
+					VerificationReportPath: "/state/feat-x/run-1/phase-2/implement/iteration-01/verification-report.yaml",
+					ProgressPath:           "/state/feat-x/run-1/phase-2/implement/progress.md",
+					PhaseType:              "tdd-fill-in",
+					FeedbackPath:           "/state/feat-x/run-1/phase-2/implement/iteration-01/review/design/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_final_user",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:                            3,
+					IterDir:                              "/state/feat-x/run-1/review/iteration-03",
+					AxisLabel:                            "Functionality/Evidence",
+					GateLabel:                            "Final Review",
+					FinalGate:                            true,
+					DiffBase:                             "main",
+					FeatureDescription:                   "Sign in with Google.",
+					DesignArtifactPath:                   "/state/feat-x/run-1/design/design.md",
+					PreviousFeedback:                     "## Findings\n### Craft\n- Tighten error handling.",
+					RoadmapPath:                          "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:                             "/state/feat-x/run-1/phase-2/plan.md",
+					PhaseType:                            "tdd-fill-in",
+					ExitCriteria:                         "Relevant tests pass.",
+					PriorImplementationReportPaths:       []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml"},
+					PriorImplementationEvidenceRootDirs:  []string{"/state/feat-x/run-1/phase-1/implement/iteration-02"},
+					PriorImplementationEvidenceArtifacts: []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png"},
+					FeedbackPath:                         "/state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md",
+				})
+			},
+		},
+		{
 			name: "pr_description_user_full",
 			render: func() string {
 				return PRDescriptionUserPrompt(PRDescriptionUserInput{
@@ -537,24 +588,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					VerificationReportPath:            "/state/feat-x/run-1/phase-1/iter-2/verification-report.yaml",
 					IncludeManualVerificationOutcomes: true,
 					Publishable:                       true,
-				})
-			},
-		},
-		{
-			name: "final_review_user_phase",
-			render: func() string {
-				return FinalReviewUserPrompt(FinalReviewUserInput{
-					VisualReferences:   VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "conducting this final review"},
-					Iteration:          1,
-					IsCycleReview:      false,
-					PhaseType:          "tdd-fill-in",
-					DiffBase:           "main",
-					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
-					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
-					FeatureDescription: "Sign in with Google.",
-					ExitCriteria:       "Relevant tests pass.",
-					FeedbackPath:       "/state/feat-x/run-1/final-review/iter-1/review-feedback.md",
-					Publishable:        true,
 				})
 			},
 		},

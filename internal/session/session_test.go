@@ -257,6 +257,53 @@ sleep 30
 	}
 }
 
+func TestPendingToolWatchdogIgnoresToolWaitingOnPermission(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "tool-waiting-permission.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-bash","tool_name":"Bash","data":"in_progress"}'
+printf '%s\n' '{"type":"control_request","request_id":"req-bash-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"npm run slow-check"}}}'
+sleep 0.12
+printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"pending-tool-watchdog-permission-wait",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "test-provider",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout:    25 * time.Millisecond,
+				TurnCompletionIdleTimeout: 25 * time.Millisecond,
+				PollInterval:              5 * time.Millisecond,
+			},
+			ResultShutdownGrace: 20 * time.Millisecond,
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "SUCCESS" {
+			t.Fatalf("StatusCh = %q, want SUCCESS; error detail: %s", status, sess.ErrorDetail())
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for success status")
+	}
+}
+
 func TestPendingToolWatchdogAllowsPromptResultAfterCompletedTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")

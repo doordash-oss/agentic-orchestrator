@@ -122,6 +122,12 @@ export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): Featu
     repos: ['repo-a'],
     createdAt: '2026-07-14T10:00:00Z',
     activeRun: 1,
+    reviewGate: {
+      reviewingGate: false,
+      reviewFixing: false,
+      validatingPlan: false,
+      validatorStatuses: {},
+    },
     setup: {
       status: 'running',
       attempt: 1,

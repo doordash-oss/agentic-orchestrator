@@ -1310,7 +1310,13 @@ export function FeatureCockpit({
 
                   {showsRun(snapshot) && !hasPendingReview ? (
                     <>
-                      <CurrentRunInspection featureId={featureId} runNumber={snapshot.activeRun} />
+                      <CurrentRunInspection
+                        featureId={featureId}
+                        runNumber={snapshot.activeRun}
+                        currentPhase={snapshot.currentPhase}
+                        currentRoadmapPhase={snapshot.currentRoadmapPhase}
+                        reviewGate={snapshot.reviewGate}
+                      />
                       <RunTimeline
                         featureId={featureId}
                         activeRun={snapshot.activeRun}

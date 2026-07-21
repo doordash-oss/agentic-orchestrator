@@ -386,6 +386,12 @@ describe('FeatureService.getFeature', () => {
     expect(FeatureSnapshotSchema.parse(snapshot)).toEqual(snapshot);
     expect(snapshot.name).toBe('Search revamp');
     expect(snapshot.status).toBe('SettingUpWorktrees');
+    expect(snapshot.reviewGate).toEqual({
+      reviewingGate: false,
+      reviewFixing: false,
+      validatingPlan: false,
+      validatorStatuses: {},
+    });
     expect(snapshot.actions).toEqual([
       {
         id: 'setup',
@@ -395,6 +401,32 @@ describe('FeatureService.getFeature', () => {
       },
       { id: 'start', enabled: true, disabledReasons: [], inputs: [] },
     ]);
+  });
+
+  it('preserves implementation review gate and axis status', async () => {
+    const body = detailBody({
+      review_gate: {
+        reviewing_gate: true,
+        review_fixing: true,
+        validating_plan: false,
+        validator_statuses: {
+          Craft: 'APPROVED',
+          'Functionality/Evidence': 'running',
+        },
+      },
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+
+    await expect(service.getFeature('abcd1234ef567890')).resolves.toMatchObject({
+      reviewGate: {
+        reviewingGate: true,
+        reviewFixing: true,
+        validatorStatuses: {
+          Craft: 'APPROVED',
+          'Functionality/Evidence': 'running',
+        },
+      },
+    });
   });
 
   it('orders setup tasks by the server-owned task_order', async () => {

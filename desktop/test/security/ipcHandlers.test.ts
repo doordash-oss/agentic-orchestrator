@@ -116,6 +116,12 @@ function makeServices(): IpcServices {
         repos: [],
         createdAt: '2026-07-14T10:00:00Z',
         activeRun: 1,
+        reviewGate: {
+          reviewingGate: false,
+          reviewFixing: false,
+          validatingPlan: false,
+          validatorStatuses: {},
+        },
         actions: [],
       }),
     ),

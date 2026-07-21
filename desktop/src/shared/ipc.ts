@@ -718,6 +718,15 @@ export const CycleViewSchema = z.strictObject({
 });
 export type CycleView = z.output<typeof CycleViewSchema>;
 
+/** Active plan or implementation/final-review gate state. */
+export const ReviewGateViewSchema = z.strictObject({
+  reviewingGate: z.boolean(),
+  reviewFixing: z.boolean(),
+  validatingPlan: z.boolean(),
+  validatorStatuses: z.record(z.string(), z.string()),
+});
+export type ReviewGateView = z.output<typeof ReviewGateViewSchema>;
+
 export const FeatureSnapshotSchema = z.strictObject({
   id: FeatureIdSchema,
   name: z.string(),
@@ -738,6 +747,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   repoStatus: z.array(RepoStatusViewSchema).optional(),
   /** Active cycle summary from the server. */
   cycle: CycleViewSchema.optional(),
+  /** Active plan or implementation/final-review gate from the server. */
+  reviewGate: ReviewGateViewSchema,
   failure: z
     .strictObject({ type: z.string().optional(), message: z.string().optional() })
     .optional(),

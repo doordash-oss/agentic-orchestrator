@@ -45,10 +45,30 @@ describe('CurrentRunInspection', () => {
       truncated: false,
     });
 
-    render(<CurrentRunInspection featureId="abcd1234ef567890" runNumber={2} />);
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={2}
+        currentPhase="Implement"
+        reviewGate={{
+          reviewingGate: true,
+          reviewFixing: true,
+          validatingPlan: false,
+          validatorStatuses: {
+            Design: 'running',
+            Cleanliness: 'CHANGES_REQUESTED',
+            'Functionality/Evidence': 'running',
+            Craft: 'APPROVED',
+          },
+        }}
+      />,
+    );
 
     expect(await screen.findByText('Running implementation')).toBeVisible();
     expect(screen.getByText('42%')).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Reviewing implementation' })).toBeVisible();
+    expect(screen.getByText('Fix pass active')).toBeVisible();
+    expect(screen.getByLabelText('Review axes')).toHaveTextContent('Craft✓Func⟳Clean✕Design⟳');
     await user.click(screen.getByRole('button', { name: 'Open artifact phase-plan' }));
     expect(await screen.findByLabelText('Current run artifact content')).toHaveTextContent(
       '# Current artifact',

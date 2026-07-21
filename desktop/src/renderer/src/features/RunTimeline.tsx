@@ -8,6 +8,7 @@ import {
   stripUnsafeAnsi,
   type SemanticEntry,
 } from './timelineModel';
+import { orderRunSessions, selectInitialRunSession, sessionDisplayLabel } from './reviewModel';
 
 type StreamState = 'connecting' | 'live' | 'stale' | 'resetting' | 'unavailable';
 
@@ -64,6 +65,7 @@ export function RunTimeline({
   shouldStream = true,
 }: RunTimelineProps) {
   const [session, setSession] = useState<SessionSummary | null>(null);
+  const [availableSessions, setAvailableSessions] = useState<SessionSummary[]>([]);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [streamState, setStreamState] = useState<StreamState>('connecting');
   const [streamDetail, setStreamDetail] = useState('Loading the current run…');
@@ -73,6 +75,8 @@ export function RunTimeline({
   const viewportRef = useRef<HTMLDivElement>(null);
   const subscriptionRef = useRef<string | null>(null);
   const globalStreamRef = useRef<'connecting' | 'live' | 'stale'>('live');
+  const selectedSessionIdRef = useRef<string | null>(null);
+  const runScopeRef = useRef('');
 
   useEffect(() => {
     return window.agentico.onAppEvent((event) => {
@@ -121,10 +125,20 @@ export function RunTimeline({
 
     const attachCurrentSession = async () => {
       try {
-        const sessions = (await window.agentico.listSessions()).filter(
-          (candidate) => candidate.featureId === featureId && candidate.runNumber === activeRun,
+        const scope = `${featureId}:${activeRun}`;
+        if (runScopeRef.current !== scope) {
+          runScopeRef.current = scope;
+          selectedSessionIdRef.current = null;
+        }
+        const sessions = orderRunSessions(
+          (await window.agentico.listSessions()).filter(
+            (candidate) => candidate.featureId === featureId && candidate.runNumber === activeRun,
+          ),
         );
-        const selectedSession = selectCurrentSession(sessions, currentPhase);
+        if (!disposed) setAvailableSessions(sessions);
+        const selectedSession =
+          sessions.find((candidate) => candidate.id === selectedSessionIdRef.current) ??
+          selectInitialRunSession(sessions);
         if (selectedSession === null) {
           if (!disposed) {
             setSession(null);
@@ -142,6 +156,7 @@ export function RunTimeline({
           }
           return;
         }
+        selectedSessionIdRef.current = selectedSession.id;
         sessionIdRef.current = selectedSession.id;
         if (!disposed) setSession(selectedSession);
         await window.agentico.getSession(selectedSession.id);
@@ -151,9 +166,13 @@ export function RunTimeline({
         });
         if (disposed) return;
         setMessages(reconcileTranscript([], backfill.messages));
-        if (!shouldStream) {
+        if (!shouldStream || isTerminalSessionStatus(selectedSession.status)) {
           setStreamState('unavailable');
-          setStreamDetail('Historical transcript · live output is closed');
+          setStreamDetail(
+            shouldStream
+              ? 'This session has finished. Its transcript remains available.'
+              : 'Historical transcript · live output is closed',
+          );
           return;
         }
         const opened = await window.agentico.openSessionOutput({
@@ -227,6 +246,28 @@ export function RunTimeline({
           <span aria-hidden="true">●</span> {streamState} · {streamDetail}
         </p>
       </header>
+
+      {availableSessions.length > 1 ? (
+        <div className="run-timeline__sessions" role="tablist" aria-label="Current run sessions">
+          {availableSessions.map((candidate) => (
+            <button
+              key={candidate.id}
+              type="button"
+              role="tab"
+              aria-selected={candidate.id === session?.id}
+              data-status={candidate.status.toLocaleLowerCase()}
+              onClick={() => {
+                if (candidate.id === selectedSessionIdRef.current) return;
+                selectedSessionIdRef.current = candidate.id;
+                setGeneration((value) => value + 1);
+              }}
+            >
+              <span>{sessionDisplayLabel(candidate)}</span>
+              <span className="run-timeline__session-status">{candidate.status}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="run-timeline__layout">
         <div className="run-timeline__reader">
@@ -329,16 +370,15 @@ function TimelineEntry({
   );
 }
 
-function selectCurrentSession(
-  sessions: readonly SessionSummary[],
-  currentPhase: string,
-): SessionSummary | null {
-  return (
-    [...sessions].sort((left, right) => {
-      const leftScore = (left.phase === currentPhase ? 2 : 0) + (left.status === 'running' ? 1 : 0);
-      const rightScore =
-        (right.phase === currentPhase ? 2 : 0) + (right.status === 'running' ? 1 : 0);
-      return rightScore - leftScore || Date.parse(right.startedAt) - Date.parse(left.startedAt);
-    })[0] ?? null
-  );
+function isTerminalSessionStatus(status: string): boolean {
+  return [
+    'complete',
+    'completed',
+    'done',
+    'ended',
+    'failed',
+    'cancelled',
+    'canceled',
+    'stopped',
+  ].includes(status.trim().toLocaleLowerCase());
 }

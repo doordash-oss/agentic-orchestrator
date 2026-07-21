@@ -1,16 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { LivePreviewView, RunArtifactsListResult, RunTextContent } from '../../../shared/ipc';
+import type {
+  LivePreviewView,
+  ReviewGateView,
+  RunArtifactsListResult,
+  RunTextContent,
+} from '../../../shared/ipc';
 import { parseIpcError } from '../wizard/ipcError';
+import {
+  orderedReviewStatuses,
+  reviewAxisShortName,
+  reviewStatusSymbol,
+  reviewStatusTone,
+} from './reviewModel';
 import { stripUnsafeAnsi } from './timelineModel';
 
 interface CurrentRunInspectionProps {
   featureId: string;
   runNumber: number;
+  currentPhase: string;
+  currentRoadmapPhase?: number;
+  reviewGate: ReviewGateView;
 }
 
 export function CurrentRunInspection({
   featureId,
   runNumber,
+  currentPhase,
+  currentRoadmapPhase,
+  reviewGate,
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [artifacts, setArtifacts] = useState<RunArtifactsListResult['artifacts']>([]);
@@ -116,6 +133,12 @@ export function CurrentRunInspection({
         </div>
       )}
 
+      <ReviewGateSummary
+        gate={reviewGate}
+        currentPhase={currentPhase}
+        currentRoadmapPhase={currentRoadmapPhase}
+      />
+
       <div className="current-inspection__resources">
         <div>
           <h4>Run artifacts</h4>
@@ -177,6 +200,63 @@ export function CurrentRunInspection({
           </pre>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function ReviewGateSummary({
+  gate,
+  currentPhase,
+  currentRoadmapPhase,
+}: {
+  gate: ReviewGateView;
+  currentPhase: string;
+  currentRoadmapPhase?: number;
+}): React.ReactElement | null {
+  const statuses = orderedReviewStatuses(gate.validatorStatuses);
+  if (!gate.reviewingGate && !gate.validatingPlan && statuses.length === 0) return null;
+
+  const target = gate.reviewingGate
+    ? currentPhase.trim().toLocaleLowerCase() === 'implement'
+      ? 'Reviewing implementation'
+      : 'Final review'
+    : currentRoadmapPhase === undefined
+      ? 'Validating plan'
+      : `Validating Phase ${currentRoadmapPhase} plan`;
+  const counts = statuses.reduce(
+    (result, [, status]) => {
+      result[reviewStatusTone(status)] += 1;
+      return result;
+    },
+    { passed: 0, failed: 0, running: 0, pending: 0 },
+  );
+
+  return (
+    <section className="review-gate" aria-label="Review gate">
+      <div className="review-gate__heading">
+        <div>
+          <span className="review-gate__eyebrow">Review gate</span>
+          <h4>{target}</h4>
+        </div>
+        {gate.reviewFixing ? <span className="review-gate__fixing">Fix pass active</span> : null}
+      </div>
+      {statuses.length > 0 ? (
+        <>
+          <ul className="review-gate__axes" aria-label="Review axes">
+            {statuses.map(([name, status]) => (
+              <li key={name} data-status={reviewStatusTone(status)} title={`${name}: ${status}`}>
+                <span>{reviewAxisShortName(name)}</span>
+                <span aria-hidden="true">{reviewStatusSymbol(status)}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="review-gate__counts">
+            {counts.passed} passed · {counts.failed} changes requested · {counts.running} running
+          </p>
+        </>
+      ) : (
+        <p className="review-gate__counts">Review session is starting…</p>
+      )}
     </section>
   );
 }

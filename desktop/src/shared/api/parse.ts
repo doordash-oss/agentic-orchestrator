@@ -433,6 +433,12 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   actions: z.array(ServerActionSchema),
   repo_status: z.array(ServerRepoStatusSchema).optional(),
   cycle: ServerCycleSchema.optional(),
+  review_gate: z.object({
+    reviewing_gate: z.boolean(),
+    review_fixing: z.boolean(),
+    validating_plan: z.boolean(),
+    validator_statuses: z.record(z.string(), z.string()).optional(),
+  }),
   need_user_input: ServerNeedUserInputGateDetailSchema.optional(),
   failure: z.object({ type: z.string().optional(), message: z.string().optional() }).optional(),
 });

@@ -3324,6 +3324,47 @@ body {
   color: var(--color-danger);
 }
 
+.run-timeline__sessions {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  padding-block: 1px var(--space-1);
+}
+
+.run-timeline__sessions button {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 2px;
+  min-width: 112px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-muted);
+  background: var(--color-panel);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.run-timeline__sessions button[aria-selected='true'] {
+  border-color: var(--color-signal);
+  color: var(--color-text);
+  box-shadow: inset 0 -2px 0 var(--color-signal);
+}
+
+.run-timeline__sessions button:focus-visible {
+  outline: 2px solid var(--color-signal);
+  outline-offset: 2px;
+}
+
+.run-timeline__session-status {
+  color: var(--color-muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .run-timeline__layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(210px, 0.38fr);
@@ -7627,6 +7668,78 @@ body {
 .current-inspection__metrics dd {
   margin: 0;
   font-family: var(--font-mono);
+}
+
+.review-gate {
+  display: grid;
+  gap: var(--space-2);
+  border-block: 1px solid var(--color-hairline);
+  padding-block: var(--space-3);
+}
+
+.review-gate__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.review-gate__heading h4 {
+  margin: 2px 0 0;
+  font: 600 15px var(--font-display);
+}
+
+.review-gate__eyebrow,
+.review-gate__fixing,
+.review-gate__counts {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.review-gate__fixing {
+  color: var(--color-accent);
+}
+
+.review-gate__axes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.review-gate__axes li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  padding: 3px var(--space-2);
+  color: var(--color-muted);
+  background: var(--color-panel);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.review-gate__axes li[data-status='passed'] {
+  color: var(--color-success);
+}
+
+.review-gate__axes li[data-status='failed'] {
+  color: var(--color-danger);
+}
+
+.review-gate__axes li[data-status='running'] {
+  color: var(--color-signal);
+}
+
+.review-gate__counts {
+  margin: 0;
+  text-transform: none;
 }
 
 .current-inspection__resources {

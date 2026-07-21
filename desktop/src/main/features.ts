@@ -522,6 +522,12 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
               : { iteration: feature.cycle.iteration }),
           },
         }),
+    reviewGate: {
+      reviewingGate: feature.review_gate.reviewing_gate,
+      reviewFixing: feature.review_gate.review_fixing,
+      validatingPlan: feature.review_gate.validating_plan,
+      validatorStatuses: { ...(feature.review_gate.validator_statuses ?? {}) },
+    },
     ...(feature.failure === undefined
       ? {}
       : {

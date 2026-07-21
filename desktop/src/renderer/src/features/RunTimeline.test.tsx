@@ -118,6 +118,41 @@ describe('RunTimeline', () => {
     expect(mock.api.getSession).not.toHaveBeenCalledWith('sealed-session');
   });
 
+  it('orders review axes and initially focuses the running axis over a failed axis', async () => {
+    const design = {
+      ...session,
+      id: 'review-design',
+      phase: 'Final Review',
+      kind: 'validator',
+      label: 'Design',
+      status: 'failed',
+    };
+    const functionality = {
+      ...design,
+      id: 'review-functionality',
+      label: 'Functionality/Evidence',
+      status: 'running',
+    };
+    const cleanliness = { ...design, id: 'review-cleanliness', label: 'Cleanliness' };
+    const mock = installAgenticoMock({ sessions: [design, cleanliness, functionality] });
+    const user = userEvent.setup();
+
+    render(<RunTimeline featureId={FEATURE_ID} activeRun={2} currentPhase="Final Review" />);
+
+    await waitFor(() => expect(mock.api.getSession).toHaveBeenCalledWith('review-functionality'));
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      'Functionality/Evidencerunning',
+      'Cleanlinessfailed',
+      'Designfailed',
+    ]);
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
+
+    await user.click(screen.getByRole('tab', { name: /Design/ }));
+    await waitFor(() => expect(mock.api.getSession).toHaveBeenCalledWith('review-design'));
+    expect(screen.getByRole('tab', { name: /Design/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('retries session discovery when the server announces a newly registered session', async () => {
     const mock = installAgenticoMock({ sessions: [] });
     mock.api.listSessions.mockResolvedValueOnce([]).mockResolvedValue([session]);

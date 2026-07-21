@@ -283,6 +283,17 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   repos: ['signal-lab', 'orchestrator-core'],
   createdAt: '2026-07-14T10:00:00Z',
   activeRun: 8,
+  reviewGate: {
+    reviewingGate: true,
+    reviewFixing: false,
+    validatingPlan: false,
+    validatorStatuses: {
+      Craft: 'APPROVED',
+      'Functionality/Evidence': 'running',
+      Cleanliness: 'CHANGES_REQUESTED',
+      Design: 'running',
+    },
+  },
   actions: [
     {
       id: 'start',
@@ -305,6 +316,12 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
   repos: ['signal-lab', 'orchestrator-core'],
   createdAt: '2026-07-14T10:00:00Z',
   activeRun: 8,
+  reviewGate: {
+    reviewingGate: false,
+    reviewFixing: false,
+    validatingPlan: false,
+    validatorStatuses: {},
+  },
   actions: [
     {
       id: 'start',

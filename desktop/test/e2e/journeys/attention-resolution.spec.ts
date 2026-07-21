@@ -207,7 +207,7 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
 }, testInfo) => {
   const transcript = new Transcript(
     'attention-resolution',
-    'Phase 3 — packaged prompt-class attention resolution',
+    'Prompt-class attention resolution via packaged inbox and cockpit',
   );
   const world = createWorld('attention-resolution', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
@@ -410,7 +410,7 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
 test('packaged inbox resolves an interactive help request from chat', async ({}, testInfo) => {
   const transcript = new Transcript(
     'attention-help',
-    'Phase 3 — packaged interactive help attention',
+    'Interactive help attention resolution via packaged inbox',
   );
   const world = createWorld('attention-help', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
@@ -427,7 +427,7 @@ test('packaged inbox resolves an interactive help request from chat', async ({},
     });
 
     const chatStart = await serverPost(world, '/api/v1/prompts/chat/start', {
-      message: 'Phase 3 attention chat help',
+      message: 'attention chat help',
     });
     transcript.json('chat start response', chatStart);
     await waitForProviderLog(world, 'chat-waiting');
@@ -462,7 +462,7 @@ test('packaged inbox resolves an interactive help request from chat', async ({},
 test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({}, testInfo) => {
   const transcript = new Transcript(
     'attention-gate',
-    'Phase 3 — packaged NEED_USER_INPUT gate attention',
+    'Needs-user-input gate attention via packaged inbox',
   );
   const world = createWorld('attention-gate', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },

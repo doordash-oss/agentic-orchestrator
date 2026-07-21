@@ -20,7 +20,7 @@ import { createRepo, createWorld, destroyWorld } from '../helpers/world';
 test('attention inbox is keyboard reachable and restores focus to the bell', async ({}, testInfo) => {
   const transcript = new Transcript(
     'attention-inbox',
-    'Phase 3 — packaged global attention inbox keyboard shell',
+    'Global attention inbox keyboard shell and focus restoration',
   );
   const world = createWorld('attention-inbox', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },

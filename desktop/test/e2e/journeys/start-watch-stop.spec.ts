@@ -47,13 +47,13 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
       repoPatterns: [/signal-lab/],
       waitForReady: true,
     });
-    await evidenceShot(handle, 'phase2-ready-light-wide');
+    await evidenceShot(handle, 'cockpit-ready-light-wide');
 
     await handle.page.getByRole('tab', { name: 'Home' }).click();
     const featureList = handle.page.getByRole('region', { name: 'Existing features' });
     await expect(featureList).toContainText('Packaged Signal Journey');
     await featureList.scrollIntoViewIfNeeded();
-    await evidenceShot(handle, 'phase2-intervention-dashboard-light-wide');
+    await evidenceShot(handle, 'cockpit-intervention-dashboard-light-wide');
     await handle.page.getByRole('tab', { name: 'Packaged Signal Journey' }).click();
 
     transcript.section('Start through the UI exactly once');
@@ -132,7 +132,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(
       cockpit.getByRole('complementary', { name: 'Raw record inspector' }),
     ).toContainText('Write');
-    await evidenceShot(handle, 'phase2-live-grouped-activity-light-wide');
+    await evidenceShot(handle, 'cockpit-live-grouped-activity-light-wide');
 
     transcript.section('Live app-owned epoch reset resnapshots without duplicate rows');
     const beforeReset = requireDiscovery(world);
@@ -143,7 +143,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(connectionShell.getByRole('status')).toContainText(
       /crashed|recovering|starting|connecting|waiting for health/i,
     );
-    await evidenceShot(handle, 'phase2-live-reconnect-reset-in-progress');
+    await evidenceShot(handle, 'cockpit-live-reconnect-reset-in-progress');
     const afterReset = await waitForNewServer(world, beforeReset.pid);
     await expect(cockpit).toBeVisible({ timeout: 60_000 });
     await expect(timeline.getByRole('status')).toContainText(/live|Receiving live output/, {
@@ -166,7 +166,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
 
     await setTheme(handle, 'dark');
     await setWindowSize(handle, 1440, 960);
-    await evidenceShot(handle, 'phase2-live-cockpit-dark-wide');
+    await evidenceShot(handle, 'cockpit-live-dark-wide');
 
     transcript.section('Historical reading stays put until Jump to live');
     const reader = timeline.getByLabel('Semantic timeline');
@@ -176,7 +176,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     });
     const jump = timeline.getByRole('button', { name: 'Jump to live' });
     await expect(jump).toBeVisible();
-    await evidenceShot(handle, 'phase2-reading-history-jump-live');
+    await evidenceShot(handle, 'cockpit-reading-history-jump-live');
     await jump.click();
     await expect(jump).toHaveCount(0);
 
@@ -191,17 +191,17 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(inspector.getByText('Packaged Signal Journey')).toBeVisible();
     await inspector.getByRole('button', { name: 'Close inspector' }).click();
     await expect(inspector).toHaveCount(0);
-    await evidenceShot(handle, 'phase2-live-cockpit-dark-narrow');
+    await evidenceShot(handle, 'cockpit-live-dark-narrow');
     await setTheme(handle, 'light');
     await expect(cockpit.getByRole('button', { name: 'Stop' })).toBeEnabled();
-    await evidenceShot(handle, 'phase2-live-cockpit-light-narrow');
+    await evidenceShot(handle, 'cockpit-live-light-narrow');
 
     transcript.section('Stop confirmation and authoritative terminal state');
     await cockpit.getByRole('button', { name: 'Stop' }).click();
     const dialog = handle.page.getByRole('dialog', { name: 'Stop Packaged Signal Journey?' });
     await expect(dialog).toContainText(/currently affects 1 live session/);
     await expect(dialog).toContainText(/Existing validated transcript content remains available/);
-    await evidenceShot(handle, 'phase2-stop-impact-confirmation');
+    await evidenceShot(handle, 'cockpit-stop-impact-confirmation');
     await dialog.getByRole('button', { name: 'Confirm stop' }).click();
     await expect(dialog).toHaveCount(0);
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
@@ -230,7 +230,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await expect(handle.page.getByRole('region', { name: 'Existing features' })).toContainText(
       'Packaged Signal Journey',
     );
-    await evidenceShot(handle, 'phase2-terminal-dashboard-light-narrow');
+    await evidenceShot(handle, 'cockpit-terminal-dashboard-light-narrow');
 
     const discovery = readDiscovery(world);
     transcript.json('real bundled-server discovery (token redacted)', {

@@ -199,14 +199,12 @@ export function AttentionInbox({
         aria-controls="attention-inbox"
         onClick={() => setOpen(true)}
       >
-        <span className="attention-bell__glyph" aria-hidden="true">
-          !
+        <span className="attention-bell__label" aria-hidden="true">
+          Attention
         </span>
-        {actionableCount > 0 ? (
-          <span className="attention-bell__count" aria-hidden="true">
-            {actionableCount}
-          </span>
-        ) : null}
+        <span className="attention-bell__count" aria-hidden="true" data-empty={actionableCount === 0}>
+          {actionableCount}
+        </span>
       </button>
       {notice !== '' && !open ? (
         <p className="sr-only" role="status">

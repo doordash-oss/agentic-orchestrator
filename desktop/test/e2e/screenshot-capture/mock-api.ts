@@ -401,8 +401,8 @@ const RECOVERY_ITEMS = [
     pid: 12345,
     processAlive: true,
     logAvailable: true,
-    allowedActions: ['resume', 'kill', 'skip'],
-    defaultAction: 'skip',
+    allowedActions: ['resume', 'kill'],
+    defaultAction: 'resume',
   },
   {
     key: 'feature-beta:orchestrator-core',
@@ -414,8 +414,8 @@ const RECOVERY_ITEMS = [
     pid: 0,
     processAlive: false,
     logAvailable: true,
-    allowedActions: ['resume', 'kill', 'skip'],
-    defaultAction: 'skip',
+    allowedActions: ['resume', 'kill'],
+    defaultAction: 'resume',
   },
 ];
 
@@ -1059,7 +1059,7 @@ function makeMockApi(
         offset: 0,
         limit: 65536,
         size: 220,
-        text: '[implement] iteration 3 started\n[model] requesting review-comments cycle\n[implement] NEED_USER_INPUT: apply suggested fix?\n[cycle] review-comments paused on gate\n[recovery] orphan process detected (pid 412)\n[recovery] log excerpt available — Resume, Kill, or Skip.',
+        text: '[implement] iteration 3 started\n[model] requesting review-comments cycle\n[implement] NEED_USER_INPUT: apply suggested fix?\n[cycle] review-comments paused on gate\n[recovery] orphan process detected (pid 412)\n[recovery] log excerpt available — Resume or Kill.',
         truncated: false,
       }),
     bulkPreview: () => Promise.resolve(BULK_PREVIEW_DATA),

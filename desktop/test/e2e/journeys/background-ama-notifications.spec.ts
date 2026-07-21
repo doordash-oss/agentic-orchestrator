@@ -122,11 +122,11 @@ test('packaged attention notifications are private, deduplicated, bounded, exact
       timeout: 60_000,
     });
     await installNotificationCapture(handle);
-    // The line-134 assertion expects zero notifications, which holds only when
-    // the main window is focused (shouldNotify returns false). OS focus is an
-    // ambient resource the test does not otherwise control, so deterministically
-    // focus the window and confirm via the published test hook before any
-    // attention item can arrive.
+    // The zero-notification assertion below expects no notifications, which
+    // holds only when the main window is focused (shouldNotify returns false).
+    // OS focus is an ambient resource the test does not otherwise control, so
+    // deterministically focus the window and confirm via the published test
+    // hook before any attention item can arrive.
     await ensureMainWindowFocus(handle);
 
     const cockpit = await createFeatureViaForm(handle, {

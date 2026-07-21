@@ -263,7 +263,8 @@ async function waitForRebaseCycleSuccess(
         (repo) =>
           repo.rebaseStatus !== 'conflict' &&
           repo.rebaseStatus !== 'failed' &&
-          repo.cycleStatus !== 'failed',
+          repo.cycleStatus !== 'failed' &&
+          !repo.lastError,
       );
       if (!serverReportsNoRebaseFailure) {
         return false;

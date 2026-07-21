@@ -536,16 +536,8 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     '.recovery-workspace__header',
     async (p) => {
       await expect(p.locator('.recovery-workspace__queue')).toBeVisible({ timeout: 15_000 });
-      // Skip the first (live) item so the capture shows a per-item partial
-      // outcome, then open the Kill impact dialog on the second item so
-      // both the outcome and the confirmation are visible in one viewport.
-      const firstItem = p.locator('.recovery-workspace__item').first();
-      const skipButton = firstItem.locator('.recovery-workspace__action--skip');
-      await expect(skipButton).toBeVisible({ timeout: 5_000 });
-      await skipButton.click();
-      await expect(firstItem.locator('.recovery-workspace__item-outcome')).toBeVisible({
-        timeout: 10_000,
-      });
+      // Open the Kill impact dialog on the second item so the per-item
+      // action and the confirmation are visible in one viewport.
       const secondItem = p.locator('.recovery-workspace__item').nth(1);
       const killButton = secondItem.locator('.recovery-workspace__action--kill');
       await expect(killButton).toBeVisible({ timeout: 5_000 });

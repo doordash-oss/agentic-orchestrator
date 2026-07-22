@@ -83,10 +83,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
 
     const implementationPicker = editor.getByLabel('Implementation model');
     await expect(implementationPicker).toBeVisible();
-    const defaultOptionLabel = await implementationPicker
-      .locator('option')
-      .first()
-      .textContent();
+    const defaultOptionLabel = await implementationPicker.locator('option').first().textContent();
     expect(defaultOptionLabel).toContain('Default —');
     transcript.step(`implementation picker names the effective default: "${defaultOptionLabel}"`);
 

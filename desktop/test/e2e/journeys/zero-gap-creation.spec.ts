@@ -13,8 +13,7 @@ const SHOTS = {
     'creation-where-step-with-repository-browser-eligibility-detail-and-initializatio-1440x900',
   pipeline:
     'creation-pipeline-step-with-profile-cards-and-effective-gate-summary-light-theme-1440x900',
-  review:
-    'creation-review-step-with-models-checkpoints-exit-criteria-and-complete-s-1440x900',
+  review: 'creation-review-step-with-models-checkpoints-exit-criteria-and-complete-s-1440x900',
 } as const;
 
 test('four-step creation covers scoped files, initialization, review, setup, and retry-safe identity', async ({}, testInfo) => {
@@ -73,27 +72,7 @@ test('four-step creation covers scoped files, initialization, review, setup, and
 
     await app.page.setViewportSize({ width: 1440, height: 900 });
     await app.page.getByRole('button', { name: 'New feature' }).click();
-    await app.page.locator('#feature-name').fill('Zero gap creation');
-    await app.page
-      .locator('#feature-description')
-      .fill('Prove the complete desktop creation contract.');
-    await app.page.getByRole('button', { name: 'Choose images' }).click();
-    await app.page.getByRole('button', { name: 'Choose attachments' }).click();
-
-    await app.page.getByRole('button', { name: 'Next: Where' }).click();
     await app.page.getByRole('checkbox', { name: /creation-lab/ }).check();
-    await app.page.getByRole('button', { name: 'Back', exact: true }).click();
-    await app.page.getByPlaceholder('Fuzzy search selected repositories').fill('creation context');
-    const repoFile = app.page.getByRole('checkbox', { name: /creation-lab.*creation-context/ });
-    await expect(repoFile).toBeVisible();
-    await repoFile.check();
-    await setTheme(app, 'light');
-    await evidenceShot(app, SHOTS.what);
-    transcript.step(
-      'What preserved ordered native-picked inputs and a scoped relative repository file',
-    );
-
-    await app.page.getByRole('button', { name: 'Next: Where' }).click();
     await app.page.getByRole('button', { name: 'Browse for folder' }).click();
     await app.page.getByRole('button', { name: 'Add workspace root' }).click();
     await expect(app.page.getByRole('heading', { name: 'Choose repositories' })).toBeVisible();
@@ -106,6 +85,27 @@ test('four-step creation covers scoped files, initialization, review, setup, and
     await app.page.getByRole('checkbox', { name: /initialized-lab/ }).check();
     transcript.step(
       'Where added a root, consented to server-owned initialization, and observed rediscovery',
+    );
+
+    await app.page.getByRole('button', { name: 'Next: What' }).click();
+    await app.page.locator('#feature-name').fill('Zero gap creation');
+    await app.page
+      .locator('#feature-description')
+      .fill('Prove the complete desktop creation contract. See @creation-context');
+    const repoFile = app.page.getByRole('option', { name: /creation-lab.*creation-context/ });
+    await expect(repoFile).toBeVisible();
+    await repoFile.click();
+    await expect(
+      app.page.getByRole('button', { name: /Remove reference creation-lab/ }),
+    ).toBeVisible();
+    await app.page.getByRole('button', { name: 'Attach files or photos' }).click();
+    await app.page.getByRole('menuitem', { name: 'Add photos' }).click();
+    await app.page.getByRole('button', { name: 'Attach files or photos' }).click();
+    await app.page.getByRole('menuitem', { name: 'Add files' }).click();
+    await setTheme(app, 'light');
+    await evidenceShot(app, SHOTS.what);
+    transcript.step(
+      'What preserved ordered native-picked inputs and an @-mentioned repository file',
     );
 
     await app.page.getByRole('button', { name: 'Next: Pipeline' }).click();
@@ -132,6 +132,7 @@ test('four-step creation covers scoped files, initialization, review, setup, and
       const wizard = document.querySelector('.creation-wizard');
       if (wizard instanceof HTMLElement) wizard.style.zoom = '1';
     });
+    await app.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
     await app.page.getByRole('button', { name: 'Create feature' }).click();
 
     const cockpit = app.page.getByLabel('Feature Zero gap creation');

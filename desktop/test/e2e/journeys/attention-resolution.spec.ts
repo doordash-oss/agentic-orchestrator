@@ -68,14 +68,15 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     ]);
     await setWindowSize(handle, 1440, 900);
     await setTheme(handle, 'light');
+    await handle.page.getByRole('checkbox', { name: /spatial-shell-lab/ }).check();
+    await handle.page.getByRole('button', { name: 'Next: What' }).click();
     await handle.page.locator('#feature-name').fill('Spatial Shell Attention Fixture');
     await handle.page
       .locator('#feature-description')
       .fill('A real packaged feature used to exercise the spatial shell journey.');
-    await handle.page.getByRole('button', { name: 'Next: Where' }).click();
-    await handle.page.getByRole('checkbox', { name: /spatial-shell-lab/ }).check();
     await handle.page.getByRole('button', { name: 'Next: Pipeline' }).click();
     await handle.page.getByRole('button', { name: 'Next: Review' }).click();
+    await handle.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
     await handle.page.getByRole('button', { name: 'Create feature' }).click();
 
     const cockpit = handle.page.getByLabel('Feature Spatial Shell Attention Fixture');

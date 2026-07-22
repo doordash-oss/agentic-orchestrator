@@ -166,7 +166,6 @@ export class FeatureService {
           manual_publish: validated.checkpoints.manualPublish,
           draft_publish: validated.checkpoints.draftPublish,
         },
-        skills: validated.skills,
         idempotency_key: validated.idempotencyKey,
       },
     });

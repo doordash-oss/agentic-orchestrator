@@ -790,9 +790,18 @@ export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
   }),
   z.strictObject({
     featureId: FeatureIdSchema,
-    action: z.enum(['merge', 'mark-done', 'delete']),
+    action: z.enum(['merge', 'mark-done']),
     body: z.strictObject({
       source_revision: CompletionSourceRevisionSchema,
+    }),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    // Delete works from any lifecycle state; the guard revision is only
+    // supplied when the completion workspace has one.
+    action: z.literal('delete'),
+    body: z.strictObject({
+      source_revision: CompletionSourceRevisionSchema.optional(),
     }),
   }),
   z.strictObject({
@@ -1716,7 +1725,6 @@ export const CreateFeatureInputSchema = z.strictObject({
       manualPublish: true,
       draftPublish: false,
     }),
-  skills: z.array(z.string().min(1).max(256)).max(32).default([]),
   /** Stable for the lifetime of one draft so a retry cannot duplicate it. */
   idempotencyKey: z
     .string()

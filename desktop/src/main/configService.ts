@@ -88,9 +88,7 @@ const ModelCatalogResponseSchema = z.object({
   provider_order: z.array(z.string()).optional(),
   provider_models: z.record(z.string(), z.array(ServerModelInfoSchema)).optional(),
   phase_defaults: ServerModelsSchema.optional(),
-  phase_provider_models: z
-    .record(z.string(), z.record(z.string(), z.array(z.string())))
-    .optional(),
+  phase_provider_models: z.record(z.string(), z.record(z.string(), z.array(z.string()))).optional(),
 });
 
 const ActionResponseSchema = z.object({ api_version: z.string() });
@@ -102,7 +100,9 @@ function toPhaseModels(models: z.output<typeof ServerModelsSchema>): PhaseModels
     ...(entry(models.inquiry) === undefined ? {} : { inquiry: models.inquiry }),
     ...(entry(models.research) === undefined ? {} : { research: models.research }),
     ...(entry(models.planning) === undefined ? {} : { planning: models.planning }),
-    ...(entry(models.implementation) === undefined ? {} : { implementation: models.implementation }),
+    ...(entry(models.implementation) === undefined
+      ? {}
+      : { implementation: models.implementation }),
     ...(entry(models.review) === undefined ? {} : { review: models.review }),
     ...(entry(models.utilities) === undefined ? {} : { utilities: models.utilities }),
     ...(entry(models.kb_build) === undefined ? {} : { kbBuild: models.kb_build }),
@@ -149,9 +149,7 @@ function normalizeInquireness(value: string | undefined): 'none' | 'medium' | 'h
   return value === 'none' || value === 'high' ? value : 'medium';
 }
 
-function normalizeInputNotifications(
-  value: string | undefined,
-): 'default' | 'enabled' | 'muted' {
+function normalizeInputNotifications(value: string | undefined): 'default' | 'enabled' | 'muted' {
   return value === 'enabled' || value === 'muted' ? value : 'default';
 }
 

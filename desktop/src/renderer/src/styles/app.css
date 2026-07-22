@@ -2207,33 +2207,146 @@ body {
   line-height: 1.5;
 }
 
-.file-shelf {
-  padding: 1rem;
-  border: 1px dashed var(--color-hairline);
-  border-radius: var(--radius);
+.composer {
+  position: relative;
+  display: grid;
+  gap: 0.6rem;
 }
-.file-shelf > div {
+.composer__toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  gap: 0.75rem;
 }
-.file-shelf h3 {
+.composer__attach {
+  position: relative;
+}
+.composer__attach-button {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--color-hairline);
+  border-radius: 50%;
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.composer__attach-button:hover,
+.composer__attach-button[aria-expanded='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.composer__attach-menu {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 11rem;
+  padding: 0.3rem;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+.composer__attach-menu button {
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+.composer__attach-menu button:hover {
+  background: var(--color-hairline);
+}
+.composer__hint {
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+.composer__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
   margin: 0;
-  font-size: 0.9rem;
-}
-.file-shelf ol,
-.skill-picker ul {
-  margin: 0.75rem 0 0;
   padding: 0;
   list-style: none;
 }
-.file-shelf li {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.45rem 0;
-  border-top: 1px solid var(--color-hairline);
+.composer__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  background: var(--color-panel);
+  font-size: 0.78rem;
+}
+.composer__chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer__chip[data-kind='reference'] {
+  font-family: var(--font-mono, monospace);
+}
+.composer__chip button {
+  padding: 0 0.2rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.composer__chip button:hover {
+  color: var(--color-text);
+}
+.composer__mentions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 14rem;
+  overflow: auto;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+.composer__mentions-hint {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+.composer__mention-option {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) 1fr;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.composer__mention-option[data-active='true'] {
+  background: var(--color-hairline);
+}
+.composer__mention-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-muted);
+}
+.repo-option--empty {
+  padding: 0.6rem 0;
+  color: var(--color-muted);
 }
 .review-controls {
   display: grid;
@@ -2246,7 +2359,10 @@ body {
   gap: 1rem;
   margin: 1rem 0;
 }
-.review-contract > div {
+.review-contract > div,
+.review-contract > fieldset {
+  min-width: 0;
+  margin: 0;
   padding: 0.8rem;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
@@ -2266,14 +2382,12 @@ body {
   gap: 0.75rem;
   font-size: 0.8rem;
 }
-.review-controls label,
-.skill-picker > label {
+.review-controls label {
   display: grid;
   gap: 0.4rem;
   font-weight: 650;
 }
 .review-controls select,
-.skill-picker input,
 .creation-wizard textarea {
   padding: 0.7rem;
   border: 1px solid var(--color-hairline);
@@ -2281,49 +2395,13 @@ body {
   color: var(--color-text);
   background: var(--color-panel);
 }
-.skill-picker {
-  max-height: 14rem;
-  overflow: auto;
-  padding: 1rem;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-}
-.skill-picker li {
-  padding: 0.35rem 0;
-}
 
-.repository-file-picker,
 .directory-browser {
   margin-top: 1rem;
   padding: 1rem;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
   background: var(--color-panel);
-}
-
-.repository-file-picker > label {
-  display: grid;
-  gap: 0.4rem;
-  font-weight: 650;
-}
-.repository-file-picker input[type='text'],
-.repository-file-picker input:not([type]) {
-  padding: 0.65rem;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-}
-.repository-file-picker ul {
-  max-height: 12rem;
-  overflow: auto;
-  padding: 0;
-  list-style: none;
-}
-.repository-file-picker li label {
-  display: grid;
-  grid-template-columns: auto 8rem 1fr;
-  gap: 0.6rem;
-  align-items: center;
-  padding: 0.35rem 0;
 }
 .directory-browser > div:first-child,
 .directory-browser__actions {
@@ -3323,6 +3401,32 @@ body {
 
 .cockpit__resume:disabled,
 .cockpit__retry:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.cockpit__delete-button {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--color-danger, #b3261e);
+  background: transparent;
+  border: 1px solid var(--color-danger, #b3261e);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.cockpit__delete-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger, #b3261e) 12%, transparent);
+}
+
+.cockpit__delete-button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0;
+}
+
+.cockpit__delete-button:disabled {
   opacity: 0.55;
   cursor: default;
 }

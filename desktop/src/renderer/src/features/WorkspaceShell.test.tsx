@@ -174,12 +174,12 @@ describe('WorkspaceShell tabs', () => {
     await user.click(await screen.findByRole('button', { name: 'New feature' }));
     await screen.findByRole('form', { name: /create a feature/i });
 
-    await user.type(screen.getByLabelText('Name'), 'Search revamp');
-    await user.click(screen.getByRole('button', { name: 'Next: Where' }));
     await user.click(screen.getByRole('checkbox', { name: /repo-a/ }));
+    await user.click(screen.getByRole('button', { name: 'Next: What' }));
+    await user.type(screen.getByLabelText('Name'), 'Search revamp');
     await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
     await user.click(screen.getByRole('button', { name: 'Next: Review' }));
-    await user.click(screen.getByRole('button', { name: 'Create feature' }));
+    await user.click(screen.getByRole('button', { name: 'Create and start' }));
 
     const tab = await screen.findByRole('tab', { name: 'Search revamp' });
     expect(tab).toHaveAttribute('aria-selected', 'true');
@@ -200,6 +200,8 @@ describe('WorkspaceShell tabs', () => {
 
     await user.click(await screen.findByRole('tab', { name: 'Home' }));
     await user.click(await screen.findByRole('button', { name: 'New feature' }));
+    await user.click(await screen.findByRole('checkbox', { name: /repo-a/ }));
+    await user.click(screen.getByRole('button', { name: 'Next: What' }));
     await user.type(screen.getByLabelText('Name'), 'Unsaved feature');
     await user.click(screen.getByRole('button', { name: 'Back to Home' }));
 
@@ -219,6 +221,8 @@ describe('WorkspaceShell tabs', () => {
 
     await user.click(await screen.findByRole('tab', { name: 'Home' }));
     await user.click(await screen.findByRole('button', { name: 'New feature' }));
+    await user.click(await screen.findByRole('checkbox', { name: /repo-a/ }));
+    await user.click(screen.getByRole('button', { name: 'Next: What' }));
     await user.type(screen.getByLabelText('Name'), 'Unsaved feature');
     await user.click(screen.getByRole('tab', { name: 'Search revamp' }));
 

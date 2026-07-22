@@ -300,6 +300,8 @@ function CockpitActionBar({
   onOpenCycles,
   completionAvailable,
   onOpenCompletion,
+  deleteAction,
+  onDelete,
 }: {
   snapshot: FeatureSnapshot;
   setupAction: ReturnType<typeof actionById>;
@@ -329,6 +331,8 @@ function CockpitActionBar({
   onOpenCycles(): void;
   completionAvailable: boolean;
   onOpenCompletion(): void;
+  deleteAction: ReturnType<typeof actionById>;
+  onDelete(): void;
 }) {
   return (
     <div className="cockpit__actions" role="group" aria-label="Feature actions">
@@ -472,6 +476,20 @@ function CockpitActionBar({
           aria-label="View run history"
         >
           ▦ History
+        </button>
+      ) : null}
+      {deleteAction !== undefined ? (
+        <button
+          type="button"
+          className="cockpit__delete-button"
+          disabled={!deleteAction.enabled || busy}
+          onClick={onDelete}
+          aria-label="Delete feature"
+          {...(deleteAction.disabledReasons[0] !== undefined
+            ? { title: displayFeatureMessage(deleteAction.disabledReasons[0].message) }
+            : {})}
+        >
+          🗑 Delete
         </button>
       ) : null}
       <button
@@ -699,6 +717,68 @@ function RestartConfirmDialog({
   );
 }
 
+function DeleteConfirmDialog({
+  snapshot,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  snapshot: FeatureSnapshot;
+  busy: boolean;
+  onClose(): void;
+  onConfirm(): void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [busy, onClose]);
+
+  const repos = snapshot.repos.join(', ');
+
+  return (
+    <div className="impact-dialog__backdrop">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-dialog-title"
+        className="impact-dialog"
+        tabIndex={-1}
+      >
+        <span className="impact-dialog__eyebrow">Operational impact</span>
+        <h3 id="delete-dialog-title">Delete {snapshot.name}?</h3>
+        <p>
+          This permanently removes the feature, its runs, and its worktrees
+          {repos.length > 0 ? ` for ${repos}` : ''}. Published branches and merged work are not
+          touched.
+        </p>
+        <p className="impact-dialog__note">This cannot be undone.</p>
+        <div className="impact-dialog__actions">
+          <button type="button" onClick={onClose} disabled={busy} autoFocus>
+            Keep feature
+          </button>
+          <button
+            type="button"
+            className="cockpit__delete-button"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? 'Deleting…' : 'Delete feature'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FeatureConfigEditor({ featureId }: { featureId: string }) {
   const [showConfig, setShowConfig] = useState(false);
 
@@ -739,11 +819,12 @@ export function FeatureCockpit({
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [actionError, setActionError] = useState<{
-    action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart';
+    action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart' | 'Delete';
     error: WizardError;
   } | null>(null);
   const [stopDialog, setStopDialog] = useState(false);
   const [restartDialog, setRestartDialog] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState(false);
   const [liveSessionCount, setLiveSessionCount] = useState(0);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
@@ -933,6 +1014,30 @@ export function FeatureCockpit({
     setRestartDialog(true);
   }, []);
 
+  const confirmDelete = useCallback(() => {
+    if (actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
+    setBusy(true);
+    setActionError(null);
+    setAnnouncement('Deleting the feature and its worktrees…');
+    window.agentico
+      .dispatchFeatureAction({ featureId, action: 'delete', body: {} })
+      .then(() => {
+        setDeleteDialog(false);
+        onClose();
+      })
+      .catch((err: unknown) => {
+        setDeleteDialog(false);
+        setActionError({ action: 'Delete', error: parseIpcError(err) });
+        setAnnouncement('');
+        return load({ silent: true });
+      })
+      .finally(() => {
+        actionInFlightRef.current = false;
+        setBusy(false);
+      });
+  }, [featureId, load, onClose]);
+
   const closeStopDialog = useCallback(() => {
     setStopDialog(false);
     stopButtonRef.current?.focus();
@@ -1006,6 +1111,7 @@ export function FeatureCockpit({
   const retryAction = actionById(snapshot, 'retry');
   const restartAction = actionById(snapshot, 'restart');
   const rewindAction = actionById(snapshot, 'rewind');
+  const deleteAction = actionById(snapshot, 'delete');
   const rebaseAction = actionById(snapshot, 'rebase');
   const reviewCommentsAction = actionById(snapshot, 'review-comments');
   const refactorAction = actionById(snapshot, 'refactor');
@@ -1136,6 +1242,8 @@ export function FeatureCockpit({
             onOpenCycles={() => setCyclesDialog(true)}
             completionAvailable={completionAvailable}
             onOpenCompletion={() => setCompletionOpen(true)}
+            deleteAction={deleteAction}
+            onDelete={() => setDeleteDialog(true)}
           />
 
           {isNarrow && inspectorOpen ? (
@@ -1330,6 +1438,15 @@ export function FeatureCockpit({
               busy={busy}
               onClose={() => setRestartDialog(false)}
               onConfirm={confirmRestart}
+            />
+          ) : null}
+
+          {deleteDialog ? (
+            <DeleteConfirmDialog
+              snapshot={snapshot}
+              busy={busy}
+              onClose={() => setDeleteDialog(false)}
+              onConfirm={confirmDelete}
             />
           ) : null}
 

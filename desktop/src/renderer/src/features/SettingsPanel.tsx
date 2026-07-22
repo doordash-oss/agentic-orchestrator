@@ -779,8 +779,8 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
       <section className="settings-panel__section" aria-label="Workspace defaults">
         <h2 className="settings-panel__section-title">Workspace defaults</h2>
         <p className="settings-panel__section-desc">
-          Default models per phase, inquireness, and gates for new work. Features can override
-          each setting in their own configuration.
+          Default models per phase, inquireness, and gates for new work. Features can override each
+          setting in their own configuration.
         </p>
         <WorkspaceDefaultsPanel />
       </section>

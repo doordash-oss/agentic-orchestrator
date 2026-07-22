@@ -676,3 +676,47 @@ describe('FeatureCockpit Stop', () => {
     await waitFor(() => expect(mock.api.getFeature.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 });
+
+describe('FeatureCockpit delete', () => {
+  it('deletes the feature after confirmation and closes the tab', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Created',
+        actions: [{ id: 'delete', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    const { onClose } = renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'delete',
+        body: {},
+      }),
+    );
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps the feature when delete is disabled while work is running', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        actions: [
+          {
+            id: 'delete',
+            enabled: false,
+            disabledReasons: [
+              { code: 'repo_cycle_running', message: 'delete is disabled while work is running' },
+            ],
+          },
+        ],
+      }),
+    });
+    renderCockpit(mock);
+    expect(await screen.findByRole('button', { name: 'Delete feature' })).toBeDisabled();
+  });
+});

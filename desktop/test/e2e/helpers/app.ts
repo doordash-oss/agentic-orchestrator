@@ -57,14 +57,17 @@ export async function createFeatureViaForm(
 ): Promise<Locator> {
   await handle.page.getByRole('button', { name: 'New feature' }).click();
   await expect(handle.page.getByRole('form', { name: 'Create a feature' })).toBeVisible();
-  await handle.page.locator('#feature-name').fill(name);
-  if (description !== '') await handle.page.locator('#feature-description').fill(description);
-  await handle.page.getByRole('button', { name: 'Next: Where' }).click();
   for (const repoPattern of repoPatterns) {
     await handle.page.getByRole('checkbox', { name: repoPattern }).check();
   }
+  await handle.page.getByRole('button', { name: 'Next: What' }).click();
+  await handle.page.locator('#feature-name').fill(name);
+  if (description !== '') await handle.page.locator('#feature-description').fill(description);
   await handle.page.getByRole('button', { name: 'Next: Pipeline' }).click();
   await handle.page.getByRole('button', { name: 'Next: Review' }).click();
+  // Journeys own lifecycle explicitly: opt out of the default auto-start so
+  // the cockpit lands in the deterministic pre-start state.
+  await handle.page.getByRole('checkbox', { name: /Start immediately/ }).uncheck();
   await beforeSubmit?.();
   const cockpit = handle.page.getByLabel(`Feature ${name}`);
   // Creation immediately replaces the wizard with a cockpit. Some Electron

@@ -24,10 +24,10 @@ import type {
 } from '../../../shared/ipc';
 import { parseIpcError } from '../wizard/ipcError';
 
-type PhaseKey = keyof PhaseModels;
+export type PhaseKey = keyof PhaseModels;
 
 /** Display order and catalogue-role mapping for the per-phase model rows. */
-const PHASE_FIELDS: ReadonlyArray<{
+export const PHASE_FIELDS: ReadonlyArray<{
   key: PhaseKey;
   label: string;
   role: string;
@@ -63,7 +63,7 @@ interface GateField {
   hint: string;
 }
 
-const GATE_FIELDS: ReadonlyArray<GateField> = [
+export const GATE_FIELDS: ReadonlyArray<GateField> = [
   { key: 'inquiryReview', label: 'Inquiry review', hint: 'Pause after inquiry, before research' },
   { key: 'researchReview', label: 'Research review', hint: 'Pause after research, before design' },
   { key: 'designReview', label: 'Design review', hint: 'Pause after design, before planning' },
@@ -85,7 +85,7 @@ const GATE_FIELDS: ReadonlyArray<GateField> = [
 ];
 
 /** Gates that apply per pipeline profile (mirrors the server's rules). */
-function applicableGates(pipeline: string): ReadonlySet<keyof Checkpoints> {
+export function applicableGates(pipeline: string): ReadonlySet<keyof Checkpoints> {
   if (pipeline === 'medium') {
     return new Set(['roadmapReview', 'phasePlanReview', 'manualPublish']);
   }
@@ -121,7 +121,7 @@ interface ModelPickerProps {
   onChange(value: string): void;
 }
 
-function ModelPicker({ field, value, defaultModel, catalogue, onChange }: ModelPickerProps) {
+export function ModelPicker({ field, value, defaultModel, catalogue, onChange }: ModelPickerProps) {
   const groups = useMemo(() => {
     if (catalogue === null) return [];
     const eligibleByProvider = catalogue.phaseProviderModels[field.role] ?? {};
@@ -130,10 +130,7 @@ function ModelPicker({ field, value, defaultModel, catalogue, onChange }: ModelP
       const all = catalogue.providerModels[provider] ?? [];
       // Eligible ids first (server-ordered), then any remaining provider
       // models so a persisted off-role value stays representable.
-      const ordered = [
-        ...eligible,
-        ...all.map((m) => m.id).filter((id) => !eligible.includes(id)),
-      ];
+      const ordered = [...eligible, ...all.map((m) => m.id).filter((id) => !eligible.includes(id))];
       if (ordered.length === 0) return [];
       return [{ provider, ids: ordered }];
     });
@@ -247,7 +244,11 @@ function ConfigForm({
 
       <fieldset className="config-editor__group">
         <legend className="config-editor__group-title">Behavior</legend>
-        <div className="config-editor__row config-editor__row--stacked" role="radiogroup" aria-label="Inquireness">
+        <div
+          className="config-editor__row config-editor__row--stacked"
+          role="radiogroup"
+          aria-label="Inquireness"
+        >
           <span className="config-editor__row-label">Inquireness</span>
           <span className="config-editor__row-hint">How many planning questions to surface</span>
           <div className="config-editor__segments">
@@ -311,9 +312,7 @@ function ConfigForm({
 }
 
 type LoadState<T> =
-  | { phase: 'loading' }
-  | { phase: 'error'; message: string }
-  | { phase: 'ready'; data: T };
+  { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'ready'; data: T };
 
 interface SaveBarProps {
   dirty: boolean;
@@ -361,7 +360,7 @@ function SaveBar({ dirty, saving, saved, error, effectNote, onSave, onReset }: S
   );
 }
 
-function useModelCatalogue(): ModelCatalogue | null {
+export function useModelCatalogue(): ModelCatalogue | null {
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
   useEffect(() => {
     let alive = true;
@@ -389,7 +388,12 @@ const FEATURE_ALERT_OPTIONS = [
 export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   const catalogue = useModelCatalogue();
   const [state, setState] = useState<
-    LoadState<{ baseline: FeatureConfig; draft: FeatureConfig; manualPublishAvailable: boolean; defaults: FeatureConfig }>
+    LoadState<{
+      baseline: FeatureConfig;
+      draft: FeatureConfig;
+      manualPublishAvailable: boolean;
+      defaults: FeatureConfig;
+    }>
   >({ phase: 'loading' });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);

@@ -39,7 +39,12 @@ import {
   type RunSummaryView,
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
-import { serverRequest, toSessionSummary, type ServerTransport } from './serverClient';
+import {
+  serverRequest,
+  toSessionSummary,
+  toTranscriptMessage,
+  type ServerTransport,
+} from './serverClient';
 
 export type RunHistoryTransport = ServerTransport;
 
@@ -98,6 +103,7 @@ export class RunHistoryService {
       contextPercentage: response.context.percentage,
       totalSeconds: response.timing.total_seconds,
       totalUsd: response.cost.total_usd,
+      transcript: response.transcript.map(toTranscriptMessage),
     };
   }
 

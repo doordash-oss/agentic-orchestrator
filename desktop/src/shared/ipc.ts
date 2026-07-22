@@ -1498,16 +1498,6 @@ export const SessionSummarySchema = z.strictObject({
 });
 export type SessionSummary = z.output<typeof SessionSummarySchema>;
 
-export const LivePreviewViewSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  activity: z.string().max(1000),
-  session: SessionSummarySchema.optional(),
-  contextPercentage: z.number().int(),
-  totalSeconds: z.number().int().nonnegative(),
-  totalUsd: z.number().nonnegative(),
-});
-export type LivePreviewView = z.output<typeof LivePreviewViewSchema>;
-
 export const TERMINAL_CHAT_STATUSES = [
   'complete',
   'completed',
@@ -1595,6 +1585,18 @@ export const TranscriptMessageSchema = z.strictObject({
   task: TranscriptTaskSchema.optional(),
 });
 export type TranscriptMessage = z.output<typeof TranscriptMessageSchema>;
+
+export const LivePreviewViewSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  activity: z.string().max(1000),
+  session: SessionSummarySchema.optional(),
+  contextPercentage: z.number().int(),
+  totalSeconds: z.number().int().nonnegative(),
+  totalUsd: z.number().nonnegative(),
+  /** Sanitized transcript tail already returned by the server live-preview endpoint. */
+  transcript: z.array(TranscriptMessageSchema).max(500),
+});
+export type LivePreviewView = z.output<typeof LivePreviewViewSchema>;
 
 export const SessionDetailSchema = SessionSummarySchema.extend({
   transcriptCursor: TranscriptCursorSchema,

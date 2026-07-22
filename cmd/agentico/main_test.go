@@ -1444,12 +1444,17 @@ func TestRemapUnresolvableModels(t *testing.T) {
 		cfg := config.NewDefault() // has claude models: opus, sonnet, etc.
 		remapUnresolvableModels(cfg, r)
 
-		// All fields should now be testModelGPT54 since codex is the only provider
+		// Unresolvable Claude fields should now be testModelGPT54 since codex is
+		// the only provider. The annotated Codex review default remains because
+		// ResolveModel falls back through its bare alias.
 		m := cfg.Defaults.Models
-		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Review, m.Utilities, m.KBBuild} {
+		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Utilities, m.KBBuild} {
 			if field != testModelGPT54 {
 				t.Errorf("expected gpt-5.4, got %q", field)
 			}
+		}
+		if m.Review != "gpt-5.4[272K]" {
+			t.Errorf("review should remain gpt-5.4[272K], got %q", m.Review)
 		}
 	})
 

@@ -236,7 +236,7 @@ describe('CreateFeatureForm repository-first contract', () => {
     expect(screen.getByRole('checkbox', { name: /Phase plan review/ })).toBeChecked();
   });
 
-  it('submits the contract, auto-starts the feature, and keeps one idempotency identity', async () => {
+  it('submits the contract without untouched model defaults, auto-starts the feature, and keeps one idempotency identity', async () => {
     const mock = installAgenticoMock();
     mock.api.getCreationDefaults.mockResolvedValue(
       creationDefaults({
@@ -280,7 +280,7 @@ describe('CreateFeatureForm repository-first contract', () => {
           manualPublish: false,
           draftPublish: false,
         },
-        models: { planning: 'model-plan', kb_build: 'model-kb' },
+        models: {},
         idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     );

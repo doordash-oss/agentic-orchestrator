@@ -88,6 +88,10 @@ export class QuitCoordinator<TParent = unknown> {
         await this.shutdown({ quitAnyway: true });
         return;
       }
+      if (this.deps.runtimeOwnership() === 'external') {
+        await this.shutdown({ quitAnyway: false });
+        return;
+      }
       const active = await this.deps.detectActiveWork();
       if (!hasActiveWork(active)) {
         await this.shutdown({ quitAnyway: false });

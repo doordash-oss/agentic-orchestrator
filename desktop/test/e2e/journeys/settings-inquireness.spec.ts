@@ -1,0 +1,80 @@
+/**
+ * Packaged Electron regression: changing workspace-default inquireness in
+ * Settings must not blank the renderer. This exercises the shipped app bundle,
+ * real bundled Go server, real IPC bridge, and real persisted runtime config.
+ */
+import { expect, test } from '@playwright/test';
+import {
+  assertNoLeakedProcesses,
+  closeApp,
+  evidenceShot,
+  launchApp,
+  persistAppLogs,
+  type AppHandle,
+} from '../helpers/app';
+import { createRepo, createWorld, destroyWorld } from '../helpers/world';
+
+const RUN_NAME = `settings-inquireness-${
+  process.env['AGENTICO_E2E_VARIANT'] ?? (process.platform === 'darwin' ? 'macos' : 'linux')
+}`;
+
+test('changing Settings workspace inquireness keeps the packaged renderer alive', async ({}, testInfo) => {
+  const world = createWorld('settings-inquireness', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+  });
+  createRepo(world, 'alpha', { commit: true });
+
+  let handle: AppHandle | null = null;
+  const rendererErrors: string[] = [];
+  try {
+    handle = await launchApp(world, testInfo, { traceName: RUN_NAME });
+    handle.page.on('pageerror', (error) => rendererErrors.push(`pageerror: ${error.message}`));
+    handle.page.on('console', (message) => {
+      if (message.type() === 'error') rendererErrors.push(`console: ${message.text()}`);
+    });
+
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+
+    await handle.page.getByRole('tab', { name: 'Settings' }).click();
+    await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const defaultsEditor = handle.page.locator('[aria-label="Workspace defaults editor"]');
+    await defaultsEditor.scrollIntoViewIfNeeded();
+    await expect(defaultsEditor).toBeVisible({ timeout: 15_000 });
+    const before = await handle.page.evaluate(() => window.agentico.getWorkspaceDefaults());
+    const target = before.inquireness === 'high' ? 'none' : 'high';
+    const targetLabel = target === 'high' ? /High/ : /None/;
+    const targetText = target === 'high' ? 'High' : 'None';
+
+    await defaultsEditor.locator('.config-editor__segment', { hasText: targetText }).click();
+
+    await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+    await expect(defaultsEditor).toBeVisible();
+    await expect(defaultsEditor.getByRole('radio', { name: targetLabel })).toBeChecked();
+    const save = defaultsEditor.getByRole('button', { name: 'Save changes' });
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(defaultsEditor.getByRole('status')).toContainText('Saved', {
+      timeout: 15_000,
+    });
+
+    const workspaceDefaults = await handle.page.evaluate(() =>
+      window.agentico.getWorkspaceDefaults(),
+    );
+    expect(workspaceDefaults.inquireness).toBe(target);
+    expect(rendererErrors).toEqual([]);
+    await evidenceShot(handle, `${RUN_NAME}-workspace-inquireness-high`);
+  } finally {
+    if (handle !== null) {
+      persistAppLogs(handle, RUN_NAME);
+      await closeApp(handle);
+    }
+    destroyWorld(world);
+    assertNoLeakedProcesses(world);
+  }
+});

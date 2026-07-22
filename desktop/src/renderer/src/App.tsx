@@ -30,6 +30,7 @@ const THEME_OPTIONS: readonly { value: ThemePreference; label: string }[] = [
 export default function App() {
   const { preference, setPreference } = useTheme();
   const connection = useConnectionState();
+  const runtimeReady = connection.status === 'ready';
   const [serverAttentionItems, setServerAttentionItems] = useState<AttentionItem[]>([]);
   const [recoveryItems, setRecoveryItems] = useState<{
     liveCount: number;
@@ -77,12 +78,25 @@ export default function App() {
   );
 
   const refreshAttention = useCallback(async () => {
-    const snapshot = await window.agentico.getAttention();
-    setServerAttentionItems(snapshot.items);
-    return snapshot.items;
-  }, []);
+    if (!runtimeReady) {
+      setServerAttentionItems([]);
+      return [];
+    }
+    try {
+      const snapshot = await window.agentico.getAttention();
+      setServerAttentionItems(snapshot.items);
+      return snapshot.items;
+    } catch {
+      setServerAttentionItems([]);
+      return [];
+    }
+  }, [runtimeReady]);
 
   const refreshRecovery = useCallback(async () => {
+    if (!runtimeReady) {
+      setRecoveryItems(null);
+      return;
+    }
     try {
       const snapshot = await window.agentico.scanRecovery();
       const live = snapshot.items.filter((i) => i.processAlive).length;
@@ -99,9 +113,14 @@ export default function App() {
     } catch {
       setRecoveryItems(null);
     }
-  }, []);
+  }, [runtimeReady]);
 
   useEffect(() => {
+    if (!runtimeReady) {
+      setServerAttentionItems([]);
+      setRecoveryItems(null);
+      return;
+    }
     void refreshAttention();
     void refreshRecovery();
     return window.agentico.onAppEvent((event) => {
@@ -123,14 +142,26 @@ export default function App() {
         void refreshAttention();
       }
     });
-  }, [refreshAttention, refreshRecovery]);
+  }, [refreshAttention, refreshRecovery, runtimeReady]);
 
   const refreshFeatureNames = useCallback(async () => {
-    const features = await window.agentico.listFeatures();
-    setFeatureNames(namesById(features));
-  }, []);
+    if (!runtimeReady) {
+      setFeatureNames({});
+      return;
+    }
+    try {
+      const features = await window.agentico.listFeatures();
+      setFeatureNames(namesById(features));
+    } catch {
+      setFeatureNames({});
+    }
+  }, [runtimeReady]);
 
   useEffect(() => {
+    if (!runtimeReady) {
+      setFeatureNames({});
+      return;
+    }
     void refreshFeatureNames();
     return window.agentico.onAppEvent((event) => {
       if (
@@ -142,20 +173,18 @@ export default function App() {
         void refreshFeatureNames();
       }
     });
-  }, [refreshFeatureNames]);
+  }, [refreshFeatureNames, runtimeReady]);
 
-  const runtimeLabel =
-    connection.status === 'ready'
-      ? 'Runtime ready'
-      : isConnectionErrorState(connection)
-        ? 'Runtime needs attention'
-        : 'Connecting';
-  const runtimeTone =
-    connection.status === 'ready'
-      ? 'ready'
-      : isConnectionErrorState(connection)
-        ? 'error'
-        : 'progress';
+  const runtimeLabel = runtimeReady
+    ? 'Runtime ready'
+    : isConnectionErrorState(connection)
+      ? 'Runtime needs attention'
+      : 'Connecting';
+  const runtimeTone = runtimeReady
+    ? 'ready'
+    : isConnectionErrorState(connection)
+      ? 'error'
+      : 'progress';
 
   // Recovery items sort ahead of all other attention so recovery receives
   // contextual priority (Task 8 acceptance criterion 1).
@@ -232,7 +261,7 @@ export default function App() {
           }
         }}
       />
-      {connection.status === 'ready' ? (
+      {runtimeReady ? (
         <>
           <ReadinessGate
             attentionItems={attentionItems}
@@ -254,11 +283,7 @@ export default function App() {
       ) : (
         <ConnectionShell />
       )}
-      <CommandPalette
-        ready={connection.status === 'ready'}
-        routeRequest={routeRequest}
-        onRoute={requestRoute}
-      />
+      <CommandPalette ready={runtimeReady} routeRequest={routeRequest} onRoute={requestRoute} />
       <HelpOverlay routeRequest={routeRequest} />
     </div>
   );

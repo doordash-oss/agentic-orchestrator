@@ -411,12 +411,10 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     }
     setFormError(null);
     setPending(true);
-    const defaults = defaultModelsByKey(state.defaults);
     const models: Record<string, string> = {};
     for (const field of PHASE_FIELDS) {
       const chosen = modelChoices[field.key] ?? '';
-      const model = chosen !== '' ? chosen : (defaults[field.key] ?? '');
-      if (model !== '') models[modelConfigKey(field.key)] = model;
+      if (chosen !== '') models[modelConfigKey(field.key)] = chosen;
     }
     const gates = applicableGates(pipeline);
     void (async () => {

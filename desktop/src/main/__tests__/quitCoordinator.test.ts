@@ -58,6 +58,22 @@ describe('QuitCoordinator', () => {
     expect(coordinator.shouldAllowClose()).toBe(true);
   });
 
+  it('detaches from an external runtime without stopping active work', async () => {
+    const deps = makeDeps({
+      runtimeOwnership: vi.fn().mockReturnValue('external'),
+    });
+    const coordinator = new QuitCoordinator(deps);
+
+    await coordinator.requestQuitDecision('window');
+
+    expect(deps.detectActiveWork).not.toHaveBeenCalled();
+    expect(deps.showActiveWorkDialog).not.toHaveBeenCalled();
+    expect(deps.stopWork).not.toHaveBeenCalled();
+    expect(deps.shutdown).toHaveBeenCalledWith({ quitAnyway: false });
+    expect(deps.quitApplication).toHaveBeenCalledOnce();
+    expect(coordinator.shouldAllowClose()).toBe(true);
+  });
+
   it('keeps work running by hiding the requested parent window', async () => {
     const deps = makeDeps({
       showActiveWorkDialog: vi.fn().mockResolvedValue('keep-running'),
@@ -128,7 +144,7 @@ describe('QuitCoordinator', () => {
         .mockResolvedValue({ unresolved: [unresolvedFeature] } satisfies StopWorkResult),
       showStopFailureDialog: vi.fn().mockResolvedValue('quit-anyway'),
       confirmQuitAnyway: vi.fn().mockResolvedValue(true),
-      runtimeOwnership: vi.fn().mockReturnValue('external'),
+      runtimeOwnership: vi.fn().mockReturnValue('app-owned'),
     });
     const coordinator = new QuitCoordinator(deps);
 
@@ -136,7 +152,7 @@ describe('QuitCoordinator', () => {
 
     expect(deps.confirmQuitAnyway).toHaveBeenCalledWith(
       { unresolved: [unresolvedFeature] },
-      'external',
+      'app-owned',
       'window',
     );
     expect(deps.shutdown).toHaveBeenCalledWith({ quitAnyway: true });

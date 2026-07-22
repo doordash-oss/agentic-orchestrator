@@ -397,7 +397,7 @@ function toSessionDetail(session: ServerSessionDetail): SessionDetail {
   );
 }
 
-function toTranscriptMessage(message: ServerTranscriptMessage): TranscriptMessage {
+export function toTranscriptMessage(message: ServerTranscriptMessage): TranscriptMessage {
   return {
     index: message.index,
     ...(message.block_index === undefined ? {} : { blockIndex: message.block_index }),

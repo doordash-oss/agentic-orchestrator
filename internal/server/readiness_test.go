@@ -344,6 +344,81 @@ func TestCreateFeatureReportsFieldSpecificCreationLimits(t *testing.T) {
 	}
 }
 
+func TestCreateFeatureRejectsUnresolvableModelOverrides(t *testing.T) {
+	t.Parallel()
+
+	target := &createFeatureRecorder{}
+	ready := &readinessProbeProvider{
+		MockProvider: &mocks.MockProvider{
+			ProviderName: "readyprov",
+			CLIDetected:  true,
+			Models:       []string{"sonnet[1M]"},
+			Catalog: []llm.ModelInfo{
+				{ID: "sonnet[1M]", Aliases: []string{"sonnet"}},
+			},
+		},
+		status: staticReadiness(llm.ProviderReadiness{Ready: true}),
+	}
+	handler := NewHandler(HandlerOptions{
+		Config:                config.NewDefault(),
+		Registry:              newReadinessRegistry(ready),
+		Mutations:             target,
+		DisableHostValidation: true,
+	})
+
+	w := postTrustedJSON(handler, apiPathFeatures, map[string]any{
+		"name":   "bad model",
+		"models": map[string]string{"planning": "not-a-real-model"},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("create status = %d body=%s; want 400", w.Code, w.Body.String())
+	}
+	body := decodeErrorBody(t, w)
+	if body.Error.Code != errCodeBadRequest {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeBadRequest)
+	}
+	if !strings.Contains(body.Error.Message, "model for planning is unavailable") {
+		t.Fatalf("message = %q; want unavailable planning model", body.Error.Message)
+	}
+	if got := target.created.Load(); got != 0 {
+		t.Fatalf("CreateFeature called %d times; want 0 for invalid model", got)
+	}
+}
+
+func TestCreateFeatureAcceptsContextAnnotatedModelFallback(t *testing.T) {
+	t.Parallel()
+
+	target := &createFeatureRecorder{}
+	ready := &readinessProbeProvider{
+		MockProvider: &mocks.MockProvider{
+			ProviderName: "readyprov",
+			CLIDetected:  true,
+			Models:       []string{"sonnet[1M]"},
+			Catalog: []llm.ModelInfo{
+				{ID: "sonnet[1M]", Aliases: []string{"sonnet"}},
+			},
+		},
+		status: staticReadiness(llm.ProviderReadiness{Ready: true}),
+	}
+	handler := NewHandler(HandlerOptions{
+		Config:                config.NewDefault(),
+		Registry:              newReadinessRegistry(ready),
+		Mutations:             target,
+		DisableHostValidation: true,
+	})
+
+	w := postTrustedJSON(handler, apiPathFeatures, map[string]any{
+		"name":   "fallback model",
+		"models": map[string]string{"kb_build": "sonnet[200K]"},
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s; want 201", w.Code, w.Body.String())
+	}
+	if got := target.created.Load(); got != 1 {
+		t.Fatalf("CreateFeature called %d times; want 1 after fallback model", got)
+	}
+}
+
 func (t *createFeatureRecorder) CreateFeature(req CreateFeatureRequest) (CreateFeatureResponse, error) {
 	t.created.Add(1)
 	return CreateFeatureResponse{FeatureID: fixtureFeatureID, Result: resultCreated}, nil

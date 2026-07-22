@@ -183,6 +183,11 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 				if canonical, ok := canonicalModelForProvider(p, bareModel); ok {
 					return p, canonical, nil
 				}
+				if stripped := stripContextAnnotation(bareModel); stripped != bareModel {
+					if canonical, ok := canonicalModelForProvider(p, stripped); ok {
+						return p, canonical, nil
+					}
+				}
 				return p, bareModel, nil
 			}
 		}
@@ -200,6 +205,11 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 	// Bare model name — search providers in registration order via MatchesModel.
 	if p, canonical, ok := r.resolveBareLocked(model); ok {
 		return p, canonical, nil
+	}
+	if stripped := stripContextAnnotation(model); stripped != model {
+		if p, canonical, ok := r.resolveBareLocked(stripped); ok {
+			return p, canonical, nil
+		}
 	}
 	return nil, "", fmt.Errorf("no provider found for model %q", model)
 }
@@ -249,6 +259,29 @@ func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func stripContextAnnotation(model string) string {
+	open := strings.LastIndexByte(model, '[')
+	if open <= 0 || !strings.HasSuffix(model, "]") {
+		return model
+	}
+	context := model[open+1 : len(model)-1]
+	if context == "" {
+		return model
+	}
+	for _, r := range context {
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case 'k', 'K', 'm', 'M':
+			continue
+		default:
+			return model
+		}
+	}
+	return strings.TrimSpace(model[:open])
 }
 
 // DefaultModels computes the recommended model for each phase role from the

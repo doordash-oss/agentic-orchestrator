@@ -24,7 +24,6 @@ import {
 import { PhaseSpine } from '../components/PhaseSpine';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
-import { RunTimeline } from './RunTimeline';
 import { CurrentRunInspection } from './CurrentRunInspection';
 import { ReviewSurface } from './ReviewSurface';
 import { FeatureConfigPanel } from './ConfigEditor';
@@ -68,6 +67,7 @@ export interface FeatureCockpitProps {
   /** Local presentation hint shown until the authoritative name loads. */
   titleHint: string;
   onClose(): void;
+  onDeleted?(featureId: string): void;
   /** Reports the authoritative feature name for the tab title hint. */
   onLoadedName(name: string): void;
   attentionItems: AttentionItem[];
@@ -806,6 +806,7 @@ export function FeatureCockpit({
   featureId,
   titleHint,
   onClose,
+  onDeleted,
   onLoadedName,
   attentionItems,
   refreshAttention,
@@ -1024,7 +1025,11 @@ export function FeatureCockpit({
       .dispatchFeatureAction({ featureId, action: 'delete', body: {} })
       .then(() => {
         setDeleteDialog(false);
-        onClose();
+        if (onDeleted !== undefined) {
+          onDeleted(featureId);
+        } else {
+          onClose();
+        }
       })
       .catch((err: unknown) => {
         setDeleteDialog(false);
@@ -1036,7 +1041,7 @@ export function FeatureCockpit({
         actionInFlightRef.current = false;
         setBusy(false);
       });
-  }, [featureId, load, onClose]);
+  }, [featureId, load, onClose, onDeleted]);
 
   const closeStopDialog = useCallback(() => {
     setStopDialog(false);
@@ -1362,21 +1367,14 @@ export function FeatureCockpit({
                   ) : null}
 
                   {showsRun(snapshot) && !hasPendingReview ? (
-                    <>
-                      <CurrentRunInspection
-                        featureId={featureId}
-                        runNumber={snapshot.activeRun}
-                        currentPhase={snapshot.currentPhase}
-                        currentRoadmapPhase={snapshot.currentRoadmapPhase}
-                        reviewGate={snapshot.reviewGate}
-                      />
-                      <RunTimeline
-                        featureId={featureId}
-                        activeRun={snapshot.activeRun}
-                        currentPhase={snapshot.currentPhase}
-                        shouldStream={stopAction !== undefined}
-                      />
-                    </>
+                    <CurrentRunInspection
+                      featureId={featureId}
+                      runNumber={snapshot.activeRun}
+                      currentPhase={snapshot.currentPhase}
+                      currentRoadmapPhase={snapshot.currentRoadmapPhase}
+                      reviewGate={snapshot.reviewGate}
+                      shouldStream={stopAction !== undefined}
+                    />
                   ) : null}
 
                   {ready ? (

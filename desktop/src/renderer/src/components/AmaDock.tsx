@@ -29,6 +29,8 @@ import {
   type AttentionSubmitOptions,
 } from '../features/AttentionInbox';
 import { useAttentionDraftSaves } from '../features/useAttentionDraftSaves';
+import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
+import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
 
 type DrawerMode = 'compact' | 'expanded';
 type TranscriptState =
@@ -36,12 +38,8 @@ type TranscriptState =
   | { phase: 'loading'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'ready'; messages: TranscriptMessage[]; cursor: TranscriptCursor }
   | { phase: 'error'; message: string; messages: TranscriptMessage[]; cursor: TranscriptCursor };
-type ConversationItem =
-  | { kind: 'message'; key: string; role: 'user' | 'assistant'; text: string }
-  | { kind: 'activity'; key: string; labels: string[] };
 
 const EMPTY_CURSOR: TranscriptCursor = { total: 0, start: 0, end: 0 };
-const MAX_TRANSCRIPT_MESSAGES = 200;
 
 export function AmaDock({
   attentionItems,
@@ -70,10 +68,9 @@ export function AmaDock({
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [localDrafts, setLocalDrafts] = useState(emptyAttentionDrafts);
+  const [pinToBottom, setPinToBottom] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const confirmEndRef = useRef<HTMLButtonElement>(null);
-  const transcriptRef = useRef<HTMLElement>(null);
-  const stickToBottom = useRef(true);
   const subscriptionId = useRef<string | null>(null);
   const subscriptionGeneration = useRef(0);
   const activeDrafts = attentionDrafts ?? localDrafts;
@@ -86,7 +83,12 @@ export function AmaDock({
   );
   const sessionActive = session !== null && !isTerminalChatStatus(session.status);
   const conversation = useMemo(
-    () => buildConversation(transcript.messages, session?.initialPrompt, optimisticMessage),
+    () =>
+      buildConversation(transcript.messages, {
+        mode: 'chat',
+        initialPrompt: session?.initialPrompt,
+        optimisticMessage,
+      }),
     [optimisticMessage, session?.initialPrompt, transcript.messages],
   );
   const lastConversationItem = conversation.at(-1);
@@ -98,11 +100,6 @@ export function AmaDock({
     (sessionActive &&
       lastConversationItem?.kind === 'message' &&
       lastConversationItem.role === 'user');
-
-  useEffect(() => {
-    const element = transcriptRef.current;
-    if (element !== null && stickToBottom.current) element.scrollTop = element.scrollHeight;
-  }, [conversation, waitingForAssistant]);
 
   const persistDrawer = useCallback((next: DrawerMode) => {
     setDrawer(next);
@@ -217,7 +214,7 @@ export function AmaDock({
         if (event.type === 'record') {
           setTranscript((current) => ({
             phase: current.phase === 'error' ? 'ready' : current.phase,
-            messages: upsertMessage(current.messages, event.message),
+            messages: reconcileMessages(current.messages, event.message),
             cursor: {
               total: Math.max(current.cursor.total, event.index + 1),
               start: current.cursor.start,
@@ -253,7 +250,7 @@ export function AmaDock({
     if (text === '' || busy) return;
     setOptimisticMessage(text);
     setMessage('');
-    stickToBottom.current = true;
+    setPinToBottom((value) => value + 1);
     setBusy(true);
     setNotice('');
     persistDrawer('expanded');
@@ -382,20 +379,20 @@ export function AmaDock({
               ))}
             </section>
           ) : null}
-          <section
-            ref={transcriptRef}
+          <ConversationTranscript
             className="ama-dock__transcript"
-            aria-label="AMA transcript"
-            aria-live="polite"
-            onScroll={(event) => {
-              const element = event.currentTarget;
-              stickToBottom.current =
-                element.scrollHeight - element.scrollTop - element.clientHeight < 40;
-            }}
-          >
-            {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
-            {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
-            {conversation.length === 0 && !waitingForAssistant ? (
+            ariaLabel="AMA transcript"
+            items={conversation}
+            waiting={waitingForAssistant}
+            idleLabel="Thinking through your question"
+            pinToBottomToken={pinToBottom}
+            status={
+              <>
+                {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
+                {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
+              </>
+            }
+            emptyState={
               <div className="ama-dock__empty">
                 <strong>Ask anything about this workspace.</strong>
                 <span>
@@ -403,27 +400,8 @@ export function AmaDock({
                   do next.
                 </span>
               </div>
-            ) : null}
-            {conversation.map((item, index) =>
-              item.kind === 'message' ? (
-                <article key={item.key} className="ama-dock__message" data-role={item.role}>
-                  <span className="ama-dock__message-role">
-                    {item.role === 'user' ? 'You' : 'Agentico'}
-                  </span>
-                  <p>{item.text}</p>
-                </article>
-              ) : (
-                <ActivityIndicator
-                  key={item.key}
-                  labels={item.labels}
-                  active={waitingForAssistant && index === conversation.length - 1}
-                />
-              ),
-            )}
-            {waitingForAssistant && conversation.at(-1)?.kind !== 'activity' ? (
-              <ActivityIndicator labels={[]} active />
-            ) : null}
-          </section>
+            }
+          />
         </div>
       ) : null}
       {notice !== '' ? (
@@ -480,127 +458,5 @@ export function AmaDock({
         </button>
       </form>
     </aside>
-  );
-}
-
-function upsertMessage(
-  messages: readonly TranscriptMessage[],
-  incoming: TranscriptMessage,
-): TranscriptMessage[] {
-  const byIndex = new Map(messages.map((message) => [message.index, message]));
-  byIndex.set(incoming.index, incoming);
-  return [...byIndex.values()]
-    .sort((left, right) => left.index - right.index)
-    .slice(-MAX_TRANSCRIPT_MESSAGES);
-}
-
-function buildConversation(
-  messages: readonly TranscriptMessage[],
-  initialPrompt?: string,
-  optimisticMessage?: string | null,
-): ConversationItem[] {
-  const items: ConversationItem[] = [];
-  const initial = initialPrompt?.trim();
-  const visibleUserMessages = messages.filter(
-    (entry) => entry.role.toLocaleLowerCase() === 'user' && entry.text?.trim() !== '',
-  );
-
-  if (
-    initial !== undefined &&
-    initial !== '' &&
-    !visibleUserMessages.some((entry) => entry.text?.trim() === initial)
-  ) {
-    items.push({ kind: 'message', key: 'initial-prompt', role: 'user', text: initial });
-  }
-
-  for (const entry of messages) {
-    const role = entry.role.toLocaleLowerCase();
-    const text = entry.text?.trim();
-    const operational =
-      entry.tool !== undefined ||
-      entry.toolCall !== undefined ||
-      entry.task !== undefined ||
-      entry.type.toLocaleLowerCase().includes('tool') ||
-      entry.type.toLocaleLowerCase().includes('task');
-    if (
-      (role === 'user' || (role === 'assistant' && !operational)) &&
-      text !== undefined &&
-      text !== ''
-    ) {
-      items.push({
-        kind: 'message',
-        key: `message-${entry.index}`,
-        role,
-        text,
-      });
-      continue;
-    }
-
-    const label = activityLabel(entry);
-    if (label === null) continue;
-    const previous = items.at(-1);
-    if (previous?.kind === 'activity') {
-      if (!previous.labels.includes(label)) previous.labels.push(label);
-    } else {
-      items.push({ kind: 'activity', key: `activity-${entry.index}`, labels: [label] });
-    }
-  }
-
-  const optimistic = optimisticMessage?.trim();
-  if (
-    optimistic !== undefined &&
-    optimistic !== '' &&
-    !items.some(
-      (item) => item.kind === 'message' && item.role === 'user' && item.text === optimistic,
-    )
-  ) {
-    items.push({ kind: 'message', key: 'optimistic-message', role: 'user', text: optimistic });
-  }
-  return items;
-}
-
-function activityLabel(entry: TranscriptMessage): string | null {
-  const type = entry.type.toLocaleLowerCase();
-  if (['usage_update', 'success', 'result', 'system'].includes(type)) return null;
-
-  const tool = entry.tool ?? entry.task?.lastToolName;
-  if (tool !== undefined && tool.trim() !== '') return `Using ${friendlyToolName(tool)}`;
-  if (entry.task?.description?.trim()) return entry.task.description.trim();
-  if (entry.toolCall?.summary?.trim()) return entry.toolCall.summary.trim();
-  if (type === 'read') {
-    const target = entry.text?.split(/[\\/]/).at(-1)?.trim();
-    return target ? `Reading ${target}` : 'Reading workspace files';
-  }
-  if (type.includes('tool')) return 'Using a workspace tool';
-  if (type.includes('task')) return 'Working on a task';
-  return null;
-}
-
-function friendlyToolName(tool: string): string {
-  return tool
-    .trim()
-    .replaceAll('_', ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .toLocaleLowerCase();
-}
-
-function ActivityIndicator({ labels, active }: { labels: string[]; active: boolean }) {
-  const shownLabels = labels.slice(-3);
-  return (
-    <div className="ama-dock__activity" data-active={active} role={active ? 'status' : undefined}>
-      <span className="ama-dock__thinking" aria-hidden="true">
-        {Array.from({ length: 8 }, (_, index) => (
-          <span key={index} />
-        ))}
-      </span>
-      <div className="ama-dock__activity-copy">
-        <strong>{active ? 'Working' : 'Worked'}</strong>
-        {shownLabels.length > 0 ? (
-          <span>{shownLabels.join(' · ')}</span>
-        ) : (
-          <span>Thinking through your question</span>
-        )}
-      </div>
-    </div>
   );
 }

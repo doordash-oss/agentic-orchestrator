@@ -94,6 +94,26 @@ describe('AmaDock', () => {
     expect(screen.getByText('Worked')).toBeVisible();
   });
 
+  it('keeps every block of a multi-block response instead of overwriting', async () => {
+    installAgenticoMock({
+      session: activeChatSession({ initialPrompt: 'Explain the change' }),
+      transcript: {
+        sessionId: '__chat__',
+        cursor: { total: 2, start: 0, end: 2 },
+        messages: [
+          { index: 5, blockIndex: 0, role: 'assistant', type: 'text', text: 'First, the setup.' },
+          { index: 5, blockIndex: 1, role: 'assistant', type: 'text', text: 'Then, the fix.' },
+        ],
+      },
+    });
+    renderDock();
+
+    await userEvent.click(screen.getByRole('button', { name: 'AMA' }));
+
+    expect(await screen.findByText('First, the setup.')).toBeVisible();
+    expect(screen.getByText('Then, the fix.')).toBeVisible();
+  });
+
   it('keeps Shift+Enter as a newline', async () => {
     const mock = installAgenticoMock();
     renderDock();

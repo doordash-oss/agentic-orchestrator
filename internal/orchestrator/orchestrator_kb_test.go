@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -308,6 +309,69 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 	}
 	if waiter.KBWaitMessage != "" {
 		t.Errorf("KBWaitMessage = %q, want cleared after successful start", waiter.KBWaitMessage)
+	}
+}
+
+func TestOrchestrator_StartKB_SessionBuildFailureMarksFeatureFailed(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	cpr.pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		return nil, nil, nil, errors.New(`resolving provider for model "sonnet[200K]": no provider found for model "sonnet[200K]"`)
+	}
+
+	f := &feature.Feature{
+		ID:           "feat-kb-spawn-fail",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		Models:       config.ModelConfig{KBBuild: "sonnet[200K]"},
+		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.MarkFailedFn = func(id, failureType, lastError string) error {
+		f.Status = feature.StatusFailed
+		f.FailureType = failureType
+		f.LastError = lastError
+		return nil
+	}
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+
+	var failureType, failureMessage string
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{
+		OnFeatureFailed: func(id string, ft, msg string) {
+			failureType = ft
+			failureMessage = msg
+		},
+	})
+
+	err := o.StartFeature(f.ID)
+	if err == nil {
+		t.Fatal("StartFeature() error = nil; want KB build failure")
+	}
+	if f.Status != feature.StatusFailed {
+		t.Fatalf("feature status = %s; want Failed", f.Status)
+	}
+	if f.FailureType != feature.FailureInfrastructure {
+		t.Fatalf("FailureType = %q; want %q", f.FailureType, feature.FailureInfrastructure)
+	}
+	if !strings.Contains(f.LastError, "run KB for repo repo-a") || !strings.Contains(f.LastError, "sonnet[200K]") {
+		t.Fatalf("LastError = %q; want persisted KB spawn error", f.LastError)
+	}
+	if failureType != feature.FailureInfrastructure || failureMessage != f.LastError {
+		t.Fatalf("OnFeatureFailed = %q/%q; want infrastructure/%q", failureType, failureMessage, f.LastError)
+	}
+	if got := len(cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)); got != 0 {
+		t.Fatalf("KB sessions = %d; want none when session build fails", got)
+	}
+	events := drainEvents(o)
+	if !hasEventType(events, ports.FeatureFailed) {
+		t.Fatalf("events = %+v; want FeatureFailed", events)
 	}
 }
 

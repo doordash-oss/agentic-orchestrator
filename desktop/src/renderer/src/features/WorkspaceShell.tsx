@@ -165,6 +165,22 @@ export function WorkspaceShell({
     [persist, tabs],
   );
 
+  const handleFeatureDeleted = useCallback(
+    (featureId: string) => {
+      setList((current) =>
+        current.phase === 'loaded'
+          ? {
+              ...current,
+              features: current.features.filter((feature) => feature.id !== featureId),
+            }
+          : current,
+      );
+      closeFeature(featureId);
+      loadList();
+    },
+    [closeFeature, loadList],
+  );
+
   const renameTab = useCallback(
     (featureId: string, titleHint: string) => {
       const base = tabs ?? defaultTabsPrefs();
@@ -506,6 +522,7 @@ export function WorkspaceShell({
             featureId={active}
             titleHint={tabs.open.find((tab) => tab.featureId === active)?.titleHint ?? active}
             onClose={() => closeFeature(active)}
+            onDeleted={handleFeatureDeleted}
             onLoadedName={(name) => renameTab(active, name)}
             attentionItems={attentionItems.filter(
               (item) => item.kind !== 'recovery' && item.featureId === active,

@@ -76,6 +76,29 @@ describe('FeatureConfigPanel', () => {
     expect(within(picker).getByRole('group', { name: 'codex' })).toBeInTheDocument();
   });
 
+  it('marks a workspace default as unavailable when it is absent from live discovery', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue({
+      ...SNAPSHOT,
+      defaults: {
+        ...SNAPSHOT.defaults,
+        models: { implementation: 'sonnet[200K]' },
+      },
+    });
+    mock.api.getModelCatalogue.mockResolvedValue({
+      ...CATALOGUE,
+      providerOrder: ['claude'],
+      providerModels: { claude: [{ id: 'sonnet[1M]', displayName: 'Sonnet 1M' }] },
+      phaseProviderModels: { implementation: { claude: ['sonnet[1M]'] } },
+    });
+    render(<FeatureConfigPanel featureId="feat-1" />);
+
+    const picker = await screen.findByLabelText('Implementation model');
+    expect(within(picker).getAllByRole('option')[0]).toHaveTextContent(
+      'Default — sonnet[200K] (unavailable)',
+    );
+  });
+
   it('saves the full edited config and reports the saved state', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);
@@ -179,6 +202,32 @@ const DEFAULTS: WorkspaceDefaults = {
 };
 
 describe('WorkspaceDefaultsPanel', () => {
+  it('isolates its inquireness radio group from other config editors', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);
+    mock.api.getWorkspaceDefaults.mockResolvedValue(DEFAULTS);
+    mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
+    render(
+      <>
+        <FeatureConfigPanel featureId="feat-1" />
+        <WorkspaceDefaultsPanel />
+      </>,
+    );
+    const user = userEvent.setup();
+
+    const editors = await screen.findAllByLabelText(/configuration editor|defaults editor/);
+    const featureEditor = editors[0]!;
+    const defaultsEditor = editors[1]!;
+
+    expect(within(featureEditor).getByRole('radio', { name: /Medium/ })).toBeChecked();
+    expect(within(defaultsEditor).getByRole('radio', { name: /Medium/ })).toBeChecked();
+
+    await user.click(within(defaultsEditor).getByRole('radio', { name: /High/ }));
+
+    expect(within(featureEditor).getByRole('radio', { name: /Medium/ })).toBeChecked();
+    expect(within(defaultsEditor).getByRole('radio', { name: /High/ })).toBeChecked();
+  });
+
   it('shows the utilities model row and maps input alerts to the mute flag', async () => {
     const mock = installAgenticoMock();
     mock.api.getWorkspaceDefaults.mockResolvedValue(DEFAULTS);

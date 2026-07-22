@@ -626,6 +626,9 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) {
 		return
 	}
+	if !h.validateRequestedModels(w, req.Models) {
+		return
+	}
 	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
 		return
 	}
@@ -650,6 +653,36 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	}
 	defaultActionFields(&resp, "", resultCreated)
 	writeActionJSON(w, http.StatusCreated, &resp)
+}
+
+func (h *apiHandler) validateRequestedModels(w http.ResponseWriter, models config.ModelConfig) bool {
+	if h.registry == nil {
+		return true
+	}
+	for _, candidate := range []struct {
+		phase string
+		model string
+	}{
+		{"inquiry", models.Inquiry},
+		{"research", models.Research},
+		{"planning", models.Planning},
+		{"implementation", models.Implementation},
+		{"review", models.Review},
+		{"utilities", models.Utilities},
+		{"kb_build", models.KBBuild},
+	} {
+		if strings.TrimSpace(candidate.model) == "" {
+			continue
+		}
+		if _, _, err := h.registry.ResolveModel(candidate.model); err != nil {
+			writeAPIError(w, http.StatusBadRequest, errCodeBadRequest, fmt.Sprintf("model for %s is unavailable: %s", candidate.phase, candidate.model), map[string]any{
+				"phase": candidate.phase,
+				"model": candidate.model,
+			})
+			return false
+		}
+	}
+	return true
 }
 
 func (h *apiHandler) createFeatureOnce(req CreateFeatureRequest) (CreateFeatureResponse, error) {

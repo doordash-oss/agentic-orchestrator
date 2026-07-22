@@ -12,7 +12,7 @@
  * value always names the effective default so an untouched config still says
  * exactly what will run.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import type {
   Checkpoints,
   FeatureConfig,
@@ -141,6 +141,8 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
     groups.flatMap((g) => g.ids.map((id) => selectionValue(catalogue, g.provider, id))),
   );
   const effectiveDefault = defaultModel === '' ? 'server default' : defaultModel;
+  const defaultUnavailable =
+    catalogue !== null && defaultModel !== '' && !knownValues.has(defaultModel);
 
   return (
     <label className="config-editor__row">
@@ -152,7 +154,10 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
-        <option value="">Default — {effectiveDefault}</option>
+        <option value="">
+          Default — {effectiveDefault}
+          {defaultUnavailable ? ' (unavailable)' : ''}
+        </option>
         {value !== '' && !knownValues.has(value) ? (
           <option value={value}>{value} (unavailable)</option>
         ) : null}
@@ -205,6 +210,7 @@ function ConfigForm({
   onChange,
   onInputAlertsChange,
 }: ConfigFormProps) {
+  const inquirenessName = useId();
   const phaseFields = PHASE_FIELDS.filter((f) => showUtilities || f.key !== 'utilities');
   const gates = applicableGates(pipeline);
   const visibleGates = GATE_FIELDS.filter(
@@ -260,7 +266,7 @@ function ConfigForm({
               >
                 <input
                   type="radio"
-                  name="inquireness"
+                  name={inquirenessName}
                   checked={value.inquireness === option.value}
                   onChange={() => onChange({ ...value, inquireness: option.value })}
                 />

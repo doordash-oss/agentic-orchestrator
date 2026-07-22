@@ -966,6 +966,21 @@ function makeMockApi(
         contextPercentage: 42,
         totalSeconds: 73,
         totalUsd: 0.12,
+        transcript: [
+          {
+            index: 0,
+            role: 'assistant',
+            type: 'tool_use',
+            tool: 'Read',
+            text: 'src/renderer/app.tsx',
+          },
+          {
+            index: 1,
+            role: 'assistant',
+            type: 'text',
+            text: 'I updated the live preview to stream the agent transcript directly into the cockpit.',
+          },
+        ],
       }),
     listRunArtifacts: ({ runNumber }) =>
       Promise.resolve({

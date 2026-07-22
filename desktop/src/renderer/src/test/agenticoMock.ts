@@ -409,7 +409,7 @@ export function installAgenticoMock(
       Promise.resolve({ runs: [], page: 1, pageSize: 20, total: 0, totalPages: 0 }),
     ),
     getRun: vi.fn(() => Promise.reject(new Error('unused'))),
-    listRunSessions: vi.fn(() => Promise.resolve({ runNumber: 1, sessions: [] })),
+    listRunSessions: vi.fn(() => Promise.resolve({ runNumber: 1, sessions })),
     getLivePreview: vi.fn(() =>
       Promise.resolve({
         featureId: feature.id,
@@ -417,6 +417,7 @@ export function installAgenticoMock(
         contextPercentage: -1,
         totalSeconds: 0,
         totalUsd: 0,
+        transcript: [],
       }),
     ),
     listRunArtifacts: vi.fn(() => Promise.resolve({ artifacts: [] })),

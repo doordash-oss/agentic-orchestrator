@@ -6,6 +6,7 @@ import {
   defaultSettings,
   type AttentionItem,
   type ConnectionState,
+  type WorkspaceDefaults,
 } from '../../shared/ipc';
 import App from './App';
 import { defaultUpdateState, installAgenticoMock, readySnapshot } from './test/agenticoMock';
@@ -21,6 +22,22 @@ function connection(overrides: Record<string, unknown>): ConnectionState {
     ...overrides,
   });
 }
+
+const WORKSPACE_DEFAULTS: WorkspaceDefaults = {
+  models: {},
+  inquireness: 'medium',
+  checkpoints: {
+    inquiryReview: false,
+    researchReview: false,
+    designReview: false,
+    roadmapReview: true,
+    phasePlanReview: true,
+    manualPublish: true,
+    draftPublish: false,
+  },
+  pipeline: 'large',
+  muteFeatureInput: false,
+};
 
 beforeEach(() => {
   matchMediaState.darkScheme = true;
@@ -76,6 +93,24 @@ describe('App theming', () => {
 });
 
 describe('App readiness gating', () => {
+  it('does not call runtime-backed IPC until the connection is ready', async () => {
+    const mock = installAgenticoMock({ readiness: readySnapshot() });
+    render(<App />);
+
+    await screen.findByLabelText(/agentico connection/i);
+    expect(mock.api.getAttention).not.toHaveBeenCalled();
+    expect(mock.api.scanRecovery).not.toHaveBeenCalled();
+    expect(mock.api.listFeatures).not.toHaveBeenCalled();
+
+    act(() => {
+      mock.emitConnection(connection({ status: 'ready', stage: 'ready', ownership: 'app-owned' }));
+    });
+
+    await waitFor(() => expect(mock.api.getAttention).toHaveBeenCalledTimes(1));
+    expect(mock.api.scanRecovery).toHaveBeenCalledTimes(1);
+    expect(mock.api.listFeatures).toHaveBeenCalledTimes(1);
+  });
+
   it('uses the authoritative feature name in the global inbox', async () => {
     const featureId = 'abcd1234ef567890';
     const attention: AttentionItem = {
@@ -253,6 +288,29 @@ describe('App readiness gating', () => {
       within(updates).getByRole('button', { name: 'Stop Work and Install Now' }),
     ).toBeVisible();
     expect(within(updates).queryByRole('button', { name: 'Restart to Update' })).toBeNull();
+  });
+
+  it('keeps Settings rendered when the workspace inquireness default changes', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
+    mock.api.getWorkspaceDefaults.mockResolvedValue(WORKSPACE_DEFAULTS);
+    mock.api.getModelCatalogue.mockResolvedValue({
+      providerOrder: [],
+      providerModels: {},
+      phaseDefaults: {},
+      phaseProviderModels: {},
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    await user.click(await screen.findByRole('radio', { name: /High/ }));
+
+    expect(screen.getByRole('tabpanel', { name: 'Settings' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Workspace defaults' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
 
   it('keeps keyboard focus inside the stop-work install confirmation and restores the trigger', async () => {

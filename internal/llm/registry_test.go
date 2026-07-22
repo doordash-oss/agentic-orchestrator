@@ -380,6 +380,41 @@ func TestRegistry_ResolveModel_CanonicalizesCatalogAliases(t *testing.T) {
 	}
 }
 
+func TestRegistry_ResolveModel_StripsContextAnnotationFallback(t *testing.T) {
+	t.Parallel()
+
+	r := llm.NewRegistry()
+	r.Register(&stubCatalogProvider{
+		stubProvider: stubProvider{name: "claude", models: []string{"sonnet[1M]", "haiku[200K]"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "sonnet[1M]", Aliases: []string{"sonnet"}},
+			{ID: "haiku[200K]", Aliases: []string{"haiku"}},
+		},
+	})
+
+	tests := []struct {
+		model         string
+		wantBareModel string
+	}{
+		{"sonnet[200K]", "sonnet[1M]"},
+		{"claude:sonnet[200K]", "sonnet[1M]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			p, bareModel, err := r.ResolveModel(tt.model)
+			if err != nil {
+				t.Fatalf("ResolveModel(%q) error: %v", tt.model, err)
+			}
+			if p.Name() != "claude" {
+				t.Fatalf("provider = %q, want claude", p.Name())
+			}
+			if bareModel != tt.wantBareModel {
+				t.Fatalf("bareModel = %q, want %q", bareModel, tt.wantBareModel)
+			}
+		})
+	}
+}
+
 func TestRegistry_ResolveModel_ColonEdgeCases(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubProvider{name: "a", models: []string{"model"}, hasCLI: true})

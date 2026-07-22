@@ -308,6 +308,62 @@ describe('WorkspaceShell tabs', () => {
     await waitFor(() => expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID));
   });
 
+  it('removes a deleted feature from Home after the cockpit delete succeeds', async () => {
+    const mock = installAgenticoMock({
+      features: [
+        {
+          id: FEATURE_ID,
+          name: 'Search revamp',
+          status: 'Created',
+          currentPhase: 'Plan',
+          repos: ['repo-a'],
+          createdAt: '2026-07-14T10:00:00Z',
+          activeRun: 1,
+          runCount: 1,
+          warnings: [],
+        },
+      ],
+      feature: featureSnapshot({
+        id: FEATURE_ID,
+        name: 'Search revamp',
+        status: 'Created',
+        actions: [{ id: 'delete', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    const listRegion = await screen.findByRole('region', { name: 'Existing features' });
+    await user.click(within(listRegion).getByRole('button', { name: 'Open' }));
+    expect(await screen.findByRole('tab', { name: 'Search revamp' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    mock.api.listFeatures.mockResolvedValueOnce([]);
+    await user.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'delete',
+        body: {},
+      }),
+    );
+    expect(await screen.findByRole('tab', { name: 'Home' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await waitFor(() => expect(mock.api.listFeatures.mock.calls.length).toBeGreaterThan(1));
+    expect(
+      within(await screen.findByRole('region', { name: 'Existing features' })).queryByText(
+        'Search revamp',
+      ),
+    ).toBeNull();
+  });
+
   it('refetches the feature list on feature invalidations and resync', async () => {
     const mock = installAgenticoMock();
     render(<WorkspaceShell />);

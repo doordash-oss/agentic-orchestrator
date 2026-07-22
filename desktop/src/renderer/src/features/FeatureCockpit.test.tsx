@@ -420,6 +420,8 @@ describe('FeatureCockpit convergence', () => {
     });
     renderCockpit(mock);
 
+    // The failed run's raw transcript stays inspectable via the signal-trace view.
+    await userEvent.click(await screen.findByRole('button', { name: 'Signal trace' }));
     expect(await screen.findByText('Agent failed safely')).toBeInTheDocument();
   });
 

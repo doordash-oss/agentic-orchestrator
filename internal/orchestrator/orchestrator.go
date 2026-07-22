@@ -724,7 +724,11 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 					o.markKBWaiting(featureID, baseDir, repo.Name)
 					return PhaseStartResult{Outcome: PhaseStarted}, nil
 				}
-				return PhaseStartResult{}, fmt.Errorf("run KB for repo %s: %w", repo.Name, err)
+				errMsg := fmt.Sprintf("run KB for repo %s: %v", repo.Name, err)
+				if markErr := o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg); markErr != nil {
+					return PhaseStartResult{}, fmt.Errorf("%s (also failed to mark feature failed: %w)", errMsg, markErr)
+				}
+				return PhaseStartResult{}, errors.New(errMsg)
 			}
 			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
 		}

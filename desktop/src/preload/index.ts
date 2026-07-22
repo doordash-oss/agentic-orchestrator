@@ -38,11 +38,8 @@ import {
   type ReviewSaveRequest,
   type ReviewValidateRequest,
   type ReviewDecisionRequest,
-  type ResourceValidateRequest,
-  type ResourceWriteRequest,
-  type LocalResourceDraftSaveRequest,
-  type LocalResourceDraftLookupRequest,
-  type LocalResourceDraftDiscardRequest,
+  type FeatureConfigUpdateRequest,
+  type WorkspaceDefaults,
   type RunListRequest,
   type RunGetRequest,
   type RunArtifactsListRequest,
@@ -205,19 +202,13 @@ const api: AgenticoApi = {
   saveReview: (request: ReviewSaveRequest) => call(IPC_CHANNELS.reviewsSave, request),
   validateReview: (request: ReviewValidateRequest) => call(IPC_CHANNELS.reviewsValidate, request),
   decideReview: (request: ReviewDecisionRequest) => call(IPC_CHANNELS.reviewsDecide, request),
-  listResources: (kind?: string) => call(IPC_CHANNELS.resourcesCatalogue, kind),
-  readResource: (resourceId: string) => call(IPC_CHANNELS.resourcesRead, resourceId),
-  validateResource: (request: ResourceValidateRequest) =>
-    call(IPC_CHANNELS.resourcesValidate, request),
-  writeResource: (request: ResourceWriteRequest) => call(IPC_CHANNELS.resourcesWrite, request),
-  loadLocalResourceDraft: (request: LocalResourceDraftLookupRequest) =>
-    call(IPC_CHANNELS.resourceDraftsLoad, request),
-  saveLocalResourceDraft: (request: LocalResourceDraftSaveRequest) =>
-    call(IPC_CHANNELS.resourceDraftsSave, request),
-  discardLocalResourceDraft: (request: LocalResourceDraftDiscardRequest) =>
-    call<{ discarded: boolean }>(IPC_CHANNELS.resourceDraftsDiscard, request).then(
-      ({ discarded }) => discarded,
-    ),
+  getFeatureConfig: (featureId: string) => call(IPC_CHANNELS.configFeatureGet, featureId),
+  updateFeatureConfig: (request: FeatureConfigUpdateRequest) =>
+    call(IPC_CHANNELS.configFeatureUpdate, request),
+  getWorkspaceDefaults: () => call(IPC_CHANNELS.configDefaultsGet),
+  updateWorkspaceDefaults: (defaults: WorkspaceDefaults) =>
+    call(IPC_CHANNELS.configDefaultsUpdate, defaults),
+  getModelCatalogue: () => call(IPC_CHANNELS.configModelCatalogue),
   listRuns: (request: RunListRequest) => call(IPC_CHANNELS.runsList, request),
   getRun: (request: RunGetRequest) => call(IPC_CHANNELS.runsGet, request),
   listRunSessions: (request: RunGetRequest) => call(IPC_CHANNELS.runSessionsList, request),

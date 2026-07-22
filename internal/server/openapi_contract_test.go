@@ -299,10 +299,6 @@ func topLevelPatternForPath(path string) string {
 		return apiPathShutdown
 	case path == apiPathEvents:
 		return apiPathEvents
-	case path == apiPathResources:
-		return apiPathResources
-	case strings.HasPrefix(path, "/api/v1/resources/"):
-		return apiPathResources + "/"
 	default:
 		return path
 	}
@@ -377,10 +373,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathRecoveryLogs},
 		{method: httpMethodPost, path: apiPathShutdown, mutation: true},
 		{method: httpMethodGet, path: apiPathEvents, sse: true},
-		{method: httpMethodGet, path: apiPathResources},
-		{method: httpMethodGet, path: "/api/v1/resources/{resource_id}"},
-		{method: "put", path: "/api/v1/resources/{resource_id}", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/resources/{resource_id}/validate", mutation: true},
 	}
 }
 

@@ -14,7 +14,7 @@ const SHOTS = {
   pipeline:
     'creation-pipeline-step-with-profile-cards-and-effective-gate-summary-light-theme-1440x900',
   review:
-    'creation-review-step-with-models-checkpoints-exit-criteria-skills-and-complete-s-1440x900',
+    'creation-review-step-with-models-checkpoints-exit-criteria-and-complete-s-1440x900',
 } as const;
 
 test('four-step creation covers scoped files, initialization, review, setup, and retry-safe identity', async ({}, testInfo) => {
@@ -120,12 +120,6 @@ test('four-step creation covers scoped files, initialization, review, setup, and
       .locator('..')
       .getByRole('textbox')
       .fill('All focused checks pass.');
-    const firstSkill = app.page
-      .getByRole('region', { name: 'Skills' })
-      .getByRole('checkbox')
-      .first();
-    if (await firstSkill.count()) await firstSkill.check();
-    await app.page.getByLabel('Search skills').fill('build-knowledge-base');
     await setTheme(app, 'dark');
     await app.page.evaluate(() => {
       const wizard = document.querySelector('.creation-wizard');

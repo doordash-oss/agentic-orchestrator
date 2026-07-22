@@ -310,32 +310,6 @@ export async function setWindowSize(
   await handle.page.waitForTimeout(250);
 }
 
-/**
- * Sets the Monaco editor's text via the __monacoEditor seam on the DOM
- * container. Monaco is lazy-loaded: the host div renders immediately but
- * the __monacoEditor seam is attached only after import('monaco-editor')
- * resolves. We poll for the seam itself rather than container visibility
- * to avoid a race where the container is visible but Monaco hasn't loaded.
- */
-export async function setEditorText(handle: AppHandle, fullText: string): Promise<void> {
-  await handle.page.waitForFunction(
-    () => {
-      const el = document.querySelector('.resource-editor__monaco') as
-        (Element & { __monacoEditor?: unknown }) | null;
-      return !!el?.__monacoEditor;
-    },
-    undefined,
-    { timeout: 15_000 },
-  );
-  await handle.page.evaluate((text) => {
-    const container = document.querySelector('.resource-editor__monaco');
-    const editor = (container as unknown as Record<string, unknown>)?.__monacoEditor as
-      { setValue(v: string): void } | undefined;
-    if (!editor) throw new Error('Monaco editor instance not found on DOM');
-    editor.setValue(text);
-  }, fullText);
-}
-
 /** Switches the theme through the app's own radiogroup and waits for CSS. */
 export async function setTheme(handle: AppHandle, theme: 'light' | 'dark'): Promise<void> {
   // click (not check): the radio is React-controlled and only flips after

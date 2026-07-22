@@ -161,7 +161,7 @@ describe('CreateFeatureForm four-step contract', () => {
     expect(refreshedFirstChoice).not.toBeChecked();
   });
 
-  it('submits pipeline, review, skills, files, and one stable idempotency identity', async () => {
+  it('submits pipeline, review, files, and one stable idempotency identity', async () => {
     const mock = installAgenticoMock();
     mock.api.getCreationDefaults.mockResolvedValue(
       creationDefaults({
@@ -176,24 +176,11 @@ describe('CreateFeatureForm four-step contract', () => {
         },
       }),
     );
-    mock.api.listResources.mockResolvedValue({
-      resources: [
-        {
-          id: 'skill:frontend-design',
-          kind: 'skill',
-          label: 'Frontend design',
-          contentType: 'markdown',
-          revision: 'r1',
-          validatable: true,
-        },
-      ],
-    });
     mock.api.pickCreationFiles.mockResolvedValueOnce({ paths: ['/safe/screen.png'] });
     const { onCreated, user } = await renderForm(mock);
     await user.click(screen.getByRole('button', { name: 'Choose images' }));
     await reachReview(user);
     await user.selectOptions(screen.getByLabelText('Risk'), 'high');
-    await user.click(screen.getByRole('checkbox', { name: 'Frontend design' }));
     await user.click(screen.getByRole('button', { name: 'Create feature' }));
 
     await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
@@ -214,7 +201,6 @@ describe('CreateFeatureForm four-step contract', () => {
           draftPublish: false,
         },
         models: { planning: 'model-plan', kb_build: 'model-kb' },
-        skills: ['skill:frontend-design'],
         idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     );

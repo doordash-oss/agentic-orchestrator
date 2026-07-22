@@ -218,40 +218,29 @@ const SELECTED_RECORD_RUNTIME = {
   config_path: '/rt/config.yaml',
 };
 
-describe('gateway API path allowlist for resource catalogue', () => {
-  it('permits kind-filtered /api/v1/resources through the real allowlist', async () => {
+describe('gateway API path allowlist for configuration endpoints', () => {
+  it('permits the queryless structured-config endpoints', async () => {
     const record = { states: [] as ConnectionState[], logs: [] as string[], urls: [] as string[] };
     const gateway = new RuntimeGateway(attachDeps(record));
     await gateway.start();
     expect(gateway.getState().status).toBe('ready');
 
-    // Each valid kind must pass the allowlist and reach fetchJson.
-    for (const kind of ['feature_config', 'runtime_config', 'skill', 'guideline']) {
+    for (const path of [
+      '/api/v1/config/runtime',
+      '/api/v1/catalog/models',
+      '/api/v1/features/feat-1/config',
+    ]) {
       record.urls.length = 0;
-      await gateway.apiRequest(`/api/v1/resources?kind=${kind}`);
-      expect(record.urls.some((u) => u.includes(`kind=${kind}`))).toBe(true);
+      await gateway.apiRequest(path);
+      expect(record.urls.some((u) => u.endsWith(path))).toBe(true);
     }
-
-    // An unfiltered catalogue call must also pass.
-    record.urls.length = 0;
-    await gateway.apiRequest('/api/v1/resources');
-    expect(record.urls.some((u) => u.endsWith('/api/v1/resources'))).toBe(true);
-
-    // An invalid kind value must be rejected by the allowlist before fetchJson.
-    await expect(gateway.apiRequest('/api/v1/resources?kind=bogus')).rejects.toThrow();
-    expect(record.urls.some((u) => u.includes('kind=bogus'))).toBe(false);
-
-    // A duplicate kind query parameter must be rejected.
-    await expect(
-      gateway.apiRequest('/api/v1/resources?kind=skill&kind=guideline'),
-    ).rejects.toThrow();
   });
 
-  it('rejects unknown query keys on /api/v1/resources', async () => {
+  it('rejects unknown query keys on config endpoints', async () => {
     const record = { states: [] as ConnectionState[], logs: [] as string[], urls: [] as string[] };
     const gateway = new RuntimeGateway(attachDeps(record));
     await gateway.start();
 
-    await expect(gateway.apiRequest('/api/v1/resources?foo=bar')).rejects.toThrow();
+    await expect(gateway.apiRequest('/api/v1/config/runtime?foo=bar')).rejects.toThrow();
   });
 });

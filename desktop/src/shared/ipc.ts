@@ -73,13 +73,11 @@ export const IPC_CHANNELS = {
   reviewsSave: 'agentico:reviews:save',
   reviewsValidate: 'agentico:reviews:validate',
   reviewsDecide: 'agentico:reviews:decide',
-  resourcesCatalogue: 'agentico:resources:catalogue',
-  resourcesRead: 'agentico:resources:read',
-  resourcesValidate: 'agentico:resources:validate',
-  resourcesWrite: 'agentico:resources:write',
-  resourceDraftsLoad: 'agentico:resource-drafts:load',
-  resourceDraftsSave: 'agentico:resource-drafts:save',
-  resourceDraftsDiscard: 'agentico:resource-drafts:discard',
+  configFeatureGet: 'agentico:config:feature-get',
+  configFeatureUpdate: 'agentico:config:feature-update',
+  configDefaultsGet: 'agentico:config:defaults-get',
+  configDefaultsUpdate: 'agentico:config:defaults-update',
+  configModelCatalogue: 'agentico:config:model-catalogue',
   runsList: 'agentico:runs:list',
   runsGet: 'agentico:runs:get',
   runSessionsList: 'agentico:runs:sessions-list',
@@ -2055,151 +2053,92 @@ export const ReviewDecisionResultSchema = z.discriminatedUnion('type', [
 ]);
 export type ReviewDecisionResult = z.output<typeof ReviewDecisionResultSchema>;
 
-// --- Editable resources (feature config, runtime config, skills, guidelines) ---
+// --- Structured configuration (feature config, workspace defaults, model catalogue) ---
 
-export const ResourceKindSchema = z.enum([
-  'feature_config',
-  'runtime_config',
-  'skill',
-  'guideline',
-]);
-export type ResourceKind = z.output<typeof ResourceKindSchema>;
-
-export const ResourceContentTypeSchema = z.enum(['yaml', 'markdown', 'text']);
-export type ResourceContentType = z.output<typeof ResourceContentTypeSchema>;
-
-export const ResourceEffectSchema = z.enum([
-  'immediate',
-  'next_dispatch',
-  'next_session',
-  'restart_required',
-]);
-export type ResourceEffect = z.output<typeof ResourceEffectSchema>;
-
-export const ResourceFindingSchema = z.strictObject({
-  code: z.string().min(1),
-  message: z.string().min(1),
-  field: z.string().optional(),
+/** Per-phase model assignments. Empty/omitted means "use the default". */
+export const PhaseModelsSchema = z.strictObject({
+  inquiry: z.string().max(200).optional(),
+  research: z.string().max(200).optional(),
+  planning: z.string().max(200).optional(),
+  implementation: z.string().max(200).optional(),
+  review: z.string().max(200).optional(),
+  utilities: z.string().max(200).optional(),
+  kbBuild: z.string().max(200).optional(),
 });
-export type ResourceFinding = z.output<typeof ResourceFindingSchema>;
+export type PhaseModels = z.output<typeof PhaseModelsSchema>;
 
-export const ResourceEntrySchema = z.strictObject({
-  id: z.string().min(1).max(256),
-  kind: ResourceKindSchema,
-  label: z.string().min(1).max(500),
-  contentType: ResourceContentTypeSchema,
-  revision: z.string().min(1).max(128),
-  effect: ResourceEffectSchema.optional(),
-  validatable: z.boolean(),
-  hierarchy: z.array(z.string().max(200)).max(50).optional(),
-  featureId: z.string().max(200).optional(),
+export const CheckpointsSchema = z.strictObject({
+  inquiryReview: z.boolean(),
+  researchReview: z.boolean(),
+  designReview: z.boolean(),
+  roadmapReview: z.boolean(),
+  phasePlanReview: z.boolean(),
+  manualPublish: z.boolean(),
+  /** Not user-editable; round-tripped so saves preserve it. */
+  draftPublish: z.boolean(),
 });
-export type ResourceEntry = z.output<typeof ResourceEntrySchema>;
+export type Checkpoints = z.output<typeof CheckpointsSchema>;
 
-export const ResourceCatalogueSchema = z.strictObject({
-  resources: z.array(ResourceEntrySchema).max(5000),
-  truncated: z.boolean().optional(),
+export const InquirenessSchema = z.enum(['none', 'medium', 'high']);
+export type Inquireness = z.output<typeof InquirenessSchema>;
+
+export const InputNotificationsModeSchema = z.enum(['default', 'enabled', 'muted']);
+export type InputNotificationsMode = z.output<typeof InputNotificationsModeSchema>;
+
+export const FeatureConfigSchema = z.strictObject({
+  models: PhaseModelsSchema,
+  inquireness: InquirenessSchema,
+  checkpoints: CheckpointsSchema,
+  pipeline: z.string().max(50),
+  inputNotifications: InputNotificationsModeSchema,
 });
-export type ResourceCatalogue = z.output<typeof ResourceCatalogueSchema>;
+export type FeatureConfig = z.output<typeof FeatureConfigSchema>;
 
-export const ResourceReadSchema = z.strictObject({
-  id: z.string().min(1).max(256),
-  kind: ResourceKindSchema,
-  label: z.string().min(1).max(500),
-  contentType: ResourceContentTypeSchema,
-  revision: z.string().min(1).max(128),
-  text: z.string().max(2 * 1024 * 1024),
-  effect: ResourceEffectSchema.optional(),
-  validatable: z.boolean(),
-  hierarchy: z.array(z.string().max(200)).max(50).optional(),
-  featureId: z.string().max(200).optional(),
+export const FeatureConfigSnapshotSchema = z.strictObject({
+  featureId: z.string().min(1).max(200),
+  current: FeatureConfigSchema,
+  defaults: FeatureConfigSchema,
+  /** Whether the Manual Publish gate applies to this feature. */
+  manualPublishAvailable: z.boolean(),
 });
-export type ResourceRead = z.output<typeof ResourceReadSchema>;
+export type FeatureConfigSnapshot = z.output<typeof FeatureConfigSnapshotSchema>;
 
-export const ResourceValidateRequestSchema = z.strictObject({
-  resourceId: z.string().min(1).max(256),
-  text: z.string().max(1024 * 1024),
+export const FeatureConfigUpdateRequestSchema = z.strictObject({
+  featureId: z.string().min(1).max(200),
+  config: FeatureConfigSchema,
 });
-export type ResourceValidateRequest = z.output<typeof ResourceValidateRequestSchema>;
+export type FeatureConfigUpdateRequest = z.output<typeof FeatureConfigUpdateRequestSchema>;
 
-export const ResourceValidateResultSchema = z.strictObject({
-  id: z.string().min(1).max(256),
-  valid: z.boolean(),
-  revision: z.string().max(128),
-  findings: z.array(ResourceFindingSchema).max(100),
+export const WorkspaceDefaultsSchema = z.strictObject({
+  models: PhaseModelsSchema,
+  inquireness: InquirenessSchema,
+  checkpoints: CheckpointsSchema,
+  pipeline: z.string().max(50),
+  /** Workspace-level input alerts: true mutes feature-input notifications. */
+  muteFeatureInput: z.boolean(),
 });
-export type ResourceValidateResult = z.output<typeof ResourceValidateResultSchema>;
+export type WorkspaceDefaults = z.output<typeof WorkspaceDefaultsSchema>;
 
-export const ResourceWriteRequestSchema = z.strictObject({
-  resourceId: z.string().min(1).max(256),
-  baseRevision: z.string().min(1).max(128),
-  text: z.string().max(1024 * 1024),
+export const CatalogueModelSchema = z.strictObject({
+  id: z.string().min(1).max(200),
+  displayName: z.string().max(200).optional(),
+  category: z.string().max(50).optional(),
+  contextWindow: z.number().int().nonnegative().optional(),
 });
-export type ResourceWriteRequest = z.output<typeof ResourceWriteRequestSchema>;
+export type CatalogueModel = z.output<typeof CatalogueModelSchema>;
 
-export const ResourceWriteResultSchema = z.discriminatedUnion('type', [
-  z.strictObject({
-    type: z.literal('saved'),
-    id: z.string().min(1).max(256),
-    revision: z.string().min(1).max(128),
-    effect: ResourceEffectSchema.optional(),
-  }),
-  z.strictObject({
-    type: z.literal('conflict'),
-    id: z.string().min(1).max(256),
-    expectedRevision: z.string().max(128),
-    currentRevision: z.string().min(1).max(128),
-    currentText: z.string().max(2 * 1024 * 1024),
-  }),
-]);
-export type ResourceWriteResult = z.output<typeof ResourceWriteResultSchema>;
-
-// --- Recoverable local resource drafts (generalized from review drafts) ---
-
-export const LOCAL_RESOURCE_DRAFT_STORE_SCHEMA_VERSION = 1;
-export const MAX_LOCAL_RESOURCE_DRAFT_BYTES = 1024 * 1024;
-
-export const ResourceDraftKeySchema = z.strictObject({
-  runtimeId: RuntimeIdSchema,
-  resourceId: z.string().min(1).max(256),
-  baseRevision: DraftRevisionSchema,
+export const ModelCatalogueSchema = z.strictObject({
+  providerOrder: z.array(z.string().max(100)).max(20),
+  providerModels: z.record(z.string().max(100), z.array(CatalogueModelSchema).max(200)),
+  /** Recommended model per phase field (keys match PhaseModels). */
+  phaseDefaults: PhaseModelsSchema,
+  /** Phase field -> provider -> eligible model ids. */
+  phaseProviderModels: z.record(
+    z.string().max(50),
+    z.record(z.string().max(100), z.array(z.string().max(200)).max(200)),
+  ),
 });
-export type ResourceDraftKey = z.output<typeof ResourceDraftKeySchema>;
-
-export const LocalResourceDraftSchema = ResourceDraftKeySchema.extend({
-  text: z.string().max(MAX_LOCAL_RESOURCE_DRAFT_BYTES),
-  savedAt: z.string().datetime({ offset: true }),
-});
-export type LocalResourceDraft = z.output<typeof LocalResourceDraftSchema>;
-
-export const LocalResourceDraftSaveRequestSchema = ResourceDraftKeySchema.extend({
-  text: z.string().max(MAX_LOCAL_RESOURCE_DRAFT_BYTES),
-});
-export type LocalResourceDraftSaveRequest = z.output<typeof LocalResourceDraftSaveRequestSchema>;
-
-export const LocalResourceDraftLookupRequestSchema = ResourceDraftKeySchema.pick({
-  runtimeId: true,
-  resourceId: true,
-}).extend({ baseRevision: DraftRevisionSchema.optional() });
-export type LocalResourceDraftLookupRequest = z.output<
-  typeof LocalResourceDraftLookupRequestSchema
->;
-
-export const LocalResourceDraftDiscardRequestSchema = ResourceDraftKeySchema;
-export type LocalResourceDraftDiscardRequest = z.output<
-  typeof LocalResourceDraftDiscardRequestSchema
->;
-
-export const LocalResourceDraftDiscardResultSchema = z.strictObject({ discarded: z.boolean() });
-export type LocalResourceDraftDiscardResult = z.output<
-  typeof LocalResourceDraftDiscardResultSchema
->;
-
-export const LocalResourceDraftStoreSchema = z.strictObject({
-  schemaVersion: z.literal(LOCAL_RESOURCE_DRAFT_STORE_SCHEMA_VERSION),
-  drafts: z.array(LocalResourceDraftSchema).max(50),
-});
-export type LocalResourceDraftStore = z.output<typeof LocalResourceDraftStoreSchema>;
+export type ModelCatalogue = z.output<typeof ModelCatalogueSchema>;
 
 // --- Per-channel contracts ---------------------------------------------------
 
@@ -2388,33 +2327,25 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([ReviewDecisionRequestSchema]),
     response: ReviewDecisionResultSchema,
   },
-  [IPC_CHANNELS.resourcesCatalogue]: {
-    request: z.tuple([z.string().max(50).optional()]),
-    response: ResourceCatalogueSchema,
+  [IPC_CHANNELS.configFeatureGet]: {
+    request: z.tuple([z.string().min(1).max(200)]),
+    response: FeatureConfigSnapshotSchema,
   },
-  [IPC_CHANNELS.resourcesRead]: {
-    request: z.tuple([z.string().min(1).max(256)]),
-    response: ResourceReadSchema,
+  [IPC_CHANNELS.configFeatureUpdate]: {
+    request: z.tuple([FeatureConfigUpdateRequestSchema]),
+    response: FeatureConfigSnapshotSchema,
   },
-  [IPC_CHANNELS.resourcesValidate]: {
-    request: z.tuple([ResourceValidateRequestSchema]),
-    response: ResourceValidateResultSchema,
+  [IPC_CHANNELS.configDefaultsGet]: {
+    request: z.tuple([]),
+    response: WorkspaceDefaultsSchema,
   },
-  [IPC_CHANNELS.resourcesWrite]: {
-    request: z.tuple([ResourceWriteRequestSchema]),
-    response: ResourceWriteResultSchema,
+  [IPC_CHANNELS.configDefaultsUpdate]: {
+    request: z.tuple([WorkspaceDefaultsSchema]),
+    response: WorkspaceDefaultsSchema,
   },
-  [IPC_CHANNELS.resourceDraftsLoad]: {
-    request: z.tuple([LocalResourceDraftLookupRequestSchema]),
-    response: LocalResourceDraftSchema.nullable(),
-  },
-  [IPC_CHANNELS.resourceDraftsSave]: {
-    request: z.tuple([LocalResourceDraftSaveRequestSchema]),
-    response: LocalResourceDraftSchema,
-  },
-  [IPC_CHANNELS.resourceDraftsDiscard]: {
-    request: z.tuple([LocalResourceDraftDiscardRequestSchema]),
-    response: LocalResourceDraftDiscardResultSchema,
+  [IPC_CHANNELS.configModelCatalogue]: {
+    request: z.tuple([]),
+    response: ModelCatalogueSchema,
   },
   [IPC_CHANNELS.runsList]: {
     request: z.tuple([RunListRequestSchema]),
@@ -2598,15 +2529,11 @@ export interface AgenticoApi {
   saveReview(request: ReviewSaveRequest): Promise<ReviewSaveResult>;
   validateReview(request: ReviewValidateRequest): Promise<ReviewValidation>;
   decideReview(request: ReviewDecisionRequest): Promise<ReviewDecisionResult>;
-  listResources(kind?: string): Promise<ResourceCatalogue>;
-  readResource(resourceId: string): Promise<ResourceRead>;
-  validateResource(request: ResourceValidateRequest): Promise<ResourceValidateResult>;
-  writeResource(request: ResourceWriteRequest): Promise<ResourceWriteResult>;
-  loadLocalResourceDraft(
-    request: LocalResourceDraftLookupRequest,
-  ): Promise<LocalResourceDraft | null>;
-  saveLocalResourceDraft(request: LocalResourceDraftSaveRequest): Promise<LocalResourceDraft>;
-  discardLocalResourceDraft(request: LocalResourceDraftDiscardRequest): Promise<boolean>;
+  getFeatureConfig(featureId: string): Promise<FeatureConfigSnapshot>;
+  updateFeatureConfig(request: FeatureConfigUpdateRequest): Promise<FeatureConfigSnapshot>;
+  getWorkspaceDefaults(): Promise<WorkspaceDefaults>;
+  updateWorkspaceDefaults(defaults: WorkspaceDefaults): Promise<WorkspaceDefaults>;
+  getModelCatalogue(): Promise<ModelCatalogue>;
   listRuns(request: RunListRequest): Promise<RunListResult>;
   getRun(request: RunGetRequest): Promise<RunDetailView>;
   listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;

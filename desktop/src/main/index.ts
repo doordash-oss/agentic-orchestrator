@@ -43,9 +43,8 @@ import {
 import { SettingsStore } from './settings';
 import { LocalDraftStore } from './localDraftStore';
 import { ReviewService } from './reviews';
-import { ResourceService } from './resources';
+import { ConfigService } from './configService';
 import { RunHistoryService } from './runHistory';
-import { ResourceDraftStore } from './resourceDraftStore';
 import { SetupService } from './setup';
 import { CreationFilesService } from './creationFiles';
 import { ThemeController } from './theme';
@@ -233,7 +232,6 @@ if (!hasSingleInstanceLock) {
 
     const settings = new SettingsStore(app.getPath('userData'));
     const localDrafts = new LocalDraftStore(app.getPath('userData'));
-    const resourceDrafts = new ResourceDraftStore(app.getPath('userData'));
     const { gateway, logBuffer } = createRuntimeGateway({
       getRuntimeSelection: () => settings.get().runtime.selection,
       isPackaged: isPackagedRuntime,
@@ -255,6 +253,26 @@ if (!hasSingleInstanceLock) {
       (preference) => settings.setTheme(preference),
     );
     theme.applyStored();
+
+    // Dock icon follows the effective theme: nativeTheme resolves the user
+    // preference (via themeSource) or the system appearance. Packaged builds
+    // read the variants from extraResources; dev runs from desktop/build.
+    if (process.platform === 'darwin') {
+      const iconDir = app.isPackaged
+        ? path.join(process.resourcesPath, 'icons')
+        : path.join(import.meta.dirname, '../../build');
+      const updateDockIcon = () => {
+        const icon = path.join(
+          iconDir,
+          nativeTheme.shouldUseDarkColors ? 'icon-dark.png' : 'icon-light.png',
+        );
+        if (fs.existsSync(icon)) {
+          app.dock?.setIcon(icon);
+        }
+      };
+      updateDockIcon();
+      nativeTheme.on('updated', updateDockIcon);
+    }
 
     const pickCreationFiles = async (kind: 'image' | 'attachment'): Promise<string[]> => {
       const focused = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -314,7 +332,7 @@ if (!hasSingleInstanceLock) {
     const bulk = new BulkService(features);
     const sessions = new SessionService(gateway);
     const reviews = new ReviewService(gateway);
-    const resourceService = new ResourceService(gateway);
+    const configService = new ConfigService(gateway);
     const attention = new AttentionService(gateway);
     const runHistory = new RunHistoryService(gateway);
     let mainWindow: BrowserWindow | null = null;
@@ -786,13 +804,11 @@ if (!hasSingleInstanceLock) {
           ? result
           : { type: 'saved' as const, result: result.session.result };
       },
-      listResources: (kind) => resourceService.catalogue(kind),
-      readResource: (resourceId) => resourceService.read(resourceId),
-      validateResource: (request) => resourceService.validate(request),
-      writeResource: (request) => resourceService.write(request),
-      loadLocalResourceDraft: (request) => resourceDrafts.load(request),
-      saveLocalResourceDraft: (request) => resourceDrafts.save(request),
-      discardLocalResourceDraft: (request) => resourceDrafts.discard(request),
+      getFeatureConfig: (featureId) => configService.getFeatureConfig(featureId),
+      updateFeatureConfig: (request) => configService.updateFeatureConfig(request),
+      getWorkspaceDefaults: () => configService.getWorkspaceDefaults(),
+      updateWorkspaceDefaults: (defaults) => configService.updateWorkspaceDefaults(defaults),
+      getModelCatalogue: () => configService.getModelCatalogue(),
       listRuns: (request) => runHistory.listRuns(request),
       getRun: (request) => runHistory.getRun(request),
       listRunSessions: (request) => runHistory.listRunSessions(request),

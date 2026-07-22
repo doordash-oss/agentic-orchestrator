@@ -28,11 +28,26 @@ import type {
   Settings,
   SetupDispatchResult,
   ThemeInfo,
-  ResourceCatalogue,
   UpdateState,
   DiagnosticsSnapshot,
 } from '../../../src/shared/ipc';
 import { CHAT_SESSION_ID, defaultSettings } from '../../../src/shared/ipc';
+
+const DEMO_FEATURE_CONFIG = {
+  models: { planning: 'demo:planner' },
+  inquireness: 'medium' as const,
+  checkpoints: {
+    inquiryReview: true,
+    researchReview: false,
+    designReview: false,
+    roadmapReview: true,
+    phasePlanReview: true,
+    manualPublish: true,
+    draftPublish: false,
+  },
+  pipeline: 'large',
+  inputNotifications: 'default' as const,
+};
 
 const SEALED_RUNS: RunSummaryView[] = [
   {
@@ -885,44 +900,35 @@ function makeMockApi(
     saveReview: () => Promise.reject(new Error('unused')),
     validateReview: () => Promise.reject(new Error('unused')),
     decideReview: () => Promise.reject(new Error('unused')),
-    listResources: () =>
+    getFeatureConfig: () =>
       Promise.resolve({
-        resources: [
-          {
-            id: 'runtime:config.yaml',
-            kind: 'runtime_config',
-            label: 'config.yaml',
-            contentType: 'yaml',
-            revision: 'rev-resource-001',
-            effect: 'restart_required',
-            validatable: true,
-            hierarchy: ['runtime', 'config.yaml'],
-          },
-        ],
-      } as ResourceCatalogue),
-    readResource: () =>
-      Promise.resolve({
-        id: 'runtime:config.yaml',
-        kind: 'runtime_config',
-        label: 'config.yaml',
-        contentType: 'yaml',
-        revision: 'rev-resource-001',
-        text: 'providers:\n  claude:\n    cli: /usr/local/bin/claude\n',
-        effect: 'restart_required',
-        validatable: true,
-        hierarchy: ['runtime', 'config.yaml'],
+        featureId: 'feat-demo',
+        current: DEMO_FEATURE_CONFIG,
+        defaults: DEMO_FEATURE_CONFIG,
+        manualPublishAvailable: true,
       }),
-    validateResource: () =>
+    updateFeatureConfig: () => Promise.reject(new Error('unused')),
+    getWorkspaceDefaults: () =>
       Promise.resolve({
-        id: 'runtime:config.yaml',
-        valid: true,
-        revision: 'rev-resource-001',
-        findings: [],
+        models: { planning: 'demo:planner' },
+        inquireness: 'medium' as const,
+        checkpoints: DEMO_FEATURE_CONFIG.checkpoints,
+        pipeline: 'large',
+        muteFeatureInput: false,
       }),
-    writeResource: () => Promise.reject(new Error('unused')),
-    loadLocalResourceDraft: () => Promise.resolve(null),
-    saveLocalResourceDraft: () => Promise.reject(new Error('unused')),
-    discardLocalResourceDraft: () => Promise.resolve(false),
+    updateWorkspaceDefaults: () => Promise.reject(new Error('unused')),
+    getModelCatalogue: () =>
+      Promise.resolve({
+        providerOrder: ['demo'],
+        providerModels: {
+          demo: [
+            { id: 'demo:planner', displayName: 'Demo Planner' },
+            { id: 'demo:builder', displayName: 'Demo Builder' },
+          ],
+        },
+        phaseDefaults: { planning: 'demo:planner' },
+        phaseProviderModels: {},
+      }),
     listRuns: ({ page, pageSize }) => {
       const ps = pageSize ?? 20;
       const p = page ?? 1;

@@ -2,11 +2,12 @@
  * Journey 7 — configuration, workspace, degraded-remediation, and
  * deferred-restart against the packaged app and real bundled server:
  *
- * create feature → edit feature config in cockpit with invalid model →
- * verify eligibility findings → fix and save through server → Settings tab →
- * runtime config editor with effect annotations → workspace-root management →
- * provider remediation rows → degraded state with affected actions disabled →
- * advanced path change → restart-pending → idle prompt → Later → Restart Now.
+ * create feature → edit feature config in the cockpit through the structured
+ * form (model per phase, inquireness, gates) → save through the server →
+ * verify persistence → Settings tab → workspace defaults form with the
+ * Utilities model → workspace-root management → provider remediation rows →
+ * degraded state → advanced path change → restart-pending → idle prompt →
+ * Later → Restart Now.
  */
 import { execFileSync } from 'node:child_process';
 import { expect, test } from '@playwright/test';
@@ -18,7 +19,6 @@ import {
   launchApp,
   mockDirectoryPicker,
   persistAppLogs,
-  setEditorText,
   setTheme,
   setWindowSize,
   type AppHandle,
@@ -66,135 +66,103 @@ test('configuration, workspace, and restart journey against the packaged app', a
     });
     transcript.step('feature created and setup complete');
 
-    transcript.section('Feature configuration editor in the cockpit');
+    transcript.section('Structured feature configuration in the cockpit');
     const configToggle = cockpit.getByRole('button', { name: /Configuration/ }).first();
     await expect(configToggle).toBeVisible();
     await configToggle.click();
-    await expect(cockpit.locator('.resource-editor__breadcrumb')).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(cockpit.locator('.resource-editor__monaco')).toBeVisible({ timeout: 15_000 });
-    transcript.step('configuration editor expanded in the cockpit with Monaco visible');
 
-    const configInfo = await handle.page.evaluate(async () => {
-      const cat = await window.agentico.listResources('feature_config');
-      const entry = cat.resources[0];
-      if (!entry) throw new Error('no feature config resource');
-      const read = await window.agentico.readResource(entry.id);
-      return { id: entry.id, text: read.text, revision: read.revision };
-    });
-    expect(configInfo.text).toContain('models:');
-    transcript.codeBlock('feature config YAML (via IPC)', configInfo.text);
+    const editor = handle.page.locator('[aria-label="Feature configuration editor"]');
+    await expect(editor).toBeVisible({ timeout: 15_000 });
+    await expect(editor.getByRole('group', { name: 'Models' })).toBeVisible();
+    await expect(editor.getByRole('group', { name: 'Behavior' })).toBeVisible();
+    await expect(editor.getByRole('group', { name: 'Gates' })).toBeVisible();
+    transcript.step('structured config form visible with Models / Behavior / Gates groups');
 
-    transcript.section('Edit with invalid model → verify eligibility findings');
-    const invalidConfig = configInfo.text.replace(
-      /^(\s*)review:\s*.*$/m,
-      '$1review: bogus-model[1M]',
-    );
-    await setEditorText(handle, invalidConfig);
-    await waitFor(
-      () =>
-        handle!.page
-          .locator('.resource-editor__findings')
-          .isVisible()
-          .then((v) => v)
-          .catch(() => false),
-      'validation findings',
-      15_000,
-    );
-    await expect(handle.page.locator('.resource-editor__findings')).toBeVisible();
-    const findingsText = await handle.page.locator('.resource-editor__findings').textContent();
-    expect(findingsText).toBeTruthy();
-    expect(findingsText).toContain('model_unavailable');
-    expect(findingsText).toContain('models.');
-    transcript.step(`validation findings appeared for invalid model: "${findingsText}"`);
+    // The feature form has no Utilities row — that model is workspace-scoped.
+    await expect(editor.getByLabel('Utilities model')).toHaveCount(0);
+
+    const implementationPicker = editor.getByLabel('Implementation model');
+    await expect(implementationPicker).toBeVisible();
+    const defaultOptionLabel = await implementationPicker
+      .locator('option')
+      .first()
+      .textContent();
+    expect(defaultOptionLabel).toContain('Default —');
+    transcript.step(`implementation picker names the effective default: "${defaultOptionLabel}"`);
+
+    // Pick the first concrete model, flip inquireness and a gate, then save.
+    const optionValues = await implementationPicker
+      .locator('option')
+      .evaluateAll((options) =>
+        options
+          .map((option) => (option as HTMLOptionElement).value)
+          .filter((value) => value !== ''),
+      );
+    expect(optionValues.length).toBeGreaterThan(0);
+    const chosenModel = optionValues[0] as string;
+    await implementationPicker.selectOption(chosenModel);
+    await editor.locator('.config-editor__segment', { hasText: 'High' }).click();
+    const researchGate = editor.getByRole('checkbox', { name: /Research review/ });
+    const researchGateWasChecked = await researchGate.isChecked();
+    await researchGate.click();
+
+    const saveButton = editor.getByRole('button', { name: 'Save changes' });
+    await expect(editor.getByRole('status')).toContainText('Unsaved changes');
+    await expect(saveButton).toBeEnabled();
 
     await setWindowSize(handle, 1440, 900);
-    // Scroll the config editor (with findings and Save button) into frame.
-    await handle.page.locator('.resource-editor__footer').scrollIntoViewIfNeeded();
-    await handle.page.waitForTimeout(200);
-    await evidenceShot(
-      handle,
-      'feature-configuration-editor-showing-model-eligibility-findings-in-the-cockpit-l-1440x900',
-    );
+    await editor.scrollIntoViewIfNeeded();
+    await evidenceShot(handle, 'feature-configuration-structured-form-dirty-l-1440x900');
     await setTheme(handle, 'dark');
-    await handle.page.locator('.resource-editor__footer').scrollIntoViewIfNeeded();
-    await evidenceShot(
-      handle,
-      'feature-configuration-editor-showing-model-eligibility-findings-in-the-cockpit-d-1440x900',
-    );
+    await evidenceShot(handle, 'feature-configuration-structured-form-dirty-d-1440x900');
     await setTheme(handle, 'light');
-    transcript.step('captured feature config editor with eligibility findings (light + dark)');
 
-    transcript.section('Fix model and save through the server');
-    const saveResult = await handle.page.evaluate(
-      async ({ id, text, rev }) => {
-        const result = await window.agentico.writeResource({
-          resourceId: id,
-          baseRevision: rev,
-          text: `${text}# E2E valid save\n`,
-        });
-        return result;
-      },
-      { id: configInfo.id, text: configInfo.text, rev: configInfo.revision },
+    await saveButton.click();
+    await expect(editor.getByRole('status')).toContainText('Saved', { timeout: 15_000 });
+    transcript.step('feature config saved through the server');
+
+    const persisted = await handle.page.evaluate(async () => {
+      const list = await window.agentico.listFeatures();
+      const feature = list.find((f) => f.name === 'Config Journey');
+      if (!feature) throw new Error('feature not found');
+      const snapshot = await window.agentico.getFeatureConfig(feature.id);
+      return snapshot.current;
+    });
+    expect(persisted.models.implementation).toBe(chosenModel);
+    expect(persisted.inquireness).toBe('high');
+    expect(persisted.checkpoints.researchReview).toBe(!researchGateWasChecked);
+    transcript.step(
+      `server persisted implementation=${persisted.models.implementation}, inquireness=high, researchReview=${String(!researchGateWasChecked)}`,
     );
 
-    expect(saveResult.type).toBe('saved');
-    transcript.step('feature config saved through the server with valid models');
-
-    await waitFor(
-      () =>
-        handle!.page
-          .locator('.resource-editor__state--saved, .resource-editor__state--idle')
-          .isVisible()
-          .then((v) => v)
-          .catch(() => false),
-      'saved or idle editor state after IPC save',
-      10_000,
-    ).catch(() => {});
-    transcript.step('editor state updated after save');
-
-    transcript.section('Runtime configuration editor in Settings');
+    transcript.section('Workspace defaults in Settings');
     await handle.page.getByRole('tab', { name: 'Settings' }).click();
     await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible({
       timeout: 15_000,
     });
 
-    const runtimeEntry = await handle.page.evaluate(async () => {
-      const cat = await window.agentico.listResources('runtime_config');
-      return cat.resources[0] ?? null;
-    });
-    expect(runtimeEntry).not.toBeNull();
-    transcript.step('runtime config resource discovered in the catalogue');
+    const defaultsEditor = handle.page.locator('[aria-label="Workspace defaults editor"]');
+    await defaultsEditor.scrollIntoViewIfNeeded();
+    await expect(defaultsEditor).toBeVisible({ timeout: 15_000 });
+    await expect(defaultsEditor.getByLabel('Utilities model')).toBeVisible();
+    transcript.step('workspace defaults form visible including the Utilities model row');
 
-    await handle.page
-      .locator('.resource-browser__group', { hasText: 'Runtime' })
-      .locator('.resource-browser__entry')
-      .click();
-    await expect(handle.page.locator('.resource-editor__breadcrumb')).toContainText('Runtime');
-    await expect(handle.page.locator('.resource-editor__effect')).toBeVisible();
-    const runtimeEffect = await handle.page.locator('.resource-editor__effect').textContent();
-    expect(runtimeEffect).toBeTruthy();
-    expect(runtimeEffect).toContain('next dispatch');
-    transcript.step(`runtime config editor opened with effect annotation: "${runtimeEffect}"`);
+    await defaultsEditor.locator('.config-editor__segment', { hasText: 'None' }).click();
+    const defaultsSave = defaultsEditor.getByRole('button', { name: 'Save changes' });
+    await expect(defaultsSave).toBeEnabled();
+    await defaultsSave.click();
+    await expect(defaultsEditor.getByRole('status')).toContainText('Saved', { timeout: 15_000 });
 
-    await setWindowSize(handle, 1440, 900);
-    // Scroll the runtime config editor into frame so the YAML, effect
-    // annotation, and hierarchy are all visible in the capture.
-    await handle.page.locator('.resource-editor__header').scrollIntoViewIfNeeded();
-    await handle.page.waitForTimeout(200);
-    await evidenceShot(
-      handle,
-      'global-runtime-configuration-editor-with-resource-hierarchy-and-effect-annotatio-1440x900',
+    const workspaceDefaults = await handle.page.evaluate(() =>
+      window.agentico.getWorkspaceDefaults(),
     );
+    expect(workspaceDefaults.inquireness).toBe('none');
+    transcript.step('workspace default inquireness saved and re-read as none');
+
+    await evidenceShot(handle, 'workspace-defaults-structured-form-saved-l-1440x900');
     await setTheme(handle, 'dark');
-    await handle.page.locator('.resource-editor__header').scrollIntoViewIfNeeded();
-    await evidenceShot(
-      handle,
-      'global-runtime-configuration-editor-with-resource-hierarchy-and-effect-annotatio-1440x900-c39ef463',
-    );
+    await evidenceShot(handle, 'workspace-defaults-structured-form-saved-d-1440x900');
     await setTheme(handle, 'light');
-    transcript.step('captured runtime config editor with hierarchy and effect annotations');
 
     transcript.section('Workspace-root management');
     await expect(handle.page.getByRole('heading', { name: 'Workspace roots' })).toBeVisible();
@@ -232,19 +200,6 @@ test('configuration, workspace, and restart journey against the packaged app', a
     expect(degradedCause).toBeTruthy();
     transcript.step('degraded provider shows Not ready with cause and remedy');
 
-    await setWindowSize(handle, 1440, 900);
-    await evidenceShot(
-      handle,
-      'workspace-provider-degraded-remediation-surface-with-affected-actions-disabled-l-1440x900',
-    );
-    await setTheme(handle, 'dark');
-    await evidenceShot(
-      handle,
-      'workspace-provider-degraded-remediation-surface-with-affected-actions-disabled-d-1440x900',
-    );
-    await setTheme(handle, 'light');
-    transcript.step('captured degraded provider state with Not ready status (light + dark)');
-
     transcript.section('Appearance settings');
     const themeGroup = handle.page.locator('.settings-panel__theme');
     await expect(themeGroup).toBeVisible();
@@ -273,20 +228,6 @@ test('configuration, workspace, and restart journey against the packaged app', a
       timeout: 15_000,
     });
     transcript.step('idle detected; restart prompt dialog appeared');
-
-    await setTheme(handle, 'dark');
-    await evidenceShot(
-      handle,
-      'restart-pending-summary-and-idle-restart-now-or-later-prompt-dark-theme-1440x900',
-    );
-    transcript.step('captured restart prompt in dark theme');
-
-    await setTheme(handle, 'light');
-    await evidenceShot(
-      handle,
-      'restart-pending-summary-and-idle-restart-now-or-later-prompt-light-theme-1440x900',
-    );
-    transcript.step('captured restart prompt in light theme');
 
     await handle.page
       .locator('.restart-prompt__actions')
@@ -329,7 +270,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     await setWindowSize(handle, 760, 900);
     await evidenceShot(handle, 'config-constrained-light');
     await setWindowSize(handle, 1440, 900);
-    transcript.step('captured constrained layout with hierarchy navigation accessible');
+    transcript.step('captured constrained layout');
 
     transcript.section('No filesystem lifecycle controls');
     const pageText = await handle.page.locator('body').innerText();
@@ -358,17 +299,17 @@ test('configuration, workspace, and restart journey against the packaged app', a
           }
         },
         `server pid ${discovery.pid} to exit`,
-        15_000,
-      ).catch(() => {});
+        30_000,
+      );
     }
     assertNoLeakedProcesses(world);
-    transcript.step('app quit gracefully; no leaked processes');
+    transcript.step('app closed; no orphaned server processes remain');
+
     transcript.write(testInfo);
   } finally {
     if (handle !== null) {
       await closeApp(handle).catch(() => {});
     }
-    assertNoLeakedProcesses(world);
     destroyWorld(world);
   }
 });

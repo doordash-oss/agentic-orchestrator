@@ -529,19 +529,6 @@ func mutationRouteMethods(path string) ([]string, bool) {
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start", "/api/v1/prompts/chat/end":
 		return []string{http.MethodPost}, true
 	}
-	if strings.HasPrefix(path, apiPathResources+"/") {
-		rest := strings.TrimPrefix(path, apiPathResources+"/")
-		parts := splitPath(rest)
-		if len(parts) == 0 || !validEntityID(parts[0]) {
-			return nil, false
-		}
-		if len(parts) == 1 {
-			return []string{http.MethodPut}, true
-		}
-		if len(parts) == 2 && parts[1] == "validate" {
-			return []string{http.MethodPost}, true
-		}
-	}
 	if !strings.HasPrefix(path, "/api/v1/features/") {
 		return nil, false
 	}

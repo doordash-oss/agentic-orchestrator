@@ -38,6 +38,11 @@ publish: null
 extraResources:
   - from: resources
     to: .
+  # Theme-matched dock icon variants swapped at runtime by the main process.
+  - from: build/icon-dark.png
+    to: icons/icon-dark.png
+  - from: build/icon-light.png
+    to: icons/icon-light.png
   - from: ../LICENSE.txt
     to: LICENSE.txt
   - from: ../NOTICE.txt

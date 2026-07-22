@@ -1041,8 +1041,6 @@ const SESSION_TRANSCRIPT_PATH_PATTERN = new RegExp(
   `^/api/v1/sessions/${SESSION_ID_SEGMENT_PATTERN}/transcript$`,
   'i',
 );
-const RESOURCES_PATH_PATTERN = /^\/api\/v1\/resources$/i;
-const ALLOWED_RESOURCE_KINDS = new Set(['feature_config', 'runtime_config', 'skill', 'guideline']);
 const SAFE_API_SEGMENT = '[a-z0-9_-]+';
 const RUN_LIST_PATH_PATTERN = new RegExp(`^/api/v1/features/${SAFE_API_SEGMENT}/runs$`, 'i');
 const RUN_CONTENT_PATH_PATTERN = new RegExp(
@@ -1066,21 +1064,6 @@ function isAllowedApiPath(path: string): boolean {
     return (
       QUERYLESS_API_PATH_PATTERN.test(pathname) || QUERYLESS_SESSION_API_PATH_PATTERN.test(pathname)
     );
-  }
-  // The resource catalogue supports an optional ?kind=<kind> query that
-  // filters by resource kind.  Validate the value against the closed set
-  // of kinds to keep the fail-closed posture of the allowlist.
-  if (parts.length === 2 && RESOURCES_PATH_PATTERN.test(pathname)) {
-    const rawQuery = parts[1] ?? '';
-    if (rawQuery === '') return false;
-    const seen = new Set<string>();
-    for (const [key, value] of new URLSearchParams(rawQuery)) {
-      if (seen.has(key)) return false;
-      if (key !== 'kind') return false;
-      if (!ALLOWED_RESOURCE_KINDS.has(value)) return false;
-      seen.add(key);
-    }
-    return seen.size > 0;
   }
   if (parts.length === 2 && RUN_LIST_PATH_PATTERN.test(pathname)) {
     return hasBoundedIntegerQuery(parts[1] ?? '', {

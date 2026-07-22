@@ -207,13 +207,11 @@ export interface AgenticoMock {
     resolveGate: ReturnType<typeof vi.fn>;
     startChat: ReturnType<typeof vi.fn>;
     endChat: ReturnType<typeof vi.fn>;
-    listResources: ReturnType<typeof vi.fn>;
-    readResource: ReturnType<typeof vi.fn>;
-    validateResource: ReturnType<typeof vi.fn>;
-    writeResource: ReturnType<typeof vi.fn>;
-    loadLocalResourceDraft: ReturnType<typeof vi.fn>;
-    saveLocalResourceDraft: ReturnType<typeof vi.fn>;
-    discardLocalResourceDraft: ReturnType<typeof vi.fn>;
+    getFeatureConfig: ReturnType<typeof vi.fn>;
+    updateFeatureConfig: ReturnType<typeof vi.fn>;
+    getWorkspaceDefaults: ReturnType<typeof vi.fn>;
+    updateWorkspaceDefaults: ReturnType<typeof vi.fn>;
+    getModelCatalogue: ReturnType<typeof vi.fn>;
     listRuns: ReturnType<typeof vi.fn>;
     getRun: ReturnType<typeof vi.fn>;
     listRunSessions: ReturnType<typeof vi.fn>;
@@ -395,13 +393,18 @@ export function installAgenticoMock(
     saveReview: vi.fn(() => Promise.reject(new Error('unused'))),
     validateReview: vi.fn(() => Promise.reject(new Error('unused'))),
     decideReview: vi.fn(() => Promise.reject(new Error('unused'))),
-    listResources: vi.fn(() => Promise.resolve({ resources: [] })),
-    readResource: vi.fn(() => Promise.reject(new Error('unused'))),
-    validateResource: vi.fn(() => Promise.reject(new Error('unused'))),
-    writeResource: vi.fn(() => Promise.reject(new Error('unused'))),
-    loadLocalResourceDraft: vi.fn(() => Promise.resolve(null)),
-    saveLocalResourceDraft: vi.fn(() => Promise.reject(new Error('unused'))),
-    discardLocalResourceDraft: vi.fn(() => Promise.resolve(false)),
+    getFeatureConfig: vi.fn(() => Promise.reject(new Error('unused'))),
+    updateFeatureConfig: vi.fn(() => Promise.reject(new Error('unused'))),
+    getWorkspaceDefaults: vi.fn(() => Promise.reject(new Error('unused'))),
+    updateWorkspaceDefaults: vi.fn(() => Promise.reject(new Error('unused'))),
+    getModelCatalogue: vi.fn(() =>
+      Promise.resolve({
+        providerOrder: [],
+        providerModels: {},
+        phaseDefaults: {},
+        phaseProviderModels: {},
+      }),
+    ),
     listRuns: vi.fn(() =>
       Promise.resolve({ runs: [], page: 1, pageSize: 20, total: 0, totalPages: 0 }),
     ),

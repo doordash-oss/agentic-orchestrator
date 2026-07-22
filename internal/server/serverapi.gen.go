@@ -247,93 +247,6 @@ func (e ReadinessIssueCode) Valid() bool {
 	}
 }
 
-// Defines values for ResourceContentType.
-const (
-	Markdown ResourceContentType = "markdown"
-	Text     ResourceContentType = "text"
-	Yaml     ResourceContentType = "yaml"
-)
-
-// Valid indicates whether the value is a known member of the ResourceContentType enum.
-func (e ResourceContentType) Valid() bool {
-	switch e {
-	case Markdown:
-		return true
-	case Text:
-		return true
-	case Yaml:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ResourceEffect.
-const (
-	Immediate       ResourceEffect = "immediate"
-	NextDispatch    ResourceEffect = "next_dispatch"
-	NextSession     ResourceEffect = "next_session"
-	RestartRequired ResourceEffect = "restart_required"
-)
-
-// Valid indicates whether the value is a known member of the ResourceEffect enum.
-func (e ResourceEffect) Valid() bool {
-	switch e {
-	case Immediate:
-		return true
-	case NextDispatch:
-		return true
-	case NextSession:
-		return true
-	case RestartRequired:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ResourceKind.
-const (
-	ResourceKindFeatureConfig ResourceKind = "feature_config"
-	ResourceKindGuideline     ResourceKind = "guideline"
-	ResourceKindRuntimeConfig ResourceKind = "runtime_config"
-	ResourceKindSkill         ResourceKind = "skill"
-)
-
-// Valid indicates whether the value is a known member of the ResourceKind enum.
-func (e ResourceKind) Valid() bool {
-	switch e {
-	case ResourceKindFeatureConfig:
-		return true
-	case ResourceKindGuideline:
-		return true
-	case ResourceKindRuntimeConfig:
-		return true
-	case ResourceKindSkill:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ResourceWriteResponseType.
-const (
-	Conflict ResourceWriteResponseType = "conflict"
-	Saved    ResourceWriteResponseType = "saved"
-)
-
-// Valid indicates whether the value is a known member of the ResourceWriteResponseType enum.
-func (e ResourceWriteResponseType) Valid() bool {
-	switch e {
-	case Conflict:
-		return true
-	case Saved:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for RewindWorktreeConsequenceResetKind.
 const (
 	Anchor    RewindWorktreeConsequenceResetKind = "anchor"
@@ -868,36 +781,6 @@ const (
 func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case ExecuteRecoveryActionsParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for WriteResourceParamsXAgenticoClient.
-const (
-	WriteResourceParamsXAgenticoClientLocal WriteResourceParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the WriteResourceParamsXAgenticoClient enum.
-func (e WriteResourceParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case WriteResourceParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ValidateResourceParamsXAgenticoClient.
-const (
-	ValidateResourceParamsXAgenticoClientLocal ValidateResourceParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the ValidateResourceParamsXAgenticoClient enum.
-func (e ValidateResourceParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case ValidateResourceParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -1983,119 +1866,6 @@ type Resource struct {
 	Type      string `json:"type"`
 }
 
-// ResourceCatalogResponse defines model for ResourceCatalogResponse.
-type ResourceCatalogResponse struct {
-	APIVersion string          `json:"api_version"`
-	Meta       ResponseMeta    `json:"meta,omitempty"`
-	Resources  []ResourceEntry `json:"resources"`
-
-	// Truncated True when the catalogue exceeded maxResourceCatalogue and was truncated.
-	Truncated bool `json:"truncated,omitempty"`
-}
-
-// ResourceContentType defines model for ResourceContentType.
-type ResourceContentType string
-
-// ResourceEffect defines model for ResourceEffect.
-type ResourceEffect string
-
-// ResourceEntry defines model for ResourceEntry.
-type ResourceEntry struct {
-	ContentType ResourceContentType `json:"content_type"`
-	Effect      ResourceEffect      `json:"effect,omitempty"`
-
-	// FeatureID Present only for feature_config resources.
-	FeatureID string `json:"feature_id,omitempty"`
-
-	// Hierarchy Breadcrumb path for display (never raw host paths).
-	Hierarchy []string `json:"hierarchy,omitempty"`
-
-	// ID Opaque stable resource identity.
-	ID   string       `json:"id"`
-	Kind ResourceKind `json:"kind"`
-
-	// Label Display label for navigation.
-	Label string `json:"label"`
-
-	// Revision SHA-256 content revision.
-	Revision    string `json:"revision"`
-	Validatable bool   `json:"validatable"`
-}
-
-// ResourceFinding defines model for ResourceFinding.
-type ResourceFinding struct {
-	Code    string `json:"code"`
-	Field   string `json:"field,omitempty"`
-	Message string `json:"message"`
-}
-
-// ResourceKind defines model for ResourceKind.
-type ResourceKind string
-
-// ResourceReadResponse defines model for ResourceReadResponse.
-type ResourceReadResponse struct {
-	APIVersion  string              `json:"api_version"`
-	ContentType ResourceContentType `json:"content_type"`
-	Effect      ResourceEffect      `json:"effect,omitempty"`
-	FeatureID   string              `json:"feature_id,omitempty"`
-	Hierarchy   []string            `json:"hierarchy,omitempty"`
-	ID          string              `json:"id"`
-	Kind        ResourceKind        `json:"kind"`
-	Label       string              `json:"label"`
-	Meta        ResponseMeta        `json:"meta,omitempty"`
-	Revision    string              `json:"revision"`
-
-	// Text Current canonical content.
-	Text        string `json:"text"`
-	Validatable bool   `json:"validatable"`
-}
-
-// ResourceValidateRequest defines model for ResourceValidateRequest.
-type ResourceValidateRequest struct {
-	Text string `json:"text"`
-}
-
-// ResourceValidateResponse defines model for ResourceValidateResponse.
-type ResourceValidateResponse struct {
-	APIVersion string            `json:"api_version"`
-	Findings   []ResourceFinding `json:"findings"`
-	ID         string            `json:"id"`
-	Meta       ResponseMeta      `json:"meta,omitempty"`
-	Revision   string            `json:"revision"`
-	Valid      bool              `json:"valid"`
-}
-
-// ResourceWriteRequest defines model for ResourceWriteRequest.
-type ResourceWriteRequest struct {
-	// BaseRevision Expected current revision for optimistic concurrency.
-	BaseRevision string `json:"base_revision"`
-	Text         string `json:"text"`
-}
-
-// ResourceWriteResponse defines model for ResourceWriteResponse.
-type ResourceWriteResponse struct {
-	APIVersion string `json:"api_version"`
-
-	// CurrentRevision The server's current revision (present when type is conflict).
-	CurrentRevision string `json:"current_revision,omitempty"`
-
-	// CurrentText The server's current content (present when type is conflict).
-	CurrentText string         `json:"current_text,omitempty"`
-	Effect      ResourceEffect `json:"effect,omitempty"`
-
-	// ExpectedRevision The caller's stale base revision (present when type is conflict).
-	ExpectedRevision string       `json:"expected_revision,omitempty"`
-	ID               string       `json:"id"`
-	Meta             ResponseMeta `json:"meta,omitempty"`
-
-	// Revision New content revision (present when type is saved).
-	Revision string                    `json:"revision,omitempty"`
-	Type     ResourceWriteResponseType `json:"type"`
-}
-
-// ResourceWriteResponseType defines model for ResourceWriteResponse.Type.
-type ResourceWriteResponseType string
-
 // ResponseMeta defines model for ResponseMeta.
 type ResponseMeta struct {
 	AsOfSeq     uint64    `json:"as_of_seq"`
@@ -2687,9 +2457,6 @@ type RecoveryItemKey = string
 // RecoverySnapshotID defines model for RecoverySnapshotID.
 type RecoverySnapshotID = string
 
-// ResourceID defines model for ResourceID.
-type ResourceID = string
-
 // ReviewID defines model for ReviewID.
 type ReviewID = string
 
@@ -2972,29 +2739,6 @@ type GetRecoveryLogParams struct {
 	Limit  Limit           `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
-// ListResourcesParams defines parameters for ListResources.
-type ListResourcesParams struct {
-	Kind ResourceKind `form:"kind,omitempty" json:"kind,omitempty"`
-}
-
-// WriteResourceParams defines parameters for WriteResource.
-type WriteResourceParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient WriteResourceParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// WriteResourceParamsXAgenticoClient defines parameters for WriteResource.
-type WriteResourceParamsXAgenticoClient string
-
-// ValidateResourceParams defines parameters for ValidateResource.
-type ValidateResourceParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient ValidateResourceParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// ValidateResourceParamsXAgenticoClient defines parameters for ValidateResource.
-type ValidateResourceParamsXAgenticoClient string
-
 // StreamSessionOutputParams defines parameters for StreamSessionOutput.
 type StreamSessionOutputParams struct {
 	// From Resume position expressed as a transcript row index (the same index space `/transcript` uses), not a byte offset.
@@ -3081,12 +2825,6 @@ type RefreshReadinessJSONRequestBody RefreshReadinessJSONBody
 
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
-
-// WriteResourceJSONRequestBody defines body for WriteResource for application/json ContentType.
-type WriteResourceJSONRequestBody = ResourceWriteRequest
-
-// ValidateResourceJSONRequestBody defines body for ValidateResource for application/json ContentType.
-type ValidateResourceJSONRequestBody = ResourceValidateRequest
 
 // ShutdownRuntimeJSONRequestBody defines body for ShutdownRuntime for application/json ContentType.
 type ShutdownRuntimeJSONRequestBody ShutdownRuntimeJSONBody

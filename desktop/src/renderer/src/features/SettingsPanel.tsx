@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useConnectionState, useTheme } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
-import { ResourceWorkspace } from './ResourceWorkspace';
+import { WorkspaceDefaultsPanel } from './ConfigEditor';
 import type {
   ReadinessSnapshot,
   RepositoryState,
@@ -112,11 +112,7 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
         if (event.kind === 'updates.changed') {
           refreshUpdates();
         }
-        if (
-          event.kind === 'resync' ||
-          event.kind.startsWith('config') ||
-          event.kind.startsWith('resource')
-        ) {
+        if (event.kind === 'resync' || event.kind.startsWith('config')) {
           refresh();
         }
       }
@@ -780,13 +776,13 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
         )}
       </section>
 
-      <section className="settings-panel__section" aria-label="Resource editor">
-        <h2 className="settings-panel__section-title">Resources</h2>
+      <section className="settings-panel__section" aria-label="Workspace defaults">
+        <h2 className="settings-panel__section-title">Workspace defaults</h2>
         <p className="settings-panel__section-desc">
-          Edit runtime configuration, feature configurations, skills, and guidelines. Saves are
-          revision-checked and validated by the server.
+          Default models per phase, inquireness, and gates for new work. Features can override
+          each setting in their own configuration.
         </p>
-        <ResourceWorkspace />
+        <WorkspaceDefaultsPanel />
       </section>
 
       {showPrompt && hasPendingRestart && !restarting && (

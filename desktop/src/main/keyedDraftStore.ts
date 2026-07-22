@@ -1,9 +1,9 @@
 /**
  * Generic, owner-only, recoverable storage for keyed unsaved text drafts.
  *
- * Both the review-editor draft store and the resource-editor draft store
- * delegate to this implementation, differing only in configuration: key
- * shape, file name, draft cap, error-code prefix, and Zod schemas.
+ * The review-editor draft store delegates to this implementation,
+ * supplying its key shape, file name, draft cap, error-code prefix, and
+ * Zod schemas.
  *
  * A corrupt or incompatible file is moved aside; recovery always starts
  * empty rather than implying that draft text survived.

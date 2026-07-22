@@ -64,16 +64,10 @@ import {
   type ReviewSaveResult,
   type ReviewValidation,
   type ReviewDecisionResult,
-  type ResourceCatalogue,
-  type ResourceRead,
-  type ResourceValidateRequest,
-  type ResourceValidateResult,
-  type ResourceWriteRequest,
-  type ResourceWriteResult,
-  type LocalResourceDraft,
-  type LocalResourceDraftSaveRequest,
-  type LocalResourceDraftLookupRequest,
-  type LocalResourceDraftDiscardRequest,
+  type FeatureConfigSnapshot,
+  type FeatureConfigUpdateRequest,
+  type WorkspaceDefaults,
+  type ModelCatalogue,
   type RunListRequest,
   type RunListResult,
   type RunGetRequest,
@@ -170,13 +164,11 @@ export interface IpcServices {
   saveReview(request: ReviewSaveRequest): Promise<ReviewSaveResult>;
   validateReview(request: ReviewValidateRequest): Promise<ReviewValidation>;
   decideReview(request: ReviewDecisionRequest): Promise<ReviewDecisionResult>;
-  listResources(kind?: string): Promise<ResourceCatalogue>;
-  readResource(resourceId: string): Promise<ResourceRead>;
-  validateResource(request: ResourceValidateRequest): Promise<ResourceValidateResult>;
-  writeResource(request: ResourceWriteRequest): Promise<ResourceWriteResult>;
-  loadLocalResourceDraft(request: LocalResourceDraftLookupRequest): LocalResourceDraft | null;
-  saveLocalResourceDraft(request: LocalResourceDraftSaveRequest): LocalResourceDraft;
-  discardLocalResourceDraft(request: LocalResourceDraftDiscardRequest): boolean;
+  getFeatureConfig(featureId: string): Promise<FeatureConfigSnapshot>;
+  updateFeatureConfig(request: FeatureConfigUpdateRequest): Promise<FeatureConfigSnapshot>;
+  getWorkspaceDefaults(): Promise<WorkspaceDefaults>;
+  updateWorkspaceDefaults(defaults: WorkspaceDefaults): Promise<WorkspaceDefaults>;
+  getModelCatalogue(): Promise<ModelCatalogue>;
   listRuns(request: RunListRequest): Promise<RunListResult>;
   getRun(request: RunGetRequest): Promise<RunDetailView>;
   listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
@@ -337,19 +329,14 @@ export function registerIpcHandlers(
       services.validateReview(request),
     [IPC_CHANNELS.reviewsDecide]: (_event, request: ReviewDecisionRequest) =>
       services.decideReview(request),
-    [IPC_CHANNELS.resourcesCatalogue]: (_event, kind?: string) => services.listResources(kind),
-    [IPC_CHANNELS.resourcesRead]: (_event, resourceId: string) => services.readResource(resourceId),
-    [IPC_CHANNELS.resourcesValidate]: (_event, request: ResourceValidateRequest) =>
-      services.validateResource(request),
-    [IPC_CHANNELS.resourcesWrite]: (_event, request: ResourceWriteRequest) =>
-      services.writeResource(request),
-    [IPC_CHANNELS.resourceDraftsLoad]: (_event, request: LocalResourceDraftLookupRequest) =>
-      services.loadLocalResourceDraft(request),
-    [IPC_CHANNELS.resourceDraftsSave]: (_event, request: LocalResourceDraftSaveRequest) =>
-      services.saveLocalResourceDraft(request),
-    [IPC_CHANNELS.resourceDraftsDiscard]: (_event, request: LocalResourceDraftDiscardRequest) => ({
-      discarded: services.discardLocalResourceDraft(request),
-    }),
+    [IPC_CHANNELS.configFeatureGet]: (_event, featureId: string) =>
+      services.getFeatureConfig(featureId),
+    [IPC_CHANNELS.configFeatureUpdate]: (_event, request: FeatureConfigUpdateRequest) =>
+      services.updateFeatureConfig(request),
+    [IPC_CHANNELS.configDefaultsGet]: () => services.getWorkspaceDefaults(),
+    [IPC_CHANNELS.configDefaultsUpdate]: (_event, defaults: WorkspaceDefaults) =>
+      services.updateWorkspaceDefaults(defaults),
+    [IPC_CHANNELS.configModelCatalogue]: () => services.getModelCatalogue(),
     [IPC_CHANNELS.runsList]: (_event, request: RunListRequest) => services.listRuns(request),
     [IPC_CHANNELS.runsGet]: (_event, request: RunGetRequest) => services.getRun(request),
     [IPC_CHANNELS.runSessionsList]: (_event, request: RunGetRequest) =>

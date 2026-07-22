@@ -19,7 +19,6 @@ import {
   type FeatureSnapshot,
   type RunDetailView,
   type SetupTaskView,
-  type ResourceEntry,
   type FeatureActionRequest,
 } from '../../../shared/ipc';
 import { PhaseSpine } from '../components/PhaseSpine';
@@ -28,8 +27,7 @@ import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { RunTimeline } from './RunTimeline';
 import { CurrentRunInspection } from './CurrentRunInspection';
 import { ReviewSurface } from './ReviewSurface';
-import { ResourceEditor } from './ResourceWorkspace';
-import { useResolvedTheme } from '../components/monaco';
+import { FeatureConfigPanel } from './ConfigEditor';
 import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { RepositoryInstrument } from './RepositoryInstrument';
@@ -702,39 +700,7 @@ function RestartConfirmDialog({
 }
 
 function FeatureConfigEditor({ featureId }: { featureId: string }) {
-  const [configResourceId, setConfigResourceId] = useState<string | null>(null);
-  const [configError, setConfigError] = useState<string | null>(null);
-  const [configLoaded, setConfigLoaded] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
-  const [retryNonce, setRetryNonce] = useState(0);
-  const theme = useResolvedTheme();
-
-  useEffect(() => {
-    let alive = true;
-    setConfigLoaded(false);
-    setConfigError(null);
-    void window.agentico
-      .listResources('feature_config')
-      .then((cat) => {
-        if (!alive) return;
-        const entry = cat.resources.find((e: ResourceEntry) => e.featureId === featureId);
-        if (entry) {
-          setConfigResourceId(entry.id);
-          setConfigError(null);
-        } else {
-          setConfigResourceId(null);
-        }
-        setConfigLoaded(true);
-      })
-      .catch((e: unknown) => {
-        if (!alive) return;
-        setConfigError(parseIpcError(e).message);
-        setConfigLoaded(true);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [featureId, retryNonce]);
 
   return (
     <section className="cockpit__config" aria-label="Feature configuration">
@@ -744,33 +710,12 @@ function FeatureConfigEditor({ featureId }: { featureId: string }) {
         aria-expanded={showConfig}
         onClick={() => setShowConfig((v) => !v)}
       >
-        <span aria-hidden="true">{showConfig ? '▾' : '▸'}</span>
+        <span aria-hidden="true">{showConfig ? '\u25be' : '\u25b8'}</span>
         Configuration
       </button>
       {showConfig && (
         <div className="cockpit__config-body">
-          {configError ? (
-            <div className="cockpit__config-error">
-              <p className="resource-editor__notice resource-editor__notice--error" role="alert">
-                Could not load configuration — {configError}
-              </p>
-              <button
-                type="button"
-                className="resource-editor__btn"
-                onClick={() => setRetryNonce((n) => n + 1)}
-              >
-                Retry
-              </button>
-            </div>
-          ) : configResourceId ? (
-            <ResourceEditor resourceId={configResourceId} theme={theme} />
-          ) : configLoaded ? (
-            <p className="resource-editor__notice">
-              No configuration resource found for this feature.
-            </p>
-          ) : (
-            <p className="resource-editor__notice">Loading configuration…</p>
-          )}
+          <FeatureConfigPanel featureId={featureId} />
         </div>
       )}
     </section>

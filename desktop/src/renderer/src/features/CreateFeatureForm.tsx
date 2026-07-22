@@ -134,9 +134,6 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const [directoryCandidate, setDirectoryCandidate] = useState<string | null>(null);
   const [initializeConsent, setInitializeConsent] = useState(false);
   const [workspacePending, setWorkspacePending] = useState(false);
-  const [skills, setSkills] = useState<readonly { id: string; label: string }[]>([]);
-  const [selectedSkills, setSelectedSkills] = useState<readonly string[]>([]);
-  const [skillQuery, setSkillQuery] = useState('');
   const [pending, setPending] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -158,17 +155,13 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
 
   const loadInitialDefaults = useCallback(() => {
     setState({ phase: 'loading' });
-    Promise.all([window.agentico.getCreationDefaults(), window.agentico.listResources('skill')])
-      .then(([defaults, catalogue]) => {
+    window.agentico
+      .getCreationDefaults()
+      .then((defaults) => {
         setState({ phase: 'loaded', defaults });
         setUseCurrentBranch(defaults.defaults.useCurrentBranch);
         if (isPipeline(defaults.defaults.pipeline)) setPipeline(defaults.defaults.pipeline);
         setInquireness(normalizeInquireness(defaults.defaults.inquireness));
-        setSkills(
-          catalogue.resources
-            .filter((entry) => entry.kind === 'skill')
-            .map((entry) => ({ id: entry.id, label: entry.label })),
-        );
       })
       .catch((err: unknown) => setState({ phase: 'error', error: parseIpcError(err) }));
   }, []);
@@ -308,7 +301,6 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
           exitCriteria,
           models,
           checkpoints: checkpointsForPipeline(pipeline),
-          skills: [...selectedSkills],
           idempotencyKey: creationKey.current,
         });
         try {
@@ -355,11 +347,6 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     );
 
   const repositories = state.defaults.repositories;
-  const visibleSkills = skills
-    .filter((skill) =>
-      `${skill.label} ${skill.id}`.toLowerCase().includes(skillQuery.trim().toLowerCase()),
-    )
-    .slice(0, 50);
   const currentStep = STEPS[stepIndex] as Step;
 
   return (
@@ -646,32 +633,6 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
               <p>{checkpointSummaryForPipeline(pipeline)}</p>
             </div>
           </section>
-          <section aria-label="Skills" className="skill-picker">
-            <label>
-              Search skills
-              <input value={skillQuery} onChange={(event) => setSkillQuery(event.target.value)} />
-            </label>
-            <ul>
-              {visibleSkills.map((skill) => (
-                <li key={skill.id}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={selectedSkills.includes(skill.id)}
-                      onChange={() =>
-                        setSelectedSkills((items) =>
-                          items.includes(skill.id)
-                            ? items.filter((item) => item !== skill.id)
-                            : [...items, skill.id],
-                        )
-                      }
-                    />
-                    {skill.label}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </section>
           <dl className="creation-summary">
             <div>
               <dt>What</dt>
@@ -687,9 +648,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
             </div>
             <div>
               <dt>Review</dt>
-              <dd>
-                {riskLevel} risk · {selectedSkills.length} skills
-              </dd>
+              <dd>{riskLevel} risk</dd>
             </div>
           </dl>
         </section>

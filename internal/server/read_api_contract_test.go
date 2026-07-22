@@ -2077,7 +2077,8 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	store, f := seedReadFeature(t)
 	runDir := store.RunDir(f.ID, 1)
 	writeFile(t, filepath.Join(runDir, targetPhasePlan, "phase-plan.md"), "hello artifact content")
-	writeFile(t, filepath.Join(runDir, "logs", "session.log"), "first\nsecond\nthird\n")
+	largeLog := strings.Repeat("old provider output\n", 70_000) + "first\nsecond\nthird\n"
+	writeFile(t, filepath.Join(runDir, feature.PhaseResearch.DirName(), "output.txt"), largeLog)
 	msgs := []llm.SDKMessage{
 		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "safe text"}, {Type: blockTypeToolUse, Name: toolNameBash, Input: json.RawMessage(`{"command":"echo private-token"}`)}}}}},
 		{Type: roleUser, User: &llm.UserMessage{Message: llm.ConversationMsg{Role: roleUser, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "raw prompt private-token"}}}}},
@@ -2085,7 +2086,7 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
 		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement, repoName: repoNameSelf,
 		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex, model: modelGPT54,
-		logPath: filepath.Join(runDir, "logs", "session.log"), messages: msgs,
+		logPath: filepath.Join(runDir, feature.PhaseResearch.DirName(), "output.txt"), messages: msgs,
 		initialPrompt: "private-token initial prompt",
 	}}}
 	opts := baseReadHandlerOptions(store)
@@ -2102,7 +2103,18 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	}
 	requestJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/..%2Ffeature.yaml", http.StatusBadRequest)
 
-	logBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/logs/session?offset=6&limit=6")
+	logList := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/logs")
+	logs := logList["logs"].([]any)
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v; want authentic research output", logs)
+	}
+	log := logs[0].(map[string]any)
+	if log["path"] != "research/output.txt" {
+		t.Fatalf("log path = %v; want research/output.txt", log["path"])
+	}
+	logID := log["id"].(string)
+	offset := int64(len(largeLog) - len("first\nsecond\nthird\n") + len("first\n"))
+	logBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/logs/"+logID+"?offset="+strconv.FormatInt(offset, 10)+"&limit=6")
 	if logBody[blockTypeText] != "second" {
 		t.Fatalf("log text slice = %q; want second", logBody[blockTypeText])
 	}

@@ -8,21 +8,32 @@ const SUPPRESSED_TYPES = ['usage_update', 'success', 'result', 'system', 'prompt
 
 export type ConversationMode = 'chat' | 'assistant-only';
 
+export type SubagentState = 'running' | 'done' | 'failed';
+
+/** Live view of one delegated sub-agent, folded from its task lifecycle rows. */
+export interface SubagentActivity {
+  id: string;
+  state: SubagentState;
+  description?: string;
+  taskType?: string;
+  lastTool?: string;
+  summary?: string;
+}
+
 export type ConversationItem =
   | { kind: 'message'; key: string; role: 'user' | 'assistant'; text: string }
   | {
       kind: 'auto-pick';
       key: string;
-      question: string;
-      answer: string;
-      confidence?: number;
+      text: string;
     }
   | {
       kind: 'file-change';
       key: string;
       change: NonNullable<TranscriptMessage['fileChange']>;
     }
-  | { kind: 'activity'; key: string; labels: string[] };
+  | { kind: 'activity'; key: string; labels: string[] }
+  | { kind: 'subagents'; key: string; agents: SubagentActivity[] };
 
 /** Stable identity for a row, unique across multi-block responses. */
 export function messageKey(entry: Pick<TranscriptMessage, 'index' | 'blockIndex'>): string {
@@ -110,6 +121,7 @@ export function buildConversation(
   const { mode = 'chat', initialPrompt, optimisticMessage } = options;
   const includeUser = mode === 'chat';
   const items: ConversationItem[] = [];
+  const subagentsById = new Map<string, SubagentActivity>();
 
   const initial = initialPrompt?.trim();
   const visibleUserMessages = messages.filter(
@@ -140,12 +152,35 @@ export function buildConversation(
       items.push({
         kind: 'auto-pick',
         key: `auto-pick-${messageKey(entry)}`,
-        question: entry.autoPickQuestion?.trim() || 'Agent question',
-        answer: text,
-        ...(entry.autoPickConfidence === undefined ? {} : { confidence: entry.autoPickConfidence }),
+        text: `Option ${autoPickOptionNumber(entry.autoPickQuestion, text)}: ${text}`,
       });
       continue;
     }
+    // Task lifecycle rows fold into a live sub-agent group: `task_started`
+    // spawns an entry, `task_progress` updates its current tool in place, and
+    // `task_notification` settles it as done or failed.
+    const taskId = entry.task?.id?.trim();
+    if (entry.task !== undefined && taskId !== undefined && taskId !== '') {
+      const known = subagentsById.get(taskId);
+      const agent: SubagentActivity = known ?? { id: taskId, state: 'running' };
+      if (entry.task.description?.trim()) agent.description = entry.task.description.trim();
+      if (entry.task.taskType?.trim()) agent.taskType = entry.task.taskType.trim();
+      if (entry.task.lastToolName?.trim()) agent.lastTool = entry.task.lastToolName.trim();
+      if (entry.type.toLocaleLowerCase() === 'task_notification') {
+        const status = entry.task.status?.trim().toLocaleLowerCase() ?? '';
+        agent.state = status === 'failed' || status === 'error' ? 'failed' : 'done';
+        if (entry.task.summary?.trim()) agent.summary = entry.task.summary.trim();
+      }
+      if (known === undefined) {
+        subagentsById.set(taskId, agent);
+        const previous = items.at(-1);
+        if (previous?.kind === 'subagents') previous.agents.push(agent);
+        else
+          items.push({ kind: 'subagents', key: `subagents-${messageKey(entry)}`, agents: [agent] });
+      }
+      continue;
+    }
+
     const operational = isOperational(entry);
     const isMessage =
       !isHiddenReasoning(entry) &&
@@ -189,4 +224,18 @@ export function buildConversation(
     items.push({ kind: 'message', key: 'optimistic-message', role: 'user', text: optimistic });
   }
   return items;
+}
+
+function autoPickOptionNumber(question: string | undefined, answer: string): number {
+  if (question !== undefined) {
+    for (const line of question.split('\n')) {
+      const match = line.match(/^\s*(\d+)\.\s+(.+)$/);
+      if (match === null) continue;
+      const option = match[2]?.trim();
+      if (option?.startsWith(answer) || answer.startsWith(option ?? '')) {
+        return Number(match[1]);
+      }
+    }
+  }
+  return 1;
 }

@@ -407,6 +407,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/runs/{run_number}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List authentic bounded-text logs discovered inside a run. */
+        get: operations["listRunLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/runtime": {
         parameters: {
             query?: never;
@@ -1012,6 +1029,18 @@ export interface components {
             size: number;
             text: string;
             truncated: boolean;
+        };
+        RunLog: {
+            id: string;
+            /** @description Safe run-relative display path. */
+            path: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            modified_at: string;
+        };
+        RunLogListResponse: components["schemas"]["JSONResponse"] & {
+            logs: components["schemas"]["RunLog"][];
         };
         ReviewSessionResponse: components["schemas"]["JSONResponse"] & {
             feature_id: string;
@@ -1927,6 +1956,15 @@ export interface components {
                 "application/json": components["schemas"]["TextContentResponse"];
             };
         };
+        /** @description Authentic log files available within one run. */
+        RunLogListResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RunLogListResponse"];
+            };
+        };
         /** @description Paginated run history, newest first. */
         RunListResponse: {
             headers: {
@@ -2682,6 +2720,22 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["TextContentResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listRunLogs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+                run_number: components["parameters"]["RunNumber"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["RunLogListResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

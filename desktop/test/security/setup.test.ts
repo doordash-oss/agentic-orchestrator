@@ -141,6 +141,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     listRunSessions: vi.fn(() => Promise.reject(new Error('unused'))),
     getLivePreview: vi.fn(() => Promise.reject(new Error('unused'))),
     listRunArtifacts: vi.fn(() => Promise.reject(new Error('unused'))),
+    listRunLogs: vi.fn(() => Promise.reject(new Error('unused'))),
     getRunArtifactContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),

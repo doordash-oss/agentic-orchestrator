@@ -124,6 +124,16 @@ describe('CurrentRunInspection', () => {
         },
       ],
     });
+    mock.api.listRunLogs.mockResolvedValue({
+      logs: [
+        {
+          id: 'log-research',
+          path: 'research/output.txt',
+          size: 128 * 1024,
+          modifiedAt: '2026-07-22T12:00:00Z',
+        },
+      ],
+    });
     mock.api.getRunArtifactContent.mockResolvedValue({
       id: 'phase-plan',
       offset: 0,
@@ -133,8 +143,8 @@ describe('CurrentRunInspection', () => {
       truncated: false,
     });
     mock.api.getRunLogContent.mockResolvedValue({
-      id: 'session',
-      offset: 0,
+      id: 'log-research',
+      offset: 64 * 1024,
       limit: 65536,
       size: 16,
       text: '\u001b[31mcurrent log\u001b[0m',
@@ -185,13 +195,16 @@ describe('CurrentRunInspection', () => {
       screen.queryByRole('dialog', { name: 'Expanded artifact phase-plan' }),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Open session log' }));
+    await user.click(screen.getByRole('button', { name: 'Open log research/output.txt' }));
     expect(await screen.findByLabelText('Current run log content')).toHaveTextContent(
       'current log',
     );
     expect(screen.getByLabelText('Current run log content')).not.toHaveTextContent('\u001b');
     expect(mock.api.getRunArtifactContent).toHaveBeenCalledWith(
       expect.objectContaining({ artifactId: 'phase-plan', limit: 64 * 1024 }),
+    );
+    expect(mock.api.getRunLogContent).toHaveBeenCalledWith(
+      expect.objectContaining({ logId: 'log-research', offset: 64 * 1024, limit: 64 * 1024 }),
     );
   });
 
@@ -390,10 +403,9 @@ describe('CurrentRunInspection', () => {
     );
 
     const autoPick = await screen.findByRole('article', { name: 'Auto-picked response' });
-    expect(autoPick).toHaveTextContent('Auto-picked');
-    expect(autoPick).toHaveTextContent('Which cache should this use?');
-    expect(autoPick).toHaveTextContent('Redis (Recommended)');
-    expect(autoPick).toHaveTextContent('85% confidence');
+    expect(autoPick).toHaveTextContent('Option 1: Redis (Recommended)');
+    expect(autoPick).not.toHaveTextContent('Which cache should this use?');
+    expect(autoPick).not.toHaveTextContent('85% confidence');
   });
 
   it('shows the durable wait reason when no session exists for the current run', async () => {

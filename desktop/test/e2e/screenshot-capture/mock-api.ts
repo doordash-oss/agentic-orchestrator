@@ -987,6 +987,17 @@ function makeMockApi(
       Promise.resolve({
         artifacts: RUN_ARTIFACTS.map((a) => ({ ...a, runNumber })),
       } as RunArtifactsListResult),
+    listRunLogs: () =>
+      Promise.resolve({
+        logs: [
+          {
+            id: 'log-research',
+            path: 'research/output.txt',
+            size: ARTIFACT_CONTENT.length,
+            modifiedAt: '2026-07-20T12:00:00Z',
+          },
+        ],
+      }),
     getRunArtifactContent: ({ artifactId }) =>
       Promise.resolve({
         id: artifactId,

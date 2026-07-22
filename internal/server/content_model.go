@@ -15,7 +15,9 @@
 package server
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -23,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -182,22 +185,111 @@ func (h *apiHandler) handleLogContent(w http.ResponseWriter, r *http.Request, fe
 		writeStoreError(w, err, featureID)
 		return
 	}
-	logs := map[string]string{
-		logIDSession: filepath.Join("logs", "session.log"),
-		"phase":      filepath.Join("logs", "phase.log"),
-		"observe":    "events.jsonl",
+	logs, err := discoverRunLogs(h.store.RunDir(featureID, runNumber))
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "discover run logs", nil)
+		return
 	}
-	rel, ok := logs[logID]
-	if !ok {
+	var selected *discoveredRunLog
+	for i := range logs {
+		if logs[i].ID == logID {
+			selected = &logs[i]
+			break
+		}
+	}
+	// Preserve the original observe ID for API clients while removing the two
+	// synthetic IDs that never corresponded to production files.
+	if selected == nil && logID == "observe" {
+		for i := range logs {
+			if logs[i].RelativePath == "events.jsonl" {
+				selected = &logs[i]
+				break
+			}
+		}
+	}
+	if selected == nil {
 		writeAPIError(w, http.StatusNotFound, "not_found", "log not found", map[string]any{"log_id": logID})
 		return
 	}
-	path, ok := safeJoin(h.store.RunDir(featureID, runNumber), rel)
+	path, ok := safeJoin(h.store.RunDir(featureID, runNumber), selected.RelativePath)
 	if !ok {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid log target", map[string]any{"log_id": logID})
 		return
 	}
 	h.writeTextFileSlice(w, r, logID, path)
+}
+
+type discoveredRunLog struct {
+	ID           string
+	RelativePath string
+	Size         int64
+	ModifiedAt   time.Time
+}
+
+func (h *apiHandler) handleLogList(w http.ResponseWriter, r *http.Request, featureID string, runNumber int) {
+	if _, _, err := h.featureAndRun(featureID, runNumber); err != nil {
+		writeStoreError(w, err, featureID)
+		return
+	}
+	logs, err := discoverRunLogs(h.store.RunDir(featureID, runNumber))
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "discover run logs", nil)
+		return
+	}
+	dtos := make([]RunLog, 0, len(logs))
+	for _, log := range logs {
+		dtos = append(dtos, RunLog{ID: log.ID, Path: log.RelativePath, Size: log.Size, ModifiedAt: log.ModifiedAt.UTC()})
+	}
+	revision := revisionForAny(dtos)
+	h.writeRevisionedJSON(w, r, revision, RunLogListResponse{APIVersion: APIVersion, Meta: h.responseMeta(revision), Logs: dtos})
+}
+
+func discoverRunLogs(runDir string) ([]discoveredRunLog, error) {
+	logs := []discoveredRunLog{}
+	err := filepath.WalkDir(runDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() || !isRunLogName(entry.Name()) {
+			return nil
+		}
+		rel, err := filepath.Rel(runDir, path)
+		if err != nil || rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+		sum := sha256.Sum256([]byte(filepath.ToSlash(rel)))
+		logs = append(logs, discoveredRunLog{
+			ID: fmt.Sprintf("log-%x", sum[:12]), RelativePath: filepath.ToSlash(rel),
+			Size: info.Size(), ModifiedAt: info.ModTime(),
+		})
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return logs, nil
+	}
+	sort.Slice(logs, func(i, j int) bool {
+		if logs[i].ModifiedAt.Equal(logs[j].ModifiedAt) {
+			return logs[i].RelativePath < logs[j].RelativePath
+		}
+		return logs[i].ModifiedAt.After(logs[j].ModifiedAt)
+	})
+	return logs, err
+}
+
+func isRunLogName(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "output.txt" || lower == "response.txt" || lower == "review-output.txt" ||
+		lower == "events.jsonl" || strings.HasSuffix(lower, ".log") || strings.HasSuffix(lower, "-output.txt")
 }
 
 func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, id, path string) {
@@ -210,7 +302,7 @@ func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, 
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read content metadata", map[string]any{"id": id})
 		return
 	}
-	if info.IsDir() || !textArtifact(path, info.Size()) {
+	if info.IsDir() || !boundedTextFile(path) {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "content is not available as bounded text", map[string]any{"id": id})
 		return
 	}
@@ -253,6 +345,15 @@ func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, 
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
 	h.writeRevisionedJSON(w, r, revision, resp)
+}
+
+func boundedTextFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".md", ".yaml", ".yml", ".txt", ".log", ".jsonl":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, featureID string) {

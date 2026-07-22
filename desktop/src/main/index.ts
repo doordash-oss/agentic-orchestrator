@@ -824,6 +824,7 @@ if (!hasSingleInstanceLock) {
       listRunSessions: (request) => runHistory.listRunSessions(request),
       getLivePreview: (featureId) => runHistory.getLivePreview(featureId),
       listRunArtifacts: (request) => runHistory.listRunArtifacts(request),
+      listRunLogs: (request) => runHistory.listRunLogs(request),
       getRunArtifactContent: (request) => runHistory.getRunArtifactContent(request),
       getRunLogContent: (request) => runHistory.getRunLogContent(request),
       getRewindPreview: (request) => runHistory.getRewindPreview(request),

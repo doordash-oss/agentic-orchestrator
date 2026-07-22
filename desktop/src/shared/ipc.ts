@@ -84,6 +84,7 @@ export const IPC_CHANNELS = {
   runSessionsList: 'agentico:runs:sessions-list',
   livePreviewGet: 'agentico:runs:live-preview',
   runArtifactsList: 'agentico:runs:artifacts-list',
+  runLogsList: 'agentico:runs:logs-list',
   runArtifactContent: 'agentico:runs:artifact-content',
   runLogContent: 'agentico:runs:log-content',
   rewindPreview: 'agentico:rewind:preview',
@@ -1217,6 +1218,19 @@ export const RunArtifactsListResultSchema = z.strictObject({
   artifacts: z.array(RunArtifactViewSchema).max(10000),
 });
 export type RunArtifactsListResult = z.output<typeof RunArtifactsListResultSchema>;
+
+export const RunLogViewSchema = z.strictObject({
+  id: z.string().min(1).max(200),
+  path: z.string().min(1).max(1000),
+  size: z.number().int().nonnegative(),
+  modifiedAt: z.string().max(100),
+});
+export type RunLogView = z.output<typeof RunLogViewSchema>;
+
+export const RunLogsListResultSchema = z.strictObject({
+  logs: z.array(RunLogViewSchema).max(10000),
+});
+export type RunLogsListResult = z.output<typeof RunLogsListResultSchema>;
 
 /** Maximum bounded history text response accepted anywhere in the desktop. */
 export const MAX_RUN_CONTENT_BYTES = 256 * 1024;
@@ -2388,6 +2402,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RunArtifactsListRequestSchema]),
     response: RunArtifactsListResultSchema,
   },
+  [IPC_CHANNELS.runLogsList]: {
+    request: z.tuple([RunArtifactsListRequestSchema]),
+    response: RunLogsListResultSchema,
+  },
   [IPC_CHANNELS.runArtifactContent]: {
     request: z.tuple([RunArtifactContentRequestSchema]),
     response: RunTextContentSchema,
@@ -2561,6 +2579,7 @@ export interface AgenticoApi {
   listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
   getLivePreview(featureId: string): Promise<LivePreviewView>;
   listRunArtifacts(request: RunArtifactsListRequest): Promise<RunArtifactsListResult>;
+  listRunLogs(request: RunArtifactsListRequest): Promise<RunLogsListResult>;
   getRunArtifactContent(request: RunArtifactContentRequest): Promise<RunTextContent>;
   getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
   getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;

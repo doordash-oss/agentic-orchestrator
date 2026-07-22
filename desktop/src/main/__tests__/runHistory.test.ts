@@ -2,6 +2,55 @@ import { describe, expect, it } from 'vitest';
 import { RunHistoryService } from '../runHistory';
 
 describe('RunHistoryService', () => {
+  it('lists authentic run logs and maps a vanished file without claiming the run disappeared', async () => {
+    const service = new RunHistoryService({
+      apiRequest: (path) => {
+        if (path.endsWith('/logs')) {
+          return Promise.resolve({
+            status: 200,
+            body: {
+              api_version: 'v1',
+              logs: [
+                {
+                  id: 'log-research',
+                  path: 'research/output.txt',
+                  size: 1_500_000,
+                  modified_at: '2026-07-22T12:00:00Z',
+                },
+              ],
+            },
+          });
+        }
+        return Promise.resolve({
+          status: 404,
+          body: { api_version: 'v1', error: { code: 'not_found', message: 'log not found' } },
+        });
+      },
+    });
+
+    await expect(
+      service.listRunLogs({ featureId: 'abcd1234ef567890', runNumber: 2 }),
+    ).resolves.toStrictEqual({
+      logs: [
+        {
+          id: 'log-research',
+          path: 'research/output.txt',
+          size: 1_500_000,
+          modifiedAt: '2026-07-22T12:00:00Z',
+        },
+      ],
+    });
+    await expect(
+      service.getRunLogContent({
+        featureId: 'abcd1234ef567890',
+        runNumber: 2,
+        logId: 'log-vanished',
+      }),
+    ).rejects.toMatchObject({
+      safe: { remediation: expect.stringContaining('This log is no longer available') },
+    });
+  });
+
   it('maps the bounded authoritative live preview without exposing raw server fields', async () => {
     const paths: string[] = [];
     const service = new RunHistoryService({

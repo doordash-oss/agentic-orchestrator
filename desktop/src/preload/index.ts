@@ -216,6 +216,7 @@ const api: AgenticoApi = {
   getLivePreview: (featureId: string) => call(IPC_CHANNELS.livePreviewGet, featureId),
   listRunArtifacts: (request: RunArtifactsListRequest) =>
     call(IPC_CHANNELS.runArtifactsList, request),
+  listRunLogs: (request: RunArtifactsListRequest) => call(IPC_CHANNELS.runLogsList, request),
   getRunArtifactContent: (request: RunArtifactContentRequest) =>
     call(IPC_CHANNELS.runArtifactContent, request),
   getRunLogContent: (request: RunLogContentRequest) => call(IPC_CHANNELS.runLogContent, request),

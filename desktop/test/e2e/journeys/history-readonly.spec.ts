@@ -89,7 +89,7 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     transcript.section('Inspect a run-authentic artifact and bounded historical log');
     await handle.page.getByRole('button', { name: /history-6/ }).click();
     await expect(handle.page.getByLabel('Artifact content')).toContainText('belongs only to Run 6');
-    await handle.page.getByRole('button', { name: 'Open session log' }).click();
+    await handle.page.getByRole('button', { name: 'Open log logs/session.log' }).click();
     await expect(handle.page.getByLabel('Historical log content')).toContainText('sealed run 6');
 
     transcript.section('Keep history pinned while the current run changes');

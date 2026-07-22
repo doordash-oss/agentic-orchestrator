@@ -218,6 +218,7 @@ export interface AgenticoMock {
     listRunSessions: ReturnType<typeof vi.fn>;
     getLivePreview: ReturnType<typeof vi.fn>;
     listRunArtifacts: ReturnType<typeof vi.fn>;
+    listRunLogs: ReturnType<typeof vi.fn>;
     getRunArtifactContent: ReturnType<typeof vi.fn>;
     getRunLogContent: ReturnType<typeof vi.fn>;
     getRewindPreview: ReturnType<typeof vi.fn>;
@@ -423,6 +424,7 @@ export function installAgenticoMock(
       }),
     ),
     listRunArtifacts: vi.fn(() => Promise.resolve({ artifacts: [] })),
+    listRunLogs: vi.fn(() => Promise.resolve({ logs: [] })),
     getRunArtifactContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRunLogContent: vi.fn(() => Promise.reject(new Error('unused'))),
     getRewindPreview: vi.fn(() => Promise.reject(new Error('unused'))),

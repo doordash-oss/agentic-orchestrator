@@ -3,6 +3,7 @@ import type {
   LivePreviewView,
   ReviewGateView,
   RunArtifactsListResult,
+  RunLogView,
   RunTextContent,
   SessionSummary,
   TranscriptMessage,
@@ -24,6 +25,12 @@ import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 import { CloseIcon, MaximizeIcon, MinimizeIcon } from '../components/icons';
 
 const IDLE_ACTIVITY_LABEL = 'Thinking through the next step';
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 type PreviewView = 'conversation' | 'trace';
 
@@ -103,12 +110,16 @@ export function CurrentRunInspection({
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [artifacts, setArtifacts] = useState<RunArtifactsListResult['artifacts']>([]);
+  const [logs, setLogs] = useState<RunLogView[]>([]);
   const [content, setContent] = useState<{
     kind: 'artifact' | 'log';
+    label: string;
     value: RunTextContent;
   } | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [logListError, setLogListError] = useState<string | null>(null);
+  const [contentError, setContentError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [artifactFullscreen, setArtifactFullscreen] = useState(false);
   const [view, setView] = useState<PreviewView>('conversation');
@@ -132,13 +143,22 @@ export function CurrentRunInspection({
     const request = ++requestRef.current;
     setError(null);
     try {
-      const [nextPreview, nextArtifacts] = await Promise.all([
+      const [nextPreview, nextArtifacts, logResult] = await Promise.all([
         window.agentico.getLivePreview(featureId),
         window.agentico.listRunArtifacts({ featureId, runNumber }),
+        window.agentico
+          .listRunLogs({ featureId, runNumber })
+          .then((value) => ({ value, error: null }))
+          .catch((cause: unknown) => ({
+            value: { logs: [] as RunLogView[] },
+            error: parseIpcError(cause).message,
+          })),
       ]);
       if (request !== requestRef.current) return;
       setPreview(nextPreview);
       setArtifacts(orderRunArtifacts(nextArtifacts.artifacts));
+      setLogs(logResult.value.logs);
+      setLogListError(logResult.error);
     } catch (cause) {
       if (request === requestRef.current) setError(parseIpcError(cause).message);
     }
@@ -152,9 +172,9 @@ export function CurrentRunInspection({
   }, [refresh]);
 
   const openContent = useCallback(
-    async (kind: 'artifact' | 'log', id: string) => {
+    async (kind: 'artifact' | 'log', id: string, size?: number, label = id) => {
       setLoadingContent(true);
-      setError(null);
+      setContentError(null);
       try {
         const value =
           kind === 'artifact'
@@ -167,13 +187,14 @@ export function CurrentRunInspection({
             : await window.agentico.getRunLogContent({
                 featureId,
                 runNumber,
-                logId: id === 'session' ? 'session' : 'phase',
+                logId: id,
+                offset: Math.max(0, (size ?? 0) - 64 * 1024),
                 limit: 64 * 1024,
               });
-        setContent({ kind, value });
+        setContent({ kind, label, value });
         setArtifactFullscreen(false);
       } catch (cause) {
-        setError(parseIpcError(cause).message);
+        setContentError(parseIpcError(cause).message);
       } finally {
         setLoadingContent(false);
       }
@@ -285,27 +306,47 @@ export function CurrentRunInspection({
         </div>
         <div>
           <h4>Bounded logs</h4>
-          <button
-            type="button"
-            disabled={loadingContent}
-            onClick={() => void openContent('log', 'session')}
-          >
-            Open session log
-          </button>
-          <button
-            type="button"
-            disabled={loadingContent}
-            onClick={() => void openContent('log', 'phase')}
-          >
-            Open phase log
-          </button>
+          {logs.length === 0 ? (
+            <p className="setup-step__empty">
+              {logListError === null
+                ? 'No run logs yet.'
+                : `Could not refresh run logs: ${logListError}`}
+            </p>
+          ) : (
+            <ol className="current-inspection__artifact-list" aria-label="Available run logs">
+              {logs.map((log, index) => (
+                <li key={log.id} className="current-inspection__artifact-item">
+                  <span className="current-inspection__artifact-index" aria-hidden="true">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <button
+                    type="button"
+                    className="current-inspection__artifact-button"
+                    disabled={loadingContent}
+                    aria-label={`Open log ${log.path}`}
+                    title={`${log.path} · ${formatBytes(log.size)}`}
+                    onClick={() => void openContent('log', log.id, log.size, log.path)}
+                  >
+                    {log.path} · {formatBytes(log.size)}
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       </div>
+
+      {contentError !== null ? (
+        <p role="alert" className="form-field__error">
+          Could not open this file: {contentError}
+        </p>
+      ) : null}
 
       {content !== null ? (
         <div className="current-inspection__content">
           <div className="current-inspection__content-header">
-            <span>{content.value.id}</span>
+            <span>{content.label}</span>
+            {content.kind === 'log' && content.value.offset > 0 ? <span>Latest 64 KB</span> : null}
             {content.value.truncated ? <span>Bounded page · more content remains</span> : null}
             {content.kind === 'artifact' ? (
               <button
@@ -709,9 +750,12 @@ export function roadmapStatusLabel(
 ): string {
   const phase = currentPhase.trim().toLocaleLowerCase();
   const iteration =
-    currentIteration !== undefined && currentIteration > 0 ? ` · Iteration ${currentIteration}` : '';
+    currentIteration !== undefined && currentIteration > 0
+      ? ` · Iteration ${currentIteration}`
+      : '';
   if (phase === 'implement') {
-    const reviewing = reviewGate.reviewingGate || phaseStatus?.trim().toLocaleLowerCase() === 'reviewing';
+    const reviewing =
+      reviewGate.reviewingGate || phaseStatus?.trim().toLocaleLowerCase() === 'reviewing';
     return `${reviewing ? 'Reviewing' : 'Implementing'}${iteration}`;
   }
   if (phase === 'plan' || phase === 'planning') {

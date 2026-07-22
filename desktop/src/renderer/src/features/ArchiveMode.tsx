@@ -11,6 +11,7 @@ import {
   type RunSummaryView,
   type RunDetailView,
   type RunArtifactView,
+  type RunLogView,
   type RunSessionsListResult,
   type SessionSummary,
   type SessionTranscript,
@@ -61,8 +62,13 @@ export function ArchiveMode(props: ArchiveModeProps) {
 
   const [state, setState] = useState<ArchiveState>({ phase: 'loading' });
   const [artifacts, setArtifacts] = useState<RunArtifactView[]>([]);
+  const [logs, setLogs] = useState<RunLogView[]>([]);
   const [artifactContent, setArtifactContent] = useState<string | null>(null);
-  const [logContent, setLogContent] = useState<string | null>(null);
+  const [logContent, setLogContent] = useState<{
+    label: string;
+    text: string;
+    offset: number;
+  } | null>(null);
   const [selectedSession, setSelectedSession] = useState<SessionTranscript | null>(null);
   const [sessions, setSessions] = useState<RunSessionsListResult | null>(null);
   const [loadingArtifact, setLoadingArtifact] = useState(false);
@@ -125,6 +131,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
     setLogContent(null);
     setSelectedSession(null);
     setArtifacts([]);
+    setLogs([]);
     setSessions(null);
     setInspectionError(null);
     setArtifactLoadError(null);
@@ -142,9 +149,16 @@ export function ArchiveMode(props: ArchiveModeProps) {
           setSessionLoadError(parseIpcError(error));
           return { runNumber: selectedRunNumber, sessions: [] };
         }),
-    ]).then(([arts, sess]) => {
+      window.agentico
+        .listRunLogs({ featureId, runNumber: selectedRunNumber })
+        .catch((error: unknown) => {
+          setInspectionError(parseIpcError(error));
+          return { logs: [] };
+        }),
+    ]).then(([arts, sess, runLogs]) => {
       setArtifacts(arts.artifacts);
       setSessions(sess);
+      setLogs(runLogs.logs);
     });
   }, [featureId, selectedRunNumber, state.phase]);
 
@@ -183,7 +197,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
   );
 
   const handleLogSelect = useCallback(
-    async (logId: 'session' | 'phase') => {
+    async (log: RunLogView) => {
       setLoadingArtifact(true);
       setLogContent(null);
       setInspectionError(null);
@@ -191,10 +205,11 @@ export function ArchiveMode(props: ArchiveModeProps) {
         const content = await window.agentico.getRunLogContent({
           featureId,
           runNumber: selectedRunNumber,
-          logId,
+          logId: log.id,
+          offset: Math.max(0, log.size - 64 * 1024),
           limit: 64 * 1024,
         });
-        setLogContent(content.text);
+        setLogContent({ label: log.path, text: content.text, offset: content.offset });
       } catch (error) {
         setInspectionError(parseIpcError(error));
       } finally {
@@ -409,30 +424,37 @@ export function ArchiveMode(props: ArchiveModeProps) {
           <div className="archive-mode__logs">
             <h3 className="archive-mode__section-title">Bounded logs</h3>
             <p className="archive-mode__hint">
-              Read-only slices from this sealed run. Live output is never opened.
+              Read-only tails from authentic files in this sealed run. Live output is never opened.
             </p>
-            <div className="archive-mode__log-actions">
-              <button
-                type="button"
-                className="archive-mode__artifact-button"
-                onClick={() => void handleLogSelect('session')}
-                disabled={loadingArtifact}
-              >
-                Open session log
-              </button>
-              <button
-                type="button"
-                className="archive-mode__artifact-button"
-                onClick={() => void handleLogSelect('phase')}
-                disabled={loadingArtifact}
-              >
-                Open phase log
-              </button>
-            </div>
+            {logs.length === 0 ? (
+              <p className="archive-mode__empty">No logs were recorded for this run.</p>
+            ) : (
+              <ul className="archive-mode__artifact-list" aria-label="Available historical logs">
+                {logs.map((log) => (
+                  <li key={log.id} className="archive-mode__artifact-item">
+                    <button
+                      type="button"
+                      className="archive-mode__artifact-button"
+                      onClick={() => void handleLogSelect(log)}
+                      disabled={loadingArtifact}
+                      aria-label={`Open log ${log.path}`}
+                    >
+                      {log.path} · {formatBytes(log.size)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             {logContent !== null ? (
-              <pre className="archive-mode__artifact-content" aria-label="Historical log content">
-                {logContent}
-              </pre>
+              <>
+                <p className="archive-mode__hint">
+                  {logContent.label}
+                  {logContent.offset > 0 ? ' · Latest 64 KB' : ''}
+                </p>
+                <pre className="archive-mode__artifact-content" aria-label="Historical log content">
+                  {logContent.text}
+                </pre>
+              </>
             ) : null}
           </div>
 

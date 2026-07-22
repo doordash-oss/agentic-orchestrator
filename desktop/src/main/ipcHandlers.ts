@@ -76,6 +76,7 @@ import {
   type LivePreviewView,
   type RunArtifactsListRequest,
   type RunArtifactsListResult,
+  type RunLogsListResult,
   type RunArtifactContentRequest,
   type RunTextContent,
   type RunLogContentRequest,
@@ -175,6 +176,7 @@ export interface IpcServices {
   listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
   getLivePreview(featureId: string): Promise<LivePreviewView>;
   listRunArtifacts(request: RunArtifactsListRequest): Promise<RunArtifactsListResult>;
+  listRunLogs(request: RunArtifactsListRequest): Promise<RunLogsListResult>;
   getRunArtifactContent(request: RunArtifactContentRequest): Promise<RunTextContent>;
   getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
   getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;
@@ -347,6 +349,8 @@ export function registerIpcHandlers(
       services.getLivePreview(featureId),
     [IPC_CHANNELS.runArtifactsList]: (_event, request: RunArtifactsListRequest) =>
       services.listRunArtifacts(request),
+    [IPC_CHANNELS.runLogsList]: (_event, request: RunArtifactsListRequest) =>
+      services.listRunLogs(request),
     [IPC_CHANNELS.runArtifactContent]: (_event, request: RunArtifactContentRequest) =>
       services.getRunArtifactContent(request),
     [IPC_CHANNELS.runLogContent]: (_event, request: RunLogContentRequest) =>

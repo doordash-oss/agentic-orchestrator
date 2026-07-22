@@ -489,9 +489,6 @@ body {
 }
 
 .conversation__auto-pick {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px var(--space-3);
   align-self: flex-end;
   width: min(78%, 760px);
   border-left: 3px solid var(--color-signal);
@@ -499,33 +496,11 @@ body {
   background: color-mix(in srgb, var(--color-signal) 7%, var(--color-panel));
 }
 
-.conversation__auto-pick-label,
-.conversation__auto-pick-confidence {
-  color: var(--color-muted);
-  font: 11px var(--font-mono);
-}
-
-.conversation__auto-pick-label {
-  color: var(--color-signal);
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.conversation__auto-pick strong,
 .conversation__auto-pick p {
-  grid-column: 1 / -1;
   margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.conversation__auto-pick p {
   line-height: 1.5;
   white-space: pre-wrap;
-}
-
-.conversation__auto-pick-confidence {
-  grid-column: 2;
-  grid-row: 1;
+  overflow-wrap: anywhere;
 }
 
 .ama-dock__empty {
@@ -577,6 +552,119 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Delegated sub-agents: one instrument lamp per task, folded live from
+   task_started/progress/notification rows. */
+.conversation__subagents {
+  align-self: stretch;
+  width: min(100%, 880px);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--color-panel) 92%, var(--color-canvas));
+  overflow: hidden;
+}
+
+.conversation__subagents-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px var(--space-3);
+  border-bottom: 1px solid var(--color-hairline);
+  font: 12px var(--font-mono);
+}
+
+.conversation__subagents-title {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.conversation__subagents-tally {
+  margin-left: auto;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.conversation__subagents-tally[data-live='true'] {
+  color: var(--color-signal);
+}
+
+.conversation__subagents-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+}
+
+.conversation__subagent {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+}
+
+.conversation__subagent-lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-signal);
+}
+
+.conversation__subagent[data-state='running'] .conversation__subagent-lamp {
+  animation: conversation-subagent-lamp 1.4s ease-in-out infinite;
+}
+
+.conversation__subagent[data-state='done'] .conversation__subagent-lamp {
+  background: var(--color-success);
+}
+
+.conversation__subagent[data-state='failed'] .conversation__subagent-lamp {
+  background: var(--color-danger);
+}
+
+.conversation__subagent-desc {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation__subagent-detail {
+  overflow: hidden;
+  max-width: 40%;
+  color: var(--color-muted);
+  font: 11px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation__subagent[data-state='failed'] .conversation__subagent-detail {
+  color: var(--color-danger);
+}
+
+@keyframes conversation-subagent-lamp {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-signal) 45%, transparent);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-signal) 0%, transparent);
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation__subagent[data-state='running'] .conversation__subagent-lamp {
+    animation: none;
+    opacity: 0.85;
+  }
 }
 
 .conversation__file-change {
@@ -7683,6 +7771,10 @@ body {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.current-inspection__resources [aria-label='Available run logs'] {
+  flex-basis: 100%;
 }
 
 .current-inspection__metrics dd {

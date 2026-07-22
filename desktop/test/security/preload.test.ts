@@ -86,6 +86,7 @@ describe('preload surface', () => {
         'listRunSessions',
         'getLivePreview',
         'listRunArtifacts',
+        'listRunLogs',
         'getRunArtifactContent',
         'getRunLogContent',
         'getRewindPreview',

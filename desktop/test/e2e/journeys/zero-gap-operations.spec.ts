@@ -80,7 +80,7 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     await expect(inspection.getByText(/Context/)).toBeVisible({ timeout: 60_000 });
     // The phase log exists for the whole active run. A provider session log is
     // phase-dependent and may not exist yet while the first phase is starting.
-    await inspection.getByRole('button', { name: 'Open phase log' }).click();
+    await inspection.getByRole('button', { name: 'Open log logs/phase.log' }).click();
     await expect(inspection.getByLabel('Current run log content')).toBeVisible({
       timeout: 30_000,
     });

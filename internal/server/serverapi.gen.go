@@ -2135,6 +2135,23 @@ type RunListResponse struct {
 	TotalPages int          `json:"total_pages"`
 }
 
+// RunLog defines model for RunLog.
+type RunLog struct {
+	ID         string    `json:"id"`
+	ModifiedAt time.Time `json:"modified_at"`
+
+	// Path Safe run-relative display path.
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// RunLogListResponse defines model for RunLogListResponse.
+type RunLogListResponse struct {
+	APIVersion string       `json:"api_version"`
+	Logs       []RunLog     `json:"logs"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+}
+
 // RunSessionListResponse defines model for RunSessionListResponse.
 type RunSessionListResponse struct {
 	APIVersion string           `json:"api_version"`

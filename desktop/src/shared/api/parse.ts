@@ -538,6 +538,20 @@ export const ArtifactListResponseSchema = z.object({
 });
 export type ArtifactListResponse = z.output<typeof ArtifactListResponseSchema>;
 
+export const ServerRunLogSchema = z.object({
+  id: z.string(),
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+  modified_at: z.string(),
+});
+export type ServerRunLog = z.output<typeof ServerRunLogSchema>;
+
+export const RunLogListResponseSchema = z.object({
+  api_version: z.string(),
+  logs: z.array(ServerRunLogSchema),
+});
+export type RunLogListResponse = z.output<typeof RunLogListResponseSchema>;
+
 export const TextContentResponseSchema = z.object({
   api_version: z.string(),
   id: z.string(),

@@ -360,6 +360,8 @@ func (h *apiHandler) handleRunRoute(w http.ResponseWriter, r *http.Request, feat
 		h.handleArtifactList(w, r, featureID, runNumber)
 	case len(parts) == 2 && parts[0] == "artifacts":
 		h.handleArtifactContent(w, r, featureID, runNumber, parts[1])
+	case len(parts) == 1 && parts[0] == "logs":
+		h.handleLogList(w, r, featureID, runNumber)
 	case len(parts) == 2 && parts[0] == "logs":
 		h.handleLogContent(w, r, featureID, runNumber, parts[1])
 	case len(parts) == 1 && parts[0] == "sessions":

@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { TranscriptMessage } from '../../../../shared/ipc';
-import type { ConversationItem } from './conversation';
+import { friendlyToolName, type ConversationItem, type SubagentActivity } from './conversation';
 
 const NEAR_BOTTOM_PX = 40;
 
@@ -30,6 +30,52 @@ export function ActivityIndicator({
         {shownLabels.length > 0 ? <span>{shownLabels.join(' · ')}</span> : <span>{idleLabel}</span>}
       </div>
     </div>
+  );
+}
+
+function subagentDetail(agent: SubagentActivity): string {
+  if (agent.state === 'running') {
+    return agent.lastTool !== undefined && agent.lastTool !== ''
+      ? `using ${friendlyToolName(agent.lastTool)}`
+      : 'starting up';
+  }
+  if (agent.summary?.trim()) return agent.summary.trim();
+  return agent.state === 'failed' ? 'Failed' : 'Finished';
+}
+
+function subagentTally(agents: SubagentActivity[]): string {
+  const running = agents.filter((agent) => agent.state === 'running').length;
+  const failed = agents.filter((agent) => agent.state === 'failed').length;
+  if (running > 0) return `${running} of ${agents.length} running`;
+  return failed > 0 ? `${failed} of ${agents.length} failed` : 'all finished';
+}
+
+export function SubagentGroupCard({ agents }: { agents: SubagentActivity[] }) {
+  const live = agents.some((agent) => agent.state === 'running');
+  return (
+    <article
+      className="conversation__subagents"
+      aria-label="Sub-agent activity"
+      role={live ? 'status' : undefined}
+    >
+      <header className="conversation__subagents-header">
+        <span className="conversation__subagents-title">Sub-agents</span>
+        <span className="conversation__subagents-tally" data-live={live}>
+          {subagentTally(agents)}
+        </span>
+      </header>
+      <ul className="conversation__subagents-list">
+        {agents.map((agent) => (
+          <li key={agent.id} className="conversation__subagent" data-state={agent.state}>
+            <span className="conversation__subagent-lamp" aria-hidden="true" />
+            <span className="conversation__subagent-desc">
+              {agent.description ?? agent.taskType ?? 'Delegated task'}
+            </span>
+            <span className="conversation__subagent-detail">{subagentDetail(agent)}</span>
+          </li>
+        ))}
+      </ul>
+    </article>
   );
 }
 
@@ -200,17 +246,12 @@ export function ConversationTranscript({
             className="conversation__auto-pick"
             aria-label="Auto-picked response"
           >
-            <span className="conversation__auto-pick-label">Auto-picked</span>
-            <strong>{item.question}</strong>
-            <p>{item.answer}</p>
-            {item.confidence === undefined ? null : (
-              <span className="conversation__auto-pick-confidence">
-                {Math.round(item.confidence * 100)}% confidence
-              </span>
-            )}
+            <p>{item.text}</p>
           </article>
         ) : item.kind === 'file-change' ? (
           <FileChangeCard key={item.key} change={item.change} />
+        ) : item.kind === 'subagents' ? (
+          <SubagentGroupCard key={item.key} agents={item.agents} />
         ) : (
           <ActivityIndicator
             key={item.key}
@@ -221,7 +262,19 @@ export function ConversationTranscript({
         ),
       )}
       {waiting && lastItem?.kind !== 'activity' ? (
-        <ActivityIndicator labels={[]} idleLabel={idleLabel} active />
+        <ActivityIndicator
+          labels={(() => {
+            const running =
+              lastItem?.kind === 'subagents'
+                ? lastItem.agents.filter((agent) => agent.state === 'running').length
+                : 0;
+            return running > 0
+              ? [`waiting on ${running} sub-agent${running === 1 ? '' : 's'}`]
+              : [];
+          })()}
+          idleLabel={idleLabel}
+          active
+        />
       ) : null}
     </section>
   );

@@ -453,6 +453,19 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/features/{feature_id}/runs/{run_number}/logs:
+    get:
+      operationId: listRunLogs
+      summary: List authentic bounded-text logs discovered inside a run.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+      responses:
+        "200":
+          $ref: "#/components/responses/RunLogListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/config/runtime:
     get:
       operationId: getRuntimeConfig
@@ -1042,6 +1055,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/TextContentResponse"
+    RunLogListResponse:
+      description: Authentic log files available within one run.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RunLogListResponse"
     RunListResponse:
       description: Paginated run history, newest first.
       headers:
@@ -1803,6 +1822,31 @@ components:
               type: string
             truncated:
               type: boolean
+    RunLog:
+      type: object
+      required: [id, path, size, modified_at]
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+          description: Safe run-relative display path.
+        size:
+          type: integer
+          format: int64
+        modified_at:
+          type: string
+          format: date-time
+    RunLogListResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [logs]
+          properties:
+            logs:
+              type: array
+              items:
+                $ref: "#/components/schemas/RunLog"
     ReviewSessionResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

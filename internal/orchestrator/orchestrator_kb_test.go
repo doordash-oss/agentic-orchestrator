@@ -233,6 +233,69 @@ func TestOrchestrator_StartKB_LockHeldByOther_SetsWaitMessage(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_StartKB_OrphanedLockStartsSession(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+
+	kbDir := agent.KBStateDir(cpr.stateDir, "repo-orphaned")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", kbDir, err)
+	}
+	owner := agent.KBLockInfo{FeatureID: "feat-missing", Timestamp: time.Now()}
+	ownerData, _ := json.Marshal(owner)
+	if err := os.WriteFile(filepath.Join(kbDir, "kb.lock"), ownerData, 0o644); err != nil {
+		t.Fatalf("write kb.lock: %v", err)
+	}
+
+	waiter := &feature.Feature{
+		ID:           "feat-waiter",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo-orphaned", Path: "/tmp/repo-orphaned"},
+		},
+	}
+	lc := lifecycleForFeature(waiter)
+	fs := newFeatureStore(waiter)
+	fs.LoadFn = func(id string) (*feature.Feature, error) {
+		if id == "feat-missing" {
+			return nil, os.ErrNotExist
+		}
+		f, ok := fs.features[id]
+		if !ok {
+			return nil, os.ErrNotExist
+		}
+		return f, nil
+	}
+	cpr.pr.FeatureStore = fs
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+
+	if err := o.StartFeature("feat-waiter"); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+
+	kbSessions := cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)
+	if len(kbSessions) != 1 {
+		t.Fatalf("KB StartSession calls = %d, want 1", len(kbSessions))
+	}
+	if kbSessions[0].ID != "feat-waiter-kb-repo-orphaned" {
+		t.Errorf("session ID = %q, want feat-waiter-kb-repo-orphaned", kbSessions[0].ID)
+	}
+	if waiter.KBWaitMessage != "" {
+		t.Errorf("KBWaitMessage = %q, want no wait message after orphan recovery", waiter.KBWaitMessage)
+	}
+	if owner := agent.ReadKBLockOwner(kbDir); owner != "feat-waiter" {
+		t.Errorf("KB lock owner = %q, want feat-waiter", owner)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestOrchestrator_StartKB_AfterLockReleased_StartsSession
 // ---------------------------------------------------------------------------

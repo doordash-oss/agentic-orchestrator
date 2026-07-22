@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -524,5 +525,24 @@ func TestSessionOutputActivityCarriesCurrentRecordCount(t *testing.T) {
 	evt := eventDTOFromRuntime(msg)
 	if evt.Kind != sseEventSessionOutputActivity || evt.RecordCount != 3 {
 		t.Fatalf("eventDTOFromRuntime = %+v, want session.output.activity with RecordCount 3", evt)
+	}
+}
+
+func TestSessionStartedPublishesSnapshotRequiredSessionUpdate(t *testing.T) {
+	t.Parallel()
+
+	evt := eventDTOFromRuntime(session.SessionStartedMsg{
+		SessionID: fixtureSessionID,
+		FeatureID: fixtureFeatureID,
+		Phase:     feature.PhaseKnowledgeBase,
+	})
+	if evt.Kind != sseEventSessionUpdated || !evt.SnapshotRequired {
+		t.Fatalf("eventDTOFromRuntime = %+v, want snapshot-required session.updated", evt)
+	}
+	if evt.Resource.Type != resourceTypeSession || evt.Resource.ID != fixtureSessionID || evt.Resource.FeatureID != fixtureFeatureID {
+		t.Fatalf("event resource = %+v, want session resource for %q/%q", evt.Resource, fixtureFeatureID, fixtureSessionID)
+	}
+	if evt.Resource.Phase != feature.PhaseKnowledgeBase.String() {
+		t.Fatalf("event phase = %q, want %q", evt.Resource.Phase, feature.PhaseKnowledgeBase.String())
 	}
 }

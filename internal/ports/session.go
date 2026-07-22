@@ -162,10 +162,14 @@ type AskUserAutoPickConfig struct {
 
 // SessionWatchdogConfig enables provider-specific lifecycle safety rails for a
 // session. PendingToolIdleTimeout bounds silence while a tool is running.
-// TurnCompletionIdleTimeout bounds silence after a tool reaches a terminal
-// state but before the provider completes the enclosing turn.
+// SubagentToolIdleTimeout, when positive, replaces PendingToolIdleTimeout
+// while any pending tool is a subagent task: subagents run in child sessions
+// whose activity is not streamed to the parent, so long silence is expected.
+// TurnCompletionIdleTimeout bounds silence after every pending tool reaches a
+// terminal state but before the provider completes the enclosing turn.
 type SessionWatchdogConfig struct {
 	PendingToolIdleTimeout    time.Duration
+	SubagentToolIdleTimeout   time.Duration
 	TurnCompletionIdleTimeout time.Duration
 	PollInterval              time.Duration
 	SubagentHeartbeatInterval time.Duration

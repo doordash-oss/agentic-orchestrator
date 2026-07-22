@@ -231,6 +231,45 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	}
 }
 
+func TestFeatureDetailIncludesSanitizedKBWaitReason(t *testing.T) {
+	t.Parallel()
+	store := feature.NewStore(t.TempDir())
+	f := &feature.Feature{
+		ID:            "feat-kb-wait",
+		Name:          "KB Wait",
+		Slug:          "kb-wait",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		Created:       time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC),
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "repo-a"}},
+		KBWaitMessage: `Waiting for KB build on repo "repo-a" by feature "private-token owner"`,
+	}
+	f.SetRun(&feature.Run{
+		RunNumber:     1,
+		KBWaitMessage: f.KBWaitMessage,
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save feature: %v", err)
+	}
+	handler := NewHandler(HandlerOptions{Features: store, DisableHostValidation: true})
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	featureBody := detail[entityFeature].(map[string]any)
+	waitReason, ok := featureBody["wait_reason"].(string)
+	if !ok {
+		t.Fatalf("wait_reason missing or non-string: %+v", featureBody["wait_reason"])
+	}
+	if strings.Contains(waitReason, "private-token") {
+		t.Fatalf("wait_reason was not sanitized: %q", waitReason)
+	}
+	if !strings.Contains(waitReason, "[redacted] owner") {
+		t.Fatalf("wait_reason = %q, want redacted owner label", waitReason)
+	}
+}
+
 func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	t.Parallel()
 

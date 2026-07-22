@@ -1743,6 +1743,7 @@ export interface components {
         FeatureDetail: components["schemas"]["FeatureSummary"] & {
             description?: string;
             summary?: string;
+            wait_reason?: string;
             pipeline?: string;
             models: components["schemas"]["ModelDefaults"];
             active_run_detail?: components["schemas"]["RunSummary"];

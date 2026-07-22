@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -484,7 +485,11 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		return "", nil
 	}
 
-	locked, err := AcquireKBLock(kbDir, f.ID)
+	var ownerStatus FeatureStatusFunc
+	if pr.FeatureStore != nil {
+		ownerStatus = pr.kbLockOwnerStatus
+	}
+	locked, err := AcquireKBLockWithStatus(kbDir, f.ID, ownerStatus)
 	if err != nil {
 		return "", fmt.Errorf("acquiring KB lock for %s: %w", repo.Name, err)
 	}
@@ -612,6 +617,23 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	}
 
 	return sessionID, nil
+}
+
+func (pr *PhaseRunner) kbLockOwnerStatus(featureID string) (int, bool) {
+	if pr == nil || pr.FeatureStore == nil {
+		return int(feature.StatusBuildingKB), true
+	}
+	owner, err := pr.FeatureStore.Load(featureID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, false
+		}
+		return int(feature.StatusBuildingKB), true
+	}
+	if owner == nil {
+		return 0, false
+	}
+	return int(owner.Status), true
 }
 
 // RunAllKnowledgeBuilds starts KB builds for all repos in a feature.
@@ -1353,7 +1375,10 @@ type BuildSessionOpts struct {
 type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
 var sessionWatchdogConfig = ports.SessionWatchdogConfig{
-	PendingToolIdleTimeout:    5 * time.Minute,
+	PendingToolIdleTimeout: 5 * time.Minute,
+	// Subagent tasks (parallel researchers, etc.) surface no parent-session
+	// activity until they finish, so they get a much longer leash.
+	SubagentToolIdleTimeout:   30 * time.Minute,
 	TurnCompletionIdleTimeout: 5 * time.Minute,
 	PollInterval:              time.Second,
 	SubagentHeartbeatInterval: 5 * time.Minute,

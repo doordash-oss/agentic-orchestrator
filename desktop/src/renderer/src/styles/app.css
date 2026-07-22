@@ -7742,13 +7742,42 @@ body {
 .live-preview__overlay {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  width: min(64rem, 100%);
-  height: min(80vh, 900px);
+  width: min(72rem, 100%);
+  height: min(82vh, 920px);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
   background: var(--color-panel);
   box-shadow: 0 24px 70px rgb(0 0 0 / 40%);
   overflow: hidden;
+}
+
+.live-preview__overlay[data-view='trace'] {
+  width: min(88rem, 100%);
+  height: min(88vh, 980px);
+}
+
+.live-preview__overlay[data-view='trace'] .live-preview,
+.live-preview__overlay[data-view='trace'] .live-preview__trace,
+.live-preview__overlay[data-view='trace'] .run-timeline__layout {
+  min-height: 0;
+  height: 100%;
+}
+
+.live-preview__overlay[data-view='trace'] .run-timeline__layout {
+  grid-template-columns: minmax(0, 1fr) clamp(14rem, 20vw, 19rem);
+}
+
+.live-preview__overlay[data-view='trace'] .run-timeline__viewport {
+  height: 100%;
+}
+
+.live-preview__overlay[data-view='trace'] .raw-inspector {
+  min-height: 0;
+  overflow: auto;
+}
+
+.live-preview__overlay[data-view='trace'] .raw-inspector pre {
+  max-height: none;
 }
 
 .live-preview__overlay:focus-visible {

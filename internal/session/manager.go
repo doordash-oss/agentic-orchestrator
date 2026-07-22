@@ -57,6 +57,19 @@ type SDKEventMsg struct {
 	RecordCount int
 }
 
+// SessionStartedMsg signals that a session has been registered and is visible
+// through the session list/read APIs.
+//
+// Consumers SHOULD read FeatureID and Phase directly. Never re-derive
+// identity from SessionID — see SDKEventMsg for rationale.
+type SessionStartedMsg struct {
+	SessionID string
+	FeatureID string
+	Phase     feature.Phase
+	StartedAt time.Time
+	Status    SessionStatus
+}
+
 // SessionDoneMsg signals that a session has ended.
 //
 // Consumers SHOULD read FeatureID and Phase directly. Never re-derive
@@ -289,6 +302,25 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	}
 	m.sessions[id] = s
 	m.mu.Unlock()
+
+	if m.eventCh != nil {
+		assertEmissionIdentity(id, featureID, phase)
+		startedMsg := SessionStartedMsg{
+			SessionID: id,
+			FeatureID: featureID,
+			Phase:     phase,
+			StartedAt: s.StartedAt(),
+			Status:    s.Status(),
+		}
+		select {
+		case m.eventCh <- startedMsg:
+		default:
+			// SessionStartedMsg is an invalidation hint for UI discovery.
+			// Dropping it under backpressure is acceptable: output/done events
+			// and manual snapshots still converge, while StartSession remains
+			// independent of dashboard consumers.
+		}
+	}
 
 	// Monitor for completion
 	go func() {

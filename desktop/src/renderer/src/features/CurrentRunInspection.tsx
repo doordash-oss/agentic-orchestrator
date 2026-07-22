@@ -32,6 +32,7 @@ interface CurrentRunInspectionProps {
   currentPhase: string;
   currentRoadmapPhase?: number;
   reviewGate: ReviewGateView;
+  waitReason?: string;
   /** Only open live SSE while the run is actually streaming. */
   shouldStream?: boolean;
 }
@@ -80,6 +81,7 @@ export function CurrentRunInspection({
   currentPhase,
   currentRoadmapPhase,
   reviewGate,
+  waitReason,
   shouldStream = true,
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
@@ -199,6 +201,7 @@ export function CurrentRunInspection({
               view={view}
               selectedId={live.selectedId}
               selectSession={live.selectSession}
+              waitReason={waitReason}
             />
           </div>
           {preview !== null ? (
@@ -291,6 +294,7 @@ export function CurrentRunInspection({
           selectedId={live.selectedId}
           selectSession={live.selectSession}
           preview={preview}
+          waitReason={waitReason}
         />
       ) : null}
     </section>
@@ -364,12 +368,21 @@ function TranscriptStage({
   view,
   selectedId,
   selectSession,
+  waitReason,
 }: {
   stage: TranscriptStageModel;
   view: PreviewView;
   selectedId: string | null;
   selectSession(id: string): void;
+  waitReason?: string;
 }): React.ReactElement {
+  const emptyState =
+    stage.cohort.length === 0 && waitReason !== undefined && waitReason.trim() !== '' ? (
+      <p className="setup-step__empty">{waitReason}</p>
+    ) : (
+      <p className="setup-step__empty">Waiting for the agent to respond…</p>
+    );
+
   return (
     <div className="live-preview">
       {stage.cohort.length > 1 ? (
@@ -402,7 +415,7 @@ function TranscriptStage({
           waiting={stage.waiting}
           idleLabel={IDLE_ACTIVITY_LABEL}
           assistantName={stage.assistantName}
-          emptyState={<p className="setup-step__empty">Waiting for the agent to respond…</p>}
+          emptyState={emptyState}
         />
       ) : (
         <div className="live-preview__trace">
@@ -440,6 +453,7 @@ function LivePreviewOverlay({
   selectedId,
   selectSession,
   preview,
+  waitReason,
 }: {
   onClose(): void;
   stage: TranscriptStageModel;
@@ -448,6 +462,7 @@ function LivePreviewOverlay({
   selectedId: string | null;
   selectSession(id: string): void;
   preview: LivePreviewView | null;
+  waitReason?: string;
 }): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalDismiss(dialogRef, onClose);
@@ -459,6 +474,7 @@ function LivePreviewOverlay({
         aria-modal="true"
         aria-label="Live agent preview"
         className="live-preview__overlay"
+        data-view={view}
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
@@ -491,6 +507,7 @@ function LivePreviewOverlay({
           view={view}
           selectedId={selectedId}
           selectSession={selectSession}
+          waitReason={waitReason}
         />
         {preview !== null ? (
           <footer className="live-preview__overlay-footer">

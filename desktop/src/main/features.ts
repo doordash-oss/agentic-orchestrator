@@ -452,6 +452,9 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.description === undefined || feature.description === ''
       ? {}
       : { description: feature.description }),
+    ...(feature.wait_reason === undefined || feature.wait_reason === ''
+      ? {}
+      : { waitReason: redactText(feature.wait_reason) }),
     repos: feature.repos,
     createdAt: feature.created_at,
     activeRun: feature.active_run,

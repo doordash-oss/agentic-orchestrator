@@ -205,6 +205,35 @@ describe('CurrentRunInspection', () => {
     expect(screen.getByText('Working')).toBeVisible();
   });
 
+  it('shows the durable wait reason when no session exists for the current run', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Building knowledge base',
+      contextPercentage: -1,
+      totalSeconds: 0,
+      totalUsd: 0,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="KnowledgeBase"
+        reviewGate={REVIEW_GATE}
+        waitReason='Waiting for KB build on repo "repo-a" by feature "Other feature"'
+      />,
+    );
+
+    expect(
+      await screen.findByText('Waiting for KB build on repo "repo-a" by feature "Other feature"'),
+    ).toBeVisible();
+    expect(screen.queryByText('Waiting for the agent to respond…')).not.toBeInTheDocument();
+  });
+
   it('merges a streamed record into the correct session without touching the selected view', async () => {
     const user = userEvent.setup();
     const mock = renderCohort();

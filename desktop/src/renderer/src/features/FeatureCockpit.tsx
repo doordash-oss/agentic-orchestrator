@@ -1373,6 +1373,7 @@ export function FeatureCockpit({
                       currentPhase={snapshot.currentPhase}
                       currentRoadmapPhase={snapshot.currentRoadmapPhase}
                       reviewGate={snapshot.reviewGate}
+                      waitReason={snapshot.waitReason}
                       shouldStream={stopAction !== undefined}
                     />
                   ) : null}

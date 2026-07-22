@@ -422,6 +422,7 @@ export type ServerNeedUserInputGateDetail = z.output<typeof ServerNeedUserInputG
 
 export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   description: z.string().optional(),
+  wait_reason: z.string().optional(),
   pipeline: z.string().optional(),
   active_run_detail: z
     .object({

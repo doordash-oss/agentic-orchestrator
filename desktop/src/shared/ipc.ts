@@ -733,6 +733,7 @@ export const FeatureSnapshotSchema = z.strictObject({
   currentPhase: z.string(),
   pipeline: z.string().optional(),
   description: z.string().optional(),
+  waitReason: z.string().optional(),
   repos: z.array(z.string()),
   createdAt: z.string(),
   activeRun: z.number().int().nonnegative(),

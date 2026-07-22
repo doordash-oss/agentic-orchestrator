@@ -3533,6 +3533,8 @@ components:
               type: string
             summary:
               type: string
+            wait_reason:
+              type: string
             pipeline:
               type: string
             models:

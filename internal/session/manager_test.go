@@ -60,10 +60,12 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	}
 
 	// Drain events in a separate goroutine. Assert FeatureID/Phase are
-	// populated on every SDKEventMsg and on the SessionDoneMsg so the desktop app
+	// populated on every session lifecycle and SDK event so the desktop app
 	// never needs to reverse-engineer identity from SessionID.
 	var received atomic.Int64
 	var badEvents atomic.Int64
+	var startedFeatureID atomic.Value
+	var startedPhase atomic.Value
 	var doneFeatureID atomic.Value
 	var donePhase atomic.Value
 	doneCh := make(chan struct{})
@@ -78,6 +80,9 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 					return
 				}
 				switch v := evt.(type) {
+				case SessionStartedMsg:
+					startedFeatureID.Store(v.FeatureID)
+					startedPhase.Store(v.Phase)
 				case SDKEventMsg:
 					received.Add(1)
 					if v.FeatureID != "feat-1" || v.Phase != feature.PhaseImplement {
@@ -109,6 +114,12 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	}
 	if n := badEvents.Load(); n > 0 {
 		t.Errorf("%d SDKEventMsgs had missing/incorrect FeatureID or Phase", n)
+	}
+	if fid, _ := startedFeatureID.Load().(string); fid != "feat-1" {
+		t.Errorf("SessionStartedMsg.FeatureID = %q, want %q", fid, "feat-1")
+	}
+	if phase, _ := startedPhase.Load().(feature.Phase); phase != feature.PhaseImplement {
+		t.Errorf("SessionStartedMsg.Phase = %v, want %v", phase, feature.PhaseImplement)
 	}
 	if fid, _ := doneFeatureID.Load().(string); fid != "feat-1" {
 		t.Errorf("SessionDoneMsg.FeatureID = %q, want %q", fid, "feat-1")

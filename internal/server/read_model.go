@@ -117,6 +117,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 	detail := featureDetailFromSummary(summarizeFeature(f))
 	detail.Description = SafeDisplayText(f.Description, 500)
 	detail.Summary = SafeDisplayText(f.Summary, 500)
+	detail.WaitReason = SafeDisplayText(f.KBWaitMessage, 240)
 	detail.Pipeline = string(f.Pipeline)
 	detail.Models = f.Models
 	autoReviewEnabled, autoReviewSource := feature.ResolveAutomaticReview(

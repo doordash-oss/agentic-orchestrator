@@ -1295,6 +1295,9 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 			_ = o.deps.Sessions.StopSession(s.ID())
 		}
 	}
+	if getErr == nil {
+		o.releaseKBLocksForFeature(f)
+	}
 
 	// Clear pending help/permission requests.
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
@@ -2164,11 +2167,45 @@ func (o *Orchestrator) StopFeatureSessions(featureID string) {
 	}
 }
 
+func (o *Orchestrator) releaseKBLocksForFeature(f *feature.Feature) {
+	if f == nil {
+		return
+	}
+	baseDir := o.stateDir()
+	if baseDir == "" {
+		return
+	}
+	released := false
+	for _, repo := range f.Repos {
+		if repo.Name == "" {
+			continue
+		}
+		kbDir := agent.KBStateDir(baseDir, repo.Name)
+		didRelease, err := agent.ReleaseKBLockIfOwned(kbDir, f.ID)
+		if err != nil {
+			o.emitEvent(ports.Event{
+				Type:      ports.FeatureFailed,
+				FeatureID: f.ID,
+				Message:   fmt.Sprintf("KB lock cleanup failed for repo %s: %v", repo.Name, err),
+			})
+			continue
+		}
+		released = released || didRelease
+	}
+	if released {
+		o.wakeKBWaiters(f.ID)
+	}
+}
+
 // Delete stops any active sessions for the feature and removes it via the
 // lifecycle. Synchronous (caller learns the outcome via the returned error);
 // no ports.Event is emitted because deletion is synchronously acknowledged.
 func (o *Orchestrator) Delete(featureID string) error {
+	f, getErr := o.deps.Lifecycle.Get(featureID)
 	o.StopFeatureSessions(featureID)
+	if getErr == nil {
+		o.releaseKBLocksForFeature(f)
+	}
 	if err := o.deps.Lifecycle.Delete(featureID); err != nil {
 		return fmt.Errorf("deleting feature: %w", err)
 	}

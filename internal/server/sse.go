@@ -488,6 +488,8 @@ func eventDTOFromRuntime(msg interface{}) SSEEventDTO {
 			SnapshotRequired: false,
 			RecordCount:      ev.RecordCount,
 		}
+	case session.SessionStartedMsg:
+		return snapshotRequiredEventDTO(sseEventSessionUpdated, ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
 	case session.SessionDoneMsg:
 		return snapshotRequiredEventDTO(sseEventSessionUpdated, ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
 	default:

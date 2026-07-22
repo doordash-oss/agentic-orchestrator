@@ -1266,6 +1266,7 @@ type FeatureDetail struct {
 	Summary           string               `json:"summary,omitempty"`
 	Timing            Timing               `json:"timing"`
 	VerificationItems []VerificationItem   `json:"verification_items,omitempty"`
+	WaitReason        string               `json:"wait_reason,omitempty"`
 	Warnings          []Warning            `json:"warnings,omitempty"`
 }
 

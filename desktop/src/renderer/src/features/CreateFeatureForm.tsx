@@ -520,18 +520,24 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
       onSubmit={submit}
     >
       <nav className="creation-wizard__spine" aria-label="Creation steps">
-        {STEPS.map((step, index) => (
-          <button
-            key={step}
-            type="button"
-            aria-current={index === stepIndex ? 'step' : undefined}
-            disabled={index > stepIndex}
-            onClick={() => setStepIndex(index)}
-          >
-            <span>{index + 1}</span>
-            {step}
-          </button>
-        ))}
+        {STEPS.map((step, index) => {
+          const state = index < stepIndex ? 'done' : index === stepIndex ? 'current' : 'upcoming';
+          return (
+            <button
+              key={step}
+              type="button"
+              data-state={state}
+              aria-current={index === stepIndex ? 'step' : undefined}
+              disabled={index > stepIndex}
+              onClick={() => setStepIndex(index)}
+            >
+              <span className="creation-wizard__step-marker" aria-hidden="true">
+                {state === 'done' ? '✓' : index + 1}
+              </span>
+              <span className="creation-wizard__step-label">{step}</span>
+            </button>
+          );
+        })}
       </nav>
       {formError !== null ? (
         <div ref={formErrorRef} tabIndex={-1} role="alert" className="create-form__error">
@@ -865,39 +871,42 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
         <section className="creation-wizard__panel" aria-labelledby="creation-review">
           <p className="home-surface__eyebrow">04 / Review</p>
           <h2 id="creation-review">Review the run contract</h2>
-          <div className="review-controls">
-            <label>
-              Risk
-              <select
-                value={riskLevel}
-                onChange={(e) => setRiskLevel(e.target.value as typeof riskLevel)}
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </label>
-            <label>
-              Inquireness
-              <select
-                value={inquireness}
-                onChange={(e) => setInquireness(e.target.value as typeof inquireness)}
-              >
-                <option value="none">None</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
+          <div className="review-knobs">
+            <div className="review-controls">
+              <label>
+                Risk
+                <select
+                  value={riskLevel}
+                  onChange={(e) => setRiskLevel(e.target.value as typeof riskLevel)}
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+              <label>
+                Inquireness
+                <select
+                  value={inquireness}
+                  onChange={(e) => setInquireness(e.target.value as typeof inquireness)}
+                >
+                  <option value="none">None</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
+            </div>
+            <label className="form-field">
+              <span className="form-field__label">Exit criteria</span>
+              <textarea
+                value={exitCriteria}
+                maxLength={4000}
+                rows={3}
+                placeholder="What must be true for this run to be considered done?"
+                onChange={(event) => setExitCriteria(event.target.value)}
+              />
             </label>
           </div>
-          <label className="form-field">
-            <span className="form-field__label">Exit criteria</span>
-            <textarea
-              value={exitCriteria}
-              maxLength={4000}
-              rows={3}
-              onChange={(event) => setExitCriteria(event.target.value)}
-            />
-          </label>
           <section className="review-contract" aria-label="Models and checkpoints">
             <fieldset className="config-editor__group">
               <legend className="config-editor__group-title">Models</legend>

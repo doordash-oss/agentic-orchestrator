@@ -55,6 +55,10 @@ test('changing Settings workspace inquireness keeps the packaged renderer alive'
 
     await expect(handle.page.getByRole('heading', { name: 'Settings' })).toBeVisible();
     await expect(defaultsEditor).toBeVisible();
+    // Focusing the segment's hidden radio must not scroll the document: the
+    // shell is 100vh, so any document scroll paints a blank window while
+    // DOM-level visibility assertions still pass.
+    expect(await handle.page.evaluate(() => document.scrollingElement?.scrollTop ?? 0)).toBe(0);
     await expect(defaultsEditor.getByRole('radio', { name: targetLabel })).toBeChecked();
     const save = defaultsEditor.getByRole('button', { name: 'Save changes' });
     await expect(save).toBeEnabled();

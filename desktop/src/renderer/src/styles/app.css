@@ -2050,7 +2050,7 @@ body {
   text-transform: uppercase;
 }
 .creation-flow {
-  width: min(680px, 100%);
+  width: min(880px, 100%);
   margin: 0 auto;
 }
 .creation-flow__header {
@@ -2081,34 +2081,75 @@ body {
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--color-panel);
-  font: 600 12px var(--font-mono);
 }
 
 .creation-wizard__spine button {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
+  gap: var(--space-3);
   min-width: 0;
-  padding: 0.8rem 1rem;
+  padding: var(--space-3) var(--space-4);
   border: 0;
   border-right: 1px solid var(--color-hairline);
   color: var(--color-muted);
   background: transparent;
   text-align: left;
-  font: inherit;
+  font: 600 12px var(--font-mono);
+  letter-spacing: 0.04em;
   cursor: pointer;
 }
 
 .creation-wizard__spine button:last-child {
   border-right: 0;
 }
-.creation-wizard__spine button[aria-current='step'] {
+.creation-wizard__spine button:disabled {
+  cursor: default;
+}
+.creation-wizard__spine button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Numbered node: quiet for upcoming steps, a filled signal disc for the
+   current step, a signal tick once a step is behind you. */
+.creation-wizard__step-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 50%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-muted);
+}
+.creation-wizard__step-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creation-wizard__spine button:not(:disabled):hover .creation-wizard__step-marker {
+  border-color: var(--color-signal);
+  color: var(--color-signal);
+}
+.creation-wizard__spine button[data-state='done'] {
+  color: var(--color-text);
+}
+.creation-wizard__spine button[data-state='done'] .creation-wizard__step-marker {
+  border-color: var(--color-signal);
+  color: var(--color-signal);
+}
+.creation-wizard__spine button[data-state='current'] {
   color: var(--color-text);
   background: color-mix(in srgb, var(--color-signal) 12%, var(--color-panel));
 }
-.creation-wizard__spine button span {
-  font-family: var(--font-mono);
-  color: var(--color-signal);
+.creation-wizard__spine button[data-state='current'] .creation-wizard__step-marker {
+  border-color: var(--color-signal);
+  background: var(--color-signal);
+  color: var(--color-bg);
 }
 .creation-wizard__panel {
   min-height: 30rem;
@@ -2347,52 +2388,74 @@ body {
   padding: 0.6rem 0;
   color: var(--color-muted);
 }
-.review-controls {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-.review-contract {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  margin: 1rem 0;
-}
-.review-contract > div,
-.review-contract > fieldset {
-  min-width: 0;
-  margin: 0;
-  padding: 0.8rem;
+/* Contract knobs (Risk / Inquireness / Exit criteria) share one quiet panel;
+   the two selects sit side by side and collapse to one column when narrow. */
+.review-knobs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
+  background: var(--color-panel);
 }
-.review-contract h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.85rem;
-}
-.review-contract ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.review-contract li {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.8rem;
+.review-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
 }
 .review-controls label {
   display: grid;
-  gap: 0.4rem;
-  font-weight: 650;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 13px;
 }
 .review-controls select,
-.creation-wizard textarea {
-  padding: 0.7rem;
+.review-knobs textarea {
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
   color: var(--color-text);
-  background: var(--color-panel);
+  background: var(--color-bg);
+  font: inherit;
+  font-size: 14px;
+}
+.review-controls select:focus-visible,
+.review-knobs textarea:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0;
+  border-color: var(--color-signal);
+}
+
+/* Models and Checkpoints as equal panels; each keeps a 300px floor and drops
+   to a single column before it can squeeze a control. */
+.review-contract {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-4);
+  margin: var(--space-4) 0 0;
+}
+.review-contract > fieldset {
+  min-width: 0;
+  margin: 0;
+}
+/* In the wizard, stack each model picker's label/hint above a full-width
+   select so no model name is ever clipped, whatever the panel width. */
+.review-contract .config-editor__row {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    'label'
+    'hint'
+    'control';
+  row-gap: var(--space-1);
+  align-items: stretch;
+}
+.review-contract .config-editor__row-label {
+  align-self: start;
+}
+.review-contract .config-editor__select {
+  margin-top: var(--space-1);
 }
 
 .directory-browser {
@@ -2420,10 +2483,13 @@ body {
 }
 .creation-summary {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 1px;
   margin-top: 1.5rem;
   padding: 1px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
   background: var(--color-hairline);
 }
 .creation-summary div {
@@ -2444,18 +2510,11 @@ body {
 
 @media (max-width: 760px) {
   .creation-wizard__spine button {
-    justify-content: center;
-    padding-inline: 0.45rem;
-    font-size: 0.76rem;
+    gap: var(--space-2);
+    padding-inline: var(--space-2);
+    font-size: 0.72rem;
   }
-  .pipeline-grid,
-  .creation-summary {
-    grid-template-columns: 1fr;
-  }
-  .review-controls {
-    grid-template-columns: 1fr;
-  }
-  .review-contract {
+  .pipeline-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -8018,6 +8077,9 @@ body {
 }
 
 .config-editor__segment {
+  /* Containing block for the hidden radio; without it the absolute input
+     overflows the document and focusing it scrolls the app shell away. */
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;

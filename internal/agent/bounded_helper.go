@@ -147,15 +147,13 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 	if err != nil {
 		return nil, fmt.Errorf("running bounded helper: building session: %w", err)
 	}
-	if sessOpts == nil {
-		sessOpts = &ports.SessionOpts{}
-	}
 	if cfg.EffectiveEffort != "" {
+		if sessOpts == nil {
+			sessOpts = &ports.SessionOpts{}
+		}
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
 	}
-	sessOpts.RunNumber = cfg.ParentSpanCtx.RunNumber
-
 	return pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
 		sessionID:        cfg.SessionID,
 		featureID:        cfg.FeatureID,
@@ -207,6 +205,14 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 	label := cfg.label
 	if label == "" {
 		label = "bounded helper"
+	}
+	// Stamp the run number so helper sessions appear in run-scoped session
+	// lists (the desktop live preview filters on it).
+	if cfg.sessOpts == nil {
+		cfg.sessOpts = &ports.SessionOpts{}
+	}
+	if cfg.sessOpts.RunNumber == 0 {
+		cfg.sessOpts.RunNumber = cfg.parentSpanCtx.RunNumber
 	}
 	if cfg.phaseCompleteDir != "" {
 		// A helper with phase_complete semantics may end its turn while its

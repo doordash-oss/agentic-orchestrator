@@ -403,6 +403,51 @@ describe('FeatureService.getFeature', () => {
     ]);
   });
 
+  it('maps roadmap phase, total, iteration, and phase status from the active run detail', async () => {
+    const body = detailBody({
+      status: 'Implementing',
+      current_phase: 'Implement',
+      active_run_detail: {
+        run_number: 1,
+        artifact_count: 0,
+        roadmap_phase: 2,
+        roadmap_total: 5,
+        iteration: 3,
+        phase_status: 'implementing',
+      },
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+
+    await expect(service.getFeature('abcd1234ef567890')).resolves.toMatchObject({
+      currentRoadmapPhase: 2,
+      totalRoadmapPhases: 5,
+      currentIteration: 3,
+      phaseStatus: 'implementing',
+    });
+  });
+
+  it('falls back to feature progress when the active run detail omits roadmap fields', async () => {
+    const body = detailBody({
+      status: 'Implementing',
+      current_phase: 'Implement',
+      active_run_detail: { run_number: 1, artifact_count: 0 },
+      progress: {
+        current_iteration: 4,
+        current_roadmap_phase: 1,
+        total_roadmap_phases: 3,
+        current_phase_status: 'reviewing',
+      },
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+
+    await expect(service.getFeature('abcd1234ef567890')).resolves.toMatchObject({
+      currentRoadmapPhase: 1,
+      totalRoadmapPhases: 3,
+      currentIteration: 4,
+      phaseStatus: 'reviewing',
+    });
+  });
+
   it('preserves implementation review gate and axis status', async () => {
     const body = detailBody({
       review_gate: {

@@ -171,9 +171,19 @@ describe('CurrentRunInspection', () => {
         .map((button) => button.textContent),
     ).toEqual(['inquire', 'research', 'design', 'phase-plan', 'phase-2-plan', 'phase-10-plan']);
     await user.click(screen.getByRole('button', { name: 'Open artifact phase-plan' }));
-    expect(await screen.findByLabelText('Current run artifact content')).toHaveTextContent(
-      '# Current artifact',
-    );
+    const artifact = await screen.findByLabelText('Current run artifact content');
+    expect(artifact).toHaveTextContent('Current artifact');
+    expect(artifact.querySelector('h1')).toHaveTextContent('Current artifact');
+
+    await user.click(screen.getByRole('button', { name: 'Enlarge artifact' }));
+    expect(screen.getByRole('dialog', { name: 'Expanded artifact phase-plan' })).toBeVisible();
+    expect(
+      screen.getByLabelText('Expanded artifact content').querySelector('h1'),
+    ).toHaveTextContent('Current artifact');
+    await user.click(screen.getByRole('button', { name: 'Exit enlarged artifact' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Expanded artifact phase-plan' }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Open session log' }));
     expect(await screen.findByLabelText('Current run log content')).toHaveTextContent(
@@ -183,6 +193,81 @@ describe('CurrentRunInspection', () => {
     expect(mock.api.getRunArtifactContent).toHaveBeenCalledWith(
       expect.objectContaining({ artifactId: 'phase-plan', limit: 64 * 1024 }),
     );
+  });
+
+  it('shows the roadmap gauge with phase, total, and iteration during implementation', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running implementation',
+      contextPercentage: 42,
+      totalSeconds: 73,
+      totalUsd: 0.12,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        currentRoadmapPhase={2}
+        totalRoadmapPhases={5}
+        currentIteration={3}
+        phaseStatus="implementing"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    const gauge = await screen.findByRole('region', {
+      name: 'Roadmap progress: phase 2 of 5 — Implementing · Iteration 3',
+    });
+    expect(gauge).toHaveTextContent('Phase 2 of 5');
+    expect(gauge).toHaveTextContent('Implementing · Iteration 3');
+    const segments = gauge.querySelectorAll('.roadmap-gauge__segment');
+    expect(segments).toHaveLength(5);
+    expect(segments[0]).toHaveAttribute('data-state', 'done');
+    expect(segments[1]).toHaveAttribute('data-state', 'active');
+    expect(segments[2]).toHaveAttribute('data-state', 'upcoming');
+  });
+
+  it('labels the roadmap gauge as reviewing while the implementation gate runs', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running implementation',
+      contextPercentage: 42,
+      totalSeconds: 73,
+      totalUsd: 0.12,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        currentRoadmapPhase={4}
+        totalRoadmapPhases={4}
+        currentIteration={2}
+        phaseStatus="reviewing"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    const gauge = await screen.findByRole('region', { name: /Roadmap progress/ });
+    expect(gauge).toHaveTextContent('Phase 4 of 4');
+    expect(gauge).toHaveTextContent('Reviewing · Iteration 2');
+  });
+
+  it('hides the roadmap gauge before the roadmap exists', async () => {
+    renderCohort();
+    await screen.findByText('Security review underway.');
+    expect(screen.queryByRole('region', { name: /Roadmap progress/ })).not.toBeInTheDocument();
   });
 
   it('renders one tab per cohort agent and switches transcripts in isolation', async () => {
@@ -203,6 +288,112 @@ describe('CurrentRunInspection', () => {
     renderCohort();
     expect(await screen.findByText('Security review underway.')).toBeVisible();
     expect(screen.getByText('Working')).toBeVisible();
+  });
+
+  it('renders created and updated files as readable inline diffs', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running implementation',
+      contextPercentage: 42,
+      totalSeconds: 73,
+      totalUsd: 0.12,
+      transcript: [
+        {
+          index: 0,
+          role: 'system',
+          type: 'tool_progress',
+          tool: 'Write',
+          redacted: true,
+          fileChange: {
+            path: 'src/new-panel.tsx',
+            operation: 'write',
+            detail: '+export function NewPanel() {\n+  return null;\n+}',
+            addedLines: 3,
+            removedLines: 0,
+            hasDiffPatch: true,
+          },
+        },
+        {
+          index: 1,
+          role: 'system',
+          type: 'tool_progress',
+          tool: 'Edit',
+          redacted: true,
+          fileChange: {
+            path: 'src/app.tsx',
+            operation: 'update',
+            detail: '-return <OldPanel />;\n+return <NewPanel />;',
+            addedLines: 1,
+            removedLines: 1,
+            hasDiffPatch: true,
+          },
+        },
+      ],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    const created = await screen.findByRole('article', { name: 'Created src/new-panel.tsx' });
+    expect(created).toHaveTextContent('Createdsrc/new-panel.tsx+3');
+    expect(screen.getByRole('region', { name: 'Diff for src/new-panel.tsx' })).toHaveTextContent(
+      'export function NewPanel()',
+    );
+
+    const updated = screen.getByRole('article', { name: 'Updated src/app.tsx' });
+    expect(updated).toHaveTextContent('Updatedsrc/app.tsx+1−1');
+    expect(screen.getByRole('region', { name: 'Diff for src/app.tsx' })).toHaveTextContent(
+      'return <OldPanel />;',
+    );
+  });
+
+  it('shows auto-picked inquiry dialogue in the conversation preview', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running inquiry',
+      contextPercentage: 10,
+      totalSeconds: 12,
+      totalUsd: 0.01,
+      transcript: [
+        {
+          index: 0,
+          role: 'user',
+          type: 'text',
+          text: 'Redis (Recommended)',
+          locallyAppended: true,
+          autoPicked: true,
+          autoPickQuestion: 'Which cache should this use?',
+          autoPickConfidence: 0.85,
+        },
+      ],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Inquire"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    const autoPick = await screen.findByRole('article', { name: 'Auto-picked response' });
+    expect(autoPick).toHaveTextContent('Auto-picked');
+    expect(autoPick).toHaveTextContent('Which cache should this use?');
+    expect(autoPick).toHaveTextContent('Redis (Recommended)');
+    expect(autoPick).toHaveTextContent('85% confidence');
   });
 
   it('shows the durable wait reason when no session exists for the current run', async () => {

@@ -74,6 +74,8 @@ export interface FeatureCockpitProps {
   refreshAttention(): Promise<AttentionItem[]>;
   attentionDrafts: AttentionDrafts;
   setAttentionDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
+  attentionPreviewRequest?: { requestId: number; attentionId: string } | null;
+  onAttentionPreviewClose?(): void;
   /** Selected sealed run number for archive mode; null/0 means current run. */
   selectedRunNumber?: number | null;
   /** Persist a new selected run number (or null to return to current). */
@@ -812,6 +814,8 @@ export function FeatureCockpit({
   refreshAttention,
   attentionDrafts,
   setAttentionDrafts,
+  attentionPreviewRequest = null,
+  onAttentionPreviewClose,
   selectedRunNumber,
   onSelectRun,
 }: FeatureCockpitProps) {
@@ -841,7 +845,6 @@ export function FeatureCockpit({
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
   const stopButtonRef = useRef<HTMLButtonElement>(null);
-  const attentionRegionRef = useRef<HTMLElement>(null);
   const inspectorButtonRef = useRef<HTMLButtonElement>(null);
   const onLoadedNameRef = useRef(onLoadedName);
   onLoadedNameRef.current = onLoadedName;
@@ -1172,6 +1175,35 @@ export function FeatureCockpit({
   const visibleAttentionItems = attentionItems.filter(
     (item) => !(hasPendingReview && item.kind === 'review'),
   );
+  const previewAttentionItem =
+    attentionPreviewRequest === null
+      ? undefined
+      : visibleAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
+
+  const submitAttention = async (
+    item: AttentionItem,
+    action: Parameters<typeof runAttentionSubmit>[0],
+    options?: Parameters<typeof runAttentionSubmit>[2],
+  ) => {
+    if (attentionBusy !== null) return;
+    setAttentionBusy(item.id);
+    try {
+      const { notice } = await runAttentionSubmit(
+        action,
+        async () => {
+          const latest = await refreshAttention();
+          await load({ silent: true });
+          return latest;
+        },
+        options,
+      );
+      setAnnouncement(notice);
+    } catch (error) {
+      setAnnouncement(attentionErrorMessage(error));
+    } finally {
+      setAttentionBusy(null);
+    }
+  };
 
   const openHistory = () => {
     void window.agentico
@@ -1312,69 +1344,36 @@ export function FeatureCockpit({
                       onResolved={() => load({ silent: true })}
                     />
                   ) : null}
-                  {visibleAttentionItems.length > 0 ? (
-                    <section
-                      ref={attentionRegionRef}
-                      className="cockpit__attention"
-                      aria-label="Feature attention"
-                      tabIndex={-1}
-                    >
-                      <h3>Blocking input</h3>
-                      {visibleAttentionItems.map((item) => (
-                        <AttentionDetail
-                          key={`${item.kind}:${item.id}`}
-                          item={item}
-                          busy={attentionBusy === item.id}
-                          drafts={attentionDrafts}
-                          setDrafts={setAttentionDrafts}
-                          saveDraft={(action, options) =>
-                            saveAttentionDraft(item.id, action, options)
-                          }
-                          submit={async (action, options) => {
-                            if (attentionBusy !== null) return;
-                            const invoker =
-                              document.activeElement instanceof HTMLElement
-                                ? document.activeElement
-                                : null;
-                            setAttentionBusy(item.id);
-                            try {
-                              const { notice } = await runAttentionSubmit(
-                                action,
-                                async () => {
-                                  const latest = await refreshAttention();
-                                  await load({ silent: true });
-                                  return latest;
-                                },
-                                options,
-                              );
-                              setAnnouncement(notice);
-                            } catch (error) {
-                              setAnnouncement(attentionErrorMessage(error));
-                            } finally {
-                              setAttentionBusy(null);
-                              requestAnimationFrame(() => {
-                                if (invoker !== null && document.body.contains(invoker)) {
-                                  invoker.focus();
-                                } else {
-                                  attentionRegionRef.current?.focus();
-                                }
-                              });
-                            }
-                          }}
-                        />
-                      ))}
-                    </section>
-                  ) : null}
-
                   {showsRun(snapshot) && !hasPendingReview ? (
                     <CurrentRunInspection
                       featureId={featureId}
                       runNumber={snapshot.activeRun}
                       currentPhase={snapshot.currentPhase}
                       currentRoadmapPhase={snapshot.currentRoadmapPhase}
+                      totalRoadmapPhases={snapshot.totalRoadmapPhases}
+                      currentIteration={snapshot.currentIteration}
+                      phaseStatus={snapshot.phaseStatus}
                       reviewGate={snapshot.reviewGate}
                       waitReason={snapshot.waitReason}
                       shouldStream={stopAction !== undefined}
+                      attentionRequestId={attentionPreviewRequest?.requestId}
+                      onAttentionPreviewClose={onAttentionPreviewClose}
+                      attentionFooter={
+                        previewAttentionItem === undefined ? undefined : (
+                          <AttentionDetail
+                            item={previewAttentionItem}
+                            busy={attentionBusy === previewAttentionItem.id}
+                            drafts={attentionDrafts}
+                            setDrafts={setAttentionDrafts}
+                            saveDraft={(action, options) =>
+                              saveAttentionDraft(previewAttentionItem.id, action, options)
+                            }
+                            submit={(action, options) =>
+                              void submitAttention(previewAttentionItem, action, options)
+                            }
+                          />
+                        )
+                      }
                     />
                   ) : null}
 
@@ -1504,10 +1503,7 @@ export function FeatureCockpit({
                   snapshot={snapshot}
                   onComplete={() => load({ silent: true })}
                   attentionItems={attentionItems}
-                  onOpenGate={() => {
-                    setCyclesDialog(false);
-                    attentionRegionRef.current?.focus();
-                  }}
+                  onOpenGate={() => setCyclesDialog(false)}
                 />
               </aside>
             </div>

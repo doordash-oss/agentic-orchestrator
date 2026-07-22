@@ -368,7 +368,12 @@ export const ServerFeatureSummarySchema = z.object({
   created_at: z.string(),
   active_run: z.number().int().nonnegative(),
   run_count: z.number().int().nonnegative(),
-  progress: z.object({ current_phase_status: z.string().optional() }),
+  progress: z.object({
+    current_phase_status: z.string().optional(),
+    current_iteration: z.number().int().nonnegative().optional(),
+    current_roadmap_phase: z.number().int().nonnegative().optional(),
+    total_roadmap_phases: z.number().int().nonnegative().optional(),
+  }),
   warnings: z
     .array(z.object({ code: z.string(), message: z.string() }))
     .max(100)
@@ -429,6 +434,8 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
       setup: ServerSetupSchema.optional(),
       roadmap_phase: z.number().int().nonnegative().optional(),
       roadmap_total: z.number().int().nonnegative().optional(),
+      iteration: z.number().int().nonnegative().optional(),
+      phase_status: z.string().optional(),
     })
     .optional(),
   actions: z.array(ServerActionSchema),

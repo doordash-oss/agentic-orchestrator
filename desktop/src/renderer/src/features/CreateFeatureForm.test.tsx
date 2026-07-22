@@ -125,6 +125,7 @@ describe('CreateFeatureForm repository-first contract', () => {
           new File(['i'], 'pasted.png', { type: 'image/png' }),
           new File(['d'], 'notes.pdf', { type: 'application/pdf' }),
         ],
+        items: [{ type: 'image/png' }],
       },
     });
     expect(mock.api.importDroppedCreationFiles).toHaveBeenCalledWith('image', expect.any(Array));
@@ -134,6 +135,23 @@ describe('CreateFeatureForm repository-first contract', () => {
     );
     expect(screen.getByText(/pasted\.png/)).toBeVisible();
     expect(screen.getByText(/notes\.pdf/)).toBeVisible();
+  });
+
+  it('materializes pasted clipboard bitmaps that have no filesystem path', async () => {
+    const mock = installAgenticoMock();
+    mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
+    const { user } = await renderForm(mock);
+    await reachWhat(user);
+
+    fireEvent.paste(screen.getByLabelText('Description'), {
+      clipboardData: {
+        files: [new File(['image'], 'image.png', { type: 'image/png' })],
+        items: [{ type: 'image/png' }],
+      },
+    });
+
+    expect(mock.api.readClipboardImage).toHaveBeenCalledOnce();
+    expect(await screen.findByText(/clipboard-image\.png/)).toBeVisible();
   });
 
   it('offers @ file mentions scoped to the selected repositories', async () => {

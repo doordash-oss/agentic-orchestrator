@@ -244,7 +244,8 @@ type HelpAnswerRequest struct {
 }
 
 type ChatStartRequest struct {
-	Message string `json:"message"`
+	Message string   `json:"message"`
+	Images  []string `json:"images,omitempty"`
 }
 
 type RuntimeConfigMutationRequest struct {

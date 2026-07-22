@@ -451,7 +451,7 @@ describe('FeatureCockpit convergence', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('saves inline gate drafts without disabling an immediate abort click', async () => {
+  it('saves expanded-preview gate drafts without disabling an immediate abort click', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Implementing',
@@ -479,18 +479,20 @@ describe('FeatureCockpit convergence', () => {
           refreshAttention={() => Promise.resolve([gateAttention])}
           attentionDrafts={drafts}
           setAttentionDrafts={setDrafts}
+          attentionPreviewRequest={{ requestId: 1, attentionId: gateAttention.id }}
         />
       );
     }
     render(<Harness />);
     const user = userEvent.setup();
 
-    const inlineAttention = await screen.findByRole('region', { name: 'Feature attention' });
+    const preview = await screen.findByRole('dialog', { name: 'Live agent preview' });
+    const request = within(preview).getByRole('region', { name: 'Agent request' });
     await user.type(
-      within(inlineAttention).getByLabelText(/Which deployment window should implementation use/),
+      within(request).getByLabelText(/Which deployment window should implementation use/),
       'After packaged attention evidence passes.',
     );
-    await user.click(within(inlineAttention).getByRole('button', { name: 'Abort gate' }));
+    await user.click(within(request).getByRole('button', { name: 'Abort gate' }));
 
     expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
       featureId: FEATURE_ID,
@@ -506,7 +508,7 @@ describe('FeatureCockpit convergence', () => {
     await waitFor(() => expect(screen.getByText('Draft saved.')).toBeVisible());
   });
 
-  it('sends a help reply from the inline feature attention region', async () => {
+  it('sends a help reply from the expanded conversation footer', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Implementing',
@@ -536,18 +538,20 @@ describe('FeatureCockpit convergence', () => {
           }}
           attentionDrafts={drafts}
           setAttentionDrafts={setDrafts}
+          attentionPreviewRequest={{ requestId: 1, attentionId: helpAttention.id }}
         />
       );
     }
     render(<Harness />);
     const user = userEvent.setup();
 
-    const inlineAttention = await screen.findByRole('region', { name: 'Feature attention' });
+    const preview = await screen.findByRole('dialog', { name: 'Live agent preview' });
+    const request = within(preview).getByRole('region', { name: 'Agent request' });
     await user.type(
-      within(inlineAttention).getByLabelText('Help reply'),
+      within(request).getByLabelText('Help reply'),
       'Continue with the cockpit evidence path.',
     );
-    await user.click(within(inlineAttention).getByRole('button', { name: 'Send reply' }));
+    await user.click(within(request).getByRole('button', { name: 'Send reply' }));
 
     expect(mock.api.sendHelp).toHaveBeenCalledWith({
       featureId: FEATURE_ID,
@@ -555,7 +559,9 @@ describe('FeatureCockpit convergence', () => {
       message: 'Continue with the cockpit evidence path.',
     });
     await waitFor(() =>
-      expect(screen.queryByRole('region', { name: 'Feature attention' })).not.toBeInTheDocument(),
+      expect(
+        within(preview).queryByRole('region', { name: 'Agent request' }),
+      ).not.toBeInTheDocument(),
     );
   });
 });

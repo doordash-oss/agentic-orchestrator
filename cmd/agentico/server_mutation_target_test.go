@@ -634,6 +634,23 @@ func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSuba
 	assertJSONDoesNotContain(t, result, "What is running?")
 }
 
+func TestChatMessageWithImagesAddsInspectableLocalPaths(t *testing.T) {
+	got := chatMessageWithImages("What is shown?", []string{"/tmp/screenshot one.png", "/tmp/detail.png"})
+	for _, want := range []string{
+		"What is shown?",
+		"Attached images (inspect these local files):",
+		`"/tmp/screenshot one.png"`,
+		`"/tmp/detail.png"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("chatMessageWithImages() missing %q:\n%s", want, got)
+		}
+	}
+	if plain := chatMessageWithImages("No image", nil); plain != "No image" {
+		t.Fatalf("chatMessageWithImages() without images = %q, want unchanged message", plain)
+	}
+}
+
 func TestServerMutationTargetEndChatStopsOnlySingletonChat(t *testing.T) {
 	sessions := &mutationTargetSessionManager{
 		sessions: []ports.SessionView{

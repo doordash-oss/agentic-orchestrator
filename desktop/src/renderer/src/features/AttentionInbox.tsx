@@ -36,7 +36,7 @@ export interface AttentionInboxProps {
   featureLabel(featureId: string | undefined): string;
   drafts: AttentionDrafts;
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
-  onJump(featureId: string): void;
+  onJump(featureId: string, attentionId?: string): void;
   openRequest?: { id: number; attentionId?: string } | null;
 }
 
@@ -96,15 +96,26 @@ export function AttentionInbox({
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   const bell = useRef<HTMLButtonElement>(null);
   const itemButtons = useRef(new Map<string, HTMLButtonElement>());
+  const openedRequestId = useRef<number | null>(null);
 
   useEffect(() => {
     if (openRequest === null) return;
-    setOpen(true);
+    if (openedRequestId.current !== openRequest.id) {
+      openedRequestId.current = openRequest.id;
+      setOpen(true);
+    }
     if (openRequest.attentionId !== undefined) {
-      setExpanded(openRequest.attentionId);
+      const requested = items.find((item) => item.id === openRequest.attentionId);
+      setExpanded(
+        requested !== undefined &&
+          requested.kind !== 'recovery' &&
+          requested.featureId === undefined
+          ? openRequest.attentionId
+          : null,
+      );
       setPendingFocus(openRequest.attentionId);
     }
-  }, [openRequest]);
+  }, [items, openRequest]);
 
   useEffect(() => {
     if (!open) return;
@@ -258,8 +269,24 @@ export function AttentionInbox({
                     }}
                     type="button"
                     className="attention-inbox__item"
-                    aria-expanded={expanded === item.id}
-                    onClick={() => setExpanded(expanded === item.id ? null : item.id)}
+                    aria-expanded={
+                      item.kind !== 'recovery' && item.featureId === undefined
+                        ? expanded === item.id
+                        : undefined
+                    }
+                    onClick={() => {
+                      if (item.kind === 'recovery') {
+                        setOpen(false);
+                        onJump('__recovery__');
+                        return;
+                      }
+                      if (item.featureId !== undefined) {
+                        setOpen(false);
+                        onJump(item.featureId, item.kind === 'review' ? undefined : item.id);
+                        return;
+                      }
+                      setExpanded(expanded === item.id ? null : item.id);
+                    }}
                     onKeyDown={(event) => handleItemKeyDown(event, item.id, focusRelativeItem)}
                   >
                     <span className="attention-inbox__item-main">

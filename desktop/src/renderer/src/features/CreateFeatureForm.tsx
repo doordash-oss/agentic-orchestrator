@@ -255,20 +255,24 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     };
   }, [mention, repoKeys]);
 
-  const importFiles = (files: FileList | readonly File[]): void => {
+  const importFiles = (files: FileList | readonly File[]): number => {
     const list = Array.from(files);
+    let importedCount = 0;
     const photos = list.filter((file) => file.type.startsWith('image/'));
     const documents = list.filter((file) => !file.type.startsWith('image/'));
     if (photos.length > 0) {
       const imported = window.agentico.importDroppedCreationFiles('image', photos);
+      importedCount += imported.paths.length;
       setImages((items) => unique([...items, ...imported.paths]).slice(0, CREATION_IMAGE_LIMIT));
     }
     if (documents.length > 0) {
       const imported = window.agentico.importDroppedCreationFiles('attachment', documents);
+      importedCount += imported.paths.length;
       setAttachments((items) =>
         unique([...items, ...imported.paths]).slice(0, CREATION_ATTACHMENT_LIMIT),
       );
     }
+    return importedCount;
   };
 
   const pickFiles = async (kind: 'image' | 'attachment'): Promise<void> => {
@@ -368,9 +372,20 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   };
 
   const onComposerPaste = (event: ClipboardEvent): void => {
-    if (event.clipboardData.files.length === 0) return;
+    const hasImage = Array.from(event.clipboardData.items ?? []).some((item) =>
+      item.type.startsWith('image/'),
+    );
+    if (!hasImage && event.clipboardData.files.length === 0) return;
     event.preventDefault();
-    importFiles(event.clipboardData.files);
+    const importedCount = importFiles(event.clipboardData.files);
+    if (hasImage && importedCount === 0) {
+      void window.agentico
+        .readClipboardImage()
+        .then((result) =>
+          setImages((items) => unique([...items, ...result.paths]).slice(0, CREATION_IMAGE_LIMIT)),
+        )
+        .catch((err: unknown) => setFormError(parseIpcError(err)));
+    }
   };
 
   const onComposerDrop = (event: DragEvent): void => {

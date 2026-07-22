@@ -9,6 +9,7 @@ import path from 'node:path';
 import {
   BrowserWindow,
   app,
+  clipboard,
   dialog,
   ipcMain,
   nativeTheme,
@@ -295,6 +296,15 @@ if (!hasSingleInstanceLock) {
         : await dialog.showOpenDialog(options);
       return result.canceled ? [] : result.filePaths;
     };
+    const readClipboardImage = async (): Promise<{ paths: string[] }> => {
+      const image = clipboard.readImage();
+      if (image.isEmpty()) return { paths: [] };
+      const directory = path.join(app.getPath('temp'), 'agentico-clipboard');
+      await fs.promises.mkdir(directory, { recursive: true });
+      const imagePath = path.join(directory, `clipboard-${crypto.randomUUID()}.png`);
+      await fs.promises.writeFile(imagePath, image.toPNG());
+      return { paths: [imagePath] };
+    };
     const setup = new SetupService({
       transport: gateway,
       dialogs: {
@@ -409,9 +419,8 @@ if (!hasSingleInstanceLock) {
           !mainWindowAttentionFocused
         );
       },
-      route: (event) => {
+      show: () => {
         showMainWindow();
-        route(event);
       },
     });
 
@@ -773,6 +782,7 @@ if (!hasSingleInstanceLock) {
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
       getCreationDefaults: () => features.creationDefaults(),
       pickCreationFiles: (kind) => creationFiles.pickFiles(kind),
+      readClipboardImage,
       searchCreationFiles: (request) => creationFiles.search(request),
       cancelCreationFileSearch: (requestId) => creationFiles.cancelSearch(requestId),
       loadLocalReviewDraft: (request) => localDrafts.load(request),

@@ -160,7 +160,10 @@ export class SessionService {
     const response = await serverRequest(
       this.transport,
       '/api/v1/prompts/chat/start',
-      { method: 'POST', body: { message: input.message } } as ApiRequestInit,
+      {
+        method: 'POST',
+        body: { message: input.message, images: input.images ?? [] },
+      } as ApiRequestInit,
       { remedyByCode: CHAT_REMEDIES },
     );
     const raw = response as { session_id?: unknown; result?: unknown };

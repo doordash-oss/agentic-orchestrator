@@ -57,7 +57,11 @@ export function WorkspaceShell({
   refreshAttention?: () => Promise<AttentionItem[]>;
   attentionDrafts?: AttentionDrafts;
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
-  attentionJump?: string | null;
+  attentionJump?: {
+    requestId: number;
+    featureId: string;
+    attentionId?: string;
+  } | null;
   onAttentionJumpHandled?: () => void;
   routeRequest?: RoutedRequest | null;
 }) {
@@ -69,7 +73,12 @@ export function WorkspaceShell({
   const updateAttentionDrafts = setAttentionDrafts ?? setLocalAttentionDrafts;
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const newFeatureButtonRef = useRef<HTMLButtonElement | null>(null);
-  const handledAttentionJump = useRef<string | null>(null);
+  const handledAttentionJump = useRef<number | null>(null);
+  const [attentionPreviewRequest, setAttentionPreviewRequest] = useState<{
+    requestId: number;
+    featureId: string;
+    attentionId: string;
+  } | null>(null);
   const handledRouteRequest = useRef<number | null>(null);
   const listRequestRef = useRef(0);
   const [view, setView] = useState<'home' | 'create'>('home');
@@ -241,13 +250,22 @@ export function WorkspaceShell({
       handledAttentionJump.current = null;
       return;
     }
-    if (tabs === null || handledAttentionJump.current === attentionJump) return;
-    handledAttentionJump.current = attentionJump;
-    if (attentionJump === '__recovery__') {
+    if (tabs === null || handledAttentionJump.current === attentionJump.requestId) return;
+    handledAttentionJump.current = attentionJump.requestId;
+    if (attentionJump.featureId === '__recovery__') {
       persist({ ...tabs, activeFeatureId: null });
       setView('home');
     } else {
-      openFeature(attentionJump, featureLabel(attentionJump));
+      openFeature(attentionJump.featureId, featureLabel(attentionJump.featureId));
+      setAttentionPreviewRequest(
+        attentionJump.attentionId === undefined
+          ? null
+          : {
+              requestId: attentionJump.requestId,
+              featureId: attentionJump.featureId,
+              attentionId: attentionJump.attentionId,
+            },
+      );
     }
     onAttentionJumpHandled();
   }, [attentionJump, featureLabel, onAttentionJumpHandled, openFeature, persist, tabs]);
@@ -280,6 +298,7 @@ export function WorkspaceShell({
     persist({ ...tabs, activeFeatureId: null });
     setView('home');
   }, [persist, tabs]);
+  const closeAttentionPreview = useCallback(() => setAttentionPreviewRequest(null), []);
 
   useEffect(() => {
     if (tabs === null || routeRequest === null) return;
@@ -530,6 +549,10 @@ export function WorkspaceShell({
             refreshAttention={refreshAttention}
             attentionDrafts={activeAttentionDrafts}
             setAttentionDrafts={updateAttentionDrafts}
+            attentionPreviewRequest={
+              attentionPreviewRequest?.featureId === active ? attentionPreviewRequest : null
+            }
+            onAttentionPreviewClose={closeAttentionPreview}
             selectedRunNumber={
               tabs.open.find((tab) => tab.featureId === active)?.selectedRunNumber ?? null
             }

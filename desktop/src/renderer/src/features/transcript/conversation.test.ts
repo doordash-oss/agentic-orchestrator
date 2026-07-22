@@ -34,6 +34,15 @@ describe('activityLabel', () => {
     expect(activityLabel(row({ index: 0, type: 'tool_use', tool: 'Bash' }))).toBe('Using bash');
   });
 
+  it('labels redacted tool rows with the sanitized tool name', () => {
+    expect(activityLabel(row({ index: 0, type: 'tool_progress', tool: 'Bash', redacted: true }))).toBe(
+      'Using bash',
+    );
+    expect(
+      activityLabel(row({ index: 1, type: 'task_progress', redacted: true, task: { lastToolName: 'Read' } })),
+    ).toBe('Using read');
+  });
+
   it('returns a label-less activity for hidden reasoning without exposing text', () => {
     expect(
       activityLabel(row({ index: 0, type: 'thinking', text: 'secret chain of thought' })),
@@ -76,6 +85,22 @@ describe('buildConversation', () => {
     expect(items).toEqual([{ kind: 'activity', key: 'activity-0:0', labels: [] }]);
   });
 
+  it('keeps structured file changes as first-class conversation items', () => {
+    const change = {
+      path: 'src/app.ts',
+      operation: 'update',
+      detail: '-old\n+new',
+      addedLines: 1,
+      removedLines: 1,
+      hasDiffPatch: true,
+    };
+    expect(
+      buildConversation([
+        row({ index: 3, type: 'tool_progress', tool: 'Write', redacted: true, fileChange: change }),
+      ]),
+    ).toEqual([{ kind: 'file-change', key: 'file-change-3:0', change }]);
+  });
+
   it('suppresses user turns in assistant-only mode but keeps them in chat mode', () => {
     const rows = [
       row({ index: 0, role: 'user', type: 'text', text: 'do the thing' }),
@@ -84,6 +109,33 @@ describe('buildConversation', () => {
     expect(buildConversation(rows, { mode: 'chat' })).toHaveLength(2);
     expect(buildConversation(rows, { mode: 'assistant-only' })).toEqual([
       { kind: 'message', key: 'message-1:0', role: 'assistant', text: 'done' },
+    ]);
+  });
+
+  it('keeps auto-picked inquiry dialogue in assistant-only previews', () => {
+    const items = buildConversation(
+      [
+        row({
+          index: 3,
+          role: 'user',
+          type: 'text',
+          text: 'Redis (Recommended)',
+          locallyAppended: true,
+          autoPicked: true,
+          autoPickQuestion: 'Which cache?',
+          autoPickConfidence: 0.85,
+        }),
+      ],
+      { mode: 'assistant-only' },
+    );
+    expect(items).toEqual([
+      {
+        kind: 'auto-pick',
+        key: 'auto-pick-3:0',
+        question: 'Which cache?',
+        answer: 'Redis (Recommended)',
+        confidence: 0.85,
+      },
     ]);
   });
 

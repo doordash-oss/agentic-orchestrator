@@ -1357,8 +1357,9 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	if t.sessions == nil {
 		return serverruntime.ChatStartResponse{}, errors.New("session manager is not available")
 	}
+	deliveryMessage := chatMessageWithImages(message, req.Images)
 	if sess := t.sessions.GetSession(serverChatSessionID); sess != nil && sess.IsActive() {
-		if err := sess.SendUserMessage(message); err != nil {
+		if err := sess.SendUserMessage(deliveryMessage); err != nil {
 			return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
 		}
 		return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultSent}, nil
@@ -1368,7 +1369,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	}
 
 	chatSkillPath := serverChatSkillPath(t.phaseRunner.SkillsDir)
-	prompt := message
+	prompt := deliveryMessage
 	if instruction := serverChatSkillInstruction(t.phaseRunner.SkillsDir); instruction != "" {
 		prompt = instruction + "\n\n" + prompt
 	}
@@ -1404,7 +1405,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	if sessOpts == nil {
 		sessOpts = &ports.SessionOpts{}
 	}
-	sessOpts.InitialPrompt = message
+	sessOpts.InitialPrompt = deliveryMessage
 	sessOpts.Kind = ports.KindChat
 	sessOpts.TurnMode = ports.TurnModeInteractive
 	sessOpts.Label = chatName
@@ -1415,6 +1416,20 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)
 	}
 	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultStarted}, nil
+}
+
+func chatMessageWithImages(message string, images []string) string {
+	if len(images) == 0 {
+		return message
+	}
+	var prompt strings.Builder
+	prompt.WriteString(message)
+	prompt.WriteString("\n\nAttached images (inspect these local files):")
+	for _, image := range images {
+		prompt.WriteString("\n- ")
+		prompt.WriteString(strconv.Quote(image))
+	}
+	return prompt.String()
 }
 
 func (t *serverMutationTarget) EndChat() (serverruntime.ChatEndResponse, error) {

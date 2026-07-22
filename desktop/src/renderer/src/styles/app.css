@@ -351,6 +351,10 @@ body {
   width: 100%;
 }
 
+.ama-dock__attachments {
+  grid-column: 1 / -1;
+}
+
 .ama-dock__composer textarea {
   width: 100%;
   min-height: 36px;
@@ -484,6 +488,46 @@ body {
   background: color-mix(in srgb, var(--color-signal) 10%, var(--color-panel));
 }
 
+.conversation__auto-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px var(--space-3);
+  align-self: flex-end;
+  width: min(78%, 760px);
+  border-left: 3px solid var(--color-signal);
+  padding: var(--space-2) var(--space-3);
+  background: color-mix(in srgb, var(--color-signal) 7%, var(--color-panel));
+}
+
+.conversation__auto-pick-label,
+.conversation__auto-pick-confidence {
+  color: var(--color-muted);
+  font: 11px var(--font-mono);
+}
+
+.conversation__auto-pick-label {
+  color: var(--color-signal);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.conversation__auto-pick strong,
+.conversation__auto-pick p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.conversation__auto-pick p {
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.conversation__auto-pick-confidence {
+  grid-column: 2;
+  grid-row: 1;
+}
+
 .ama-dock__empty {
   display: flex;
   flex: 1;
@@ -533,6 +577,108 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation__file-change {
+  align-self: stretch;
+  width: min(100%, 880px);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--color-panel) 92%, var(--color-canvas));
+  overflow: hidden;
+}
+
+.conversation__file-change-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 38px;
+  padding: 7px var(--space-3);
+  border-bottom: 1px solid var(--color-hairline);
+  font: 12px var(--font-mono);
+}
+
+.conversation__file-change-status {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.conversation__file-change-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation__file-change-stats {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+  margin-left: auto;
+  font-weight: 700;
+}
+
+.conversation__file-change-stats [data-kind='added'] {
+  color: var(--color-success);
+}
+
+.conversation__file-change-stats [data-kind='removed'] {
+  color: var(--color-danger);
+}
+
+.conversation__diff {
+  max-height: 360px;
+  overflow: auto;
+  padding: var(--space-1) 0;
+  background: color-mix(in srgb, var(--color-canvas) 78%, black);
+  font: 12px/1.55 var(--font-mono);
+}
+
+.conversation__diff-line {
+  display: grid;
+  grid-template-columns: 28px minmax(max-content, 1fr);
+  min-width: max-content;
+  white-space: pre;
+}
+
+.conversation__diff-line[data-kind='added'] {
+  background: color-mix(in srgb, var(--color-success) 13%, transparent);
+}
+
+.conversation__diff-line[data-kind='removed'] {
+  background: color-mix(in srgb, var(--color-danger) 13%, transparent);
+}
+
+.conversation__diff-line[data-kind='meta'] {
+  color: var(--color-muted);
+  background: color-mix(in srgb, var(--color-signal) 8%, transparent);
+}
+
+.conversation__diff-marker {
+  padding-right: 8px;
+  color: var(--color-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.conversation__diff-line[data-kind='added'] .conversation__diff-marker {
+  color: var(--color-success);
+}
+
+.conversation__diff-line[data-kind='removed'] .conversation__diff-marker {
+  color: var(--color-danger);
+}
+
+.conversation__diff-line code {
+  padding-right: var(--space-3);
+  color: inherit;
+  font: inherit;
 }
 
 .conversation__thinking {
@@ -7544,6 +7690,100 @@ body {
   font-family: var(--font-mono);
 }
 
+/* --- Roadmap gauge ---------------------------------------------------------
+ * The implement-loop instrument: one segment per roadmap phase, the active
+ * segment carrying the same signal pulse as the phase-spine needle. Mirrors
+ * the TUI's "Implementing Phase 2/5 (Iteration 3)".
+ */
+
+.roadmap-gauge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+
+.roadmap-gauge__reading {
+  display: grid;
+  gap: 2px;
+  flex: none;
+}
+
+.roadmap-gauge__eyebrow {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.roadmap-gauge__phase {
+  font: 600 18px var(--font-display);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.1;
+}
+
+.roadmap-gauge__of {
+  color: var(--color-muted);
+  font-weight: 500;
+}
+
+.roadmap-gauge__track {
+  display: flex;
+  flex: 1;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 80px;
+}
+
+.roadmap-gauge__segment {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-hairline);
+}
+
+.roadmap-gauge__segment[data-state='done'] {
+  background: var(--color-success);
+}
+
+.roadmap-gauge__segment[data-state='active'] {
+  background: var(--color-signal);
+  animation: needle-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .roadmap-gauge__segment[data-state='active'] {
+    animation: none;
+  }
+}
+
+.roadmap-gauge__status {
+  margin: 0;
+  flex: none;
+  color: var(--color-signal);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .roadmap-gauge {
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .roadmap-gauge__track {
+    order: 3;
+    flex-basis: 100%;
+  }
+}
+
 /* --- Live agent preview --------------------------------------------------- */
 
 .live-preview__frame {
@@ -7805,15 +8045,38 @@ body {
 
 .live-preview__overlay-footer {
   display: flex;
+  min-height: 0;
+  flex-direction: column;
+  align-items: stretch;
+  border-top: 1px solid var(--color-hairline);
+}
+
+.live-preview__overlay-status {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--color-hairline);
 }
 
-.live-preview__overlay-footer .current-inspection__activity {
+.live-preview__overlay-status .current-inspection__activity {
   margin: 0;
+}
+
+.live-preview__attention {
+  max-height: min(42vh, 30rem);
+  overflow: auto;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--color-hairline);
+  background: color-mix(in srgb, var(--color-panel) 94%, var(--color-accent));
+}
+
+.live-preview__attention > .cockpit__eyebrow {
+  margin: 0 0 var(--space-2);
+}
+
+.live-preview__attention .attention-detail {
+  padding: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7962,6 +8225,10 @@ body {
   font-size: 12px;
 }
 
+.current-inspection__content-header > button:first-of-type {
+  margin-left: auto;
+}
+
 .current-inspection__content pre {
   max-height: 240px;
   overflow: auto;
@@ -7969,6 +8236,42 @@ body {
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.current-inspection__artifact-markdown {
+  max-height: 28rem;
+  margin-top: var(--space-3);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+}
+
+.current-inspection__artifact-overlay {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(88rem, 100%);
+  height: min(90vh, 1080px);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 40%);
+  overflow: hidden;
+}
+
+.current-inspection__artifact-overlay:focus-visible {
+  outline: none;
+}
+
+.current-inspection__artifact-overlay .live-preview__overlay-header h2 {
+  margin: var(--space-1) 0 0;
+  font: 600 1.1rem var(--font-display);
+}
+
+.current-inspection__artifact-overlay .current-inspection__artifact-markdown {
+  max-height: none;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 @media (max-width: 760px) {

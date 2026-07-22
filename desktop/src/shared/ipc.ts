@@ -63,6 +63,7 @@ export const IPC_CHANNELS = {
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
   creationDefaults: 'agentico:creation:defaults',
   creationPickFiles: 'agentico:creation:pick-files',
+  clipboardReadImage: 'agentico:clipboard:read-image',
   creationSearchFiles: 'agentico:creation:search-files',
   creationCancelFileSearch: 'agentico:creation:cancel-file-search',
   reviewDraftsLoad: 'agentico:review-drafts:load',
@@ -739,6 +740,10 @@ export const FeatureSnapshotSchema = z.strictObject({
   activeRun: z.number().int().nonnegative(),
   currentRoadmapPhase: z.number().int().nonnegative().optional(),
   totalRoadmapPhases: z.number().int().nonnegative().optional(),
+  /** Implement-loop iteration within the current roadmap phase. */
+  currentIteration: z.number().int().nonnegative().optional(),
+  /** Mid-flight phase status from the server ("implementing" | "reviewing"). */
+  phaseStatus: z.string().optional(),
   setup: FeatureSetupViewSchema.optional(),
   /** The authoritative server action catalogue (setup/start/…). */
   actions: z.array(FeatureActionViewSchema),
@@ -1454,6 +1459,7 @@ export const CHAT_SESSION_ID = '__chat__';
 
 export const ChatStartRequestSchema = z.strictObject({
   message: AttentionTextSchema.refine((value) => value.trim() !== ''),
+  images: z.array(AbsolutePathSchema).max(12).optional(),
 });
 export type ChatStartRequest = z.output<typeof ChatStartRequestSchema>;
 
@@ -2298,6 +2304,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([CreationFileKindSchema]),
     response: PickedCreationFilesSchema,
   },
+  [IPC_CHANNELS.clipboardReadImage]: {
+    request: z.tuple([]),
+    response: PickedCreationFilesSchema,
+  },
   [IPC_CHANNELS.creationSearchFiles]: {
     request: z.tuple([CreationFileSearchRequestSchema]),
     response: CreationFileSearchResultSchema,
@@ -2529,6 +2539,7 @@ export interface AgenticoApi {
   onSessionOutput(listener: (event: SessionOutputEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
+  readClipboardImage(): Promise<PickedCreationFiles>;
   importDroppedCreationFiles(kind: CreationFileKind, files: readonly File[]): PickedCreationFiles;
   searchCreationFiles(request: CreationFileSearchRequest): Promise<CreationFileSearchResult>;
   cancelCreationFileSearch(requestId: string): Promise<boolean>;

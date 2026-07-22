@@ -35,6 +35,7 @@ describe('preload surface', () => {
         'getAttention',
         'getCreationDefaults',
         'pickCreationFiles',
+        'readClipboardImage',
         'importDroppedCreationFiles',
         'searchCreationFiles',
         'cancelCreationFileSearch',

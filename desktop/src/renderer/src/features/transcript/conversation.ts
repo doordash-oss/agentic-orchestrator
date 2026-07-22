@@ -10,6 +10,18 @@ export type ConversationMode = 'chat' | 'assistant-only';
 
 export type ConversationItem =
   | { kind: 'message'; key: string; role: 'user' | 'assistant'; text: string }
+  | {
+      kind: 'auto-pick';
+      key: string;
+      question: string;
+      answer: string;
+      confidence?: number;
+    }
+  | {
+      kind: 'file-change';
+      key: string;
+      change: NonNullable<TranscriptMessage['fileChange']>;
+    }
   | { kind: 'activity'; key: string; labels: string[] };
 
 /** Stable identity for a row, unique across multi-block responses. */
@@ -58,12 +70,14 @@ function isHiddenReasoning(entry: TranscriptMessage): boolean {
 export function activityLabel(entry: TranscriptMessage): string | null {
   const type = entry.type.toLocaleLowerCase();
   if (SUPPRESSED_TYPES.includes(type)) return null;
-  if (entry.redacted === true || type.includes('think') || type.includes('reason')) return '';
 
+  // Redaction hides row text, not the server-sanitized tool/task metadata —
+  // most live tool rows arrive redacted, so label them before blanking.
   const tool = entry.tool ?? entry.task?.lastToolName;
   if (tool !== undefined && tool.trim() !== '') return `Using ${friendlyToolName(tool)}`;
   if (entry.task?.description?.trim()) return entry.task.description.trim();
   if (entry.toolCall?.summary?.trim()) return entry.toolCall.summary.trim();
+  if (entry.redacted === true || type.includes('think') || type.includes('reason')) return '';
   if (type === 'read') {
     const target = entry.text?.split(/[\\/]/).at(-1)?.trim();
     return target ? `Reading ${target}` : 'Reading workspace files';
@@ -111,8 +125,27 @@ export function buildConversation(
   }
 
   for (const entry of messages) {
+    if (entry.fileChange !== undefined && entry.fileChange.path?.trim()) {
+      items.push({
+        kind: 'file-change',
+        key: `file-change-${messageKey(entry)}`,
+        change: entry.fileChange,
+      });
+      continue;
+    }
+
     const role = entry.role.toLocaleLowerCase();
     const text = entry.text?.trim();
+    if (entry.autoPicked === true && role === 'user' && text !== undefined && text !== '') {
+      items.push({
+        kind: 'auto-pick',
+        key: `auto-pick-${messageKey(entry)}`,
+        question: entry.autoPickQuestion?.trim() || 'Agent question',
+        answer: text,
+        ...(entry.autoPickConfidence === undefined ? {} : { confidence: entry.autoPickConfidence }),
+      });
+      continue;
+    }
     const operational = isOperational(entry);
     const isMessage =
       !isHiddenReasoning(entry) &&

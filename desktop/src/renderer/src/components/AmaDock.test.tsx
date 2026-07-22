@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installAgenticoMock } from '../test/agenticoMock';
@@ -57,9 +57,30 @@ describe('AmaDock', () => {
 
     await userEvent.type(input, 'What is running?{enter}');
 
-    expect(mock.api.startChat).toHaveBeenCalledWith({ message: 'What is running?' });
+    expect(mock.api.startChat).toHaveBeenCalledWith({ message: 'What is running?', images: [] });
     expect(await screen.findByText('What is running?')).toBeVisible();
     expect(screen.getByText('Thinking through your question')).toBeVisible();
+  });
+
+  it('pastes a clipboard bitmap and submits it with the AMA message', async () => {
+    const mock = installAgenticoMock();
+    mock.api.readClipboardImage.mockResolvedValue({ paths: ['/tmp/clipboard-image.png'] });
+    renderDock();
+    const input = screen.getByRole('textbox', { name: 'Ask Agentico' });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [new File(['image'], 'image.png', { type: 'image/png' })],
+        items: [{ type: 'image/png' }],
+      },
+    });
+
+    expect(await screen.findByText('clipboard-image.png')).toBeVisible();
+    await userEvent.type(input, 'What is shown?{enter}');
+    expect(mock.api.startChat).toHaveBeenCalledWith({
+      message: 'What is shown?',
+      images: ['/tmp/clipboard-image.png'],
+    });
   });
 
   it('replaces live tool activity with the response when it arrives', async () => {

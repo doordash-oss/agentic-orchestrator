@@ -1098,6 +1098,7 @@ func startCrashResumeSession(cfg ImplementConfig, sm ports.SessionManager, build
 		sessOpts.TurnMode = ports.TurnModeInteractive
 	}
 	sessOpts.Iteration = iteration
+	sessOpts.RunNumber = cfg.Feature.ActiveRun
 	sessOpts.PermCacheScope = permScope
 	sessOpts.StderrPath = filepath.Join(iterDir, "stderr-resume.log")
 

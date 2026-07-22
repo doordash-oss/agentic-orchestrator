@@ -24,6 +24,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -160,6 +161,7 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 		EffortLevel:   llm.EffortMedium,
 		Kind:          ports.KindValidator,
 		Label:         "QA",
+		ParentSpanCtx: observe.SpanContext{FeatureID: "feature-1", RunNumber: 4},
 	})
 	if err != nil {
 		t.Fatalf("RunLiveRunReviewHelper() error = %v", err)
@@ -194,6 +196,9 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 
 	if startOpts == nil || startOpts.PermHandler == nil {
 		t.Fatal("session PermHandler was not configured")
+	}
+	if startOpts.RunNumber != 4 {
+		t.Fatalf("RunNumber = %d, want 4 (from ParentSpanCtx); run-scoped session lists depend on it", startOpts.RunNumber)
 	}
 	requirePermissionDecision(t, startOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
 	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(evidenceRoot, "screenshots", "home.png")+`"}`, "allow")

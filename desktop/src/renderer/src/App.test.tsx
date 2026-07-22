@@ -150,8 +150,41 @@ describe('App readiness gating', () => {
       await screen.findByRole('button', { name: /Attention inbox, 1 pending/ }),
     );
     const inbox = screen.getByRole('complementary', { name: 'Attention inbox' });
-    await userEvent.click(within(inbox).getByRole('button', { name: /Permission.*Search revamp/ }));
     expect(within(inbox).getByText('Search revamp')).toBeVisible();
+    await userEvent.click(within(inbox).getByRole('button', { name: /Permission.*Search revamp/ }));
+    expect(
+      screen.queryByRole('complementary', { name: 'Attention inbox' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not replay a handled attention route after the inbox is closed', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
+    render(<App />);
+    await screen.findByRole('tab', { name: 'Home' });
+
+    act(() => mock.emitRouteRequest({ target: 'attention' }));
+    const inbox = await screen.findByRole('complementary', { name: 'Attention inbox' });
+    await user.click(within(inbox).getByRole('button', { name: 'Close inbox' }));
+    expect(
+      screen.queryByRole('complementary', { name: 'Attention inbox' }),
+    ).not.toBeInTheDocument();
+
+    // A background refresh must not replay the already-consumed route request.
+    const updatesBeforeRefresh = mock.api.getUpdates.mock.calls.length;
+    act(() => mock.emitAppEvent({ type: 'invalidated', kind: 'updates.changed' }));
+    await waitFor(() =>
+      expect(mock.api.getUpdates.mock.calls.length).toBeGreaterThan(updatesBeforeRefresh),
+    );
+    expect(
+      screen.queryByRole('complementary', { name: 'Attention inbox' }),
+    ).not.toBeInTheDocument();
+
+    act(() => mock.emitRouteRequest({ target: 'attention' }));
+    expect(await screen.findByRole('complementary', { name: 'Attention inbox' })).toBeVisible();
   });
 
   it('refreshes review attention after a lifecycle invalidation', async () => {

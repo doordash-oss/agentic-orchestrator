@@ -15,6 +15,7 @@ import { installMockApi, CYCLES_FEATURE_SNAPSHOT, REBASE_FEATURE_SNAPSHOT } from
 import { ArchiveMode } from '../../../src/renderer/src/features/ArchiveMode';
 import { RewindJourney } from '../../../src/renderer/src/features/RewindJourney';
 import { RepositoryInstrument } from '../../../src/renderer/src/features/RepositoryInstrument';
+import { CurrentRunInspection } from '../../../src/renderer/src/features/CurrentRunInspection';
 import { CycleJourneys } from '../../../src/renderer/src/features/CycleJourneys';
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
@@ -159,6 +160,44 @@ function RepoInstrumentScene() {
               <RepositoryInstrument repos={snapshot.repoStatus} />
             )}
           </aside>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RunGaugeScene() {
+  return (
+    <div
+      className="workspace-shell__content"
+      style={{
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'auto',
+        padding: 'var(--space-4)',
+      }}
+    >
+      <div className="cockpit" aria-label="Feature cockpit" style={{ flex: 1 }}>
+        <div className="cockpit__content">
+          <main className="cockpit__canvas">
+            <CurrentRunInspection
+              featureId="abcd1234ef567890"
+              runNumber={8}
+              currentPhase="Implement"
+              currentRoadmapPhase={2}
+              totalRoadmapPhases={5}
+              currentIteration={3}
+              phaseStatus="implementing"
+              reviewGate={{
+                reviewingGate: false,
+                reviewFixing: false,
+                validatingPlan: false,
+                validatorStatuses: {},
+              }}
+              shouldStream={false}
+            />
+          </main>
         </div>
       </div>
     </div>
@@ -588,6 +627,9 @@ function CaptureApp() {
   }
   if (scene === 'repo-instrument') {
     return <RepoInstrumentScene />;
+  }
+  if (scene === 'run-gauge') {
+    return <RunGaugeScene />;
   }
   if (scene === 'rebase-preflight' || scene === 'review-refactor' || scene === 'cycle-gate') {
     return <CycleJourneysScene scene={scene} />;

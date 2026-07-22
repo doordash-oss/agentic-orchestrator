@@ -122,7 +122,9 @@ describe('SessionService singleton chat mutations', () => {
       });
     const service = new SessionService({ ...transport(), apiRequest });
 
-    await expect(service.startChat({ message: 'What is running?' })).resolves.toStrictEqual({
+    await expect(
+      service.startChat({ message: 'What is running?', images: ['/tmp/clipboard.png'] }),
+    ).resolves.toStrictEqual({
       sessionId: '__chat__',
       result: 'started',
     });
@@ -132,7 +134,7 @@ describe('SessionService singleton chat mutations', () => {
     });
     expect(apiRequest).toHaveBeenNthCalledWith(1, '/api/v1/prompts/chat/start', {
       method: 'POST',
-      body: { message: 'What is running?' },
+      body: { message: 'What is running?', images: ['/tmp/clipboard.png'] },
     });
     expect(apiRequest).toHaveBeenNthCalledWith(2, '/api/v1/prompts/chat/end', {
       method: 'POST',

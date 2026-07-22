@@ -170,6 +170,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
     ...overrides,
     pickCreationFiles: overrides.pickCreationFiles ?? vi.fn(() => Promise.resolve({ paths: [] })),
+    readClipboardImage: overrides.readClipboardImage ?? vi.fn(() => Promise.resolve({ paths: [] })),
     searchCreationFiles:
       overrides.searchCreationFiles ??
       vi.fn((request) =>

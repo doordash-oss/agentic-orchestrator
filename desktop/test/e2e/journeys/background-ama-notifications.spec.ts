@@ -107,7 +107,7 @@ test('packaged AMA dock streams singleton chat, restores drawer state, and retai
   }
 });
 
-test('packaged attention notifications are private, deduplicated, bounded, exact-targeted, and do not steal focus', async ({}, testInfo) => {
+test('packaged attention notifications are private, deduplicated, bounded, passive, and do not steal focus', async ({}, testInfo) => {
   const world = createWorld('background-ama-notifications-attention', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
@@ -152,11 +152,12 @@ test('packaged attention notifications are private, deduplicated, bounded, exact
 
     await activateNotification(handle, 0);
     const inbox = handle.page.getByRole('complementary', { name: 'Attention inbox' });
-    await expect(inbox).toBeVisible({ timeout: 30_000 });
-    const focusedItem = inbox.getByRole('button', {
-      name: /Permission.*Background Notification Questions/,
-    });
-    await expect(focusedItem).toBeFocused();
+    await expect(inbox).not.toBeVisible();
+    await expect(
+      handle.page.getByRole('status', {
+        name: 'Blocking input for Background Notification Questions: 1 pending',
+      }),
+    ).toBeVisible();
 
     await answerPermission(handle, 'perm-stale', 'deny');
     await waitForAttentionItem(handle, 'perm-deny');
@@ -186,23 +187,25 @@ test('packaged attention notifications are private, deduplicated, bounded, exact
     expect(askNotification?.body.length ?? 0).toBeLessThanOrEqual(180);
 
     await activateNotification(handle, 1);
-    await expect(inbox).toBeVisible({ timeout: 30_000 });
-    await expect(inbox.getByText('Which verification tracks should be included?')).toBeVisible();
-    await inbox.getByRole('checkbox', { name: /Unit tests/ }).check();
-    await inbox.getByRole('checkbox', { name: /Packaged smoke/ }).check();
-    await inbox.getByLabel(/Evidence note free text/).fill('Keep the routed question on target.');
-    await inbox.getByRole('button', { name: 'Close inbox' }).click();
+    await expect(inbox).not.toBeVisible();
+    await handle.page.getByRole('button', { name: /Attention inbox, 1 pending/ }).click();
+    await expect(inbox).toBeVisible();
+    await inbox
+      .getByRole('button', { name: /Questions.*Background Notification Questions/ })
+      .click();
+    await expect(inbox).not.toBeVisible();
 
-    const inlineQuestions = cockpit.getByRole('region', { name: 'Feature attention' });
+    const preview = handle.page.getByRole('dialog', { name: 'Live agent preview' });
+    const questions = preview.getByRole('region', { name: 'Agent request' });
     await expect(
-      inlineQuestions.getByText('Which verification tracks should be included?'),
+      questions.getByText('Which verification tracks should be included?'),
     ).toBeVisible();
-    await expect(inlineQuestions.getByRole('checkbox', { name: /Unit tests/ })).toBeChecked();
-    await expect(inlineQuestions.getByRole('checkbox', { name: /Packaged smoke/ })).toBeChecked();
-    await expect(inlineQuestions.getByLabel(/Evidence note free text/)).toHaveValue(
-      'Keep the routed question on target.',
-    );
-    await inlineQuestions.getByRole('button', { name: 'Submit answers' }).click();
+    await questions.getByRole('checkbox', { name: /Unit tests/ }).check();
+    await questions.getByRole('checkbox', { name: /Packaged smoke/ }).check();
+    await questions
+      .getByLabel(/Evidence note free text/)
+      .fill('Keep the routed question on target.');
+    await questions.getByRole('button', { name: 'Submit answers' }).click();
     await waitForAttentionMissing(handle, 'ask-bundle');
 
     persistAppLogs(handle, 'background-notifications-app-server');

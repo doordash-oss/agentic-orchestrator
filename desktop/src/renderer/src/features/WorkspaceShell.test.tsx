@@ -32,16 +32,6 @@ function settingsWithTab(): Settings {
   };
 }
 
-function WorkspaceWithAttention({ initialItems }: { initialItems: AttentionItem[] }) {
-  const [attentionItems, setAttentionItems] = useState(initialItems);
-  const refreshAttention = useCallback(async () => {
-    const snapshot = await window.agentico.getAttention();
-    setAttentionItems(snapshot.items);
-    return snapshot.items;
-  }, []);
-  return <WorkspaceShell attentionItems={attentionItems} refreshAttention={refreshAttention} />;
-}
-
 describe('WorkspaceShell tabs', () => {
   it('keeps Home focused on the authoritative feature list and enters creation deliberately', async () => {
     installAgenticoMock({
@@ -403,7 +393,10 @@ describe('WorkspaceShell tabs', () => {
     const onAttentionJumpHandled = vi.fn();
     installAgenticoMock();
     render(
-      <WorkspaceShell attentionJump={FEATURE_ID} onAttentionJumpHandled={onAttentionJumpHandled} />,
+      <WorkspaceShell
+        attentionJump={{ requestId: 1, featureId: FEATURE_ID }}
+        onAttentionJumpHandled={onAttentionJumpHandled}
+      />,
     );
 
     expect(await screen.findByRole('tab', { name: 'Search revamp' })).toHaveAttribute(
@@ -452,25 +445,52 @@ describe('WorkspaceShell tabs', () => {
     ).toHaveLength(2);
   });
 
-  it('refreshes shared attention after inline cockpit resolution', async () => {
-    const mock = installAgenticoMock({ settings: settingsWithTab() });
+  it('opens routed attention in the expanded conversation and refreshes after resolution', async () => {
+    const mock = installAgenticoMock({
+      settings: settingsWithTab(),
+      feature: featureSnapshot({
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      }),
+    });
     let currentAttention: AttentionItem[] = [permissionAttention];
     mock.api.getAttention.mockImplementation(() => Promise.resolve({ items: currentAttention }));
     mock.api.answerPermission.mockImplementation(() => {
       currentAttention = [];
       return Promise.resolve({ result: 'submitted' });
     });
-    render(<WorkspaceWithAttention initialItems={[permissionAttention]} />);
+    function RoutedWorkspace() {
+      const [attentionItems, setAttentionItems] = useState<AttentionItem[]>([permissionAttention]);
+      const refreshAttention = useCallback(async () => {
+        const snapshot = await window.agentico.getAttention();
+        setAttentionItems(snapshot.items);
+        return snapshot.items;
+      }, []);
+      return (
+        <WorkspaceShell
+          attentionItems={attentionItems}
+          refreshAttention={refreshAttention}
+          attentionJump={{ requestId: 7, featureId: FEATURE_ID, attentionId: 'perm-1' }}
+        />
+      );
+    }
+    render(<RoutedWorkspace />);
     const user = userEvent.setup();
 
-    const inlineAttention = await screen.findByRole('region', { name: 'Feature attention' });
-    await user.click(within(inlineAttention).getByRole('button', { name: 'Deny' }));
+    const preview = await screen.findByRole('dialog', { name: 'Live agent preview' });
+    expect(within(preview).getByRole('region', { name: 'Live agent transcript' })).toBeVisible();
+    const request = within(preview).getByRole('region', { name: 'Agent request' });
+    await user.click(within(request).getByRole('button', { name: 'Deny' }));
 
     expect(mock.api.answerPermission).toHaveBeenCalledWith({
       requestId: 'perm-1',
       sessionId: 'session-1',
       decision: 'deny',
     });
-    expect(screen.queryByRole('region', { name: 'Feature attention' })).not.toBeInTheDocument();
+    expect(
+      within(preview).queryByRole('region', { name: 'Agent request' }),
+    ).not.toBeInTheDocument();
   });
 });

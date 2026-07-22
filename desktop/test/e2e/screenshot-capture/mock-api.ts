@@ -883,6 +883,7 @@ function makeMockApi(
         },
       } as CreationDefaults),
     pickCreationFiles: () => Promise.resolve({ paths: [] }),
+    readClipboardImage: () => Promise.resolve({ paths: [] }),
     importDroppedCreationFiles: () => ({ paths: [] }),
     searchCreationFiles: (request) =>
       Promise.resolve({

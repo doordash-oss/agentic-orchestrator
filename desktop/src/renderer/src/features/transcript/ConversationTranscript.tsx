@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import type { TranscriptMessage } from '../../../../shared/ipc';
 import type { ConversationItem } from './conversation';
 
 const NEAR_BOTTOM_PX = 40;
@@ -45,6 +46,100 @@ export interface ConversationTranscriptProps {
   status?: ReactNode;
   /** Bump to force a scroll to the newest row (e.g. after sending a message). */
   pinToBottomToken?: number;
+}
+
+type FileChange = NonNullable<TranscriptMessage['fileChange']>;
+type DiffLineKind = 'added' | 'removed' | 'context' | 'meta';
+
+function fileChangeLabel(operation: string | undefined): string {
+  switch (operation?.trim().toLocaleLowerCase()) {
+    case 'add':
+    case 'create':
+    case 'write':
+      return 'Created';
+    case 'delete':
+    case 'remove':
+      return 'Deleted';
+    case 'move':
+    case 'rename':
+      return 'Renamed';
+    default:
+      return 'Updated';
+  }
+}
+
+function diffLineKind(line: string): DiffLineKind {
+  if (
+    line.startsWith('diff --git ') ||
+    line.startsWith('index ') ||
+    line.startsWith('@@') ||
+    line.startsWith('--- ') ||
+    line.startsWith('+++ ') ||
+    line.startsWith('new file mode ') ||
+    line.startsWith('deleted file mode ') ||
+    line === '...'
+  ) {
+    return 'meta';
+  }
+  if (line.startsWith('+')) return 'added';
+  if (line.startsWith('-')) return 'removed';
+  return 'context';
+}
+
+function visibleDiff(change: FileChange): string[] {
+  const detail = change.detail?.trim();
+  if (detail === undefined || detail === '') return [];
+  if (/^Captured from (?:tool usage|tool activity|provider file change)\.$/.test(detail)) return [];
+  const lines = detail.split('\n');
+  const looksLikeDiff =
+    change.hasDiffPatch === true ||
+    lines.some((line) => line.startsWith('+') || line.startsWith('-') || line.startsWith('@@'));
+  return looksLikeDiff ? lines : [];
+}
+
+export function FileChangeCard({ change }: { change: FileChange }): React.ReactElement {
+  const lines = visibleDiff(change);
+  const inferredAdded = lines.filter((line) => diffLineKind(line) === 'added').length;
+  const inferredRemoved = lines.filter((line) => diffLineKind(line) === 'removed').length;
+  const added = change.addedLines ?? inferredAdded;
+  const removed = change.removedLines ?? inferredRemoved;
+  const label = fileChangeLabel(change.operation);
+
+  return (
+    <article className="conversation__file-change" aria-label={`${label} ${change.path}`}>
+      <header className="conversation__file-change-header">
+        <span className="conversation__file-change-status">{label}</span>
+        <span className="conversation__file-change-path" title={change.path}>
+          {change.oldPath ? `${change.oldPath} → ` : null}
+          {change.path}
+        </span>
+        {added > 0 || removed > 0 ? (
+          <span
+            className="conversation__file-change-stats"
+            aria-label={`${added} lines added, ${removed} lines removed`}
+          >
+            {added > 0 ? <span data-kind="added">+{added}</span> : null}
+            {removed > 0 ? <span data-kind="removed">−{removed}</span> : null}
+          </span>
+        ) : null}
+      </header>
+      {lines.length > 0 ? (
+        <div className="conversation__diff" role="region" aria-label={`Diff for ${change.path}`}>
+          {lines.map((line, index) => {
+            const kind = diffLineKind(line);
+            return (
+              <div key={`${index}-${line}`} className="conversation__diff-line" data-kind={kind}>
+                <span className="conversation__diff-marker" aria-hidden="true">
+                  {kind === 'added' ? '+' : kind === 'removed' ? '−' : ' '}
+                </span>
+                <code>{kind === 'added' || kind === 'removed' ? line.slice(1) : line}</code>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </article>
+  );
 }
 
 /** Shared conversational renderer for AMA and the current-run live preview. */
@@ -99,6 +194,23 @@ export function ConversationTranscript({
             </span>
             <p>{item.text}</p>
           </article>
+        ) : item.kind === 'auto-pick' ? (
+          <article
+            key={item.key}
+            className="conversation__auto-pick"
+            aria-label="Auto-picked response"
+          >
+            <span className="conversation__auto-pick-label">Auto-picked</span>
+            <strong>{item.question}</strong>
+            <p>{item.answer}</p>
+            {item.confidence === undefined ? null : (
+              <span className="conversation__auto-pick-confidence">
+                {Math.round(item.confidence * 100)}% confidence
+              </span>
+            )}
+          </article>
+        ) : item.kind === 'file-change' ? (
+          <FileChangeCard key={item.key} change={item.change} />
         ) : (
           <ActivityIndicator
             key={item.key}

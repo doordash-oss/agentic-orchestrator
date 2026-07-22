@@ -145,6 +145,7 @@ function makeServices(): IpcServices {
       Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
     ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),
     searchCreationFiles: vi.fn((request) =>
       Promise.resolve({
         requestId: request.requestId,

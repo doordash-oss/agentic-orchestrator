@@ -1,6 +1,6 @@
 import { Notification } from 'electron';
 import { redactText } from '../shared/errors';
-import type { AppRouteEvent, AttentionItem, AttentionSnapshot } from '../shared/ipc';
+import type { AttentionItem, AttentionSnapshot } from '../shared/ipc';
 
 type ActionableAttentionItem = Exclude<AttentionItem, { kind: 'recovery' }>;
 
@@ -22,7 +22,7 @@ export const electronNotificationSink: NotificationSink = {
 export interface AttentionNotificationCoordinatorDeps {
   sink: NotificationSink;
   shouldNotify(): boolean;
-  route(event: AppRouteEvent): void;
+  show(): void;
 }
 
 export interface AttentionNotificationOptions {
@@ -64,11 +64,7 @@ export class AttentionNotificationCoordinator {
           : 'Agentico needs attention.',
       });
       notification.on('click', () => {
-        this.deps.route({
-          target: 'attention',
-          attentionId: item.id,
-          ...(item.featureId === undefined ? {} : { featureId: item.featureId }),
-        });
+        this.deps.show();
       });
       notification.show();
     }

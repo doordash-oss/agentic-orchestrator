@@ -39,7 +39,11 @@ export default function App() {
   } | null>(null);
   const [attentionDrafts, setAttentionDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   const [featureNames, setFeatureNames] = useState<Record<string, string>>({});
-  const [attentionJump, setAttentionJump] = useState<string | null>(null);
+  const [attentionJump, setAttentionJump] = useState<{
+    requestId: number;
+    featureId: string;
+    attentionId?: string;
+  } | null>(null);
   const [routeRequest, setRouteRequest] = useState<RoutedRequest | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
   const [updateDismissedVersion, setUpdateDismissedVersion] = useState<string | null>(null);
@@ -220,7 +224,14 @@ export default function App() {
           }
           drafts={attentionDrafts}
           setDrafts={setAttentionDrafts}
-          onJump={setAttentionJump}
+          onJump={(featureId, attentionId) => {
+            routeSequence.current += 1;
+            setAttentionJump({
+              requestId: routeSequence.current,
+              featureId,
+              ...(attentionId === undefined ? {} : { attentionId }),
+            });
+          }}
           openRequest={
             routeRequest?.event.target === 'attention'
               ? {

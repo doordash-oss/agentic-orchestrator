@@ -5,12 +5,14 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type ClipboardEvent,
   type FormEvent,
   type SetStateAction,
 } from 'react';
 import {
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   CHAT_SESSION_ID,
+  CREATION_IMAGE_LIMIT,
   isTerminalChatStatus,
   type AttentionItem,
   type RoutedRequest,
@@ -62,6 +64,7 @@ export function AmaDock({
     cursor: EMPTY_CURSOR,
   });
   const [message, setMessage] = useState('');
+  const [images, setImages] = useState<readonly string[]>([]);
   const [optimisticMessage, setOptimisticMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -250,12 +253,14 @@ export function AmaDock({
     if (text === '' || busy) return;
     setOptimisticMessage(text);
     setMessage('');
+    const submittedImages = images;
+    setImages([]);
     setPinToBottom((value) => value + 1);
     setBusy(true);
     setNotice('');
     persistDrawer('expanded');
     try {
-      await window.agentico.startChat({ message: text });
+      await window.agentico.startChat({ message: text, images: [...submittedImages] });
       await refreshSession();
       const from = await loadTranscript();
       if (from !== null) {
@@ -270,10 +275,33 @@ export function AmaDock({
     } catch (error) {
       setOptimisticMessage(null);
       setMessage(text);
+      setImages(submittedImages);
       setNotice(error instanceof Error ? error.message : 'Could not send AMA message.');
     } finally {
       setBusy(false);
     }
+  };
+
+  const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    const imageFiles = Array.from(event.clipboardData.files).filter((file) =>
+      file.type.startsWith('image/'),
+    );
+    const hasImage = Array.from(event.clipboardData.items ?? []).some((item) =>
+      item.type.startsWith('image/'),
+    );
+    if (!hasImage && imageFiles.length === 0) return;
+    event.preventDefault();
+    const imported = window.agentico.importDroppedCreationFiles('image', imageFiles);
+    if (imported.paths.length > 0) {
+      setImages((current) => uniquePaths(current, imported.paths));
+      return;
+    }
+    void window.agentico
+      .readClipboardImage()
+      .then((result) => setImages((current) => uniquePaths(current, result.paths)))
+      .catch((error: unknown) =>
+        setNotice(error instanceof Error ? error.message : 'Could not paste image.'),
+      );
   };
 
   const askToEndChat = (): void => {
@@ -440,11 +468,28 @@ export function AmaDock({
         </div>
       ) : null}
       <form className="ama-dock__composer" onSubmit={(event) => void submit(event)}>
+        {images.length > 0 ? (
+          <ol className="composer__chips ama-dock__attachments" aria-label="Attached images">
+            {images.map((image) => (
+              <li key={image} className="composer__chip" data-kind="image">
+                <span>{basename(image)}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${basename(image)}`}
+                  onClick={() => setImages((current) => current.filter((item) => item !== image))}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ol>
+        ) : null}
         <textarea
           ref={inputRef}
           aria-label="Ask Agentico"
           value={message}
           onChange={(event) => setMessage(event.target.value)}
+          onPaste={onComposerPaste}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
@@ -459,4 +504,12 @@ export function AmaDock({
       </form>
     </aside>
   );
+}
+
+function uniquePaths(current: readonly string[], additions: readonly string[]): string[] {
+  return [...new Set([...current, ...additions])].slice(0, CREATION_IMAGE_LIMIT);
+}
+
+function basename(filePath: string): string {
+  return filePath.split(/[\\/]/).at(-1) ?? filePath;
 }

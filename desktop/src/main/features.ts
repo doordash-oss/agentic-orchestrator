@@ -437,6 +437,14 @@ export class FeatureService {
   }
 }
 
+/** Spreads `{ [key]: value }` only when the value is present and non-empty. */
+function spreadDefined<K extends string, V extends string | number>(
+  key: K,
+  value: V | undefined,
+): Partial<Record<K, V>> {
+  return value === undefined || value === '' ? {} : ({ [key]: value } as Record<K, V>);
+}
+
 /** Maps the validated server detail to the strict renderer-facing snapshot. */
 function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
   const setup = toSetupView(feature.active_run_detail?.setup);
@@ -458,12 +466,22 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     repos: feature.repos,
     createdAt: feature.created_at,
     activeRun: feature.active_run,
-    ...(feature.active_run_detail?.roadmap_phase === undefined
-      ? {}
-      : { currentRoadmapPhase: feature.active_run_detail.roadmap_phase }),
-    ...(feature.active_run_detail?.roadmap_total === undefined
-      ? {}
-      : { totalRoadmapPhases: feature.active_run_detail.roadmap_total }),
+    ...spreadDefined(
+      'currentRoadmapPhase',
+      feature.active_run_detail?.roadmap_phase ?? feature.progress.current_roadmap_phase,
+    ),
+    ...spreadDefined(
+      'totalRoadmapPhases',
+      feature.active_run_detail?.roadmap_total ?? feature.progress.total_roadmap_phases,
+    ),
+    ...spreadDefined(
+      'currentIteration',
+      feature.active_run_detail?.iteration ?? feature.progress.current_iteration,
+    ),
+    ...spreadDefined(
+      'phaseStatus',
+      feature.active_run_detail?.phase_status ?? feature.progress.current_phase_status,
+    ),
     ...(setup === null ? {} : { setup }),
     actions: (feature.actions ?? []).map((action) => ({
       id: action.id,

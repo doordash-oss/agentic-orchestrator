@@ -31,7 +31,11 @@ export function ReadinessGate({
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
   attentionItems?: AttentionItem[];
   refreshAttention?: () => Promise<AttentionItem[]>;
-  attentionJump?: string | null;
+  attentionJump?: {
+    requestId: number;
+    featureId: string;
+    attentionId?: string;
+  } | null;
   onAttentionJumpHandled?: () => void;
   routeRequest?: RoutedRequest | null;
 }) {

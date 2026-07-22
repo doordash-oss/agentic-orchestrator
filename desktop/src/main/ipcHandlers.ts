@@ -146,6 +146,7 @@ export interface IpcServices {
   cancelSessionOutput(subscriptionId: string): boolean;
   getCreationDefaults(): Promise<CreationDefaults>;
   pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
+  readClipboardImage(): Promise<PickedCreationFiles>;
   searchCreationFiles(request: CreationFileSearchRequest): Promise<CreationFileSearchResult>;
   cancelCreationFileSearch(requestId: string): Promise<boolean> | boolean;
   getAttention(): Promise<AttentionSnapshot>;
@@ -306,6 +307,7 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
     [IPC_CHANNELS.creationPickFiles]: (_event, kind: CreationFileKind) =>
       services.pickCreationFiles(kind),
+    [IPC_CHANNELS.clipboardReadImage]: () => services.readClipboardImage(),
     [IPC_CHANNELS.creationSearchFiles]: (_event, request: CreationFileSearchRequest) =>
       services.searchCreationFiles(request),
     [IPC_CHANNELS.creationCancelFileSearch]: (_event, requestId: string) =>

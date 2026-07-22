@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   LivePreviewView,
   ReviewGateView,
@@ -20,6 +20,7 @@ import { ConversationTranscript } from './transcript/ConversationTranscript';
 import { HistoricalTimeline } from './RunTimeline';
 import { useCohortTranscripts } from './useCohortTranscripts';
 import { cohortTabLabels, cohortTabStatus, isTerminalSessionStatus } from './liveCohort';
+import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 import { CloseIcon, MaximizeIcon, MinimizeIcon } from '../components/icons';
 
 const IDLE_ACTIVITY_LABEL = 'Thinking through the next step';
@@ -31,10 +32,20 @@ interface CurrentRunInspectionProps {
   runNumber: number;
   currentPhase: string;
   currentRoadmapPhase?: number;
+  totalRoadmapPhases?: number;
+  /** Implement-loop iteration within the current roadmap phase. */
+  currentIteration?: number;
+  /** Mid-flight status from the server ("implementing" | "reviewing"). */
+  phaseStatus?: string;
   reviewGate: ReviewGateView;
   waitReason?: string;
   /** Only open live SSE while the run is actually streaming. */
   shouldStream?: boolean;
+  /** Opens the conversation overlay for a newly routed attention item. */
+  attentionRequestId?: number;
+  /** Response controls docked beneath the expanded conversation. */
+  attentionFooter?: ReactNode;
+  onAttentionPreviewClose?(): void;
 }
 
 type RunArtifact = RunArtifactsListResult['artifacts'][number];
@@ -80,9 +91,15 @@ export function CurrentRunInspection({
   runNumber,
   currentPhase,
   currentRoadmapPhase,
+  totalRoadmapPhases,
+  currentIteration,
+  phaseStatus,
   reviewGate,
   waitReason,
   shouldStream = true,
+  attentionRequestId,
+  attentionFooter,
+  onAttentionPreviewClose,
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [artifacts, setArtifacts] = useState<RunArtifactsListResult['artifacts']>([]);
@@ -93,12 +110,23 @@ export function CurrentRunInspection({
   const [loadingContent, setLoadingContent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [artifactFullscreen, setArtifactFullscreen] = useState(false);
   const [view, setView] = useState<PreviewView>('conversation');
   const requestRef = useRef(0);
 
   const live = useCohortTranscripts(featureId, runNumber, currentPhase, shouldStream);
   const selectedSession = live.cohort.find((session) => session.id === live.selectedId) ?? null;
   const stage = useTranscriptStage(live.cohort, live.transcripts, selectedSession, preview);
+  const closeFullscreen = useCallback(() => {
+    setFullscreen(false);
+    onAttentionPreviewClose?.();
+  }, [onAttentionPreviewClose]);
+
+  useEffect(() => {
+    if (attentionRequestId === undefined) return;
+    setView('conversation');
+    setFullscreen(true);
+  }, [attentionRequestId]);
 
   const refresh = useCallback(async () => {
     const request = ++requestRef.current;
@@ -143,6 +171,7 @@ export function CurrentRunInspection({
                 limit: 64 * 1024,
               });
         setContent({ kind, value });
+        setArtifactFullscreen(false);
       } catch (cause) {
         setError(parseIpcError(cause).message);
       } finally {
@@ -169,6 +198,15 @@ export function CurrentRunInspection({
           Refresh
         </button>
       </header>
+
+      <RoadmapGauge
+        currentPhase={currentPhase}
+        currentRoadmapPhase={currentRoadmapPhase}
+        totalRoadmapPhases={totalRoadmapPhases}
+        currentIteration={currentIteration}
+        phaseStatus={phaseStatus}
+        reviewGate={reviewGate}
+      />
 
       {error !== null ? (
         <p role="alert" className="form-field__error">
@@ -269,25 +307,42 @@ export function CurrentRunInspection({
           <div className="current-inspection__content-header">
             <span>{content.value.id}</span>
             {content.value.truncated ? <span>Bounded page · more content remains</span> : null}
-            <button type="button" onClick={() => setContent(null)}>
+            {content.kind === 'artifact' ? (
+              <button
+                type="button"
+                className="live-preview__icon-button"
+                aria-label="Enlarge artifact"
+                title="Enlarge artifact"
+                onClick={() => setArtifactFullscreen(true)}
+              >
+                <MaximizeIcon />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                setArtifactFullscreen(false);
+                setContent(null);
+              }}
+            >
               Close
             </button>
           </div>
-          <pre
-            aria-label={
-              content.kind === 'artifact'
-                ? 'Current run artifact content'
-                : 'Current run log content'
-            }
-          >
-            {content.kind === 'log' ? stripUnsafeAnsi(content.value.text) : content.value.text}
-          </pre>
+          {content.kind === 'artifact' ? (
+            <RenderedArtifact text={content.value.text} ariaLabel="Current run artifact content" />
+          ) : (
+            <pre aria-label="Current run log content">{stripUnsafeAnsi(content.value.text)}</pre>
+          )}
         </div>
+      ) : null}
+
+      {artifactFullscreen && content?.kind === 'artifact' ? (
+        <ArtifactOverlay artifact={content.value} onClose={() => setArtifactFullscreen(false)} />
       ) : null}
 
       {fullscreen ? (
         <LivePreviewOverlay
-          onClose={() => setFullscreen(false)}
+          onClose={closeFullscreen}
           stage={stage}
           view={view}
           onChangeView={setView}
@@ -295,9 +350,73 @@ export function CurrentRunInspection({
           selectSession={live.selectSession}
           preview={preview}
           waitReason={waitReason}
+          attentionFooter={attentionFooter}
         />
       ) : null}
     </section>
+  );
+}
+
+function RenderedArtifact({ text, ariaLabel }: { text: string; ariaLabel: string }) {
+  return (
+    <div
+      className="review-surface__preview current-inspection__artifact-markdown"
+      aria-label={ariaLabel}
+      dangerouslySetInnerHTML={{ __html: renderSanitizedMarkdown(text) }}
+    />
+  );
+}
+
+function ArtifactOverlay({
+  artifact,
+  onClose,
+}: {
+  artifact: RunTextContent;
+  onClose(): void;
+}): React.ReactElement {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalDismiss(dialogRef, onClose);
+
+  return (
+    <div className="live-preview__overlay-backdrop" onMouseDown={onClose}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Expanded artifact ${artifact.id}`}
+        className="current-inspection__artifact-overlay"
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="live-preview__overlay-header">
+          <div>
+            <p className="cockpit__eyebrow">Run artifact</p>
+            <h2>{artifact.id}</h2>
+          </div>
+          <div className="live-preview__overlay-controls">
+            <button
+              type="button"
+              className="live-preview__icon-button"
+              aria-label="Exit enlarged artifact"
+              title="Exit enlarged view"
+              onClick={onClose}
+            >
+              <MinimizeIcon />
+            </button>
+            <button
+              type="button"
+              className="live-preview__icon-button"
+              aria-label="Close enlarged artifact"
+              title="Close"
+              onClick={onClose}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        </header>
+        <RenderedArtifact text={artifact.text} ariaLabel="Expanded artifact content" />
+      </div>
+    </div>
   );
 }
 
@@ -454,6 +573,7 @@ function LivePreviewOverlay({
   selectSession,
   preview,
   waitReason,
+  attentionFooter,
 }: {
   onClose(): void;
   stage: TranscriptStageModel;
@@ -463,6 +583,7 @@ function LivePreviewOverlay({
   selectSession(id: string): void;
   preview: LivePreviewView | null;
   waitReason?: string;
+  attentionFooter?: ReactNode;
 }): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalDismiss(dialogRef, onClose);
@@ -509,10 +630,20 @@ function LivePreviewOverlay({
           selectSession={selectSession}
           waitReason={waitReason}
         />
-        {preview !== null ? (
+        {preview !== null || attentionFooter !== undefined ? (
           <footer className="live-preview__overlay-footer">
-            <p className="current-inspection__activity">{preview.activity}</p>
-            <PreviewMetrics preview={preview} />
+            {preview !== null ? (
+              <div className="live-preview__overlay-status">
+                <p className="current-inspection__activity">{preview.activity}</p>
+                <PreviewMetrics preview={preview} />
+              </div>
+            ) : null}
+            {attentionFooter !== undefined ? (
+              <section className="live-preview__attention" aria-label="Agent request">
+                <p className="cockpit__eyebrow">Your response</p>
+                {attentionFooter}
+              </section>
+            ) : null}
           </footer>
         ) : null}
       </div>
@@ -567,6 +698,87 @@ function useModalDismiss(ref: React.RefObject<HTMLElement | null>, onClose: () =
       requestAnimationFrame(() => previouslyFocused?.focus());
     };
   }, [ref, onClose]);
+}
+
+/** Mirrors the TUI's implement-loop status verb for the active roadmap phase. */
+export function roadmapStatusLabel(
+  currentPhase: string,
+  reviewGate: ReviewGateView,
+  currentIteration: number | undefined,
+  phaseStatus: string | undefined,
+): string {
+  const phase = currentPhase.trim().toLocaleLowerCase();
+  const iteration =
+    currentIteration !== undefined && currentIteration > 0 ? ` · Iteration ${currentIteration}` : '';
+  if (phase === 'implement') {
+    const reviewing = reviewGate.reviewingGate || phaseStatus?.trim().toLocaleLowerCase() === 'reviewing';
+    return `${reviewing ? 'Reviewing' : 'Implementing'}${iteration}`;
+  }
+  if (phase === 'plan' || phase === 'planning') {
+    return reviewGate.validatingPlan ? 'Validating plan' : 'Planning';
+  }
+  return currentPhase;
+}
+
+function RoadmapGauge({
+  currentPhase,
+  currentRoadmapPhase,
+  totalRoadmapPhases,
+  currentIteration,
+  phaseStatus,
+  reviewGate,
+}: {
+  currentPhase: string;
+  currentRoadmapPhase?: number;
+  totalRoadmapPhases?: number;
+  currentIteration?: number;
+  phaseStatus?: string;
+  reviewGate: ReviewGateView;
+}): React.ReactElement | null {
+  if (
+    currentRoadmapPhase === undefined ||
+    totalRoadmapPhases === undefined ||
+    currentRoadmapPhase < 1 ||
+    totalRoadmapPhases < 1
+  ) {
+    return null;
+  }
+  const total = Math.max(totalRoadmapPhases, currentRoadmapPhase);
+  const status = roadmapStatusLabel(currentPhase, reviewGate, currentIteration, phaseStatus);
+  return (
+    <section
+      className="roadmap-gauge"
+      aria-label={`Roadmap progress: phase ${currentRoadmapPhase} of ${total} — ${status}`}
+    >
+      <div className="roadmap-gauge__reading">
+        <span className="roadmap-gauge__eyebrow">Roadmap</span>
+        <span className="roadmap-gauge__phase">
+          Phase {currentRoadmapPhase}
+          <span className="roadmap-gauge__of"> of {total}</span>
+        </span>
+      </div>
+      <ol className="roadmap-gauge__track" aria-hidden="true">
+        {Array.from({ length: total }, (_, index) => {
+          const phaseNumber = index + 1;
+          const state =
+            phaseNumber < currentRoadmapPhase
+              ? 'done'
+              : phaseNumber === currentRoadmapPhase
+                ? 'active'
+                : 'upcoming';
+          return (
+            <li
+              key={phaseNumber}
+              className="roadmap-gauge__segment"
+              data-state={state}
+              title={`Phase ${phaseNumber}`}
+            />
+          );
+        })}
+      </ol>
+      <p className="roadmap-gauge__status">{status}</p>
+    </section>
+  );
 }
 
 function ReviewGateSummary({

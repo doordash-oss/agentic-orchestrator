@@ -196,6 +196,7 @@ export interface AgenticoMock {
     cancelSessionOutput: ReturnType<typeof vi.fn>;
     getCreationDefaults: ReturnType<typeof vi.fn>;
     pickCreationFiles: ReturnType<typeof vi.fn>;
+    readClipboardImage: ReturnType<typeof vi.fn>;
     importDroppedCreationFiles: ReturnType<typeof vi.fn>;
     searchCreationFiles: ReturnType<typeof vi.fn>;
     cancelCreationFileSearch: ReturnType<typeof vi.fn>;
@@ -366,6 +367,7 @@ export function installAgenticoMock(
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
+    readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),
     importDroppedCreationFiles: vi.fn(() => ({ paths: [] })),
     searchCreationFiles: vi.fn((request) =>
       Promise.resolve({

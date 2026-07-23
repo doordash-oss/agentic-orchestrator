@@ -1467,6 +1467,7 @@ export function FeatureCockpit({
                         currentIteration={snapshot.currentIteration}
                         phaseStatus={snapshot.phaseStatus}
                         reviewGate={snapshot.reviewGate}
+                        verificationItems={snapshot.verificationItems}
                         waitReason={snapshot.waitReason}
                         shouldStream={stopAction !== undefined}
                         attentionRequestId={

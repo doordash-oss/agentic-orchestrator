@@ -474,6 +474,29 @@ describe('FeatureService.getFeature', () => {
     });
   });
 
+  it('carries ordered harness verification items into the snapshot', async () => {
+    const body = detailBody({
+      verification_items: [
+        { name: 'go test ./...', state: 'passed' },
+        { name: 'npm run build', state: 'running' },
+      ],
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+
+    await expect(service.getFeature('abcd1234ef567890')).resolves.toMatchObject({
+      verificationItems: [
+        { name: 'go test ./...', state: 'passed' },
+        { name: 'npm run build', state: 'running' },
+      ],
+    });
+  });
+
+  it('omits verificationItems when the server sends none', async () => {
+    const { service } = makeService(() => ({ status: 200, body: detailBody() }));
+    const snapshot = await service.getFeature('abcd1234ef567890');
+    expect(snapshot.verificationItems).toBeUndefined();
+  });
+
   it('orders setup tasks by the server-owned task_order', async () => {
     const { service } = makeService(() => ({ status: 200, body: detailBody() }));
     const snapshot = await service.getFeature('abcd1234ef567890');

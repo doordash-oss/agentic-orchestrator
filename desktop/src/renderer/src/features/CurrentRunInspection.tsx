@@ -7,6 +7,7 @@ import type {
   RunTextContent,
   SessionSummary,
   TranscriptMessage,
+  VerificationItemView,
 } from '../../../shared/ipc';
 import { parseIpcError } from '../wizard/ipcError';
 import {
@@ -15,6 +16,12 @@ import {
   reviewStatusSymbol,
   reviewStatusTone,
 } from './reviewModel';
+import {
+  isVerifyingPhase,
+  verificationCounts,
+  verificationSymbol,
+  verificationTone,
+} from './verificationModel';
 import { displayStatusLabel, isRunAtRest } from './featureView';
 import { stripUnsafeAnsi } from './timelineModel';
 import { buildConversation } from './transcript/conversation';
@@ -45,9 +52,11 @@ interface CurrentRunInspectionProps {
   totalRoadmapPhases?: number;
   /** Implement-loop iteration within the current roadmap phase. */
   currentIteration?: number;
-  /** Mid-flight status from the server ("implementing" | "reviewing"). */
+  /** Mid-flight status from the server ("implementing" | "reviewing" | "verifying"). */
   phaseStatus?: string;
   reviewGate: ReviewGateView;
+  /** Ordered per-command harness verification state during "verifying". */
+  verificationItems?: VerificationItemView[];
   waitReason?: string;
   /** Only open live SSE while the run is actually streaming. */
   shouldStream?: boolean;
@@ -143,6 +152,7 @@ export function CurrentRunInspection({
   currentIteration,
   phaseStatus,
   reviewGate,
+  verificationItems,
   waitReason,
   shouldStream = true,
   attentionRequestId,
@@ -169,6 +179,9 @@ export function CurrentRunInspection({
   const live = useCohortTranscripts(featureId, runNumber, currentPhase, shouldStream);
   const selectedSession = live.cohort.find((session) => session.id === live.selectedId) ?? null;
   const stage = useTranscriptStage(live.cohort, live.transcripts, selectedSession, preview);
+  // The review gate wins over a stale "verifying" marker: while an axis review
+  // is active there is no harness contract running to display.
+  const verifying = isVerifyingPhase(phaseStatus, verificationItems) && !reviewGate.reviewingGate;
   const closeFullscreen = useCallback(() => {
     setFullscreen(false);
     onAttentionPreviewClose?.();
@@ -297,28 +310,38 @@ export function CurrentRunInspection({
                 </button>
               </div>
             </div>
-            <TranscriptStage
-              stage={stage}
-              view={view}
-              selectedId={live.selectedId}
-              selectSession={live.selectSession}
-              waitReason={waitReason}
-            />
+            {verifying && verificationItems !== undefined ? (
+              <VerificationStage items={verificationItems} />
+            ) : (
+              <TranscriptStage
+                stage={stage}
+                view={view}
+                selectedId={live.selectedId}
+                selectSession={live.selectSession}
+                waitReason={waitReason}
+              />
+            )}
           </div>
           {preview !== null ? (
             <>
-              <p className="current-inspection__activity">{preview.activity}</p>
-              <PreviewMetrics preview={preview} />
+              {verifying ? null : (
+                <p className="current-inspection__activity">{preview.activity}</p>
+              )}
+              <PreviewMetrics preview={preview} verifying={verifying} />
             </>
           ) : null}
         </div>
       )}
 
-      <ReviewGateSummary
-        gate={reviewGate}
-        currentPhase={currentPhase}
-        currentRoadmapPhase={currentRoadmapPhase}
-      />
+      {verifying && verificationItems !== undefined ? (
+        <VerificationSummary items={verificationItems} />
+      ) : (
+        <ReviewGateSummary
+          gate={reviewGate}
+          currentPhase={currentPhase}
+          currentRoadmapPhase={currentRoadmapPhase}
+        />
+      )}
 
       <div className="current-inspection__resources">
         <ResourceSection
@@ -630,13 +653,23 @@ function TranscriptStage({
   );
 }
 
-function PreviewMetrics({ preview }: { preview: LivePreviewView }): React.ReactElement {
+function PreviewMetrics({
+  preview,
+  verifying = false,
+}: {
+  preview: LivePreviewView;
+  verifying?: boolean;
+}): React.ReactElement {
   return (
     <dl className="current-inspection__metrics">
-      <div>
-        <dt>Context</dt>
-        <dd>{preview.contextPercentage < 0 ? 'Unavailable' : `${preview.contextPercentage}%`}</dd>
-      </div>
+      {/* The harness runs the contract with no live LLM session, so the
+          context-window reading is stale during verification. */}
+      {verifying ? null : (
+        <div>
+          <dt>Context</dt>
+          <dd>{preview.contextPercentage < 0 ? 'Unavailable' : `${preview.contextPercentage}%`}</dd>
+        </div>
+      )}
       <div>
         <dt>Elapsed</dt>
         <dd>{preview.totalSeconds}s</dd>
@@ -798,8 +831,11 @@ export function roadmapStatusLabel(
       ? ` · Iteration ${currentIteration}`
       : '';
   if (phase === 'implement') {
-    const reviewing =
-      reviewGate.reviewingGate || phaseStatus?.trim().toLocaleLowerCase() === 'reviewing';
+    const normalizedStatus = phaseStatus?.trim().toLocaleLowerCase();
+    const reviewing = reviewGate.reviewingGate || normalizedStatus === 'reviewing';
+    if (!reviewing && normalizedStatus === 'verifying') {
+      return `Verifying implementation${iteration}`;
+    }
     return `${reviewing ? 'Reviewing' : 'Implementing'}${iteration}`;
   }
   if (phase === 'plan' || phase === 'planning') {
@@ -871,6 +907,72 @@ function RoadmapGauge({
       </ol>
       <p className="roadmap-gauge__status" data-tone={atRest ? 'rest' : 'working'}>
         {status}
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Replaces the live transcript while the harness runs the testing contract:
+ * there is no agent session to watch, so a stale prior-session transcript
+ * would masquerade as live. Renders a per-command execution log instead.
+ */
+function VerificationStage({
+  items,
+}: {
+  items: readonly VerificationItemView[];
+}): React.ReactElement {
+  return (
+    <div className="live-preview">
+      <div className="live-preview__verification" aria-label="Verification progress">
+        <p className="setup-step__empty">
+          Verification in progress — no agent session to watch; see the live preview.
+        </p>
+        <ul className="live-preview__verification-log">
+          {items.map((item, index) => (
+            <li key={`${item.name}-${index}`} data-status={verificationTone(item.state)}>
+              <span aria-hidden="true">{verificationSymbol(item.state)}</span>
+              <span className="live-preview__verification-name">{item.name}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/** Overview counts and per-command status for an active harness contract. */
+function VerificationSummary({
+  items,
+}: {
+  items: readonly VerificationItemView[];
+}): React.ReactElement {
+  const counts = verificationCounts(items);
+  return (
+    <section className="review-gate" aria-label="Verification">
+      <div className="review-gate__heading">
+        <div>
+          <span className="review-gate__eyebrow">Verification</span>
+          <h4>
+            Verifying implementation · {counts.done}/{counts.total}
+          </h4>
+        </div>
+      </div>
+      <ul className="review-gate__axes" aria-label="Verification commands">
+        {items.map((item, index) => (
+          <li
+            key={`${item.name}-${index}`}
+            data-status={verificationTone(item.state)}
+            title={`${item.name}: ${item.state}`}
+          >
+            <span>{item.name}</span>
+            <span aria-hidden="true">{verificationSymbol(item.state)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="review-gate__counts">
+        {counts.done}/{counts.total} complete
+        {counts.failed > 0 ? ` · ✕${counts.failed}` : ''}
       </p>
     </section>
   );

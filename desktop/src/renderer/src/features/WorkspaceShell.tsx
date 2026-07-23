@@ -295,7 +295,8 @@ export function WorkspaceShell({
     if (tabs === null) return;
     persist({ ...tabs, activeFeatureId: null });
     setView('home');
-  }, [persist, tabs]);
+    loadList();
+  }, [loadList, persist, tabs]);
   const closeAttentionPreview = useCallback(() => setAttentionPreviewRequest(null), []);
 
   useEffect(() => {

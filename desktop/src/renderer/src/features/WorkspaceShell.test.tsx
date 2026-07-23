@@ -385,6 +385,49 @@ describe('WorkspaceShell tabs', () => {
     expect(mock.api.listFeatures.mock.calls.length).toBe(base + 2);
   });
 
+  it('refetches the feature list when returning Home without an invalidation', async () => {
+    const published = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'Search revamp',
+      status: 'Published',
+      currentPhase: 'Publish',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+    });
+    const done = {
+      ...published,
+      status: 'Done' as const,
+    };
+    let current = published;
+    const mock = installAgenticoMock({
+      settings: settingsWithTab(),
+      features: [
+        {
+          id: FEATURE_ID,
+          name: 'Search revamp',
+          status: 'Published',
+          currentPhase: 'Publish',
+          repos: ['repo-a'],
+          createdAt: '2026-07-14T10:00:00Z',
+          activeRun: 1,
+          runCount: 1,
+          warnings: [],
+        },
+      ],
+    });
+    mock.api.getFeature.mockImplementation(() => Promise.resolve(current));
+    render(<WorkspaceShell />);
+
+    await screen.findByRole('heading', { name: 'Search revamp' });
+    await waitFor(() => expect(mock.api.listFeatures).toHaveBeenCalledTimes(1));
+    current = done;
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Home' }));
+
+    const doneGroup = await screen.findByRole('region', { name: 'Done' });
+    expect(within(doneGroup).getByText('Search revamp')).toBeInTheDocument();
+    expect(mock.api.listFeatures).toHaveBeenCalledTimes(2);
+  });
+
   it('supports keyboard navigation across the tab strip', async () => {
     installAgenticoMock({ settings: settingsWithTab() });
     render(<WorkspaceShell />);

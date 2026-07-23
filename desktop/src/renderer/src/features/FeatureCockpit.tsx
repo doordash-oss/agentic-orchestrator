@@ -32,7 +32,18 @@ import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { RepositoryInstrument } from './RepositoryInstrument';
 import { CycleJourneys } from './CycleJourneys';
-import { CompletionWorkspace } from './CompletionWorkspace';
+import { useCompletionPreflight } from './completion/useCompletionPreflight';
+import {
+  completionBarModel,
+  type CompletionVerb,
+  type CompletionVerbModel,
+} from './completion/completionBarModel';
+import { ChangesSurface } from './completion/ChangesSurface';
+import { PublishModalBody } from './completion/PublishModal';
+import { MergeModalBody } from './completion/MergeModal';
+import { MarkDoneModalBody } from './completion/MarkDoneModal';
+import { CleanupConfirm } from './completion/CleanupConfirm';
+import type { CompletionAction } from './completion/completionShared';
 import type { FeatureActionResult } from '../../../shared/ipc';
 import {
   AttentionDetail,
@@ -97,8 +108,6 @@ const TASK_STATUS_ICON: Record<SetupTaskView['status'], string> = {
   done: '●',
   failed: '✕',
 };
-
-const COMPLETION_ACTION_IDS = ['publish', 'merge', 'mark-done', 'cleanup', 'delete'] as const;
 
 function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch: string | null }) {
   return (
@@ -320,6 +329,7 @@ function CockpitActionBar({
   status,
   primaryActions,
   menuActions,
+  extraControls,
   isNarrow,
   inspectorButtonRef,
   onOpenInspector,
@@ -327,6 +337,7 @@ function CockpitActionBar({
   status: FeatureSnapshot['status'];
   primaryActions: CockpitPrimaryAction[];
   menuActions: CockpitMenuAction[];
+  extraControls?: ReactNode;
   isNarrow: boolean;
   inspectorButtonRef: RefObject<HTMLButtonElement | null>;
   onOpenInspector(): void;
@@ -378,6 +389,7 @@ function CockpitActionBar({
           {action.busy === true ? `${action.busyLabel ?? action.label}…` : action.label}
         </button>
       ))}
+      {extraControls}
       {menuActions.length > 0 ? (
         <details ref={menuRef} className="cockpit__overflow">
           <summary className="cockpit__overflow-summary" aria-label="More actions">
@@ -426,6 +438,63 @@ function CockpitActionBar({
         </button>
       ) : null}
     </div>
+  );
+}
+
+function CompletionWrapUpMenu({
+  verbs,
+  onSelect,
+}: {
+  verbs: CompletionVerbModel[];
+  onSelect: (verb: CompletionVerb) => void;
+}) {
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const menu = menuRef.current;
+      if (menu?.open === true && !menu.contains(event.target as Node)) menu.open = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const menu = menuRef.current;
+      if (menu?.open === true) {
+        menu.open = false;
+        menu.querySelector<HTMLElement>('.cockpit__wrapup-summary')?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+  return (
+    <details ref={menuRef} className="cockpit__wrapup">
+      <summary className="cockpit__wrapup-summary" aria-label="Wrap up">
+        Wrap up <span aria-hidden="true">▾</span>
+      </summary>
+      <div className="cockpit__wrapup-menu" role="menu">
+        {verbs.map((v) => (
+          <div key={v.verb} className="cockpit__wrapup-item">
+            <button
+              type="button"
+              role="menuitem"
+              disabled={v.state === 'blocked'}
+              onClick={() => {
+                if (menuRef.current !== null) menuRef.current.open = false;
+                onSelect(v.verb);
+              }}
+            >
+              {v.label}
+              <span className="cockpit__wrapup-state" aria-hidden="true">
+                {v.state === 'done' ? '✓' : v.state === 'blocked' ? v.blocker : ''}
+              </span>
+            </button>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -788,9 +857,9 @@ export function FeatureCockpit({
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [rewindDialog, setRewindDialog] = useState(false);
   const [cyclesDialog, setCyclesDialog] = useState(false);
-  const [completionOpen, setCompletionOpen] = useState(false);
+  const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
-  const [activeSurface, setActiveSurface] = useState<'document' | 'live'>('document');
+  const [activeSurface, setActiveSurface] = useState<'document' | 'live' | 'changes'>('document');
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
     run: RunDetailView | null;
@@ -837,6 +906,30 @@ export function FeatureCockpit({
     },
     [featureId],
   );
+
+  const completionEnabled =
+    state.phase === 'loaded' &&
+    ['publish', 'merge', 'mark-done', 'cleanup', 'delete'].some(
+      (id) => actionById(state.snapshot, id) !== undefined,
+    );
+  const preflightCompletion = useCallback(
+    (id: string) => window.agentico.preflightCompletion({ featureId: id }),
+    [],
+  );
+  const completion = useCompletionPreflight(featureId, completionEnabled, preflightCompletion);
+  const dispatchCompletion = useCallback(
+    (id: string, action: CompletionAction, body?: Record<string, unknown>) =>
+      window.agentico.dispatchFeatureAction({
+        featureId: id,
+        action,
+        ...(body === undefined ? {} : { body }),
+      } as FeatureActionRequest),
+    [],
+  );
+  const onCompletionDispatched = useCallback(() => {
+    void completion.refresh();
+    void load({ silent: true });
+  }, [completion, load]);
 
   // Fetch on mount; refetch on relevant invalidations; track stream health
   // so the view can show that it is refreshing after a reconnect.
@@ -1086,9 +1179,6 @@ export function FeatureCockpit({
   const rebaseAction = actionById(snapshot, 'rebase');
   const reviewCommentsAction = actionById(snapshot, 'review-comments');
   const refactorAction = actionById(snapshot, 'refactor');
-  const completionAvailable = COMPLETION_ACTION_IDS.some(
-    (actionId) => actionById(snapshot, actionId) !== undefined,
-  );
   const hasPendingReview = isPendingReviewStatus(snapshot.status);
   const isArchiveMode =
     selectedRunNumber !== undefined && selectedRunNumber !== null && selectedRunNumber > 0;
@@ -1192,12 +1282,13 @@ export function FeatureCockpit({
   // its dialog is on stage.
   const documentAvailable = hasPendingReview;
   const liveAvailable = showsRun(snapshot);
-  const stageSurfaces: { id: 'document' | 'live'; label: string }[] = [];
+  const stageSurfaces: { id: 'document' | 'live' | 'changes'; label: string }[] = [];
   if (documentAvailable) stageSurfaces.push({ id: 'document', label: 'Document' });
   if (liveAvailable) stageSurfaces.push({ id: 'live', label: 'Live activity' });
+  if (completionEnabled) stageSurfaces.push({ id: 'changes', label: 'Changes' });
   const surfaceIds = stageSurfaces.map((surface) => surface.id);
   const forcedLive = attentionPreviewRequest?.attentionId !== undefined && liveAvailable;
-  const resolvedSurface: 'document' | 'live' | null = forcedLive
+  const resolvedSurface: 'document' | 'live' | 'changes' | null = forcedLive
     ? 'live'
     : surfaceIds.includes(activeSurface)
       ? activeSurface
@@ -1265,16 +1356,6 @@ export function FeatureCockpit({
       disabled: busy,
     });
   }
-  if (completionAvailable) {
-    primaryActions.push({
-      key: 'complete',
-      label: 'Complete',
-      ariaLabel: 'Open completion workspace',
-      variant: 'complete',
-      onClick: () => setCompletionOpen(true),
-    });
-  }
-
   const menuActions: CockpitMenuAction[] = [];
   if (startAction !== undefined && !startAction.enabled) {
     menuActions.push({
@@ -1345,6 +1426,51 @@ export function FeatureCockpit({
     });
   }
 
+  const completionCandidates = new Set<CompletionVerb>(
+    (['publish', 'merge', 'mark-done', 'cleanup'] as CompletionVerb[]).filter(
+      (verb) => actionById(snapshot, verb) !== undefined,
+    ),
+  );
+  const barVerbs =
+    completion.preflight !== null
+      ? completionBarModel(completion.preflight, completionCandidates)
+      : [];
+  const completionControls =
+    completionEnabled && barVerbs.length > 0 ? (
+      isNarrow ? (
+        <CompletionWrapUpMenu verbs={barVerbs} onSelect={(v) => setCompletionModal(v)} />
+      ) : (
+        <>
+          {barVerbs.map((v) =>
+            v.state === 'done' ? (
+              <button
+                key={v.verb}
+                type="button"
+                className="cockpit__completion-chip"
+                onClick={() => setCompletionModal(v.verb)}
+                aria-label={`${v.label} — reopen`}
+              >
+                {v.label} ✓
+              </button>
+            ) : (
+              <button
+                key={v.verb}
+                type="button"
+                className={
+                  v.primary ? 'cockpit__completion-button' : 'cockpit__completion-secondary'
+                }
+                disabled={v.state === 'blocked'}
+                title={v.state === 'blocked' ? v.blocker : undefined}
+                onClick={() => setCompletionModal(v.verb)}
+              >
+                {v.label}
+              </button>
+            ),
+          )}
+        </>
+      )
+    ) : null;
+
   return (
     <section className="cockpit" aria-label={`Feature ${snapshot.name}`}>
       {isArchiveMode ? (
@@ -1379,6 +1505,7 @@ export function FeatureCockpit({
             status={snapshot.status}
             primaryActions={primaryActions}
             menuActions={menuActions}
+            extraControls={completionControls}
             isNarrow={isNarrow}
             inspectorButtonRef={inspectorButtonRef}
             onOpenInspector={() => setInspectorOpen(true)}
@@ -1408,150 +1535,135 @@ export function FeatureCockpit({
 
           <div className="cockpit__content">
             <main className="cockpit__stage">
-              {completionOpen ? (
-                <div className="cockpit__surface cockpit__surface--live">
-                  <CompletionWorkspace
-                    featureId={featureId}
-                    featureName={snapshot.name}
-                    onClose={() => {
-                      setCompletionOpen(false);
-                      void load({ silent: true });
-                    }}
-                    preflightCompletion={(id) =>
-                      window.agentico.preflightCompletion({ featureId: id })
-                    }
-                    getRepositoryDiff={(id, repo, filePath) =>
-                      window.agentico.getRepositoryDiff({
-                        featureId: id,
-                        repo,
-                        ...(filePath === undefined ? {} : { filePath }),
-                      })
-                    }
-                    dispatchAction={(id, action, body) =>
-                      window.agentico.dispatchFeatureAction({
-                        featureId: id,
-                        action,
-                        ...(body === undefined ? {} : { body }),
-                      } as FeatureActionRequest)
-                    }
-                    generatePublishDescription={(id, repos) =>
-                      window.agentico.generatePublishDescription({ featureId: id, repos })
-                    }
-                    openExternal={(url) => window.agentico.openExternal({ url })}
-                    revealPath={(id, repo) => window.agentico.revealPath({ featureId: id, repo })}
-                    onHandoffToRebase={() => setCyclesDialog(true)}
-                  />
-                </div>
-              ) : (
-                <>
-                  {stageSurfaces.length > 1 ? (
-                    <div className="cockpit__stage-tabs" role="tablist" aria-label="Stage view">
-                      {stageSurfaces.map((surface) => (
-                        <button
-                          key={surface.id}
-                          type="button"
-                          role="tab"
-                          aria-selected={resolvedSurface === surface.id}
-                          className="cockpit__stage-tab"
-                          data-active={resolvedSurface === surface.id}
-                          onClick={() => setActiveSurface(surface.id)}
-                        >
-                          {surface.label}
-                          {surface.id === 'live' &&
-                          resolvedSurface !== 'live' &&
-                          stopAction !== undefined ? (
-                            <span
-                              className="cockpit__stage-tab-dot"
-                              aria-label="Live activity in progress"
-                            />
-                          ) : null}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {resolvedSurface === 'document' ? (
-                    <div className="cockpit__surface cockpit__surface--document">
-                      <ReviewSurface
-                        featureId={featureId}
-                        onResolved={() => load({ silent: true })}
-                      />
-                    </div>
-                  ) : null}
-
-                  {resolvedSurface === 'live' ? (
-                    <div className="cockpit__surface cockpit__surface--live">
-                      <CurrentRunInspection
-                        featureId={featureId}
-                        runNumber={snapshot.activeRun}
-                        currentPhase={snapshot.currentPhase}
-                        featureStatus={snapshot.status}
-                        currentRoadmapPhase={snapshot.currentRoadmapPhase}
-                        totalRoadmapPhases={snapshot.totalRoadmapPhases}
-                        currentIteration={snapshot.currentIteration}
-                        phaseStatus={snapshot.phaseStatus}
-                        reviewGate={snapshot.reviewGate}
-                        verificationItems={snapshot.verificationItems}
-                        waitReason={snapshot.waitReason}
-                        shouldStream={stopAction !== undefined}
-                        attentionRequestId={
-                          attentionPreviewRequest?.attentionId === undefined
-                            ? undefined
-                            : attentionPreviewRequest.requestId
-                        }
-                        onAttentionPreviewClose={onAttentionPreviewClose}
-                        attentionFooter={
-                          previewAttentionItem === undefined ? undefined : (
-                            <AttentionDetail
-                              item={previewAttentionItem}
-                              busy={attentionBusy === previewAttentionItem.id}
-                              drafts={attentionDrafts}
-                              setDrafts={setAttentionDrafts}
-                              saveDraft={(action, options) =>
-                                saveAttentionDraft(previewAttentionItem.id, action, options)
-                              }
-                              submit={(action, options) =>
-                                void submitAttention(previewAttentionItem, action, options)
-                              }
-                            />
-                          )
-                        }
-                      />
-                    </div>
-                  ) : null}
-
-                  {resolvedSurface === null && ready ? (
-                    <div className="cockpit__empty-state" role="status">
-                      <span aria-hidden="true">●</span> Ready to start
-                      <p>Start runs the {snapshot.currentPhase} phase for this feature.</p>
-                    </div>
-                  ) : null}
-
-                  <div className="cockpit__stage-status">
-                    {snapshot.failure?.message !== undefined ? (
-                      <div role="alert" className="create-form__error">
-                        <span className="create-form__error-code">
-                          {snapshot.failure.type ?? 'failure'}
-                        </span>
-                        <p className="create-form__error-message">{snapshot.failure.message}</p>
-                      </div>
-                    ) : null}
-
-                    {actionError !== null ? (
-                      <div role="alert" className="create-form__error">
-                        <span className="create-form__error-code">{actionError.error.code}</span>
-                        <p className="create-form__error-message">
-                          {actionError.action} was rejected — {actionError.error.message}
-                        </p>
-                      </div>
-                    ) : null}
-
-                    <p className="cockpit__announcement" role="status" aria-live="polite">
-                      {announcement}
-                    </p>
+              <>
+                {stageSurfaces.length > 1 ? (
+                  <div className="cockpit__stage-tabs" role="tablist" aria-label="Stage view">
+                    {stageSurfaces.map((surface) => (
+                      <button
+                        key={surface.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={resolvedSurface === surface.id}
+                        className="cockpit__stage-tab"
+                        data-active={resolvedSurface === surface.id}
+                        onClick={() => setActiveSurface(surface.id)}
+                      >
+                        {surface.label}
+                        {surface.id === 'live' &&
+                        resolvedSurface !== 'live' &&
+                        stopAction !== undefined ? (
+                          <span
+                            className="cockpit__stage-tab-dot"
+                            aria-label="Live activity in progress"
+                          />
+                        ) : null}
+                      </button>
+                    ))}
                   </div>
-                </>
-              )}
+                ) : null}
+
+                {resolvedSurface === 'document' ? (
+                  <div className="cockpit__surface cockpit__surface--document">
+                    <ReviewSurface
+                      featureId={featureId}
+                      onResolved={() => load({ silent: true })}
+                    />
+                  </div>
+                ) : null}
+
+                {resolvedSurface === 'live' ? (
+                  <div className="cockpit__surface cockpit__surface--live">
+                    <CurrentRunInspection
+                      featureId={featureId}
+                      runNumber={snapshot.activeRun}
+                      currentPhase={snapshot.currentPhase}
+                      featureStatus={snapshot.status}
+                      currentRoadmapPhase={snapshot.currentRoadmapPhase}
+                      totalRoadmapPhases={snapshot.totalRoadmapPhases}
+                      currentIteration={snapshot.currentIteration}
+                      phaseStatus={snapshot.phaseStatus}
+                      reviewGate={snapshot.reviewGate}
+                      verificationItems={snapshot.verificationItems}
+                      waitReason={snapshot.waitReason}
+                      shouldStream={stopAction !== undefined}
+                      attentionRequestId={
+                        attentionPreviewRequest?.attentionId === undefined
+                          ? undefined
+                          : attentionPreviewRequest.requestId
+                      }
+                      onAttentionPreviewClose={onAttentionPreviewClose}
+                      attentionFooter={
+                        previewAttentionItem === undefined ? undefined : (
+                          <AttentionDetail
+                            item={previewAttentionItem}
+                            busy={attentionBusy === previewAttentionItem.id}
+                            drafts={attentionDrafts}
+                            setDrafts={setAttentionDrafts}
+                            saveDraft={(action, options) =>
+                              saveAttentionDraft(previewAttentionItem.id, action, options)
+                            }
+                            submit={(action, options) =>
+                              void submitAttention(previewAttentionItem, action, options)
+                            }
+                          />
+                        )
+                      }
+                    />
+                  </div>
+                ) : null}
+
+                {resolvedSurface === 'changes' ? (
+                  <div className="cockpit__surface cockpit__surface--live">
+                    <ChangesSurface
+                      featureId={featureId}
+                      preflight={completion.preflight}
+                      loading={completion.loading}
+                      error={completion.error}
+                      onRetry={() => void completion.refresh()}
+                      getRepositoryDiff={(id, repo, filePath) =>
+                        window.agentico.getRepositoryDiff({
+                          featureId: id,
+                          repo,
+                          ...(filePath === undefined ? {} : { filePath }),
+                        })
+                      }
+                      openExternal={(url) => window.agentico.openExternal({ url })}
+                      revealPath={(id, repo) => window.agentico.revealPath({ featureId: id, repo })}
+                    />
+                  </div>
+                ) : null}
+
+                {resolvedSurface === null && ready ? (
+                  <div className="cockpit__empty-state" role="status">
+                    <span aria-hidden="true">●</span> Ready to start
+                    <p>Start runs the {snapshot.currentPhase} phase for this feature.</p>
+                  </div>
+                ) : null}
+
+                <div className="cockpit__stage-status">
+                  {snapshot.failure?.message !== undefined ? (
+                    <div role="alert" className="create-form__error">
+                      <span className="create-form__error-code">
+                        {snapshot.failure.type ?? 'failure'}
+                      </span>
+                      <p className="create-form__error-message">{snapshot.failure.message}</p>
+                    </div>
+                  ) : null}
+
+                  {actionError !== null ? (
+                    <div role="alert" className="create-form__error">
+                      <span className="create-form__error-code">{actionError.error.code}</span>
+                      <p className="create-form__error-message">
+                        {actionError.action} was rejected — {actionError.error.message}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <p className="cockpit__announcement" role="status" aria-live="polite">
+                    {announcement}
+                  </p>
+                </div>
+              </>
             </main>
             {!isNarrow ? (
               <aside className="cockpit__inspector" aria-label="Feature inspector">
@@ -1648,6 +1760,72 @@ export function FeatureCockpit({
                 onOpenGate={() => setCyclesDialog(false)}
               />
             </CockpitModal>
+          ) : null}
+
+          {completionModal === 'publish' && completion.preflight !== null ? (
+            <CockpitModal
+              title="Publish"
+              ariaLabel="Publish reviewed changes"
+              onClose={() => setCompletionModal(null)}
+            >
+              <PublishModalBody
+                featureId={featureId}
+                preflight={completion.preflight}
+                dispatchAction={dispatchCompletion}
+                generatePublishDescription={(id, repos) =>
+                  window.agentico.generatePublishDescription({ featureId: id, repos })
+                }
+                openExternal={(url) => window.agentico.openExternal({ url })}
+                onDispatched={onCompletionDispatched}
+              />
+            </CockpitModal>
+          ) : null}
+
+          {completionModal === 'merge' && completion.preflight !== null ? (
+            <CockpitModal
+              title="Merge"
+              ariaLabel="Merge local repositories"
+              onClose={() => setCompletionModal(null)}
+            >
+              <MergeModalBody
+                featureId={featureId}
+                preflight={completion.preflight}
+                dispatchAction={dispatchCompletion}
+                onDispatched={onCompletionDispatched}
+                onHandoffToRebase={() => {
+                  setCompletionModal(null);
+                  setCyclesDialog(true);
+                }}
+              />
+            </CockpitModal>
+          ) : null}
+
+          {completionModal === 'mark-done' && completion.preflight !== null ? (
+            <CockpitModal
+              title="Mark done"
+              ariaLabel="Mark feature done"
+              onClose={() => setCompletionModal(null)}
+            >
+              <MarkDoneModalBody
+                featureId={featureId}
+                preflight={completion.preflight}
+                dispatchAction={dispatchCompletion}
+                onDispatched={() => {
+                  onCompletionDispatched();
+                  setCompletionModal(null);
+                }}
+              />
+            </CockpitModal>
+          ) : null}
+
+          {completionModal === 'cleanup' && completion.preflight !== null ? (
+            <CleanupConfirm
+              featureId={featureId}
+              preflight={completion.preflight}
+              dispatchAction={dispatchCompletion}
+              onClose={() => setCompletionModal(null)}
+              onDispatched={onCompletionDispatched}
+            />
           ) : null}
         </>
       )}

@@ -171,7 +171,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(details.open).toBe(false);
   });
 
-  it('opens the completion workspace from server-advertised completion actions', async () => {
+  it('opens the publish modal from a server-advertised completion verb', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'CodeReady',
@@ -187,9 +187,11 @@ describe('FeatureCockpit snapshot rendering', () => {
     renderCockpit(mock);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('button', { name: 'Open completion workspace' }));
+    await user.click(await screen.findByRole('button', { name: 'Publish' }));
 
-    expect(await screen.findByRole('heading', { name: 'Completion' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('dialog', { name: 'Publish reviewed changes' }),
+    ).toBeInTheDocument();
     expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
   });
 

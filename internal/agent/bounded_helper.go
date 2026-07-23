@@ -16,7 +16,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,6 +28,13 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+// errHelperReturnedErrorResult is the sentinel behind "helper returned an
+// error result" (llm.TermErrored): the CLI process ran and reported a
+// provider/API-level error result rather than a truncated or completed turn.
+// Wrapped with %w so callers can retry on it via errors.Is without matching
+// error text.
+var errHelperReturnedErrorResult = errors.New("helper returned an error result")
 
 const (
 	BoundedHelperStatusCompleted          = "completed"
@@ -201,6 +210,9 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 }
 
 func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boundedHelperRunConfig, label string) (*BoundedHelperResult, error, bool) {
+	if cfg.sessOpts != nil {
+		archiveExistingLog(cfg.sessOpts.LogPath)
+	}
 	sess, err := pr.SessionManager.StartSession(cfg.sessionID, cfg.featureID, cfg.phase, cfg.command, cfg.workDir, cfg.env, cfg.sessOpts)
 	if err != nil {
 		return nil, fmt.Errorf("running %s: starting session: %w", label, err), false
@@ -257,7 +269,8 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 		retryable := err != nil &&
 			result != nil &&
 			result.Status == BoundedHelperStatusFailed &&
-			isRetryableInfrastructureSessionFailure(sess, ExtractSessionCost(sess), time.Since(sessionStart))
+			(isRetryableInfrastructureSessionFailure(sess, ExtractSessionCost(sess), time.Since(sessionStart)) ||
+				errors.Is(err, errHelperReturnedErrorResult))
 		return result, err, retryable
 	}
 
@@ -462,7 +475,7 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 		return result, fmt.Errorf("running %s: helper asked for user input", label)
 	case llm.TermErrored:
 		result.Status = BoundedHelperStatusFailed
-		return result, fmt.Errorf("running %s: helper returned an error result", label)
+		return result, fmt.Errorf("running %s: %w", label, errHelperReturnedErrorResult)
 	case llm.TermRefused:
 		result.Status = BoundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: helper refused the request", label)
@@ -473,6 +486,22 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 		result.Status = BoundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: helper ended in an unknown state", label)
 	}
+}
+
+// archiveExistingLog preserves a session log from a prior attempt at the
+// same LogPath before the session manager truncates it via os.Create. This
+// covers both an in-process retry (bounded_helper's own retry loop) and a
+// fresh process picking up mid-phase after a restart — both start a new
+// session against the same axis/log directory, and without this the failed
+// attempt's transcript is gone the moment the retry begins.
+func archiveExistingLog(path string) {
+	if path == "" {
+		return
+	}
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
+	_ = os.Rename(path, fmt.Sprintf("%s.%d.bak", path, time.Now().UnixNano()))
 }
 
 func boundedHelperSnapshot(responsePath string, sess ports.SessionHandle, status string) *BoundedHelperResult {

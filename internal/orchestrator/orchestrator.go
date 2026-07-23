@@ -327,6 +327,15 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		Sessions:          o.deps.Sessions,
 		OnCompletionError: o.surfaceDispatchCompletionError,
 	})
+	if o.deps.PhaseRunner != nil {
+		existingProgressHook := o.deps.PhaseRunner.OnVerificationProgress
+		o.deps.PhaseRunner.OnVerificationProgress = func(featureID string) {
+			if existingProgressHook != nil {
+				existingProgressHook(featureID)
+			}
+			o.emitEvent(ports.Event{Type: ports.VerificationProgress, FeatureID: featureID})
+		}
+	}
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,
 		planPath string,

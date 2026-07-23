@@ -1455,3 +1455,83 @@ func TestRenderPhaseProgress_KBSubRows_RenderedForMultiRepo(t *testing.T) {
 		t.Errorf("renderPhaseProgress() = %q, want worker name in KB sub-rows", got)
 	}
 }
+
+func TestFormatPhaseStatusVerifyingShowsCountOnly(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		VerificationItems: []feature.VerificationItemStatus{
+			{Name: "Go build passes", State: "passed"},
+			{Name: "Desktop tests", State: "running"},
+			{Name: "Security tests", State: "pending"},
+		},
+	})
+	got := formatPhaseStatus(f)
+	if !strings.Contains(got, "verifying") || !strings.Contains(got, "1/3") {
+		t.Fatalf("formatPhaseStatus() = %q, want compact verifying [1/3]", got)
+	}
+	for _, name := range []string{"Go build passes", "Desktop tests", "Security tests"} {
+		if strings.Contains(got, name) {
+			t.Fatalf("formatPhaseStatus() = %q, want counts only with no command names", got)
+		}
+	}
+}
+
+func TestRenderPhaseProgressVerifyingOmitsStaleContextUsage(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-verifying",
+		Slug:         "verifying",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Models:       config.ModelConfig{Implementation: "opus"},
+	}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		VerificationItems: []feature.VerificationItemStatus{
+			{Name: "Go build passes", State: "passed"},
+			{Name: "Desktop tests", State: "running"},
+		},
+	})
+	m := NewDetailModel(f, "")
+	m.contextPct = 17
+
+	got := stripANSI(m.renderPhaseProgress(f))
+	if !strings.Contains(got, "verifying: [1/2]") {
+		t.Fatalf("renderPhaseProgress() = %q, want verification progress", got)
+	}
+	if strings.Contains(got, "context window") || strings.Contains(got, "17%") {
+		t.Fatalf("renderPhaseProgress() = %q, want no stale session context during harness verification", got)
+	}
+}
+
+func TestFormatPhaseStatusVerifyingShowsFailureCount(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		VerificationItems: []feature.VerificationItemStatus{
+			{Name: "Go build passes", State: "failed"},
+			{Name: "Desktop tests", State: "running"},
+		},
+	})
+	got := formatPhaseStatus(f)
+	if !strings.Contains(got, "✗1") {
+		t.Fatalf("formatPhaseStatus() = %q, want failure count ✗1", got)
+	}
+}
+
+func TestFormatPhaseStatusReviewingGateWinsOverStaleVerifying(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing}
+	f.SetRun(&feature.Run{
+		CurrentPhaseStatus: "verifying",
+		ReviewingGate:      true,
+		ValidatorStatuses:  map[string]string{"Craft": "running"},
+	})
+	got := formatPhaseStatus(f)
+	if !strings.Contains(got, "reviewing") {
+		t.Fatalf("formatPhaseStatus() = %q, want reviewing to win over stale verifying status", got)
+	}
+}

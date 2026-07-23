@@ -525,6 +525,48 @@ func TestPromptEndTurn_NumberedOptionsMissingConfidenceRemindsBeforeSurfacing(t 
 	}
 }
 
+// TestPromptEndTurn_MultiSentenceStemQuestionSurfacesOptions proves a stem
+// whose '?' ends the first sentence — with a declarative clarifier after it —
+// still surfaces as an AskUserQuestion instead of being misread as a plain
+// completion.
+func TestPromptEndTurn_MultiSentenceStemQuestionSurfacesOptions(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, strings.Join([]string{
+		"How should the opt-in notification preview setting be scoped? Existing server settings already control whether a feature may notify; this decision only governs how much content a notification reveals.",
+		"",
+		"1. Global preview toggle (Recommended): One app-local privacy setting. [confidence: 0.88]",
+		"2. Per-feature preview toggle: More configuration and state. [confidence: 0.62]",
+		"3. Per-attention-type toggle: Most control, highest complexity. [confidence: 0.38]",
+	}, "\n"))
+	msgs := endTurn(t, p, promptID)
+	if len(msgs) != 1 || msgs[0].ControlRequest == nil || msgs[0].Result != nil {
+		t.Fatalf("multi-sentence stem produced %+v, want one AskUserQuestion control request and no result", msgs)
+	}
+	qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+	if len(qs) != 1 || len(qs[0].Options) != 3 {
+		t.Fatalf("questions = %+v, want one question with 3 options", qs)
+	}
+	if !strings.HasPrefix(qs[0].Question, "How should the opt-in notification preview setting be scoped?") {
+		t.Fatalf("question = %q, want the multi-sentence stem", qs[0].Question)
+	}
+}
+
+// TestPromptEndTurn_InformationalListStaysCompletion proves a numbered list
+// with no question signal (no '?' stem, no confidence/(Recommended) markers)
+// is still a normal completion.
+func TestPromptEndTurn_InformationalListStaysCompletion(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, strings.Join([]string{
+		"Here's what I changed.",
+		"1. Updated the handler to reject oversized bodies.",
+		"2. Added a regression test for the new limit.",
+	}, "\n"))
+	msgs := endTurn(t, p, promptID)
+	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+		t.Fatalf("informational list produced %+v, want a success result", msgs)
+	}
+}
+
 // TestPromptEndTurn_MalformedQuestionRemindsThenSynthesizes proves an unformatted
 // question first earns a reformat-reminder turn (no message, no result), and when
 // the agent still fails to format on the reminded turn the provider falls back to

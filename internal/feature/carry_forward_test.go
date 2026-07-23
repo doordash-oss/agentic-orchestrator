@@ -17,7 +17,10 @@ package feature_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
@@ -85,6 +88,73 @@ func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
 	}
 	if sealedRun.Artifacts["research"] != outsideResearch {
 		t.Errorf("sealed Artifacts[research] = %q, want %q", sealedRun.Artifacts["research"], outsideResearch)
+	}
+}
+
+func TestRewindToPhase_CarriesCostsOfKeptPhases(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestManager(t)
+	f, _ := seedRewindableFeature(t, mgr)
+
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.RecordSessionCost(feature.SessionCostRecord{SessionID: "s-kb", PhaseKey: "knowledgebase", CostUSD: 1.25})
+		ff.RecordSessionCost(feature.SessionCostRecord{SessionID: "s-inq", PhaseKey: "inquire", CostUSD: 2.5})
+		ff.RecordSessionCost(feature.SessionCostRecord{SessionID: "s-des", PhaseKey: "design", CostUSD: 4})
+		ff.RecordSessionCost(feature.SessionCostRecord{SessionID: "s-plan", PhaseKey: "plan", CostUSD: 8})
+		ff.RecordSessionCost(feature.SessionCostRecord{SessionID: "s-impl", PhaseKey: "phase-1-impl", CostUSD: 16})
+		ff.PhaseTimings = map[string]time.Duration{
+			"inquire": time.Minute,
+			"plan":    2 * time.Minute,
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify costs: %v", err)
+	}
+
+	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+
+	got, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	wantCosts := map[string]float64{
+		"knowledgebase": 1.25,
+		"inquire":       2.5,
+		"design":        4,
+	}
+	if len(got.PhaseCosts) != len(wantCosts) {
+		t.Fatalf("PhaseCosts = %v, want %v", got.PhaseCosts, wantCosts)
+	}
+	for k, want := range wantCosts {
+		if got.PhaseCosts[k] != want {
+			t.Errorf("PhaseCosts[%q] = %v, want %v", k, got.PhaseCosts[k], want)
+		}
+	}
+	if got.PhaseRuntime("inquire") != time.Minute {
+		t.Errorf("PhaseRuntime(inquire) = %v, want 1m", got.PhaseRuntime("inquire"))
+	}
+	if got.PhaseRuntime("plan") != 0 {
+		t.Errorf("PhaseRuntime(plan) = %v, want dropped", got.PhaseRuntime("plan"))
+	}
+	var sessionKeys []string
+	for _, rec := range got.SessionCosts {
+		sessionKeys = append(sessionKeys, rec.PhaseKey)
+	}
+	sort.Strings(sessionKeys)
+	if want := []string{"design", "inquire", "knowledgebase"}; !slices.Equal(sessionKeys, want) {
+		t.Errorf("SessionCosts keys = %v, want %v", sessionKeys, want)
+	}
+
+	// The sealed run keeps the full ledger untouched.
+	sealedRun, err := mgr.Store.LoadRun(f.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun(1): %v", err)
+	}
+	if len(sealedRun.PhaseCosts) != 5 || sealedRun.PhaseCosts["phase-1-impl"] != 16 {
+		t.Errorf("sealed PhaseCosts = %v, want full 5-key ledger", sealedRun.PhaseCosts)
 	}
 }
 

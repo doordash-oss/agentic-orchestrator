@@ -2507,6 +2507,7 @@ func TestImplementLoopSkipIterationReview(t *testing.T) {
 		StateDir:                   stateDir,
 		DangerouslySkipPermissions: true,
 		BuildSession:               buildSession,
+		CommandRunner:              NewExecCommandRunner(),
 		SkipIterationReview:        true,
 	}
 
@@ -2894,6 +2895,259 @@ case "$_step" in
 	return b.String()
 }
 
+func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-review-park")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	runVerificationTestCommand(t, runner, workDir, "git commit --allow-empty -qm base")
+
+	planPath := filepath.Join(artifactDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("### Automated Verification\n- [ ] Check passes: `printf verified`\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.JSONLError("Unable to connect to API (ENOTFOUND)")+"\n")
+	f := &feature.Feature{
+		ID: "test-review-park", Name: "Review Park", Slug: "review-park",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, captured := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 3, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: false, PhaseType: "collapsed",
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_error" {
+		t.Fatalf("result = %+v, want review_error park when no axis produced a verdict", result)
+	}
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if !HasPhaseComplete(iterDir) {
+		t.Fatal("phase_complete missing; review-only resume would re-run the implementer")
+	}
+	if _, statErr := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(statErr) {
+		t.Fatalf("meta.yaml written for an unreviewed iteration; resume would advance to iteration 2: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(artifactDir, "iteration-02")); !os.IsNotExist(statErr) {
+		t.Fatal("iteration-02 exists; infra failure consumed an implementer iteration")
+	}
+	implementerSessions := len(*captured)
+	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, implementationReviewAxisSelection{Profile: f.EffectivePipeline()})
+	if implementerSessions != 1+len(axes) {
+		t.Fatalf("BuildSession calls = %d, want one implementer + %d review axes", implementerSessions, len(axes))
+	}
+
+	// Network restored: the same review script now approves. Resume must run
+	// review-only for the same iteration, reuse the already-generated
+	// verification report instead of re-executing the contract, and skip
+	// axes that already produced a complete verdict.
+	contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), f, cfg.RepoName)
+	if !ok {
+		t.Fatal("no contract path resolved")
+	}
+	runsBefore := countContractEvidenceRuns(t, contractPath)
+	cachedAxis := axes[0]
+	cachedAxisDir := filepath.Join(iterDir, "review", implementationReviewAxisSlug(cachedAxis.Name))
+	if err := os.MkdirAll(cachedAxisDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cachedFeedback := FormatStructuredReviewFeedback(cachedAxis.Name+" Implementation Review", "- (none)", "- (none)", ReviewApproved)
+	if err := os.WriteFile(filepath.Join(cachedAxisDir, "review-feedback.md"), []byte(cachedFeedback), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachedAxisDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	resumed, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
+	}
+	if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
+		t.Fatalf("resumed result = %+v, want iteration-1 review_passed", resumed)
+	}
+	if got := len(*captured); got != implementerSessions+len(axes)-1 {
+		t.Fatalf("BuildSession calls after resume = %d, want %d (uncached review axes only)", got, implementerSessions+len(axes)-1)
+	}
+	if runsAfter := countContractEvidenceRuns(t, contractPath); runsAfter != runsBefore {
+		t.Fatalf("evidence runs after resume = %d, want %d (verification report must be reused, not re-executed)", runsAfter, runsBefore)
+	}
+}
+
+func countContractEvidenceRuns(t *testing.T, contractPath string) int {
+	t.Helper()
+	root := filepath.Join(filepath.Dir(contractPath), "verification-evidence")
+	runs := 0
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() && strings.HasPrefix(d.Name(), "run-") {
+			runs++
+		}
+		return nil
+	})
+	return runs
+}
+
+func TestPrepareImplementationTestingContractSkipsNonMoonshotRoadmapPhases(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-large-roadmap")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "test-large-roadmap", Name: "Large Roadmap", Slug: "large-roadmap",
+		Pipeline: feature.PipelineLarge, CurrentRoadmapPhase: 1,
+	}
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir}
+	planContent := "### Automated Verification\n- [ ] Check passes: `printf verified`\n"
+
+	path, fingerprint, err := prepareImplementationTestingContract(cfg, planContent)
+	if err != nil {
+		t.Fatalf("prepareImplementationTestingContract: %v", err)
+	}
+	if path != "" || fingerprint != "" {
+		t.Fatalf("expected no contract for large-profile roadmap phase, got path=%q fingerprint=%q", path, fingerprint)
+	}
+	if _, statErr := os.Stat(PhaseTestingContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, 1)); !os.IsNotExist(statErr) {
+		t.Fatalf("testing-contract.yaml must not be written for large-profile roadmap phase")
+	}
+}
+
+func TestPrepareImplementationTestingContractMoonshotRoadmapPhaseStillWritesContract(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-moonshot-roadmap")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "test-moonshot-roadmap", Name: "Moonshot Roadmap", Slug: "moonshot-roadmap",
+		Pipeline: feature.PipelineMoonshot, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "test-repo", Path: stateDir, WorktreePath: stateDir}},
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, stateDir, "git init -q")
+	runVerificationTestCommand(t, runner, stateDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, stateDir, "git config user.name Test")
+	if err := os.WriteFile(filepath.Join(stateDir, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runVerificationTestCommand(t, runner, stateDir, "git add README.md")
+	runVerificationTestCommand(t, runner, stateDir, "git commit -qm base")
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir, CommandRunner: runner}
+	planContent := "#### Automated Verification:\n- [ ] Check passes: `printf verified`\n"
+
+	path, fingerprint, err := prepareImplementationTestingContract(cfg, planContent)
+	if err != nil {
+		t.Fatalf("prepareImplementationTestingContract: %v", err)
+	}
+	if path == "" || fingerprint == "" {
+		t.Fatalf("expected a contract for moonshot roadmap phase, got path=%q fingerprint=%q", path, fingerprint)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("expected testing-contract.yaml at %s: %v", path, statErr)
+	}
+	contract, err := ReadTestingContract(path)
+	if err != nil {
+		t.Fatalf("ReadTestingContract: %v", err)
+	}
+	if len(contract.Items) == 0 {
+		t.Fatalf("expected written contract to have at least one item, got none")
+	}
+}
+
+func TestPrepareImplementationTestingContractNonMoonshotRoadmapRemovesStaleContract(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-large-stale")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "test-large-stale", Name: "Large Stale", Slug: "large-stale",
+		Pipeline: feature.PipelineLarge, CurrentRoadmapPhase: 1,
+	}
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir}
+	contractPath := PhaseTestingContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, 1)
+	if err := os.MkdirAll(filepath.Dir(contractPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTestingContract(contractPath, compileImplementationTestingContract(cfg, "### Automated Verification\n- [ ] Check passes: `printf verified`\n")); err != nil {
+		t.Fatalf("seeding stale contract: %v", err)
+	}
+
+	path, fingerprint, err := prepareImplementationTestingContract(cfg, "### Automated Verification\n- [ ] Check passes: `printf verified`\n")
+	if err != nil {
+		t.Fatalf("prepareImplementationTestingContract: %v", err)
+	}
+	if path != "" || fingerprint != "" {
+		t.Fatalf("expected no contract for large-profile roadmap phase, got path=%q fingerprint=%q", path, fingerprint)
+	}
+	if _, statErr := os.Stat(contractPath); !os.IsNotExist(statErr) {
+		t.Fatalf("stale testing-contract.yaml must be removed, stat err = %v", statErr)
+	}
+}
+
+func TestPrepareImplementationTestingContractLargeCycleStillWritesContract(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-large-cycle")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "test-large-cycle", Name: "Large Cycle", Slug: "large-cycle",
+		Pipeline: feature.PipelineLarge,
+	}
+	f.SetActiveCycleType(feature.CycleReviewComments)
+	cfg := ImplementConfig{Feature: f, StateDir: stateDir, CommandRunner: NewExecCommandRunner()}
+	planContent := "### Automated Verification\n- [ ] Check passes: `printf verified`\n"
+
+	path, fingerprint, err := prepareImplementationTestingContract(cfg, planContent)
+	if err != nil {
+		t.Fatalf("prepareImplementationTestingContract: %v", err)
+	}
+	if path == "" || fingerprint == "" {
+		t.Fatalf("expected a cycle contract for large-profile repo cycle, got path=%q fingerprint=%q", path, fingerprint)
+	}
+	wantPath := CycleTestingContractPath(filepath.Dir(cfg.StateDir), f, cfg.RepoName, feature.CycleReviewComments)
+	if path != wantPath {
+		t.Fatalf("path = %q, want cycle contract path %q", path, wantPath)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("expected testing-contract.yaml at %s: %v", path, statErr)
+	}
+}
+
 func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
@@ -2928,12 +3182,21 @@ func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		Repos: []feature.FeatureRepo{
-			{Name: "test-repo", Path: workDir},
+			{Name: "test-repo", Path: workDir, WorktreePath: workDir},
 		},
 	}
 
 	store := feature.NewStore(stateRoot)
 	_ = store.Save(f)
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runVerificationTestCommand(t, runner, workDir, "git add README.md")
+	runVerificationTestCommand(t, runner, workDir, "git commit -qm base")
 
 	buildSession, _ := capturingBuildSession(agentScript, reviewScript)
 	cfg := ImplementConfig{
@@ -2951,6 +3214,7 @@ func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 		StateDir:                   stateDir,
 		DangerouslySkipPermissions: true,
 		BuildSession:               buildSession,
+		CommandRunner:              runner,
 		SkipIterationReview:        true,
 		PhaseType:                  "tracer-bullet",
 	}
@@ -3115,7 +3379,334 @@ required_checks:
 	}
 }
 
-func TestImplementLoop_IntegrityGateRejectsStaleContractRevision(t *testing.T) {
+func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-capability-pause")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	runVerificationTestCommand(t, runner, workDir, "git commit --allow-empty -qm base")
+
+	planPath := filepath.Join(artifactDir, "plan.md")
+	plan := "### Automated Verification\n- [ ] Protected [agentico capability: Okta session; probe: exit 1]: `printf protected`\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	f := &feature.Feature{
+		ID: "test-capability-pause", Name: "Capability Pause", Slug: "capability-pause",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, captured := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: false, PhaseType: "collapsed",
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "need_user_input" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want same-iteration need_user_input", result)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("BuildSession calls = %d, want implementer only (no reviewer)", len(*captured))
+	}
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if _, err := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("meta.yaml exists after harness pause; resume would consume an iteration: %v", err)
+	}
+	rec, err := ReadNeedUserInputRecord(result.NeedUserInputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.VerificationDecision == nil || len(rec.VerificationDecision.ItemIDs) != 1 {
+		t.Fatalf("gate record = %+v, want structured verification decision", rec)
+	}
+	rec.Questions[0].Answer = NeedUserVerificationWaive
+	if err := ApplyNeedUserVerificationDecision(rec); err != nil {
+		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
+	}
+	resumed, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
+	}
+	if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
+		t.Fatalf("resumed result = %+v, want iteration-1 review_passed", resumed)
+	}
+	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, implementationReviewAxisSelection{Profile: f.EffectivePipeline()})
+	if len(*captured) != 1+len(axes) {
+		t.Fatalf("BuildSession calls after resume = %d, want one implementer + %d review axes (no second implementer)", len(*captured), len(axes))
+	}
+}
+
+func TestImplementLoopHarnessContractErrorRoutesPlanRevisionKeepsSameIteration(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-contract-revision")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("translated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runVerificationTestCommand(t, runner, workDir, "git add README.md")
+	runVerificationTestCommand(t, runner, workDir, "git commit -qm base")
+
+	planPath := filepath.Join(artifactDir, "plan.md")
+	badPlan := "### Automated Verification\n- [ ] Stable waived check: `printf stable`\n- [ ] README translated: `grep -q translated repo/README.md`\n"
+	if err := os.WriteFile(planPath, []byte(badPlan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	f := &feature.Feature{
+		ID: "test-contract-revision", Name: "Contract Revision", Slug: "contract-revision",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, captured := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: false, PhaseType: "collapsed",
+	}
+	contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName)
+	if !ok {
+		t.Fatal("resolveImplementationContractPath() returned ok=false")
+	}
+	seededContract := compileImplementationTestingContract(cfg, badPlan)
+	for i := range seededContract.Items {
+		if seededContract.Items[i].Command == "printf stable" {
+			seededContract.Items[i].Disposition = TestingContractItemDisposition{
+				Status: TestingContractDispositionWaived, Reason: "user-approved stable exception", ChangedBy: "user",
+			}
+		}
+	}
+	if err := WriteTestingContract(contractPath, seededContract); err != nil {
+		t.Fatalf("seed testing contract: %v", err)
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "plan_revision_required" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want same-iteration plan_revision_required", result)
+	}
+	if !strings.Contains(result.PlanRevisionFeedback, "repo/README.md") || !strings.Contains(result.PlanRevisionFeedback, "README.md") {
+		t.Fatalf("PlanRevisionFeedback = %q, want bad path and correction", result.PlanRevisionFeedback)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("BuildSession calls = %d, want implementer only (no reviewer)", len(*captured))
+	}
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	if _, err := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("meta.yaml exists after contract repair route; resume would consume an iteration: %v", err)
+	}
+
+	goodPlan := "### Automated Verification\n- [ ] Stable waived check: `printf stable`\n- [ ] README translated: `grep -q translated README.md`\n"
+	if err := os.WriteFile(planPath, []byte(goodPlan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
+	}
+	if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
+		t.Fatalf("resumed result = %+v, want iteration-1 review_passed", resumed)
+	}
+	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, implementationReviewAxisSelection{Profile: f.EffectivePipeline()})
+	if len(*captured) != 1+len(axes) {
+		t.Fatalf("BuildSession calls after resume = %d, want original implementer plus %d review axes only", len(*captured), len(axes))
+	}
+	reconciledContract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		t.Fatalf("ReadTestingContract() error = %v", err)
+	}
+	waiverPreserved := false
+	for _, item := range reconciledContract.Items {
+		if item.Command == "printf stable" {
+			waiverPreserved = IsTestingContractItemWaived(item)
+		}
+	}
+	if !waiverPreserved {
+		t.Fatal("stable user waiver was lost while repairing another verification command")
+	}
+}
+
+func TestImplementLoopUnscopedMultiRepoVerificationRoutesPlanRevisionBeforeImplementer(t *testing.T) {
+	tmpDir := t.TempDir()
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "unscoped-multi")
+	for _, dir := range []string{artifactDir, stateDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := strings.Join([]string{
+		"## Tasks",
+		"### Task 1: API", "**Repo:** api",
+		"### Task 2: Web", "**Repo:** web",
+		"## Success Criteria",
+		"### Automated Verification",
+		"- [ ] Tests pass: `make test`",
+	}, "\n")
+	planPath := filepath.Join(tmpDir, "phase-plan.md")
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "unscoped-multi", Name: "Unscoped Multi", Status: feature.StatusImplementing,
+		Repos: []feature.FeatureRepo{{Name: "api", Path: t.TempDir()}, {Name: "web", Path: t.TempDir()}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildCalls := 0
+	result, err := RunImplementationLoop(ImplementConfig{
+		Feature: f, FeatureStore: store, PlanPath: planPath, ArtifactDir: artifactDir, StateDir: stateDir,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		BuildSession: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			buildCalls++
+			return nil, nil, nil, errors.New("implementer must not start")
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "plan_revision_required" || !strings.Contains(result.PlanRevisionFeedback, "[repo: <name>]") {
+		t.Fatalf("result = %+v, want scoped plan revision", result)
+	}
+	if buildCalls != 0 {
+		t.Fatalf("BuildSession calls = %d, want plan repaired before implementer starts", buildCalls)
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-01")); !os.IsNotExist(err) {
+		t.Fatalf("iteration directory exists before plan repair: %v", err)
+	}
+}
+
+func TestImplementLoopSkipReviewRoutesHarnessRegressionToRetry(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateRoot := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(stateRoot, "test-harness-regression")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	if err := os.WriteFile(filepath.Join(workDir, "check.sh"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runVerificationTestCommand(t, runner, workDir, "git add check.sh")
+	runVerificationTestCommand(t, runner, workDir, "git commit -qm base")
+	// The uncommitted change regresses the check: candidate fails while the
+	// anchored base commit still passes.
+	if err := os.WriteFile(filepath.Join(workDir, "check.sh"), []byte("#!/bin/sh\necho regressed >&2\nexit 9\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	planPath := filepath.Join(artifactDir, "plan.md")
+	plan := "### Automated Verification\n- [ ] Check passes: `./check.sh`\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	f := &feature.Feature{
+		ID: "test-harness-regression", Name: "Harness Regression", Slug: "harness-regression",
+		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	buildSession, _ := capturingBuildSession(agentScript, reviewScript)
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+		SkipIterationReview: true, PhaseType: "collapsed",
+	}
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus == finalStatusReviewPassed {
+		t.Fatalf("result = %+v, want harness-detected regression to block review_passed", result)
+	}
+	meta, err := os.ReadFile(filepath.Join(artifactDir, "iteration-01", "meta.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(meta), ReviewChangesRequested.String()) {
+		t.Fatalf("iteration meta = %s, want review status %q", meta, ReviewChangesRequested.String())
+	}
+}
+
+func TestImplementLoop_RejectsImplementerContractMutation(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
@@ -3141,9 +3732,18 @@ func TestImplementLoop_IntegrityGateRejectsStaleContractRevision(t *testing.T) {
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		Repos: []feature.FeatureRepo{
-			{Name: "test-repo", Path: workDir},
+			{Name: "test-repo", Path: workDir, WorktreePath: workDir},
 		},
 	}
+	runner := NewExecCommandRunner()
+	runVerificationTestCommand(t, runner, workDir, "git init -q")
+	runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+	runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runVerificationTestCommand(t, runner, workDir, "git add README.md")
+	runVerificationTestCommand(t, runner, workDir, "git commit -qm base")
 
 	contractPath := PhaseTestingContractPath(stateRoot, f, 1)
 	contract := CompileTestingContract(plan, planPath, "tdd-fill-in")
@@ -3210,6 +3810,7 @@ func TestImplementLoop_IntegrityGateRejectsStaleContractRevision(t *testing.T) {
 		StateDir:                   stateDir,
 		DangerouslySkipPermissions: true,
 		BuildSession:               buildSession,
+		CommandRunner:              runner,
 		SkipIterationReview:        false,
 		PhaseType:                  "tdd-fill-in",
 	}
@@ -3230,8 +3831,8 @@ func TestImplementLoop_IntegrityGateRejectsStaleContractRevision(t *testing.T) {
 		t.Fatalf("os.ReadFile(review-feedback.md) error = %v", err)
 	}
 	feedback := string(feedbackBytes)
-	if !strings.Contains(feedback, "contract revision 1") || !strings.Contains(feedback, "revision 2") {
-		t.Fatalf("review-feedback.md missing stale revision guidance:\n%s", feedback)
+	if !strings.Contains(feedback, "testing-contract.yaml") || !strings.Contains(feedback, "harness-owned") {
+		t.Fatalf("review-feedback.md missing harness-owned contract guidance:\n%s", feedback)
 	}
 }
 
@@ -3530,5 +4131,45 @@ func TestRetryReviewFeedbackReminder(t *testing.T) {
 	}
 	if strings.Contains(got, "findings") {
 		t.Errorf("retryReviewFeedbackReminder = %q, want a pointer without the feedback body", got)
+	}
+}
+
+// TestVerificationContextCancelsOnInterruptedFeature pins the P3 fix: a
+// verification run's context must cancel once the feature is interrupted, so
+// a hung command cannot outlive a user interrupt by its full timeout.
+func TestVerificationContextCancelsOnInterruptedFeature(t *testing.T) {
+	t.Parallel()
+	store := feature.NewStore(filepath.Join(t.TempDir(), "state"))
+	f := &feature.Feature{
+		ID:            "verify-ctx-001",
+		Name:          "Verify Ctx",
+		Slug:          "verify-ctx",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	ctx, cancel := verificationContext(store, f.ID)
+	defer cancel()
+	select {
+	case <-ctx.Done():
+		t.Fatal("context cancelled before interruption")
+	default:
+	}
+
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusInterrupted
+		return nil
+	}); err != nil {
+		t.Fatalf("interrupt feature: %v", err)
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("context not cancelled within 10s of feature interruption")
 	}
 }

@@ -1,17 +1,13 @@
 {{- /*
   manual_verification_outcomes: injected into final_fix.user when the
-  reviewer feedback mentions a manual-verification gate. Teaches the fix
-  agent the valid YAML outcomes for a `### Manual Verification`
-  bullet so it doesn't re-emit `mode: command` evidence and loop again.
+  reviewer feedback mentions a manual-verification gate. The fix agent
+  attests a manual bullet by describing what it actually observed.
 */ -}}
 {{- define "manual_verification_outcomes" -}}
 ## Manual Verification Outcomes
 
-The reviewer flagged unattested `### Manual Verification` bullets. Re-running automated commands (`mode: command`) does NOT attest a manual bullet. For each flagged bullet, update the verification report named by the RoleSpec Output Files section with one of these outcomes:
+The reviewer flagged unattested `### Manual Verification` bullets. Re-running automated commands does NOT attest a manual bullet. For each flagged bullet, describe in your fix output what you actually observed when you executed it: steps, command output snippets, UI state. "Manual check, looks fine" is not evidence.
 
-1. **Attested with evidence** — `mode: manual`, `status: passed` (or `failed`), `evidence:` describing what you observed when you executed the bullet (e.g. command run, output snippet, UI state). "Manual check, looks fine" is not evidence.
-2. **Genuinely deferred** — `mode: manual`, `status: pending_human`, `evidence:` documenting any partial in-environment coverage that already exists, plus `blocked_reason:` naming the downstream owner (e.g. "release-time operator smoke", "Publish-phase gate", "integration suite owned by team X"). Use this only when the bullet is genuinely out-of-environment (production-only, requires a physical device, mutates real user state, requires a pushed remote ref this session is not authorized to create).
-
-If you cannot attest and cannot defer with a named owner, the bullet is a real gap — raise it in your fix output rather than re-emitting `mode: command` evidence and looping again.
+If the bullet is genuinely out-of-environment (production-only, physical device, mutates real user state), do not invent an observation — state the gap and its downstream owner in your fix output so the reviewer can judge it.
 
 {{ end -}}

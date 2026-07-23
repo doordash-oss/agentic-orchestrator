@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,11 +42,8 @@ func Fingerprint(path string) (string, error) {
 	return fmt.Sprintf("%x", h), nil
 }
 
-// ProgressFingerprint computes a stable fingerprint over progress.md that
-// excludes iteration-specific data (the `## Verification Report` block
-// cites the iteration's verification-report.yaml path, which differs
-// every turn even when the agent's narrative is unchanged). The fingerprint
-// covers just the `## Iteration Handoff` section — the agent's claimed
+// ProgressFingerprint computes a stable fingerprint over progress.md. The
+// fingerprint covers just the `## Iteration Handoff` section — the agent's claimed
 // completed/remaining/where-stopped narrative — which is what should
 // converge across iterations when no real progress is being made.
 //
@@ -72,6 +71,13 @@ type ProgressTracker struct {
 	lastFingerprint string
 	hasChecked      bool
 	noProgressCount int
+	hasOutcome      bool
+	bestBlockers    int
+	// RETRY stall-evidence state: the last handoff-narrative and worktree
+	// fingerprints seen by ObserveRetryOutcome.
+	hasRetryObservation bool
+	lastRetryNarrative  string
+	lastRetryWorktree   string
 }
 
 func NewProgressTracker() *ProgressTracker {
@@ -107,6 +113,128 @@ func (pt *ProgressTracker) Check(progressPath string) (bool, error) {
 // NoProgressCount returns the number of consecutive no-progress iterations.
 func (pt *ProgressTracker) NoProgressCount() int {
 	return pt.noProgressCount
+}
+
+// ObserveVerifiedOutcome records a deterministic outcome. Progress is credited
+// only when the verified blocker count reaches a new low; repeated narrative or
+// file churn without fewer blockers does not reset the safety rail.
+func (pt *ProgressTracker) ObserveVerifiedOutcome(blockers int) bool {
+	if blockers < 0 {
+		blockers = 0
+	}
+	if !pt.hasOutcome {
+		pt.hasOutcome = true
+		pt.bestBlockers = blockers
+		return true
+	}
+	if blockers < pt.bestBlockers {
+		pt.bestBlockers = blockers
+		pt.noProgressCount = 0
+		return true
+	}
+	pt.noProgressCount++
+	return false
+}
+
+// ObserveUnverifiedOutcome records an iteration that did not produce a
+// verifier/reviewer outcome, such as a protocol violation.
+func (pt *ProgressTracker) ObserveUnverifiedOutcome() bool {
+	pt.noProgressCount++
+	return false
+}
+
+// ObserveRetryOutcome records a self-declared partial (RETRY) iteration.
+// A RETRY produces no review verdict, but absence of a verdict is not
+// evidence of a stall: a short-turn model legitimately splits one task
+// across many partial iterations. The iteration counts as no-progress only
+// when neither the handoff narrative nor the worktree state changed since
+// the previous RETRY observation. An empty fingerprint (unreadable
+// progress.md, git failure) is treated as unchanged so a broken signal
+// cannot disarm the rail. A progressing RETRY does not reset the counter
+// accumulated by non-improving verified outcomes — it only declines to add
+// to it — so review churn without fewer blockers still trips the rail.
+func (pt *ProgressTracker) ObserveRetryOutcome(narrativeFP, worktreeFP string) bool {
+	first := !pt.hasRetryObservation
+	narrativeChanged := narrativeFP != "" && narrativeFP != pt.lastRetryNarrative
+	worktreeChanged := worktreeFP != "" && worktreeFP != pt.lastRetryWorktree
+	pt.hasRetryObservation = true
+	pt.lastRetryNarrative = narrativeFP
+	pt.lastRetryWorktree = worktreeFP
+	if first || narrativeChanged || worktreeChanged {
+		return true
+	}
+	pt.noProgressCount++
+	return false
+}
+
+// WorktreeStateFingerprint hashes each repo worktree's HEAD, porcelain
+// status, tracked diff, and untracked-file stats (path, size, mtime — new
+// files stay untracked for the whole phase, so their edits never appear in
+// `git diff HEAD`). Returns "" when no signal could be gathered so callers
+// treat it as unchanged. A nil runner falls back to direct execution.
+func WorktreeStateFingerprint(ctx context.Context, runner ports.CommandRunner, paths []string) string {
+	h := sha256.New()
+	gotSignal := false
+	for _, p := range paths {
+		for _, args := range [][]string{
+			{"rev-parse", "HEAD"},
+			{"status", "--porcelain", "--untracked-files=all"},
+			{"diff", "HEAD"},
+		} {
+			out, err := gitOutput(ctx, runner, p, args...)
+			if err != nil {
+				continue
+			}
+			gotSignal = true
+			h.Write(out)
+		}
+		out, err := gitOutput(ctx, runner, p, "ls-files", "--others", "--exclude-standard", "-z")
+		if err != nil {
+			continue
+		}
+		gotSignal = true
+		for _, rel := range strings.Split(string(out), "\x00") {
+			if rel == "" {
+				continue
+			}
+			if fi, err := os.Stat(filepath.Join(p, rel)); err == nil {
+				fmt.Fprintf(h, "%s|%d|%d\n", rel, fi.Size(), fi.ModTime().UnixNano())
+			}
+		}
+	}
+	if !gotSignal {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+var blockingReviewFindingRE = regexp.MustCompile(`(?im)^\s*[-*]\s+\*\*\[?(critical|high)(?:\]|\b)`)
+
+func CountBlockingReviewFindings(feedback string) int {
+	return len(blockingReviewFindingRE.FindAllString(feedback, -1))
+}
+
+func CountOpenVerificationBlockers(report *VerificationReport) int {
+	if report == nil {
+		return 0
+	}
+	count := 0
+	for _, result := range report.Results {
+		switch NormalizeStatus(result.Status) {
+		case VerificationStatusPassed, VerificationStatusWaived:
+			continue
+		default:
+			count++
+		}
+	}
+	return count
+}
+
+func CountOpenVerificationOutcomeBlockers(out *VerificationExecutionOutcome) int {
+	if out == nil {
+		return 0
+	}
+	return CountOpenVerificationBlockers(out.Report)
 }
 
 // IterationState is the harness-recognised terminal state the agent declares
@@ -148,8 +276,6 @@ type ParsedProgress struct {
 	StateNote          string // free-text body after the state token (NEED_USER_INPUT only)
 	Deferrals          []feature.IncomingDeferral
 	ClosedDeferrals    []string
-	VerificationPath   string
-	VerificationNotes  string
 	HandoffSections    map[string]string // sub-section heading -> body (Iteration Handoff children)
 	Questions          []string          // numbered prompts under `## Questions for User`
 	ProtocolViolations []string
@@ -163,13 +289,12 @@ func (p *ParsedProgress) OK() bool {
 	return p != nil && p.State != StateInvalid && len(p.ProtocolViolations) == 0
 }
 
-// progressRequiredSections lists the four `## ` sections the agent MUST emit
+// progressRequiredSections lists the three `## ` sections the agent MUST emit
 // in this exact order. The parser enforces presence and order; missing or
 // out-of-order headings are protocol violations.
 var progressRequiredSections = []string{
 	"## Iteration Handoff",
 	"## Deferrals",
-	"## Verification Report",
 	"## Iteration State",
 }
 
@@ -203,14 +328,6 @@ var validIterationStateTokens = map[string]IterationState{
 // alternate fence under tilde-fence Markdown rules.
 var progressYAMLBlockRE = regexp.MustCompile("(?s)(?:```|~~~)\\s*ya?ml\\s*\\n(.*?)\\n(?:```|~~~)")
 
-// progressVerificationPathRE matches the `**Path**:` bullet under the
-// Verification Report section. The captured group is the raw value (trim
-// for backticks / leading dashes).
-var progressVerificationPathRE = regexp.MustCompile(`(?m)^\s*-\s*\*\*Path\*\*\s*:\s*(.+?)\s*$`)
-
-// progressVerificationNotesRE matches the optional `**Notes**:` bullet.
-var progressVerificationNotesRE = regexp.MustCompile(`(?m)^\s*-\s*\*\*Notes\*\*\s*:\s*(.+?)\s*$`)
-
 // deferralsYAMLDoc is the on-the-wire shape inside the Deferrals fenced YAML
 // block. We accept the empty form (`deferrals: []`, `closed_deferrals: []`)
 // but require both keys to be present so the agent's intent is unambiguous —
@@ -221,17 +338,12 @@ type deferralsYAMLDoc struct {
 }
 
 // ParseProgressMd parses progress.md at path under the iteration-handoff
-// contract spelled out in skills/implement/SKILL.md. expectedVerificationPath
-// is the absolute path the harness emitted in the user prompt's
-// `## Runtime Paths → Verification report` line; the parser cross-checks
-// the agent's `**Path**:` bullet against it. Pass "" to disable the check
-// (used by tests that don't care about the runtime-paths cross-check).
-//
+// contract spelled out in skills/implement/SKILL.md.
 // The function is conservative: every defect it can name deterministically
 // becomes a separate ProtocolViolations entry so the synthesized feedback
 // enumerates all of them in one pass — same shape as the grounding gate.
 // Callers MUST inspect ProtocolViolations before trusting State.
-func ParseProgressMd(path, expectedVerificationPath string) (*ParsedProgress, error) {
+func ParseProgressMd(path string) (*ParsedProgress, error) {
 	if path == "" {
 		return nil, fmt.Errorf("ParseProgressMd: empty path")
 	}
@@ -261,7 +373,7 @@ func ParseProgressMd(path, expectedVerificationPath string) (*ParsedProgress, er
 		pos, ok := headingPositions[h]
 		if !ok {
 			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-				fmt.Sprintf("progress.md missing required section %q — the four `## ` sections must all be present, in order", h))
+				fmt.Sprintf("progress.md missing required section %q — the three `## ` sections must all be present, in order", h))
 			missingOrUnordered = true
 			continue
 		}
@@ -310,27 +422,6 @@ func ParseProgressMd(path, expectedVerificationPath string) (*ParsedProgress, er
 		}
 	}
 
-	// Verification Report: pointer + summary line; cross-check the path
-	// against what the harness emitted in the prompt's runtime paths.
-	if vrBody := extractMarkdownSection(body, "## Verification Report"); vrBody != "" {
-		if m := progressVerificationPathRE.FindStringSubmatch(vrBody); m != nil {
-			parsed.VerificationPath = strings.Trim(strings.TrimSpace(m[1]), "`")
-		} else {
-			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-				"progress.md `## Verification Report` is missing the `- **Path**: <absolute path>` bullet")
-		}
-		if m := progressVerificationNotesRE.FindStringSubmatch(vrBody); m != nil {
-			parsed.VerificationNotes = strings.TrimSpace(m[1])
-		}
-		if expectedVerificationPath != "" && parsed.VerificationPath != "" {
-			if filepath.Clean(parsed.VerificationPath) != filepath.Clean(expectedVerificationPath) {
-				parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf(
-					"progress.md `## Verification Report` Path %q does not match the runtime path the prompt named (%q) — cite the absolute path verbatim",
-					parsed.VerificationPath, expectedVerificationPath))
-			}
-		}
-	}
-
 	// Questions for User: required when state is NEED_USER_INPUT, forbidden
 	// otherwise. The parser tracks section presence separately from parsed
 	// content so a heading-without-content gate ("## Questions for User"
@@ -369,7 +460,7 @@ func ParseProgressMd(path, expectedVerificationPath string) (*ParsedProgress, er
 	// completeness check rejects an empty question set. SUCCESS and RETRY
 	// must NOT carry a Questions section so a stale gate from a prior
 	// iteration cannot survive a resumed iteration. The placement check
-	// (Questions must sit between Verification Report and Iteration State)
+	// (Questions must sit between Deferrals and Iteration State)
 	// is shared logic in validateQuestionsSectionPlacement.
 	switch parsed.State {
 	case StateNeedUserInput:
@@ -416,9 +507,8 @@ func FormatProtocolViolationFeedback(parsed *ParsedProgress) string {
 	b.WriteString("\nRe-emit `progress.md` with these sections in order:\n")
 	b.WriteString("1. `## Iteration Handoff` (with the four `### ` sub-sections)\n")
 	b.WriteString("2. `## Deferrals` (fenced YAML block with `deferrals:` and `closed_deferrals:` keys)\n")
-	b.WriteString("3. `## Verification Report` (with `- **Path**:` and `- **Summary**:` bullets)\n")
-	b.WriteString("4. `## Questions for User` only when `## Iteration State` is `NEED_USER_INPUT`, and only between Verification Report and Iteration State (numbered list of structured prompts)\n")
-	b.WriteString("5. `## Iteration State` (one of `SUCCESS`, `RETRY`, `NEED_USER_INPUT` on its own line; `NEED_USER_INPUT` requires a non-empty summary on the lines that follow)\n")
+	b.WriteString("3. `## Questions for User` only when `## Iteration State` is `NEED_USER_INPUT`, and only between Deferrals and Iteration State (numbered list of structured prompts)\n")
+	b.WriteString("4. `## Iteration State` (one of `SUCCESS`, `RETRY`, `NEED_USER_INPUT` on its own line; `NEED_USER_INPUT` requires a non-empty summary on the lines that follow)\n")
 	return FormatStructuredReviewFeedback(
 		"Implementation Review — Iteration Handoff Protocol Violation",
 		strings.TrimRight(b.String(), "\n"),
@@ -428,7 +518,7 @@ func FormatProtocolViolationFeedback(parsed *ParsedProgress) string {
 }
 
 // validateQuestionsSectionPlacement enforces that `## Questions for User`,
-// when present, sits between `## Verification Report` and
+// when present, sits between `## Deferrals` and
 // `## Iteration State`. Misplaced sections (most often appended after
 // `## Iteration State`) are surfaced as a protocol violation so the
 // deterministic retry path catches them before the gate artifact is
@@ -440,7 +530,7 @@ func validateQuestionsSectionPlacement(body string, parsed *ParsedProgress) {
 		return
 	}
 	positions := findSectionHeadings(body, []string{
-		"## Verification Report",
+		"## Deferrals",
 		"## Questions for User",
 		"## Iteration State",
 	})
@@ -449,10 +539,10 @@ func validateQuestionsSectionPlacement(body string, parsed *ParsedProgress) {
 		return
 	}
 	statePos, stateOK := positions["## Iteration State"]
-	verifyPos, verifyOK := positions["## Verification Report"]
-	if !verifyOK || !stateOK || !(verifyPos < qPos && qPos < statePos) {
+	deferralsPos, deferralsOK := positions["## Deferrals"]
+	if !deferralsOK || !stateOK || !(deferralsPos < qPos && qPos < statePos) {
 		parsed.ProtocolViolations = append(parsed.ProtocolViolations,
-			"progress.md `## Questions for User` must appear between `## Verification Report` and `## Iteration State` when state is `NEED_USER_INPUT`")
+			"progress.md `## Questions for User` must appear between `## Deferrals` and `## Iteration State` when state is `NEED_USER_INPUT`")
 	}
 }
 

@@ -132,3 +132,42 @@ func TestHandleNeedUserInputDecision_StaleRepoNameRoutesToFeatureScope(t *testin
 		t.Errorf("err = %q, want feature-level handler diagnostic 'is not paused on a need-user-input gate'", err.Error())
 	}
 }
+
+func TestHandleNeedUserInputDecisionAppliesHarnessWaiverBeforeResume(t *testing.T) {
+	stateRoot := t.TempDir()
+	contractPath := filepath.Join(stateRoot, "feat-waiver", "testing-contract.yaml")
+	contract := agent.TestingContract{Version: 1, Revision: 2, Items: []agent.TestingContractItem{{
+		ID: "protected", Policy: agent.TestingContractItemPolicy{Required: true, AllowWaiver: true},
+	}}}
+	if err := agent.WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatal(err)
+	}
+	rec := agent.SynthesizeVerificationNeedUserInputGate(contractPath, 2, []string{"protected"}, 1)
+	rec.Questions[0].Answer = "WAIVE"
+	gatePath := filepath.Join(stateRoot, "feat-waiver", "iteration-01", agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: "feat-waiver", Name: "Waiver", Slug: "waiver", Status: feature.StatusNeedUserInput,
+		CurrentPhase: feature.PhaseImplement, PendingNeedUserInputPath: gatePath,
+		Repos: []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	lc := lifecycleForFeature(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+
+	if err := o.HandleNeedUserInputDecision(f.ID, orchestrator.NeedUserInputDecision{Decision: "resume"}); err == nil || !strings.Contains(err.Error(), "plan phase did not produce an artifact") {
+		t.Fatalf("HandleNeedUserInputDecision() error = %v, want expected post-decision dispatch failure", err)
+	}
+	got, err := agent.ReadTestingContract(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != 3 || !agent.IsTestingContractItemWaived(got.Items[0]) {
+		t.Fatalf("contract after resume = %+v, want durable revision-3 user waiver", got)
+	}
+}

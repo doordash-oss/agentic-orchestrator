@@ -118,6 +118,27 @@ func TestLatestPlanRevisionFeedbackAttemptFindsInvalidatedMissingEvidenceAttempt
 	}
 }
 
+func TestInsufficientEvidenceRequirements(t *testing.T) {
+	feedback := "prose before\nINSUFFICIENT_EVIDENCE_REQUIREMENT visual_239fdd1deecb: split into one cell per surface/state/size/theme\nINSUFFICIENT_EVIDENCE_REQUIREMENT `behavioral_739eeaabb223`: split per journey with packaged commands\nINSUFFICIENT_EVIDENCE_REQUIREMENT plan_deadbeef0000: not an evidence row\nINSUFFICIENT_EVIDENCE_REQUIREMENT visual_x:\n"
+	reqs := InsufficientEvidenceRequirements(feedback)
+	if len(reqs) != 2 {
+		t.Fatalf("parsed %d requirements, want 2: %+v", len(reqs), reqs)
+	}
+	if reqs[0].ItemID != "visual_239fdd1deecb" || reqs[1].ItemID != "behavioral_739eeaabb223" {
+		t.Fatalf("item IDs = %q, %q", reqs[0].ItemID, reqs[1].ItemID)
+	}
+}
+
+func TestEvidencePlanRevisionFeedbackCombines(t *testing.T) {
+	out := EvidencePlanRevisionFeedback(
+		[]MissingEvidenceRequirement{{Kind: "visual", Requirement: "capture the empty state"}},
+		[]InsufficientEvidenceRequirement{{ItemID: "visual_239fdd1deecb", Requirement: "split into per-cell rows"}},
+	)
+	if !strings.Contains(out, "capture the empty state") || !strings.Contains(out, "visual_239fdd1deecb") {
+		t.Fatalf("combined feedback missing content:\n%s", out)
+	}
+}
+
 func TestMissingEvidencePlanRevisionFeedback_PreservesReviewerRequirement(t *testing.T) {
 	requirements := []MissingEvidenceRequirement{
 		{Kind: testingContractVisualSource, Requirement: "Capture the updated setup wizard empty state."},

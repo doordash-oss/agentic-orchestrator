@@ -10,6 +10,8 @@
       not flag legitimate prior-phase symbols as missing on master.
     - Roadmap kind injects a "Validation Stage" preface that limits the
       scope of acceptable findings (no per-phase implementation detail).
+    - AutomatedVerificationOnly tells the critic not to demand evidence
+      matrices for a plan that must stay automated-only.
 
   The plan body is referenced by path (PlanPath) rather than inlined
   because plans can be large and the validator reads them via tool use.
@@ -39,6 +41,8 @@ The worktree is on a feature branch that already contains commits from earlier p
 Read the research findings at: {{ .ResearchPath }}
 
 Use the research to verify that the plan respects discovered constraints, existing patterns, and integration requirements.
+
+{{ end }}{{ if .AutomatedVerificationOnly }}Note: this feature verifies through automated tests only. The plan's Manual Verification, Visual Evidence, and Behavioral Evidence sections are required to be `None required:` markers; do not request evidence matrices, screenshots, or manual observation steps.
 
 {{ end }}## Plan to Evaluate
 

@@ -1660,6 +1660,7 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 			// per the roadmap's State Model.
 			newRun.Artifacts = carryForwardArtifactsMapForRequest(oldRun.Artifacts, targetPhase, sealedRunDir, partial.roadmapPhase)
 			newRun.RoadmapPhaseFrontendByPhase = carryForwardRoadmapPhaseFrontend(oldRun.RoadmapPhaseFrontendByPhase, targetPhase, partial.roadmapPhase)
+			carryForwardCostLedgers(oldRun, newRun, targetPhase, partial.roadmapPhase)
 			if partial.enabled {
 				var err error
 				newRun.RoadmapPhaseFrontendByPhase, err = restoreTargetPhaseFrontendFromCarriedPlan(

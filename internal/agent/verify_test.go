@@ -212,6 +212,32 @@ type VerificationStep struct {
 	}
 }
 
+func TestParsePlanVerificationDeclaresCapabilityProbe(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] Protected integration [agentico capability: Okta session; probe: okta auth status]: `make test-integration`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Command != "make test-integration" {
+		t.Fatalf("Command = %q, want make test-integration", steps[0].Command)
+	}
+	if steps[0].Description != "Protected integration" {
+		t.Fatalf("Description = %q, want capability metadata removed", steps[0].Description)
+	}
+	if len(steps[0].Capabilities) != 1 || steps[0].Capabilities[0].Name != "Okta session" || steps[0].Capabilities[0].Probe != "okta auth status" {
+		t.Fatalf("Capabilities = %+v, want declared Okta probe", steps[0].Capabilities)
+	}
+}
+
+func TestParsePlanVerificationDeclaresRepoScope(t *testing.T) {
+	steps := ParsePlanVerification("### Automated Verification\n- [ ] [repo: web] Frontend tests: `npm test`\n")
+	if len(steps) != 1 {
+		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
+	}
+	if steps[0].Repo != "web" || steps[0].Description != "Frontend tests" || steps[0].Command != "npm test" {
+		t.Fatalf("step = %+v, want parsed repo scope removed from description", steps[0])
+	}
+}
+
 func TestParsePlanManualVerification(t *testing.T) {
 	plan := "## Success Criteria\n\n" +
 		"### Manual Verification\n" +
@@ -400,7 +426,8 @@ func TestParseCrossRepoVerification(t *testing.T) {
 		t.Fatalf("len = %d, want %d (%+v)", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if got[i].Description != want[i].Description || got[i].Command != want[i].Command ||
+			got[i].Repo != want[i].Repo || len(got[i].Capabilities) != 0 {
 			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
@@ -423,5 +450,77 @@ func TestParseCrossRepoItem_PlainBulletRequiresCommandShape(t *testing.T) {
 	}
 	if step.Command != "make" {
 		t.Fatalf("command = %q, want make", step.Command)
+	}
+}
+
+func TestParseEvidenceChecklistItemSizeTag(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Home populated, dark theme [size: 1440x900]")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Width != 1440 || req.Height != 900 {
+		t.Fatalf("size = %dx%d, want 1440x900", req.Width, req.Height)
+	}
+	if req.Description != "Home populated, dark theme" {
+		t.Fatalf("description = %q, want tag stripped", req.Description)
+	}
+}
+
+func TestParseEvidenceChecklistItemTrailingCommand(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Primary journey trace bundle: `npx playwright test e2e/journey.spec.ts`")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Command != "npx playwright test e2e/journey.spec.ts" {
+		t.Fatalf("command = %q", req.Command)
+	}
+	if req.Description != "Primary journey trace bundle" {
+		t.Fatalf("description = %q, want command and trailing colon stripped", req.Description)
+	}
+}
+
+func TestParseEvidenceChecklistItemInlineCodeIsNotCommand(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Capture the `WorkspaceShell` overflow menu open")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Command != "" {
+		t.Fatalf("command = %q, want empty for bare identifier span", req.Command)
+	}
+	if req.Description != "Capture the `WorkspaceShell` overflow menu open" {
+		t.Fatalf("description = %q, want untouched", req.Description)
+	}
+}
+
+func TestParseEvidenceChecklistItemNonTerminalCommandIsNotStripped(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Run `npm run dev` and capture the home screen")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Command != "" {
+		t.Fatalf("command = %q, want empty when prose follows the span", req.Command)
+	}
+}
+
+func TestParseEvidenceChecklistItemSizeTagAndTrailingCommand(t *testing.T) {
+	req, ok := parseEvidenceChecklistItem("- [ ] Home populated, dark theme [size: 1440x900]: `npx playwright test e2e/home.spec.ts`")
+	if !ok {
+		t.Fatal("expected requirement")
+	}
+	if req.Width != 1440 || req.Height != 900 {
+		t.Fatalf("size = %dx%d, want 1440x900", req.Width, req.Height)
+	}
+	if req.Command != "npx playwright test e2e/home.spec.ts" {
+		t.Fatalf("command = %q", req.Command)
+	}
+	if req.Description != "Home populated, dark theme" {
+		t.Fatalf("description = %q, want size tag and command both stripped", req.Description)
+	}
+}
+
+func TestParseEvidenceChecklistItemCommandOnlyIsRejected(t *testing.T) {
+	_, ok := parseEvidenceChecklistItem("- [ ] `npx playwright test e2e/a.spec.ts`")
+	if ok {
+		t.Fatal("expected command-only bullet with no prose to be rejected")
 	}
 }

@@ -177,6 +177,8 @@ type PhasePlanUserInput struct {
 	QAFiles QAFilesInput
 
 	Inquireness GrillMeInquirenessInput
+
+	AutomatedVerificationOnly bool
 }
 
 type PhasePlanRevisionUserInput struct {
@@ -191,6 +193,8 @@ type PhasePlanRevisionUserInput struct {
 	PhasePlanFormatPath string
 
 	Inquireness AutonomousInquirenessInput
+
+	AutomatedVerificationOnly bool
 }
 
 type VerificationItemView struct {
@@ -242,11 +246,10 @@ type ReviewUserInput struct {
 type FinalFixUserInput struct {
 	VisualReferences VisualReferencesInput
 
-	Iteration              int
-	ExitCriteria           string
-	Feedback               string
-	FeedbackPath           string
-	VerificationReportPath string
+	Iteration    int
+	ExitCriteria string
+	Feedback     string
+	FeedbackPath string
 
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool
@@ -270,6 +273,8 @@ type ValidateSpecializedUserInput struct {
 
 	FeedbackPath string
 	AxisLabel    string
+
+	AutomatedVerificationOnly bool
 }
 
 // TestGoldenSnapshots exercises each user-facing template with realistic
@@ -444,6 +449,35 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			name: "phase_plan_user_automated_verification_only",
+			render: func() string {
+				in := PhasePlanUserInput{
+					Phase: PhasePlanView{
+						Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in",
+						Goal: "Make the login button work.",
+					},
+					RoadmapPath:               "/state/feat-x/run-1/roadmap/plan.md",
+					Inquireness:               GrillMeInquirenessInput{Level: "none"},
+					AutomatedVerificationOnly: true,
+				}
+				return PhasePlanUserPrompt(in)
+			},
+		},
+		{
+			name: "phase_plan_revision_user_automated_verification_only",
+			render: func() string {
+				return PhasePlanRevisionUserPrompt(PhasePlanRevisionUserInput{
+					Attempt:                   2,
+					Phase:                     PhasePlanView{Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in"},
+					Feedback:                  "Plan groundwork is fine but missing PKCE.",
+					PhasePlanPath:             "/state/feat-x/run-1/phase-2/plan.md",
+					PhasePlanFormatPath:       "/skills/plan-phase/format.md",
+					Inquireness:               AutonomousInquirenessInput{},
+					AutomatedVerificationOnly: true,
+				})
+			},
+		},
+		{
 			name: "implement_system_rolespec",
 			render: func() string {
 				return RoleSystemPrompt(RoleSystemInput{
@@ -585,7 +619,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					ExitCriteria:                      "Relevant tests pass.",
 					Feedback:                          "Manual verification bullet 'Inspect login UI' is unattested.",
 					FeedbackPath:                      "/state/feat-x/run-1/review/iteration-2/review-feedback.md",
-					VerificationReportPath:            "/state/feat-x/run-1/phase-1/iter-2/verification-report.yaml",
 					IncludeManualVerificationOutcomes: true,
 					Publishable:                       true,
 				})
@@ -615,6 +648,20 @@ func TestGoldenSnapshots(t *testing.T) {
 					IncludePriorPhaseContext: true,
 					PriorPhasePlanPaths:      []string{"/state/feat-x/run-1/phase-1/plan.md"},
 					ResearchPath:             "/state/feat-x/run-1/research/research.md",
+				})
+			},
+		},
+		{
+			name: "validate_specialized_automated_verification_only",
+			render: func() string {
+				return ValidateSpecializedUserPrompt(ValidateSpecializedUserInput{
+					Name:                      "OAuth login",
+					Description:               "Sign in with Google.",
+					ExitCriteria:              "Relevant tests pass.",
+					RiskLevel:                 "medium",
+					DomainName:                "scope",
+					PlanPath:                  "/state/feat-x/run-1/phase-2/plan.md",
+					AutomatedVerificationOnly: true,
 				})
 			},
 		},

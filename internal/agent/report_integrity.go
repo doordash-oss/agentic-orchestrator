@@ -15,11 +15,12 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -45,8 +46,6 @@ const (
 	GateCategoryDeferral ReportGateCategory = "deferral"
 )
 
-var behavioralTranscriptExitCodeRE = regexp.MustCompile(`(?i)^\[?exit code:\s*(-?\d+)\]?$`)
-
 // ReportGateKind is a fine-grained finding type within a category. It
 // drives feedback consolidation: findings sharing the same Kind are
 // collapsed into a single bullet when many fire at once, so the agent
@@ -67,6 +66,8 @@ const (
 	KindEvidenceFile          ReportGateKind = "invalid_evidence_file"
 	KindDeferralUnclosed      ReportGateKind = "deferral_unclosed_due_this_phase"
 	KindDeferralMissingReason ReportGateKind = "deferral_missing_reason"
+	KindEvidenceIntegrity     ReportGateKind = "evidence_integrity"
+	KindEvidenceDuplicate     ReportGateKind = "evidence_duplicate"
 )
 
 // ReportGateFinding describes a single integrity issue found in a
@@ -221,7 +222,7 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 				})
 			}
 
-		case VerificationStatusFailed, VerificationStatusBlocked, VerificationStatusWaived:
+		case VerificationStatusFailed, VerificationStatusInheritedFailure, VerificationStatusBlocked, VerificationStatusWaived:
 			// Honest declarations. The LLM reviewer assesses severity. The
 			// gate does not block here except for policy/schema checks above.
 
@@ -231,7 +232,7 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 				CheckName: name,
 				Category:  GateCategorySchema,
 				Kind:      KindUnknownStatus,
-				Detail:    fmt.Sprintf("status %q is not one of passed, failed, blocked, waived, not_run, pending_human", string(c.Status)),
+				Detail:    fmt.Sprintf("status %q is not one of passed, failed, inherited_failure, blocked, waived, not_run, pending_human", string(c.Status)),
 			})
 		}
 	}
@@ -256,6 +257,7 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 	for _, item := range contract.Items {
 		items[item.ID] = item
 	}
+	digestRows := make(map[string][]string)
 	for i := range checks {
 		c := &checks[i]
 		item, ok := items[strings.TrimSpace(c.ItemID)]
@@ -268,12 +270,17 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 		}
 		status := NormalizeStatus(c.Status)
 		switch status {
-		case VerificationStatusPassed, VerificationStatusFailed, VerificationStatusPendingHuman:
+		case VerificationStatusPassed, VerificationStatusFailed, VerificationStatusInheritedFailure, VerificationStatusPendingHuman:
 		default:
 			continue
 		}
 
 		name := checkDisplayName(c)
+		if status == VerificationStatusPassed {
+			if digest := strings.ToLower(strings.TrimSpace(c.EvidenceData.Sha256)); digest != "" {
+				digestRows[digest] = append(digestRows[digest], name)
+			}
+		}
 		if strings.TrimSpace(c.EvidenceData.Primary) == "" {
 			result.Findings = append(result.Findings, ReportGateFinding{
 				CheckName: name,
@@ -283,18 +290,33 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 			})
 			continue
 		}
-		primaryValid := validateEvidencePath(result, name, iterDir, root, "primary", c.EvidenceData.Primary)
-		if primaryValid && item.ExpectedEvidence.Matcher == testingContractCommandTranscriptMatcher {
-			validateBehavioralCommandTranscript(result, name, iterDir, c.EvidenceData.Primary, item)
+		primaryOK := validateEvidencePath(result, name, iterDir, root, "primary", c.EvidenceData.Primary)
+		if primaryOK && status == VerificationStatusPassed && strings.TrimSpace(c.EvidenceData.Sha256) != "" {
+			verifyEvidenceDigest(result, name, iterDir, root, c.EvidenceData.Primary, c.EvidenceData.Sha256)
 		}
 		for idx, attachment := range c.EvidenceData.Attachments {
 			field := fmt.Sprintf("attachments[%d]", idx)
 			validateEvidencePath(result, name, iterDir, root, field, attachment)
 		}
 	}
+	for _, names := range digestRows {
+		if len(names) < 2 {
+			continue
+		}
+		sort.Strings(names)
+		result.Findings = append(result.Findings, ReportGateFinding{
+			Category: GateCategorySchema,
+			Kind:     KindEvidenceDuplicate,
+			Detail: fmt.Sprintf("these passed evidence rows share one byte-identical file, so they cannot each depict their own contracted surface — capture each distinctly: %s",
+				strings.Join(names, "; ")),
+		})
+	}
 }
 
 func evidenceFileRootForContractItem(item TestingContractItem) (string, bool) {
+	if item.Owner == TestingContractOwnerHarness {
+		return "", false
+	}
 	source := strings.TrimSpace(item.Source)
 	kind := strings.TrimSpace(item.ExpectedEvidence.Kind)
 	switch {
@@ -350,87 +372,29 @@ func validateEvidencePath(result *ReportGateResult, checkName, iterDir, root, fi
 	return true
 }
 
-func validateBehavioralCommandTranscript(result *ReportGateResult, checkName, iterDir, rawPath string, item TestingContractItem) {
-	commands := requiredBehavioralTranscriptCommands(item.Name)
-	if len(commands) == 0 {
-		result.Findings = append(result.Findings, ReportGateFinding{
-			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
-			Detail:    "behavioral evidence expects an actual command transcript, but the testing-contract item names no parseable commands",
-		})
-		return
-	}
-
-	clean, detail := cleanEvidencePath(rawPath, "behaviors")
+// verifyEvidenceDigest re-reads a passed row's canonical evidence file and
+// compares it against the digest recorded at verification time, so a later
+// run cannot silently replace evidence after its pass mark was earned.
+func verifyEvidenceDigest(result *ReportGateResult, checkName, iterDir, root, rel, want string) {
+	clean, detail := cleanEvidencePath(rel, root)
 	if detail != "" {
-		return
+		return // path findings already reported by validateEvidencePath
 	}
 	data, err := os.ReadFile(filepath.Join(iterDir, filepath.FromSlash(clean)))
 	if err != nil {
 		result.Findings = append(result.Findings, ReportGateFinding{
-			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
-			Detail:    fmt.Sprintf("behavioral evidence %q could not be read as an actual command transcript: %v", clean, err),
+			CheckName: checkName, Category: GateCategorySchema, Kind: KindEvidenceIntegrity,
+			Detail: fmt.Sprintf("evidence file %q could not be re-read for digest verification: %v", clean, err),
 		})
 		return
 	}
-
-	lines := strings.Split(string(data), "\n")
-	missing := make([]string, 0, len(commands))
-	for _, command := range commands {
-		if !hasBehavioralTranscriptBlock(lines, command) {
-			missing = append(missing, command)
-		}
-	}
-	if len(missing) > 0 {
+	sum := sha256.Sum256(data)
+	if !strings.EqualFold(hex.EncodeToString(sum[:]), strings.TrimSpace(want)) {
 		result.Findings = append(result.Findings, ReportGateFinding{
-			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
-			Detail: fmt.Sprintf(
-				"behavioral evidence %q contains summaries instead of an actual command transcript for: %s; preserve a command header, exit code, and captured stdout/stderr for non-zero exits",
-				clean,
-				strings.Join(quoted(missing), ", "),
-			),
+			CheckName: checkName, Category: GateCategorySchema, Kind: KindEvidenceIntegrity,
+			Detail: fmt.Sprintf("evidence file %q changed after the harness verified it — its recorded digest no longer matches, so the passed status does not describe this file; re-run verification to re-earn the pass", clean),
 		})
 	}
-}
-
-func hasBehavioralTranscriptBlock(lines []string, command string) bool {
-	normalizedCommand := normalizeVerificationCommand(command)
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !isBehavioralTranscriptCommandHeader(trimmed) || !strings.Contains(normalizeVerificationCommand(trimmed), normalizedCommand) {
-			continue
-		}
-
-		exitCode := ""
-		hasOutput := false
-		for j := i + 1; j < len(lines); j++ {
-			next := strings.TrimSpace(lines[j])
-			if isBehavioralTranscriptCommandHeader(next) {
-				break
-			}
-			if match := behavioralTranscriptExitCodeRE.FindStringSubmatch(next); match != nil {
-				exitCode = match[1]
-				continue
-			}
-			if exitCode != "" && next != "" && !strings.EqualFold(next, "OUTPUT:") {
-				hasOutput = true
-			}
-		}
-		if exitCode == "0" || (exitCode != "" && hasOutput) {
-			return true
-		}
-	}
-	return false
-}
-
-func isBehavioralTranscriptCommandHeader(line string) bool {
-	upper := strings.ToUpper(line)
-	return strings.HasPrefix(line, "$ ") || strings.HasPrefix(upper, "COMMAND:")
 }
 
 func cleanEvidencePath(raw, root string) (string, string) {
@@ -576,6 +540,14 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 						Detail:    "status is blocked but the bound contract item does not allow blocked results",
 					})
 				}
+			}
+			if NormalizeStatus(checks[i].Status) == VerificationStatusWaived && !IsTestingContractItemWaived(item) {
+				result.Findings = append(result.Findings, ReportGateFinding{
+					CheckName: checkDisplayName(&checks[i]),
+					Category:  GateCategorySchema,
+					Kind:      KindPolicyViolation,
+					Detail:    "status is waived but the bound contract has no user-authorized waiver for this item",
+				})
 			}
 			if substituteID := strings.TrimSpace(checks[i].SubstituteItemID); substituteID != "" {
 				if !item.Policy.AllowSubstitution {

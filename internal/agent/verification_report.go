@@ -44,18 +44,20 @@ const (
 type VerificationRunStatus string
 
 const (
-	VerificationStatusPassed       VerificationRunStatus = "passed"
-	VerificationStatusFailed       VerificationRunStatus = "failed"
-	VerificationStatusBlocked      VerificationRunStatus = "blocked"
-	VerificationStatusWaived       VerificationRunStatus = "waived"
-	VerificationStatusNotRun       VerificationRunStatus = "not_run"
-	VerificationStatusPendingHuman VerificationRunStatus = "pending_human"
+	VerificationStatusPassed           VerificationRunStatus = "passed"
+	VerificationStatusFailed           VerificationRunStatus = "failed"
+	VerificationStatusInheritedFailure VerificationRunStatus = "inherited_failure"
+	VerificationStatusBlocked          VerificationRunStatus = "blocked"
+	VerificationStatusWaived           VerificationRunStatus = "waived"
+	VerificationStatusNotRun           VerificationRunStatus = "not_run"
+	VerificationStatusPendingHuman     VerificationRunStatus = "pending_human"
 )
 
 type VerificationEvidence struct {
 	ExitCode    *int     `yaml:"exit_code,omitempty"`
 	Summary     string   `yaml:"summary,omitempty"`
 	Primary     string   `yaml:"primary,omitempty"`
+	Sha256      string   `yaml:"sha256,omitempty"`
 	Attachments []string `yaml:"attachments,omitempty"`
 }
 
@@ -162,6 +164,9 @@ func (r *VerificationCheckResult) UnmarshalYAML(node *yaml.Node) error {
 		if primary, ok := evidence["primary"].(string); ok {
 			r.EvidenceData.Primary = strings.TrimSpace(primary)
 		}
+		if digest, ok := evidence["sha256"].(string); ok {
+			r.EvidenceData.Sha256 = strings.TrimSpace(digest)
+		}
 		if attachments, ok := evidence["attachments"]; ok {
 			r.EvidenceData.Attachments = toStringSlice(attachments)
 		}
@@ -193,6 +198,7 @@ func hasStructuredEvidence(e VerificationEvidence) bool {
 	return e.ExitCode != nil ||
 		strings.TrimSpace(e.Summary) != "" ||
 		strings.TrimSpace(e.Primary) != "" ||
+		strings.TrimSpace(e.Sha256) != "" ||
 		len(e.Attachments) > 0
 }
 
@@ -290,6 +296,8 @@ func NormalizeStatus(s VerificationRunStatus) VerificationRunStatus {
 		return VerificationStatusPassed
 	case "fail", "failed", "failure", "error":
 		return VerificationStatusFailed
+	case "inherited_failure", "inherited", "pre_existing_failure", "pre-existing-failure":
+		return VerificationStatusInheritedFailure
 	case "blocked":
 		return VerificationStatusBlocked
 	case "waived", "waive":
@@ -351,13 +359,24 @@ func BuildContractVerificationReportStub(contract *TestingContract, contractPath
 	}
 	for _, item := range contract.Items {
 		mode := verificationModeForContractItem(item)
+		status := VerificationStatusNotRun
+		evidence := VerificationEvidence{}
+		notes := ""
+		if IsTestingContractItemWaived(item) {
+			status = VerificationStatusWaived
+			notes = strings.TrimSpace(item.Disposition.Reason)
+			evidence.Summary = "user-authorized waiver: " + notes
+		}
 		report.Results = append(report.Results, VerificationCheckResult{
-			ItemID:      item.ID,
-			Name:        item.Name,
-			Requirement: item.Command,
-			Command:     item.Command,
-			Mode:        mode,
-			Status:      VerificationStatusNotRun,
+			ItemID:       item.ID,
+			Name:         item.Name,
+			Requirement:  item.Command,
+			Command:      item.Command,
+			Mode:         mode,
+			Status:       status,
+			Evidence:     evidence.Summary,
+			EvidenceData: evidence,
+			Notes:        notes,
 		})
 	}
 	return report

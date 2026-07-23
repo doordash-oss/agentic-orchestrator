@@ -703,6 +703,149 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 	}
 }
 
+// TestRunBoundedHelper_RetriesOnErroredResult proves a session whose CLI
+// process ran and then reported an error result (llm.TermErrored — e.g. a
+// transient provider/API failure) gets a fresh session retry instead of
+// immediately failing the whole review gate, mirroring the early-crash-loop
+// retry already in place for sessions that produce no result at all.
+func TestRunBoundedHelper_RetriesOnErroredResult(t *testing.T) {
+	phaseDir := t.TempDir()
+	erroredSess := newBoundedNudgeSession(&llm.ResultMessage{
+		Type: testResultMessageType, Subtype: "error", IsError: true, StopReason: testStopReasonEndTurn,
+	})
+	okSess := newBoundedNudgeSession(&llm.ResultMessage{
+		Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn,
+	})
+
+	var startCalls int
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		startCalls++
+		if startCalls == 1 {
+			return erroredSess, nil
+		}
+		// The retry attempt removes the stale marker before starting
+		// (mirrors a real re-dispatched helper); simulate the resumed
+		// helper writing its contract artifacts before ending its turn.
+		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+		if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+			t.Fatalf("write marker: %v", err)
+		}
+		return okSess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:        "helper-errored-retry",
+			workDir:          t.TempDir(),
+			phaseCompleteDir: phaseDir,
+			contractPhase:    feature.PhaseReview,
+			contractRole:     RoleImplementationReviewCraft,
+		})
+		resultCh <- result
+		errCh <- err
+	}()
+
+	erroredSess.statusC <- agentStatusSuccess
+	okSess.statusC <- agentStatusSuccess
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q (err: %v)", result.Status, BoundedHelperStatusCompleted, <-errCh)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize after an errored-result retry")
+	}
+	if startCalls != 2 {
+		t.Fatalf("StartSession called %d times, want 2 (one retry after the errored result)", startCalls)
+	}
+}
+
+// TestRunBoundedHelper_ErroredResultRetryExhausts proves the retry budget for
+// errored results is bounded: a session that keeps erroring finalizes as a
+// failure once retryableInfrastructureSessionMaxAttempts is reached, rather
+// than retrying forever.
+func TestRunBoundedHelper_ErroredResultRetryExhausts(t *testing.T) {
+	phaseDir := t.TempDir()
+
+	var startCalls int
+	sm := mocks.NewMockSessionManager()
+	// Each attempt's session reports its status synchronously right after
+	// construction (buffered statusC), driving the retry loop without
+	// relying on an external goroutine to push per attempt.
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		startCalls++
+		sess := newBoundedNudgeSession(&llm.ResultMessage{
+			Type: testResultMessageType, Subtype: "error", IsError: true, StopReason: testStopReasonEndTurn,
+		})
+		sess.statusC <- agentStatusSuccess
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+		sessionID:        "helper-errored-exhaust",
+		workDir:          t.TempDir(),
+		phaseCompleteDir: phaseDir,
+		contractPhase:    feature.PhaseReview,
+		contractRole:     RoleImplementationReviewCraft,
+	})
+
+	if result == nil || result.Status != BoundedHelperStatusFailed {
+		status := "<nil>"
+		if result != nil {
+			status = result.Status
+		}
+		t.Fatalf("Status = %q, want %q", status, BoundedHelperStatusFailed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "helper returned an error result") {
+		t.Fatalf("err = %v, want an error-result failure", err)
+	}
+	if startCalls != retryableInfrastructureSessionMaxAttempts {
+		t.Fatalf("StartSession called %d times, want %d", startCalls, retryableInfrastructureSessionMaxAttempts)
+	}
+}
+
+// TestArchiveExistingLog proves a session log from a prior attempt is
+// preserved (renamed aside), not silently overwritten, before the next
+// attempt's os.Create at the same path.
+func TestArchiveExistingLog(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "review-output.txt")
+
+	// No-op when there is nothing to preserve yet.
+	archiveExistingLog(path)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected no file to be created, stat err = %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte("attempt 1 transcript"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archiveExistingLog(path)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected %s to be renamed away, stat err = %v", path, err)
+	}
+	matches, err := filepath.Glob(path + ".*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("glob %s.*.bak = %v, want exactly one archived file", path, matches)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "attempt 1 transcript" {
+		t.Fatalf("archived content = %q, want the prior attempt's transcript", data)
+	}
+}
+
 // TestRunBoundedHelper_TruncatedTurnAutoResumes proves the statusCh arm
 // resumes a CLI-truncated turn (stop_reason tool_use — e.g. the helper yielded
 // on a scheduled wakeup) instead of finalizing the run as a failure.

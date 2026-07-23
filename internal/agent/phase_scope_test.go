@@ -123,6 +123,20 @@ Body.
 	}
 }
 
+func TestPhaseScope_MultipleRepoTagsRejectedWithoutStagingEither(t *testing.T) {
+	feat := &feature.Feature{
+		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
+	}
+	plan := "## Tasks\n\n### Task 1: ambiguous\n**Repo:** api\n**Repo:** web\n"
+	got := PhaseScopeFromText(feat, plan)
+	if got.ScopeOK() || len(got.Repos) != 0 {
+		t.Fatalf("PhaseScopeFromText() = repos %v, issues %+v; want ambiguous task rejected without staging", got.Repos, got.Issues)
+	}
+	if len(got.Issues) != 1 || got.Issues[0].Code != "multiple-repo-tags" {
+		t.Fatalf("issues = %+v, want multiple-repo-tags", got.Issues)
+	}
+}
+
 func TestPhaseScope_EmptyPlan(t *testing.T) {
 	feat := &feature.Feature{
 		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}},

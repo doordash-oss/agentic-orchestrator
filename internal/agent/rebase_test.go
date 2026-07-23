@@ -19,7 +19,7 @@ import (
 	"testing"
 )
 
-func TestBuildRebasePlan_UsesGenericVerificationCommands(t *testing.T) {
+func TestBuildRebasePlan_UsesOnlyConcreteVerificationCommands(t *testing.T) {
 	tests := []struct {
 		name          string
 		conflictFiles []string
@@ -32,17 +32,20 @@ func TestBuildRebasePlan_UsesGenericVerificationCommands(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			plan := BuildRebasePlan(defaultTestBranch, "https://github.com/o/r/pull/1", tt.conflictFiles)
 
-			for _, want := range []string{
-				"`run the project build command`",
-				"`run the project linter`",
-				"`run the full test suite`",
+			for _, forbidden := range []string{
+				"run the project build command",
+				"run the project linter",
+				"run the full test suite",
 			} {
-				if !strings.Contains(plan, want) {
-					t.Errorf("expected plan to contain %q", want)
+				if strings.Contains(plan, forbidden) {
+					t.Errorf("plan contains guessed command %q", forbidden)
 				}
 			}
-			if !strings.Contains(plan, "grep -rn") || !strings.Contains(plan, "<<<<<<<") {
-				t.Errorf("expected plan to preserve the conflict-marker grep check, got %q", plan)
+			if !strings.Contains(plan, "! grep -rln") || !strings.Contains(plan, "<<<<<<<") {
+				t.Errorf("expected plan to preserve the negated conflict-marker grep check, got %q", plan)
+			}
+			if strings.Contains(plan, "| head") {
+				t.Errorf("conflict-marker check must not pipe into head: the pipeline exit code would always be 0, got %q", plan)
 			}
 		})
 	}

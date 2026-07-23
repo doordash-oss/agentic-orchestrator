@@ -98,8 +98,8 @@ func TestParsePlanTasks_MultiRepo(t *testing.T) {
 		if tasks[i].Heading != w.heading {
 			t.Errorf("task %d heading = %q, want %q", i, tasks[i].Heading, w.heading)
 		}
-		if tasks[i].Repo != w.repo {
-			t.Errorf("task %d repo = %q, want %q", i, tasks[i].Repo, w.repo)
+		if !reflect.DeepEqual(tasks[i].Repos, []string{w.repo}) {
+			t.Errorf("task %d repos = %v, want [%q]", i, tasks[i].Repos, w.repo)
 		}
 	}
 }
@@ -110,8 +110,8 @@ func TestParsePlanTasks_SingleRepoNoTags(t *testing.T) {
 		t.Fatalf("expected 2 tasks, got %d", len(tasks))
 	}
 	for i, tt := range tasks {
-		if tt.Repo != "" {
-			t.Errorf("task %d repo = %q, want empty", i, tt.Repo)
+		if len(tt.Repos) != 0 {
+			t.Errorf("task %d repos = %v, want empty", i, tt.Repos)
 		}
 	}
 }
@@ -231,7 +231,7 @@ func TestParsePlanTasks_FencedHeadingsDoNotTruncate(t *testing.T) {
 	if len(tasks) != 4 {
 		t.Fatalf("expected 4 tasks (fenced headings should not truncate), got %d", len(tasks))
 	}
-	got := []string{tasks[0].Repo, tasks[1].Repo, tasks[2].Repo, tasks[3].Repo}
+	got := []string{tasks[0].Repos[0], tasks[1].Repos[0], tasks[2].Repos[0], tasks[3].Repos[0]}
 	want := []string{"agentic", "agentic", "payments", "payments"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("repos = %v, want %v", got, want)
@@ -263,8 +263,16 @@ func TestParsePlanTasks_FencedTaskHeadingIgnored(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(tasks))
 	}
-	if tasks[0].Repo != testRepoNameAPI || tasks[1].Repo != testRepoNameWeb {
-		t.Errorf("repos = [%q %q], want [api web]", tasks[0].Repo, tasks[1].Repo)
+	if !reflect.DeepEqual(tasks[0].Repos, []string{testRepoNameAPI}) || !reflect.DeepEqual(tasks[1].Repos, []string{testRepoNameWeb}) {
+		t.Errorf("repos = [%v %v], want [[api] [web]]", tasks[0].Repos, tasks[1].Repos)
+	}
+}
+
+func TestParsePlanTasks_RetainsEveryRepoTag(t *testing.T) {
+	plan := "## Tasks\n\n### Task 1: ambiguous\n**Repo:** api\n**Repo:** web\n"
+	tasks := ParsePlanTasks(plan)
+	if len(tasks) != 1 || !reflect.DeepEqual(tasks[0].Repos, []string{testRepoNameAPI, testRepoNameWeb}) {
+		t.Fatalf("tasks = %+v, want both repo declarations retained", tasks)
 	}
 }
 

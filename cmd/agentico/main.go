@@ -114,9 +114,11 @@ const (
 
 	cliSubcommandServer            = "server"
 	cliSubcommandValidateArtifacts = "validate-artifacts"
+	cliSubcommandVerifyEvidence    = "verify-evidence"
 	cliFlagDir                     = "--dir"
 	cliFlagPhase                   = "--phase"
 	cliFlagRole                    = "--role"
+	cliFlagContract                = "--contract"
 
 	// repoConflictKey is the Target map key used to report the repo name on
 	// a publish conflict. Coincidentally shares its value with an unrelated
@@ -136,6 +138,7 @@ const (
 	launchModeVersion
 	launchModeUpdate
 	launchModeValidateArtifacts
+	launchModeVerifyEvidence
 	launchModeServer
 )
 
@@ -147,6 +150,7 @@ type launchOptions struct {
 	refreshModels        bool
 	mode                 launchMode
 	validateArtifacts    validateArtifactsOptions
+	verifyEvidence       verifyEvidenceOptions
 	// updateCheck is set when update mode was selected with --check / -n,
 	// requesting a check-only run that never attempts to install.
 	updateCheck bool
@@ -156,6 +160,11 @@ type validateArtifactsOptions struct {
 	phase string
 	role  string
 	dir   string
+}
+
+type verifyEvidenceOptions struct {
+	contract string
+	dir      string
 }
 
 type defaultLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int
@@ -218,6 +227,8 @@ func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, la
 		return update(opts.updateCheck, stdout, stderr)
 	case launchModeValidateArtifacts:
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
+	case launchModeVerifyEvidence:
+		return runVerifyEvidence(opts.verifyEvidence, stdout, stderr)
 	case launchModeServer:
 		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 	default:
@@ -265,6 +276,10 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if len(args) > 0 && args[0] == cliSubcommandValidateArtifacts {
 		opts.mode = launchModeValidateArtifacts
 		return parseValidateArtifactsArgs(opts, args[1:])
+	}
+	if len(args) > 0 && args[0] == cliSubcommandVerifyEvidence {
+		opts.mode = launchModeVerifyEvidence
+		return parseVerifyEvidenceArgs(opts, args[1:])
 	}
 	if len(args) > 0 && args[0] == cliSubcommandServer {
 		opts.mode = launchModeServer
@@ -355,6 +370,62 @@ func parseValidateArtifactsArgs(opts launchOptions, args []string) (launchOption
 	return opts, nil
 }
 
+func parseVerifyEvidenceArgs(opts launchOptions, args []string) (launchOptions, error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case cliFlagContract:
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--contract requires a value")
+			}
+			i++
+			opts.verifyEvidence.contract = args[i]
+		case cliFlagDir:
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--dir requires a value")
+			}
+			i++
+			opts.verifyEvidence.dir = args[i]
+		case "--help", "-h":
+			opts.mode = launchModeHelp
+			return opts, nil
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unknown verify-evidence flag: %s", arg)
+			}
+			return opts, fmt.Errorf("unknown verify-evidence argument: %s", arg)
+		}
+	}
+	if strings.TrimSpace(opts.verifyEvidence.contract) == "" {
+		return opts, fmt.Errorf("verify-evidence requires --contract")
+	}
+	if strings.TrimSpace(opts.verifyEvidence.dir) == "" {
+		return opts, fmt.Errorf("verify-evidence requires --dir")
+	}
+	return opts, nil
+}
+
+// runVerifyEvidence is the in-session self-check the implementer runs before
+// phase_complete: it reads the testing contract and confirms every required
+// agent-owned capture is present, well-formed, correctly sized, and not a
+// byte-identical duplicate of another row — the same file-backed checks the
+// post-handoff report-integrity gate applies, surfaced early so a missing or
+// duplicated capture costs seconds here instead of a whole failed iteration.
+func runVerifyEvidence(opts verifyEvidenceOptions, stdout, stderr io.Writer) int {
+	contract, err := agent.ReadTestingContract(opts.contract)
+	if err != nil {
+		fmt.Fprintf(stderr, "reading testing contract: %v\n", err)
+		return 1
+	}
+	violations := agent.PreflightAgentEvidence(contract, opts.dir)
+	if len(violations) > 0 {
+		fmt.Fprintln(stderr, agent.JoinProtocolViolations(violations))
+		return 1
+	}
+	fmt.Fprintln(stdout, "evidence OK")
+	return 0
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
@@ -362,6 +433,7 @@ Usage: agentico [flags]
        agentico server [flags]
        agentico update [--check|-n]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
+       agentico verify-evidence --contract <testing-contract.yaml> --dir <iteration_dir>
 
 Launches the Bubble Tea TUI dashboard.
 Run 'agentico server' to start the foreground loopback HTTP server.
@@ -369,6 +441,9 @@ Run 'agentico update' to upgrade the binary, or 'agentico update --check'
 (alias -n) to report the latest available release without installing.
 Run 'agentico validate-artifacts' from agent sessions before phase_complete
 to parse and validate role output artifacts without starting the TUI/server.
+Run 'agentico verify-evidence' from implementer sessions before phase_complete
+to confirm required agent-owned captures are present, correctly sized, and not
+duplicates — catching gaps before the post-handoff integrity gate does.
 
 Flags:
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)

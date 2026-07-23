@@ -620,3 +620,35 @@ func TestBuildPhasePlanRevisionPrompt_OmitsPriorPhaseContextForPhaseOne(t *testi
 		t.Errorf("revision prompt should omit Prior Phase Context when no prior phases:\n%s", prompt)
 	}
 }
+
+func TestBuildPhasePlanPromptDeclaresAutomatedVerificationOnlyForNonMoonshotProfiles(t *testing.T) {
+	phase := RoadmapPhase{Number: 2, Name: "Preference persistence", Goal: "Persist selected theme"}
+
+	large := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineLarge}
+	largePrompt := BuildPhasePlanPromptWithResearch(large, "", "", "/roadmap.md", "", phase, nil)
+	if !strings.Contains(largePrompt, "## Verification Contracting Mode") {
+		t.Errorf("large-profile phase plan prompt should declare automated-only verification mode:\n%s", largePrompt)
+	}
+
+	moonshot := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineMoonshot}
+	moonshotPrompt := BuildPhasePlanPromptWithResearch(moonshot, "", "", "/roadmap.md", "", phase, nil)
+	if strings.Contains(moonshotPrompt, "## Verification Contracting Mode") {
+		t.Errorf("moonshot-profile phase plan prompt should not declare automated-only verification mode:\n%s", moonshotPrompt)
+	}
+}
+
+func TestBuildPhasePlanRevisionPromptDeclaresAutomatedVerificationOnlyForNonMoonshotProfiles(t *testing.T) {
+	phase := RoadmapPhase{Number: 2, Name: "Fill-in", Type: "tdd-fill-in"}
+
+	large := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineLarge}
+	largePrompt := BuildPhasePlanRevisionPrompt(large, "", "/p.md", "feedback", "", phase, 2, nil)
+	if !strings.Contains(largePrompt, "## Verification Contracting Mode") {
+		t.Errorf("large-profile phase plan revision prompt should declare automated-only verification mode:\n%s", largePrompt)
+	}
+
+	moonshot := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineMoonshot}
+	moonshotPrompt := BuildPhasePlanRevisionPrompt(moonshot, "", "/p.md", "feedback", "", phase, 2, nil)
+	if strings.Contains(moonshotPrompt, "## Verification Contracting Mode") {
+		t.Errorf("moonshot-profile phase plan revision prompt should not declare automated-only verification mode:\n%s", moonshotPrompt)
+	}
+}

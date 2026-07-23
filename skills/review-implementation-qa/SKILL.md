@@ -24,6 +24,8 @@ Own functional QA at Final Review:
 
 Read the feature description, design artifact, exit criteria, roadmap and plan context, previous aggregate feedback, and prior implementation evidence before choosing what to exercise. Prefer a few representative end-to-end journeys over static inspection.
 
+Before returning APPROVED, execute the repository's full automated test suites (the documented aggregate commands) yourself and confirm they pass. For features without per-iteration machine verification you are the only execution gate; do not approve on code reading alone.
+
 ## Blocking Mandate
 
 Use `CHANGES_REQUESTED` only for Critical or High defects attributable to the code. Examples: the feature cannot build, cannot launch, crashes, or behaves contrary to approved intent or exit criteria.

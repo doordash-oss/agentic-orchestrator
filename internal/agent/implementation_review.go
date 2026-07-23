@@ -224,9 +224,16 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
 		return ReviewFailed, "", fmt.Errorf("creating %s implementation review helper directory: %w", axis.Name, err)
 	}
-	RemovePhaseComplete(axisDir)
-
 	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
+	// Stop/restart resume: an axis that already completed its verdict for
+	// this iteration is reused instead of re-running the helper. Helper
+	// failure stubs never persist phase_complete, so they are never reused.
+	if HasPhaseComplete(axisDir) {
+		if cached, err := ParseReviewFeedback(feedbackPath); err == nil && len(cached.ProtocolViolations) == 0 {
+			return cached.Verdict, cached.Body, nil
+		}
+	}
+	RemovePhaseComplete(axisDir)
 	reviewPrompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
 		Gate:                   implementationReviewGatePerPhase,
 		AxisLabel:              axis.Name,

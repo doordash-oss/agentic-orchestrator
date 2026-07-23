@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
@@ -39,6 +40,24 @@ const testEventEpoch = "epoch-test"
 // testEventKindFeatureState is the fake SSEEventDTO.Kind used across broker
 // tests in this file and handler_test.go.
 const testEventKindFeatureState = "feature.state"
+
+func TestVerificationProgressEventInvalidatesFeatureSnapshot(t *testing.T) {
+	t.Parallel()
+
+	event := eventDTOFromDomain(ports.Event{
+		Type:      ports.VerificationProgress,
+		FeatureID: testFeatureID,
+	})
+	if event.Kind != sseEventLifecycleUpdated {
+		t.Errorf("event kind = %q, want %q", event.Kind, sseEventLifecycleUpdated)
+	}
+	if event.Resource.Type != entityFeature || event.Resource.FeatureID != testFeatureID {
+		t.Errorf("event resource = %+v, want feature %s", event.Resource, testFeatureID)
+	}
+	if !event.SnapshotRequired {
+		t.Error("verification progress must require a feature snapshot refresh")
+	}
+}
 
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	t.Parallel()

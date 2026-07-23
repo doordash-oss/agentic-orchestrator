@@ -73,14 +73,15 @@ Single-repo features may omit `**Repo:**`; multi-repo features must include it i
 - `#### Blocked by` is present for every task and says either a concrete blocker or `None - can start immediately`.
 - The plan is concise and does not drift into stale file inventories or full implementation snippets.
 - Top-level `### Automated Verification` exists under `## Success Criteria`.
-- Every automated verification bullet contains a complete executable command in backticks, in `description: command` order.
+- Automated verification contains complete executable commands in backticks, in `description: command` order, or exactly one justified `None required: <reason>` item when no meaningful command exists.
+- Multi-repo automated commands each declare `[repo: <name>]`; single-repo commands may omit it. Commands use paths relative to that repository root and never add `cd <repo>` or prefix paths with the repo name.
 - Top-level `### Manual Verification` exists under `## Success Criteria`.
-- Manual verification bullets are checklist items without executable backtick commands, or exactly one `None required: <reason>` checklist item when manual verification is not meaningful.
+- Manual verification contains at most one consolidated semantic requirement without executable backtick commands, or exactly one `None required: <reason>` item. Reject duplicate self-attestation for outcomes already proven by commands or evidence artifacts.
 - Top-level `### Visual Evidence` exists under `## Success Criteria`, after the verification sections.
 - Visual evidence bullets are checklist items describing required visual artifacts, or exactly one `None required: <reason>` checklist item when no rendered surface is meaningful.
-- If `**Frontend:** true`, the Visual Evidence section must contain at least one real checklist visual evidence requirement. Reject `None required`, empty, or missing Visual Evidence for frontend phases; this is the frontend/visual-evidence rule.
+- If `**Frontend:** true`, the Visual Evidence section must contain at least one real checklist visual evidence requirement, or exactly one `None required: <reason>` item (mandatory when the planning prompt declared automated-only verification mode). Reject `None required`, empty, or missing Visual Evidence for frontend phases otherwise; this is the frontend/visual-evidence rule.
 - Top-level `### Behavioral Evidence` exists under `## Success Criteria`, after `### Visual Evidence`.
-- Behavioral evidence bullets are checklist items describing required behavioral artifacts, or exactly one `None required: <reason>` checklist item when no primary user journey artifact is meaningful.
+- Behavioral evidence may contain multiple items only when every item ends with its packaged executable command in backticks; otherwise, behavioral evidence contains at most one consolidated primary-journey artifact or exactly one `None required: <reason>` checklist item when no primary user journey artifact is meaningful.
 - Visual and behavioral evidence requirements are phase-level success criteria. Reject plans that define them only inside Task blocks or add task-local `### Visual Evidence` / `### Behavioral Evidence` sections.
 
 ## Per-Task Repo Tagging
@@ -128,12 +129,13 @@ APPROVE if the plan:
 - Sets `**Frontend:** true|false` in `## Metadata`
 - Has task-level `What to build`, acceptance criteria, and blockers
 - Has valid repo tags for the feature shape
-- Defines executable automated verification and meaningful manual verification
-- Defines visual and behavioral evidence sections, including explicit `None required: <reason>` markers when no evidence artifact is meaningful and at least one real Visual Evidence requirement when `**Frontend:** true`
+- Defines executable automated verification when meaningful, and no more than one non-overlapping semantic manual review
+- Defines visual and behavioral evidence sections, including explicit `None required: <reason>` markers when no evidence artifact is meaningful and at least one real Visual Evidence requirement when `**Frontend:** true` (or exactly one `None required: <reason>` item there instead, mandatory when the planning prompt declared automated-only verification mode)
 
 Do NOT request changes for:
 - Missing exact file paths or function signatures
 - Lack of a grounding table
 - Lack of stub inventories or TDD step ceremony
 - Minor wording preferences
+- A justified lack of build/test commands for a documentation-only or otherwise non-executable phase
 - Implementation details the coding agent can resolve from the worktree

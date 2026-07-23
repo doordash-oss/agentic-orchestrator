@@ -925,6 +925,299 @@ func TestPhasePlanningLoopContractViolationCanRecoverWithinAttemptBudget(t *test
 	}
 }
 
+// planTextWithVisualEvidenceRow returns validPhasePlanText() with a real
+// Visual Evidence requirement in place of the None-required marker, so the
+// deterministic agent-evidence check has something to reject for
+// automated-only profiles.
+func planTextWithVisualEvidenceRow() string {
+	return strings.Replace(validPhasePlanText(),
+		"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n\n",
+		"### Visual Evidence\n- [ ] Home screen default state [size: 760x480]\n\n", 1)
+}
+
+func TestPhasePlanningLoopRejectsAgentEvidenceForAutomatedOnlyProfile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := tmpDir
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	phasePlanDir := filepath.Join(stateDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, d := range []string{workDir, phasePlanDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", d, err)
+		}
+	}
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WritePhasePlanSuccessArtifacts(phasePlanDir, planTextWithVisualEvidenceRow())+"\n"+
+			testutil.JSONLSuccess+"\n")
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineLarge
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature) error = %v", err)
+	}
+
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:                    f,
+			FeatureStore:               store,
+			StateDir:                   stateDir,
+			WorkDir:                    workDir,
+			MaxAttempts:                2,
+			DangerouslySkipPermissions: true,
+			BuildSession:               mockBuildSession(planScript, criticScript),
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Test Phase",
+			Type:   "tdd-fill-in",
+			Goal:   "Test automated-only evidence rejection",
+		},
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
+		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if !strings.Contains(result.LastError, "### Visual Evidence") {
+		t.Fatalf("LastError = %q, want it to name ### Visual Evidence", result.LastError)
+	}
+
+	feedbackPath := filepath.Join(phasePlanDir, "attempt-02", "validation-feedback.md")
+	feedback, err := os.ReadFile(feedbackPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", feedbackPath, err)
+	}
+	if !strings.Contains(string(feedback), "### Visual Evidence") {
+		t.Fatalf("validation-feedback.md = %q, want it to name ### Visual Evidence", feedback)
+	}
+}
+
+// frontendPlanTextWithNoneRequiredTrio returns validPhasePlanText() with a
+// `## Metadata` / `**Frontend:** true` block spliced in ahead of the
+// Overview section, keeping the None-required Manual/Visual/Behavioral
+// markers. This is the plan shape that deadlocked automated-only frontend
+// features before the frontend visual-evidence rule became profile-aware.
+func frontendPlanTextWithNoneRequiredTrio() string {
+	return strings.Replace(validPhasePlanText(),
+		"## Overview\n",
+		"## Metadata\n\n**Frontend:** true\n\n## Overview\n", 1)
+}
+
+func TestPhasePlanningLoopApprovesFrontendAutomatedOnlyPlanWithNoneRequiredVisualEvidence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := tmpDir
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	phasePlanDir := filepath.Join(stateDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, d := range []string{workDir, phasePlanDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", d, err)
+		}
+	}
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WritePhasePlanSuccessArtifacts(phasePlanDir, frontendPlanTextWithNoneRequiredTrio())+"\n"+
+			testutil.JSONLSuccess+"\n")
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineLarge
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature) error = %v", err)
+	}
+
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:                    f,
+			FeatureStore:               store,
+			StateDir:                   stateDir,
+			WorkDir:                    workDir,
+			MaxAttempts:                2,
+			DangerouslySkipPermissions: true,
+			BuildSession:               mockBuildSession(planScript, criticScript),
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Test Phase",
+			Type:   "tdd-fill-in",
+			Goal:   "Test frontend automated-only plan is not deadlocked",
+		},
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "approved" {
+		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if result.Iterations != 1 {
+		t.Fatalf("Iterations = %d, want 1 (no ping-pong)", result.Iterations)
+	}
+}
+
+func TestPhasePlanningLoopRejectsMoonshotFrontendPlanWithNoneRequiredVisualEvidence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := tmpDir
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	phasePlanDir := filepath.Join(stateDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, d := range []string{workDir, phasePlanDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", d, err)
+		}
+	}
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WritePhasePlanSuccessArtifacts(phasePlanDir, frontendPlanTextWithNoneRequiredTrio())+"\n"+
+			testutil.JSONLSuccess+"\n")
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMoonshot
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature) error = %v", err)
+	}
+
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:                    f,
+			FeatureStore:               store,
+			StateDir:                   stateDir,
+			WorkDir:                    workDir,
+			MaxAttempts:                2,
+			DangerouslySkipPermissions: true,
+			BuildSession:               mockBuildSession(planScript, criticScript),
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Test Phase",
+			Type:   "tdd-fill-in",
+			Goal:   "Test frontend visual rule still enforced for evidence-contracting profiles",
+		},
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
+		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if !strings.Contains(result.LastError, "frontend/visual-evidence rule") {
+		t.Fatalf("LastError = %q, want it to name the frontend visual-evidence rule", result.LastError)
+	}
+
+	metaPath := filepath.Join(phasePlanDir, "attempt-02", "meta.yaml")
+	meta, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", metaPath, err)
+	}
+	if !strings.Contains(string(meta), agentStatusChangesRequested) {
+		t.Fatalf("meta.yaml = %q, want ReviewStatus %s", meta, agentStatusChangesRequested)
+	}
+
+	feedbackPath := filepath.Join(phasePlanDir, "attempt-02", "validation-feedback.md")
+	feedback, err := os.ReadFile(feedbackPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", feedbackPath, err)
+	}
+	if !strings.Contains(string(feedback), "frontend/visual-evidence rule") {
+		t.Fatalf("validation-feedback.md = %q, want it to name the frontend visual-evidence rule", feedback)
+	}
+}
+
+func TestPhasePlanningLoopAllowsAgentEvidenceForMoonshotProfile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := tmpDir
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	phasePlanDir := filepath.Join(stateDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, d := range []string{workDir, phasePlanDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", d, err)
+		}
+	}
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WritePhasePlanSuccessArtifacts(phasePlanDir, planTextWithVisualEvidenceRow())+"\n"+
+			testutil.JSONLSuccess+"\n")
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMoonshot
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature) error = %v", err)
+	}
+
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:                    f,
+			FeatureStore:               store,
+			StateDir:                   stateDir,
+			WorkDir:                    workDir,
+			MaxAttempts:                2,
+			DangerouslySkipPermissions: true,
+			BuildSession:               mockBuildSession(planScript, criticScript),
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Test Phase",
+			Type:   "tdd-fill-in",
+			Goal:   "Test agent evidence allowed for moonshot",
+		},
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "approved" {
+		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+}
+
 func TestPlanValidatorHelperUsesIsolatedDirAndMarkerContract(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

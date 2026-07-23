@@ -106,6 +106,10 @@ type OrchestratorConfig struct {
 
 	// Observer is the observability facade for lifecycle events. Nil = no-op.
 	Observer *observe.Observer
+
+	// OnVerificationProgress is called after each persisted harness
+	// verification status transition so API clients can refresh live state.
+	OnVerificationProgress func(featureID string)
 }
 
 // OrchestratorResult is the aggregate outcome of multi-repo implementation.
@@ -123,9 +127,9 @@ type OrchestratorResult struct {
 	// can read the questionnaire and answers.
 	NeedUserInputPath string
 	LastError         string
-	// PlanRevisionFeedback carries implementation-review missing-evidence
-	// requirements when FinalStatus == "plan_revision_required". Final Review
-	// must run its fix leg instead of returning this status.
+	// PlanRevisionFeedback carries phase-plan repair requirements when
+	// FinalStatus == "plan_revision_required". Final Review must run its fix
+	// leg instead of returning this status.
 	PlanRevisionFeedback string
 }
 

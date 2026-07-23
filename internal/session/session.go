@@ -428,6 +428,9 @@ func (s *Session) removePendingControlRequestLocked(requestID string) bool {
 	for i, cr := range s.pendingControlRequests {
 		if cr != nil && cr.RequestID == requestID {
 			s.pendingControlRequests = append(s.pendingControlRequests[:i], s.pendingControlRequests[i+1:]...)
+			if s.watchdog != nil {
+				s.watchdog.ResolveControlRequest(requestID)
+			}
 			return true
 		}
 	}
@@ -449,6 +452,9 @@ func (s *Session) findPendingControlRequestLocked(requestID string) *llm.Control
 // hold s.mu. Used when the session resets (e.g. SendUserMessage).
 func (s *Session) clearPendingControlRequestsLocked() {
 	s.pendingControlRequests = nil
+	if s.watchdog != nil {
+		s.watchdog.ClearControlRequests()
+	}
 }
 
 func (s *Session) QALog() []QAPair {
@@ -1372,6 +1378,9 @@ func (s *Session) matchingAskUserToolUseInput(controlInput json.RawMessage) (jso
 
 // respondToControlViaProtocol sends a control response through the protocol or direct writeJSON.
 func (s *Session) respondToControlViaProtocol(requestID string, allow bool, originalInput json.RawMessage, reason string) {
+	if s.watchdog != nil {
+		s.watchdog.ResolveControlRequest(requestID)
+	}
 	if s.protocol != nil {
 		_ = s.protocol.RespondToControl(requestID, allow, originalInput, reason)
 	} else if allow {

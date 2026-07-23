@@ -304,7 +304,7 @@ func TestRebaseLoop_Integration_3RepoMixedBehind(t *testing.T) {
 		}
 	}
 
-	// Verify the testing-contract.yaml is plan-less (only baseline rows).
+	// Verify the initial plan-less contract contains no guessed commands.
 	contract, err := agent.ReadTestingContract(filepath.Join(flatDir, "testing-contract.yaml"))
 	if err != nil {
 		t.Fatalf("read contract: %v", err)
@@ -314,15 +314,8 @@ func TestRebaseLoop_Integration_3RepoMixedBehind(t *testing.T) {
 			t.Errorf("plan-source item leaked into plan-less rebase contract: %+v", item)
 		}
 	}
-	gotRepoSet := map[string]bool{}
-	for _, item := range contract.Items {
-		gotRepoSet[item.Repo] = true
-	}
-	if !gotRepoSet["repoA"] || !gotRepoSet["repoB"] {
-		t.Errorf("contract missing per-repo baseline rows for behind subset; got repos = %v", gotRepoSet)
-	}
-	if gotRepoSet["repoC"] {
-		t.Errorf("contract leaked repoC into plan-less rebase items")
+	if len(contract.Items) != 0 {
+		t.Errorf("plan-less rebase contract contains guessed items: %+v", contract.Items)
 	}
 }
 

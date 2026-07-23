@@ -1053,6 +1053,131 @@ func TestTurnCompleted_WellFormedQuestionSurfacesOptions(t *testing.T) {
 	}
 }
 
+func TestTurnCompleted_MultiSentenceStemQuestionSurfacesOptions(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	// Verbatim shape from a real gpt-5.6 plan interview: the '?' ends the
+	// first stem sentence and a declarative clarifier follows, so the stem's
+	// final character is '.'.
+	p.mu.Lock()
+	p.lastAssistantText = "How should the opt-in notification preview setting be scoped? Existing server settings already control whether a feature may notify; this decision only governs how much content an allowed native notification reveals.\n" +
+		"\n" +
+		"1. Global preview toggle (Recommended): Keep previews off by default with one app-local privacy setting. [confidence: 0.88]\n" +
+		"2. Per-feature preview toggle: Allow previews selectively for trusted features. [confidence: 0.62]\n" +
+		"3. Per-attention-type toggle: Configure previews separately per attention type. [confidence: 0.38]"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "control_request" || msg.ControlRequest == nil {
+		t.Fatalf("got Type=%q ControlRequest=%v, want AskUserQuestion control_request", msg.Type, msg.ControlRequest)
+	}
+	if msg.ControlRequest.Request.ToolName != "AskUserQuestion" {
+		t.Fatalf("ToolName = %q, want AskUserQuestion", msg.ControlRequest.Request.ToolName)
+	}
+	var parsed struct {
+		Questions []struct {
+			Question string           `json:"question"`
+			Options  []map[string]any `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &parsed); err != nil {
+		t.Fatalf("unmarshal control request input: %v", err)
+	}
+	if len(parsed.Questions) != 1 || len(parsed.Questions[0].Options) != 3 {
+		t.Fatalf("expected 1 question with 3 options, got %+v", parsed.Questions)
+	}
+	if !strings.HasPrefix(parsed.Questions[0].Question, "How should the opt-in notification preview setting be scoped?") {
+		t.Errorf("question = %q", parsed.Questions[0].Question)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
+	}
+}
+
+func TestTurnCompleted_NonQuestionStemWithContractMarkersSurfacesOptions(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = "Pick the notification preview scope.\n" +
+		"1. Global toggle (Recommended): One app-local setting. [confidence: 0.85]\n" +
+		"2. Per-feature toggle: More configuration and state. [confidence: 0.40]"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "control_request" || msg.ControlRequest == nil {
+		t.Fatalf("got Type=%q, want control_request (confidence markers mark the list as a question)", msg.Type)
+	}
+}
+
+func TestTurnCompleted_InformationalListStaysNormalCompletion(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = "Here's what I changed.\n" +
+		"1. Updated the handler to reject oversized bodies.\n" +
+		"2. Added a regression test for the new limit."
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "result" || msg.Subtype != "success" {
+		t.Fatalf("got Type=%q Subtype=%q, want result/success for informational list", msg.Type, msg.Subtype)
+	}
+}
+
+func TestTurnCompleted_UnparseableContractMarkedTextTriggersReformatRetry(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	// A single option can't parse into a question, but the confidence marker
+	// proves this was contract output — remind instead of silently completing.
+	p.mu.Lock()
+	p.lastAssistantText = "Pick the notification preview scope.\n" +
+		"1. Global toggle (Recommended): One app-local setting. [confidence: 0.85]"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if ok {
+		t.Fatalf("parseNotification ok = true (msg=%+v), want false while reminder is pending", msg)
+	}
+	if !strings.Contains(buf.String(), "not in the required question format") {
+		t.Errorf("expected reformat reminder on stdin; got %s", buf.String())
+	}
+}
+
+func TestStemLooksLikeQuestion(t *testing.T) {
+	tests := []struct {
+		stem string
+		want bool
+	}{
+		{"Which one?", true},
+		{"Which one? The choice only affects defaults.", true},
+		{"Which one?\nThe choice only affects defaults.", true},
+		{"Pick the scope below.", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := stemLooksLikeQuestion(tt.stem); got != tt.want {
+			t.Errorf("stemLooksLikeQuestion(%q) = %v, want %v", tt.stem, got, tt.want)
+		}
+	}
+}
+
 func TestTurnCompleted_BlankAgentMessageDoesNotEraseWellFormedQuestion(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})

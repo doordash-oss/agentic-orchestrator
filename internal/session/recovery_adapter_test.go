@@ -51,7 +51,7 @@ func TestRecoveryAdapter_ScanDelegatesToPackageFunction(t *testing.T) {
 	stateDir := t.TempDir()
 
 	// Seed one orphan PID file.
-	featDir := filepath.Join(stateDir, "feat-scan", "implement")
+	featDir := filepath.Join(stateDir, "feat-scan")
 	pf := session.PIDFile{PID: 999999999, FeatureID: "feat-scan", Phase: "implement"}
 	if err := session.WritePIDFile(featDir, pf); err != nil {
 		t.Fatalf("seed PID file: %v", err)
@@ -81,7 +81,7 @@ func TestRecoveryAdapter_ScanDelegatesToPackageFunction(t *testing.T) {
 func TestRecoveryAdapter_ExecuteDelegatesToPackageFunction(t *testing.T) {
 	stateDir := t.TempDir()
 
-	featDir := filepath.Join(stateDir, "feat-exec", "implement")
+	featDir := filepath.Join(stateDir, "feat-exec")
 	pf := session.PIDFile{PID: 999999999, FeatureID: "feat-exec", Phase: "implement", Dir: featDir}
 	if err := session.WritePIDFile(featDir, pf); err != nil {
 		t.Fatalf("seed PID file: %v", err)

@@ -106,7 +106,7 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			parsed, err := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+			parsed, err := ParseProgressMd(path)
 			if err != nil {
 				t.Fatalf("ParseProgressMd: %v", err)
 			}
@@ -124,7 +124,7 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 }
 
 func TestParseProgressMd_MissingFile(t *testing.T) {
-	parsed, err := ParseProgressMd(filepath.Join(t.TempDir(), "nope.md"), "")
+	parsed, err := ParseProgressMd(filepath.Join(t.TempDir(), "nope.md"))
 	if err != nil {
 		t.Fatalf("expected nil err for missing file, got: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestParseProgressMd_RejectsMissingSection(t *testing.T) {
 SUCCESS
 `
 	path, _ := writeTempProgress(t, body)
-	parsed, err := ParseProgressMd(path, "")
+	parsed, err := ParseProgressMd(path)
 	if err != nil {
 		t.Fatalf("ParseProgressMd: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestParseProgressMd_RejectsInvalidStateToken(t *testing.T) {
 	body := progressMdHappy("MAYBE", iterDir, "")
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, "")
+	parsed, _ := ParseProgressMd(path)
 	if parsed.OK() {
 		t.Fatalf("expected violation for invalid state token")
 	}
@@ -232,7 +232,7 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, _ := ParseProgressMd(path)
 	if parsed.OK() {
 		t.Fatalf("expected violation for malformed Deferrals YAML")
 	}
@@ -286,7 +286,7 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, _ := ParseProgressMd(path)
 	if parsed.OK() {
 		t.Fatalf("expected violation for manual-follow-up deferral shape")
 	}
@@ -337,7 +337,7 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, _ := ParseProgressMd(path)
 	if parsed.OK() {
 		t.Fatalf("expected violation for incomplete deferral entry")
 	}
@@ -389,7 +389,7 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, _ := ParseProgressMd(path)
 	if parsed.OK() {
 		t.Fatalf("expected violation when both deferrals keys are absent")
 	}
@@ -401,29 +401,6 @@ SUCCESS
 	}
 	if hits < 2 {
 		t.Errorf("expected violations citing both deferrals: and closed_deferrals: keys; got %v", parsed.ProtocolViolations)
-	}
-}
-
-func TestParseProgressMd_VerificationPathMismatch(t *testing.T) {
-	dir := t.TempDir()
-	iterDir := filepath.Join(dir, "iteration-01")
-	_ = os.MkdirAll(iterDir, 0o755)
-	// Cite a wrong path.
-	body := progressMdHappy(agentStatusSuccess, "/wrong/path", "")
-	path := filepath.Join(dir, "progress.md")
-	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
-	if parsed.OK() {
-		t.Fatalf("expected violation for verification path mismatch")
-	}
-	hit := false
-	for _, v := range parsed.ProtocolViolations {
-		if strings.Contains(v, "Verification Report") && strings.Contains(v, "does not match") {
-			hit = true
-		}
-	}
-	if !hit {
-		t.Errorf("expected Verification Report path mismatch violation; got %v", parsed.ProtocolViolations)
 	}
 }
 
@@ -462,7 +439,7 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, _ := ParseProgressMd(path)
 	if !parsed.OK() {
 		t.Fatalf("expected future-phase prose to stay out of protocol validation; got %v", parsed.ProtocolViolations)
 	}
@@ -530,7 +507,7 @@ Plan contradicts the worktree.
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write progress.md: %v", err)
 	}
-	parsed, err := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, err := ParseProgressMd(path)
 	if err != nil {
 		t.Fatalf("ParseProgressMd: %v", err)
 	}
@@ -611,7 +588,7 @@ func TestParseProgressMd_NeedUserInputRejectsMissingQuestions(t *testing.T) {
 	body := progressMdNeedUserInput(iterDir, "Plan contradicts worktree.", nil)
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, _ := ParseProgressMd(path)
 	if parsed.OK() {
 		t.Fatalf("expected violation when NEED_USER_INPUT lacks ## Questions for User")
 	}
@@ -636,7 +613,7 @@ func TestParseProgressMd_NeedUserInputRejectsEmptyStateNote(t *testing.T) {
 	body := progressMdNeedUserInput(iterDir, "", []string{"What now?"})
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, _ := ParseProgressMd(path)
 	if parsed.OK() {
 		t.Fatalf("expected violation when NEED_USER_INPUT has empty summary")
 	}
@@ -695,7 +672,7 @@ Plan contradicts the worktree.
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, _ := ParseProgressMd(path)
 	if parsed.OK() {
 		t.Fatalf("expected violation when Questions for User has zero numbered prompts")
 	}
@@ -728,7 +705,7 @@ func TestParseProgressMd_RejectsQuestionsOnSuccessOrRetry(t *testing.T) {
 			)
 			path := filepath.Join(dir, "progress.md")
 			_ = os.WriteFile(path, []byte(body), 0o644)
-			parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+			parsed, _ := ParseProgressMd(path)
 			if parsed.OK() {
 				t.Fatalf("expected violation when state is %s but Questions for User is present", state)
 			}
@@ -798,22 +775,21 @@ Need a product choice before touching auth.
 		t.Fatalf("write progress.md: %v", err)
 	}
 
-	parsed, err := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
+	parsed, err := ParseProgressMd(path)
 	if err != nil {
 		t.Fatalf("ParseProgressMd: %v", err)
 	}
 	if parsed.OK() {
 		t.Fatalf("expected misplaced Questions for User section to be rejected")
 	}
-	if !strings.Contains(strings.Join(parsed.ProtocolViolations, "\n"), "between `## Verification Report` and `## Iteration State`") {
+	if !strings.Contains(strings.Join(parsed.ProtocolViolations, "\n"), "between `## Deferrals` and `## Iteration State`") {
 		t.Fatalf("violations = %v, want explicit ordering guidance", parsed.ProtocolViolations)
 	}
 }
 
 func TestProgressFingerprint_StableAcrossIterationDirs(t *testing.T) {
-	// Two progress.md files identical except for the verification-report
-	// path inside `## Verification Report`. The fingerprint should match
-	// because that section is excluded from the hash — otherwise the
+	// Two progress.md files identical except for metadata outside the handoff.
+	// The fingerprint should match because only the handoff is hashed — otherwise the
 	// no-progress safety rail breaks (see TestImplementLoopSafetyRailNoProgress).
 	dir := t.TempDir()
 	pathA := filepath.Join(dir, "a.md")

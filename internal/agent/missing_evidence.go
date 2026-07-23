@@ -129,3 +129,70 @@ func MissingEvidencePlanRevisionFeedback(requirements []MissingEvidenceRequireme
 	b.WriteString("- Do not use testing-contract.yaml Changes entries to create new evidence rows; Changes can only revise known item IDs.\n")
 	return b.String()
 }
+
+const insufficientEvidenceMarker = "INSUFFICIENT_EVIDENCE_REQUIREMENT"
+
+// InsufficientEvidenceRequirement is one reviewer-authored request to
+// restructure an existing evidence row whose scope is unsatisfiable as
+// written (e.g. one row contracting an entire capture matrix). Repair is a
+// phase-plan revision, not another implementer lap against the same row.
+type InsufficientEvidenceRequirement struct {
+	ItemID      string
+	Requirement string
+}
+
+// InsufficientEvidenceRequirements extracts structured markers of the form:
+//
+//	INSUFFICIENT_EVIDENCE_REQUIREMENT <item_id>: <revised requirement>
+//
+// Only visual_/behavioral_ item IDs are accepted — command rows already have
+// their own contract-error revision path.
+func InsufficientEvidenceRequirements(feedback string) []InsufficientEvidenceRequirement {
+	var out []InsufficientEvidenceRequirement
+	for _, line := range strings.Split(feedback, "\n") {
+		idx := strings.Index(line, insufficientEvidenceMarker)
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(line[idx+len(insufficientEvidenceMarker):])
+		head, requirement, ok := strings.Cut(rest, ":")
+		if !ok {
+			continue
+		}
+		itemID := strings.Trim(strings.TrimSpace(head), "`")
+		requirement = strings.TrimSpace(requirement)
+		if requirement == "" || !isEvidenceContractItemID(itemID) {
+			continue
+		}
+		out = append(out, InsufficientEvidenceRequirement{ItemID: itemID, Requirement: requirement})
+	}
+	return out
+}
+
+func isEvidenceContractItemID(itemID string) bool {
+	return strings.HasPrefix(itemID, testingContractVisualSource+"_") ||
+		strings.HasPrefix(itemID, testingContractBehavioralSource+"_")
+}
+
+// EvidencePlanRevisionFeedback renders one combined plan-revision request for
+// both marker kinds so the planner repairs coverage and row structure in a
+// single pass.
+func EvidencePlanRevisionFeedback(missing []MissingEvidenceRequirement, insufficient []InsufficientEvidenceRequirement) string {
+	if len(insufficient) == 0 {
+		return MissingEvidencePlanRevisionFeedback(missing)
+	}
+	var b strings.Builder
+	if len(missing) > 0 {
+		b.WriteString(MissingEvidencePlanRevisionFeedback(missing))
+		b.WriteString("\n")
+	}
+	b.WriteString("# Phase Plan Revision Required: Restructure Evidence Rows\n\n")
+	b.WriteString("The implementation reviewer found existing evidence rows whose scope cannot be satisfied or audited as written. Replace each row's plan bullet(s) under `### Visual Evidence` / `### Behavioral Evidence` per the revised requirement below. Split matrix-shaped visual requirements into one checklist item per surface/state/size/theme cell using `[size: WxH]` tags; give each behavioral journey its own checklist item ending with its packaged executable command in backticks.\n\n")
+	b.WriteString("## Findings\n")
+	for _, req := range insufficient {
+		fmt.Fprintf(&b, "- **High**: %s `%s`: %s\n", insufficientEvidenceMarker, req.ItemID, req.Requirement)
+	}
+	b.WriteString("\n## Invalid Repair Paths\n")
+	b.WriteString("- Do not edit verification-report.yaml or testing-contract.yaml directly; rows recompile from the revised plan.\n")
+	return b.String()
+}

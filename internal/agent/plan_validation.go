@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1096,18 +1097,19 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 	includePriorPhase := domain.Template == "validate-phase-plan-grounding" && len(extras.PriorPhasePlanPaths) > 0
 
 	return roles.BuildValidateSpecializedPrompt(roles.ValidateSpecializedUserInput{
-		Name:                     f.Name,
-		Description:              f.EffectiveDescription(),
-		ExitCriteria:             f.ExitCriteria,
-		RiskLevel:                string(f.RiskLevel),
-		DomainName:               domain.Name,
-		PlanPath:                 planPath,
-		IncludePriorPhaseContext: includePriorPhase,
-		PriorPhasePlanPaths:      append([]string(nil), extras.PriorPhasePlanPaths...),
-		IsRoadmapKind:            kind == validationArtifactRoadmap,
-		ResearchPath:             researchPath,
-		FeedbackPath:             feedbackPath,
-		AxisLabel:                strings.ToLower(domain.Name),
+		Name:                      f.Name,
+		Description:               f.EffectiveDescription(),
+		ExitCriteria:              f.ExitCriteria,
+		RiskLevel:                 string(f.RiskLevel),
+		DomainName:                domain.Name,
+		PlanPath:                  planPath,
+		IncludePriorPhaseContext:  includePriorPhase,
+		PriorPhasePlanPaths:       append([]string(nil), extras.PriorPhasePlanPaths...),
+		IsRoadmapKind:             kind == validationArtifactRoadmap,
+		ResearchPath:              researchPath,
+		FeedbackPath:              feedbackPath,
+		AxisLabel:                 strings.ToLower(domain.Name),
+		AutomatedVerificationOnly: kind != validationArtifactRoadmap && !f.EffectivePipeline().ShouldContractAgentEvidence(),
 	})
 }
 
@@ -2046,6 +2048,33 @@ phasePlanAttemptLoop:
 		if cfg.FeatureStore != nil {
 			if fresh, loadErr := cfg.FeatureStore.Load(cfg.Feature.ID); loadErr == nil {
 				cfg.Feature = fresh
+			}
+		}
+
+		// Deterministically enforce the profile-aware evidence mode:
+		// evidence-contracting profiles must give frontend phases real
+		// Visual Evidence rows; automated-only profiles must never declare
+		// agent-owned evidence rows at all.
+		{
+			planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
+			if planText, readErr := os.ReadFile(planArtifactPath); readErr != nil {
+				log.Printf("plan evidence-mode check skipped: read %s: %v", planArtifactPath, readErr)
+			} else {
+				contractAgentEvidence := cfg.Feature.EffectivePipeline().ShouldContractAgentEvidence()
+				if violations := phasePlanEvidenceModeViolations(string(planText), contractAgentEvidence); len(violations) > 0 {
+					lastErr := formatProtocolViolationError(plannerRole, attemptDir, violations)
+					criticFeedback = formatPlanContractViolationFeedback(plannerRole, violations)
+					_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
+					_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+						Attempt:      attempt,
+						AgentStatus:  agentStatusSuccess,
+						ReviewStatus: agentStatusChangesRequested,
+					})
+					if attempt >= maxAttempts {
+						return &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: lastErr}, nil
+					}
+					continue
+				}
 			}
 		}
 

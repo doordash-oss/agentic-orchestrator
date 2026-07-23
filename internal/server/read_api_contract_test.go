@@ -491,9 +491,16 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 	if len(gates) != 2 {
 		t.Fatalf("need_user_inputs length = %d; want feature and cycle gates", len(gates))
 	}
-	cycleGate := gates[1].(map[string]any)
-	if cycleGate["repo_name"] != repoNameSelf || cycleGate["cycle_type"] != string(feature.CycleReviewComments) {
-		t.Fatalf("cycle gate routing = %+v; want repo/cycle routing", cycleGate)
+	var cycleGate map[string]any
+	for _, raw := range gates {
+		gate := raw.(map[string]any)
+		if gate["repo_name"] == repoNameSelf && gate["cycle_type"] == string(feature.CycleReviewComments) {
+			cycleGate = gate
+			break
+		}
+	}
+	if cycleGate == nil {
+		t.Fatalf("need_user_inputs = %+v; want gate with repo/cycle routing", gates)
 	}
 	cycleQuestions := cycleGate["questions"].([]any)
 	if len(cycleQuestions) != 1 || cycleQuestions[0].(map[string]any)["answer"] != "Reply now" {

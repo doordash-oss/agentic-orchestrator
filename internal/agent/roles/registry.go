@@ -48,7 +48,7 @@ func SkillOutputRoleSpecs() []RoleSpec {
 	seen := map[string]bool{}
 	out := make([]RoleSpec, 0, len(roleSpecs))
 	for _, spec := range roleSpecs {
-		if spec.SkillName == "" || seen[spec.SkillName] {
+		if spec.SkillName == "" || len(spec.Artifacts) == 0 || seen[spec.SkillName] {
 			continue
 		}
 		seen[spec.SkillName] = true

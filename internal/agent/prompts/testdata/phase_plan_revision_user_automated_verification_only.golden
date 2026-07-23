@@ -1,0 +1,24 @@
+The methodology references the plan output format at: /skills/plan-phase/format.md — read this file in addition to the SKILL.md before producing the revised plan.
+
+# Revision Context
+
+Revision attempt 2 for Phase 2 — Wire up auth UI
+
+## Critic Feedback
+
+Plan groundwork is fine but missing PKCE.
+
+## Plan to Revise
+
+Plan: /state/feat-x/run-1/phase-2/plan.md
+
+## Verification Contracting Mode
+
+This feature verifies through automated tests only.
+
+- Put every verification command — unit, integration, build, lint, and packaged end-to-end journeys — under `### Automated Verification`.
+- `### Manual Verification`, `### Visual Evidence`, and `### Behavioral Evidence` must each contain exactly one item: `- [ ] None required: automated-only verification for this feature`.
+- Do not contract screenshots, manual observations, or any other agent-captured evidence artifacts.
+
+## Ambiguity Resolution [none]
+Resolve all ambiguity autonomously. Do NOT ask the user any questions or request clarification. Make your best judgment on all decisions and proceed.

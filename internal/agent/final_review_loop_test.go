@@ -192,7 +192,8 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		iterDir := latestFinalReviewIterationDir(t, artDir)
 		switch {
 		case strings.Contains(id, "-fix-01"):
-			markFinalReviewReportPassed(t, iterDir)
+			// No testing contract executes at Final Review; the fix session
+			// only completes its marker.
 			touchPhaseComplete(t, iterDir)
 		case strings.HasSuffix(id, "-01"), strings.HasSuffix(id, "-02"):
 			iteration := 1
@@ -274,28 +275,6 @@ func touchPhaseComplete(t *testing.T, iterDir string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), nil, 0o644); err != nil {
 		t.Fatalf("touch %s: %v", PhaseCompleteFile, err)
-	}
-}
-
-func markFinalReviewReportPassed(t *testing.T, iterDir string) {
-	t.Helper()
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	report, err := ReadVerificationReport(reportPath)
-	if err != nil {
-		t.Fatalf("read final review verification report: %v", err)
-	}
-	markVerificationRowsPassed(report.Results)
-	markVerificationRowsPassed(report.RequiredChecks)
-	markVerificationRowsPassed(report.AdditionalChecks)
-	if err := WriteVerificationReport(reportPath, *report); err != nil {
-		t.Fatalf("write final review verification report: %v", err)
-	}
-}
-
-func markVerificationRowsPassed(rows []VerificationCheckResult) {
-	for i := range rows {
-		rows[i].Status = VerificationStatusPassed
-		rows[i].Evidence = "mock final review contract check passed"
 	}
 }
 
@@ -1527,42 +1506,6 @@ func TestRunFeatureFinalReviewLoop_FixMissingPhaseCompleteTripsProtocolViolation
 	if !strings.Contains(result.LastError, "final_review_fixer @") ||
 		!strings.Contains(result.LastError, "phase_complete") {
 		t.Fatalf("LastError = %q, want final_review_fixer phase_complete violation", result.LastError)
-	}
-}
-
-func TestRunFeatureFinalReviewLoop_FixMissingVerificationReportTripsProtocolViolation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	result := runFinalReviewWithFixScript(t, func(artDir string) string {
-		return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-rm -f "$_d/verification-report.yaml"
-touch "$_d/phase_complete"`, artDir)
-	})
-
-	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
-		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
-	}
-	if !strings.Contains(result.LastError, "final_review_fixer @") ||
-		!strings.Contains(result.LastError, "verification-report.yaml") {
-		t.Fatalf("LastError = %q, want final_review_fixer verification-report violation", result.LastError)
-	}
-}
-
-func TestRunFeatureFinalReviewLoop_FixRejectedVerificationReportTripsProtocolViolation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	result := runFinalReviewWithFixScript(t, func(artDir string) string {
-		return testutil.TouchPhaseComplete(artDir)
-	})
-
-	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
-		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
-	}
-	if !strings.Contains(result.LastError, "final_review_fixer @") ||
-		!strings.Contains(result.LastError, "not_run") {
-		t.Fatalf("LastError = %q, want final_review_fixer not_run violation", result.LastError)
 	}
 }
 

@@ -62,7 +62,7 @@ func TestScanForRecoveryWithStale(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create a PID file with a non-running PID
-	feat1Dir := filepath.Join(dir, "feat-1", "implement")
+	feat1Dir := filepath.Join(dir, "feat-1")
 	_ = WritePIDFile(feat1Dir, PIDFile{PID: 999999999, FeatureID: "feat-1", Phase: "implement"})
 
 	items, err := ScanForRecovery(dir, nil)
@@ -81,7 +81,7 @@ func TestCleanupStalePIDFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create a stale PID file
-	feat1Dir := filepath.Join(dir, "feat-1", "implement")
+	feat1Dir := filepath.Join(dir, "feat-1")
 	_ = WritePIDFile(feat1Dir, PIDFile{PID: 999999999, FeatureID: "feat-1"})
 
 	err := cleanupStalePIDFiles(dir)

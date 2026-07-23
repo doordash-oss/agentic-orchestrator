@@ -244,6 +244,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),

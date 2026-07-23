@@ -1,0 +1,17 @@
+## Feature Under Review
+
+**Name**: OAuth login
+
+**Description**:
+> Sign in with Google.
+
+**Exit Criteria**:
+> Relevant tests pass.
+
+**Risk Level**: medium
+
+Note: this feature verifies through automated tests only. The plan's Manual Verification, Visual Evidence, and Behavioral Evidence sections are required to be `None required:` markers; do not request evidence matrices, screenshots, or manual observation steps.
+
+## Plan to Evaluate
+
+Read the plan at: /state/feat-x/run-1/phase-2/plan.md

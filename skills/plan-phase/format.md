@@ -8,7 +8,7 @@ This file describes what a phase plan **looks like**. It deliberately does **not
 
 Every phase emits one file in the plan directory:
 
-1. `<slug>.md` — the implementation plan markdown described below.
+1. `phase-plan.md` — the implementation plan markdown described below.
 
 ## Per-Task Repo Tag
 
@@ -18,7 +18,7 @@ For multi-repo features, every `### Task N:` heading is followed by a `**Repo:**
 
 Every newly-authored phase plan includes a mandatory top-level `## Metadata` section before `## Overview`. The section contains the plan-level `**Frontend:** true|false` field:
 
-- `true` means this phase adds or changes a user-facing UI surface. A frontend phase must include at least one real checklist item under `### Visual Evidence`; it must not use `None required`.
+- `true` means this phase adds or changes a user-facing UI surface. A frontend phase must include at least one real checklist item under `### Visual Evidence`; it must not use `None required` — except when the planning prompt declared automated-only verification mode, which mandates `None required: automated-only verification for this feature` there instead.
 - `false` means this phase does not add or change a user-facing UI surface. Non-UI phases may use `None required: <reason>` under `### Visual Evidence` when no rendered surface is meaningful.
 
 The harness reads this field as the authoritative UI signal for the phase. Legacy plans with no `## Metadata` section or no `**Frontend:**` field are interpreted as `frontend: false` for compatibility, but new plans must write the field explicitly.
@@ -66,27 +66,74 @@ Or "None - can start immediately" if no blockers.
 
 ### Automated Verification
 
-- [ ] Build passes: `go build ./...`
-- [ ] Tests pass: `go test ./... -race -short`
-- [ ] Lint passes: `make lint`
+- [ ] [repo: <name>] Build passes: `go build ./...`
+- [ ] [repo: <name>] Tests pass: `go test ./... -race -short`
+- [ ] [repo: <name>] Lint passes: `make lint`
 
 Each bullet must contain the **complete executable command** in backticks, in `description: command` order (description first, command last). The contract extractor reads only the bullet line, so don't reference a command name and put the real invocation in a fenced block elsewhere.
 
+In a multi-repo phase, every bullet begins with `[repo: <name>]`, using a repository assigned to a phase task. A single-repo phase may omit the annotation. The harness executes each command from that repository root, so paths are repo-relative (`README.md`, `./internal/...`): never add `cd <repo>` or prefix a path with the repository name.
+
+The harness automatically records each command's exit code, stdout, stderr, working directory, duration, and run metadata. Do not request a second manual or behavioral transcript of the same command.
+
+Use `- [ ] None required: <reason>` only when the phase has no meaningful executable verification, such as a prose-only documentation change whose correctness requires semantic or rendered review.
+
+When a command needs an external login, credential, device, service, or
+permission, declare the capability and a safe non-mutating probe on that same
+line before the final command:
+
+- [ ] [repo: api] Protected integration [agentico capability: Okta session; probe: okta auth status]: `make test-integration`
+
+Do not add capability metadata based only on an expected error message. The
+probe must directly answer whether the prerequisite is currently available.
+
 ### Manual Verification
 
-- [ ] [Manual check description, no backticks.]
+- [ ] [One consolidated semantic review requirement, no backticks.]
 
-Use `- [ ] None required: <reason>` only when the phase has no meaningful manual verification surface.
+Use at most one requirement. It is reserved for irreducible semantic judgment and must not restate automated, visual, or behavioral checks. Use `- [ ] None required: <reason>` when no such judgment is needed.
 
 ### Visual Evidence
 
 - [ ] [Visual artifact requirement, such as a screenshot path or capture description.]
 
-Use `- [ ] None required: <reason>` only when the phase has no meaningful rendered surface to capture and `**Frontend:** false`. If `**Frontend:** true`, include at least one real visual evidence checklist item. Keep visual evidence requirements here at the phase level; do not add per-task visual evidence sections.
+Use `- [ ] None required: <reason>` only when the phase has no meaningful rendered surface to capture and `**Frontend:** false`, or when the planning prompt declared automated-only verification mode (see below), which mandates `- [ ] None required: automated-only verification for this feature` here regardless of `**Frontend:**`. Otherwise, if `**Frontend:** true`, include at least one real visual evidence checklist item. Keep visual evidence requirements here at the phase level; do not add per-task visual evidence sections.
+
+Give each item a `[size: WxH]` tag naming the capture window size; one checklist item per surface/state/size/theme cell.
+
+Do not request a screenshot merely to prove an invariant already covered by an automated command.
 
 ### Behavioral Evidence
 
-- [ ] [Behavioral artifact requirement, such as a transcript, command log, or recording description.]
+- [ ] [Short description of the primary user journey]: `[packaged executable command that produces the artifact]`
 
-Use `- [ ] None required: <reason>` only when the phase has no meaningful primary user journey artifact beyond automated verification. Keep behavioral evidence requirements here at the phase level; do not add per-task behavioral evidence sections.
+End each requirement with its packaged executable command in backticks; the harness runs it and preserves its evidence. Multiple requirements are allowed only when every item carries a command; without commands, use at most one consolidated requirement. Use `- [ ] None required: <reason>` only when the phase has no meaningful primary user journey artifact beyond automated verification. Keep behavioral evidence requirements here at the phase level; do not add per-task behavioral evidence sections.
+
+Do not request command transcripts here; command results already retain stdout, stderr, and run metadata.
+````
+
+## Automated-Only Verification Mode (Prompt-Declared)
+
+When the phase-plan prompt declares `## Verification Contracting Mode`, the `## Success Criteria` section takes this compact shape instead — every command under `### Automated Verification`, and each of the other three sections holding exactly one `None required: automated-only verification for this feature` item:
+
+````markdown
+## Success Criteria
+
+### Automated Verification
+
+- [ ] [repo: <name>] Build passes: `go build ./...`
+- [ ] [repo: <name>] Tests pass: `go test ./... -race -short`
+- [ ] Primary journey: `npx playwright test e2e/journey.spec.ts`
+
+### Manual Verification
+
+- [ ] None required: automated-only verification for this feature
+
+### Visual Evidence
+
+- [ ] None required: automated-only verification for this feature
+
+### Behavioral Evidence
+
+- [ ] None required: automated-only verification for this feature
 ````

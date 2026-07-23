@@ -131,11 +131,10 @@ func TestFinalFixPromptBranches(t *testing.T) {
 			input: FinalFixUserInput{
 				Iteration:                         2,
 				Feedback:                          "Manual verification is missing.",
-				VerificationReportPath:            "/iter/verification-report.yaml",
 				IncludeManualVerificationOutcomes: true,
 				Publishable:                       true,
 			},
-			wantContains: []string{"## Manual Verification Outcomes", "verification report named by the RoleSpec Output Files section"},
+			wantContains: []string{"## Manual Verification Outcomes", "describe in your fix output what you actually observed"},
 			wantOmit:     []string{"NOTE: Local-only repository"},
 		},
 		{
@@ -238,6 +237,25 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 			wantContains: []string{"## Plan to Evaluate", "/roadmap.md"},
 			wantOmit:     []string{"## Feature Under Review", "## Prior Phase Context", "## Research Findings"},
 		},
+		{
+			name: "automated_verification_only_adds_note_and_omits_it_by_default",
+			input: ValidateSpecializedUserInput{
+				Name:                      "OAuth login",
+				DomainName:                "scope",
+				PlanPath:                  "/phase-plan.md",
+				AutomatedVerificationOnly: true,
+			},
+			wantContains: []string{"this feature verifies through automated tests only", "do not request evidence matrices, screenshots, or manual observation steps"},
+		},
+		{
+			name: "automated_verification_only_note_omitted_when_false",
+			input: ValidateSpecializedUserInput{
+				Name:       "OAuth login",
+				DomainName: "scope",
+				PlanPath:   "/phase-plan.md",
+			},
+			wantOmit: []string{"this feature verifies through automated tests only"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -255,25 +273,28 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 
 func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 	retained := map[string]bool{
-		"design_system_rolespec":                   true,
-		"design_user_multi_repo":                   true,
-		"final_fix_user_with_manual":               true,
-		"implement_system_rolespec":                true,
-		"implementation_review_axis_final_user":    true,
-		"implementation_review_axis_live_run_user": true,
-		"implementation_review_axis_user":          true,
-		"inquire_user_high_with_kb":                true,
-		"kb_build_full":                            true,
-		"phase_plan_revision_user":                 true,
-		"phase_plan_user_autonomous":               true,
-		"pr_description_user_full":                 true,
-		"refactor_plan_user":                       true,
-		"research_from_questions_user":             true,
-		"roadmap_revision_user":                    true,
-		"roadmap_user_multi_repo":                  true,
-		"scout_user":                               true,
-		"summary_user":                             true,
-		"validate_specialized_grounding":           true,
+		"design_system_rolespec":                               true,
+		"design_user_multi_repo":                               true,
+		"final_fix_user_with_manual":                           true,
+		"implement_system_rolespec":                            true,
+		"implementation_review_axis_final_user":                true,
+		"implementation_review_axis_live_run_user":             true,
+		"implementation_review_axis_user":                      true,
+		"inquire_user_high_with_kb":                            true,
+		"kb_build_full":                                        true,
+		"phase_plan_revision_user":                             true,
+		"phase_plan_revision_user_automated_verification_only": true,
+		"phase_plan_user_autonomous":                           true,
+		"phase_plan_user_automated_verification_only":          true,
+		"pr_description_user_full":                             true,
+		"refactor_plan_user":                                   true,
+		"research_from_questions_user":                         true,
+		"roadmap_revision_user":                                true,
+		"roadmap_user_multi_repo":                              true,
+		"scout_user":                                           true,
+		"summary_user":                                         true,
+		"validate_specialized_grounding":                       true,
+		"validate_specialized_automated_verification_only":     true,
 	}
 
 	files, err := filepath.Glob(filepath.Join("testdata", "*.golden"))

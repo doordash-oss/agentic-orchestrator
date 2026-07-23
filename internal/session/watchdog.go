@@ -31,9 +31,10 @@ type sessionWatchdog struct {
 	turnCompletionIdleTimeout time.Duration
 	pollInterval              time.Duration
 
-	mu             sync.Mutex
-	tool           watchdogTool
-	lastActivityAt time.Time
+	mu                    sync.Mutex
+	tool                  watchdogTool
+	pendingControlRequest map[string]struct{}
+	lastActivityAt        time.Time
 
 	startOnce sync.Once
 }
@@ -108,9 +109,47 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 	switch {
 	case msg.Result != nil:
 		w.tool = watchdogTool{}
+		w.pendingControlRequest = nil
+	case msg.ControlRequest != nil:
+		if watchdogShouldParkForControlRequest(msg.ControlRequest) {
+			if w.pendingControlRequest == nil {
+				w.pendingControlRequest = make(map[string]struct{})
+			}
+			w.pendingControlRequest[msg.ControlRequest.RequestID] = struct{}{}
+		}
 	case msg.ToolProgress != nil:
 		w.tool = observeWatchdogToolProgress(w.tool, *msg.ToolProgress)
 	}
+	w.mu.Unlock()
+}
+
+func watchdogShouldParkForControlRequest(req *llm.ControlRequestMessage) bool {
+	if req == nil {
+		return false
+	}
+	return req.Request.Subtype != "hook_callback"
+}
+
+func (w *sessionWatchdog) ResolveControlRequest(requestID string) {
+	if w == nil || requestID == "" {
+		return
+	}
+	w.mu.Lock()
+	delete(w.pendingControlRequest, requestID)
+	if len(w.pendingControlRequest) == 0 {
+		w.pendingControlRequest = nil
+	}
+	w.lastActivityAt = time.Now()
+	w.mu.Unlock()
+}
+
+func (w *sessionWatchdog) ClearControlRequests() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.pendingControlRequest = nil
+	w.lastActivityAt = time.Now()
 	w.mu.Unlock()
 }
 
@@ -202,8 +241,13 @@ func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, bool) {
 
 	w.mu.Lock()
 	tool := w.tool
+	hasPendingControlRequest := len(w.pendingControlRequest) > 0
 	lastActivityAt := w.lastActivityAt
 	w.mu.Unlock()
+	if hasPendingControlRequest {
+		w.refreshActivity()
+		return watchdogTool{}, 0, false
+	}
 	timeout := w.timeoutFor(tool.phase)
 	if timeout <= 0 {
 		return watchdogTool{}, 0, false

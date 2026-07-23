@@ -50,8 +50,6 @@ func isTerminalForCompletion(f *feature.Feature) bool {
 // to give that caller an unambiguous short-circuit signal.
 var errFinalReviewInterrupted = errors.New("final review interrupted")
 
-var errPlanRevisionDispatched = errors.New("missing evidence routed to phase-plan revision")
-
 var validateAgentContract = agent.Validate
 
 var finalReviewRootOrchestrationArtifacts = []string{
@@ -896,7 +894,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		})
 		return nil
 	case finalStatusPlanRevisionRequired:
-		return o.routeMissingEvidencePlanRevision(featureID, f, result.PlanRevisionFeedback)
+		return o.routePlanRevision(featureID, f, result.PlanRevisionFeedback)
 	case "failed":
 		errMsg := result.LastError
 		if errMsg == "" {
@@ -934,25 +932,26 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 	}
 }
 
-func (o *Orchestrator) routeMissingEvidencePlanRevision(featureID string, f *feature.Feature, feedback string) error {
+func (o *Orchestrator) routePlanRevision(featureID string, f *feature.Feature, feedback string) error {
 	if f == nil {
 		var err error
 		f, err = o.deps.Lifecycle.Get(featureID)
 		if err != nil {
-			return fmt.Errorf("load feature for missing-evidence plan revision: %w", err)
+			return fmt.Errorf("load feature for plan revision: %w", err)
 		}
 	}
 	if strings.TrimSpace(feedback) == "" {
-		feedback = agent.MissingEvidencePlanRevisionFeedback(nil)
+		feedback = "## Plan Revision Required\n\nImplementation cannot resume until the phase plan is corrected.\n"
 	}
 	targetRoadmapPhase := f.CurrentRoadmapPhase
 	if f.TotalRoadmapPhases > 0 && targetRoadmapPhase > f.TotalRoadmapPhases {
 		targetRoadmapPhase = f.CurrentRoadmapPhase
 	}
-	if err := o.writeMissingEvidencePlanRevisionFeedback(f, feedback, targetRoadmapPhase); err != nil {
+	feedbackAttempt, err := o.writePlanRevisionFeedback(f, feedback, targetRoadmapPhase)
+	if err != nil {
 		return err
 	}
-	if err := o.moveFeatureToPlanningForEvidenceRevision(featureID, targetRoadmapPhase); err != nil {
+	if err := o.moveFeatureToPlanningForPlanRevision(featureID, targetRoadmapPhase, feedbackAttempt+1); err != nil {
 		return err
 	}
 	startedPhase, started, err := o.startPhase(featureID, feature.PhasePlan)
@@ -965,10 +964,10 @@ func (o *Orchestrator) routeMissingEvidencePlanRevision(featureID string, f *fea
 	return nil
 }
 
-func (o *Orchestrator) writeMissingEvidencePlanRevisionFeedback(f *feature.Feature, feedback string, roadmapPhase int) error {
+func (o *Orchestrator) writePlanRevisionFeedback(f *feature.Feature, feedback string, roadmapPhase int) (int, error) {
 	baseDir := o.stateDir()
 	if baseDir == "" || f == nil {
-		return nil
+		return 0, nil
 	}
 	planDir := ""
 	if roadmapPhase > 0 {
@@ -982,21 +981,21 @@ func (o *Orchestrator) writeMissingEvidencePlanRevisionFeedback(f *feature.Featu
 	}
 	attemptDir := filepath.Join(planDir, fmt.Sprintf("attempt-%02d", latestAttempt))
 	if err := os.MkdirAll(attemptDir, 0o755); err != nil {
-		return fmt.Errorf("create missing-evidence plan feedback dir: %w", err)
+		return 0, fmt.Errorf("create plan revision feedback dir: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback), 0o644); err != nil {
-		return fmt.Errorf("write missing-evidence plan feedback: %w", err)
+		return 0, fmt.Errorf("write plan revision feedback: %w", err)
 	}
 	if err := agent.WritePlanAttemptMeta(planDir, agent.PlanAttemptMeta{
 		Attempt:      latestAttempt,
 		ReviewStatus: "CHANGES_REQUESTED",
 	}); err != nil {
-		return fmt.Errorf("write missing-evidence plan attempt meta: %w", err)
+		return 0, fmt.Errorf("write plan revision attempt meta: %w", err)
 	}
-	return nil
+	return latestAttempt, nil
 }
 
-func (o *Orchestrator) moveFeatureToPlanningForEvidenceRevision(featureID string, roadmapPhase int) error {
+func (o *Orchestrator) moveFeatureToPlanningForPlanRevision(featureID string, roadmapPhase, minPlanAttempts int) error {
 	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 		switch ff.Status {
 		case feature.StatusPlanning:
@@ -1036,6 +1035,9 @@ func (o *Orchestrator) moveFeatureToPlanningForEvidenceRevision(featureID string
 		ff.PlanIteration = 0
 		ff.ValidatingPlan = false
 		ff.ValidatorStatuses = nil
+		if ff.MaxPlanIterations < minPlanAttempts {
+			ff.MaxPlanIterations = minPlanAttempts
+		}
 		ff.PendingReviewPhase = nil
 		ff.PendingRewindReviewRoadmapPhase = nil
 		if ff.Artifacts != nil {
@@ -1100,9 +1102,6 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 				// owns the terminal StatusInterrupted transition; do not
 				// proceed to MarkCodeReady / auto-publish on a feature that
 				// the user explicitly stopped.
-				return nil
-			}
-			if errors.Is(frErr, errPlanRevisionDispatched) {
 				return nil
 			}
 			return frErr

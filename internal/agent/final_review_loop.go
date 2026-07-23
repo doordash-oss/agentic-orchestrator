@@ -19,8 +19,8 @@
 // stay/fail together) is enforced via AtomicPhaseStamp.
 //
 // The loop intentionally does NOT carry RepoName: cwd is the feature state
-// dir, --add-dir mounts every Feature.Repos worktree, and the testing
-// contract is a feature-level artifact with `repo:`-tagged baseline rows.
+// dir, --add-dir mounts every Feature.Repos worktree, and the latest
+// harness-generated verification evidence is available as review context.
 // Cycle-specific divergence vs phase implement (review-first, fix-second
 // instead of fix-first, review-second) is expressed in the loop body, not
 // by parameterising the phase-implement kernel.
@@ -207,9 +207,9 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 //     live at runs/run-N/<cycle>-N/review/iteration-NN/.
 //
 // The iteration loop body (review FIRST, fix SECOND on CHANGES_REQUESTED,
-// --add-dir to every Feature.Repos worktree, one verification report per
-// iteration) is identical to RunFeatureFinalReviewLoop. This entry exists
-// purely to elide the atomic-stamp wrapper for post-publish cycles.
+// --add-dir to every Feature.Repos worktree) is identical to
+// RunFeatureFinalReviewLoop. This entry exists purely to elide the
+// atomic-stamp wrapper for post-publish cycles.
 //
 // Cumulative-diff review semantics align with the unification principle:
 // the post-cycle FR reviews every Feature.Repos cumulative diff, not just
@@ -377,9 +377,6 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: i}, nil
 
 		case ReviewChangesRequested:
-			if err := s.seedFixVerificationReport(iterDir); err != nil {
-				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: err.Error()}, nil
-			}
 			s.setReviewFixing(true)
 			fixStatus, fixErr := s.runFix(i, iterDir, feedback)
 
@@ -562,7 +559,9 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		}
 	}
 
-	additionalDirs := append([]string{s.stateDir}, additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
+	// Only the active run is mounted; the containing feature state directory
+	// also contains sealed predecessor runs.
+	additionalDirs := append([]string{s.workspace.Cwd}, additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
 	additionalDirs = append(additionalDirs, guidelineAdditionalDirs(cfg.GuidelinesDir)...)
 	// Mount the active run first; the state dir stays available so the agent can
 	// navigate ./<run>/<phase>/... to read prior artifacts.
@@ -644,18 +643,15 @@ func (s *featureFinalReviewLoopState) previousAggregateFeedback(iteration int) s
 func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback string) (string, error) {
 	cfg := s.cfg
 
-	verificationReportPath := filepath.Join(iterDir, "verification-report.yaml")
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
-		Feedback:               feedback,
-		FeedbackPath:           feedbackPath,
-		ExitCriteria:           cfg.Feature.ExitCriteria,
-		IterDir:                iterDir,
-		VerificationReportPath: verificationReportPath,
-		Iteration:              iteration,
-		Publishable:            cfg.Feature.IsPublishable(),
-		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
-		Images:                 cfg.Feature.Images,
+		Feedback:           feedback,
+		FeedbackPath:       feedbackPath,
+		ExitCriteria:       cfg.Feature.ExitCriteria,
+		Iteration:          iteration,
+		Publishable:        cfg.Feature.IsPublishable(),
+		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),
+		Images:             cfg.Feature.Images,
 	})
 
 	_ = os.WriteFile(filepath.Join(iterDir, "fix-prompt.md"), []byte(prompt), 0o644)
@@ -737,7 +733,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 			return false
 		},
 		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-		MissingArtifacts:     []string{"verification-report.yaml"},
 	}).Status
 	return agentStatus, nil
 }
@@ -768,32 +763,6 @@ func (s *featureFinalReviewLoopState) maxConsecFails() int {
 // suffix collapses since the FR session owns every repo at once.
 func (s *featureFinalReviewLoopState) featureFinalReviewSessionID(role string, iteration int) string {
 	return fmt.Sprintf("%s-%s-%02d", s.cfg.Feature.ID, role, iteration)
-}
-
-// seedFixVerificationReport pre-populates the fix leg's verification report.
-// Final Review itself only emits review-feedback.md; this report exists for
-// the final-review fix role after a CHANGES_REQUESTED verdict.
-func (s *featureFinalReviewLoopState) seedFixVerificationReport(iterDir string) error {
-	target := filepath.Join(iterDir, "verification-report.yaml")
-	if seed := priorIterationFinalReviewReportPath(s.artifactDir, iterDir); seed != "" {
-		if err := copyFile(seed, target); err == nil {
-			return nil
-		}
-	}
-	report := VerificationReport{
-		Version: 1,
-		RequiredChecks: []VerificationCheckResult{{
-			Name:        "Final Review fix validation",
-			Requirement: "Address the current Final Review findings and run targeted verification for the changed behavior.",
-			Command:     "targeted verification for the Final Review fix",
-			Mode:        VerificationModeCommand,
-			Status:      VerificationStatusNotRun,
-		}},
-	}
-	if err := WriteVerificationReport(target, report); err != nil {
-		return fmt.Errorf("writing final-review fix verification report stub: %w", err)
-	}
-	return nil
 }
 
 func (s *featureFinalReviewLoopState) writeIterationMeta(iterDir string, iteration int, reviewStatus string) {

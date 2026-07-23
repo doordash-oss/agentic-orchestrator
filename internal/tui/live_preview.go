@@ -137,6 +137,16 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, cont
 		{label: labelFeatureID, value: livePreviewFeatureID(f)},
 		{label: "Repos", value: livePreviewReposSummary(f)},
 	}
+	if livePreviewIsVerifying(f) {
+		// The harness, not an agent session, is running commands: keep the
+		// info box clean of session fields (model, context, validators).
+		return append(items,
+			livePreviewMetadataItem{label: "Phase", value: livePreviewPhaseLabel(f, sess)},
+			livePreviewMetadataItem{label: "Status", value: livePreviewStatusText(f)},
+			livePreviewMetadataItem{label: "Elapsed", value: livePreviewElapsedText(f)},
+			livePreviewMetadataItem{label: labelCost, value: livePreviewCostText(f)},
+		)
+	}
 	if prLinks := livePreviewPRLinks(f); prLinks != "" {
 		items = append(items, livePreviewMetadataItem{label: "PRs", value: prLinks})
 	}
@@ -569,6 +579,11 @@ func livePreviewActivityLine(f *feature.Feature, sess session.SessionView) strin
 	if f != nil && f.Status == feature.StatusCreated {
 		return "Starting " + f.CurrentPhase.String() + "..."
 	}
+	if livePreviewIsVerifying(f) {
+		// The session transcript is stale while the harness runs commands;
+		// its last activity ("Done") would read as a finished session.
+		return ""
+	}
 	if sess == nil || sess.MessageLog() == nil {
 		return workingOnPhaseLine(f, sess)
 	}
@@ -652,6 +667,15 @@ type livePreviewTranscriptRow struct {
 func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, width, height int) []string {
 	if width < livePreviewTailMinContentWidth {
 		return nil
+	}
+	if livePreviewIsVerifying(f) {
+		// No agent session is running; showing a stale transcript here reads
+		// as a hung session. Render the harness execution log instead.
+		lines := livePreviewVerificationLogLines(f, width)
+		if height >= 0 && len(lines) > height {
+			lines = lines[len(lines)-height:]
+		}
+		return lines
 	}
 	if sess == nil || sess.MessageLog() == nil {
 		return nil
@@ -1053,6 +1077,10 @@ func livePreviewValidationTitle(f *feature.Feature, sess session.SessionView) st
 		return ""
 	}
 	parts := []string{livePreviewValidationTarget(f)}
+	if livePreviewIsVerifying(f) {
+		done, total := livePreviewVerificationCounts(f)
+		return strings.Join(append(parts, fmt.Sprintf("%d/%d", done, total)), " · ")
+	}
 	if summary := livePreviewValidatorCountSummary(f); summary != "" {
 		parts = append(parts, summary)
 	}
@@ -1066,12 +1094,62 @@ func livePreviewHasValidationContext(f *feature.Feature, sess session.SessionVie
 	if f != nil && (f.ValidatingPlan || f.ReviewingGate) && len(f.ValidatorStatuses) > 0 {
 		return true
 	}
+	if livePreviewIsVerifying(f) {
+		return true
+	}
 	return sess != nil && sess.Kind() == ports.KindValidator
+}
+
+// livePreviewIsVerifying reports whether the feature is in the harness
+// verification substep, which gets its own live-preview presentation: a
+// clean info box plus a high-level per-command execution log (no agent
+// session is running).
+func livePreviewIsVerifying(f *feature.Feature) bool {
+	return f != nil && f.CurrentPhaseStatus == "verifying" && len(f.VerificationItems) > 0
+}
+
+// livePreviewVerificationCounts returns completed and total command counts.
+func livePreviewVerificationCounts(f *feature.Feature) (done, total int) {
+	for _, item := range f.VerificationItems {
+		switch item.State {
+		case "running", "pending":
+		default:
+			done++
+		}
+	}
+	return done, len(f.VerificationItems)
+}
+
+// livePreviewVerificationLogLines renders the ordered per-command execution
+// log shown in place of a session transcript while the harness runs the
+// testing contract.
+func livePreviewVerificationLogLines(f *feature.Feature, width int) []string {
+	lines := make([]string, 0, len(f.VerificationItems))
+	for _, item := range f.VerificationItems {
+		var line string
+		switch item.State {
+		case "passed":
+			line = SuccessStyle.Render("✓ " + item.Name)
+		case "running":
+			line = lipgloss.NewStyle().Foreground(colorInfo).Render("⟳ "+item.Name) + MutedStyle.Render(" — running...")
+		case "pending":
+			line = MutedStyle.Render("· " + item.Name + " — pending")
+		case "failed", "blocked", "inherited_failure":
+			line = ErrorStyle.Render("✗ "+item.Name) + MutedStyle.Render(" — "+strings.ReplaceAll(item.State, "_", " "))
+		default:
+			line = WarningStyle.Render("• "+item.Name) + MutedStyle.Render(" — "+strings.ReplaceAll(item.State, "_", " "))
+		}
+		lines = append(lines, ansi.Truncate(line, width, "…"))
+	}
+	return lines
 }
 
 func livePreviewValidationTarget(f *feature.Feature) string {
 	if f != nil && f.CurrentPhase == feature.PhaseImplement && f.ReviewingGate {
 		return "Reviewing implementation"
+	}
+	if f != nil && f.CurrentPhaseStatus == "verifying" {
+		return "Verifying implementation"
 	}
 	if f != nil && f.CurrentRoadmapPhase > 0 {
 		return fmt.Sprintf("Validating Phase %d plan", f.CurrentRoadmapPhase)
@@ -1218,9 +1296,9 @@ func livePreviewValidatorStatusStyle(status string) lipgloss.Style {
 
 func livePreviewValidatorStatusKind(status string) string {
 	switch strings.ToUpper(status) {
-	case validatorStatusApproved:
+	case validatorStatusApproved, "PASSED", "WAIVED":
 		return "approved"
-	case validatorStatusChangesRequested, "FAILED", "ERROR":
+	case validatorStatusChangesRequested, "FAILED", "ERROR", "BLOCKED":
 		return "failed"
 	default:
 		return "running"

@@ -36,9 +36,8 @@ import (
 //   - "need_user_input":  iteration emitted NEED_USER_INPUT — feature-scoped
 //     pause gate; NeedUserInputPath points to the persisted gate
 //     artifact at the phase-iteration dir.
-//   - "plan_revision_required": implementation review found missing visual or
-//     behavioral evidence coverage that must be repaired by revising the
-//     phase plan before another implementation attempt.
+//   - "plan_revision_required": implementation found a phase-plan contract
+//     defect that must be repaired before another implementation attempt.
 //
 // PhaseRepos is the deduplicated, sorted list of repo names declared by the
 // phase plan's `**Repo:** <name>` Task tags (single-repo phases get
@@ -157,12 +156,14 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
+		CommandRunner:              cfg.CommandRunner,
 		BuildSession:               cfg.BuildSession,
 		AskingClause:               cfg.AskingClause,
 		EffortLevel:                cfg.EffortLevel,
 		SkillsDir:                  cfg.SkillsDir,
 		GuidelinesDir:              cfg.GuidelinesDir,
 		Observer:                   cfg.Observer,
+		OnVerificationProgress:     cfg.OnVerificationProgress,
 		// Per-iteration review stays on the same gating policy as the
 		// per-repo path historically used: Medium/Large skip per-
 		// iteration review and rely on Final Review for quality gating;

@@ -29,17 +29,28 @@ import (
 
 const DefaultClientTimeout = 10 * time.Second
 
+// DefaultLongClientTimeout bounds long-running mutations such as rewind,
+// which seals the current run and copies whole artifact trees before
+// responding — routinely longer than DefaultClientTimeout.
+const DefaultLongClientTimeout = 5 * time.Minute
+
 type ClientOptions struct {
 	BaseURL    string
 	HTTPClient *http.Client
 	Timeout    time.Duration
-	Token      string
+	// LongTimeout applies to long-running mutations (e.g. rewind) instead of
+	// Timeout. Zero means DefaultLongClientTimeout.
+	LongTimeout time.Duration
+	Token       string
 }
 
 type Client struct {
 	baseURL string
 	client  *http.Client
-	token   string
+	// longClient mirrors client with a longer timeout for mutations whose
+	// server-side work is unbounded by request size (see LongTimeout).
+	longClient *http.Client
+	token      string
 }
 
 type APIError struct {
@@ -92,12 +103,26 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		copyClient.Timeout = clientTimeout(opts.Timeout)
 		httpClient = &copyClient
 	}
-	return &Client{baseURL: baseURL, client: httpClient, token: strings.TrimSpace(opts.Token)}, nil
+	longClient := *httpClient
+	longClient.Timeout = longClientTimeout(opts.LongTimeout)
+	return &Client{
+		baseURL:    baseURL,
+		client:     httpClient,
+		longClient: &longClient,
+		token:      strings.TrimSpace(opts.Token),
+	}, nil
 }
 
 func clientTimeout(timeout time.Duration) time.Duration {
 	if timeout <= 0 {
 		return DefaultClientTimeout
+	}
+	return timeout
+}
+
+func longClientTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return DefaultLongClientTimeout
 	}
 	return timeout
 }
@@ -320,7 +345,7 @@ func (c *Client) MergeFeature(ctx context.Context, featureID string) (MergeFeatu
 
 func (c *Client) RewindFeature(ctx context.Context, featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error) {
 	var out RewindFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRewind), nil, req, &out, true)
+	err := c.doJSONWith(ctx, c.longClient, http.MethodPost, featureActionPath(featureID, actionRewind), nil, req, &out, true)
 	return out, err
 }
 
@@ -395,6 +420,10 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, in, out any, trusted bool) error {
+	return c.doJSONWith(ctx, c.client, method, path, query, in, out, trusted)
+}
+
+func (c *Client) doJSONWith(ctx context.Context, httpClient *http.Client, method, path string, query url.Values, in, out any, trusted bool) error {
 	var body *bytes.Reader
 	if in == nil {
 		body = bytes.NewReader(nil)
@@ -419,7 +448,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 	if trusted {
 		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
 	}
-	resp, err := c.client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("send request: %w", err)
 	}

@@ -112,6 +112,7 @@ func (o *Orchestrator) startFeatureReviewComments(
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
+		CommandRunner:              pr.CommandRunner,
 	}
 	_ = hintRepoName // hint diagnostic only; the loop aggregates every Feature.Repos PR.
 

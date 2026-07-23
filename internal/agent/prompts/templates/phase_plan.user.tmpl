@@ -26,6 +26,14 @@ Research Document: {{ .ResearchArtifactPath }}
 
 {{ .Phase.Goal }}
 
+{{ end }}{{ if .AutomatedVerificationOnly }}## Verification Contracting Mode
+
+This feature verifies through automated tests only.
+
+- Put every verification command — unit, integration, build, lint, and packaged end-to-end journeys — under `### Automated Verification`.
+- `### Manual Verification`, `### Visual Evidence`, and `### Behavioral Evidence` must each contain exactly one item: `- [ ] None required: automated-only verification for this feature`.
+- Do not contract screenshots, manual observations, or any other agent-captured evidence artifacts.
+
 {{ end }}{{ template "qa_files" .QAFiles }}{{ if .Phase.StubsToRetire }}## Roadmap-Assigned Phase Commitments
 
 Include these roadmap-assigned commitments in `## Tasks` acceptance criteria or `## Success Criteria`; do not create a separate stubs section in the plan:

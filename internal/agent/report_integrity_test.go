@@ -15,6 +15,8 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -379,131 +381,6 @@ func TestValidateVerificationReportWithContext_EvidenceFiles(t *testing.T) {
 	}
 }
 
-func TestValidateVerificationReportWithContext_RejectsSummaryOnlyCommandTranscript(t *testing.T) {
-	iterDir := t.TempDir()
-	contract := compileCommandTranscriptContractForTest(iterDir)
-	foundBehavioral := false
-	for _, item := range contract.Items {
-		if item.Source != testingContractBehavioralSource {
-			continue
-		}
-		foundBehavioral = true
-		if item.ExpectedEvidence.Matcher != testingContractCommandTranscriptMatcher {
-			t.Fatalf("behavioral evidence matcher = %q, want %q; commands=%q", item.ExpectedEvidence.Matcher, testingContractCommandTranscriptMatcher, requiredBehavioralTranscriptCommands(item.Name))
-		}
-	}
-	if !foundBehavioral {
-		t.Fatal("compiled contract has no behavioral evidence item")
-	}
-
-	behaviorPath := filepath.Join(iterDir, "behaviors", "verification.log")
-	if err := os.MkdirAll(filepath.Dir(behaviorPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	if err := os.WriteFile(behaviorPath, []byte(strings.Join([]string{
-		"Automated command results:",
-		"- dbaccess: `task lint` exited 201 because of existing findings.",
-		"- dbaccess: `task test-coverage` exited 201 because Docker is unavailable.",
-		"- agentic-orchestrator: `make test-fast` exited 0; all packages passed.",
-	}, "\n")), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	report := passedArtifactReportForTest(&contract, filepath.Join(iterDir, "testing-contract.yaml"))
-	setArtifactEvidenceForTest(&report, VerificationModeBehavioral, VerificationEvidence{
-		Summary: "verification.log records command outcomes",
-		Primary: "behaviors/verification.log",
-	})
-
-	result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
-		IterationDir: iterDir,
-		Contract:     &contract,
-	})
-	if !result.Rejected {
-		t.Fatal("ValidateVerificationReportWithContext() accepted hand-written command summaries as command transcripts")
-	}
-	if details := reportGateDetailsForTest(result); !strings.Contains(details, "actual command transcript") {
-		t.Fatalf("ValidateVerificationReportWithContext() details = %q, want actual command transcript guidance", details)
-	}
-}
-
-func TestValidateVerificationReportWithContext_AcceptsCommandTranscriptFormats(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{
-			name: "shell_capture",
-			content: strings.Join([]string{
-				"$ (cd /tmp/dbaccess && task lint)",
-				"[exit code: 201]",
-				"task: Failed to run task lint",
-				"$ (cd /tmp/dbaccess && task test-coverage)",
-				"[exit code: 201]",
-				"Docker is unavailable",
-				"$ (cd /tmp/agentic-orchestrator && make test-fast)",
-				"[exit code: 0]",
-			}, "\n"),
-		},
-		{
-			name: "labeled_capture",
-			content: strings.Join([]string{
-				"COMMAND: cd /tmp/dbaccess && task lint",
-				"EXIT CODE: 201",
-				"OUTPUT:",
-				"task: Failed to run task lint",
-				"COMMAND: cd /tmp/dbaccess && task test-coverage",
-				"EXIT CODE: 201",
-				"OUTPUT:",
-				"Docker is unavailable",
-				"COMMAND: cd /tmp/agentic-orchestrator && make test-fast",
-				"EXIT CODE: 0",
-				"OUTPUT:",
-			}, "\n"),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			iterDir := t.TempDir()
-			contract := compileCommandTranscriptContractForTest(iterDir)
-			behaviorPath := filepath.Join(iterDir, "behaviors", "verification.log")
-			if err := os.MkdirAll(filepath.Dir(behaviorPath), 0o755); err != nil {
-				t.Fatalf("MkdirAll() error = %v", err)
-			}
-			if err := os.WriteFile(behaviorPath, []byte(tt.content), 0o644); err != nil {
-				t.Fatalf("WriteFile() error = %v", err)
-			}
-
-			report := passedArtifactReportForTest(&contract, filepath.Join(iterDir, "testing-contract.yaml"))
-			setArtifactEvidenceForTest(&report, VerificationModeBehavioral, VerificationEvidence{
-				Summary: "complete combined stdout/stderr",
-				Primary: "behaviors/verification.log",
-			})
-			result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
-				IterationDir: iterDir,
-				Contract:     &contract,
-			})
-			if result.Rejected {
-				t.Fatalf("ValidateVerificationReportWithContext() rejected valid transcript: %+v", result.Findings)
-			}
-		})
-	}
-}
-
-func compileCommandTranscriptContractForTest(iterDir string) TestingContract {
-	return CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos: []string{"agentic-orchestrator", "dbaccess"},
-		PlanText: strings.Join([]string{
-			"## Success Criteria",
-			"### Behavioral Evidence",
-			"- [ ] Record the verification command output for `task lint`, `task test-coverage`, and `make test-fast`.",
-		}, "\n"),
-		PlanPath:  filepath.Join(iterDir, "plan.md"),
-		PhaseType: "collapsed",
-	})
-}
-
 func TestValidateVerificationReportWithContext_EvidenceFilesSkippedForBlockedRows(t *testing.T) {
 	iterDir := t.TempDir()
 	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(iterDir, "plan.md"), "collapsed")
@@ -836,4 +713,142 @@ func reportGateDetailsForTest(result ReportGateResult) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func TestValidateVerificationReportRejectsForgedWaiverAndAcceptsContractWaiver(t *testing.T) {
+	contract := TestingContract{Version: 1, Revision: 1, Items: []TestingContractItem{{
+		ID: "check", Source: testingContractPlanSource, Name: "check", Command: "go test ./...",
+		Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true},
+	}}}
+	report := BuildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
+	report.Results[0].Status = VerificationStatusWaived
+	report.Results[0].EvidenceData.Summary = "claimed waiver"
+
+	result := ValidateVerificationReport(&report, nil, &contract, true)
+	if !result.Rejected || !strings.Contains(reportGateDetailsForTest(result), "no user-authorized waiver") {
+		t.Fatalf("forged waiver result = %+v, want policy violation", result)
+	}
+
+	contract.Items[0].Disposition = TestingContractItemDisposition{
+		Status: TestingContractDispositionWaived, Reason: "user approved", ChangedBy: "user",
+	}
+	report = BuildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
+	result = ValidateVerificationReport(&report, nil, &contract, true)
+	if result.Rejected {
+		t.Fatalf("authorized waiver rejected: %+v", result.Findings)
+	}
+}
+
+func TestValidateVerificationReportRejectsDuplicateEvidenceAcrossRows(t *testing.T) {
+	iterDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(iterDir, "screenshots"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lightBytes := []byte("identical-capture-bytes")
+	darkBytes := []byte("a-genuinely-different-capture")
+	writeShot := func(rel string, data []byte) string {
+		if err := os.WriteFile(filepath.Join(iterDir, filepath.FromSlash(rel)), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		return hex.EncodeToString(sum[:])
+	}
+	lightDigest := writeShot("screenshots/config-light.png", lightBytes)
+	darkDigest := writeShot("screenshots/config-dark.png", darkBytes)
+
+	contract := &TestingContract{Version: testingContractVersion, Revision: 1, Items: []TestingContractItem{
+		{
+			ID: "visual_light", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+			Name: "Config editor, light theme", Command: "visual: Config editor, light theme",
+			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/config-light.png"},
+			Policy:           TestingContractItemPolicy{Required: true},
+		},
+		{
+			ID: "visual_dark", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+			Name: "Config editor, dark theme", Command: "visual: Config editor, dark theme",
+			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/config-dark.png"},
+			Policy:           TestingContractItemPolicy{Required: true},
+		},
+	}}
+	passed := func(itemID, name, primary, digest string) VerificationCheckResult {
+		return VerificationCheckResult{
+			ItemID: itemID, Name: name, Mode: VerificationModeVisual, Status: VerificationStatusPassed,
+			EvidenceData: VerificationEvidence{Summary: "captured", Primary: primary, Sha256: digest},
+		}
+	}
+	report := &VerificationReport{Version: 2, ContractRevision: 1, Results: []VerificationCheckResult{
+		passed("visual_light", "Config editor, light theme", "screenshots/config-light.png", lightDigest),
+		passed("visual_dark", "Config editor, dark theme", "screenshots/config-dark.png", darkDigest),
+	}}
+	ctx := VerificationReportValidationContext{IterationDir: iterDir, Contract: contract}
+
+	if gate := ValidateVerificationReportWithContext(report, nil, true, ctx); gate.Rejected {
+		t.Fatalf("distinct captures must pass, got %+v", gate.Findings)
+	}
+
+	// Point the dark row at the light bytes: two contracted cells now share
+	// one image, which no real capture of distinct surfaces can produce.
+	dupDigest := writeShot("screenshots/config-dark.png", lightBytes)
+	report.Results[1] = passed("visual_dark", "Config editor, dark theme", "screenshots/config-dark.png", dupDigest)
+
+	gate := ValidateVerificationReportWithContext(report, nil, true, ctx)
+	if !gate.Rejected {
+		t.Fatal("two rows sharing one image must reject")
+	}
+	found := false
+	for _, f := range gate.Findings {
+		if f.Kind == KindEvidenceDuplicate {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a %s finding, got %+v", KindEvidenceDuplicate, gate.Findings)
+	}
+}
+
+func TestValidateVerificationReportRejectsChangedEvidence(t *testing.T) {
+	iterDir := t.TempDir()
+	path := filepath.Join(iterDir, "screenshots", "visual_abc123def456.png")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("original-bytes")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(original)
+	contract := &TestingContract{Version: testingContractVersion, Revision: 1, Items: []TestingContractItem{{
+		ID: "visual_abc123def456", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+		Name: "Home populated", Command: "visual: Home populated",
+		ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/visual_abc123def456.png"},
+		Policy:           TestingContractItemPolicy{Required: true},
+	}}}
+	report := &VerificationReport{Version: 2, ContractRevision: 1, Results: []VerificationCheckResult{{
+		ItemID: "visual_abc123def456", Name: "Home populated", Mode: VerificationModeVisual,
+		Status: VerificationStatusPassed,
+		EvidenceData: VerificationEvidence{
+			Summary: "captured", Primary: "screenshots/visual_abc123def456.png",
+			Sha256: hex.EncodeToString(sum[:]),
+		},
+	}}}
+	ctx := VerificationReportValidationContext{IterationDir: iterDir, Contract: contract}
+	if gate := ValidateVerificationReportWithContext(report, nil, true, ctx); gate.Rejected {
+		t.Fatalf("unchanged evidence must pass, got %+v", gate.Findings)
+	}
+	if err := os.WriteFile(path, []byte("clobbered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gate := ValidateVerificationReportWithContext(report, nil, true, ctx)
+	if !gate.Rejected {
+		t.Fatal("changed evidence must reject")
+	}
+	found := false
+	for _, f := range gate.Findings {
+		if f.Kind == KindEvidenceIntegrity {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want a %s finding, got %+v", KindEvidenceIntegrity, gate.Findings)
+	}
 }

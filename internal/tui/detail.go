@@ -586,8 +586,10 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 
 		timing := phaseProgressTiming(f, p.phase, p.timerKey)
 
-		// Context usage percentage (active phase only)
-		if current && isRunningStatus(f.Status) {
+		// Context usage belongs to an active LLM session. Harness verification
+		// runs commands without one, so the last session's percentage would be
+		// stale and misleading during this substep.
+		if current && isRunningStatus(f.Status) && f.CurrentPhaseStatus != "verifying" {
 			timing += formatContextUsage(m.contextPct)
 		}
 
@@ -1135,6 +1137,28 @@ func formatValidatorStatuses(statuses map[string]string) string {
 	return strings.Join(parts, "  ")
 }
 
+// formatVerificationStatuses renders harness verification progress as counts
+// only: completed/total plus a failure count when non-zero. Example:
+// "[3/9] · ✗1". Command names live in the verification live preview.
+func formatVerificationStatuses(items []feature.VerificationItemStatus) string {
+	done, failed := 0, 0
+	for _, item := range items {
+		switch item.State {
+		case "running", "pending":
+		default:
+			done++
+			if item.State == "failed" || item.State == "blocked" || item.State == "inherited_failure" {
+				failed++
+			}
+		}
+	}
+	parts := []string{MutedStyle.Render(fmt.Sprintf("[%d/%d]", done, len(items)))}
+	if failed > 0 {
+		parts = append(parts, ErrorStyle.Render(fmt.Sprintf("✗%d", failed)))
+	}
+	return strings.Join(parts, " · ")
+}
+
 func formatPhaseStatus(f *feature.Feature) string {
 	needsInput := countPendingHelp(f) > 0
 	if f.Status == feature.StatusFinalReviewing {
@@ -1155,6 +1179,9 @@ func formatPhaseStatus(f *feature.Feature) string {
 				return ReviewStyle.Render("reviewing: ") + formatValidatorStatuses(f.ValidatorStatuses)
 			}
 			return ReviewStyle.Render(fmt.Sprintf("reviewing [%d]", f.CurrentIteration))
+		}
+		if f.CurrentPhaseStatus == "verifying" && len(f.VerificationItems) > 0 {
+			return ReviewStyle.Render("verifying: ") + formatVerificationStatuses(f.VerificationItems)
 		}
 		return lipgloss.NewStyle().Foreground(colorInfo).Render(
 			fmt.Sprintf("iteration %d", f.CurrentIteration))

@@ -77,7 +77,7 @@ export function WorkspaceShell({
   const [attentionPreviewRequest, setAttentionPreviewRequest] = useState<{
     requestId: number;
     featureId: string;
-    attentionId: string;
+    attentionId?: string;
   } | null>(null);
   const handledRouteRequest = useRef<number | null>(null);
   const listRequestRef = useRef(0);
@@ -257,15 +257,13 @@ export function WorkspaceShell({
       setView('home');
     } else {
       openFeature(attentionJump.featureId, featureLabel(attentionJump.featureId));
-      setAttentionPreviewRequest(
-        attentionJump.attentionId === undefined
-          ? null
-          : {
-              requestId: attentionJump.requestId,
-              featureId: attentionJump.featureId,
-              attentionId: attentionJump.attentionId,
-            },
-      );
+      setAttentionPreviewRequest({
+        requestId: attentionJump.requestId,
+        featureId: attentionJump.featureId,
+        ...(attentionJump.attentionId === undefined
+          ? {}
+          : { attentionId: attentionJump.attentionId }),
+      });
     }
     onAttentionJumpHandled();
   }, [attentionJump, featureLabel, onAttentionJumpHandled, openFeature, persist, tabs]);

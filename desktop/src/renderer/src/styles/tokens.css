@@ -53,4 +53,7 @@
 
   --radius: 6px;
   --focus-ring: 2px solid var(--color-signal);
+  /* One scrim for every modal: dark in both themes so the workspace visibly
+   * recedes behind a do-and-dismiss task. Trays never use it. */
+  --color-scrim: rgb(5 7 10 / 55%);
 }

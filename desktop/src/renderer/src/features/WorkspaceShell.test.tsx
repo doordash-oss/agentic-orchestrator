@@ -6,6 +6,20 @@ import { defaultSettings, type AttentionItem, type Settings } from '../../../sha
 import { featureSnapshot, installAgenticoMock } from '../test/agenticoMock';
 import { WorkspaceShell } from './WorkspaceShell';
 
+vi.mock('monaco-editor', () => ({
+  editor: {
+    create: vi.fn(() => ({
+      dispose: vi.fn(),
+      onDidChangeModelContent: vi.fn(),
+      getValue: vi.fn(() => ''),
+      setValue: vi.fn(),
+    })),
+    createModel: vi.fn(() => ({ dispose: vi.fn() })),
+    createDiffEditor: vi.fn(() => ({ dispose: vi.fn(), setModel: vi.fn() })),
+    setTheme: vi.fn(),
+  },
+}));
+
 afterEach(cleanup);
 
 const FEATURE_ID = 'abcd1234ef567890';
@@ -405,6 +419,66 @@ describe('WorkspaceShell tabs', () => {
       'true',
     );
     expect(onAttentionJumpHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an open review feature from Live activity to its Document surface', async () => {
+    const mock = installAgenticoMock({
+      settings: settingsWithTab(),
+      feature: featureSnapshot({
+        status: 'ResearchNeedsReview',
+        currentPhase: 'Research',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      }),
+    });
+    vi.mocked(mock.api.openReview).mockResolvedValue({
+      featureId: FEATURE_ID,
+      reviewId: 'phase-research',
+      reviewMode: 'phase_plan',
+      targetPhase: 'Research',
+      runNumber: 1,
+      artifactId: 'research.md',
+      text: '# Research',
+      draftRevision: 'r1',
+      sourceRevision: 's1',
+      canIterate: false,
+    });
+    vi.mocked(mock.api.validateReview).mockResolvedValue({
+      applicable: true,
+      valid: true,
+      revision: 'r1',
+      findings: [],
+    });
+
+    function ReviewJumpHarness() {
+      const [attentionJump, setAttentionJump] = useState<{
+        requestId: number;
+        featureId: string;
+      } | null>(null);
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => setAttentionJump({ requestId: 1, featureId: FEATURE_ID })}
+          >
+            Jump to review
+          </button>
+          <WorkspaceShell attentionJump={attentionJump} />
+        </>
+      );
+    }
+
+    render(<ReviewJumpHarness />);
+    const user = userEvent.setup();
+    const stageTabs = await screen.findByRole('tablist', { name: 'Stage view' });
+    const documentTab = within(stageTabs).getByRole('tab', { name: 'Document' });
+    const liveTab = within(stageTabs).getByRole('tab', { name: /Live activity/ });
+
+    await user.click(liveTab);
+    expect(liveTab).toHaveAttribute('aria-selected', 'true');
+
+    await user.click(screen.getByRole('button', { name: 'Jump to review' }));
+    await waitFor(() => expect(documentTab).toHaveAttribute('aria-selected', 'true'));
   });
 
   it('shows matching attention badges on open tabs and dashboard rows', async () => {

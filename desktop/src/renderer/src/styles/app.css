@@ -127,7 +127,7 @@ body {
   display: grid;
   place-items: start center;
   padding-top: min(12vh, 96px);
-  background: color-mix(in srgb, var(--color-bg) 46%, transparent);
+  background: var(--color-scrim);
 }
 
 .command-palette {
@@ -936,6 +936,8 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Consult-alongside tray: no scrim, hairline edge and a soft shadow — the
+ * amber attention accent lives in the eyebrow, not a welded border. */
 .attention-inbox {
   position: fixed;
   z-index: 20;
@@ -947,8 +949,8 @@ body {
   padding: var(--space-5);
   background: var(--color-panel);
   color: var(--color-text);
-  border-left: 2px solid var(--color-accent);
-  box-shadow: -12px 0 32px color-mix(in srgb, var(--color-bg) 72%, transparent);
+  border-left: 1px solid var(--color-hairline);
+  box-shadow: -16px 0 40px rgb(5 7 10 / 22%);
 }
 
 .attention-inbox__header {
@@ -1210,7 +1212,7 @@ body {
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+  background: var(--color-scrim);
 }
 
 .attention-confirm {
@@ -3456,8 +3458,70 @@ body {
   background: color-mix(in srgb, var(--color-signal) 10%, var(--color-panel));
 }
 
-.cockpit__config-drawer {
-  width: min(680px, calc(100vw - 32px));
+/* Do-and-dismiss tasks (configuration, cycles) open as a centered modal over
+ * the shared scrim — a theme-tinted backdrop barely reads as an overlay in
+ * light mode. */
+.cockpit__modal-overlay {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: var(--color-scrim);
+}
+
+.cockpit__modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: min(86vh, 900px);
+  border: 1px solid var(--color-hairline);
+  border-radius: calc(var(--radius) * 2);
+  background: var(--color-panel);
+  box-shadow: 0 24px 60px color-mix(in srgb, #000 45%, transparent);
+  overflow: hidden;
+}
+
+.cockpit__modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.cockpit__modal-header h3 {
+  margin: 0;
+  font: 600 20px var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+.cockpit__modal-close {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font: 700 13px var(--font-body);
+  cursor: pointer;
+}
+
+.cockpit__modal-close:hover {
+  border-color: var(--color-signal);
+}
+
+.cockpit__modal-close:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.cockpit__modal-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-5);
 }
 
 /* Always-visible status badge: the cockpit shell surfaces the feature status
@@ -3523,7 +3587,7 @@ body {
   inset: 0;
   display: flex;
   justify-content: flex-end;
-  background: color-mix(in srgb, var(--color-bg) 55%, transparent);
+  background: var(--color-scrim);
 }
 
 .cockpit__drawer {
@@ -3532,8 +3596,8 @@ body {
   overflow: auto;
   padding: var(--space-5);
   background: var(--color-panel);
-  border-left: 2px solid var(--color-signal);
-  box-shadow: -12px 0 30px color-mix(in srgb, var(--color-bg) 70%, transparent);
+  border-left: 1px solid var(--color-hairline);
+  box-shadow: -16px 0 40px rgb(5 7 10 / 22%);
 }
 
 .cockpit__drawer > header {
@@ -4236,7 +4300,7 @@ body {
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+  background: var(--color-scrim);
 }
 
 .impact-dialog {
@@ -5211,7 +5275,7 @@ body {
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+  background: var(--color-scrim);
 }
 
 .restart-prompt {
@@ -6127,11 +6191,7 @@ body {
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: color-mix(
-    in srgb,
-    var(--color-danger) 18%,
-    color-mix(in srgb, var(--color-bg) 70%, transparent)
-  );
+  background: color-mix(in srgb, var(--color-danger) 18%, var(--color-scrim));
 }
 
 .rewind-journey {
@@ -6772,70 +6832,6 @@ body {
   flex-direction: column;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-4);
-}
-
-.cockpit__cycles-drawer {
-  max-width: 640px;
-  width: 100%;
-}
-
-/* The cycles drawer uses the shared drawer-backdrop but must be visible on
-   all viewport sizes, not only the narrow-screen inspector drawer context. */
-.cockpit__drawer-backdrop:has(.cockpit__cycles-drawer) {
-  display: block;
-  position: fixed;
-  z-index: 40;
-  inset: 0;
-  background: color-mix(in srgb, var(--color-bg) 55%, transparent);
-}
-
-.cockpit__drawer-backdrop:has(.cockpit__cycles-drawer) .cockpit__drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  overflow: auto;
-  padding: var(--space-5);
-  background: var(--color-panel);
-  border-left: 2px solid var(--color-signal);
-  box-shadow: -12px 0 30px color-mix(in srgb, var(--color-bg) 70%, transparent);
-}
-
-.cockpit__cycles-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--color-hairline);
-}
-
-.cockpit__cycles-header h3 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 15px;
-  letter-spacing: 0.02em;
-}
-
-.cockpit__cycles-close {
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--color-text);
-  background: transparent;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-4);
-  cursor: pointer;
-}
-
-.cockpit__cycles-close:hover {
-  border-color: var(--color-signal);
-}
-
-.cockpit__cycles-close:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 0;
 }
 
 .cycle-journey {

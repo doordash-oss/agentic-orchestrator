@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type ReactNode,
   type RefObject,
   type SetStateAction,
 } from 'react';
@@ -75,7 +76,7 @@ export interface FeatureCockpitProps {
   refreshAttention(): Promise<AttentionItem[]>;
   attentionDrafts: AttentionDrafts;
   setAttentionDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
-  attentionPreviewRequest?: { requestId: number; attentionId: string } | null;
+  attentionPreviewRequest?: { requestId: number; attentionId?: string } | null;
   onAttentionPreviewClose?(): void;
   /** Selected sealed run number for archive mode; null/0 means current run. */
   selectedRunNumber?: number | null;
@@ -677,11 +678,25 @@ function DeleteConfirmDialog({
   );
 }
 
-/** Slide-over holding the structured config forms, which are too wide for the rail. */
-function ConfigDrawer({ featureId, onClose }: { featureId: string; onClose(): void }) {
-  const drawerRef = useRef<HTMLElement>(null);
+/**
+ * Centered modal for a do-and-dismiss task (configuration, cycles): a real
+ * scrim, a titled card, and a body that scrolls inside the card. Trays
+ * (attention inbox, narrow inspector) never use this shell.
+ */
+function CockpitModal({
+  title,
+  ariaLabel,
+  onClose,
+  children,
+}: {
+  title: string;
+  ariaLabel: string;
+  onClose(): void;
+  children: ReactNode;
+}) {
+  const modalRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    drawerRef.current
+    modalRef.current
       ?.querySelector<HTMLElement>(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
       )
@@ -697,23 +712,23 @@ function ConfigDrawer({ featureId, onClose }: { featureId: string; onClose(): vo
   }, [onClose]);
 
   return (
-    <div className="cockpit__drawer-backdrop" onMouseDown={onClose}>
-      <aside
-        ref={drawerRef}
-        className="cockpit__drawer cockpit__config-drawer"
+    <div className="cockpit__modal-overlay" onMouseDown={onClose}>
+      <div
+        ref={modalRef}
+        className="cockpit__modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Feature configuration"
+        aria-label={ariaLabel}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header>
-          <h3>Configuration</h3>
-          <button type="button" onClick={onClose}>
+        <header className="cockpit__modal-header">
+          <h3>{title}</h3>
+          <button type="button" className="cockpit__modal-close" onClick={onClose}>
             Close
           </button>
         </header>
-        <FeatureConfigPanel featureId={featureId} />
-      </aside>
+        <div className="cockpit__modal-body">{children}</div>
+      </div>
     </div>
   );
 }
@@ -764,6 +779,14 @@ export function FeatureCockpit({
   const inspectorButtonRef = useRef<HTMLButtonElement>(null);
   const onLoadedNameRef = useRef(onLoadedName);
   onLoadedNameRef.current = onLoadedName;
+
+  useEffect(() => {
+    if (attentionPreviewRequest === null || attentionPreviewRequest.attentionId !== undefined) {
+      return;
+    }
+    setActiveSurface('document');
+    onAttentionPreviewClose?.();
+  }, [attentionPreviewRequest, onAttentionPreviewClose]);
 
   const load = useCallback(
     (options: { silent?: boolean } = {}) => {
@@ -1092,7 +1115,7 @@ export function FeatureCockpit({
     (item) => !(hasPendingReview && item.kind === 'review'),
   );
   const previewAttentionItem =
-    attentionPreviewRequest === null
+    attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined
       ? undefined
       : visibleAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
 
@@ -1149,7 +1172,7 @@ export function FeatureCockpit({
   if (documentAvailable) stageSurfaces.push({ id: 'document', label: 'Document' });
   if (liveAvailable) stageSurfaces.push({ id: 'live', label: 'Live activity' });
   const surfaceIds = stageSurfaces.map((surface) => surface.id);
-  const forcedLive = attentionPreviewRequest !== null && liveAvailable;
+  const forcedLive = attentionPreviewRequest?.attentionId !== undefined && liveAvailable;
   const resolvedSurface: 'document' | 'live' | null = forcedLive
     ? 'live'
     : surfaceIds.includes(activeSurface)
@@ -1446,7 +1469,11 @@ export function FeatureCockpit({
                         reviewGate={snapshot.reviewGate}
                         waitReason={snapshot.waitReason}
                         shouldStream={stopAction !== undefined}
-                        attentionRequestId={attentionPreviewRequest?.requestId}
+                        attentionRequestId={
+                          attentionPreviewRequest?.attentionId === undefined
+                            ? undefined
+                            : attentionPreviewRequest.requestId
+                        }
                         onAttentionPreviewClose={onAttentionPreviewClose}
                         attentionFooter={
                           previewAttentionItem === undefined ? undefined : (
@@ -1514,7 +1541,13 @@ export function FeatureCockpit({
           </div>
 
           {configOpen ? (
-            <ConfigDrawer featureId={featureId} onClose={() => setConfigOpen(false)} />
+            <CockpitModal
+              title="Configuration"
+              ariaLabel="Feature configuration"
+              onClose={() => setConfigOpen(false)}
+            >
+              <FeatureConfigPanel featureId={featureId} />
+            </CockpitModal>
           ) : null}
 
           {stopDialog ? (
@@ -1577,33 +1610,19 @@ export function FeatureCockpit({
           ) : null}
 
           {cyclesDialog ? (
-            <div className="cockpit__drawer-backdrop" onMouseDown={() => setCyclesDialog(false)}>
-              <aside
-                className="cockpit__drawer cockpit__cycles-drawer"
-                role="dialog"
-                aria-modal="true"
-                aria-label="Repository cycles"
-                onMouseDown={(event) => event.stopPropagation()}
-              >
-                <header className="cockpit__cycles-header">
-                  <h3>Repository cycles</h3>
-                  <button
-                    type="button"
-                    className="cockpit__cycles-close"
-                    onClick={() => setCyclesDialog(false)}
-                  >
-                    Close
-                  </button>
-                </header>
-                <CycleJourneys
-                  featureId={featureId}
-                  snapshot={snapshot}
-                  onComplete={() => load({ silent: true })}
-                  attentionItems={attentionItems}
-                  onOpenGate={() => setCyclesDialog(false)}
-                />
-              </aside>
-            </div>
+            <CockpitModal
+              title="Repository cycles"
+              ariaLabel="Repository cycles"
+              onClose={() => setCyclesDialog(false)}
+            >
+              <CycleJourneys
+                featureId={featureId}
+                snapshot={snapshot}
+                onComplete={() => load({ silent: true })}
+                attentionItems={attentionItems}
+                onOpenGate={() => setCyclesDialog(false)}
+              />
+            </CockpitModal>
           ) : null}
         </>
       )}

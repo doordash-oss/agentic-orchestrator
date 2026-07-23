@@ -10,10 +10,23 @@ function pf(over: Partial<CompletionPreflightResult>): CompletionPreflightResult
 describe('completionBarModel', () => {
   it('omits verbs the server does not offer', () => {
     const model = completionBarModel(
-      pf({ repos: [{ repo: 'a', publishable: true, touched: true, status: 'eligible' }] }),
+      pf({
+        repos: [
+          { repo: 'a', publishable: true, touched: true, status: 'eligible' },
+          { repo: 'b', publishable: false, touched: true, status: 'eligible' },
+        ],
+      }),
       new Set(['merge']),
     );
     expect(model.map((m) => m.verb)).toEqual(['merge']);
+  });
+
+  it('omits merge when offered but nothing is mergeable', () => {
+    const model = completionBarModel(
+      pf({ repos: [{ repo: 'a', publishable: true, touched: true, status: 'eligible' }] }),
+      new Set(['merge']),
+    );
+    expect(model.find((m) => m.verb === 'merge')).toBeUndefined();
   });
 
   it('publish is available with an eligible repo and is primary', () => {

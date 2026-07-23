@@ -42,7 +42,8 @@ export function completionBarModel(
         return null;
       case 'merge':
         if (localMerge.length > 0) return { state: 'available' };
-        return { state: 'done' };
+        if (merged.length > 0) return { state: 'done' };
+        return null;
       case 'mark-done':
         return preflight.canMarkDone
           ? { state: 'available' }

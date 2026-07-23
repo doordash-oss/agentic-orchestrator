@@ -199,7 +199,9 @@ function RepoInstrumentScene() {
   );
 }
 
-function RunGaugeScene({ atRest = false }: { atRest?: boolean }) {
+function RunGaugeScene({ mode = 'active' }: { mode?: 'active' | 'rest' | 'final-review' }) {
+  const atRest = mode === 'rest';
+  const finalReview = mode === 'final-review';
   return (
     <div
       className="workspace-shell__content"
@@ -217,11 +219,15 @@ function RunGaugeScene({ atRest = false }: { atRest?: boolean }) {
             <CurrentRunInspection
               featureId="abcd1234ef567890"
               runNumber={8}
-              currentPhase={atRest ? 'Final Review' : 'Implement'}
-              featureStatus={atRest ? 'CodeReady' : 'Implementing'}
+              currentPhase={atRest || finalReview ? 'Final Review' : 'Implement'}
+              featureStatus={
+                atRest ? 'CodeReady' : finalReview ? 'FinalReviewing' : 'Implementing'
+              }
               currentRoadmapPhase={atRest ? 12 : 2}
-              totalRoadmapPhases={atRest ? 12 : 5}
-              {...(atRest ? {} : { currentIteration: 3, phaseStatus: 'implementing' })}
+              totalRoadmapPhases={atRest ? 12 : finalReview ? 2 : 5}
+              {...(atRest || finalReview
+                ? {}
+                : { currentIteration: 3, phaseStatus: 'implementing' })}
               reviewGate={{
                 reviewingGate: false,
                 reviewFixing: false,
@@ -742,7 +748,10 @@ function CaptureApp() {
     return <RunGaugeScene />;
   }
   if (scene === 'run-gauge-rest') {
-    return <RunGaugeScene atRest />;
+    return <RunGaugeScene mode="rest" />;
+  }
+  if (scene === 'run-gauge-final-review') {
+    return <RunGaugeScene mode="final-review" />;
   }
   if (scene === 'rebase-preflight' || scene === 'review-refactor' || scene === 'cycle-gate') {
     return <CycleJourneysScene scene={scene} />;

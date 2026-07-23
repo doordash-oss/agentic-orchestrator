@@ -304,6 +304,49 @@ describe('CurrentRunInspection', () => {
     expect(gauge).toHaveTextContent('Reviewing · Iteration 2');
   });
 
+  it('sets final review apart from the last implementation phase', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Final reviewing',
+      contextPercentage: 3,
+      totalSeconds: 4811,
+      totalUsd: 7.87,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 6, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={6}
+        currentPhase="Final Review"
+        featureStatus="FinalReviewing"
+        currentRoadmapPhase={2}
+        totalRoadmapPhases={2}
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    const gauge = await screen.findByRole('region', {
+      name: /Roadmap progress: final review/,
+    });
+    expect(gauge).toHaveTextContent('Final review');
+    expect(gauge).not.toHaveTextContent('Phase 2 of 2');
+    // Both roadmap phases are done; final review is its own separated marker.
+    const phaseSegments = gauge.querySelectorAll(
+      '.roadmap-gauge__segment:not(.roadmap-gauge__segment--final)',
+    );
+    expect(phaseSegments).toHaveLength(2);
+    for (const segment of phaseSegments) {
+      expect(segment).toHaveAttribute('data-state', 'done');
+    }
+    const finalSegment = gauge.querySelector('.roadmap-gauge__segment--final');
+    expect(finalSegment).not.toBeNull();
+    expect(finalSegment).toHaveAttribute('data-state', 'active');
+  });
+
   it('settles the roadmap gauge once the run rests at Code ready', async () => {
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({

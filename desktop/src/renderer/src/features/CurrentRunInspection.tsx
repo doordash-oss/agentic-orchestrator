@@ -965,26 +965,37 @@ function RoadmapGauge({
   }
   const atRest = featureStatus !== undefined && isRunAtRest(featureStatus);
   const total = Math.max(totalRoadmapPhases, currentRoadmapPhase);
+  // Final review is a whole-feature stage after every roadmap phase is built,
+  // not another implementation phase — so it gets its own separated marker
+  // rather than lighting up the last phase segment.
+  const finalReview =
+    !atRest &&
+    (currentPhase.trim().toLocaleLowerCase() === 'final review' ||
+      (featureStatus?.startsWith('FinalReview') ?? false));
   const status = atRest
     ? displayStatusLabel(featureStatus)
     : roadmapStatusLabel(currentPhase, reviewGate, currentIteration, phaseStatus);
+  const ariaLabel = finalReview
+    ? `Roadmap progress: final review — ${status}`
+    : `Roadmap progress: phase ${currentRoadmapPhase} of ${total} — ${status}`;
   return (
-    <section
-      className="roadmap-gauge"
-      aria-label={`Roadmap progress: phase ${currentRoadmapPhase} of ${total} — ${status}`}
-    >
+    <section className="roadmap-gauge" aria-label={ariaLabel}>
       <div className="roadmap-gauge__reading">
         <span className="roadmap-gauge__eyebrow">Roadmap</span>
-        <span className="roadmap-gauge__phase">
-          Phase {currentRoadmapPhase}
-          <span className="roadmap-gauge__of"> of {total}</span>
-        </span>
+        {finalReview ? (
+          <span className="roadmap-gauge__phase">Final review</span>
+        ) : (
+          <span className="roadmap-gauge__phase">
+            Phase {currentRoadmapPhase}
+            <span className="roadmap-gauge__of"> of {total}</span>
+          </span>
+        )}
       </div>
       <ol className="roadmap-gauge__track" aria-hidden="true">
         {Array.from({ length: total }, (_, index) => {
           const phaseNumber = index + 1;
           const state =
-            phaseNumber < currentRoadmapPhase || atRest
+            finalReview || phaseNumber < currentRoadmapPhase || atRest
               ? 'done'
               : phaseNumber === currentRoadmapPhase
                 ? 'active'
@@ -998,6 +1009,13 @@ function RoadmapGauge({
             />
           );
         })}
+        {finalReview ? (
+          <li
+            className="roadmap-gauge__segment roadmap-gauge__segment--final"
+            data-state="active"
+            title="Final review"
+          />
+        ) : null}
       </ol>
       <p className="roadmap-gauge__status" data-tone={atRest ? 'rest' : 'working'}>
         {status}

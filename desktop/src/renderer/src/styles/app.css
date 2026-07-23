@@ -8321,6 +8321,25 @@ body {
   animation: needle-pulse 1.6s ease-in-out infinite;
 }
 
+/* Final review sits apart from the phase run: a short marker set off by a gap
+ * and a leading divider, so it never reads as one more implementation phase. */
+.roadmap-gauge__segment--final {
+  flex: 0 0 28px;
+  margin-left: var(--space-3);
+  position: relative;
+}
+
+.roadmap-gauge__segment--final::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--space-2));
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 12px;
+  background: var(--color-hairline);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .roadmap-gauge__segment[data-state='active'] {
     animation: none;

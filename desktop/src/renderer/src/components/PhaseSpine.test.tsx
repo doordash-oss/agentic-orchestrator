@@ -80,6 +80,15 @@ describe('PhaseSpine', () => {
     expect(screen.getByText('IMP')).toHaveAttribute('aria-hidden', 'true');
   });
 
+  it('settles the active stage as done when the run is at rest', () => {
+    render(<PhaseSpine stages={stages} activeIndex={2} tone="progress" atRest />);
+    const items = screen.getAllByRole('listitem');
+    expect(items[2]).toHaveAttribute('data-state', 'done');
+    expect(items[2]).not.toHaveAttribute('aria-current');
+    expect(items[2]!.querySelector('.phase-spine__needle')).toBeNull();
+    expect(items[3]).toHaveAttribute('data-state', 'upcoming');
+  });
+
   it('pulses the active needle only when motion is allowed', () => {
     matchMediaState.reducedMotion = false;
     const { unmount } = render(<PhaseSpine stages={stages} activeIndex={1} tone="progress" />);

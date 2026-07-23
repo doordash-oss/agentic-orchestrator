@@ -97,6 +97,9 @@ export interface ConversationTranscriptProps {
 type FileChange = NonNullable<TranscriptMessage['fileChange']>;
 type DiffLineKind = 'added' | 'removed' | 'context' | 'meta';
 
+/** Bounded cap on rendered diff lines; the rest collapses into a meta row. */
+const MAX_DIFF_LINES = 24;
+
 function fileChangeLabel(operation: string | undefined): string {
   switch (operation?.trim().toLocaleLowerCase()) {
     case 'add':
@@ -123,6 +126,7 @@ function diffLineKind(line: string): DiffLineKind {
     line.startsWith('+++ ') ||
     line.startsWith('new file mode ') ||
     line.startsWith('deleted file mode ') ||
+    line.startsWith('…') ||
     line === '...'
   ) {
     return 'meta';
@@ -144,12 +148,16 @@ function visibleDiff(change: FileChange): string[] {
 }
 
 export function FileChangeCard({ change }: { change: FileChange }): React.ReactElement {
-  const lines = visibleDiff(change);
-  const inferredAdded = lines.filter((line) => diffLineKind(line) === 'added').length;
-  const inferredRemoved = lines.filter((line) => diffLineKind(line) === 'removed').length;
+  const allLines = visibleDiff(change);
+  const inferredAdded = allLines.filter((line) => diffLineKind(line) === 'added').length;
+  const inferredRemoved = allLines.filter((line) => diffLineKind(line) === 'removed').length;
   const added = change.addedLines ?? inferredAdded;
   const removed = change.removedLines ?? inferredRemoved;
   const label = fileChangeLabel(change.operation);
+  const lines =
+    allLines.length > MAX_DIFF_LINES
+      ? [...allLines.slice(0, MAX_DIFF_LINES), `… ${allLines.length - MAX_DIFF_LINES} more lines`]
+      : allLines;
 
   return (
     <article className="conversation__file-change" aria-label={`${label} ${change.path}`}>

@@ -166,7 +166,7 @@ function RepoInstrumentScene() {
   );
 }
 
-function RunGaugeScene() {
+function RunGaugeScene({ atRest = false }: { atRest?: boolean }) {
   return (
     <div
       className="workspace-shell__content"
@@ -184,11 +184,11 @@ function RunGaugeScene() {
             <CurrentRunInspection
               featureId="abcd1234ef567890"
               runNumber={8}
-              currentPhase="Implement"
-              currentRoadmapPhase={2}
-              totalRoadmapPhases={5}
-              currentIteration={3}
-              phaseStatus="implementing"
+              currentPhase={atRest ? 'Final Review' : 'Implement'}
+              featureStatus={atRest ? 'CodeReady' : 'Implementing'}
+              currentRoadmapPhase={atRest ? 12 : 2}
+              totalRoadmapPhases={atRest ? 12 : 5}
+              {...(atRest ? {} : { currentIteration: 3, phaseStatus: 'implementing' })}
               reviewGate={{
                 reviewingGate: false,
                 reviewFixing: false,
@@ -630,6 +630,9 @@ function CaptureApp() {
   }
   if (scene === 'run-gauge') {
     return <RunGaugeScene />;
+  }
+  if (scene === 'run-gauge-rest') {
+    return <RunGaugeScene atRest />;
   }
   if (scene === 'rebase-preflight' || scene === 'review-refactor' || scene === 'cycle-gate') {
     return <CycleJourneysScene scene={scene} />;

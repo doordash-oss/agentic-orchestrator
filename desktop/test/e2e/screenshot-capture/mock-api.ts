@@ -590,6 +590,49 @@ const AMA_TRANSCRIPT: SessionTranscript = {
   ],
 };
 
+/** Live run transcript with tool activity and bounded file-change diffs. */
+const RUN_SESSION_TRANSCRIPT: SessionTranscript['messages'] = [
+  {
+    index: 0,
+    role: 'assistant',
+    type: 'text',
+    text: 'Wiring the streamed preview into the cockpit so file changes surface as diffs.',
+  },
+  {
+    index: 1,
+    role: 'assistant',
+    type: 'tool_use',
+    tool: 'Edit',
+    redacted: true,
+    fileChange: {
+      path: 'src/renderer/app.tsx',
+      operation: 'update',
+      detail:
+        '- const preview = usePolledPreview(featureId);\n+ const preview = useStreamedPreview(featureId);\n+ const transcript = preview?.transcript ?? [];',
+    },
+  },
+  { index: 2, role: 'system', type: 'tool_progress', tool: 'Write', redacted: true },
+  {
+    index: 3,
+    role: 'assistant',
+    type: 'tool_use',
+    tool: 'Write',
+    redacted: true,
+    fileChange: {
+      path: 'src/renderer/preview/stream.ts',
+      operation: 'write',
+      detail:
+        '+ export function useStreamedPreview(featureId: string) {\n+   const [preview, setPreview] = useState<LivePreviewView | null>(null);\n+   useEffect(() => subscribePreview(featureId, setPreview), [featureId]);\n+   return preview;\n+ }',
+    },
+  },
+  {
+    index: 4,
+    role: 'assistant',
+    type: 'text',
+    text: 'The live preview now streams each file change with a capped diff view.',
+  },
+];
+
 function isBackgroundScene(scene: string): boolean {
   return scene.startsWith('background-');
 }
@@ -861,8 +904,12 @@ function makeMockApi(
           ? AMA_TRANSCRIPT
           : ({
               sessionId,
-              cursor: { total: 0, start: 0, end: 0 },
-              messages: [],
+              cursor: {
+                total: RUN_SESSION_TRANSCRIPT.length,
+                start: 0,
+                end: RUN_SESSION_TRANSCRIPT.length,
+              },
+              messages: RUN_SESSION_TRANSCRIPT,
             } as SessionTranscript),
       ),
     openSessionOutput: () =>
@@ -977,6 +1024,32 @@ function makeMockApi(
           },
           {
             index: 1,
+            role: 'assistant',
+            type: 'tool_use',
+            tool: 'Edit',
+            redacted: true,
+            fileChange: {
+              path: 'src/renderer/app.tsx',
+              operation: 'update',
+              detail:
+                '- const preview = usePolledPreview(featureId);\n+ const preview = useStreamedPreview(featureId);\n+ const transcript = preview?.transcript ?? [];',
+            },
+          },
+          {
+            index: 2,
+            role: 'assistant',
+            type: 'tool_use',
+            tool: 'Write',
+            redacted: true,
+            fileChange: {
+              path: 'src/renderer/preview/stream.ts',
+              operation: 'write',
+              detail:
+                '+ export function useStreamedPreview(featureId: string) {\n+   const [preview, setPreview] = useState<LivePreviewView | null>(null);\n+   useEffect(() => subscribePreview(featureId, setPreview), [featureId]);\n+   return preview;\n+ }',
+            },
+          },
+          {
+            index: 3,
             role: 'assistant',
             type: 'text',
             text: 'I updated the live preview to stream the agent transcript directly into the cockpit.',

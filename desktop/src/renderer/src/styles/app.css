@@ -558,6 +558,7 @@ body {
    task_started/progress/notification rows. */
 .conversation__subagents {
   align-self: stretch;
+  flex-shrink: 0;
   width: min(100%, 880px);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
@@ -669,6 +670,9 @@ body {
 
 .conversation__file-change {
   align-self: stretch;
+  /* overflow: hidden lets a flex child shrink to zero; pin it so the scroll
+     column never collapses diff cards into empty slivers. */
+  flex-shrink: 0;
   width: min(100%, 880px);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
@@ -7864,6 +7868,11 @@ body {
   font-size: 12px;
 }
 
+/* A finished run reads settled: success green, nothing pulsing. */
+.roadmap-gauge__status[data-tone='rest'] {
+  color: var(--color-success);
+}
+
 @media (max-width: 640px) {
   .roadmap-gauge {
     flex-wrap: wrap;
@@ -8256,6 +8265,61 @@ body {
   gap: var(--space-4);
 }
 
+.current-inspection__resource {
+  min-width: 0;
+}
+
+.current-inspection__resource h4 {
+  margin: 0;
+}
+
+.current-inspection__resource-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.current-inspection__resource-toggle:hover {
+  color: var(--color-signal);
+}
+
+.current-inspection__resource-caret {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid currentColor;
+  transition: transform 120ms ease;
+}
+
+.current-inspection__resource-toggle[aria-expanded='true'] .current-inspection__resource-caret {
+  transform: rotate(90deg);
+}
+
+.current-inspection__resource-count {
+  min-width: 1.5rem;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.current-inspection__resource-content {
+  margin-top: var(--space-2);
+}
+
 .current-inspection__artifact-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -8292,18 +8356,6 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   border-radius: 0 var(--radius) var(--radius) 0 !important;
-}
-
-.current-inspection__resources > div:last-child {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: start;
-  gap: var(--space-2);
-}
-
-.current-inspection__resources h4 {
-  flex-basis: 100%;
-  margin: 0;
 }
 
 .current-inspection__content {

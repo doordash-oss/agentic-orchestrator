@@ -408,7 +408,7 @@ func TestTranscriptDTOsExposeStatusTextInPlace(t *testing.T) {
 		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
 			Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeToolUse, Name: toolNameBash}},
 		}}},
-	}, 4)
+	}, 4, "")
 
 	if len(rows) != 3 {
 		t.Fatalf("transcriptDTOs() returned %d rows, want 3: %+v", len(rows), rows)
@@ -416,6 +416,33 @@ func TestTranscriptDTOsExposeStatusTextInPlace(t *testing.T) {
 	status := rows[1]
 	if status.Index != 5 || status.Role != roleSystem || status.Type != "status" || status.Text != "Auto-approved Bash: go test ./..." || status.Redacted {
 		t.Fatalf("status row = %+v, want textual system status at index 5", status)
+	}
+}
+
+func TestTranscriptDTOsWriteToolUseMarksEveryLineAdded(t *testing.T) {
+	t.Parallel()
+
+	input, err := json.Marshal(map[string]any{"file_path": "/work/src/app.ts", "content": "line one\nline two\nline three\n"})
+	if err != nil {
+		t.Fatalf("Marshal Write input: %v", err)
+	}
+	rows := transcriptDTOs([]llm.SDKMessage{{
+		Type: roleAssistant,
+		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role:    roleAssistant,
+			Content: []llm.ContentBlock{{Type: blockTypeToolUse, Name: toolNameWrite, Input: input}},
+		}},
+	}}, 0, "/work")
+
+	if len(rows) != 1 || rows[0].FileChange == nil {
+		t.Fatalf("transcriptDTOs = %+v, want one row with a file change", rows)
+	}
+	change := rows[0].FileChange
+	if change.Path != "src/app.ts" || change.Operation != "write" {
+		t.Fatalf("file change = %+v, want write of src/app.ts", change)
+	}
+	if want := "+ line one\n+ line two\n+ line three"; change.Detail != want {
+		t.Fatalf("Detail = %q, want %q", change.Detail, want)
 	}
 }
 

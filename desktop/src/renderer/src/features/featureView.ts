@@ -199,6 +199,17 @@ export function spineActiveIndexForPhase(
   return index >= 0 ? index : 0;
 }
 
+/**
+ * The run finished and the feature is resting (awaiting publish/completion).
+ * The server keeps current_phase at the last worked phase in these statuses,
+ * so position alone would falsely read as "still working". Checkpoint pauses
+ * (PlanReady, NeedUserInput, *NeedsReview, Interrupted) are NOT at rest —
+ * those runs are genuinely parked at their phase.
+ */
+export function isRunAtRest(status: string): boolean {
+  return status === 'CodeReady' || status === 'Published' || status === 'Done';
+}
+
 export function spineTone(snapshot: FeatureSnapshot): 'progress' | 'error' {
   return snapshot.setup?.status === 'failed' || snapshot.status === 'Failed' ? 'error' : 'progress';
 }

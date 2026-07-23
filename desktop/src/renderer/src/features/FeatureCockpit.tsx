@@ -49,6 +49,7 @@ import {
   displayStatusLabel,
   featureBranch,
   isReadyToStart,
+  isRunAtRest,
   setupProgress,
   showsRun,
   spineActiveIndex,
@@ -1247,6 +1248,7 @@ export function FeatureCockpit({
             stages={stages}
             activeIndex={spineActiveIndex(snapshot, stages)}
             tone={spineTone(snapshot)}
+            atRest={isRunAtRest(snapshot.status)}
             label="Feature pipeline"
           />
 
@@ -1349,6 +1351,7 @@ export function FeatureCockpit({
                       featureId={featureId}
                       runNumber={snapshot.activeRun}
                       currentPhase={snapshot.currentPhase}
+                      featureStatus={snapshot.status}
                       currentRoadmapPhase={snapshot.currentRoadmapPhase}
                       totalRoadmapPhases={snapshot.totalRoadmapPhases}
                       currentIteration={snapshot.currentIteration}

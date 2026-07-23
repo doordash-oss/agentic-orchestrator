@@ -10,6 +10,7 @@ import {
   fieldForCreationError,
   groupDashboardFeatures,
   isReadyToStart,
+  isRunAtRest,
   orderDashboardFeatures,
   setupProgress,
   spineActiveIndex,
@@ -233,6 +234,29 @@ describe('isReadyToStart', () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe('isRunAtRest', () => {
+  it('treats only finished-run statuses as resting', () => {
+    expect(isRunAtRest('CodeReady')).toBe(true);
+    expect(isRunAtRest('Published')).toBe(true);
+    expect(isRunAtRest('Done')).toBe(true);
+  });
+
+  it('keeps active and parked statuses at their phase', () => {
+    for (const status of [
+      'Implementing',
+      'FinalReviewing',
+      'NeedUserInput',
+      'PlanNeedsReview',
+      'Interrupted',
+      'Failed',
+      'PlanReady',
+      'ImplementReady',
+    ]) {
+      expect(isRunAtRest(status)).toBe(false);
+    }
   });
 });
 

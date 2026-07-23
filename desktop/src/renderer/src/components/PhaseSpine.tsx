@@ -11,6 +11,11 @@ export interface PhaseSpineProps {
   activeIndex: number;
   /** Visual tone of the active tick. */
   tone: 'progress' | 'error' | 'sealed';
+  /**
+   * The run finished and rests at the active stage: render that stage as
+   * done (green tick, no pulsing needle) instead of in progress.
+   */
+  atRest?: boolean;
   /** Accessible name for the rail. */
   label?: string;
 }
@@ -24,6 +29,7 @@ export function PhaseSpine({
   stages,
   activeIndex,
   tone,
+  atRest = false,
   label = 'Connection lifecycle',
 }: PhaseSpineProps) {
   const reducedMotion = usePrefersReducedMotion();
@@ -32,7 +38,11 @@ export function PhaseSpine({
       <ol className="phase-spine__rail">
         {stages.map((stage, index) => {
           const state =
-            index < activeIndex ? 'done' : index === activeIndex ? 'active' : 'upcoming';
+            index < activeIndex || (atRest && index === activeIndex)
+              ? 'done'
+              : index === activeIndex
+                ? 'active'
+                : 'upcoming';
           const isActive = state === 'active';
           return (
             <li

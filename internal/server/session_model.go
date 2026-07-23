@@ -674,7 +674,7 @@ func transcriptToolUseFileChangeDetail(toolName string, fields map[string]interf
 		if newString == "" {
 			return ""
 		}
-		return "+ " + newString
+		return formatTranscriptReplacement("", newString)
 	default:
 		return ""
 	}

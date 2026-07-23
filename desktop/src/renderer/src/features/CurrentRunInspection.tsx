@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   LivePreviewView,
   ReviewGateView,
@@ -15,6 +15,7 @@ import {
   reviewStatusSymbol,
   reviewStatusTone,
 } from './reviewModel';
+import { displayStatusLabel, isRunAtRest } from './featureView';
 import { stripUnsafeAnsi } from './timelineModel';
 import { buildConversation } from './transcript/conversation';
 import { ConversationTranscript } from './transcript/ConversationTranscript';
@@ -38,6 +39,8 @@ interface CurrentRunInspectionProps {
   featureId: string;
   runNumber: number;
   currentPhase: string;
+  /** Server feature status; distinguishes a resting run from an active one. */
+  featureStatus?: string;
   currentRoadmapPhase?: number;
   totalRoadmapPhases?: number;
   /** Implement-loop iteration within the current roadmap phase. */
@@ -93,10 +96,48 @@ export function orderRunArtifacts(artifacts: readonly RunArtifact[]): RunArtifac
   });
 }
 
+function ResourceSection({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count: number;
+  children: ReactNode;
+}): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const contentId = useId();
+
+  return (
+    <section className="current-inspection__resource">
+      <h4>
+        <button
+          type="button"
+          className="current-inspection__resource-toggle"
+          aria-label={`${title} (${count})`}
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <span className="current-inspection__resource-caret" aria-hidden="true" />
+          <span>{title}</span>
+          <span className="current-inspection__resource-count">{count}</span>
+        </button>
+      </h4>
+      {expanded ? (
+        <div id={contentId} className="current-inspection__resource-content">
+          {children}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export function CurrentRunInspection({
   featureId,
   runNumber,
   currentPhase,
+  featureStatus,
   currentRoadmapPhase,
   totalRoadmapPhases,
   currentIteration,
@@ -222,6 +263,7 @@ export function CurrentRunInspection({
 
       <RoadmapGauge
         currentPhase={currentPhase}
+        featureStatus={featureStatus}
         currentRoadmapPhase={currentRoadmapPhase}
         totalRoadmapPhases={totalRoadmapPhases}
         currentIteration={currentIteration}
@@ -279,8 +321,11 @@ export function CurrentRunInspection({
       />
 
       <div className="current-inspection__resources">
-        <div>
-          <h4>Run artifacts</h4>
+        <ResourceSection
+          key={`artifacts-${featureId}`}
+          title="Run artifacts"
+          count={artifacts.length}
+        >
           {artifacts.length === 0 ? (
             <p className="setup-step__empty">No current-run artifacts yet.</p>
           ) : (
@@ -303,9 +348,8 @@ export function CurrentRunInspection({
               ))}
             </ol>
           )}
-        </div>
-        <div>
-          <h4>Bounded logs</h4>
+        </ResourceSection>
+        <ResourceSection key={`logs-${featureId}`} title="Bounded logs" count={logs.length}>
           {logs.length === 0 ? (
             <p className="setup-step__empty">
               {logListError === null
@@ -333,7 +377,7 @@ export function CurrentRunInspection({
               ))}
             </ol>
           )}
-        </div>
+        </ResourceSection>
       </div>
 
       {contentError !== null ? (
@@ -766,6 +810,7 @@ export function roadmapStatusLabel(
 
 function RoadmapGauge({
   currentPhase,
+  featureStatus,
   currentRoadmapPhase,
   totalRoadmapPhases,
   currentIteration,
@@ -773,6 +818,7 @@ function RoadmapGauge({
   reviewGate,
 }: {
   currentPhase: string;
+  featureStatus?: string;
   currentRoadmapPhase?: number;
   totalRoadmapPhases?: number;
   currentIteration?: number;
@@ -787,8 +833,11 @@ function RoadmapGauge({
   ) {
     return null;
   }
+  const atRest = featureStatus !== undefined && isRunAtRest(featureStatus);
   const total = Math.max(totalRoadmapPhases, currentRoadmapPhase);
-  const status = roadmapStatusLabel(currentPhase, reviewGate, currentIteration, phaseStatus);
+  const status = atRest
+    ? displayStatusLabel(featureStatus)
+    : roadmapStatusLabel(currentPhase, reviewGate, currentIteration, phaseStatus);
   return (
     <section
       className="roadmap-gauge"
@@ -805,7 +854,7 @@ function RoadmapGauge({
         {Array.from({ length: total }, (_, index) => {
           const phaseNumber = index + 1;
           const state =
-            phaseNumber < currentRoadmapPhase
+            phaseNumber < currentRoadmapPhase || atRest
               ? 'done'
               : phaseNumber === currentRoadmapPhase
                 ? 'active'
@@ -820,7 +869,9 @@ function RoadmapGauge({
           );
         })}
       </ol>
-      <p className="roadmap-gauge__status">{status}</p>
+      <p className="roadmap-gauge__status" data-tone={atRest ? 'rest' : 'working'}>
+        {status}
+      </p>
     </section>
   );
 }

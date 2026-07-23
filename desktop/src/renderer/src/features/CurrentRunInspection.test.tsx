@@ -151,7 +151,7 @@ describe('CurrentRunInspection', () => {
       truncated: false,
     });
 
-    render(
+    const { rerender } = render(
       <CurrentRunInspection
         featureId="abcd1234ef567890"
         runNumber={2}
@@ -175,6 +175,14 @@ describe('CurrentRunInspection', () => {
     expect(screen.getByRole('heading', { name: 'Reviewing implementation' })).toBeVisible();
     expect(screen.getByText('Fix pass active')).toBeVisible();
     expect(screen.getByLabelText('Review axes')).toHaveTextContent('Craft✓Func⟳Clean✕Design⟳');
+    const artifactsToggle = screen.getByRole('button', { name: 'Run artifacts (6)' });
+    const logsToggle = screen.getByRole('button', { name: 'Bounded logs (1)' });
+    expect(artifactsToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(logsToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: /^Open artifact / })).not.toBeInTheDocument();
+
+    await user.click(artifactsToggle);
+    expect(artifactsToggle).toHaveAttribute('aria-expanded', 'true');
     expect(
       screen
         .getAllByRole('button', { name: /^Open artifact / })
@@ -195,6 +203,8 @@ describe('CurrentRunInspection', () => {
       screen.queryByRole('dialog', { name: 'Expanded artifact phase-plan' }),
     ).not.toBeInTheDocument();
 
+    await user.click(logsToggle);
+    expect(logsToggle).toHaveAttribute('aria-expanded', 'true');
     await user.click(screen.getByRole('button', { name: 'Open log research/output.txt' }));
     expect(await screen.findByLabelText('Current run log content')).toHaveTextContent(
       'current log',
@@ -205,6 +215,23 @@ describe('CurrentRunInspection', () => {
     );
     expect(mock.api.getRunLogContent).toHaveBeenCalledWith(
       expect.objectContaining({ logId: 'log-research', offset: 64 * 1024, limit: 64 * 1024 }),
+    );
+
+    rerender(
+      <CurrentRunInspection
+        featureId="fedcba0987654321"
+        runNumber={2}
+        currentPhase="Implement"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Run artifacts (6)' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(screen.getByRole('button', { name: 'Bounded logs (1)' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
     );
   });
 
@@ -275,6 +302,44 @@ describe('CurrentRunInspection', () => {
     const gauge = await screen.findByRole('region', { name: /Roadmap progress/ });
     expect(gauge).toHaveTextContent('Phase 4 of 4');
     expect(gauge).toHaveTextContent('Reviewing · Iteration 2');
+  });
+
+  it('settles the roadmap gauge once the run rests at Code ready', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'CodeReady',
+      contextPercentage: -1,
+      totalSeconds: 0,
+      totalUsd: 0,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Final Review"
+        featureStatus="CodeReady"
+        currentRoadmapPhase={12}
+        totalRoadmapPhases={12}
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    const gauge = await screen.findByRole('region', {
+      name: 'Roadmap progress: phase 12 of 12 — Code ready',
+    });
+    expect(gauge).toHaveTextContent('Code ready');
+    expect(gauge).not.toHaveTextContent('Final Review');
+    const segments = gauge.querySelectorAll('.roadmap-gauge__segment');
+    expect(segments).toHaveLength(12);
+    for (const segment of segments) {
+      expect(segment).toHaveAttribute('data-state', 'done');
+    }
+    expect(gauge.querySelector('.roadmap-gauge__status')).toHaveAttribute('data-tone', 'rest');
   });
 
   it('hides the roadmap gauge before the roadmap exists', async () => {

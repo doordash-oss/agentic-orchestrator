@@ -25,6 +25,7 @@ import { WorkspaceShell } from '../../../src/renderer/src/features/WorkspaceShel
 import { UpdateNotice } from '../../../src/renderer/src/App';
 import { AmaDock } from '../../../src/renderer/src/components/AmaDock';
 import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
+import { MonacoBuffer } from '../../../src/renderer/src/components/monaco';
 import {
   AttentionInbox,
   emptyAttentionDrafts,
@@ -46,6 +47,35 @@ import type { CompletionStep } from '../../../src/renderer/src/features/Completi
 function getScene(): string {
   const params = new URLSearchParams(window.location.search);
   return params.get('scene') ?? 'archive';
+}
+
+/**
+ * Minimal Monaco mount for the first-monaco-lazy-load performance workload:
+ * the editor chunk loads only after the click, so the measurement isolates the
+ * dynamic import plus first editor attach.
+ */
+function MonacoLazyLoadScene() {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', padding: 16 }}>
+      <style>{'.perf-monaco__editor { flex: 1; min-height: 400px; }'}</style>
+      <h1>Monaco lazy load</h1>
+      <button type="button" onClick={() => setOpen(true)}>
+        Open editor
+      </button>
+      {open ? (
+        <MonacoBuffer
+          defaultValue={'# Phase plan\n\n- step one\n- step two\n'}
+          language="markdown"
+          theme="dark"
+          ariaLabel="Performance editor"
+          className="perf-monaco__editor"
+          exposeForE2E
+          onChange={() => undefined}
+        />
+      ) : null}
+    </div>
+  );
 }
 
 function ArchiveScene({ scene }: { scene: string }) {
@@ -621,6 +651,9 @@ function CaptureApp() {
 
   if (scene === 'archive' || scene === 'pinned' || scene === 'constrained') {
     return <ArchiveScene scene={scene} />;
+  }
+  if (scene === 'monaco-lazy-load') {
+    return <MonacoLazyLoadScene />;
   }
   if (scene === 'rewind-confirm' || scene === 'fork') {
     return <RewindScene />;

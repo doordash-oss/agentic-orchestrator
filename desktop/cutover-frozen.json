@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "baselineRevision": "7caa76a1540a85bf48f0924ab9c9ec49b9589eb8",
+  "baselineRevision": "b8c00aadfccc1b9946880cb27d539386547e2dcf",
   "auditCoverage": {
     "navigation": [
       "cap-79a28d7969ea",
@@ -414,17 +414,17 @@
     {
       "id": "cap-77568f378c52",
       "capability": "Edit feature config",
-      "frozenHash": "2f93b0439c0cfad74e10dc09183ccf57eca54910d99e208006487986c29d14c9"
+      "frozenHash": "e6fdd2d1816a9a51b8319d9c711ef34698f557a0416dc47e37adf507aeb7f9aa"
     },
     {
       "id": "cap-5c4fffc25374",
       "capability": "Edit workspace/runtime config",
-      "frozenHash": "270670a587c9f71bcf2758f64e2bc0c2e4e7b23c89e64943bfb002b1adb434b5"
+      "frozenHash": "583ebdd41aa59b7cbec8a73d36240d6f3c6510686a19919e4609909ffbb2c4f4"
     },
     {
       "id": "cap-c58bd4a6f635",
       "capability": "Model overrides per phase",
-      "frozenHash": "b7a7065455ec38cb92405a94a65dc06c87a5cc95ab837f9b286ad97177974d71"
+      "frozenHash": "dd4fbe9450eb61a3a87195dae0210b6874fdfc4e9edafaa45e3dba47fd223b6c"
     },
     {
       "id": "cap-d12fbf77bbad",

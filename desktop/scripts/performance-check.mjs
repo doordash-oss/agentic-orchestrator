@@ -498,14 +498,13 @@ async function reconnectStormPackaged() {
 async function firstMonacoLazyLoad(browser) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   try {
-    await page.goto(`${rendererOrigin}/?scene=settings-diagnostics&theme=dark`);
-    await page.getByRole('heading', { name: 'Resources' }).scrollIntoViewIfNeeded();
-    await page.getByRole('option', { name: /config\.yaml/ }).click();
+    await page.goto(`${rendererOrigin}/?scene=monaco-lazy-load&theme=dark`);
+    await page.getByRole('button', { name: 'Open editor' }).click();
     const started = await page.evaluate(() => performance.now());
-    await page.locator('.resource-editor__monaco').waitFor({ state: 'visible', timeout: 15_000 });
+    await page.locator('.perf-monaco__editor').waitFor({ state: 'visible', timeout: 15_000 });
     await page.waitForFunction(
       () => {
-        const host = document.querySelector('.resource-editor__monaco');
+        const host = document.querySelector('.perf-monaco__editor');
         return Boolean(host && '__monacoEditor' in host);
       },
       undefined,

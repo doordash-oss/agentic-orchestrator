@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
@@ -91,16 +91,20 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     seeded = seedPublishFixture(world, featureId);
     transcript.json('seeded worktrees', seeded.worktrees);
 
-    transcript.section('Relaunch and open completion workspace');
+    transcript.section('Relaunch and open feature cockpit');
     handle = await launchApp(world, testInfo, { traceName: 'publish-partial-retry' });
-    await openCompletion(handle, featureName);
-    const workspace = handle.page.locator('.completion-workspace');
-    await expect(workspace.getByRole('heading', { name: 'Completion' })).toBeVisible();
+    const cockpit = await openCompletion(handle, featureName);
+    await expect(cockpit.getByRole('button', { name: 'Publish', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
 
     transcript.section('Inspect repository scope and diffs');
-    await expect(workspace.getByRole('button', { name: /publish-api/ })).toBeVisible();
-    await expect(workspace.getByRole('button', { name: /publish-web/ })).toBeVisible();
-    await expect(workspace.getByRole('button', { name: /local-only/ })).toBeVisible();
+    await cockpit.getByRole('tab', { name: 'Changes' }).click();
+    const changes = cockpit.locator('.completion-workspace__inspect');
+    await expect(changes).toBeVisible({ timeout: 15_000 });
+    await expect(changes.getByRole('button', { name: /publish-api/ })).toBeVisible();
+    await expect(changes.getByRole('button', { name: /publish-web/ })).toBeVisible();
+    await expect(changes.getByRole('button', { name: /local-only/ })).toBeVisible();
 
     const preflightSnapshot = await handle.page.evaluate(
       (id) => window.agentico.preflightCompletion({ featureId: id }),
@@ -108,7 +112,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     );
     transcript.json('preflightCompletion response', preflightSnapshot);
 
-    await workspace.getByRole('button', { name: /publish-api/ }).click();
+    await changes.getByRole('button', { name: /publish-api/ }).click();
 
     const publishApiDiff = await handle.page.evaluate(
       (id) => window.agentico.getRepositoryDiff({ featureId: id, repo: 'publish-api' }),
@@ -116,33 +120,34 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     );
     transcript.json('getRepositoryDiff(publish-api) response', publishApiDiff);
 
-    await expect(workspace.getByRole('button', { name: /README\.md/ })).toBeVisible();
-    await workspace.getByRole('button', { name: /README\.md/ }).click();
-    await expect(workspace.locator('.completion-workspace__file-diff')).toBeVisible({
+    await expect(changes.getByRole('button', { name: /README\.md/ })).toBeVisible();
+    await changes.getByRole('button', { name: /README\.md/ }).click();
+    await expect(changes.locator('.completion-workspace__file-diff')).toBeVisible({
       timeout: 15_000,
     });
     transcript.step('publish-api diff loaded lazily');
 
-    transcript.section('Navigate to publish step and generate PR narrative');
-    await workspace.getByRole('button', { name: 'Completion step: publish' }).click();
-    await expect(workspace.locator('.completion-workspace__publish')).toBeVisible();
+    transcript.section('Open publish modal and generate PR narrative');
+    await cockpit.getByRole('button', { name: 'Publish', exact: true }).click();
+    const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
+    await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
     // publish-api is pre-seeded as already published — only publish-web is in the publish set.
-    await expect(workspace.getByRole('checkbox', { name: 'publish-api' })).toHaveCount(0);
-    await expect(workspace.getByRole('checkbox', { name: 'publish-web' })).toBeChecked();
-    await expect(workspace.getByRole('checkbox', { name: 'local-only' })).toHaveCount(0);
-    await expect(workspace.getByText('Already published')).toBeVisible({ timeout: 10_000 });
-    await workspace.getByRole('button', { name: 'Generate PR narrative' }).click();
-    await expect(workspace.getByPlaceholder('Enter PR title')).not.toHaveValue('');
-    await expect(workspace.getByPlaceholder('Enter PR description')).not.toHaveValue('');
+    await expect(publishModal.getByRole('checkbox', { name: 'publish-api' })).toHaveCount(0);
+    await expect(publishModal.getByRole('checkbox', { name: 'publish-web' })).toBeChecked();
+    await expect(publishModal.getByRole('checkbox', { name: 'local-only' })).toHaveCount(0);
+    await expect(publishModal.getByText('Already published')).toBeVisible({ timeout: 10_000 });
+    await publishModal.getByRole('button', { name: 'Generate PR narrative' }).click();
+    await expect(publishModal.getByPlaceholder('Enter PR title')).not.toHaveValue('');
+    await expect(publishModal.getByPlaceholder('Enter PR description')).not.toHaveValue('');
     transcript.step(
-      'publish step preselected only the eligible unpublished repo and generated PR text',
+      'publish modal preselected only the eligible unpublished repo and generated PR text',
     );
 
     transcript.section('Execute publish and observe partial outcome');
-    const publishButton = workspace.getByRole('button', { name: 'Publish', exact: true });
+    const publishButton = publishModal.getByRole('button', { name: 'Publish', exact: true });
     await expect(publishButton).toBeEnabled();
     await publishButton.click();
-    await expect(workspace.locator('.completion-workspace__result')).toBeVisible({
+    await expect(publishModal.locator('.completion-workspace__result')).toBeVisible({
       timeout: 60_000,
     });
     assertPublishedBranch(seeded, 'publish-web');
@@ -151,18 +156,21 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     );
 
     transcript.section('Verify retry scope defaults to failed/unpublished repositories');
-    await workspace.getByRole('button', { name: 'Completion step: publish' }).click();
-    await expect(workspace.locator('.completion-workspace__publish')).toBeVisible();
+    // Reopen the publish modal so it re-derives scope from the post-publish preflight.
+    await publishModal.getByRole('button', { name: 'Close' }).click();
+    await expect(publishModal).toHaveCount(0);
+    await cockpit.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
     // publish-api was pre-seeded as already published — it must NOT appear in the retry checkbox set.
-    await expect(workspace.getByRole('checkbox', { name: 'publish-api' })).toHaveCount(0);
+    await expect(publishModal.getByRole('checkbox', { name: 'publish-api' })).toHaveCount(0);
     // publish-web failed PR creation — it remains eligible and must be preselected for retry.
-    const webCheckbox = workspace.getByRole('checkbox', { name: 'publish-web' });
+    const webCheckbox = publishModal.getByRole('checkbox', { name: 'publish-web' });
     await expect(webCheckbox).toBeVisible({ timeout: 10_000 });
     await expect(webCheckbox).toBeChecked();
     // local-only is untouched — it must be excluded from the retry scope entirely.
-    await expect(workspace.getByRole('checkbox', { name: 'local-only' })).toHaveCount(0);
+    await expect(publishModal.getByRole('checkbox', { name: 'local-only' })).toHaveCount(0);
     // The already-published repo must appear in the "Already published" group, not as a retry candidate.
-    await expect(workspace.getByText('Already published')).toBeVisible({ timeout: 10_000 });
+    await expect(publishModal.getByText('Already published')).toBeVisible({ timeout: 10_000 });
     transcript.step('retry scope defaults only to failed or still-unpublished repositories');
 
     persistAppLogs(handle, 'publish-partial-retry-app-server');
@@ -174,15 +182,14 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
   }
 });
 
-async function openCompletion(handle: AppHandle, featureName: string): Promise<void> {
+async function openCompletion(handle: AppHandle, featureName: string): Promise<Locator> {
   await expect(handle.page.getByRole('tab', { name: featureName })).toBeVisible({
     timeout: 60_000,
   });
   await handle.page.getByRole('tab', { name: featureName }).click();
   const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
   await expect(cockpit).toBeVisible({ timeout: 30_000 });
-  await cockpit.getByRole('button', { name: 'Open completion workspace' }).click();
-  await expect(handle.page.locator('.completion-workspace')).toBeVisible({ timeout: 30_000 });
+  return cockpit;
 }
 
 function seedPublishFixture(world: JourneyWorld, featureId: string): PublishFixture {

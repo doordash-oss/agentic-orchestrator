@@ -9,7 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
@@ -92,15 +92,19 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     seeded = seedLocalMergeFixture(world, featureId);
     transcript.json('seeded worktrees', seeded.worktrees);
 
-    transcript.section('Relaunch and open completion workspace');
+    transcript.section('Relaunch and open feature cockpit');
     handle = await launchApp(world, testInfo, { traceName: 'local-merge-rebase-completion' });
-    await openCompletion(handle, featureName);
-    const workspace = handle.page.locator('.completion-workspace');
-    await expect(workspace.getByRole('heading', { name: 'Completion' })).toBeVisible();
+    const cockpit = await openCompletion(handle, featureName);
+    await expect(cockpit.getByRole('button', { name: 'Merge', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
 
     transcript.section('Inspect repository scope and diff');
-    await expect(workspace.getByRole('button', { name: /local-core/ })).toBeVisible();
-    await expect(workspace.getByRole('button', { name: /local-aux/ })).toBeVisible();
+    await cockpit.getByRole('tab', { name: 'Changes' }).click();
+    const changes = cockpit.locator('.completion-workspace__inspect');
+    await expect(changes).toBeVisible({ timeout: 15_000 });
+    await expect(changes.getByRole('button', { name: /local-core/ })).toBeVisible();
+    await expect(changes.getByRole('button', { name: /local-aux/ })).toBeVisible();
 
     const preflightSnapshot = await handle.page.evaluate(
       (id) => window.agentico.preflightCompletion({ featureId: id }),
@@ -108,7 +112,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     );
     transcript.json('preflightCompletion response', preflightSnapshot);
 
-    await workspace.getByRole('button', { name: /local-core/ }).click();
+    await changes.getByRole('button', { name: /local-core/ }).click();
 
     const localCoreDiff = await handle.page.evaluate(
       (id) => window.agentico.getRepositoryDiff({ featureId: id, repo: 'local-core' }),
@@ -116,29 +120,30 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     );
     transcript.json('getRepositoryDiff(local-core) response', localCoreDiff);
 
-    await expect(workspace.getByRole('button', { name: /README\.md/ })).toBeVisible();
-    await workspace.getByRole('button', { name: /README\.md/ }).click();
-    await expect(workspace.locator('.completion-workspace__file-diff')).toBeVisible({
+    await expect(changes.getByRole('button', { name: /README\.md/ })).toBeVisible();
+    await changes.getByRole('button', { name: /README\.md/ }).click();
+    await expect(changes.locator('.completion-workspace__file-diff')).toBeVisible({
       timeout: 15_000,
     });
     transcript.step('local-core diff loaded lazily');
 
     transcript.section('Attempt local merge and observe conflict');
-    await workspace.getByRole('button', { name: 'Completion step: merge' }).click();
-    await expect(workspace.locator('.completion-workspace__merge')).toBeVisible();
-    await expect(workspace.getByText('local-core')).toBeVisible();
-    await expect(workspace.getByText('local-aux')).toBeVisible();
-    const mergeButton = workspace.getByRole('button', { name: 'Merge', exact: true });
+    await cockpit.getByRole('button', { name: 'Merge', exact: true }).click();
+    const mergeModal = handle.page.getByRole('dialog', { name: 'Merge local repositories' });
+    await expect(mergeModal.locator('.completion-workspace__merge')).toBeVisible();
+    await expect(mergeModal.getByText('local-core')).toBeVisible();
+    await expect(mergeModal.getByText('local-aux')).toBeVisible();
+    const mergeButton = mergeModal.getByRole('button', { name: 'Merge', exact: true });
     await expect(mergeButton).toBeEnabled();
     await mergeButton.click();
-    await expect(workspace.locator('.completion-workspace__result')).toBeVisible({
+    await expect(mergeModal.locator('.completion-workspace__result')).toBeVisible({
       timeout: 30_000,
     });
-    await expect(workspace.locator('.completion-workspace__result--failure')).toBeVisible();
+    await expect(mergeModal.locator('.completion-workspace__result--failure')).toBeVisible();
     transcript.step('merge failed with conflict as expected');
 
     transcript.section('Hand off to rebase journey for the conflicted repository');
-    const rebaseLink = workspace.getByRole('button', { name: /Hand off to rebase/i });
+    const rebaseLink = mergeModal.getByRole('button', { name: /Hand off to rebase/i });
     await expect(rebaseLink).toBeVisible({ timeout: 10_000 });
     await rebaseLink.click();
     await expect(handle.page.locator('.cycle-journey--rebase')).toBeVisible({
@@ -167,34 +172,38 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
       timeout: 10_000,
     });
 
-    transcript.section('Return to completion and retry merge to success');
-    await workspace.getByRole('button', { name: 'Completion step: merge' }).click();
-    const retryMerge = workspace.getByRole('button', { name: 'Merge', exact: true });
+    transcript.section('Reopen merge modal and retry merge to success');
+    // onHandoffToRebase closed the merge modal, so reopen it via the bar verb before retrying.
+    await cockpit.getByRole('button', { name: 'Merge', exact: true }).click();
+    const retryMerge = mergeModal.getByRole('button', { name: 'Merge', exact: true });
     await expect(retryMerge).toBeEnabled({ timeout: 15_000 });
     await retryMerge.click();
-    await expect(workspace.locator('.completion-workspace__result--success')).toBeVisible({
+    await expect(mergeModal.locator('.completion-workspace__result--success')).toBeVisible({
       timeout: 30_000,
     });
     transcript.step('retry merge succeeded after rebase resolution');
+    await mergeModal.getByRole('button', { name: 'Close' }).click();
+    await expect(mergeModal).toHaveCount(0);
 
     transcript.section('Mark Done explicitly');
-    await workspace.getByRole('button', { name: 'Completion step: done' }).click();
-    await workspace.getByRole('button', { name: 'Mark Done' }).click();
-    await expect(workspace.locator('.completion-workspace__result')).toContainText(/done/i, {
-      timeout: 30_000,
-    });
+    await cockpit.getByRole('button', { name: 'Mark done', exact: true }).click();
+    const markDoneModal = handle.page.getByRole('dialog', { name: 'Mark feature done' });
+    await expect(markDoneModal).toBeVisible({ timeout: 15_000 });
+    await markDoneModal.getByRole('button', { name: 'Mark Done' }).click();
+    // The cockpit closes the Mark done modal on authoritative success.
+    await expect(markDoneModal).toBeHidden({ timeout: 30_000 });
     await waitForFeatureStatus(handle.page, featureId, 'Done');
     transcript.step('Mark Done was a separate explicit mutation and reached authoritative Done');
 
     transcript.section('Clean completed worktrees');
-    await workspace.getByRole('button', { name: 'Completion step: cleanup' }).click();
-    await expect(workspace.getByText(/Branches/i)).toBeVisible();
-    await expect(workspace.getByText(/Feature\/run history/i)).toBeVisible();
-    await expect(workspace.getByText(/Artifacts/i)).toBeVisible();
-    await workspace.getByRole('button', { name: 'Clean worktrees' }).click();
-    await expect(workspace.locator('.completion-workspace__result--success')).toBeVisible({
-      timeout: 30_000,
-    });
+    await cockpit.getByRole('button', { name: 'Clean up', exact: true }).click();
+    const cleanupDialog = handle.page.getByRole('dialog', { name: 'Clean worktrees?' });
+    await expect(cleanupDialog.getByText(/Branches/i)).toBeVisible();
+    await expect(cleanupDialog.getByText(/Feature\/run history/i)).toBeVisible();
+    await expect(cleanupDialog.getByText(/Artifacts/i)).toBeVisible();
+    await cleanupDialog.getByRole('button', { name: 'Clean worktrees' }).click();
+    // CleanupConfirm closes on success rather than leaving an inline success result.
+    await expect(cleanupDialog).toBeHidden({ timeout: 30_000 });
     await waitFor(
       () => Object.values(seeded!.worktrees).every((wt) => !fs.existsSync(wt)),
       'completion worktrees to be removed',
@@ -202,18 +211,19 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     );
     transcript.step('cleanup removed every feature worktree while keeping feature state live');
 
-    transcript.section('Protect feature deletion with exact-name confirmation');
-    await workspace.getByRole('button', { name: 'Completion step: delete' }).click();
-    const deleteButton = workspace.getByRole('button', { name: 'Delete feature' });
-    await expect(deleteButton).toBeDisabled();
-    await workspace.getByPlaceholder(featureName).fill(`${featureName}x`);
-    await expect(deleteButton).toBeDisabled();
-    await workspace.getByPlaceholder(featureName).fill(featureName);
+    transcript.section('Delete feature through the cockpit overflow');
+    // Deletion moved out of completion into the cockpit overflow menu; the confirm
+    // dialog is named after the feature and gates only on the explicit confirm button.
+    await cockpit.getByRole('button', { name: 'More actions' }).click();
+    await handle.page.getByRole('menuitem', { name: 'Delete feature' }).click();
+    const deleteDialog = handle.page.getByRole('dialog', { name: /Delete .+\?/ });
+    await expect(deleteDialog).toBeVisible({ timeout: 15_000 });
+    const deleteButton = deleteDialog.getByRole('button', { name: 'Delete feature' });
     await expect(deleteButton).toBeEnabled();
     await deleteButton.click();
     await waitForFeatureMissing(handle, featureId);
     await expect(handle.page.getByText('Feature no longer exists')).toBeVisible();
-    transcript.step('delete required the exact feature name and removed server-side feature state');
+    transcript.step('delete confirmed through the overflow menu and removed server-side feature state');
 
     persistAppLogs(handle, 'local-merge-rebase-completion-app-server');
     transcript.write(testInfo);
@@ -224,15 +234,14 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
   }
 });
 
-async function openCompletion(handle: AppHandle, featureName: string): Promise<void> {
+async function openCompletion(handle: AppHandle, featureName: string): Promise<Locator> {
   await expect(handle.page.getByRole('tab', { name: featureName })).toBeVisible({
     timeout: 60_000,
   });
   await handle.page.getByRole('tab', { name: featureName }).click();
   const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
   await expect(cockpit).toBeVisible({ timeout: 30_000 });
-  await cockpit.getByRole('button', { name: 'Open completion workspace' }).click();
-  await expect(handle.page.locator('.completion-workspace')).toBeVisible({ timeout: 30_000 });
+  return cockpit;
 }
 
 async function waitForFeatureMissing(handle: AppHandle, featureId: string): Promise<void> {

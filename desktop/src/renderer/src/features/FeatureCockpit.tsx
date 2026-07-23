@@ -335,6 +335,30 @@ function CockpitActionBar({
   const closeMenu = () => {
     if (menuRef.current !== null) menuRef.current.open = false;
   };
+
+  // Native <details> stays open on outside interaction; close it on an outside
+  // pointer or Escape so it never lingers over drawers opened elsewhere.
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const menu = menuRef.current;
+      if (menu?.open === true && !menu.contains(event.target as Node)) menu.open = false;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const menu = menuRef.current;
+      if (menu?.open === true) {
+        menu.open = false;
+        menu.querySelector<HTMLElement>('.cockpit__overflow-summary')?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
   return (
     <div className="cockpit__actions" role="group" aria-label="Feature actions">
       <p className="cockpit__phase-status" role="status" aria-label="Current feature status">

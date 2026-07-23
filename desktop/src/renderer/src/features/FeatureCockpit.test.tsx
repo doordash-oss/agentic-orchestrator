@@ -142,6 +142,35 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
 
+  it('closes the overflow menu on an outside pointer so it never lingers over drawers', async () => {
+    installAgenticoMock({
+      feature: featureSnapshot({
+        actions: [{ id: 'rewind', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[]}
+        refreshAttention={() => Promise.resolve([])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+        onSelectRun={vi.fn()}
+      />,
+    );
+
+    const actions = await screen.findByRole('group', { name: 'Feature actions' });
+    const details = within(actions).getByLabelText('More actions').closest('details')!;
+    await userEvent.click(within(actions).getByLabelText('More actions'));
+    expect(details.open).toBe(true);
+
+    await userEvent.click(document.body);
+    expect(details.open).toBe(false);
+  });
+
   it('opens the completion workspace from server-advertised completion actions', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({

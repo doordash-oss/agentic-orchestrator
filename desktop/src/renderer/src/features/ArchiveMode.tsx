@@ -18,7 +18,12 @@ import {
 } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { PhaseSpine } from '../components/PhaseSpine';
-import { displayPhaseLabel, spineActiveIndexForPhase, spineStages } from './featureView';
+import {
+  displayPhaseLabel,
+  formatDuration,
+  spineActiveIndexForPhase,
+  spineStages,
+} from './featureView';
 import { HistoricalTimeline } from './RunTimeline';
 
 export interface ArchiveModeProps {
@@ -557,12 +562,6 @@ function ArchiveShell({
       </div>
     </>
   );
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
 function formatBytes(bytes: number): string {

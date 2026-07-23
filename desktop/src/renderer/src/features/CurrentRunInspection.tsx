@@ -22,7 +22,7 @@ import {
   verificationSymbol,
   verificationTone,
 } from './verificationModel';
-import { displayStatusLabel, isRunAtRest } from './featureView';
+import { displayStatusLabel, formatDuration, isRunAtRest } from './featureView';
 import { stripUnsafeAnsi } from './timelineModel';
 import { buildConversation } from './transcript/conversation';
 import { ConversationTranscript } from './transcript/ConversationTranscript';
@@ -756,7 +756,7 @@ function PreviewMetrics({
       )}
       <div>
         <dt>Elapsed</dt>
-        <dd>{preview.totalSeconds}s</dd>
+        <dd>{formatDuration(preview.totalSeconds)}</dd>
       </div>
       <div>
         <dt>Cost</dt>

@@ -8,6 +8,7 @@ import {
   displayStatusLabel,
   featureBranch,
   fieldForCreationError,
+  formatDuration,
   formatElapsed,
   groupDashboardFeatures,
   isReadyToStart,
@@ -113,12 +114,21 @@ describe('intervention-first dashboard ordering', () => {
   });
 });
 
+describe('formatDuration', () => {
+  it('scales the unit to the magnitude', () => {
+    expect(formatDuration(45)).toBe('45s');
+    expect(formatDuration(760)).toBe('12m 40s');
+    expect(formatDuration(2462)).toBe('41m 02s');
+    expect(formatDuration(4811)).toBe('1h 20m');
+    expect(formatDuration(5400)).toBe('1h 30m');
+    expect(formatDuration(0)).toBe('0s');
+    expect(formatDuration(-5)).toBe('0s');
+  });
+});
+
 describe('formatElapsed', () => {
   it('formats run time and hides it when there is none', () => {
-    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 45 } }))).toBe('45s');
     expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 760 } }))).toBe('12m 40s');
-    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 2462 } }))).toBe('41m 02s');
-    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 5400 } }))).toBe('1h 30m');
     expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 0 } }))).toBeNull();
     expect(formatElapsed(featureSnapshot({}))).toBeNull();
   });

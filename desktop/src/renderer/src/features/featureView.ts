@@ -229,12 +229,11 @@ export function spineTone(snapshot: FeatureSnapshot): 'progress' | 'error' {
 }
 
 /**
- * Human elapsed time for the queue: seconds under a minute, "Mm SSs" under an
- * hour, then "Hh Mm". Returns null when there is no run time to show yet.
+ * Human run duration: seconds under a minute, "Mm SSs" under an hour, then
+ * "Hh MMm". Negative or fractional inputs are floored to whole seconds.
  */
-export function formatElapsed(snapshot: FeatureSnapshot): string | null {
-  const total = snapshot.timing?.totalSeconds ?? 0;
-  if (total <= 0) return null;
+export function formatDuration(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
   if (total < 60) return `${total}s`;
   if (total < 3600) {
     const minutes = Math.floor(total / 60);
@@ -244,6 +243,13 @@ export function formatElapsed(snapshot: FeatureSnapshot): string | null {
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
+}
+
+/** Elapsed time for the queue card; null when there is no run time to show yet. */
+export function formatElapsed(snapshot: FeatureSnapshot): string | null {
+  const total = snapshot.timing?.totalSeconds ?? 0;
+  if (total <= 0) return null;
+  return formatDuration(total);
 }
 
 export interface SetupProgress {

@@ -1353,7 +1353,7 @@ index 5c32b6a..8a9b3c1 100644
             removedLines: 1,
           },
           {
-            path: 'desktop/src/renderer/src/features/CompletionWorkspace.tsx',
+            path: 'desktop/src/renderer/src/features/completion/PublishModal.tsx',
             operation: 'add',
             addedLines: 722,
           },

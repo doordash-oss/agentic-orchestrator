@@ -195,6 +195,29 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
   });
 
+  it('hides completion affordances while completion actions are present but disabled', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Running',
+        actions: [
+          { id: 'publish', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+          { id: 'merge', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+          { id: 'mark-done', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+          { id: 'cleanup', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+        ],
+      }),
+    });
+    renderCockpit(mock);
+
+    await screen.findByRole('heading', { name: 'Search revamp' });
+
+    expect(screen.queryByRole('tab', { name: 'Changes' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Merge' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clean up' })).not.toBeInTheDocument();
+    expect(mock.api.preflightCompletion).not.toHaveBeenCalled();
+  });
+
   it('opens the configuration drawer from the inspector entry', async () => {
     renderCockpit();
     const user = userEvent.setup();

@@ -908,8 +908,8 @@ export function FeatureCockpit({
 
   const completionEnabled =
     state.phase === 'loaded' &&
-    ['publish', 'merge', 'mark-done', 'cleanup', 'delete'].some(
-      (id) => actionById(state.snapshot, id) !== undefined,
+    (['publish', 'merge', 'mark-done', 'cleanup'] as const).some(
+      (id) => actionById(state.snapshot, id)?.enabled === true,
     );
   const preflightCompletion = useCallback(
     (id: string) => window.agentico.preflightCompletion({ featureId: id }),

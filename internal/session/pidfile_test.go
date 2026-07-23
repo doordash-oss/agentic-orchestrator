@@ -73,9 +73,9 @@ func TestPIDFileRemove(t *testing.T) {
 func TestFindPIDFiles(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create two feature dirs with PID files
-	feat1Dir := filepath.Join(dir, "feat-1", "implement")
-	feat2Dir := filepath.Join(dir, "feat-2", "research")
+	// Create two feature dirs with PID files.
+	feat1Dir := filepath.Join(dir, "feat-1")
+	feat2Dir := filepath.Join(dir, "feat-2")
 
 	WritePIDFile(feat1Dir, PIDFile{PID: 100, FeatureID: "feat-1", Phase: "implement"})
 	WritePIDFile(feat2Dir, PIDFile{PID: 200, FeatureID: "feat-2", Phase: "research"})
@@ -86,6 +86,37 @@ func TestFindPIDFiles(t *testing.T) {
 	}
 	if len(pids) != 2 {
 		t.Errorf("expected 2 PID files, got %d", len(pids))
+	}
+}
+
+// TestFindPIDFilesDoesNotDescendIntoFeatureArtifacts pins the runtime layout:
+// live session PID files belong directly under the state directory or one of
+// its feature directories. Nested run artifacts may contain copied fixtures
+// with session-like names and must not be surfaced as recoverable processes.
+func TestFindPIDFilesDoesNotDescendIntoFeatureArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	featureDir := filepath.Join(dir, "feat-1")
+	if err := WritePIDFile(featureDir, PIDFile{PID: 100, FeatureID: "feat-1", RepoName: "live"}); err != nil {
+		t.Fatalf("write live PID file: %v", err)
+	}
+
+	artifactDir := filepath.Join(featureDir, "runs", "run-001", "review", "evidence", "fixture", "features", "copied")
+	if err := WritePIDFile(artifactDir, PIDFile{PID: 200, FeatureID: "copied", RepoName: "fixture"}); err != nil {
+		t.Fatalf("write fixture PID file: %v", err)
+	}
+	if err := WritePIDFile(filepath.Join(featureDir, "runs"), PIDFile{PID: 300, FeatureID: "copied", RepoName: "shallow-fixture"}); err != nil {
+		t.Fatalf("write shallow fixture PID file: %v", err)
+	}
+
+	pids, err := FindPIDFiles(dir)
+	if err != nil {
+		t.Fatalf("find PID files: %v", err)
+	}
+	if len(pids) != 1 {
+		t.Fatalf("PID files = %+v, want only the direct feature PID file", pids)
+	}
+	if pids[0].FeatureID != "feat-1" || pids[0].RepoName != "live" {
+		t.Fatalf("PID file = %+v, want feat-1/live", pids[0])
 	}
 }
 

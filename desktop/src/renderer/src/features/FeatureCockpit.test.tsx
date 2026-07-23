@@ -8,6 +8,22 @@ import { dispatchMediaChange, matchMediaState } from '../test/setup';
 import { emptyAttentionDrafts } from './AttentionInbox';
 import { FeatureCockpit } from './FeatureCockpit';
 
+// The review surface (Document stage) instantiates Monaco, which needs no real
+// editor in jsdom; the stub keeps the stage-tab test light.
+vi.mock('monaco-editor', () => ({
+  editor: {
+    create: vi.fn(() => ({
+      dispose: vi.fn(),
+      onDidChangeModelContent: vi.fn(),
+      getValue: vi.fn(() => ''),
+      setValue: vi.fn(),
+    })),
+    createModel: vi.fn(() => ({ dispose: vi.fn() })),
+    createDiffEditor: vi.fn(() => ({ dispose: vi.fn(), setModel: vi.fn() })),
+    setTheme: vi.fn(),
+  },
+}));
+
 afterEach(cleanup);
 
 const FEATURE_ID = 'abcd1234ef567890';
@@ -99,7 +115,7 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(active).toHaveTextContent('Setup');
   });
 
-  it('keeps rewind and run history in the feature action bar', async () => {
+  it('keeps rewind and run history in the overflow menu', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         actions: [{ id: 'rewind', enabled: true, disabledReasons: [] }],
@@ -120,8 +136,9 @@ describe('FeatureCockpit snapshot rendering', () => {
     );
 
     const actions = await screen.findByRole('group', { name: 'Feature actions' });
-    expect(within(actions).getByRole('button', { name: 'Rewind feature' })).toBeVisible();
-    expect(within(actions).getByRole('button', { name: 'View run history' })).toBeVisible();
+    await userEvent.click(within(actions).getByLabelText('More actions'));
+    expect(within(actions).getByRole('menuitem', { name: 'Rewind feature' })).toBeVisible();
+    expect(within(actions).getByRole('menuitem', { name: 'View run history' })).toBeVisible();
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
 
@@ -145,6 +162,58 @@ describe('FeatureCockpit snapshot rendering', () => {
 
     expect(await screen.findByRole('heading', { name: 'Completion' })).toBeInTheDocument();
     expect(mock.api.preflightCompletion).toHaveBeenCalledWith({ featureId: FEATURE_ID });
+  });
+
+  it('opens the configuration drawer from the inspector entry', async () => {
+    renderCockpit();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Edit configuration…' }));
+    expect(
+      await screen.findByRole('dialog', { name: 'Feature configuration' }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers Document and Live activity stage tabs during a pending review', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'ResearchNeedsReview',
+        currentPhase: 'Research',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      }),
+    });
+    vi.mocked(mock.api.openReview).mockResolvedValue({
+      featureId: FEATURE_ID,
+      reviewId: 'phase-research',
+      reviewMode: 'phase_plan',
+      targetPhase: 'Research',
+      runNumber: 1,
+      artifactId: 'research.md',
+      text: '# Research',
+      draftRevision: 'r1',
+      sourceRevision: 's1',
+      canIterate: false,
+    });
+    vi.mocked(mock.api.validateReview).mockResolvedValue({
+      applicable: true,
+      valid: true,
+      revision: 'r1',
+      findings: [],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const tablist = await screen.findByRole('tablist', { name: 'Stage view' });
+    const documentTab = within(tablist).getByRole('tab', { name: 'Document' });
+    const liveTab = within(tablist).getByRole('tab', { name: /Live activity/ });
+    expect(documentTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('region', { name: 'Review editor' })).toBeInTheDocument();
+
+    await user.click(liveTab);
+    expect(liveTab).toHaveAttribute('aria-selected', 'true');
+    expect(
+      await screen.findByRole('region', { name: 'Current run inspection' }),
+    ).toBeInTheDocument();
   });
 
   it('moves focus into the inspector drawer and restores it after Escape', async () => {
@@ -245,8 +314,11 @@ describe('FeatureCockpit failure and retry', () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(failedSnapshot());
     renderCockpit(mock);
+    const user = userEvent.setup();
     await screen.findByRole('heading', { name: 'Search revamp' });
-    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    // An unavailable verb lives in the overflow menu, greyed, carrying its reason.
+    await user.click(screen.getByLabelText('More actions'));
+    expect(screen.getByRole('menuitem', { name: 'Start' })).toBeDisabled();
     expect(screen.getByText('setup must succeed first')).toBeInTheDocument();
     expect(screen.getByText('refresh the current run')).toBeInTheDocument();
   });
@@ -696,7 +768,8 @@ describe('FeatureCockpit delete', () => {
     const { onClose } = renderCockpit(mock);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    await user.click(await screen.findByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
     const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
     await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
 
@@ -725,6 +798,8 @@ describe('FeatureCockpit delete', () => {
       }),
     });
     renderCockpit(mock);
-    expect(await screen.findByRole('button', { name: 'Delete feature' })).toBeDisabled();
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText('More actions'));
+    expect(screen.getByRole('menuitem', { name: 'Delete feature' })).toBeDisabled();
   });
 });

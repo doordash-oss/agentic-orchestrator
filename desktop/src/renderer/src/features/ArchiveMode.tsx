@@ -325,7 +325,7 @@ export function ArchiveMode(props: ArchiveModeProps) {
       />
 
       <div className="cockpit__content archive-mode__content">
-        <main className="cockpit__canvas archive-mode__main">
+        <main className="archive-mode__main">
           {detail && (
             <dl className="archive-mode__facts">
               {detail.currentPhase && (
@@ -543,7 +543,7 @@ function ArchiveShell({
     <>
       <div className="archive-mode__band">Sealed run · Read only</div>
       <div className="cockpit__content archive-mode__content" data-state={state}>
-        <main className="cockpit__canvas archive-mode__main" aria-busy={state === 'loading'}>
+        <main className="archive-mode__main" aria-busy={state === 'loading'}>
           {children ?? <p className="archive-mode__loading">Loading run history…</p>}
         </main>
         <aside

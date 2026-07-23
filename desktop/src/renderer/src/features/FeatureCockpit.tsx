@@ -241,12 +241,12 @@ function InspectorContent({
   snapshot,
   branch,
   stale,
-  startAction,
+  onOpenConfig,
 }: {
   snapshot: FeatureSnapshot;
   branch: string | null;
   stale: boolean;
-  startAction: ReturnType<typeof actionById>;
+  onOpenConfig(): void;
 }) {
   return (
     <>
@@ -265,246 +265,141 @@ function InspectorContent({
       {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
         <RepositoryInstrument repos={snapshot.repoStatus} />
       ) : null}
-      {startAction?.disabledReasons.map((reason) => (
-        <p key={reason.code} className="cockpit__action-reason">
-          Start unavailable: {displayFeatureMessage(reason.message)}
-        </p>
-      ))}
+      <section className="cockpit__config-entry" aria-label="Feature configuration">
+        <h3 className="setup-step__title">Configuration</h3>
+        <button type="button" className="cockpit__config-open" onClick={onOpenConfig}>
+          Edit configuration…
+        </button>
+      </section>
     </>
   );
 }
 
+const PRIMARY_CLASS: Record<CockpitPrimaryAction['variant'], string> = {
+  setup: 'setup-wizard__action',
+  primary: 'cockpit__start',
+  stop: 'cockpit__stop',
+  resume: 'cockpit__resume',
+  restart: 'cockpit__restart',
+  complete: 'cockpit__completion-button',
+};
+
+/** A contextual verb the current state invites, rendered as a bar button. */
+interface CockpitPrimaryAction {
+  key: string;
+  label: string;
+  /** Shown (with an ellipsis) while a dispatch is in flight. */
+  busyLabel?: string;
+  ariaLabel?: string;
+  variant: 'setup' | 'primary' | 'stop' | 'resume' | 'restart' | 'complete';
+  onClick(): void;
+  busy?: boolean;
+  disabled?: boolean;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+}
+
+/** An action that lives in the overflow menu; disabled ones carry their reason. */
+interface CockpitMenuAction {
+  key: string;
+  label: string;
+  ariaLabel?: string;
+  onClick(): void;
+  enabled: boolean;
+  reasons?: string[];
+  variant?: 'default' | 'danger';
+}
+
+/**
+ * The cockpit control bar. It surfaces only the status and the verbs the
+ * current state actually invites; every other action — including verbs that
+ * exist but are unavailable, which carry their reason inline — lives in the
+ * overflow menu so the bar stays quiet and the stage keeps its height.
+ */
 function CockpitActionBar({
-  snapshot,
-  setupAction,
-  startAction,
-  stopAction,
-  resumeAction,
-  retryAction,
-  restartAction,
-  rebaseAction,
-  reviewCommentsAction,
-  refactorAction,
-  busy,
-  inspectorOpen,
+  status,
+  primaryActions,
+  menuActions,
+  isNarrow,
   inspectorButtonRef,
-  stopButtonRef,
   onOpenInspector,
-  onRetrySetup,
-  onStart,
-  onStop,
-  onResume,
-  onRetry,
-  onRestart,
-  rewindEnabled,
-  onOpenRewind,
-  canOpenHistory,
-  onOpenHistory,
-  onOpenCycles,
-  completionAvailable,
-  onOpenCompletion,
-  deleteAction,
-  onDelete,
 }: {
-  snapshot: FeatureSnapshot;
-  setupAction: ReturnType<typeof actionById>;
-  startAction: ReturnType<typeof actionById>;
-  stopAction: ReturnType<typeof actionById>;
-  resumeAction: ReturnType<typeof actionById>;
-  retryAction: ReturnType<typeof actionById>;
-  restartAction: ReturnType<typeof actionById>;
-  rebaseAction: ReturnType<typeof actionById>;
-  reviewCommentsAction: ReturnType<typeof actionById>;
-  refactorAction: ReturnType<typeof actionById>;
-  busy: boolean;
-  inspectorOpen: boolean;
+  status: FeatureSnapshot['status'];
+  primaryActions: CockpitPrimaryAction[];
+  menuActions: CockpitMenuAction[];
+  isNarrow: boolean;
   inspectorButtonRef: RefObject<HTMLButtonElement | null>;
-  stopButtonRef: RefObject<HTMLButtonElement | null>;
   onOpenInspector(): void;
-  onRetrySetup(): void;
-  onStart(): void;
-  onStop(): void;
-  onResume(): void;
-  onRetry(): void;
-  onRestart(): void;
-  rewindEnabled: boolean;
-  onOpenRewind(): void;
-  canOpenHistory: boolean;
-  onOpenHistory(): void;
-  onOpenCycles(): void;
-  completionAvailable: boolean;
-  onOpenCompletion(): void;
-  deleteAction: ReturnType<typeof actionById>;
-  onDelete(): void;
 }) {
+  const menuRef = useRef<HTMLDetailsElement>(null);
+  const closeMenu = () => {
+    if (menuRef.current !== null) menuRef.current.open = false;
+  };
   return (
     <div className="cockpit__actions" role="group" aria-label="Feature actions">
-      {/* Always-visible status: the inspector aside is hidden in narrow mode,
-        so the cockpit shell surfaces the feature status here rather than only
-        in the inspector drawer. */}
       <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
-        <code data-status={snapshot.status}>{displayStatusLabel(snapshot.status)}</code>
+        <code data-status={status}>{displayStatusLabel(status)}</code>
       </p>
-      {setupAction !== undefined ? (
-        <span className="cockpit__action">
-          <button
-            type="button"
-            className="setup-wizard__action"
-            disabled={!setupAction.enabled || busy}
-            onClick={onRetrySetup}
-            {...(setupAction.disabledReasons[0] !== undefined
-              ? { title: displayFeatureMessage(setupAction.disabledReasons[0].message) }
-              : {})}
-          >
-            {busy
-              ? 'Dispatching…'
-              : snapshot.setup?.status === 'failed'
-                ? 'Retry setup'
-                : 'Run setup'}
-          </button>
-          {!setupAction.enabled && setupAction.disabledReasons[0] !== undefined ? (
-            <ul className="cockpit__action-reasons">
-              <li>{displayFeatureMessage(setupAction.disabledReasons[0].message)}</li>
-            </ul>
-          ) : null}
-        </span>
-      ) : null}
-      {startAction !== undefined ? (
-        <span className="cockpit__action">
-          <button
-            type="button"
-            className="cockpit__start"
-            disabled={!startAction.enabled || busy}
-            onClick={onStart}
-            aria-describedby={
-              startAction.disabledReasons.length > 0 ? 'start-disabled-reasons' : undefined
-            }
-          >
-            {busy ? 'Starting…' : 'Start'}
-          </button>
-          {startAction.disabledReasons.length > 0 ? (
-            <ul id="start-disabled-reasons" className="cockpit__action-reasons">
-              {startAction.disabledReasons.map((reason) => (
-                <li key={`${reason.code}:${reason.message}`}>
-                  {displayFeatureMessage(reason.message)}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </span>
-      ) : null}
-      {stopAction !== undefined ? (
-        <span className="cockpit__action">
-          <button
-            ref={stopButtonRef}
-            type="button"
-            className="cockpit__stop"
-            disabled={!stopAction.enabled || busy}
-            onClick={onStop}
-            aria-describedby={
-              stopAction.disabledReasons.length > 0 ? 'stop-disabled-reasons' : undefined
-            }
-          >
-            Stop
-          </button>
-          {stopAction.disabledReasons.length > 0 ? (
-            <ul id="stop-disabled-reasons" className="cockpit__action-reasons">
-              {stopAction.disabledReasons.map((reason) => (
-                <li key={`${reason.code}:${reason.message}`}>
-                  {displayFeatureMessage(reason.message)}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </span>
-      ) : null}
-      {resumeAction !== undefined && resumeAction.enabled ? (
-        <span className="cockpit__action">
-          <button type="button" className="cockpit__resume" disabled={busy} onClick={onResume}>
-            {busy ? 'Resuming…' : 'Resume'}
-          </button>
-        </span>
-      ) : null}
-      {retryAction !== undefined && retryAction.enabled ? (
-        <span className="cockpit__action">
-          <button type="button" className="cockpit__retry" disabled={busy} onClick={onRetry}>
-            {busy ? 'Retrying…' : 'Retry'}
-          </button>
-        </span>
-      ) : null}
-      {restartAction !== undefined && restartAction.enabled ? (
-        <span className="cockpit__action">
-          <button type="button" className="cockpit__restart" disabled={busy} onClick={onRestart}>
-            {busy ? 'Restarting…' : 'Restart'}
-          </button>
-        </span>
-      ) : null}
-      {rebaseAction?.enabled === true ||
-      reviewCommentsAction?.enabled === true ||
-      refactorAction?.enabled === true ? (
+      <span className="cockpit__actions-spacer" />
+      {primaryActions.map((action) => (
         <button
+          key={action.key}
+          ref={action.buttonRef}
           type="button"
-          className="cockpit__cycles-button"
-          onClick={onOpenCycles}
-          aria-label="Repository cycles"
+          className={PRIMARY_CLASS[action.variant]}
+          disabled={action.disabled === true}
+          onClick={action.onClick}
+          {...(action.ariaLabel !== undefined ? { 'aria-label': action.ariaLabel } : {})}
         >
-          ⟳ Cycles
+          {action.busy === true ? `${action.busyLabel ?? action.label}…` : action.label}
+        </button>
+      ))}
+      {menuActions.length > 0 ? (
+        <details ref={menuRef} className="cockpit__overflow">
+          <summary className="cockpit__overflow-summary" aria-label="More actions">
+            <span aria-hidden="true">⋯</span>
+          </summary>
+          <div className="cockpit__overflow-menu" role="menu">
+            {menuActions.map((action) => (
+              <div
+                key={action.key}
+                className="cockpit__overflow-item"
+                data-variant={action.variant ?? 'default'}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!action.enabled}
+                  onClick={() => {
+                    closeMenu();
+                    action.onClick();
+                  }}
+                  {...(action.ariaLabel !== undefined ? { 'aria-label': action.ariaLabel } : {})}
+                >
+                  {action.label}
+                </button>
+                {!action.enabled && action.reasons !== undefined && action.reasons.length > 0 ? (
+                  <ul className="cockpit__overflow-reasons">
+                    {action.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
+      {isNarrow ? (
+        <button
+          ref={inspectorButtonRef}
+          type="button"
+          className="cockpit__inspector-toggle"
+          aria-controls="cockpit-inspector-drawer"
+          onClick={onOpenInspector}
+        >
+          Inspector
         </button>
       ) : null}
-      {rewindEnabled ? (
-        <button
-          type="button"
-          className="cockpit__rewind-button"
-          onClick={onOpenRewind}
-          aria-label="Rewind feature"
-        >
-          ↺ Rewind
-        </button>
-      ) : null}
-      {completionAvailable ? (
-        <button
-          type="button"
-          className="cockpit__completion-button"
-          onClick={onOpenCompletion}
-          aria-label="Open completion workspace"
-        >
-          Complete
-        </button>
-      ) : null}
-      {canOpenHistory ? (
-        <button
-          type="button"
-          className="cockpit__history-button"
-          onClick={onOpenHistory}
-          aria-label="View run history"
-        >
-          ▦ History
-        </button>
-      ) : null}
-      {deleteAction !== undefined ? (
-        <button
-          type="button"
-          className="cockpit__delete-button"
-          disabled={!deleteAction.enabled || busy}
-          onClick={onDelete}
-          aria-label="Delete feature"
-          {...(deleteAction.disabledReasons[0] !== undefined
-            ? { title: displayFeatureMessage(deleteAction.disabledReasons[0].message) }
-            : {})}
-        >
-          🗑 Delete
-        </button>
-      ) : null}
-      <button
-        ref={inspectorButtonRef}
-        type="button"
-        className="cockpit__inspector-toggle"
-        aria-expanded={inspectorOpen}
-        aria-controls="cockpit-inspector-drawer"
-        onClick={onOpenInspector}
-      >
-        Inspector
-      </button>
     </div>
   );
 }
@@ -513,13 +408,13 @@ function InspectorDrawer({
   snapshot,
   branch,
   stale,
-  startAction,
+  onOpenConfig,
   onClose,
 }: {
   snapshot: FeatureSnapshot;
   branch: string | null;
   stale: boolean;
-  startAction: ReturnType<typeof actionById>;
+  onOpenConfig(): void;
   onClose(): void;
 }) {
   const drawerRef = useRef<HTMLElement>(null);
@@ -560,7 +455,7 @@ function InspectorDrawer({
           snapshot={snapshot}
           branch={branch}
           stale={stale}
-          startAction={startAction}
+          onOpenConfig={onOpenConfig}
         />
       </aside>
     </div>
@@ -782,26 +677,44 @@ function DeleteConfirmDialog({
   );
 }
 
-function FeatureConfigEditor({ featureId }: { featureId: string }) {
-  const [showConfig, setShowConfig] = useState(false);
+/** Slide-over holding the structured config forms, which are too wide for the rail. */
+function ConfigDrawer({ featureId, onClose }: { featureId: string; onClose(): void }) {
+  const drawerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    drawerRef.current
+      ?.querySelector<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )
+      ?.focus();
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   return (
-    <section className="cockpit__config" aria-label="Feature configuration">
-      <button
-        type="button"
-        className="cockpit__config-toggle"
-        aria-expanded={showConfig}
-        onClick={() => setShowConfig((v) => !v)}
+    <div className="cockpit__drawer-backdrop" onMouseDown={onClose}>
+      <aside
+        ref={drawerRef}
+        className="cockpit__drawer cockpit__config-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Feature configuration"
+        onMouseDown={(event) => event.stopPropagation()}
       >
-        <span aria-hidden="true">{showConfig ? '\u25be' : '\u25b8'}</span>
-        Configuration
-      </button>
-      {showConfig && (
-        <div className="cockpit__config-body">
-          <FeatureConfigPanel featureId={featureId} />
-        </div>
-      )}
-    </section>
+        <header>
+          <h3>Configuration</h3>
+          <button type="button" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <FeatureConfigPanel featureId={featureId} />
+      </aside>
+    </div>
   );
 }
 
@@ -837,6 +750,8 @@ export function FeatureCockpit({
   const [rewindDialog, setRewindDialog] = useState(false);
   const [cyclesDialog, setCyclesDialog] = useState(false);
   const [completionOpen, setCompletionOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [activeSurface, setActiveSurface] = useState<'document' | 'live'>('document');
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
     run: RunDetailView | null;
@@ -1224,24 +1139,185 @@ export function FeatureCockpit({
       });
   };
 
+  // The stage carries at most one surface at a time. A pending review owns the
+  // document; a run beyond setup owns live activity; when both exist the stage
+  // shows a tab strip. An active attention preview forces the live surface so
+  // its dialog is on stage.
+  const documentAvailable = hasPendingReview;
+  const liveAvailable = showsRun(snapshot);
+  const stageSurfaces: { id: 'document' | 'live'; label: string }[] = [];
+  if (documentAvailable) stageSurfaces.push({ id: 'document', label: 'Document' });
+  if (liveAvailable) stageSurfaces.push({ id: 'live', label: 'Live activity' });
+  const surfaceIds = stageSurfaces.map((surface) => surface.id);
+  const forcedLive = attentionPreviewRequest !== null && liveAvailable;
+  const resolvedSurface: 'document' | 'live' | null = forcedLive
+    ? 'live'
+    : surfaceIds.includes(activeSurface)
+      ? activeSurface
+      : (surfaceIds[0] ?? null);
+
+  const reasonsOf = (action: ReturnType<typeof actionById>): string[] =>
+    action?.disabledReasons.map((reason) => displayFeatureMessage(reason.message)) ?? [];
+  const cyclesEnabled =
+    rebaseAction?.enabled === true ||
+    reviewCommentsAction?.enabled === true ||
+    refactorAction?.enabled === true;
+
+  const primaryActions: CockpitPrimaryAction[] = [];
+  if (setupAction?.enabled === true) {
+    primaryActions.push({
+      key: 'setup',
+      label: snapshot.setup?.status === 'failed' ? 'Retry setup' : 'Run setup',
+      busyLabel: 'Dispatching',
+      variant: 'setup',
+      onClick: retrySetup,
+      busy,
+      disabled: busy,
+    });
+  }
+  if (startAction?.enabled === true) {
+    primaryActions.push({
+      key: 'start',
+      label: 'Start',
+      busyLabel: 'Starting',
+      variant: 'primary',
+      onClick: start,
+      busy,
+      disabled: busy,
+    });
+  }
+  if (stopAction?.enabled === true) {
+    primaryActions.push({
+      key: 'stop',
+      label: 'Stop',
+      variant: 'stop',
+      onClick: () => void openStopDialog(),
+      disabled: busy,
+      buttonRef: stopButtonRef,
+    });
+  }
+  if (resumeAction?.enabled === true) {
+    primaryActions.push({
+      key: 'resume',
+      label: 'Resume',
+      busyLabel: 'Resuming',
+      variant: 'resume',
+      onClick: resume,
+      busy,
+      disabled: busy,
+    });
+  }
+  if (retryAction?.enabled === true) {
+    primaryActions.push({
+      key: 'retry',
+      label: 'Retry',
+      busyLabel: 'Retrying',
+      variant: 'resume',
+      onClick: retry,
+      busy,
+      disabled: busy,
+    });
+  }
+  if (completionAvailable) {
+    primaryActions.push({
+      key: 'complete',
+      label: 'Complete',
+      ariaLabel: 'Open completion workspace',
+      variant: 'complete',
+      onClick: () => setCompletionOpen(true),
+    });
+  }
+
+  const menuActions: CockpitMenuAction[] = [];
+  if (startAction !== undefined && !startAction.enabled) {
+    menuActions.push({
+      key: 'start',
+      label: 'Start',
+      enabled: false,
+      reasons: reasonsOf(startAction),
+      onClick: () => {},
+    });
+  }
+  if (stopAction !== undefined && !stopAction.enabled) {
+    menuActions.push({
+      key: 'stop',
+      label: 'Stop',
+      enabled: false,
+      reasons: reasonsOf(stopAction),
+      onClick: () => {},
+    });
+  }
+  if (setupAction !== undefined && !setupAction.enabled) {
+    menuActions.push({
+      key: 'setup',
+      label: snapshot.setup?.status === 'failed' ? 'Retry setup' : 'Run setup',
+      enabled: false,
+      reasons: reasonsOf(setupAction),
+      onClick: () => {},
+    });
+  }
+  if (restartAction?.enabled === true) {
+    menuActions.push({ key: 'restart', label: 'Restart', enabled: true, onClick: restart });
+  }
+  if (cyclesEnabled) {
+    menuActions.push({
+      key: 'cycles',
+      label: 'Cycles',
+      ariaLabel: 'Repository cycles',
+      enabled: true,
+      onClick: () => setCyclesDialog(true),
+    });
+  }
+  if (rewindAction?.enabled === true) {
+    menuActions.push({
+      key: 'rewind',
+      label: 'Rewind',
+      ariaLabel: 'Rewind feature',
+      enabled: true,
+      onClick: () => setRewindDialog(true),
+    });
+  }
+  if (onSelectRun !== undefined) {
+    menuActions.push({
+      key: 'history',
+      label: 'Run history',
+      ariaLabel: 'View run history',
+      enabled: true,
+      onClick: openHistory,
+    });
+  }
+  if (deleteAction !== undefined) {
+    menuActions.push({
+      key: 'delete',
+      label: 'Delete',
+      ariaLabel: 'Delete feature',
+      enabled: deleteAction.enabled && !busy,
+      reasons: reasonsOf(deleteAction),
+      variant: 'danger',
+      onClick: () => setDeleteDialog(true),
+    });
+  }
+
   return (
     <section className="cockpit" aria-label={`Feature ${snapshot.name}`}>
       {isArchiveMode ? (
-        <ArchiveMode
-          featureId={featureId}
-          selectedRunNumber={selectedRunNumber!}
-          currentRunNumber={snapshot.activeRun}
-          pipeline={snapshot.pipeline}
-          currentRunBadges={currentRunBadges}
-          onReturnToCurrent={() => {
-            onSelectRun?.(null);
-            setCurrentRunBadges({ changed: false, attention: false });
-          }}
-          onSelectRun={(runNumber) => {
-            onSelectRun?.(runNumber);
-            setCurrentRunBadges({ changed: false, attention: false });
-          }}
-        />
+        <div className="cockpit__archive">
+          <ArchiveMode
+            featureId={featureId}
+            selectedRunNumber={selectedRunNumber!}
+            currentRunNumber={snapshot.activeRun}
+            pipeline={snapshot.pipeline}
+            currentRunBadges={currentRunBadges}
+            onReturnToCurrent={() => {
+              onSelectRun?.(null);
+              setCurrentRunBadges({ changed: false, attention: false });
+            }}
+            onSelectRun={(runNumber) => {
+              onSelectRun?.(runNumber);
+              setCurrentRunBadges({ changed: false, attention: false });
+            }}
+          />
+        </div>
       ) : (
         <>
           <PhaseSpine
@@ -1253,161 +1329,175 @@ export function FeatureCockpit({
           />
 
           <CockpitActionBar
-            snapshot={snapshot}
-            setupAction={setupAction}
-            startAction={startAction}
-            stopAction={stopAction}
-            resumeAction={resumeAction}
-            retryAction={retryAction}
-            restartAction={restartAction}
-            rebaseAction={rebaseAction}
-            reviewCommentsAction={reviewCommentsAction}
-            refactorAction={refactorAction}
-            busy={busy}
-            inspectorOpen={isNarrow && inspectorOpen}
+            status={snapshot.status}
+            primaryActions={primaryActions}
+            menuActions={menuActions}
+            isNarrow={isNarrow}
             inspectorButtonRef={inspectorButtonRef}
-            stopButtonRef={stopButtonRef}
             onOpenInspector={() => setInspectorOpen(true)}
-            onRetrySetup={retrySetup}
-            onStart={start}
-            onStop={() => void openStopDialog()}
-            onResume={resume}
-            onRetry={retry}
-            onRestart={restart}
-            rewindEnabled={rewindAction?.enabled === true}
-            onOpenRewind={() => setRewindDialog(true)}
-            canOpenHistory={onSelectRun !== undefined}
-            onOpenHistory={openHistory}
-            onOpenCycles={() => setCyclesDialog(true)}
-            completionAvailable={completionAvailable}
-            onOpenCompletion={() => setCompletionOpen(true)}
-            deleteAction={deleteAction}
-            onDelete={() => setDeleteDialog(true)}
           />
+
+          {rewindLanding !== null ? (
+            <RewindLanding
+              outcome={rewindLanding.outcome}
+              run={rewindLanding.run}
+              onOpenSource={(runNumber) => onSelectRun?.(runNumber)}
+              onDismiss={() => setRewindLanding(null)}
+            />
+          ) : null}
 
           {isNarrow && inspectorOpen ? (
             <InspectorDrawer
               snapshot={snapshot}
               branch={branch}
               stale={stale}
-              startAction={startAction}
+              onOpenConfig={() => {
+                setInspectorOpen(false);
+                setConfigOpen(true);
+              }}
               onClose={closeInspector}
             />
           ) : null}
 
           <div className="cockpit__content">
-            <main className="cockpit__canvas">
+            <main className="cockpit__stage">
               {completionOpen ? (
-                <CompletionWorkspace
-                  featureId={featureId}
-                  featureName={snapshot.name}
-                  onClose={() => {
-                    setCompletionOpen(false);
-                    void load({ silent: true });
-                  }}
-                  preflightCompletion={(id) =>
-                    window.agentico.preflightCompletion({ featureId: id })
-                  }
-                  getRepositoryDiff={(id, repo, filePath) =>
-                    window.agentico.getRepositoryDiff({
-                      featureId: id,
-                      repo,
-                      ...(filePath === undefined ? {} : { filePath }),
-                    })
-                  }
-                  dispatchAction={(id, action, body) =>
-                    window.agentico.dispatchFeatureAction({
-                      featureId: id,
-                      action,
-                      ...(body === undefined ? {} : { body }),
-                    } as FeatureActionRequest)
-                  }
-                  generatePublishDescription={(id, repos) =>
-                    window.agentico.generatePublishDescription({ featureId: id, repos })
-                  }
-                  openExternal={(url) => window.agentico.openExternal({ url })}
-                  revealPath={(id, repo) => window.agentico.revealPath({ featureId: id, repo })}
-                  onHandoffToRebase={() => setCyclesDialog(true)}
-                />
+                <div className="cockpit__surface cockpit__surface--live">
+                  <CompletionWorkspace
+                    featureId={featureId}
+                    featureName={snapshot.name}
+                    onClose={() => {
+                      setCompletionOpen(false);
+                      void load({ silent: true });
+                    }}
+                    preflightCompletion={(id) =>
+                      window.agentico.preflightCompletion({ featureId: id })
+                    }
+                    getRepositoryDiff={(id, repo, filePath) =>
+                      window.agentico.getRepositoryDiff({
+                        featureId: id,
+                        repo,
+                        ...(filePath === undefined ? {} : { filePath }),
+                      })
+                    }
+                    dispatchAction={(id, action, body) =>
+                      window.agentico.dispatchFeatureAction({
+                        featureId: id,
+                        action,
+                        ...(body === undefined ? {} : { body }),
+                      } as FeatureActionRequest)
+                    }
+                    generatePublishDescription={(id, repos) =>
+                      window.agentico.generatePublishDescription({ featureId: id, repos })
+                    }
+                    openExternal={(url) => window.agentico.openExternal({ url })}
+                    revealPath={(id, repo) => window.agentico.revealPath({ featureId: id, repo })}
+                    onHandoffToRebase={() => setCyclesDialog(true)}
+                  />
+                </div>
               ) : (
                 <>
-                  {rewindLanding !== null ? (
-                    <RewindLanding
-                      outcome={rewindLanding.outcome}
-                      run={rewindLanding.run}
-                      onOpenSource={(runNumber) => onSelectRun?.(runNumber)}
-                      onDismiss={() => setRewindLanding(null)}
-                    />
-                  ) : null}
-                  <FeatureConfigEditor featureId={featureId} />
-                  {hasPendingReview ? (
-                    <ReviewSurface
-                      featureId={featureId}
-                      onResolved={() => load({ silent: true })}
-                    />
-                  ) : null}
-                  {showsRun(snapshot) && !hasPendingReview ? (
-                    <CurrentRunInspection
-                      featureId={featureId}
-                      runNumber={snapshot.activeRun}
-                      currentPhase={snapshot.currentPhase}
-                      featureStatus={snapshot.status}
-                      currentRoadmapPhase={snapshot.currentRoadmapPhase}
-                      totalRoadmapPhases={snapshot.totalRoadmapPhases}
-                      currentIteration={snapshot.currentIteration}
-                      phaseStatus={snapshot.phaseStatus}
-                      reviewGate={snapshot.reviewGate}
-                      waitReason={snapshot.waitReason}
-                      shouldStream={stopAction !== undefined}
-                      attentionRequestId={attentionPreviewRequest?.requestId}
-                      onAttentionPreviewClose={onAttentionPreviewClose}
-                      attentionFooter={
-                        previewAttentionItem === undefined ? undefined : (
-                          <AttentionDetail
-                            item={previewAttentionItem}
-                            busy={attentionBusy === previewAttentionItem.id}
-                            drafts={attentionDrafts}
-                            setDrafts={setAttentionDrafts}
-                            saveDraft={(action, options) =>
-                              saveAttentionDraft(previewAttentionItem.id, action, options)
-                            }
-                            submit={(action, options) =>
-                              void submitAttention(previewAttentionItem, action, options)
-                            }
-                          />
-                        )
-                      }
-                    />
+                  {stageSurfaces.length > 1 ? (
+                    <div className="cockpit__stage-tabs" role="tablist" aria-label="Stage view">
+                      {stageSurfaces.map((surface) => (
+                        <button
+                          key={surface.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={resolvedSurface === surface.id}
+                          className="cockpit__stage-tab"
+                          data-active={resolvedSurface === surface.id}
+                          onClick={() => setActiveSurface(surface.id)}
+                        >
+                          {surface.label}
+                          {surface.id === 'live' &&
+                          resolvedSurface !== 'live' &&
+                          stopAction !== undefined ? (
+                            <span
+                              className="cockpit__stage-tab-dot"
+                              aria-label="Live activity in progress"
+                            />
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
                   ) : null}
 
-                  {ready ? (
+                  {resolvedSurface === 'document' ? (
+                    <div className="cockpit__surface cockpit__surface--document">
+                      <ReviewSurface
+                        featureId={featureId}
+                        onResolved={() => load({ silent: true })}
+                      />
+                    </div>
+                  ) : null}
+
+                  {resolvedSurface === 'live' ? (
+                    <div className="cockpit__surface cockpit__surface--live">
+                      <CurrentRunInspection
+                        featureId={featureId}
+                        runNumber={snapshot.activeRun}
+                        currentPhase={snapshot.currentPhase}
+                        featureStatus={snapshot.status}
+                        currentRoadmapPhase={snapshot.currentRoadmapPhase}
+                        totalRoadmapPhases={snapshot.totalRoadmapPhases}
+                        currentIteration={snapshot.currentIteration}
+                        phaseStatus={snapshot.phaseStatus}
+                        reviewGate={snapshot.reviewGate}
+                        waitReason={snapshot.waitReason}
+                        shouldStream={stopAction !== undefined}
+                        attentionRequestId={attentionPreviewRequest?.requestId}
+                        onAttentionPreviewClose={onAttentionPreviewClose}
+                        attentionFooter={
+                          previewAttentionItem === undefined ? undefined : (
+                            <AttentionDetail
+                              item={previewAttentionItem}
+                              busy={attentionBusy === previewAttentionItem.id}
+                              drafts={attentionDrafts}
+                              setDrafts={setAttentionDrafts}
+                              saveDraft={(action, options) =>
+                                saveAttentionDraft(previewAttentionItem.id, action, options)
+                              }
+                              submit={(action, options) =>
+                                void submitAttention(previewAttentionItem, action, options)
+                              }
+                            />
+                          )
+                        }
+                      />
+                    </div>
+                  ) : null}
+
+                  {resolvedSurface === null && ready ? (
                     <div className="cockpit__empty-state" role="status">
                       <span aria-hidden="true">●</span> Ready to start
                       <p>Start runs the {snapshot.currentPhase} phase for this feature.</p>
                     </div>
                   ) : null}
 
-                  {snapshot.failure?.message !== undefined ? (
-                    <div role="alert" className="create-form__error">
-                      <span className="create-form__error-code">
-                        {snapshot.failure.type ?? 'failure'}
-                      </span>
-                      <p className="create-form__error-message">{snapshot.failure.message}</p>
-                    </div>
-                  ) : null}
+                  <div className="cockpit__stage-status">
+                    {snapshot.failure?.message !== undefined ? (
+                      <div role="alert" className="create-form__error">
+                        <span className="create-form__error-code">
+                          {snapshot.failure.type ?? 'failure'}
+                        </span>
+                        <p className="create-form__error-message">{snapshot.failure.message}</p>
+                      </div>
+                    ) : null}
 
-                  {actionError !== null ? (
-                    <div role="alert" className="create-form__error">
-                      <span className="create-form__error-code">{actionError.error.code}</span>
-                      <p className="create-form__error-message">
-                        {actionError.action} was rejected — {actionError.error.message}
-                      </p>
-                    </div>
-                  ) : null}
+                    {actionError !== null ? (
+                      <div role="alert" className="create-form__error">
+                        <span className="create-form__error-code">{actionError.error.code}</span>
+                        <p className="create-form__error-message">
+                          {actionError.action} was rejected — {actionError.error.message}
+                        </p>
+                      </div>
+                    ) : null}
 
-                  <p className="cockpit__announcement" role="status" aria-live="polite">
-                    {announcement}
-                  </p>
+                    <p className="cockpit__announcement" role="status" aria-live="polite">
+                      {announcement}
+                    </p>
+                  </div>
                 </>
               )}
             </main>
@@ -1417,11 +1507,15 @@ export function FeatureCockpit({
                   snapshot={snapshot}
                   branch={branch}
                   stale={stale}
-                  startAction={startAction}
+                  onOpenConfig={() => setConfigOpen(true)}
                 />
               </aside>
             ) : null}
           </div>
+
+          {configOpen ? (
+            <ConfigDrawer featureId={featureId} onClose={() => setConfigOpen(false)} />
+          ) : null}
 
           {stopDialog ? (
             <StopConfirmDialog

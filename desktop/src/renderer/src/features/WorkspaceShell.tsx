@@ -534,7 +534,7 @@ export function WorkspaceShell({
           id={`panel-${active}`}
           role="tabpanel"
           aria-labelledby={`tab-${active}`}
-          className="tab-panel"
+          className="tab-panel tab-panel--cockpit"
         >
           <FeatureCockpit
             key={active}

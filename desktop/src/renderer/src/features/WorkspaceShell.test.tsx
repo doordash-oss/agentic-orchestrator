@@ -331,7 +331,8 @@ describe('WorkspaceShell tabs', () => {
     );
 
     mock.api.listFeatures.mockResolvedValueOnce([]);
-    await user.click(await screen.findByRole('button', { name: 'Delete feature' }));
+    await user.click(await screen.findByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
     const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
     await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
 

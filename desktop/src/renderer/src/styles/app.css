@@ -3197,52 +3197,267 @@ body {
   }
 }
 
+/* The feature tab is a fixed instrument frame: the panel itself never scrolls,
+ * so the wheel always lands on the one surface that owns the center stage. */
+.tab-panel--cockpit {
+  overflow: hidden;
+  gap: 0;
+  padding: clamp(12px, 2vw, 28px);
+}
+
 .cockpit {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  min-height: 100%;
+  gap: var(--space-3);
+  min-height: 0;
+  height: 100%;
 }
 
 .cockpit__content {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(270px, 340px);
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   gap: var(--space-4);
   min-height: 0;
   flex: 1;
 }
 
-.cockpit__canvas,
-.cockpit__inspector {
+/* The stage carries exactly one surface at a time; that surface owns the only
+ * center scroll. The inspector rail scrolls independently when it overflows. */
+.cockpit__stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   min-width: 0;
+  min-height: 0;
+}
+
+.cockpit__surface {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The review editor manages its own internal scroll (Monaco); the live surface
+ * scrolls as a single column so its sections stay reachable. */
+.cockpit__surface--document {
+  overflow: hidden;
+}
+
+.cockpit__surface--live {
   overflow: auto;
 }
 
-.cockpit__canvas {
+.cockpit__surface--document .review-surface {
+  min-height: 0;
+  height: 100%;
+}
+
+.cockpit__surface--live .current-inspection {
+  margin-block: 0;
+}
+
+.cockpit__stage-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.cockpit__stage-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--color-hairline);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  padding: var(--space-2) var(--space-4);
+  background: color-mix(in srgb, var(--color-panel) 60%, var(--color-bg));
+  color: var(--color-muted);
+  font: 700 12px var(--font-body);
+  cursor: pointer;
+}
+
+.cockpit__stage-tab[data-active='true'] {
+  background: var(--color-panel);
+  border-color: var(--color-signal);
+  color: var(--color-text);
+}
+
+.cockpit__stage-tab:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.cockpit__stage-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: var(--color-accent);
+}
+
+/* Transient errors and announcements sit at the foot of the stage, next to the
+ * decision rail, instead of pushing the surface around. */
+.cockpit__stage-status {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cockpit__stage-status:empty {
+  display: none;
+}
+
+.cockpit__archive {
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding-right: var(--space-3);
-}
-
-.cockpit__canvas:has(.cockpit__empty-state) {
-  min-height: 100%;
 }
 
 .cockpit__inspector {
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
   border-left: 1px solid var(--color-hairline);
   padding-left: var(--space-4);
 }
 
 .cockpit__actions {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  justify-content: flex-start;
-  align-items: flex-start;
-  padding: var(--space-2) 0;
-  background: var(--color-bg);
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--color-hairline);
+}
+
+.cockpit__actions-spacer {
+  flex: 1;
+}
+
+/* Overflow menu: everything the state doesn't actively invite, including verbs
+ * that exist but are unavailable, which carry their reason inline. */
+.cockpit__overflow {
+  position: relative;
+}
+
+.cockpit__overflow-summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 30px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cockpit__overflow-summary::-webkit-details-marker {
+  display: none;
+}
+
+.cockpit__overflow-summary:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.cockpit__overflow-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  z-index: 30;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--color-bg) 60%, transparent);
+}
+
+.cockpit__overflow-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1) var(--space-1) var(--space-2);
+}
+
+.cockpit__overflow-item + .cockpit__overflow-item {
+  border-top: 1px solid var(--color-hairline);
+  padding-top: var(--space-2);
+}
+
+.cockpit__overflow-item > button {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: var(--space-2);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  font: 700 13px var(--font-body);
+  cursor: pointer;
+}
+
+.cockpit__overflow-item > button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-signal) 10%, transparent);
+}
+
+.cockpit__overflow-item > button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.cockpit__overflow-item[data-variant='danger'] > button {
+  color: var(--color-danger);
+}
+
+.cockpit__overflow-item > button:disabled {
+  color: var(--color-muted);
+  cursor: default;
+}
+
+.cockpit__overflow-reasons {
+  margin: 0;
+  padding-left: calc(var(--space-2) + 1.1em);
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* Configuration lives in the inspector as an entry point; the wide forms open
+ * in a slide-over rather than cramming into the rail. */
+.cockpit__config-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cockpit__config-open {
+  align-self: flex-start;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font: 700 13px var(--font-body);
+  cursor: pointer;
+}
+
+.cockpit__config-open:hover {
+  background: color-mix(in srgb, var(--color-signal) 10%, var(--color-panel));
+}
+
+.cockpit__config-drawer {
+  width: min(680px, calc(100vw - 32px));
 }
 
 /* Always-visible status badge: the cockpit shell surfaces the feature status
@@ -3296,34 +3511,42 @@ body {
   color: var(--color-signal);
 }
 
-/* Current-run utilities stay in the cockpit control language, with rewind
- * visibly separated as a consequential action rather than browser chrome. */
-.cockpit__rewind-button,
-.cockpit__history-button {
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-panel);
-  color: var(--color-text);
-  font-family: var(--font-body);
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.cockpit__rewind-button {
-  border-color: var(--color-danger);
-  color: var(--color-danger);
-}
-
-.cockpit__rewind-button:hover,
-.cockpit__history-button:hover {
-  background: color-mix(in srgb, var(--color-signal) 10%, var(--color-panel));
-}
-
-.cockpit__inspector-toggle,
-.cockpit__drawer-backdrop {
+.cockpit__inspector-toggle {
   display: none;
+}
+
+/* Slide-over drawers (configuration, cycles, narrow inspector) overlay the
+ * whole frame at any width. */
+.cockpit__drawer-backdrop {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--color-bg) 55%, transparent);
+}
+
+.cockpit__drawer {
+  width: min(360px, calc(100vw - 32px));
+  height: 100%;
+  overflow: auto;
+  padding: var(--space-5);
+  background: var(--color-panel);
+  border-left: 2px solid var(--color-signal);
+  box-shadow: -12px 0 30px color-mix(in srgb, var(--color-bg) 70%, transparent);
+}
+
+.cockpit__drawer > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.cockpit__drawer > header h3 {
+  margin: 0;
+  font: 600 22px var(--font-display);
 }
 
 .cockpit__loading {
@@ -3416,27 +3639,39 @@ body {
 
 /* A completed rewind remains legible in the new live cockpit, rather than
  * disappearing with the confirmation dialog. */
+/* Slim dismissible strip under the action bar; warnings expand below it. */
 .cockpit__rewind-landing {
+  flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
   border: 1px solid var(--color-success);
   border-left-width: 3px;
   border-radius: var(--radius);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
   background: color-mix(in srgb, var(--color-success) 6%, var(--color-bg));
 }
 
 .cockpit__rewind-landing-header,
 .cockpit__carried-material {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .cockpit__rewind-landing-header {
   justify-content: space-between;
+  flex: 1;
+}
+
+.cockpit__rewind-landing-header .setup-step__title {
+  font-size: 14px;
+}
+
+.cockpit__rewind-landing .cockpit__rewind-warnings {
+  flex-basis: 100%;
 }
 
 .cockpit__carried-material {
@@ -3607,33 +3842,6 @@ body {
   flex-wrap: wrap;
 }
 
-.cockpit__action {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  inline-size: 9rem;
-}
-.cockpit__action > button {
-  inline-size: 100%;
-  min-width: 0;
-}
-
-.cockpit__action-reason {
-  color: var(--color-muted);
-  font-size: 11px;
-  max-width: 260px;
-}
-
-.cockpit__action-reasons {
-  min-height: 1.4em;
-  margin: 0;
-  padding-left: 1.1em;
-  color: var(--color-muted);
-  font-size: 11px;
-  line-height: 1.3;
-  max-width: none;
-}
-
 /* Primary intervention: the one filled signal control in the cockpit. */
 .cockpit__start {
   font-family: var(--font-body);
@@ -3754,15 +3962,8 @@ body {
 }
 
 @media (max-width: 900px) {
-  .cockpit {
-    min-height: 0;
-  }
   .cockpit__content {
-    display: block;
-  }
-  .cockpit__canvas {
-    padding-right: 0;
-    overflow: visible;
+    grid-template-columns: 1fr;
   }
   .run-timeline__layout {
     grid-template-columns: 1fr;
@@ -3772,12 +3973,6 @@ body {
   }
   .cockpit__inspector {
     display: none;
-  }
-  .cockpit__actions {
-    position: sticky;
-    top: 0;
-    justify-content: flex-start;
-    background: var(--color-bg);
   }
   .cockpit__inspector-toggle {
     display: inline-flex;
@@ -3789,35 +3984,6 @@ body {
     background: var(--color-panel);
     font: 700 12px var(--font-body);
     cursor: pointer;
-  }
-  .cockpit__drawer-backdrop {
-    display: block;
-    position: fixed;
-    z-index: 40;
-    inset: 0;
-    background: color-mix(in srgb, var(--color-bg) 55%, transparent);
-  }
-  .cockpit__drawer {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(360px, calc(100vw - 32px));
-    overflow: auto;
-    padding: var(--space-5);
-    background: var(--color-panel);
-    border-left: 2px solid var(--color-signal);
-    box-shadow: -12px 0 30px color-mix(in srgb, var(--color-bg) 70%, transparent);
-  }
-  .cockpit__drawer header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-  }
-  .cockpit__drawer h3 {
-    margin: 0;
-    font: 600 22px var(--font-display);
   }
   .cockpit__drawer .cockpit__facts {
     display: flex;
@@ -5558,47 +5724,6 @@ body {
 
 /* --- Cockpit config editor --- */
 
-.cockpit__config {
-  margin-bottom: var(--space-3);
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  background: var(--color-panel);
-  flex-shrink: 0;
-}
-
-.cockpit__config-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border: none;
-  background: transparent;
-  color: var(--color-text);
-  font: 600 0.875rem/1.3 var(--font-body);
-  text-align: left;
-  cursor: pointer;
-  transition: background 80ms;
-}
-
-.cockpit__config-toggle:hover {
-  background: color-mix(in srgb, var(--color-signal) 5%, transparent);
-}
-
-.cockpit__config-toggle:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: -1px;
-}
-
-.cockpit__config-body {
-  border-top: 1px solid var(--color-hairline);
-  max-height: min(640px, calc(100vh - 220px));
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-
 .cockpit__config-error {
   padding: var(--space-4);
   display: flex;
@@ -5724,6 +5849,10 @@ body {
 }
 
 .archive-mode__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
   padding-right: var(--space-3);
 }
 
@@ -6643,27 +6772,6 @@ body {
   flex-direction: column;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-4);
-}
-
-.cockpit__cycles-button {
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--color-text);
-  background: transparent;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-4);
-  cursor: pointer;
-}
-
-.cockpit__cycles-button:hover {
-  border-color: var(--color-signal);
-}
-
-.cockpit__cycles-button:disabled {
-  opacity: 0.55;
-  cursor: default;
 }
 
 .cockpit__cycles-drawer {

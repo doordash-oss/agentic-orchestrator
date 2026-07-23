@@ -330,6 +330,7 @@ function flightSnapshot(
   repos: string[],
   createdAt: string,
   totalSeconds: number,
+  pipeline: string = 'medium',
 ): FeatureSnapshot {
   return {
     id,
@@ -337,7 +338,7 @@ function flightSnapshot(
     slug: id,
     status,
     currentPhase,
-    pipeline: 'medium',
+    pipeline,
     repos,
     createdAt,
     activeRun: 1,
@@ -370,15 +371,16 @@ const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
     ['agentic-orchestrator'],
     '2026-07-23T08:30:00Z',
     760,
+    'large',
   ),
   flightSnapshot(
     'taulu-ttl-1',
     'Taulu TTL compaction',
-    'Planning',
-    'Plan',
+    'CodeReady',
+    'Publish',
     ['taulu'],
     '2026-07-23T08:00:00Z',
-    131,
+    5940,
   ),
   flightSnapshot(
     'pub-electron-app',

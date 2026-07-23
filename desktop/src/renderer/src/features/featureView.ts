@@ -135,6 +135,20 @@ export interface SpineStage {
   label: string;
 }
 
+/**
+ * Rail labels stay full when a pipeline has few stages, but the full profile
+ * (nine stages) can't fit spelled-out labels in a card, so they compact:
+ * multi-word labels to initials, single words to their opening letters.
+ */
+export function railStageLabel(label: string, totalStages: number): string {
+  if (totalStages <= 5) return label;
+  const words = label.trim().split(/\s+/);
+  if (words.length > 1) {
+    return words.map((word) => word.charAt(0)).join('');
+  }
+  return label.length <= 4 ? label : label.slice(0, 3);
+}
+
 /** Phase order per pipeline profile (internal/feature/pipeline.go). */
 const MEDIUM_PHASES = ['Plan', 'Implement', 'Review', 'Publish'] as const;
 const FULL_PHASES = [

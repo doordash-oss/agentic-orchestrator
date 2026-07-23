@@ -2853,8 +2853,12 @@ body {
   padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
-.run-card[data-tone='attention'] {
+.run-card[data-state='attention'] {
   border-left-color: var(--color-accent);
+}
+
+.run-card[data-state='quiet'] {
+  border-left-color: var(--color-hairline);
 }
 
 .run-card__head {
@@ -2888,8 +2892,12 @@ body {
   color: var(--color-signal);
 }
 
-.run-card[data-tone='attention'] .run-card__badge {
+.run-card[data-state='attention'] .run-card__badge {
   color: var(--color-accent);
+}
+
+.run-card[data-state='quiet'] .run-card__badge {
+  color: var(--color-muted);
 }
 
 .run-card__dot {
@@ -2897,11 +2905,20 @@ body {
   height: 8px;
   border-radius: 50%;
   background: var(--color-signal);
-  animation: run-card-pulse 1.8s ease-in-out infinite;
 }
 
-.run-card[data-tone='attention'] .run-card__dot {
+.run-card[data-state='attention'] .run-card__dot {
   background: var(--color-accent);
+}
+
+.run-card[data-state='quiet'] .run-card__dot {
+  background: var(--color-muted);
+}
+
+/* Pulse only while a run is genuinely live or waiting on you. */
+.run-card[data-state='live'] .run-card__dot,
+.run-card[data-state='attention'] .run-card__dot {
+  animation: run-card-pulse 1.8s ease-in-out infinite;
 }
 
 @keyframes run-card-pulse {
@@ -2965,11 +2982,14 @@ body {
   margin-top: var(--space-1);
 }
 
+/* The track spans dot-center to dot-center, so it is inset half a column at
+ * each end and the fill percentage maps exactly onto the stop positions. */
 .flight-rail__track {
   position: relative;
   height: 2px;
   border-radius: 1px;
   background: var(--color-hairline);
+  margin: 0 calc(50% / var(--stops, 5));
 }
 
 .flight-rail__fill {
@@ -2995,8 +3015,8 @@ body {
   list-style: none;
   margin: -6px 0 0;
   padding: 0;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: repeat(var(--stops, 5), minmax(0, 1fr));
 }
 
 .flight-rail__stop {
@@ -3004,15 +3024,7 @@ body {
   flex-direction: column;
   align-items: center;
   gap: var(--space-2);
-  width: 74px;
-}
-
-.flight-rail__stop:first-child {
-  align-items: flex-start;
-}
-
-.flight-rail__stop:last-child {
-  align-items: flex-end;
+  min-width: 0;
 }
 
 .flight-rail__stop-dot {
@@ -3059,10 +3071,16 @@ body {
 }
 
 .flight-rail__stop-label {
-  font: 11px var(--font-mono);
-  letter-spacing: 0.1em;
+  max-width: 100%;
+  padding: 0 2px;
+  font: 10px var(--font-mono);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .flight-rail__stop[data-state='active'] .flight-rail__stop-label {

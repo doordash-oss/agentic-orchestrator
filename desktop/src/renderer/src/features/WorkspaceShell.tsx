@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type Dispatch,
   type KeyboardEvent,
   type RefObject,
@@ -33,6 +34,7 @@ import {
   groupDashboardFeatures,
   isRunAtRest,
   orderDashboardFeatures,
+  railStageLabel,
   spineActiveIndex,
   spineStages,
   type SpineStage,
@@ -909,10 +911,13 @@ function RunningCard({
   const { bucket, label } = dashboardState(feature);
   const needsYou = attentionCount > 0 || bucket === 'intervention';
   const railTone = needsYou ? 'attention' : 'progress';
+  // Amber when a run wants you, blue pulse while it's genuinely working, quiet
+  // otherwise — so a resting "Code ready" run never reads as live.
+  const badgeState = needsYou ? 'attention' : bucket === 'active' ? 'live' : 'quiet';
   const badge = needsYou ? 'Needs you' : bucket === 'active' ? 'Live' : label;
   const elapsed = formatElapsed(feature);
   return (
-    <li className="run-card" data-tone={railTone}>
+    <li className="run-card" data-state={badgeState}>
       <div className="run-card__head">
         <h4 className="run-card__title">{feature.name}</h4>
         <span className="run-card__badges">
@@ -1008,7 +1013,13 @@ function FlightRail({
   const denom = Math.max(stages.length - 1, 1);
   const fillPct = (Math.min(activeIndex, denom) / denom) * 100;
   return (
-    <div className="flight-rail" data-tone={tone} role="group" aria-label={label}>
+    <div
+      className="flight-rail"
+      data-tone={tone}
+      role="group"
+      aria-label={label}
+      style={{ '--stops': stages.length } as CSSProperties}
+    >
       <div className="flight-rail__track">
         <span className="flight-rail__fill" style={{ width: `${fillPct}%` }} />
       </div>
@@ -1037,7 +1048,9 @@ function FlightRail({
                 }
                 aria-hidden="true"
               />
-              <span className="flight-rail__stop-label">{stage.label}</span>
+              <span className="flight-rail__stop-label" title={stage.label}>
+                {railStageLabel(stage.label, stages.length)}
+              </span>
             </span>
           );
         })}

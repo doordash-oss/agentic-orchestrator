@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { parseIpcError } from '../../wizard/ipcError';
-import type { CompletionPreflightResult } from '../../../shared/ipc';
+import type { CompletionPreflightResult } from '../../../../shared/ipc';
 
 export interface CompletionPreflightHandle {
   preflight: CompletionPreflightResult | null;

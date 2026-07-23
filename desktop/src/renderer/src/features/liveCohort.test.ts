@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionSummary } from '../../../shared/ipc';
 import {
   EMPTY_COHORT,
+  cohortSections,
   cohortTabLabels,
   cohortTabStatus,
   computeCohort,
@@ -144,7 +145,7 @@ describe('cohortTabLabels', () => {
     ]);
     expect(labels.get('a')).toBe('Craft');
     expect(labels.get('b')).toBe('web');
-    expect(labels.get('c')).toBe('implement · repo-impl');
+    expect(labels.get('c')).toBe('Implement');
   });
 
   it('disambiguates duplicate labels by repo, then ordinal', () => {
@@ -156,6 +157,28 @@ describe('cohortTabLabels', () => {
     expect(labels.get('b')).toBe('Review · api');
     expect(labels.get('a')).toBe('Review #1');
     expect(labels.get('c')).toBe('Review #2');
+  });
+});
+
+describe('cohortSections', () => {
+  it('folds an ordered cohort into implementer and review-panel sections', () => {
+    const sections = cohortSections([
+      session({ id: 'impl', kind: 'phase', phase: 'Implement' }),
+      session({ id: 'sec', label: 'Security' }),
+      session({ id: 'craft', label: 'Craft' }),
+    ]);
+    expect(sections.map((entry) => entry.title)).toEqual(['Implementer', 'Review panel']);
+    expect(sections[0]?.sessions.map((entry) => entry.id)).toEqual(['impl']);
+    expect(sections[1]?.sessions.map((entry) => entry.id)).toEqual(['sec', 'craft']);
+  });
+
+  it('keeps a lone-group cohort in a single titled section', () => {
+    const sections = cohortSections([
+      session({ id: 'a', label: 'Security' }),
+      session({ id: 'b', label: 'Craft' }),
+    ]);
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.title).toBe('Review panel');
   });
 });
 

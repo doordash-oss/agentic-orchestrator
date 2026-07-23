@@ -362,6 +362,70 @@ describe('CurrentRunInspection', () => {
     expect(screen.queryByText('Security review underway.')).not.toBeInTheDocument();
   });
 
+  it('groups the roster by role and walks agents with arrow keys', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running implementation',
+      contextPercentage: 42,
+      totalSeconds: 73,
+      totalUsd: 0.12,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 8,
+      sessions: [
+        validator({ id: 'craft', label: 'Craft' }),
+        validator({ id: 'sec', label: 'Security' }),
+        validator({ id: 'impl', label: undefined, kind: 'phase', phase: 'Implement' }),
+      ],
+    });
+    const texts: Record<string, string> = {
+      impl: 'Implementer transcript.',
+      sec: 'Security review underway.',
+      craft: 'Craft looks solid.',
+    };
+    mock.api.getSessionTranscript.mockImplementation(({ sessionId }: { sessionId: string }) =>
+      Promise.resolve({
+        sessionId,
+        cursor: { total: 1, start: 0, end: 1 },
+        messages: [{ index: 0, role: 'assistant', type: 'text', text: texts[sessionId] ?? '' }],
+      }),
+    );
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    const tablist = await screen.findByRole('tablist', { name: 'Live agents' });
+    expect(tablist).toHaveAttribute('aria-orientation', 'vertical');
+    expect(screen.getByText('Implementer')).toBeInTheDocument();
+    expect(screen.getByText('Review panel')).toBeInTheDocument();
+
+    // Implementer sorts ahead of the review panel and selects first as the
+    // first active agent in cohort order.
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual([
+      'Implement — running',
+      'Security — running',
+      'Craft — running',
+    ]);
+    expect(await screen.findByText('Implementer transcript.')).toBeVisible();
+
+    tabs[0]!.focus();
+    await user.keyboard('{ArrowDown}');
+    expect(await screen.findByText('Security review underway.')).toBeVisible();
+    expect(screen.getByRole('tab', { name: /Security/ })).toHaveFocus();
+    await user.keyboard('{End}');
+    expect(await screen.findByText('Craft looks solid.')).toBeVisible();
+  });
+
   it('shows the working indicator while a running agent is selected', async () => {
     renderCohort();
     expect(await screen.findByText('Security review underway.')).toBeVisible();
@@ -560,6 +624,7 @@ describe('CurrentRunInspection', () => {
   });
 
   it('shows a harness verification surface instead of the transcript while verifying', async () => {
+    const user = userEvent.setup();
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
@@ -573,6 +638,18 @@ describe('CurrentRunInspection', () => {
     mock.api.listRunSessions.mockResolvedValue({
       runNumber: 8,
       sessions: [validator({ id: 'craft', label: 'Craft', status: 'done' })],
+    });
+    mock.api.getSessionTranscript.mockResolvedValue({
+      sessionId: 'craft',
+      cursor: { total: 1, start: 0, end: 1 },
+      messages: [
+        {
+          index: 0,
+          role: 'assistant',
+          type: 'text',
+          text: 'Stale implementation transcript.',
+        },
+      ],
     });
 
     render(
@@ -617,6 +694,17 @@ describe('CurrentRunInspection', () => {
         name: 'Roadmap progress: phase 2 of 5 — Verifying implementation',
       }),
     ).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Expand live preview to full screen' }));
+    const overlay = await screen.findByRole('dialog', { name: 'Live agent preview' });
+    expect(overlay).toHaveTextContent('Verification in progress');
+    expect(overlay).toHaveTextContent('go test ./...');
+    expect(overlay).toHaveTextContent('npm run build');
+    expect(overlay).toHaveTextContent('lint');
+    expect(overlay).toHaveTextContent('e2e smoke');
+    expect(overlay).not.toHaveTextContent('Stale implementation transcript.');
+    expect(overlay).not.toHaveTextContent('Running implementation');
+    expect(overlay).not.toHaveTextContent('42%');
   });
 
   it('keeps the review gate when an active reviewing gate coincides with a stale verifying marker', async () => {

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useCompletionPreflight } from './useCompletionPreflight';
-import type { CompletionPreflightResult } from '../../../shared/ipc';
+import type { CompletionPreflightResult } from '../../../../shared/ipc';
 
 const pf: CompletionPreflightResult = {
   featureId: 'f1', sourceRevision: 'r1', canMarkDone: true,

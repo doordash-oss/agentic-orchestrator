@@ -1,5 +1,5 @@
 import { CHAT_SESSION_ID, type SessionSummary } from '../../../shared/ipc';
-import { orderRunSessions, sessionDisplayLabel } from './reviewModel';
+import { orderRunSessions, sessionDisplayLabel, sessionGroup } from './reviewModel';
 
 export type CohortTabStatus = 'running' | 'completed' | 'failed';
 
@@ -90,6 +90,33 @@ export function resolveCohortSelection(
   }
   const active = cohort.find((session) => !isTerminalSessionStatus(session.status));
   return (active ?? cohort[0]!).id;
+}
+
+export interface CohortSection {
+  key: string;
+  title: string;
+  sessions: SessionSummary[];
+}
+
+const SECTION_TITLES = ['Implementer', 'Review panel', 'Review support', 'Phase agents', 'Agents'];
+
+/**
+ * Fold an ordered cohort into labeled roster sections. Cohorts arrive already
+ * sorted by roster group (see orderRunSessions), so grouping stays contiguous.
+ */
+export function cohortSections(cohort: readonly SessionSummary[]): CohortSection[] {
+  const sections: CohortSection[] = [];
+  for (const session of cohort) {
+    const group = sessionGroup(session);
+    const key = `group-${group}`;
+    const last = sections[sections.length - 1];
+    if (last !== undefined && last.key === key) {
+      last.sessions.push(session);
+    } else {
+      sections.push({ key, title: SECTION_TITLES[group] ?? 'Agents', sessions: [session] });
+    }
+  }
+  return sections;
 }
 
 /** Human labels for each tab, disambiguated when two agents share a base label. */

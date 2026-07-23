@@ -28,7 +28,12 @@ import { buildConversation } from './transcript/conversation';
 import { ConversationTranscript } from './transcript/ConversationTranscript';
 import { HistoricalTimeline } from './RunTimeline';
 import { useCohortTranscripts } from './useCohortTranscripts';
-import { cohortTabLabels, cohortTabStatus, isTerminalSessionStatus } from './liveCohort';
+import {
+  cohortSections,
+  cohortTabLabels,
+  cohortTabStatus,
+  isTerminalSessionStatus,
+} from './liveCohort';
 import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 import { CloseIcon, MaximizeIcon, MinimizeIcon } from '../components/icons';
 
@@ -459,6 +464,8 @@ export function CurrentRunInspection({
           preview={preview}
           waitReason={waitReason}
           attentionFooter={attentionFooter}
+          verifying={verifying}
+          verificationItems={verificationItems}
         />
       ) : null}
     </section>
@@ -610,29 +617,16 @@ function TranscriptStage({
       <p className="setup-step__empty">Waiting for the agent to respond…</p>
     );
 
+  const withRoster = stage.cohort.length > 1;
   return (
-    <div className="live-preview">
-      {stage.cohort.length > 1 ? (
-        <div className="live-preview__tabs" role="tablist" aria-label="Live agents">
-          {stage.cohort.map((session) => {
-            const status = cohortTabStatus(session);
-            return (
-              <button
-                key={session.id}
-                type="button"
-                role="tab"
-                aria-selected={session.id === selectedId}
-                className="live-preview__tab"
-                data-status={status}
-                onClick={() => selectSession(session.id)}
-              >
-                <span className="live-preview__tab-pip" data-status={status} aria-hidden="true" />
-                <span className="live-preview__tab-label">{stage.labels.get(session.id)}</span>
-                <span className="live-preview__tab-status">{status}</span>
-              </button>
-            );
-          })}
-        </div>
+    <div className={withRoster ? 'live-preview live-preview--cohort' : 'live-preview'}>
+      {withRoster ? (
+        <CohortRoster
+          cohort={stage.cohort}
+          labels={stage.labels}
+          selectedId={selectedId}
+          selectSession={selectSession}
+        />
       ) : null}
       {view === 'conversation' ? (
         <ConversationTranscript
@@ -649,6 +643,96 @@ function TranscriptStage({
           <HistoricalTimeline messages={stage.rows} />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Grouped agent roster beside the transcript: the implementer, then the
+ * review panel in its durable axis order. One leading mark per row — a
+ * pulsing pip while running, ✓/✕ once terminal.
+ */
+function CohortRoster({
+  cohort,
+  labels,
+  selectedId,
+  selectSession,
+}: {
+  cohort: SessionSummary[];
+  labels: Map<string, string>;
+  selectedId: string | null;
+  selectSession(id: string): void;
+}): React.ReactElement {
+  const sections = useMemo(() => cohortSections(cohort), [cohort]);
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const tabs = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+    );
+    if (tabs.length === 0) return;
+    const current = tabs.findIndex((tab) => tab === document.activeElement);
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? tabs.length - 1
+          : event.key === 'ArrowDown'
+            ? (current + 1) % tabs.length
+            : (Math.max(current, 0) - 1 + tabs.length) % tabs.length;
+    event.preventDefault();
+    const target = tabs[next];
+    if (target === undefined) return;
+    target.focus();
+    const id = target.dataset['sessionId'];
+    if (id !== undefined) selectSession(id);
+  };
+
+  return (
+    <div
+      className="live-preview__roster"
+      role="tablist"
+      aria-label="Live agents"
+      aria-orientation="vertical"
+      onKeyDown={onKeyDown}
+    >
+      {sections.map((section) => (
+        <div key={section.key} className="live-preview__roster-group" role="presentation">
+          <p className="live-preview__roster-title" aria-hidden="true">
+            {section.title}
+          </p>
+          {section.sessions.map((session) => {
+            const status = cohortTabStatus(session);
+            const label = labels.get(session.id) ?? session.id;
+            return (
+              <button
+                key={session.id}
+                type="button"
+                role="tab"
+                aria-selected={session.id === selectedId}
+                aria-label={`${label} — ${status}`}
+                tabIndex={session.id === selectedId ? 0 : -1}
+                className="live-preview__agent"
+                data-status={status}
+                data-session-id={session.id}
+                title={`${label} — ${status}`}
+                onClick={() => selectSession(session.id)}
+              >
+                <span className="live-preview__agent-state" aria-hidden="true">
+                  {status === 'running' ? (
+                    <span className="live-preview__agent-pip" />
+                  ) : status === 'completed' ? (
+                    '✓'
+                  ) : (
+                    '✕'
+                  )}
+                </span>
+                <span className="live-preview__agent-name">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -692,6 +776,8 @@ function LivePreviewOverlay({
   preview,
   waitReason,
   attentionFooter,
+  verifying,
+  verificationItems,
 }: {
   onClose(): void;
   stage: TranscriptStageModel;
@@ -702,6 +788,8 @@ function LivePreviewOverlay({
   preview: LivePreviewView | null;
   waitReason?: string;
   attentionFooter?: ReactNode;
+  verifying: boolean;
+  verificationItems?: VerificationItemView[];
 }): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalDismiss(dialogRef, onClose);
@@ -741,19 +829,25 @@ function LivePreviewOverlay({
             </button>
           </div>
         </header>
-        <TranscriptStage
-          stage={stage}
-          view={view}
-          selectedId={selectedId}
-          selectSession={selectSession}
-          waitReason={waitReason}
-        />
+        {verifying && verificationItems !== undefined ? (
+          <VerificationStage items={verificationItems} />
+        ) : (
+          <TranscriptStage
+            stage={stage}
+            view={view}
+            selectedId={selectedId}
+            selectSession={selectSession}
+            waitReason={waitReason}
+          />
+        )}
         {preview !== null || attentionFooter !== undefined ? (
           <footer className="live-preview__overlay-footer">
             {preview !== null ? (
               <div className="live-preview__overlay-status">
-                <p className="current-inspection__activity">{preview.activity}</p>
-                <PreviewMetrics preview={preview} />
+                {verifying ? null : (
+                  <p className="current-inspection__activity">{preview.activity}</p>
+                )}
+                <PreviewMetrics preview={preview} verifying={verifying} />
               </div>
             ) : null}
             {attentionFooter !== undefined ? (

@@ -67,11 +67,12 @@ export function reviewStatusSymbol(status: string): string {
   return symbols[reviewStatusTone(status)];
 }
 
-function sessionGroup(session: SessionSummary): number {
-  const phase = session.phase.trim().toLocaleLowerCase();
-  if (session.kind === 'repo-impl' || phase === 'implement') return 0;
+/** Roster group index: implementation, review axes, helpers, phase agents, rest. */
+export function sessionGroup(session: SessionSummary): number {
   if (session.kind === 'validator') return 1;
   if (session.kind === 'review-helper') return 2;
+  const phase = session.phase.trim().toLocaleLowerCase();
+  if (session.kind === 'repo-impl' || phase === 'implement') return 0;
   if (session.kind === 'phase') return 3;
   return 4;
 }
@@ -129,5 +130,9 @@ export function selectInitialRunSession(
 }
 
 export function sessionDisplayLabel(session: SessionSummary): string {
-  return session.label ?? session.repo ?? `${session.phase} · ${session.kind}`;
+  const explicit = session.label ?? session.repo;
+  if (explicit !== undefined && explicit.trim() !== '') return explicit;
+  const phase = session.phase.trim();
+  if (phase === '') return session.kind;
+  return phase.charAt(0).toLocaleUpperCase() + phase.slice(1);
 }

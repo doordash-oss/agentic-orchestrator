@@ -921,6 +921,65 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *tes
 	}
 }
 
+func TestClientFetchRefreshSnapshotIncludesFeatureForNeedUserInputPrompt(t *testing.T) {
+	var sawPrompts bool
+	var sawFeatureDetail bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case routeGetPrompts:
+			sawPrompts = true
+			writeJSON(w, http.StatusOK, PromptSnapshotResponse{
+				APIVersion: APIVersion,
+				NeedUserInputs: []NeedUserInputGate{{
+					FeatureID: fixtureFeatureID,
+					Open:      true,
+					Scope:     "feature",
+				}},
+			})
+		case "GET /api/v1/features/feat-1":
+			sawFeatureDetail = true
+			detail := testFeatureDetail(FeatureSummary{
+				ID:     fixtureFeatureID,
+				Status: feature.StatusNeedUserInput.String(),
+			})
+			detail.NeedUserInput = &NeedUserInputGate{
+				FeatureID: fixtureFeatureID,
+				Open:      true,
+				Scope:     "feature",
+			}
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{
+				APIVersion: APIVersion,
+				Feature:    detail,
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event: SSEEventDTO{
+			Kind:     "prompt.updated",
+			Resource: ResourceDTO{Type: entityFeature, FeatureID: fixtureFeatureID},
+		},
+		Resource: ResourceDTO{Type: entityFeature, FeatureID: fixtureFeatureID},
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.NeedUserInputs) != 1 {
+		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want need-user-input prompt", snapshot.Prompts, sawPrompts)
+	}
+	if !sawFeatureDetail || snapshot.Feature == nil || snapshot.Feature.Feature.Status != feature.StatusNeedUserInput.String() || snapshot.Feature.Feature.NeedUserInput == nil {
+		t.Fatalf("FetchRefreshSnapshot() feature = %+v, sawFeatureDetail=%v; want refreshed need-user-input detail", snapshot.Feature, sawFeatureDetail)
+	}
+}
+
 func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForFeatureScopedSessionUpdate(t *testing.T) {
 	var sawSessions bool
 	var sawPrompts bool

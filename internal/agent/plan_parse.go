@@ -45,6 +45,11 @@ var taskHeadingRE = regexp.MustCompile(`^###\s+Task\s+\d+\b`)
 // Captures the bare repo name in group 1.
 var repoTagRE = regexp.MustCompile("(?i)^\\*\\*Repo:\\*\\*\\s*`?([\\w.\\-]+)`?\\s*$")
 
+// frontendMetadataRE matches the plan-level `**Frontend:** true|false`
+// metadata field. Values are interpreted case-insitively by
+// ParsePhasePlanFrontend.
+var frontendMetadataRE = regexp.MustCompile("(?i)^\\*\\*Frontend:\\*\\*\\s*`?([^`\\s]+)`?\\s*$")
+
 // ParsePlanTasks scans a phase-plan markdown and returns every Task block
 // in the `## Tasks` section (the first such section; any later one is
 // ignored). Tasks without a `**Repo:**` tag get Repo == "".
@@ -193,4 +198,30 @@ func PlanTaskRepos(planMarkdown string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ParsePhasePlanFrontend reads the plan-level frontend metadata flag.
+// Missing legacy metadata, a missing field, or an unrecognized value all
+// resolve to false for backward compatibility with already-authored plans.
+func ParsePhasePlanFrontend(planMarkdown string) bool {
+	metadata := extractMarkdownSection(planMarkdown, "## Metadata")
+	if metadata == "" {
+		return false
+	}
+	lines := strings.Split(metadata, "\n")
+	for _, line := range lines {
+		m := frontendMetadataRE.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(m[1])) {
+		case "true":
+			return true
+		case "false":
+			return false
+		default:
+			return false
+		}
+	}
+	return false
 }

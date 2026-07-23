@@ -163,86 +163,6 @@ func TestFinalFixPromptBranches(t *testing.T) {
 	}
 }
 
-func TestFinalReviewPromptBranches(t *testing.T) {
-	tests := []struct {
-		name         string
-		input        FinalReviewUserInput
-		wantContains []string
-		wantOmit     []string
-	}{
-		{
-			name: "final_review_phase_variant_focuses_product_acceptance",
-			input: FinalReviewUserInput{
-				Iteration:          1,
-				IsCycleReview:      false,
-				DiffBase:           "main",
-				FeatureDescription: "Build a 2D retro game maker.",
-				RoadmapPath:        "/roadmap.md",
-				DesignArtifactPath: "/design.md",
-				ExitCriteria:       "Relevant tests pass.",
-				FeedbackPath:       "/review-feedback.md",
-				Publishable:        true,
-			},
-			wantContains: []string{"# Product Acceptance Context", "**Approved design**: /design.md", "Build a 2D retro game maker.", "Relevant tests pass.", "**Review feedback output**: /review-feedback.md"},
-			wantOmit:     []string{"## Verification Context", "**Testing contract**", "**Verification report**", "## Current Cycle Focus", "NOTE: Local-only repository"},
-		},
-		{
-			name: "final_review_lists_last_phase_evidence_as_reusable_qa_context",
-			input: FinalReviewUserInput{
-				Iteration:                            1,
-				DiffBase:                             "main",
-				PriorImplementationReportPaths:       []string{"/run/phase-01/implement/iteration-02/verification-report.yaml"},
-				PriorImplementationEvidenceRootDirs:  []string{"/run/phase-01/implement/iteration-02"},
-				PriorImplementationEvidenceArtifacts: []string{"/run/phase-01/implement/iteration-02/screenshots/setup.png"},
-				Publishable:                          true,
-			},
-			wantContains: []string{
-				"## Reusable Last-Phase QA Context",
-				"/run/phase-01/implement/iteration-02/verification-report.yaml",
-				"/run/phase-01/implement/iteration-02",
-				"Referenced evidence artifacts",
-				"/run/phase-01/implement/iteration-02/screenshots/setup.png",
-			},
-			wantOmit: []string{
-				"Phase plans:",
-				"Implementation testing contracts:",
-				"/run/phase-01/plan/phase-plan.md",
-				"/run/phase-01/testing-contract.yaml",
-				"Use these prior implementation artifacts as the coverage source",
-				"final-review testing contract stays PlanLess",
-				"MISSING_EVIDENCE_REQUIREMENT phase <number>",
-			},
-		},
-		{
-			name: "final_review_cycle_variant_includes_cycle_focus_and_legacy_verification_path",
-			input: FinalReviewUserInput{
-				Iteration:        2,
-				IsCycleReview:    true,
-				DiffBase:         "main",
-				RoadmapPath:      "/roadmap.md",
-				CycleFocus:       "Rebase: button color only.",
-				FeedbackPath:     "/cycle/review-feedback.md",
-				Publishable:      false,
-				PreviousFeedback: "Use a darker hover state.",
-			},
-			wantContains: []string{"## Current Cycle Focus", "Rebase: button color only.", "**Review feedback output**: /cycle/review-feedback.md", "NOTE: Local-only repository"},
-			wantOmit:     []string{"**Testing contract**", "**Verification report**"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := FinalReviewUserPrompt(tt.input)
-			for _, want := range tt.wantContains {
-				requireContains(t, got, want)
-			}
-			for _, unwanted := range tt.wantOmit {
-				requireNotContains(t, got, unwanted)
-			}
-		})
-	}
-}
-
 func TestPRDescriptionPromptPopulationBranches(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -335,23 +255,25 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 
 func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 	retained := map[string]bool{
-		"design_system_rolespec":         true,
-		"design_user_multi_repo":         true,
-		"final_fix_user_with_manual":     true,
-		"final_review_user_phase":        true,
-		"implement_system_rolespec":      true,
-		"inquire_user_high_with_kb":      true,
-		"kb_build_full":                  true,
-		"phase_plan_revision_user":       true,
-		"phase_plan_user_autonomous":     true,
-		"pr_description_user_full":       true,
-		"refactor_plan_user":             true,
-		"research_from_questions_user":   true,
-		"roadmap_revision_user":          true,
-		"roadmap_user_multi_repo":        true,
-		"scout_user":                     true,
-		"summary_user":                   true,
-		"validate_specialized_grounding": true,
+		"design_system_rolespec":                   true,
+		"design_user_multi_repo":                   true,
+		"final_fix_user_with_manual":               true,
+		"implement_system_rolespec":                true,
+		"implementation_review_axis_final_user":    true,
+		"implementation_review_axis_live_run_user": true,
+		"implementation_review_axis_user":          true,
+		"inquire_user_high_with_kb":                true,
+		"kb_build_full":                            true,
+		"phase_plan_revision_user":                 true,
+		"phase_plan_user_autonomous":               true,
+		"pr_description_user_full":                 true,
+		"refactor_plan_user":                       true,
+		"research_from_questions_user":             true,
+		"roadmap_revision_user":                    true,
+		"roadmap_user_multi_repo":                  true,
+		"scout_user":                               true,
+		"summary_user":                             true,
+		"validate_specialized_grounding":           true,
 	}
 
 	files, err := filepath.Glob(filepath.Join("testdata", "*.golden"))

@@ -107,6 +107,50 @@ func TestWriteTextFile_OutsideWritableRootsIsRejected(t *testing.T) {
 	}
 }
 
+func TestWriteTextFile_ExplicitWritableRootsDoNotImplicitlyAllowWorkDirOrStateDir(t *testing.T) {
+	scratch := t.TempDir()
+	workDir := t.TempDir()
+	stateDir := t.TempDir()
+	buf := &syncBuffer{}
+	p := NewProtocol(llm.ProtocolOpts{
+		Model:         "opencode:anthropic/claude-sonnet-4-5",
+		WorkDir:       workDir,
+		StateDir:      stateDir,
+		WritableRoots: []string{scratch},
+	})
+	p.SetStdin(buf)
+
+	for _, target := range []string{
+		filepath.Join(workDir, "source.go"),
+		filepath.Join(stateDir, "feature.yaml"),
+	} {
+		msgs := mustParse(t, p, serverRequestLine(t, 3, writeTextFileMethod, map[string]any{
+			"sessionId": "ses_x",
+			"path":      target,
+			"content":   "nope",
+		}))
+		if len(msgs) != 0 {
+			t.Fatalf("rejected write to %s produced %+v, want no SDK messages", target, msgs)
+		}
+		if _, err := os.Stat(target); !os.IsNotExist(err) {
+			t.Fatalf("out-of-bounds path %s exists (stat err=%v), want it never written", target, err)
+		}
+		if _, errObj := fsResponse(t, buf); errObj == nil {
+			t.Fatalf("write to %s replied without an error object", target)
+		}
+	}
+
+	allowed := filepath.Join(scratch, "evidence.txt")
+	mustParse(t, p, serverRequestLine(t, 4, writeTextFileMethod, map[string]any{
+		"sessionId": "ses_x",
+		"path":      allowed,
+		"content":   "ok",
+	}))
+	if _, errObj := fsResponse(t, buf); errObj != nil {
+		t.Fatalf("write to scratch replied with error %+v, want success", errObj)
+	}
+}
+
 // TestReadTextFile_ReturnsContentWithLineAndLimit proves a hosted read returns the
 // file content and honors the optional 1-based line offset and line limit.
 func TestReadTextFile_ReturnsContentWithLineAndLimit(t *testing.T) {

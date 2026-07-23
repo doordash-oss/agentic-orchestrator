@@ -1,5 +1,7 @@
 ---
 description: Revise an implementation roadmap based on critic feedback
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Roadmap Revision

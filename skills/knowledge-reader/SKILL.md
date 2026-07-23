@@ -2,6 +2,8 @@
 name: knowledge-reader
 description: Navigate the pre-built Knowledge Base graph to discover repo conventions, architecture, testing patterns, and verification strategies before coding.
 topics: knowledge base, KB, conventions, testing, architecture, patterns, verification, dependencies, code style, error handling
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Knowledge Base Reader

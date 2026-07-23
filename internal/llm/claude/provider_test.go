@@ -703,3 +703,10 @@ func firstArg(args []string) string {
 	}
 	return args[0]
 }
+
+func TestProviderSupportsSessionResume(t *testing.T) {
+	p := &Provider{}
+	if !p.SupportsSessionResume() {
+		t.Error("SupportsSessionResume() = false, want true")
+	}
+}

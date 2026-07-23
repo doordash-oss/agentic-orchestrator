@@ -1,5 +1,7 @@
 ---
 description: Final-review fix pass that addresses requested changes and updates verification evidence
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 ## Output Files

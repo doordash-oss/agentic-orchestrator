@@ -16,7 +16,6 @@ package agent
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -196,6 +195,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	startIter := am.LatestIteration()
 	var consecutiveFailures int
 	var reviewerFeedback string
+	// Iteration number of the most recent CHANGES_REQUESTED review. RETRY
+	// iterations swap the full feedback for a pointer to this iteration's
+	// review-feedback.md (see retryReviewFeedbackReminder).
+	var lastChangesRequestedIter int
 
 	// Mid-iteration restart: if the next iteration's dir already has
 	// phase_complete (but no meta.yaml, otherwise LatestIteration would have
@@ -220,8 +223,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			consecutiveFailures++
 		}
 		// Recover reviewer feedback: walk backwards to find the most recent
-		// CHANGES_REQUESTED review. FAILED iterations (e.g. API errors) sit
-		// between the last review and the restart point and must be skipped.
+		// CHANGES_REQUESTED review. FAILED iterations (e.g. API errors) and
+		// RETRY iterations sit between the last review and the restart point
+		// and must be skipped. Feedback found beyond a RETRY is recovered as
+		// the same pointer reminder the live loop uses, mirroring what the
+		// interrupted process would have carried.
+		passedRetry := false
 		for j := startIter; j >= 1; j-- {
 			jDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", j))
 			jMeta, jErr := am.ReadMeta(jDir)
@@ -229,10 +236,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				continue
 			}
 			if jMeta.ReviewStatus == agentStatusChangesRequested {
-				if data, err := os.ReadFile(filepath.Join(jDir, "review-feedback.md")); err == nil {
+				lastChangesRequestedIter = j
+				if passedRetry {
+					reviewerFeedback = retryReviewFeedbackReminder(cfg.ArtifactDir, j)
+				} else if data, err := os.ReadFile(filepath.Join(jDir, "review-feedback.md")); err == nil {
 					reviewerFeedback = strings.TrimSpace(string(data))
 				}
 				break
+			}
+			if jMeta.AgentStatus == "RETRY" {
+				passedRetry = true
+				continue
 			}
 			// Stop searching once we hit an iteration that had a successful
 			// review (APPROVED) or a non-FAILED agent run — earlier feedback
@@ -360,6 +374,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				GuidelinesDir: cfg.GuidelinesDir,
 				KBInfos:       cfg.KBInfos,
 				AskingClause:  cfg.AskingClause,
+				Frontend:      cfg.Feature != nil && cfg.Feature.RoadmapPhaseFrontend(cfg.Feature.CurrentRoadmapPhase),
 			})
 
 			// Derive repo name for permission scoping. cfg.RepoName is empty for
@@ -372,7 +387,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Build command + session opts via BuildSession. Only the active run
 			// state is granted; the containing feature state directory also holds
-			// sealed predecessor runs and must remain orchestrator-private.
+			// sealed predecessor runs and must remain orchestrator-private. The opts
+			// are kept so a crash-resume attempt can rebuild the same session with
+			// ResumeSessionID set.
 			runDir := cfg.RunDir
 			if runDir == "" {
 				runNumber := cfg.Feature.ActiveRun
@@ -382,7 +399,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				runDir = filepath.Join(cfg.StateDir, "runs", feature.RunDirName(runNumber))
 			}
 			dirs := append([]string{runDir}, cfg.AdditionalDirs...)
-			command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
+			implBuildOpts := BuildSessionOpts{
 				Model:                          cfg.Model,
 				Prompt:                         prompt,
 				SystemPrompt:                   implProtocol,
@@ -396,7 +413,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				Phase:                          feature.PhaseImplement,
 				SystemPromptHasUsefulResources: true,
 				MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
-			})
+			}
+			command, env, sessOpts, buildErr := cfg.BuildSession(implBuildOpts)
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
@@ -409,6 +427,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Merge iteration-specific fields into session opts
 			sessOpts.Iteration = i
 			sessOpts.PermCacheScope = permRepoName
+			// Capture provider stderr so silent process deaths are diagnosable.
+			sessOpts.StderrPath = filepath.Join(iterDir, "stderr.log")
 
 			// Start session in interactive mode
 			if cfg.Feature.CurrentRoadmapPhase > 0 {
@@ -459,39 +479,46 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			sess.SetLogFile(logFile)
 
+			// implWaitOptions builds the wait options for an implement session.
+			// Shared between the initial session and a crash-resume attempt so
+			// both waits apply the same readiness and handoff behavior.
+			implWaitOptions := func(sess ports.SessionHandle, sessionCtx observe.SpanContext, sessionID string) waitForStatusOptions {
+				return waitForStatusOptions{
+					ReadyCheck: func() bool {
+						if HasPhaseComplete(iterDir) {
+							// Agent completed its work — clear any stale question flag
+							// so we don't block on a question the agent already moved past.
+							sess.SetHasUnansweredQuestion(false)
+							return true
+						}
+						// No phase_complete yet — the agent is likely waiting for user input.
+						return false
+					},
+					FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+					MissingArtifacts:     []string{"progress.md", "verification-report.yaml"},
+					EnableContextHandoff: true,
+					OnContextHandoff: func(snap contextSnapshot) {
+						cfg.Observer.ContextHandoffTriggered(
+							sessionCtx,
+							"implement",
+							sessionID,
+							cfg.RepoName,
+							sess.ProviderName(),
+							i,
+							snap.Pct,
+							snap.ThresholdPct,
+							snap.TotalTokens,
+							snap.WindowTokens,
+							snap.BaselineTokens,
+						)
+					},
+				}
+			}
+
 			// Wait for status marker or session exit. If the SDK reports a
 			// non-truncated success without phase_complete, the iteration below
 			// records a protocol violation instead of waiting for user input.
-			waitResult = waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
-				ReadyCheck: func() bool {
-					if HasPhaseComplete(iterDir) {
-						// Agent completed its work — clear any stale question flag
-						// so we don't block on a question the agent already moved past.
-						sess.SetHasUnansweredQuestion(false)
-						return true
-					}
-					// No phase_complete yet — the agent is likely waiting for user input.
-					return false
-				},
-				FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-				MissingArtifacts:     []string{"progress.md", "verification-report.yaml"},
-				EnableContextHandoff: true,
-				OnContextHandoff: func(snap contextSnapshot) {
-					cfg.Observer.ContextHandoffTriggered(
-						implSessionCtx,
-						"implement",
-						sessionID,
-						cfg.RepoName,
-						sess.ProviderName(),
-						i,
-						snap.Pct,
-						snap.ThresholdPct,
-						snap.TotalTokens,
-						snap.WindowTokens,
-						snap.BaselineTokens,
-					)
-				},
-			})
+			waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))
 			agentStatus = waitResult.Status
 
 			// App shutdown should not serialize an in-flight iteration as FAILED.
@@ -512,6 +539,44 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
+			}
+
+			// Crash resume: the provider process died mid-turn without
+			// completing the iteration (a completed one is reclassified
+			// SUCCESS by the waiter). For providers that can resume their
+			// native session, give the same conversation one fresh process to
+			// finish or report state before charging the iteration as FAILED.
+			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume && !HasPhaseComplete(iterDir) {
+				if resumeID := providerSessionID(sess); resumeID != "" {
+					// Account the dead session before replacing it.
+					deadCost := ExtractSessionCost(sess)
+					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+					_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", deadCost, SessionCostMetadata{
+						SessionID:     sessionID,
+						ObserverPhase: "implement",
+						RepoName:      cfg.RepoName,
+					})
+					appendIterationLog(aggregateLogPath, i, sess.MessageLog().Text())
+
+					resumeSessionID := sessionID + "-resume"
+					resumeSess, resumeOpts, resumeErr := startCrashResumeSession(cfg, sm, implBuildOpts, resumeID, resumeSessionID, i, iterDir, permRepoName)
+					if resumeErr == nil {
+						sess, sessOpts = resumeSess, resumeOpts
+						sessionID = resumeSessionID
+						implSessionCtx = iterCtx.Child()
+						cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName)
+						implTracker.Install(sess, implSessionCtx, "implement", sessionID)
+
+						waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))
+						agentStatus = waitResult.Status
+						if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
+							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+						}
+						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+							return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
+						}
+					}
+				}
 			}
 
 			duration = time.Since(iterStart)
@@ -612,7 +677,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
-				reviewerFeedback = ""
+				// Don't re-inject the full feedback (the RETRY handoff may
+				// have partially addressed it), but don't drop it either —
+				// the progress.md handoff is not guaranteed to carry every
+				// finding. Point the next iteration at the on-disk feedback
+				// so it re-verifies what remains.
+				reviewerFeedback = retryReviewFeedbackReminder(cfg.ArtifactDir, lastChangesRequestedIter)
 				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "retry")
 					return &LoopResult{
@@ -723,6 +793,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						feedback = fmt.Sprintf("Review helper protocol violation: %v", reviewErr)
 					}
 					reviewerFeedback = feedback
+					lastChangesRequestedIter = i
 					meta.AgentStatus = agentStatusProtocolViolation
 					meta.ReviewStatus = ReviewChangesRequested.String()
 					_ = am.WriteMeta(iterDir, meta)
@@ -742,7 +813,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
 				// Review failed to run, treat as changes requested
-				reviewerFeedback = fmt.Sprintf("Review failed to execute: %v", reviewErr)
+				if strings.TrimSpace(feedback) == "" {
+					feedback = fmt.Sprintf("Review failed to execute: %v", reviewErr)
+				}
+				reviewerFeedback = feedback
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_error")
 				continue
 			}
@@ -771,6 +845,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}
 				consecutiveFailures = 0
 				reviewerFeedback = feedback
+				lastChangesRequestedIter = i
 				// Check no-progress safety rail
 				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "changes_requested")
@@ -816,6 +891,58 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		Iterations:  cfg.MaxIterations,
 		LastError:   "reached maximum iteration count",
 	}, nil
+}
+
+// crashResumeMessageFragment is the stable fragment tests and log scans match
+// on; keep crashResumeMessage in sync with it.
+const crashResumeMessageFragment = "process terminated unexpectedly mid-turn"
+
+// crashResumeMessage is the prompt for a crash-resume session. The resumed
+// conversation already carries the full iteration context; this only explains
+// the process boundary and re-anchors the completion protocol.
+const crashResumeMessage = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. " +
+	"Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing " +
+	"required artifacts and the completion marker per your instructions; otherwise update progress and continue " +
+	"from where you left off."
+
+// providerSessionID returns the provider-native session identifier for a
+// session handle, "" when the handle does not expose one. SessionID is not
+// part of ports.SessionView, so it is probed as an optional interface.
+func providerSessionID(sess ports.SessionView) string {
+	if p, ok := sess.(interface{ SessionID() string }); ok {
+		return p.SessionID()
+	}
+	return ""
+}
+
+// startCrashResumeSession starts a fresh provider process that resumes the
+// provider-native session resumeID after the previous process died mid-turn.
+// The iteration's response.txt is opened in append mode so the dead session's
+// streamed output is preserved.
+func startCrashResumeSession(cfg ImplementConfig, sm ports.SessionManager, buildOpts BuildSessionOpts, resumeID, sessionID string, iteration int, iterDir, permScope string) (ports.SessionHandle, *ports.SessionOpts, error) {
+	buildOpts.ResumeSessionID = resumeID
+	buildOpts.Prompt = crashResumeMessage
+	command, env, sessOpts, err := cfg.BuildSession(buildOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("building crash-resume session: %w", err)
+	}
+	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
+	sessOpts.Iteration = iteration
+	sessOpts.PermCacheScope = permScope
+	sessOpts.StderrPath = filepath.Join(iterDir, "stderr-resume.log")
+
+	startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
+	sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhaseImplement, command, cfg.WorkDir, env, sessOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("starting crash-resume session: %w", err)
+	}
+	if logFile, logErr := os.OpenFile(filepath.Join(iterDir, "response.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); logErr == nil {
+		sess.SetLogFile(logFile)
+	}
+	return sess, sessOpts, nil
 }
 
 func formatProtocolViolationError(role Role, iterDir string, violations []ProtocolViolation) string {
@@ -867,6 +994,25 @@ func recordProtocolViolationIteration(
 		return &LoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: iteration, LastError: lastErr}
 	}
 	return nil
+}
+
+// retryReviewFeedbackReminder builds the reviewer-feedback text carried into
+// iterations that follow a RETRY. Re-injecting the full CHANGES_REQUESTED
+// feedback every iteration is wasteful — some findings may already be
+// addressed — but dropping it entirely trusts the RETRY handoff in
+// progress.md to have captured every finding, which is not guaranteed.
+// Instead, point the implementer at the on-disk feedback so it re-reads and
+// re-verifies what remains in its own context. Returns "" when no reviewed
+// iteration precedes the RETRY or its feedback file is gone.
+func retryReviewFeedbackReminder(artifactDir string, reviewedIter int) string {
+	if reviewedIter <= 0 {
+		return ""
+	}
+	path := filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", reviewedIter), "review-feedback.md")
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("The iteration %d review requested changes, and the intervening RETRY iteration(s) may not have addressed every finding. Re-read the full feedback at %s and verify each finding against the current tree; progress.md alone is not authoritative for what remains. Do not declare SUCCESS while any finding is unaddressed.", reviewedIter, path)
 }
 
 func isFailureBudgetAgentStatus(status string) bool {
@@ -939,8 +1085,8 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	}
 
 	// Report Integrity Gate: deterministic pre-review. Malformed or missing
-	// reports degrade to the LLM reviewer (which treats them as Critical
-	// findings via the review-implementation skill). The gate runs two
+	// reports degrade to the Functionality/Evidence axis (which treats them
+	// as Critical findings). The gate runs two
 	// passes — schema/hedge against verification-report.yaml, and
 	// deferral-ledger against the parsed progress.md — merged into a
 	// single Rejected verdict so the agent sees all failure modes at once.
@@ -973,9 +1119,8 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	} else {
 		// No verification-report.yaml on disk: still run the deferral
 		// gate so a missing report doesn't accidentally bypass cross-
-		// phase commitment enforcement. The reviewer's own checks
-		// (review-implementation/SKILL.md) flag the missing report as
-		// Critical separately.
+		// phase commitment enforcement. The Functionality/Evidence axis
+		// flags the missing report as Critical separately.
 		deferralResult := ValidateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
 		if deferralResult.Rejected {
 			feedback := FormatGateFeedback(deferralResult)
@@ -1009,114 +1154,25 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	}
 	RemovePhaseComplete(reviewDir)
 
-	feedbackPath := filepath.Join(reviewDir, "review-feedback.md")
 	parentFeedbackPath := filepath.Join(iterDir, "review-feedback.md")
-	reviewPrompt := BuildReviewPrompt(
-		cfg.PlanPath,
-		cfg.ExitCriteria,
-		progressPath,
-		iterDir,
-		contractPath,
-		verificationReportPath,
-		iteration,
-		requiredVerification,
-		cfg.RoadmapPath,
-		cfg.PhaseType,
-		feedbackPath,
-	)
-
-	// Re-inject user-attached visual references so the reviewer can
-	// compare what was built against the pixel-level intent.
-	if cfg.Feature != nil {
-		if block := visualReferencesSection(cfg.Feature.Images, "reviewing this iteration"); block != "" {
-			reviewPrompt = block + reviewPrompt
-		}
-	}
-	// Surface due-this-phase deferrals so the reviewer can cross-check
-	// closures against the diff and flag chronic re-deferrals.
-	if cfg.Feature != nil {
-		if run := cfg.Feature.Run(); run != nil {
-			currentPhase := cfg.Feature.CurrentRoadmapPhase
-			if block := deferralsDueThisPhaseSection(run.Deferrals, currentPhase, deferralPromptKindReview, cfg.RepoName); block != "" {
-				reviewPrompt = block + reviewPrompt
-			}
-		}
-	}
-
-	// Surface agent-declared caveats to the LLM reviewer so they get
-	// cross-checked against the phase plan rather than silently accepted.
-	if addendum := KnownCaveatsReviewAddendum(gateResult); addendum != "" {
-		reviewPrompt = addendum + "\n\n" + reviewPrompt
-	}
-
-	reviewPromptPath := filepath.Join(reviewDir, "review-prompt.md")
-	logPath := filepath.Join(reviewDir, "review-output.txt")
-
-	var reviewID string
-	if cfg.Feature.CurrentRoadmapPhase > 0 {
-		reviewID = fmt.Sprintf("%s-phase-%02d-review", cfg.Feature.ID, cfg.Feature.CurrentRoadmapPhase)
-	} else {
-		reviewID = cfg.Feature.ID + "-review"
-	}
-	reviewID += fmt.Sprintf("-%02d", iteration)
-	helper := &PhaseRunner{
-		SessionManager: sm,
-		FeatureStore:   cfg.FeatureStore,
-		StateDir:       cfg.StateDir,
-		SkillsDir:      cfg.SkillsDir,
-		GuidelinesDir:  cfg.GuidelinesDir,
-		Observer:       cfg.Observer,
-		BuildSessionFn: cfg.BuildSession,
-	}
-	helperResult, err := helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
-		SessionID:              reviewID,
-		FeatureID:              cfg.Feature.ID,
-		Phase:                  feature.PhaseReview,
-		ParentSpanCtx:          reviewCtx,
-		Model:                  cfg.ReviewModel,
-		Prompt:                 reviewPrompt,
-		PromptPath:             reviewPromptPath,
-		FeedbackPath:           feedbackPath,
-		HelperIterDir:          reviewDir,
-		Role:                   RoleIterationReviewer,
-		WorkDir:                cfg.WorkDir,
-		RepoName:               cfg.RepoName,
-		LogPath:                logPath,
-		SystemPromptPrefix:     "review",
-		CompletionAskingClause: cfg.AskingClause,
-		EffortLevel:            cfg.EffortLevel,
+	reviewStatus, feedback, err := runImplementationReviewAxes(cfg, sm, iteration, iterDir, reviewDir, reviewCtx, implementationReviewInput{
+		ProgressPath:           progressPath,
+		ContractPath:           contractPath,
+		VerificationReportPath: verificationReportPath,
+		RequiredVerification:   requiredVerification,
+		KnownCaveatsGateResult: gateResult,
 	})
 	if err != nil {
-		feedback := ""
-		if helperResult != nil {
-			feedback = helperResult.Feedback
-		}
-		// The helper writes review-feedback.md itself under the new
-		// handoff protocol (and synthesizes a CHANGES_REQUESTED file
-		// when the LLM's output is malformed). When the helper failed
-		// before producing anything, fall back to a deterministic stub
-		// so the next iteration's implement prompt still has a
-		// well-formed feedback document to inject.
-		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
-			stub := FormatStructuredReviewFeedback(
-				"Implementation Review — Helper Failed",
-				fmt.Sprintf("- **Critical**: review helper terminated before writing review-feedback.md: %v", err),
-				"",
-				ReviewChangesRequested,
-			)
-			_ = os.WriteFile(feedbackPath, []byte(stub), 0o644)
-			feedback = stub
-		}
 		if strings.TrimSpace(feedback) != "" {
 			_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
 		}
-		return ReviewFailed, feedback, fmt.Errorf("running review gate: %w", err)
+		return reviewStatus, feedback, fmt.Errorf("running review gate: %w", err)
 	}
 
-	if strings.TrimSpace(helperResult.Feedback) != "" {
-		_ = os.WriteFile(parentFeedbackPath, []byte(helperResult.Feedback), 0o644)
+	if strings.TrimSpace(feedback) != "" {
+		_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
 	}
-	return helperResult.Status, helperResult.Feedback, nil
+	return reviewStatus, feedback, nil
 }
 
 func resolveImplementationContractPath(stateDir string, f *feature.Feature, repoName string) (string, bool) {
@@ -1534,6 +1590,15 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	defer bgTicker.Stop()
 
 	handleStatus := func(status string, sessionDone bool) (string, bool) {
+		// A session that died or errored after completing its work product is
+		// a logical success: the completion marker is the protocol's "done"
+		// signal, and contract validation plus the review gate still arbitrate
+		// the artifacts. This salvages iterations whose provider process dies
+		// between writing the marker and exiting cleanly.
+		if isReady != nil && (status == agentStatusFailed || (status == agentStatusAPIError && sessionDone)) && isReady() {
+			_ = sess.Stop()
+			return agentStatusSuccess, true
+		}
 		if status == agentStatusAPIError {
 			if sessionDone {
 				return agentStatusFailed, true
@@ -1680,9 +1745,13 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 				doneCh = nil
 				continue
 			}
-			// Session exited without any status — treat as failure.
-			// A well-behaved agent emits a result message before exiting;
-			// absence of one means something went wrong.
+			// Session exited without any status — treat as failure unless the
+			// completion marker landed (same logical-success rule as
+			// handleStatus). A well-behaved agent emits a result message
+			// before exiting; absence of one means something went wrong.
+			if isReady != nil && isReady() {
+				return waitForStatusResult{Status: agentStatusSuccess, Handoff: handoff}
+			}
 			return waitForStatusResult{Status: agentStatusFailed, Handoff: handoff}
 
 		case status := <-sess.StatusCh():

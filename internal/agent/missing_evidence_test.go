@@ -65,10 +65,9 @@ func TestMissingEvidenceRequirements_ParsePhaseQualifiedMarkers(t *testing.T) {
 	}
 }
 
-func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
+func TestMissingEvidenceReviewerSkillDocumentsPerPhaseRules(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	implementationReviewPath := filepath.Join(repoRoot, "skills", "review-implementation", "SKILL.md")
-	finalReviewPath := filepath.Join(repoRoot, "skills", "final-review", "SKILL.md")
+	implementationReviewPath := filepath.Join(repoRoot, "skills", "review-implementation-functionality-evidence", "SKILL.md")
 
 	implementationReview, err := os.ReadFile(implementationReviewPath)
 	if err != nil {
@@ -82,32 +81,15 @@ func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 		"MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>",
 		"MISSING_EVIDENCE_REQUIREMENT behavioral: <reviewer-authored requirement>",
 		"phase-plan revision",
+		"per-phase implementation review gate",
+		"At the per-phase gate",
 	} {
 		if !strings.Contains(string(implementationReview), want) {
 			t.Errorf("%s missing %q", implementationReviewPath, want)
 		}
 	}
-
-	finalReview, err := os.ReadFile(finalReviewPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) error = %v", finalReviewPath, err)
-	}
-	for _, want := range []string{
-		"Validate whether the current product satisfies the approved user intent",
-		"only required durable output is `review-feedback.md`",
-		"Reuse last-phase evidence when it still proves current behavior",
-		"Request changes only for product defects",
-		"## Severity Classification",
-		"**Critical/High**: Blocking — functionality broken, tests failing, exit criteria not met",
-		"**Medium/Low**: Non-blocking suggestions for improvement",
-		"Only Critical/High findings may trigger `CHANGES_REQUESTED`",
-	} {
-		if !strings.Contains(string(finalReview), want) {
-			t.Errorf("%s missing %q", finalReviewPath, want)
-		}
-	}
-	if strings.Contains(string(finalReview), "MISSING_EVIDENCE_REQUIREMENT") {
-		t.Errorf("%s should not mention MISSING_EVIDENCE_REQUIREMENT markers", finalReviewPath)
+	if strings.Contains(string(implementationReview), "At the Final gate") {
+		t.Errorf("%s still documents Final-gate Functionality/Evidence behavior after QA replaced it", implementationReviewPath)
 	}
 }
 

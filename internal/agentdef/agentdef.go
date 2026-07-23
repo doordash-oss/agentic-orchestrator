@@ -55,40 +55,33 @@ func JSON() string {
 	return jsonVal
 }
 
-// ParseEmbedded reads all .md files from the embedded agents FS and
-// returns a map of agent name -> definition.
+// ParseEmbedded reads all agent definition markdown files from the embedded
+// agents FS and returns a map of agent name -> definition.
 func ParseEmbedded() (map[string]AgentDef, error) {
 	defs := make(map[string]AgentDef)
 
-	entries, err := fs.ReadDir(agentsFS.FS, ".")
-	if err != nil {
-		return nil, fmt.Errorf("reading embedded agents: %w", err)
-	}
+	err := fs.WalkDir(agentsFS.FS, ".", func(filePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Name() != "AGENT.md" {
+			return nil
+		}
 
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		data, err := agentsFS.FS.Open(entry.Name())
+		data, err := fs.ReadFile(agentsFS.FS, filePath)
 		if err != nil {
-			continue
+			return err
 		}
-		buf := make([]byte, 0, 8192)
-		tmp := make([]byte, 4096)
-		for {
-			n, readErr := data.Read(tmp)
-			buf = append(buf, tmp[:n]...)
-			if readErr != nil {
-				break
-			}
-		}
-		data.Close()
 
-		name, def, err := parseAgentFile(string(buf))
+		name, def, err := parseAgentFile(string(data))
 		if err != nil {
-			continue
+			return nil
 		}
 		defs[name] = def
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading embedded agents: %w", err)
 	}
 
 	return defs, nil

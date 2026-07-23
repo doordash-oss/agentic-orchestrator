@@ -1,5 +1,7 @@
 ---
 description: Turn a design document into a vertical-slice implementation roadmap
+license: Apache-2.0 with incorporated MIT material; see LICENSE.upstream.txt
+provenance: upstream-adapted
 ---
 
 # Implementation Roadmap

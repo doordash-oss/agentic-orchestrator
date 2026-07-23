@@ -45,6 +45,10 @@ type Provider struct {
 
 func (p *Provider) Name() string { return "codex" }
 
+// SupportsSessionResume reports that a persisted thread can be resumed via
+// ProtocolOpts.ResumeSessionID (the thread/resume handshake).
+func (p *Provider) SupportsSessionResume() bool { return true }
+
 // cliBinary returns the configured CLI executable name, falling back to the
 // provider default when no override is set.
 func (p *Provider) cliBinary() string {

@@ -1,5 +1,7 @@
 ---
 description: Transform feature requests into research questions
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Inquire — Question Generation

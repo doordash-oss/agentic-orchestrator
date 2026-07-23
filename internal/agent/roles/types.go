@@ -319,6 +319,32 @@ func reviewFeedbackRoleArtifact(rootName string) RoleArtifactSpec {
 	}
 }
 
+type reviewFeedbackAxisRoleSpecConfig struct {
+	Phase                feature.Phase
+	Role                 Role
+	SkillName            string
+	UserTemplate         string
+	Required             []feature.Phase
+	OutputRoots          []OutputRootSpec
+	MarkerRoot           string
+	Artifact             RoleArtifactSpec
+	ReadOnlyOutsideRoots bool
+}
+
+func reviewFeedbackAxisRoleSpec(cfg reviewFeedbackAxisRoleSpecConfig) RoleSpec {
+	return RoleSpec{
+		Phase:                cfg.Phase,
+		Role:                 cfg.Role,
+		SkillName:            cfg.SkillName,
+		UserTemplate:         cfg.UserTemplate,
+		Required:             cfg.Required,
+		OutputRoots:          cfg.OutputRoots,
+		MarkerRoot:           cfg.MarkerRoot,
+		Artifacts:            []RoleArtifactSpec{cfg.Artifact},
+		ReadOnlyOutsideRoots: cfg.ReadOnlyOutsideRoots,
+	}
+}
+
 func resolvePlanMarkdownRoleArtifact(fallbackName string) func(RoleRuntime, RoleArtifactSpec) string {
 	return func(rt RoleRuntime, _ RoleArtifactSpec) string {
 		artifactDir := artifactDirOutputRoot("").ResolvePath(rt)

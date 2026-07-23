@@ -1,5 +1,7 @@
 ---
 description: Execute a feature-level rebase cycle — rebase conflicting branches onto their bases, resolve conflicts, verify the feature, and emit the standard handoff without pushing
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Rebase Cycle

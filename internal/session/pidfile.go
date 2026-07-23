@@ -69,30 +69,78 @@ func RemovePIDFile(dir string, repoName string) error {
 	return os.Remove(filepath.Join(dir, PIDFileName(repoName)))
 }
 
-// FindPIDFiles scans all feature directories for session*.pid files.
+// FindPIDFiles scans the bounded set of directories where sessions persist PID
+// files: the state directory itself, each immediate feature directory, and the
+// feature's immediate child directories used by the legacy phase layout.
+//
+// Feature trees also contain arbitrary run artifacts, work products, and copied
+// fixtures. Recursing into those trees is both unbounded and incorrect: a copied
+// session PID fixture is not a live session owned by this runtime.
 func FindPIDFiles(featuresDir string) ([]PIDFile, error) {
 	var results []PIDFile
-
-	err := filepath.Walk(featuresDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "session") && strings.HasSuffix(name, ".pid") {
-			pf, err := ReadPIDFile(path)
-			if err != nil {
-				return nil
-			}
-			pf.Dir = filepath.Dir(path)
-			results = append(results, *pf)
-		}
-		return nil
-	})
+	entries, err := os.ReadDir(featuresDir)
 	if err != nil {
-		return nil, fmt.Errorf("scanning for PID files: %w", err)
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading session state directory: %w", err)
+	}
+
+	results = appendPIDFilesInDir(results, featuresDir, entries)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		featureDir := filepath.Join(featuresDir, entry.Name())
+		featureEntries, err := os.ReadDir(featureDir)
+		if err != nil {
+			// Match the recovery scanner's best-effort behavior: one unreadable
+			// feature must not hide recoverable sessions from every other feature.
+			continue
+		}
+		results = appendPIDFilesInDir(results, featureDir, featureEntries)
+		for _, featureEntry := range featureEntries {
+			if !featureEntry.IsDir() || !isLegacyPhaseDir(featureEntry.Name()) {
+				continue
+			}
+			legacySessionDir := filepath.Join(featureDir, featureEntry.Name())
+			legacyEntries, err := os.ReadDir(legacySessionDir)
+			if err != nil {
+				continue
+			}
+			results = appendPIDFilesInDir(results, legacySessionDir, legacyEntries)
+		}
 	}
 
 	return results, nil
+}
+
+func appendPIDFilesInDir(results []PIDFile, dir string, entries []os.DirEntry) []PIDFile {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "session") || !strings.HasSuffix(name, ".pid") {
+			continue
+		}
+		pf, err := ReadPIDFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		pf.Dir = dir
+		results = append(results, *pf)
+	}
+	return results
+}
+
+func isLegacyPhaseDir(name string) bool {
+	switch name {
+	case "knowledgebase", "inquire", "research", "design", "plan", "implement", "review", "publish":
+		return true
+	default:
+		return false
+	}
 }
 
 // isProcessRunning checks if a process with the given PID is still running.

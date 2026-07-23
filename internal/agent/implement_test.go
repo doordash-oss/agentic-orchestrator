@@ -292,7 +292,7 @@ func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
 	}
 }
 
-func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing.T) {
+func TestFrontendImplementationRequiresFrontendDesignAndKeepsVisualReferences(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
@@ -316,21 +316,22 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 	}
 
 	f := &feature.Feature{
-		ID:            "test-feat-001",
-		Name:          "Test Feature",
-		Slug:          "test-feature",
-		Description:   "Legacy tagged feature",
-		Images:        []string{"/tmp/mockup.png"},
-		Tags:          []string{"frontend"},
-		Status:        feature.StatusImplementing,
-		CurrentPhase:  feature.PhaseImplement,
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
+		ID:                  "test-feat-001",
+		Name:                "Test Feature",
+		Slug:                "test-feature",
+		Description:         "Frontend feature",
+		Images:              []string{"/tmp/mockup.png"},
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentRoadmapPhase: 1,
+		ActiveRun:           1,
+		RunCount:            1,
+		SchemaVersion:       feature.SchemaVersionCurrent,
 		Repos: []feature.FeatureRepo{
 			{Name: "test-repo", Path: workDir},
 		},
 	}
+	f.SetRoadmapPhaseFrontend(1, true)
 
 	store := feature.NewStore(filepath.Join(tmpDir, "state"))
 	if err := store.Save(f); err != nil {
@@ -353,6 +354,7 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 		ReviewModel:                "reviewer",
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
+		SkillsDir:                  filepath.Join(tmpDir, "skills"),
 		DangerouslySkipPermissions: true,
 		BuildSession:               buildSession,
 	}, sm)
@@ -366,8 +368,20 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 		t.Fatalf("captured %d BuildSession calls, want implement and review", len(*captured))
 	}
 
-	t.Logf("legacy tagged implement prompt:\n%s", (*captured)[0].Prompt)
-	t.Logf("legacy tagged review prompt:\n%s", (*captured)[1].Prompt)
+	t.Logf("frontend implement prompt:\n%s", (*captured)[0].Prompt)
+	t.Logf("frontend review prompt:\n%s", (*captured)[1].Prompt)
+
+	implementSystemPrompt := (*captured)[0].SystemPrompt
+	for _, want := range []string{
+		"## Required Skills",
+		"frontend-design",
+		filepath.Join(tmpDir, "skills", "frontend-design", "SKILL.md"),
+		"mandatory",
+	} {
+		if !strings.Contains(implementSystemPrompt, want) {
+			t.Errorf("implement system prompt missing required frontend skill guidance %q:\n%s", want, implementSystemPrompt)
+		}
+	}
 
 	for _, got := range []struct {
 		name   string
@@ -387,10 +401,6 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 		}
 		if strings.Contains(got.prompt, "## Behavioral Evidence") {
 			t.Errorf("%s prompt unexpectedly contains behavioral evidence guidance:\n%s", got.name, got.prompt)
-		}
-		requiredSkillsHeading := "Required Skills" + " For This Feature"
-		if strings.Contains(got.prompt, requiredSkillsHeading) {
-			t.Errorf("%s prompt unexpectedly contains required skills guidance:\n%s", got.name, got.prompt)
 		}
 	}
 }
@@ -572,6 +582,49 @@ func TestWaitForStatus(t *testing.T) {
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for final SUCCESS")
+		}
+	})
+
+	t.Run("done_before_status_ready_true_returns_SUCCESS", func(t *testing.T) {
+		sess := session.NewSession("test", "feat", feature.PhaseImplement)
+		sess.CloseDone()
+
+		got := waitForStatus(sess, nil, "", func() bool { return true })
+		if got != agentStatusSuccess {
+			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
+		}
+	})
+
+	t.Run("done_with_pending_FAILED_ready_true_returns_SUCCESS", func(t *testing.T) {
+		sess := session.NewSession("test", "feat", feature.PhaseImplement)
+		sess.SendStatus(agentStatusFailed)
+		sess.CloseDone()
+
+		got := waitForStatus(sess, nil, "", func() bool { return true })
+		if got != agentStatusSuccess {
+			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
+		}
+	})
+
+	t.Run("done_with_pending_FAILED_ready_false_returns_FAILED", func(t *testing.T) {
+		sess := session.NewSession("test", "feat", feature.PhaseImplement)
+		sess.SendStatus(agentStatusFailed)
+		sess.CloseDone()
+
+		got := waitForStatus(sess, nil, "", func() bool { return false })
+		if got != agentStatusFailed {
+			t.Errorf("waitForStatus() = %q, want FAILED", got)
+		}
+	})
+
+	t.Run("done_with_pending_API_ERROR_ready_true_returns_SUCCESS", func(t *testing.T) {
+		sess := session.NewSession("test", "feat", feature.PhaseImplement)
+		sess.SendStatus("API_ERROR")
+		sess.CloseDone()
+
+		got := waitForStatus(sess, nil, "", func() bool { return true })
+		if got != agentStatusSuccess {
+			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
 		}
 	})
 
@@ -1550,6 +1603,199 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 	}
 }
 
+// crashResumeTestSession is a dead-process fake: it reports a terminal FAILED
+// status and exposes a provider-native session ID that a crash-resume attempt
+// can pass back via BuildSessionOpts.ResumeSessionID.
+type crashResumeTestSession struct {
+	*utilityTestSession
+	providerSessionID string
+}
+
+func (s *crashResumeTestSession) SessionID() string { return s.providerSessionID }
+
+func newCrashResumeLoopConfig(t *testing.T, artifactDir, stateDir, workDir, observeDir, featureID string) ImplementConfig {
+	t.Helper()
+	planPath := filepath.Join(artifactDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\nDo the thing.\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	f := &feature.Feature{
+		ID:            featureID,
+		Name:          "Crash Resume",
+		Slug:          "crash-resume",
+		Description:   "crash resume loop coverage",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		TraceID:       "trace-crash-resume",
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "agentic", Path: workDir}},
+	}
+	return ImplementConfig{
+		Feature:             f,
+		WorkDir:             workDir,
+		PlanPath:            planPath,
+		MaxIterations:       1,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "handoff parses",
+		Model:               "test-model",
+		ReviewModel:         "review-model",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		Observer:            observe.New(true, observeDir, false, "", false, "agentic"),
+		SkipIterationReview: true,
+	}
+}
+
+func crashResumeTestDirs(t *testing.T, featureID string) (artifactDir, stateDir, workDir, observeDir string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	artifactDir = filepath.Join(tmpDir, "artifacts")
+	stateDir = filepath.Join(tmpDir, "state")
+	workDir = filepath.Join(tmpDir, "work")
+	observeDir = filepath.Join(tmpDir, "observe")
+	for _, dir := range []string{artifactDir, stateDir, workDir, filepath.Join(observeDir, featureID)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	return artifactDir, stateDir, workDir, observeDir
+}
+
+func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
+	featureID := "crash-resume-001"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	var buildOpts []BuildSessionOpts
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildOpts = append(buildOpts, opts)
+		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+	}
+
+	var startIDs []string
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		startIDs = append(startIDs, id)
+		if len(startIDs) == 1 {
+			// First process dies mid-turn without writing the marker.
+			dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
+			dead.statusCh <- agentStatusFailed
+			return dead, nil
+		}
+		// The resumed process finishes the iteration.
+		iterDir := filepath.Join(artifactDir, "iteration-01")
+		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
+		if err := os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("complete\n"), 0o644); err != nil {
+			t.Fatalf("write phase_complete: %v", err)
+		}
+		resumed := newUtilityTestSession()
+		resumed.statusCh <- agentStatusSuccess
+		return resumed, nil
+	}
+
+	result, err := RunImplementationLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
+	}
+
+	if len(buildOpts) != 2 {
+		t.Fatalf("BuildSession calls = %d, want 2", len(buildOpts))
+	}
+	if buildOpts[0].ResumeSessionID != "" {
+		t.Errorf("first BuildSession ResumeSessionID = %q, want empty", buildOpts[0].ResumeSessionID)
+	}
+	if buildOpts[1].ResumeSessionID != "native-123" {
+		t.Errorf("resume BuildSession ResumeSessionID = %q, want native-123", buildOpts[1].ResumeSessionID)
+	}
+	if !strings.Contains(buildOpts[1].Prompt, crashResumeMessageFragment) {
+		t.Errorf("resume prompt = %q, want crash-resume message", buildOpts[1].Prompt)
+	}
+	if len(startIDs) != 2 || !strings.HasSuffix(startIDs[1], "-resume") {
+		t.Errorf("start session IDs = %v, want second with -resume suffix", startIDs)
+	}
+
+	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta.AgentStatus != agentStatusSuccess {
+		t.Fatalf("AgentStatus = %q, want %q", meta.AgentStatus, agentStatusSuccess)
+	}
+
+	events := readObserveEvents(t, observeDir, featureID)
+	if got := len(filterEventsByType(events, "session.ended")); got != 2 {
+		t.Errorf("session.ended events = %d, want 2 (dead session + resumed session)", got)
+	}
+}
+
+func TestImplementLoop_CrashResumeNotAttemptedWithoutCapability(t *testing.T) {
+	featureID := "crash-resume-002"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	buildCalls := 0
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildCalls++
+		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: false}, nil
+	}
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
+		dead.statusCh <- agentStatusFailed
+		return dead, nil
+	}
+
+	if _, err := RunImplementationLoop(cfg, nil); err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("BuildSession calls = %d, want 1 (no resume without capability)", buildCalls)
+	}
+	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta.AgentStatus != agentStatusFailed {
+		t.Fatalf("AgentStatus = %q, want FAILED", meta.AgentStatus)
+	}
+}
+
+func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
+	featureID := "crash-resume-003"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	buildCalls := 0
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildCalls++
+		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+	}
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		// Every process dies; the loop must resume at most once.
+		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
+		dead.statusCh <- agentStatusFailed
+		return dead, nil
+	}
+
+	if _, err := RunImplementationLoop(cfg, nil); err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if buildCalls != 2 {
+		t.Fatalf("BuildSession calls = %d, want 2 (initial + one resume)", buildCalls)
+	}
+	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta.AgentStatus != agentStatusFailed {
+		t.Fatalf("AgentStatus = %q, want FAILED", meta.AgentStatus)
+	}
+}
+
 func TestWaitForStatus_TurnTruncated_AutoResumes(t *testing.T) {
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sink := attachCaptureSink(sess)
@@ -2283,8 +2529,7 @@ func TestImplementLoopSkipIterationReview(t *testing.T) {
 }
 
 // TestImplementLoopNoSkipIterationReview verifies that when SkipIterationReview
-// is false, the loop runs the per-iteration review gate after SUCCESS
-// (BuildSession called at least twice: once for implementation, once for review).
+// is false, the loop runs the per-axis review gate after SUCCESS.
 func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
@@ -2355,10 +2600,10 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 
-	// BuildSession should have been called at least twice: once for
-	// implementation and once for the review gate.
-	if len(*captured) < 2 {
-		t.Errorf("expected BuildSession called at least 2 times (impl + review), got %d", len(*captured))
+	// BuildSession should have been called once for implementation and once
+	// for each selected implementation-review axis.
+	if len(*captured) != 4 {
+		t.Errorf("expected BuildSession called 4 times (impl + 3 review axes), got %d", len(*captured))
 	}
 	assertExplicitEmptyAgentNames(t, (*captured)[0].AgentNames)
 	assertExplorationAgentNames(t, (*captured)[1].AgentNames)
@@ -2367,19 +2612,20 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("implement"); got != 0.002 {
-		t.Errorf("PhaseCost(implement) = %v, want 0.002", got)
+	if got := updated.PhaseCost("implement"); got != 0.004 {
+		t.Errorf("PhaseCost(implement) = %v, want 0.004", got)
 	}
-	if len(updated.SessionCosts) != 2 {
-		t.Fatalf("len(SessionCosts) = %d, want 2", len(updated.SessionCosts))
+	if len(updated.SessionCosts) != 4 {
+		t.Fatalf("len(SessionCosts) = %d, want 4", len(updated.SessionCosts))
 	}
 	implCost := updated.SessionCosts[0]
 	if implCost.SessionID != "test-noskip-001-impl-01" || implCost.PhaseKey != "implement" || implCost.ObserverPhase != "implement" || implCost.CostUSD != 0.001 {
 		t.Errorf("SessionCosts[0] = %+v, want implementation session cost under implement", implCost)
 	}
-	reviewCost := updated.SessionCosts[1]
-	if reviewCost.SessionID != "test-noskip-001-review-01" || reviewCost.PhaseKey != "implement" || reviewCost.ObserverPhase != "review" || reviewCost.CostUSD != 0.001 {
-		t.Errorf("SessionCosts[1] = %+v, want review helper session cost under implement", reviewCost)
+	for i, reviewCost := range updated.SessionCosts[1:] {
+		if !strings.Contains(reviewCost.SessionID, "implementation-review-") || reviewCost.PhaseKey != "implement" || reviewCost.ObserverPhase != "review" || reviewCost.CostUSD != 0.001 {
+			t.Errorf("SessionCosts[%d] = %+v, want implementation review axis session cost under implement", i+1, reviewCost)
+		}
 	}
 }
 
@@ -2434,8 +2680,12 @@ func TestImplementLoopReviewHelperUsesChildDirAndMarker(t *testing.T) {
 	}
 	iterDir := filepath.Join(artifactDir, "iteration-01")
 	for _, path := range []string{
-		filepath.Join(iterDir, "review", "phase_complete"),
-		filepath.Join(iterDir, "review", "review-feedback.md"),
+		filepath.Join(iterDir, "review", "craft", "phase_complete"),
+		filepath.Join(iterDir, "review", "craft", "review-feedback.md"),
+		filepath.Join(iterDir, "review", "functionality-evidence", "phase_complete"),
+		filepath.Join(iterDir, "review", "functionality-evidence", "review-feedback.md"),
+		filepath.Join(iterDir, "review", "cleanliness", "phase_complete"),
+		filepath.Join(iterDir, "review", "cleanliness", "review-feedback.md"),
 		filepath.Join(iterDir, "review-feedback.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {
@@ -2498,8 +2748,8 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if !strings.Contains(result.LastError, "iteration_reviewer") || !strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want iteration_reviewer phase_complete violation", result.LastError)
+	if !strings.Contains(result.LastError, "implementation_review_") || !strings.Contains(result.LastError, "phase_complete") {
+		t.Fatalf("LastError = %q, want implementation-review axis phase_complete violation", result.LastError)
 	}
 
 	metaBytes, err := os.ReadFile(filepath.Join(artifactDir, "iteration-02", "meta.yaml"))
@@ -2513,7 +2763,7 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	if meta.AgentStatus != agentStatusProtocolViolation {
 		t.Fatalf("AgentStatus = %q, want %q", meta.AgentStatus, agentStatusProtocolViolation)
 	}
-	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-02", "review", "review-feedback.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-02", "review", "craft", "review-feedback.md")); err != nil {
 		t.Fatalf("expected helper review feedback in child dir: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-02", "review-feedback.md")); err != nil {
@@ -3255,4 +3505,30 @@ func TestWaitForStatus_BackgroundTasks(t *testing.T) {
 			t.Fatal("waitForStatus() hung on a dead session with stale background tasks")
 		}
 	})
+}
+
+func TestRetryReviewFeedbackReminder(t *testing.T) {
+	dir := t.TempDir()
+	if got := retryReviewFeedbackReminder(dir, 0); got != "" {
+		t.Errorf("retryReviewFeedbackReminder(dir, 0) = %q, want empty", got)
+	}
+	if got := retryReviewFeedbackReminder(dir, 2); got != "" {
+		t.Errorf("retryReviewFeedbackReminder without feedback file = %q, want empty", got)
+	}
+
+	iterDir := filepath.Join(dir, "iteration-02")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(iterDir, "review-feedback.md")
+	if err := os.WriteFile(path, []byte("findings"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := retryReviewFeedbackReminder(dir, 2)
+	if !strings.Contains(got, path) {
+		t.Errorf("retryReviewFeedbackReminder = %q, want it to reference %s", got, path)
+	}
+	if strings.Contains(got, "findings") {
+		t.Errorf("retryReviewFeedbackReminder = %q, want a pointer without the feedback body", got)
+	}
 }

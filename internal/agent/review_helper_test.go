@@ -72,7 +72,7 @@ touch "`+filepath.Join(helperDir, "phase_complete")+`"
 		ResponsePath:           filepath.Join(helperDir, "review-output.txt"),
 		FeedbackPath:           filepath.Join(helperDir, "review-feedback.md"),
 		HelperIterDir:          helperDir,
-		Role:                   RoleIterationReviewer,
+		Role:                   RoleImplementationReviewCraft,
 		WorkDir:                workDir,
 		LogPath:                filepath.Join(helperDir, "review-output.txt"),
 		SystemPromptPrefix:     "review",
@@ -91,6 +91,113 @@ touch "`+filepath.Join(helperDir, "phase_complete")+`"
 	if !strings.Contains(got.SystemPrompt, filepath.Join(helperDir, "phase_complete")) {
 		t.Fatalf("SystemPrompt missing helper phase_complete path:\n%s", got.SystemPrompt)
 	}
+}
+
+func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	helperDir := filepath.Join(stateDir, "review", "iteration-01", "qa")
+	workDir := filepath.Join(root, "worktrees", "repo")
+	for _, d := range []string{helperDir, workDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
+	markerPath := filepath.Join(helperDir, "phase_complete")
+	evidenceRoot := filepath.Join(helperDir, "evidence")
+	buildCacheRoot := filepath.Join(helperDir, "build-cache")
+	tempRoot := filepath.Join(helperDir, "tmp")
+
+	sess := newUtilityTestSession()
+	sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+	sm := mocks.NewMockSessionManager()
+	var startEnv []string
+	var startOpts *ports.SessionOpts
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		startEnv = append([]string(nil), env...)
+		if len(opts) > 0 {
+			startOpts = opts[0]
+		}
+		if err := os.WriteFile(feedbackPath, []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
+			t.Errorf("write feedback: %v", err)
+		}
+		if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
+			t.Errorf("write marker: %v", err)
+		}
+		sess.statusCh <- "SUCCESS"
+		return sess, nil
+	}
+
+	var got BuildSessionOpts
+	pr := &PhaseRunner{
+		StateDir:       stateDir,
+		SessionManager: sm,
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			got = opts
+			got.WritableRoots = append([]string(nil), opts.WritableRoots...)
+			return []string{"mock-reviewer"}, []string{"TMPDIR=/old", "EXISTING=1"}, &ports.SessionOpts{
+				PermHandler:       opts.PermHandler,
+				DebugSystemPrompt: opts.SystemPrompt,
+				ProviderName:      "mock",
+			}, nil
+		},
+	}
+
+	result, err := pr.RunLiveRunReviewHelper(context.Background(), ReviewHelperConfig{
+		SessionID:     "qa-live-run",
+		FeatureID:     "feature-1",
+		Phase:         feature.PhaseReview,
+		Model:         "test-model",
+		Prompt:        "run the app",
+		PromptPath:    filepath.Join(helperDir, "review-prompt.md"),
+		FeedbackPath:  feedbackPath,
+		HelperIterDir: helperDir,
+		Role:          RoleImplementationReviewCraft,
+		WorkDir:       workDir,
+		LogPath:       filepath.Join(helperDir, "review-output.txt"),
+		EffortLevel:   llm.EffortMedium,
+		Kind:          ports.KindValidator,
+		Label:         "QA",
+	})
+	if err != nil {
+		t.Fatalf("RunLiveRunReviewHelper() error = %v", err)
+	}
+	if result.Status != ReviewApproved {
+		t.Fatalf("result.Status = %s, want APPROVED", result.Status)
+	}
+
+	for _, dir := range []string{evidenceRoot, buildCacheRoot, tempRoot} {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			t.Fatalf("scratch root %s stat = %v, info=%v; want directory", dir, err, info)
+		}
+	}
+	for _, want := range []string{feedbackPath, markerPath, evidenceRoot, buildCacheRoot, tempRoot} {
+		if !stringSliceContains(got.WritableRoots, want) {
+			t.Fatalf("WritableRoots missing %q in %#v", want, got.WritableRoots)
+		}
+	}
+	if got := envValue(startEnv, "TMPDIR"); got != tempRoot {
+		t.Fatalf("TMPDIR = %q, want %q; env=%v", got, tempRoot, startEnv)
+	}
+	if got := envValue(startEnv, "GOCACHE"); got != filepath.Join(buildCacheRoot, "go-build") {
+		t.Fatalf("GOCACHE = %q, want under build cache; env=%v", got, startEnv)
+	}
+	if got := envValue(startEnv, "GOMODCACHE"); got != filepath.Join(buildCacheRoot, "go-mod") {
+		t.Fatalf("GOMODCACHE = %q, want under build cache; env=%v", got, startEnv)
+	}
+	if got := envValue(startEnv, "EXISTING"); got != "1" {
+		t.Fatalf("EXISTING env = %q, want preserved", got)
+	}
+
+	if startOpts == nil || startOpts.PermHandler == nil {
+		t.Fatal("session PermHandler was not configured")
+	}
+	requirePermissionDecision(t, startOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
+	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(evidenceRoot, "screenshots", "home.png")+`"}`, "allow")
+	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
 }
 
 // TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode proves the bounded
@@ -165,7 +272,7 @@ func TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode(t *testing.T) {
 				ResponsePath:  filepath.Join(helperDir, "review-output.txt"),
 				FeedbackPath:  filepath.Join(helperDir, "review-feedback.md"),
 				HelperIterDir: helperDir,
-				Role:          RoleIterationReviewer,
+				Role:          RoleImplementationReviewCraft,
 				WorkDir:       workDir,
 				LogPath:       filepath.Join(helperDir, "review-output.txt"),
 				EffortLevel:   llm.EffortMedium,
@@ -293,7 +400,7 @@ func TestRunReadOnlyReviewHelper_ProtocolViolationOverridesApprovedFeedback(t *t
 		ResponsePath:           filepath.Join(helperDir, "review-output.txt"),
 		FeedbackPath:           feedbackPath,
 		HelperIterDir:          helperDir,
-		Role:                   RoleIterationReviewer,
+		Role:                   RoleImplementationReviewCraft,
 		WorkDir:                workDir,
 		LogPath:                filepath.Join(helperDir, "review-output.txt"),
 		SystemPromptPrefix:     "review",
@@ -338,6 +445,17 @@ func permissionHandlerIncludesBoundedArtifacts(handler ports.PermissionHandler) 
 	}
 }
 
+func permissionHandlerIncludesLiveRun(handler ports.PermissionHandler) bool {
+	switch h := handler.(type) {
+	case *permission.LiveRunReviewHandler:
+		return true
+	case *permission.SizeGuardHandler:
+		return permissionHandlerIncludesLiveRun(h.Inner)
+	default:
+		return false
+	}
+}
+
 func stringSliceContains(values []string, want string) bool {
 	for _, got := range values {
 		if got == want {
@@ -345,4 +463,25 @@ func stringSliceContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
+}
+
+func requirePermissionDecision(t *testing.T, handler ports.PermissionHandler, toolName, input, want string) {
+	t.Helper()
+	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolName, Input: input})
+	if err != nil {
+		t.Fatalf("CanUseTool(%s) error = %v", toolName, err)
+	}
+	if decision.Behavior != want {
+		t.Fatalf("CanUseTool(%s, %s).Behavior = %q, want %q; reason=%q", toolName, input, decision.Behavior, want, decision.Reason)
+	}
 }

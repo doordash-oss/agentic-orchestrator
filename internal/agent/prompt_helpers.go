@@ -180,12 +180,12 @@ func ClassifyContextRead(filePath, kbBaseDir, skillsDir, guidelinesDir string) (
 // Centralized so all phase-specific prompt builders share one source of
 // truth for which orientation surfaces fire and how Skills / Guidelines
 // are resolved.
-func buildPreflightInput(phase feature.Phase, skillsDir string, kbInfos []KBInfo, guidelinesDir string) prompts.PreflightInput {
+func buildPreflightInput(phase feature.Phase, skillsDir string, kbInfos []KBInfo, guidelinesDir string, requiredSkillNames ...string) prompts.PreflightInput {
 	kbViews := make([]prompts.KBView, 0, len(kbInfos))
 	for _, kb := range kbInfos {
 		kbViews = append(kbViews, prompts.KBView{Name: kb.Name, IndexPath: kb.IndexPath, RootDir: kb.RootDir})
 	}
-	skillViews := resolveAdditionalSkills(phase, skillsDir)
+	skillViews := resolveAdditionalSkills(phase, skillsDir, requiredSkillNames...)
 	guidelineViews := resolveGuidelineViews(guidelinesDir)
 	return prompts.PreflightInput{
 		KBInfos:       kbViews,
@@ -231,15 +231,34 @@ func resolveGuidelineViews(guidelinesDir string) []prompts.GuidelineView {
 }
 
 // resolveAdditionalSkills returns the SkillView rows that should populate
-// the RoleSpec system prompt's "Additional Skills" table for this phase.
+// the RoleSpec system prompt's "Additional Skills" table for this phase,
+// excluding skills that the caller promotes to mandatory guidance.
 // Returns nil when skillsDir is empty (no skill paths to advertise) or
 // when the phase has no registered utility skills.
-func resolveAdditionalSkills(phase feature.Phase, skillsDir string) []prompts.SkillView {
+func resolveAdditionalSkills(phase feature.Phase, skillsDir string, excludedNames ...string) []prompts.SkillView {
 	if skillsDir == "" {
 		return nil
 	}
 	names := utilskill.ForPhase(phase)
-	if len(names) == 0 {
+	if len(excludedNames) > 0 {
+		excluded := make(map[string]struct{}, len(excludedNames))
+		for _, name := range excludedNames {
+			excluded[name] = struct{}{}
+		}
+		filtered := names[:0]
+		for _, name := range names {
+			if _, skip := excluded[name]; !skip {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
+	}
+	return resolveSkillViews(names, skillsDir)
+}
+
+// resolveSkillViews resolves named embedded skills into prompt rows.
+func resolveSkillViews(names []string, skillsDir string) []prompts.SkillView {
+	if skillsDir == "" || len(names) == 0 {
 		return nil
 	}
 	defs, err := skilldef.ParseEmbedded()

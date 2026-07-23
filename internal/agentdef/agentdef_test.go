@@ -16,9 +16,13 @@ package agentdef
 
 import (
 	"encoding/json"
+	"io/fs"
+	"path"
 	"reflect"
 	"strings"
 	"testing"
+
+	agentsFS "github.com/doordash-oss/agentic-orchestrator/agents"
 )
 
 func TestParseAgentFile(t *testing.T) {
@@ -144,6 +148,30 @@ func TestParseEmbedded(t *testing.T) {
 		}
 		if def.Prompt == "" {
 			t.Errorf("agent %q has empty prompt", name)
+		}
+	}
+}
+
+func TestEmbeddedUpstreamAssets(t *testing.T) {
+	upstreamAgents := []string{
+		"codebase-analyzer",
+		"codebase-locator",
+		"codebase-pattern-finder",
+		"web-search-researcher",
+	}
+	assets := []string{"AGENT.md", "ATTRIBUTION.md", "LICENSE.upstream.txt"}
+
+	for _, agentName := range upstreamAgents {
+		for _, assetName := range assets {
+			assetPath := path.Join(agentName, assetName)
+			data, err := fs.ReadFile(agentsFS.FS, assetPath)
+			if err != nil {
+				t.Errorf("reading embedded agent asset %s: %v", assetPath, err)
+				continue
+			}
+			if len(data) == 0 {
+				t.Errorf("embedded agent asset %s is empty", assetPath)
+			}
 		}
 	}
 }

@@ -1,5 +1,7 @@
 ---
 description: Revise a per-phase implementation plan based on critic feedback
+license: Apache-2.0
+provenance: agentic-orchestrator-original
 ---
 
 # Phase Plan Revision
@@ -29,6 +31,8 @@ description: Revise a per-phase implementation plan based on critic feedback
 5. **Before writing the revised plan**: re-read the whole revised document end-to-end so cross-section contradictions surface
 6. **Only then**: write the complete revised plan
 7. Write only the revised plan markdown. There is no `execution-order.yaml` and no separate execution artifact.
+
+When revising an older plan that lacks the mandatory `## Metadata` section, add it before `## Overview` and set `**Frontend:** true|false` from the phase scope. Use `true` for any phase that adds or changes a user-facing UI surface, and pair `true` with a real top-level `### Visual Evidence` checklist item rather than `None required`.
 
 ## Plan Format
 

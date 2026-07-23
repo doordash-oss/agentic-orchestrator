@@ -34,8 +34,8 @@ const (
 
 	// DeferralClosed — the deferred work landed; the implementer cited
 	// this ID in closed_deferrals: on the iteration that delivered it.
-	// The reviewer is expected to verify the diff actually implements
-	// the described work (see skills/review-implementation/SKILL.md).
+	// Implementation review is expected to verify the diff actually implements
+	// the described work.
 	DeferralClosed DeferralStatus = "closed"
 
 	// DeferralRedeferred — the deferral was punted to a later phase. A

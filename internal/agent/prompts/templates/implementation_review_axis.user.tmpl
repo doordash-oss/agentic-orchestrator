@@ -1,0 +1,103 @@
+{{- /*
+  implementation_review_axis.user: prompt for a per-axis implementation review
+  helper. It intentionally carries the same context as review.user plus the
+  selected axis label.
+*/ -}}
+{{- define "implementation_review_axis.user" -}}
+Axis under review: {{ .AxisLabel }}
+{{ if .GateLabel }}Gate under review: {{ .GateLabel }}
+{{ end -}}
+Review feedback output: {{ .FeedbackPath }}
+
+Iteration under review: {{ .Iteration }}
+Iteration artifacts directory: {{ .IterDir }}
+
+{{ if or .DesignArtifactPath .FeatureDescription }}## Approved Design Grounding
+
+{{ if .DesignArtifactPath }}Approved design: {{ .DesignArtifactPath }}
+
+{{ end }}{{ if .FeatureDescription }}Approved intent:
+{{ .FeatureDescription }}
+
+{{ end }}{{ end -}}
+{{ if .LiveRunAxis }}## Live-Run Posture
+
+- Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.
+- Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.
+- Judge from the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.
+
+{{ else }}## Review Posture
+
+- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
+
+{{ end -}}
+{{ if .FinalGate }}## Final Review Scope
+
+Review the assembled feature across the cumulative cross-repo diff.
+{{ if .DiffBase }}Cumulative diff base: {{ .DiffBase }}
+{{ end }}
+Scope guidance:
+- Judge the whole assembled feature across all repositories in the workspace.
+- Use the approved roadmap as scope context for the completed feature, not as a reason to ignore feature-level gaps.
+- Do not apply per-phase deferral criteria; the full feature is in scope at Final Review.
+{{ if .RoadmapPath }}Read the approved roadmap at: {{ .RoadmapPath }}
+
+{{ end }}{{ if .PlanPath }}Read the implementation plan at: {{ .PlanPath }}
+
+{{ end }}{{ if .PreviousFeedback }}## Prior Aggregate Feedback
+
+{{ .PreviousFeedback }}
+
+{{ end }}{{ if or .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
+
+{{ if .PriorImplementationReportPaths }}Implementation verification reports:
+{{ range .PriorImplementationReportPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationEvidenceRootDirs }}Evidence roots:
+{{ range .PriorImplementationEvidenceRootDirs }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationEvidenceArtifacts }}Evidence artifacts:
+{{ range .PriorImplementationEvidenceArtifacts }}- {{ . }}
+{{ end }}{{ end }}
+{{ end }}{{ else if .RoadmapPath }}## Approved Roadmap
+
+This phase is one step in a larger plan. Read the approved roadmap at: {{ .RoadmapPath }}
+
+Scope guidance:
+- Your review MUST be scoped to the current phase's objectives only.
+- Consult the roadmap to understand what this phase is responsible for and what later phases will handle.
+- Do NOT flag missing functionality that is explicitly deferred to a subsequent phase in the roadmap.
+- Do NOT request changes for incomplete features that are scheduled for later phases.
+- DO flag issues where this phase's specific objectives are not met.
+
+{{ end }}{{ if and (not .FinalGate) .PlanPath }}## Implementation Plan
+
+Read the implementation plan (source of truth) at: {{ .PlanPath }}
+
+{{ end }}{{ if .ExitCriteria }}## Exit Criteria
+
+{{ .ExitCriteria }}
+
+{{ end }}{{ if .VerificationReportPath }}## Verification Report
+
+Read the verification report at: {{ .VerificationReportPath }}
+
+{{ end }}{{ if .ContractPath }}## Testing Contract
+
+Read the binding testing contract at: {{ .ContractPath }}
+
+{{ else if .RequiredVerification }}## Required Verification Items
+
+{{ range $i, $item := .RequiredVerification }}{{ inc $i }}. {{ if $item.Name }}{{ $item.Name }}
+   Requirement: {{ $item.Requirement }}{{ else }}{{ $item.Requirement }}{{ end }}
+{{ end }}
+Apply the "Review Rules (With Verification Items)" section from the axis methodology.
+
+{{ else }}Apply the "Review Rules (Without Verification Items)" section from the axis methodology.
+
+{{ end }}{{ if .ProgressPath }}## Progress
+
+Read the current progress at: {{ .ProgressPath }}
+
+{{ end }}{{ if and (not .FinalGate) .PhaseType }}## Phase Type
+
+This is a **{{ .PhaseType }}** phase. If the axis methodology defines phase-aware criteria, apply them; otherwise use the phase type as scope context.
+{{ end }}{{- end -}}

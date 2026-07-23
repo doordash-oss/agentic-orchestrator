@@ -37,6 +37,7 @@ type SkillDef struct {
 	Description string
 	Topics      string // comma-separated keywords/topics for discovery
 	License     string
+	Provenance  string
 	Body        string
 }
 
@@ -124,6 +125,7 @@ func parseSkillFile(content, dirName string) (SkillDef, error) {
 		Description: description,
 		Topics:      fm["topics"],
 		License:     fm["license"],
+		Provenance:  fm["provenance"],
 		Body:        body,
 	}, nil
 }

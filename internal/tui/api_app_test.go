@@ -40,6 +40,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -1505,6 +1506,43 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 	}
 }
 
+func TestAPIAttachTabsKeepImplementationFirstAndReviewAxesStable(t *testing.T) {
+	t.Parallel()
+
+	impl := session.NewSession("impl", testFeatureIDActive, feature.PhaseImplement)
+	design := session.NewSession("design", testFeatureIDActive, feature.PhaseFinalReview)
+	functionality := session.NewSession("functionality", testFeatureIDActive, feature.PhaseFinalReview)
+	cleanliness := session.NewSession("cleanliness", testFeatureIDActive, feature.PhaseFinalReview)
+	tabs := []repoTab{
+		{repoName: "Design", label: "Design", kind: ports.KindValidator, sess: design},
+		{repoName: "Cleanliness", label: "Cleanliness", kind: ports.KindValidator, sess: cleanliness},
+		{repoName: "impl", kind: ports.KindPhase, sess: impl},
+		{repoName: "Functionality/Evidence", label: "Functionality/Evidence", kind: ports.KindValidator, sess: functionality},
+	}
+
+	apiOrderAttachTabs(tabs)
+	got := []string{tabs[0].repoName, tabs[1].label, tabs[2].label, tabs[3].label}
+	want := []string{"impl", "Functionality/Evidence", "Cleanliness", "Design"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ordered attach tabs = %v, want %v", got, want)
+	}
+}
+
+func TestAPIInitialAttachTabPrefersRunningAxisOverFailedAxis(t *testing.T) {
+	t.Parallel()
+
+	failed := session.NewSession("design", testFeatureIDActive, feature.PhaseFinalReview)
+	running := session.NewSession("functionality", testFeatureIDActive, feature.PhaseFinalReview)
+	tabs := []repoTab{
+		{repoName: "Design", label: "Design", kind: ports.KindValidator, sess: failed, status: statusFailed},
+		{repoName: "Functionality/Evidence", label: "Functionality/Evidence", kind: ports.KindValidator, sess: running, status: statusImplementing},
+	}
+
+	if got := apiInitialAttachTab(tabs); got != 1 {
+		t.Fatalf("apiInitialAttachTab() = %d, want running Functionality/Evidence tab", got)
+	}
+}
+
 func TestAPIAppModelAttachShowsAllKnowledgeBaseRepoSessions(t *testing.T) {
 	t.Parallel()
 
@@ -2356,6 +2394,61 @@ func TestAPIAppModelDashboardFeatureCarriesValidationReviewGateFromREST(t *testi
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("REST validation live preview missing %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestAPIAppModelDashboardFeatureCarriesImplementationReviewGateFromREST(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           testFeatureIDActive,
+		Name:         "Review implementation",
+		Slug:         "review-implementation",
+		Status:       testFeatureStatusImplementing,
+		CurrentPhase: testPhaseNameImplement,
+		Progress: server.FeatureProgress{
+			CurrentRoadmapPhase: 1,
+			TotalRoadmapPhases:  11,
+		},
+	}
+	detail := apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
+		ActiveRunDetail: &server.RunSummaryDTO{
+			RunNumber:    5,
+			CurrentPhase: testPhaseNameImplement,
+			Iteration:    3,
+			RoadmapPhase: 1,
+			RoadmapTotal: 11,
+		},
+		ReviewGate: server.ReviewGateDTO{
+			ReviewingGate: true,
+			ReviewFixing:  true,
+			ValidatorStatuses: map[string]string{
+				"Craft":                  featureStatusTokenRunning,
+				"Functionality/Evidence": featureStatusTokenRunning,
+				"Cleanliness":            featureStatusTokenRunning,
+				"Design":                 featureStatusTokenRunning,
+			},
+		},
+	})
+
+	f := (APIAppModel{}).apiDashboardFeature(summary, detail, true)
+	if !f.ReviewingGate {
+		t.Fatal("ReviewingGate = false, want true")
+	}
+	if !f.ReviewFixing {
+		t.Fatal("ReviewFixing = false, want true")
+	}
+
+	leftPanelStatus := stripANSI(formatStatus(f))
+	if !strings.Contains(leftPanelStatus, "Reviewing [3]") {
+		t.Fatalf("left-panel status = %q, want active review wording", leftPanelStatus)
+	}
+
+	overviewStatus := stripANSI(formatPhaseStatus(f))
+	for _, want := range []string{"reviewing:", "Craft ⟳", "Func ⟳", "Clean ⟳", "Design ⟳"} {
+		if !strings.Contains(overviewStatus, want) {
+			t.Fatalf("Overview phase status missing %q in %q", want, overviewStatus)
 		}
 	}
 }

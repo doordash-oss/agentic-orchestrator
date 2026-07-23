@@ -1,5 +1,7 @@
 ---
 description: Execute an approved phase plan with TDD, dependency-aware task fan-out, structured verification, and a strict iteration handoff
+license: Apache-2.0; Superpowers inspiration acknowledged in ATTRIBUTION.md
+provenance: upstream-inspired
 ---
 
 # Plan Execution

@@ -378,6 +378,81 @@ func (h *BoundedHelperArtifactHandler) pathAllowed(path string) bool {
 	return false
 }
 
+// LiveRunReviewHandler grants a review axis hands-on command access while
+// keeping tool-driven writes scoped to harness-owned helper artifacts and
+// scratch roots outside the reviewed source tree.
+type LiveRunReviewHandler struct {
+	AllowedPaths  []string
+	ScratchRoots  []string
+	DenyWriteHint string
+}
+
+// CanUseTool allows broad shell use for live-run review and restricts file
+// mutation tools to helper artifacts or scratch roots.
+func (h *LiveRunReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	switch req.ToolName {
+	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory", "WebSearch", "WebFetch":
+		return ports.PermissionDecision{Behavior: "allow"}, nil
+
+	case "Agent":
+		return ports.PermissionDecision{Behavior: "allow"}, nil
+
+	case "Bash":
+		return ports.PermissionDecision{Behavior: "allow"}, nil
+
+	case "Edit", "Write", "NotebookEdit":
+		path, ok := toolInputFilePath(req.Input)
+		if ok && (pathExactlyAllowed(path, h.AllowedPaths) || pathUnderAnyRoot(path, h.ScratchRoots)) {
+			return ports.PermissionDecision{Behavior: "allow"}, nil
+		}
+		reason := h.DenyWriteHint
+		if strings.TrimSpace(reason) == "" {
+			reason = "live-run review may write only helper artifacts and scratch roots"
+		}
+		return ports.PermissionDecision{Behavior: "deny", Reason: reason}, nil
+	}
+
+	return ports.PermissionDecision{
+		Behavior: "deny",
+		Reason:   "live-run review may use shell and read tools, but may not use undeclared tools",
+	}, nil
+}
+
+func pathExactlyAllowed(path string, allowedPaths []string) bool {
+	cleaned, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	for _, allowed := range allowedPaths {
+		allowedAbs, err := filepath.Abs(filepath.Clean(allowed))
+		if err == nil && cleaned == allowedAbs {
+			return true
+		}
+	}
+	return false
+}
+
+func pathUnderAnyRoot(path string, roots []string) bool {
+	cleaned, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	for _, root := range roots {
+		rootAbs, err := filepath.Abs(filepath.Clean(root))
+		if err != nil {
+			continue
+		}
+		if cleaned == rootAbs {
+			return true
+		}
+		rel, err := filepath.Rel(rootAbs, cleaned)
+		if err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+			return true
+		}
+	}
+	return false
+}
+
 func toolInputFilePath(input string) (string, bool) {
 	var payload struct {
 		FilePath string `json:"file_path"`

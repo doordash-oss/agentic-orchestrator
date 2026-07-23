@@ -247,8 +247,14 @@ func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage,
 // status="interrupted" (handled in ParseLine).
 func (p *Protocol) Interrupt() error { return llm.ErrNotSupported }
 
-// SessionID returns "" — Codex has no session ID concept.
-func (p *Protocol) SessionID() string { return "" }
+// SessionID returns the Codex thread ID once thread/start (or thread/resume)
+// has completed, "" before that. The thread ID is resumable via
+// ProtocolOpts.ResumeSessionID in a later session.
+func (p *Protocol) SessionID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.threadID
+}
 
 // TranscriptPath returns "" — Codex has no transcript file.
 func (p *Protocol) TranscriptPath() string { return "" }
@@ -309,6 +315,22 @@ func (p *Protocol) sendInitialize() error {
 
 func (p *Protocol) startThread() error {
 	id := int(nextID.Add(1))
+
+	// Resume a persisted thread instead of starting a fresh one. The
+	// response carries the same {thread:{id}} shape as thread/start, so
+	// handleResponse closes threadReady for both paths. Model, approval
+	// policy, and sandbox are re-supplied per-turn by turn/start.
+	if p.opts.ResumeSessionID != "" {
+		req := Request{
+			JSONRPC: "2.0",
+			Method:  "thread/resume",
+			ID:      id,
+			Params: ThreadResumeParams{
+				ThreadID: p.opts.ResumeSessionID,
+			},
+		}
+		return p.writeJSON(req)
+	}
 
 	sandbox := SandboxModeWorkspaceWrite
 	if p.dangerFullAccess {

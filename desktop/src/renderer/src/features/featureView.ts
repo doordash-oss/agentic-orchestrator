@@ -111,7 +111,7 @@ export function orderDashboardFeatures(features: readonly FeatureSnapshot[]): Fe
 }
 
 const DASHBOARD_GROUPS: readonly { id: DashboardGroupId; label: string }[] = [
-  { id: 'in-progress', label: 'In Progress' },
+  { id: 'in-progress', label: 'Running now' },
   { id: 'published', label: 'Published' },
   { id: 'done', label: 'Done' },
 ];
@@ -212,6 +212,24 @@ export function isRunAtRest(status: string): boolean {
 
 export function spineTone(snapshot: FeatureSnapshot): 'progress' | 'error' {
   return snapshot.setup?.status === 'failed' || snapshot.status === 'Failed' ? 'error' : 'progress';
+}
+
+/**
+ * Human elapsed time for the queue: seconds under a minute, "Mm SSs" under an
+ * hour, then "Hh Mm". Returns null when there is no run time to show yet.
+ */
+export function formatElapsed(snapshot: FeatureSnapshot): string | null {
+  const total = snapshot.timing?.totalSeconds ?? 0;
+  if (total <= 0) return null;
+  if (total < 60) return `${total}s`;
+  if (total < 3600) {
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
 }
 
 export interface SetupProgress {

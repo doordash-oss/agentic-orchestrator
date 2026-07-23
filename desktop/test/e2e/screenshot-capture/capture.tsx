@@ -672,8 +672,47 @@ function SettingsUpdateScene({ scene }: { scene: string }): React.ReactElement {
   );
 }
 
+function HomeFlightBoardScene(): React.ReactElement {
+  const attentionItems: AttentionItem[] = [
+    {
+      kind: 'permission',
+      id: 'perm-updater',
+      featureId: 'updater-auto-1',
+      sessionId: 'sess-updater',
+      phase: 'Review',
+      toolName: 'Bash',
+      summary: 'Approve the plan before implementation continues.',
+      input: { command: 'apply plan' },
+      waitingSince: '2026-07-23T09:05:00Z',
+    },
+  ];
+  return (
+    <div className="app-frame" style={{ height: '100vh' }}>
+      <header className="global-bar">
+        <div className="global-bar__brand">
+          <span className="global-bar__mark" aria-hidden="true">
+            A
+          </span>
+          <h1>Agentico</h1>
+        </div>
+        <p className="global-bar__runtime" role="status" data-tone="ready">
+          <span aria-hidden="true">●</span> Runtime ready
+        </p>
+      </header>
+      <WorkspaceShell
+        attentionItems={attentionItems}
+        refreshAttention={async () => attentionItems}
+      />
+    </div>
+  );
+}
+
 function CaptureApp() {
   const scene = getScene();
+
+  if (scene === 'home-flight-board') {
+    return <HomeFlightBoardScene />;
+  }
 
   if (scene === 'update-passive-active' || scene === 'update-constrained') {
     return <UpdateAppScene />;
@@ -726,6 +765,11 @@ function CaptureApp() {
     return <BackgroundScene scene={scene} />;
   }
   return <div>Unknown scene: {scene}</div>;
+}
+
+const themeParam = new URLSearchParams(window.location.search).get('theme');
+if (themeParam === 'light' || themeParam === 'dark') {
+  document.documentElement.dataset['theme'] = themeParam;
 }
 
 const container = document.getElementById('root');

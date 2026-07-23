@@ -8,6 +8,7 @@ import {
   displayStatusLabel,
   featureBranch,
   fieldForCreationError,
+  formatElapsed,
   groupDashboardFeatures,
   isReadyToStart,
   isRunAtRest,
@@ -105,10 +106,21 @@ describe('intervention-first dashboard ordering', () => {
         featureIds: group.features.map((feature) => feature.id),
       })),
     ).toStrictEqual([
-      { id: 'in-progress', label: 'In Progress', featureIds: ['failed', 'ready'] },
+      { id: 'in-progress', label: 'Running now', featureIds: ['failed', 'ready'] },
       { id: 'published', label: 'Published', featureIds: ['published'] },
       { id: 'done', label: 'Done', featureIds: ['done'] },
     ]);
+  });
+});
+
+describe('formatElapsed', () => {
+  it('formats run time and hides it when there is none', () => {
+    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 45 } }))).toBe('45s');
+    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 760 } }))).toBe('12m 40s');
+    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 2462 } }))).toBe('41m 02s');
+    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 5400 } }))).toBe('1h 30m');
+    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 0 } }))).toBeNull();
+    expect(formatElapsed(featureSnapshot({}))).toBeNull();
   });
 });
 

@@ -162,6 +162,39 @@ func TestBranchDiffPreviews_CommittedFeatureChange(t *testing.T) {
 	}
 }
 
+func TestBranchDiffPreviews_UsesRemoteTrackingBaseWhenLocalBaseIsStale(t *testing.T) {
+	t.Parallel()
+
+	repo := testutil.InitGitRepo(t)
+	remote := testutil.InitBareRemote(t, repo)
+
+	testutil.CreateBranch(t, repo, "upstream-main")
+	testutil.CommitFile(t, repo, "upstream.txt", "already merged\n", "advance remote main")
+	testutil.SimulatePush(t, repo, remote, "upstream-main", "main")
+
+	runGit(t, repo, "checkout", "-b", "feature/test", "origin/main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("feature only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "README.md", "feature.txt")
+
+	previews, err := BranchDiffPreviews(repo, "main")
+	if err != nil {
+		t.Fatalf("BranchDiffPreviews: %v", err)
+	}
+	if len(previews) != 2 {
+		t.Fatalf("len(previews) = %d, want 2 feature changes: %+v", len(previews), previews)
+	}
+	for _, preview := range previews {
+		if preview.Path == "upstream.txt" {
+			t.Fatalf("previews include change already present on origin/main: %+v", previews)
+		}
+	}
+}
+
 func TestBranchDiffPreviews_DeleteAndRename(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping rename/delete diff preview extended regression in short mode")

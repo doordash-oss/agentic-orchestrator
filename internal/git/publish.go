@@ -307,11 +307,20 @@ func DiffStat(worktreePath string, baseBranch ...string) (string, error) {
 	return string(out), nil
 }
 
-// resolveBase returns the base branch to diff against. If an explicit base is
-// provided, it's used directly. Otherwise falls back to detecting main/master.
+// resolveBase returns the base ref to diff against. A matching origin
+// remote-tracking branch takes precedence over the local branch because
+// publish and completion diffs describe what a PR against the remote base
+// would contain. Otherwise the supplied or detected local ref is used.
 func resolveBase(worktreePath string, baseBranch ...string) string {
+	base := ""
 	if len(baseBranch) > 0 && baseBranch[0] != "" {
-		return baseBranch[0]
+		base = baseBranch[0]
+	} else {
+		base = DefaultBranch(worktreePath)
 	}
-	return DefaultBranch(worktreePath)
+	remoteRef := "refs/remotes/origin/" + base
+	if exec.Command("git", "-C", worktreePath, "show-ref", "--verify", "--quiet", remoteRef).Run() == nil {
+		return "origin/" + base
+	}
+	return base
 }

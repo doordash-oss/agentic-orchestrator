@@ -45,6 +45,8 @@ export type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT';
 export interface ApiRequestInit {
   method?: ApiMethod;
   body?: unknown;
+  /** Trusted main-process override for server operations that legitimately run longer. */
+  timeoutMs?: number;
 }
 
 /** The supervision surface the gateway needs from a spawned server child. */
@@ -210,7 +212,7 @@ export class RuntimeGateway {
     const method = init.method ?? 'GET';
     return this.deps.fetchJson(`${this.baseUrl}${path}`, {
       token: this.token,
-      timeoutMs: this.timeouts.apiRequestMs,
+      timeoutMs: init.timeoutMs ?? this.timeouts.apiRequestMs,
       ...(method === 'GET' ? {} : { method, body: init.body ?? {} }),
     });
   }

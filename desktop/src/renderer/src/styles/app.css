@@ -2271,16 +2271,16 @@ body {
   width: min(1440px, 100%);
   margin: 0 auto;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  border-bottom: 2px solid var(--color-text);
-  padding-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
 }
 .home-surface__header h1 {
   margin: 0;
-  font: 600 clamp(30px, 4vw, 52px)/0.9 var(--font-display);
+  font: 600 clamp(30px, 4vw, 46px)/0.95 var(--font-display);
   letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 .home-surface__eyebrow {
   margin: 0 0 var(--space-2);
@@ -2288,6 +2288,16 @@ body {
   font: 11px var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+.home-surface__readout {
+  margin: var(--space-3) 0 0;
+  color: var(--color-muted);
+  font: 12px var(--font-mono);
+  letter-spacing: 0.02em;
+}
+.home-surface__readout b {
+  color: var(--color-text);
+  font-weight: 500;
 }
 .creation-flow {
   width: min(880px, 100%);
@@ -2759,158 +2769,394 @@ body {
   }
 }
 
-/* --- Feature list (Home) ------------------------------------------------------- */
+/* --- Feature list (Home) — the flight board ------------------------------------ */
 
+/* The queue reads as a departures board: in-flight runs are hero cards carrying
+ * the signature phase rail; shipped work condenses into scannable rows. */
 .feature-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-5);
   width: min(1440px, 100%);
   margin: 0 auto;
-}
-
-.feature-list__items {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
 }
 
 .feature-list__groups {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-6);
 }
 
 .feature-list__group {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-4);
+}
+
+.feature-list__group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 .feature-list__group-title {
   margin: 0;
   color: var(--color-muted);
-  font: 600 11px/1.2 var(--font-mono);
-  letter-spacing: 0.08em;
+  font: 600 13px/1.2 var(--font-display);
+  letter-spacing: 0.22em;
   text-transform: uppercase;
 }
 
-.feature-list__item {
-  display: grid;
-  grid-template-columns: 3px minmax(0, 1fr) max-content;
-  align-items: center;
-  gap: var(--space-3);
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
-}
-
-.feature-list__signal {
-  align-self: stretch;
-  width: 3px;
-  border-radius: 99px;
-  background: var(--color-hairline);
-}
-
-.feature-list__item[data-tone='danger'] .feature-list__signal {
-  background: var(--color-danger);
-}
-
-.feature-list__item[data-tone='attention'] .feature-list__signal {
-  background: var(--color-accent);
-}
-
-.feature-list__item[data-tone='active'] .feature-list__signal,
-.feature-list__item[data-tone='ready'] .feature-list__signal {
-  background: var(--color-signal);
-}
-
-.feature-list__facts {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.feature-list__heading {
-  grid-column: 1 / -1;
-}
-.feature-list__details {
-  grid-column: 1 / -1;
-}
-
-.feature-list__heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: flex-start;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
-.feature-list__name {
-  font-weight: 700;
-  font-size: 13px;
-}
-
-.feature-list__state {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--color-muted);
-  white-space: nowrap;
-}
-
-.feature-list__state[data-tone='danger'] {
-  color: var(--color-danger);
-}
-
-.feature-list__state[data-tone='attention'] {
-  color: var(--color-accent);
-}
-
-.feature-list__state[data-tone='active'] {
+/* The running-now header signals live work: signal-toned label trailing a
+ * fading rule, echoing the pulse on the cards below it. */
+.feature-list__group-head[data-kind='in-progress'] .feature-list__group-title {
   color: var(--color-signal);
 }
 
-.feature-list__state[data-tone='ready'] {
-  color: var(--color-success);
+.feature-list__group-count {
+  color: var(--color-muted);
+  font: 12px var(--font-mono);
+  letter-spacing: 0.06em;
 }
 
-.feature-list__details {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(90px, 1fr));
-  gap: var(--space-2) var(--space-3);
+.feature-list__group-head[data-kind='in-progress']::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-signal), transparent 55%);
+  opacity: 0.4;
+}
+
+/* Running-now cards -------------------------------------------------------- */
+.run-grid {
+  list-style: none;
   margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
+  gap: var(--space-3);
 }
 
-.feature-list__details div {
-  min-width: 0;
+.run-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-panel) 84%, var(--color-text) 4%),
+    var(--color-panel)
+  );
+  border: 1px solid var(--color-hairline);
+  border-left: 3px solid var(--color-signal);
+  border-radius: var(--radius);
+  padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
-.feature-list__details dt {
-  font-size: 9px;
-  letter-spacing: 0.07em;
+.run-card[data-tone='attention'] {
+  border-left-color: var(--color-accent);
+}
+
+.run-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.run-card__title {
+  margin: 0;
+  font: 600 22px/1.1 var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+.run-card__badges {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.run-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  font: 11px var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-signal);
+}
+
+.run-card[data-tone='attention'] .run-card__badge {
+  color: var(--color-accent);
+}
+
+.run-card__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-signal);
+  animation: run-card-pulse 1.8s ease-in-out infinite;
+}
+
+.run-card[data-tone='attention'] .run-card__dot {
+  background: var(--color-accent);
+}
+
+@keyframes run-card-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-card__dot {
+    animation: none;
+  }
+}
+
+.run-card__meta {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  font: 12px var(--font-mono);
+  color: var(--color-muted);
+}
+
+.run-card__meta b {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.run-card__failure {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 12px;
+}
+
+.run-card__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.run-card__action,
+.queue-row__action {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  font: 600 13px var(--font-display);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text);
+  background: transparent;
+  cursor: pointer;
+}
+
+.run-card__action:hover,
+.queue-row__action:hover {
+  border-color: var(--color-signal);
+  color: var(--color-signal);
+}
+
+/* The signature phase rail --------------------------------------------------- */
+.flight-rail {
+  margin-top: var(--space-1);
+}
+
+.flight-rail__track {
+  position: relative;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-hairline);
+}
+
+.flight-rail__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 1px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-signal) 25%, transparent),
+    var(--color-signal)
+  );
+}
+
+.flight-rail[data-tone='attention'] .flight-rail__fill {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-accent) 25%, transparent),
+    var(--color-accent)
+  );
+}
+
+.flight-rail__stops {
+  list-style: none;
+  margin: -6px 0 0;
+  padding: 0;
+  display: flex;
+  justify-content: space-between;
+}
+
+.flight-rail__stop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: 74px;
+}
+
+.flight-rail__stop:first-child {
+  align-items: flex-start;
+}
+
+.flight-rail__stop:last-child {
+  align-items: flex-end;
+}
+
+.flight-rail__stop-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-panel);
+  border: 2px solid var(--color-hairline);
+}
+
+.flight-rail__stop[data-state='done'] .flight-rail__stop-dot {
+  background: var(--color-signal);
+  border-color: var(--color-signal);
+}
+
+.flight-rail__stop[data-state='active'] .flight-rail__stop-dot {
+  background: var(--color-signal);
+  border-color: var(--color-signal);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--color-signal) 20%, transparent),
+    0 0 14px var(--color-signal);
+}
+
+.flight-rail__stop[data-tone='attention'][data-state='done'] .flight-rail__stop-dot,
+.flight-rail__stop[data-tone='attention'][data-state='active'] .flight-rail__stop-dot {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.flight-rail__stop[data-tone='attention'][data-state='active'] .flight-rail__stop-dot {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--color-accent) 20%, transparent),
+    0 0 14px var(--color-accent);
+}
+
+.flight-rail__stop-dot--pulse {
+  animation: run-card-pulse 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flight-rail__stop-dot--pulse {
+    animation: none;
+  }
+}
+
+.flight-rail__stop-label {
+  font: 11px var(--font-mono);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--color-muted);
 }
 
-.feature-list__details dd {
+.flight-rail__stop[data-state='active'] .flight-rail__stop-label {
+  color: var(--color-signal);
+}
+
+.flight-rail__stop[data-tone='attention'][data-state='active'] .flight-rail__stop-label {
+  color: var(--color-accent);
+}
+
+/* Shipped rows ------------------------------------------------------------- */
+.queue-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.queue-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.4fr) minmax(140px, 1fr) 132px 104px 104px;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--color-hairline);
+  transition: background 0.12s ease;
+}
+
+.queue-row:hover {
+  background: color-mix(in srgb, var(--color-signal) 5%, transparent);
+}
+
+.queue-row__name {
+  font: 600 18px/1.15 var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+.queue-row__repo {
+  font: 12px var(--font-mono);
+  color: var(--color-muted);
   overflow: hidden;
-  margin: 1px 0 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.feature-list__failure {
-  margin: 0;
-  color: var(--color-danger);
-  font-size: 12px;
+.queue-row__rail {
+  display: flex;
+  gap: 5px;
+}
+
+.queue-row__pip {
+  width: 20px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-success);
+  opacity: 0.75;
+}
+
+.queue-row__state {
+  font: 11px var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-success);
+}
+
+.queue-row__action {
+  justify-self: end;
+  padding: var(--space-1) var(--space-3);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.queue-row:hover .queue-row__action,
+.queue-row__action:focus-visible {
+  opacity: 1;
+}
+
+/* Narrow panes: single-column cards; rows keep name, state, and action. */
+@media (max-width: 900px) {
+  .run-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-row {
+    grid-template-columns: minmax(0, 1fr) 104px 104px;
+  }
+
+  .queue-row__repo,
+  .queue-row__rail {
+    display: none;
+  }
+
+  .queue-row__action {
+    opacity: 1;
+  }
 }
 
 .feature-list__empty {
@@ -5345,20 +5591,6 @@ body {
   .cockpit__facts {
     flex-direction: column;
     gap: var(--space-2);
-  }
-
-  .feature-list__item {
-    grid-template-columns: 3px minmax(0, 1fr);
-    align-items: stretch;
-  }
-
-  .feature-list__item > .setup-wizard__action {
-    grid-column: 2;
-    justify-self: start;
-  }
-
-  .feature-list__details {
-    grid-template-columns: repeat(2, minmax(90px, 1fr));
   }
 
   .run-timeline__header {

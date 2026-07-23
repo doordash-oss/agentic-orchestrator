@@ -283,6 +283,23 @@ describe('RuntimeGateway attach', () => {
     expectNoTokenLeak(env);
   });
 
+  it('honors a longer timeout requested by a trusted main-process service', async () => {
+    const env = makeEnv({
+      discovery: JSON.stringify(discoveryRecord()),
+      timeouts: { apiRequestMs: 22 },
+    });
+    await env.gateway.start();
+
+    await expect(
+      env.gateway.apiRequest('/api/v1/features', {
+        timeoutMs: 6 * 60_000,
+      }),
+    ).rejects.toThrow('unexpected url');
+
+    const request = env.fetchCalls.find((call) => call.url.endsWith('/api/v1/features'));
+    expect(request?.timeoutMs).toBe(6 * 60_000);
+  });
+
   it('hard-blocks on a healthy server with no compatibility declaration', async () => {
     const body = healthBody();
     delete body['compatibility'];

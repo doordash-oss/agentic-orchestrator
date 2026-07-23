@@ -367,6 +367,7 @@ describe('FeatureService.dispatchAction', () => {
     expect(calls[0]?.init).toStrictEqual({
       method: 'POST',
       body: { repos: ['repo-a'] },
+      timeoutMs: 6 * 60_000,
     });
   });
 

@@ -320,6 +320,129 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   ],
 };
 
+/** Fixtures for the Home flight-board capture: three in-flight runs and a
+ * shipped ledger, exercising live, needs-you, and published treatments. */
+function flightSnapshot(
+  id: string,
+  name: string,
+  status: string,
+  currentPhase: string,
+  repos: string[],
+  createdAt: string,
+  totalSeconds: number,
+): FeatureSnapshot {
+  return {
+    id,
+    name,
+    slug: id,
+    status,
+    currentPhase,
+    pipeline: 'medium',
+    repos,
+    createdAt,
+    activeRun: 1,
+    reviewGate: {
+      reviewingGate: false,
+      reviewFixing: false,
+      validatingPlan: false,
+      validatorStatuses: {},
+    },
+    actions: [],
+    timing: { totalSeconds },
+  };
+}
+
+const FLIGHT_BOARD_FEATURES: FeatureSnapshot[] = [
+  flightSnapshot(
+    'updater-auto-1',
+    'electron App auto-updater',
+    'NeedUserInput',
+    'Review',
+    ['agentic-orchestrator'],
+    '2026-07-23T09:00:00Z',
+    2462,
+  ),
+  flightSnapshot(
+    'readme-italian-1',
+    'translate README to Italian',
+    'Implementing',
+    'Implement',
+    ['agentic-orchestrator'],
+    '2026-07-23T08:30:00Z',
+    760,
+  ),
+  flightSnapshot(
+    'taulu-ttl-1',
+    'Taulu TTL compaction',
+    'Planning',
+    'Plan',
+    ['taulu'],
+    '2026-07-23T08:00:00Z',
+    131,
+  ),
+  flightSnapshot(
+    'pub-electron-app',
+    'electron APP for agentic Orchestrator',
+    'Published',
+    'Publish',
+    ['agentic-orchestrator'],
+    '2026-07-22T10:00:00Z',
+    5220,
+  ),
+  flightSnapshot(
+    'pub-taulu-mv',
+    'Taulu materialized views',
+    'Published',
+    'Publish',
+    ['taulu'],
+    '2026-07-21T10:00:00Z',
+    3180,
+  ),
+  flightSnapshot(
+    'pub-smart-zone',
+    'The Smart Zone',
+    'Published',
+    'Publish',
+    ['agentic-orchestrator'],
+    '2026-07-20T10:00:00Z',
+    1890,
+  ),
+  flightSnapshot(
+    'pub-prod-fallback',
+    'Prod tenant fallback on READ',
+    'Published',
+    'Publish',
+    ['dev-console', 'taulu'],
+    '2026-07-19T10:00:00Z',
+    4410,
+  ),
+  flightSnapshot(
+    'pub-static-shard',
+    'Taulu Static Sharding',
+    'Published',
+    'Publish',
+    ['taulu'],
+    '2026-07-18T10:00:00Z',
+    2020,
+  ),
+];
+
+const FLIGHT_BOARD_SUMMARY: FeatureSummaryView[] = FLIGHT_BOARD_FEATURES.map((feature) => ({
+  id: feature.id,
+  name: feature.name,
+  status: feature.status,
+  currentPhase: feature.currentPhase,
+  repos: feature.repos,
+  createdAt: feature.createdAt,
+  activeRun: feature.activeRun,
+  runCount: 1,
+  warnings: [],
+}));
+
+const FLIGHT_BOARD_SNAPSHOTS: Record<string, FeatureSnapshot> = Object.fromEntries(
+  FLIGHT_BOARD_FEATURES.map((feature) => [feature.id, feature]),
+);
+
 const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
   id: 'abcd1234ef567890',
   name: 'Signal Lab telemetry',
@@ -700,24 +823,27 @@ function makeMockApi(
   let currentSettings: Settings = {
     ...defaultSettings(),
     theme: requestedTheme,
-    tabs: {
-      open: [
-        {
-          featureId: 'abcd1234ef567890',
-          titleHint: 'History and Rewind',
-          selectedRunNumber:
-            scene.startsWith('archive') ||
-            scene.startsWith('pinned') ||
-            scene.startsWith('constrained')
-              ? 7
-              : null,
-        },
-      ],
-      activeFeatureId:
-        scene === 'update-passive-active' || scene === 'update-constrained'
-          ? null
-          : 'abcd1234ef567890',
-    },
+    tabs:
+      scene === 'home-flight-board'
+        ? { open: [], activeFeatureId: null }
+        : {
+            open: [
+              {
+                featureId: 'abcd1234ef567890',
+                titleHint: 'History and Rewind',
+                selectedRunNumber:
+                  scene.startsWith('archive') ||
+                  scene.startsWith('pinned') ||
+                  scene.startsWith('constrained')
+                    ? 7
+                    : null,
+              },
+            ],
+            activeFeatureId:
+              scene === 'update-passive-active' || scene === 'update-constrained'
+                ? null
+                : 'abcd1234ef567890',
+          },
   };
 
   return {
@@ -750,8 +876,15 @@ function makeMockApi(
     reorderWorkspaceRoots: () => Promise.resolve(READY_SNAPSHOT),
     initRepository: () => Promise.resolve(READY_SNAPSHOT),
     listRepositories: () => Promise.resolve(READY_SNAPSHOT.repositories),
-    listFeatures: () => Promise.resolve(FEATURE_SUMMARY),
+    listFeatures: () =>
+      Promise.resolve(scene === 'home-flight-board' ? FLIGHT_BOARD_SUMMARY : FEATURE_SUMMARY),
     getFeature: (_featureId: string) => {
+      if (scene === 'home-flight-board') {
+        const snapshot = FLIGHT_BOARD_SNAPSHOTS[_featureId];
+        if (snapshot !== undefined) {
+          return Promise.resolve(snapshot);
+        }
+      }
       if (scene === 'fork') {
         return Promise.resolve({
           ...FEATURE_SNAPSHOT,

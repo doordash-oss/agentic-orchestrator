@@ -450,6 +450,7 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   need_user_input: ServerNeedUserInputGateDetailSchema.optional(),
   failure: z.object({ type: z.string().optional(), message: z.string().optional() }).optional(),
   verification_items: z.array(z.object({ name: z.string(), state: z.string() })).optional(),
+  timing: z.object({ total_seconds: z.number().int().nonnegative() }).optional(),
 });
 
 export type ServerFeatureDetail = z.output<typeof ServerFeatureDetailSchema>;

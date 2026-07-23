@@ -94,6 +94,11 @@ const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['kb_build', 'Knowledge base'],
 ];
 
+// Description generation is a synchronous utility LLM session. Its session
+// idle bounds are five minutes, so leave transport cleanup time beyond that
+// without weakening the 30-second default for ordinary API calls.
+const PUBLISH_DESCRIPTION_TIMEOUT_MS = 6 * 60_000;
+
 export class FeatureService {
   private readonly actionFlights = new Map<string, Promise<FeatureActionResult>>();
 
@@ -195,6 +200,7 @@ export class FeatureService {
     const body = await this.api(`/api/v1/features/${id}/actions/publish/description`, {
       method: 'POST',
       body: repos.length === 0 ? {} : { repos },
+      timeoutMs: PUBLISH_DESCRIPTION_TIMEOUT_MS,
     });
     const response = validateWithSchema(body, PublishDescriptionResponseSchema);
     return {
@@ -556,6 +562,9 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
             state: item.state,
           })),
         }),
+    ...(feature.timing === undefined
+      ? {}
+      : { timing: { totalSeconds: feature.timing.total_seconds } }),
     ...(feature.failure === undefined
       ? {}
       : {

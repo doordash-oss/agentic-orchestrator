@@ -26,13 +26,20 @@ import { FeatureCockpit } from './FeatureCockpit';
 import { SettingsPanel } from './SettingsPanel';
 import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
 import {
+  dashboardGroupId,
   dashboardState,
   displayStatusLabel,
+  formatElapsed,
   groupDashboardFeatures,
+  isRunAtRest,
   orderDashboardFeatures,
+  spineActiveIndex,
+  spineStages,
+  type SpineStage,
 } from './featureView';
 import { BulkPreviewPanel } from './BulkPreviewPanel';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
+import { usePrefersReducedMotion } from '../hooks';
 
 const SETTINGS_TAB_ID = '__settings__';
 
@@ -487,8 +494,9 @@ export function WorkspaceShell({
             <>
               <header className="home-surface__header">
                 <div>
-                  <p className="home-surface__eyebrow">Feature queue</p>
-                  <h1>Home</h1>
+                  <p className="home-surface__eyebrow">Agentico · Supervised runs</p>
+                  <h1>Feature queue</h1>
+                  <HomeReadout state={list} />
                 </div>
                 {list.phase !== 'loaded' || list.features.length > 0 ? (
                   <button
@@ -767,6 +775,31 @@ interface FeatureListProps {
   createButtonRef: RefObject<HTMLButtonElement | null>;
 }
 
+/** The masthead run tally: active, waiting-on-you, and shipped counts. */
+function HomeReadout({ state }: { state: ListState }) {
+  if (state.phase !== 'loaded' || state.features.length === 0) return null;
+  let running = 0;
+  let waiting = 0;
+  let shipped = 0;
+  for (const feature of state.features) {
+    const group = dashboardGroupId(feature);
+    if (group === 'published' || group === 'done') {
+      shipped += 1;
+      continue;
+    }
+    const { bucket } = dashboardState(feature);
+    if (bucket === 'active') running += 1;
+    else if (bucket === 'intervention') waiting += 1;
+  }
+  return (
+    <p className="home-surface__readout">
+      <b>{running}</b> running<span aria-hidden="true"> · </span>
+      <b>{waiting}</b> waiting on you<span aria-hidden="true"> · </span>
+      <b>{shipped}</b> shipped
+    </p>
+  );
+}
+
 function FeatureList({
   state,
   openTabIds,
@@ -778,7 +811,6 @@ function FeatureList({
 }: FeatureListProps) {
   return (
     <section className="feature-list" aria-label="Existing features">
-      <h2 className="setup-step__title">Features</h2>
       {state.phase === 'loading' ? (
         <p role="status" className="setup-step__empty">
           Loading features…
@@ -817,72 +849,200 @@ function FeatureList({
               className="feature-list__group"
               aria-labelledby={`feature-list-group-${group.id}`}
             >
-              <h3 id={`feature-list-group-${group.id}`} className="feature-list__group-title">
-                {group.label}
-              </h3>
-              <ul className="feature-list__items">
-                {group.features.map((feature) => {
-                  const rowState = dashboardState(feature);
-                  const attentionCount = attentionByFeature.get(feature.id) ?? 0;
-                  return (
-                    <li key={feature.id} className="feature-list__item" data-tone={rowState.tone}>
-                      <span className="feature-list__signal" aria-hidden="true" />
-                      <div className="feature-list__facts">
-                        <div className="feature-list__heading">
-                          <span className="feature-list__name">{feature.name}</span>
-                          <span className="feature-list__state" data-tone={rowState.tone}>
-                            <span aria-hidden="true">
-                              {rowState.bucket === 'active' ? '◉' : '◆'}
-                            </span>{' '}
-                            {rowState.label}
-                          </span>
-                          <AttentionBadge
-                            count={attentionCount}
-                            label={`Blocking input for ${feature.name}`}
-                          />
-                        </div>
-                        <dl className="feature-list__details">
-                          <div>
-                            <dt>Repository</dt>
-                            <dd>{feature.repos.join(', ')}</dd>
-                          </div>
-                          <div>
-                            <dt>Status</dt>
-                            <dd>{displayStatusLabel(feature.status)}</dd>
-                          </div>
-                          <div>
-                            <dt>Current phase</dt>
-                            <dd>{feature.currentPhase || 'Not started'}</dd>
-                          </div>
-                          <div>
-                            <dt>Priority</dt>
-                            <dd>
-                              {rowState.bucket === 'intervention' ? 'Intervention' : rowState.label}
-                            </dd>
-                          </div>
-                        </dl>
-                        {feature.failure?.message !== undefined ? (
-                          <p className="feature-list__failure">
-                            <span aria-hidden="true">!</span> {feature.failure.message}
-                          </p>
-                        ) : null}
-                      </div>
-                      <button
-                        type="button"
-                        className="setup-wizard__action"
-                        onClick={() => onOpen(feature.id, feature.name)}
-                      >
-                        {openTabIds.includes(feature.id) ? 'Show tab' : 'Open'}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+              <div className="feature-list__group-head" data-kind={group.id}>
+                <h3 id={`feature-list-group-${group.id}`} className="feature-list__group-title">
+                  {group.label}
+                </h3>
+                <span className="feature-list__group-count" aria-hidden="true">
+                  {group.id === 'in-progress'
+                    ? `· ${group.features.length}`
+                    : `× ${group.features.length}`}
+                </span>
+              </div>
+              {group.id === 'in-progress' ? (
+                <ul className="run-grid">
+                  {group.features.map((feature) => (
+                    <RunningCard
+                      key={feature.id}
+                      feature={feature}
+                      isOpen={openTabIds.includes(feature.id)}
+                      attentionCount={attentionByFeature.get(feature.id) ?? 0}
+                      onOpen={onOpen}
+                    />
+                  ))}
+                </ul>
+              ) : (
+                <ul className="queue-rows">
+                  {group.features.map((feature) => (
+                    <QueueRow
+                      key={feature.id}
+                      feature={feature}
+                      isOpen={openTabIds.includes(feature.id)}
+                      onOpen={onOpen}
+                    />
+                  ))}
+                </ul>
+              )}
             </section>
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+interface RunRowProps {
+  feature: FeatureSnapshot;
+  isOpen: boolean;
+  onOpen(featureId: string, titleHint: string): void;
+}
+
+/** A feature still in flight: full phase rail, live/needs-you badge, one action. */
+function RunningCard({
+  feature,
+  isOpen,
+  attentionCount,
+  onOpen,
+}: RunRowProps & { attentionCount: number }) {
+  const stages = spineStages(feature.pipeline);
+  const activeIndex = spineActiveIndex(feature, stages);
+  const { bucket, label } = dashboardState(feature);
+  const needsYou = attentionCount > 0 || bucket === 'intervention';
+  const railTone = needsYou ? 'attention' : 'progress';
+  const badge = needsYou ? 'Needs you' : bucket === 'active' ? 'Live' : label;
+  const elapsed = formatElapsed(feature);
+  return (
+    <li className="run-card" data-tone={railTone}>
+      <div className="run-card__head">
+        <h4 className="run-card__title">{feature.name}</h4>
+        <span className="run-card__badges">
+          <AttentionBadge count={attentionCount} label={`Blocking input for ${feature.name}`} />
+          <span className="run-card__badge">
+            <span className="run-card__dot" aria-hidden="true" />
+            {badge}
+          </span>
+        </span>
+      </div>
+      <p className="run-card__meta">
+        <span>
+          repo <b>{feature.repos.join(', ')}</b>
+        </span>
+        <span>
+          status <b>{displayStatusLabel(feature.status)}</b>
+        </span>
+        {elapsed !== null ? (
+          <span>
+            elapsed <b>{elapsed}</b>
+          </span>
+        ) : null}
+      </p>
+      <FlightRail
+        stages={stages}
+        activeIndex={activeIndex}
+        atRest={isRunAtRest(feature.status)}
+        tone={railTone}
+        label={`Pipeline for ${feature.name}`}
+      />
+      {feature.failure?.message !== undefined ? (
+        <p className="run-card__failure">
+          <span aria-hidden="true">! </span>
+          {feature.failure.message}
+        </p>
+      ) : null}
+      <div className="run-card__actions">
+        <button
+          type="button"
+          className="run-card__action"
+          onClick={() => onOpen(feature.id, feature.name)}
+        >
+          {isOpen ? 'Show tab' : 'Open'}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+/** A shipped feature: compact row with an all-done rail and one action. */
+function QueueRow({ feature, isOpen, onOpen }: RunRowProps) {
+  const stages = spineStages(feature.pipeline);
+  const stateLabel = dashboardGroupId(feature) === 'done' ? 'Done' : 'Shipped';
+  return (
+    <li className="queue-row">
+      <span className="queue-row__name">{feature.name}</span>
+      <span className="queue-row__repo">{feature.repos.join(', ')}</span>
+      <span className="queue-row__rail" aria-hidden="true">
+        {stages.map((stage) => (
+          <i key={stage.id} className="queue-row__pip" />
+        ))}
+      </span>
+      <span className="queue-row__state">{stateLabel}</span>
+      <button
+        type="button"
+        className="queue-row__action"
+        onClick={() => onOpen(feature.id, feature.name)}
+      >
+        {isOpen ? 'Show tab' : 'Open'}
+      </button>
+    </li>
+  );
+}
+
+/**
+ * The signature: a horizontal pipeline rail with a filled track to the active
+ * stop, a pulsing needle on the current stage, and condensed stage labels.
+ */
+function FlightRail({
+  stages,
+  activeIndex,
+  atRest,
+  tone,
+  label,
+}: {
+  stages: readonly SpineStage[];
+  activeIndex: number;
+  atRest: boolean;
+  tone: 'progress' | 'attention';
+  label: string;
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+  const denom = Math.max(stages.length - 1, 1);
+  const fillPct = (Math.min(activeIndex, denom) / denom) * 100;
+  return (
+    <div className="flight-rail" data-tone={tone} role="group" aria-label={label}>
+      <div className="flight-rail__track">
+        <span className="flight-rail__fill" style={{ width: `${fillPct}%` }} />
+      </div>
+      <div className="flight-rail__stops">
+        {stages.map((stage, index) => {
+          const state =
+            index < activeIndex || (atRest && index === activeIndex)
+              ? 'done'
+              : index === activeIndex
+                ? 'active'
+                : 'upcoming';
+          const isActive = state === 'active';
+          return (
+            <span
+              key={stage.id}
+              className="flight-rail__stop"
+              data-state={state}
+              data-tone={tone}
+              {...(isActive ? { 'aria-current': 'step' as const } : {})}
+            >
+              <span
+                className={
+                  isActive && !reducedMotion
+                    ? 'flight-rail__stop-dot flight-rail__stop-dot--pulse'
+                    : 'flight-rail__stop-dot'
+                }
+                aria-hidden="true"
+              />
+              <span className="flight-rail__stop-label">{stage.label}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

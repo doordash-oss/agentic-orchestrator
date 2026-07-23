@@ -21,6 +21,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -38,6 +39,7 @@ func TestBuildPRDescriptionPrompt(t *testing.T) {
 		"plan content",
 		"commit body content",
 		"internal/foo.go",
+		"Do not request or invoke tools",
 		"TITLE:",
 		"BODY:",
 	}
@@ -60,42 +62,6 @@ func TestBuildPRDescriptionPrompt_EmitsOnlyPopulatedSections(t *testing.T) {
 		if strings.Contains(prompt, s) {
 			t.Errorf("empty section %q should have been omitted", s)
 		}
-	}
-}
-
-func TestBuildPRDescriptionFallback(t *testing.T) {
-	ctx := PRContext{
-		FeatureName:        "Refactor auth middleware",
-		FeatureDescription: "Rip out legacy session storage.",
-		CommitBodies:       "Refactor auth middleware\n\nlong body\n---commit---\nUpdate tests\n---commit---\n",
-		DiffStat:           " internal/auth.go | 20 ++++++\n",
-	}
-	title, body := BuildPRDescriptionFallback(ctx)
-	if title != "Refactor auth middleware" {
-		t.Errorf("title = %q, want feature name", title)
-	}
-	for _, s := range []string{"## Summary", "Rip out legacy", "## Commits", "Refactor auth middleware", "Update tests", "## Changes", "internal/auth.go", "## Test plan"} {
-		if !strings.Contains(body, s) {
-			t.Errorf("body missing %q\nbody:\n%s", s, body)
-		}
-	}
-}
-
-func TestBuildPRDescriptionFallback_EmptyContext(t *testing.T) {
-	title, body := BuildPRDescriptionFallback(PRContext{})
-	if title != "Feature implementation" {
-		t.Errorf("empty-context title = %q, want 'Feature implementation'", title)
-	}
-	if !strings.Contains(body, "## Summary") || !strings.Contains(body, "## Test plan") {
-		t.Errorf("empty-context body missing required sections:\n%s", body)
-	}
-}
-
-func TestFallbackTitle_TruncatesLongStrings(t *testing.T) {
-	long := strings.Repeat("x", 100)
-	title := fallbackTitle(PRContext{FeatureName: long})
-	if runes := []rune(title); len(runes) > 70 {
-		t.Errorf("title rune length = %d, want <= 70", len(runes))
 	}
 }
 
@@ -244,6 +210,27 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	if opts.Phase != feature.PhasePublish {
 		t.Errorf("BuildSessionOpts.Phase = %v, want %v", opts.Phase, feature.PhasePublish)
 	}
+	if !strings.Contains(opts.SystemPrompt, "complete using only the context supplied") {
+		t.Errorf("BuildSessionOpts.SystemPrompt missing tool-free completion instruction: %q", opts.SystemPrompt)
+	}
+	if opts.PermHandler == nil {
+		t.Fatal("BuildSessionOpts.PermHandler = nil, want PR-description deny-all handler")
+	}
+	for _, toolName := range []string{"Bash", "Read", "Write", "WebSearch", "Agent", "FutureTool"} {
+		decision, decisionErr := opts.PermHandler.CanUseTool(ports.ToolPermissionRequest{
+			ToolName: toolName,
+			Input:    `{}`,
+		})
+		if decisionErr != nil {
+			t.Fatalf("CanUseTool(%q): %v", toolName, decisionErr)
+		}
+		if decision.Behavior != "deny" {
+			t.Errorf("CanUseTool(%q) behavior = %q, want deny", toolName, decision.Behavior)
+		}
+		if !strings.Contains(decision.Reason, "context supplied") {
+			t.Errorf("CanUseTool(%q) reason = %q, want supplied-context direction", toolName, decision.Reason)
+		}
+	}
 	if sess.featureID != "feat-publish" {
 		t.Errorf("session featureID = %q, want %q", sess.featureID, "feat-publish")
 	}
@@ -252,7 +239,7 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	}
 }
 
-func TestPhaseRunnerRunDescriptionGeneration_FallsBackOnHelperError(t *testing.T) {
+func TestPhaseRunnerRunDescriptionGeneration_ReturnsHelperErrorWithoutFallback(t *testing.T) {
 	sess := newUtilityTestSession()
 	sess.attachCh <- mocks.ControlRequestMsg("perm-1", "Bash")
 
@@ -264,12 +251,35 @@ func TestPhaseRunnerRunDescriptionGeneration_FallsBackOnHelperError(t *testing.T
 
 	title, body, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", prCtx)
 	if err == nil {
-		t.Fatal("RunDescriptionGeneration() error = nil, want fallback error")
+		t.Fatal("RunDescriptionGeneration() error = nil, want helper error")
 	}
-	if title != "test" {
-		t.Errorf("title = %q, want fallback title %q", title, "test")
+	if title != "" || body != "" {
+		t.Errorf("RunDescriptionGeneration() = %q / %q, want empty output on error", title, body)
 	}
-	if !strings.Contains(body, "## Summary") {
-		t.Errorf("body = %q, want fallback body", body)
+}
+
+func TestPhaseRunnerRunDescriptionGeneration_RejectsIncompleteOutput(t *testing.T) {
+	sess := newUtilityTestSession()
+	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n"))
+	sess.result = &llm.ResultMessage{
+		Type:       testResultMessageType,
+		Subtype:    testResultSuccessValue,
+		Result:     "done",
+		StopReason: testStopReasonEndTurn,
+	}
+	sess.statusCh <- agentStatusSuccess
+
+	runner := newUtilityTestPhaseRunner(t, sess)
+	title, body, err := runner.pr.RunDescriptionGeneration(
+		context.Background(),
+		"feat-publish",
+		"sonnet",
+		PRContext{FeatureName: "test"},
+	)
+	if err == nil {
+		t.Fatal("RunDescriptionGeneration() error = nil, want incomplete-output error")
+	}
+	if title != "" || body != "" {
+		t.Errorf("RunDescriptionGeneration() = %q / %q, want empty output on incomplete result", title, body)
 	}
 }

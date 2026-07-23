@@ -111,7 +111,7 @@ export function orderDashboardFeatures(features: readonly FeatureSnapshot[]): Fe
 }
 
 const DASHBOARD_GROUPS: readonly { id: DashboardGroupId; label: string }[] = [
-  { id: 'in-progress', label: 'Running now' },
+  { id: 'in-progress', label: 'In progress' },
   { id: 'published', label: 'Published' },
   { id: 'done', label: 'Done' },
 ];

@@ -28,16 +28,17 @@ import (
 // UtilityRunConfig configures a bounded single-turn helper session for utility
 // tasks such as summary and PR description generation.
 type UtilityRunConfig struct {
-	FeatureID   string
-	SessionID   string
-	Label       string
-	Model       string
-	Prompt      string
-	WorkDir     string
-	RepoName    string
-	Timeout     time.Duration
-	Phase       feature.Phase
-	EffortLevel llm.EffortLevel
+	FeatureID    string
+	SessionID    string
+	Label        string
+	Model        string
+	Prompt       string
+	SystemPrompt string
+	WorkDir      string
+	RepoName     string
+	Timeout      time.Duration
+	Phase        feature.Phase
+	EffortLevel  llm.EffortLevel
 	// EffectiveEffort, when non-empty, overrides EffortLevel and is recorded
 	// on the session for observability.
 	EffectiveEffort llm.EffortLevel
@@ -88,6 +89,7 @@ func (pr *PhaseRunner) RunUtilitySession(ctx context.Context, cfg UtilityRunConf
 		Phase:           cfg.Phase,
 		Model:           cfg.Model,
 		Prompt:          cfg.Prompt,
+		SystemPrompt:    cfg.SystemPrompt,
 		WorkDir:         workDir,
 		RepoName:        cfg.RepoName,
 		Timeout:         cfg.Timeout,

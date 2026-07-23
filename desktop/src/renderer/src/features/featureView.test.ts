@@ -106,7 +106,7 @@ describe('intervention-first dashboard ordering', () => {
         featureIds: group.features.map((feature) => feature.id),
       })),
     ).toStrictEqual([
-      { id: 'in-progress', label: 'Running now', featureIds: ['failed', 'ready'] },
+      { id: 'in-progress', label: 'In progress', featureIds: ['failed', 'ready'] },
       { id: 'published', label: 'Published', featureIds: ['published'] },
       { id: 'done', label: 'Done', featureIds: ['done'] },
     ]);

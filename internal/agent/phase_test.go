@@ -2448,6 +2448,64 @@ func TestBuildSession_AllowedToolsPropagation(t *testing.T) {
 	}
 }
 
+func TestBuildSession_ToolFreeHandlerOverridesGlobalPermissionBypass(t *testing.T) {
+	dir := t.TempDir()
+	sm := session.NewManager(make(chan any, 100))
+	store := feature.NewStore(dir)
+	pr := NewPhaseRunner(sm, store, dir)
+	pr.Registry = newRegistryWithProviders()
+	pr.DangerouslySkipPermissions = true
+
+	cmd, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:        "opus",
+		Prompt:       "generate narrative",
+		SystemPrompt: prDescriptionSystemPrompt,
+		PIDDir:       filepath.Join(dir, "pid"),
+		PermHandler:  &prDescriptionPermissionHandler{},
+		WorkDir:      dir,
+		Phase:        feature.PhasePublish,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error: %v", err)
+	}
+	if slices.Contains(cmd, "--dangerously-skip-permissions") {
+		t.Errorf("tool-free command inherited --dangerously-skip-permissions: %v", cmd)
+	}
+	if slices.Contains(cmd, "--allowedTools") {
+		t.Errorf("tool-free command advertises allowed tools: %v", cmd)
+	}
+	flagValue := func(name string) string {
+		for i, arg := range cmd {
+			if arg == name && i+1 < len(cmd) {
+				return cmd[i+1]
+			}
+		}
+		return ""
+	}
+	disallowed := flagValue("--disallowedTools")
+	for _, tool := range []string{"Bash", "Read", "Write", "WebSearch", "Agent", "AskUserQuestion"} {
+		if !strings.Contains(disallowed, tool) {
+			t.Errorf("--disallowedTools = %q, want %s", disallowed, tool)
+		}
+	}
+	if got := flagValue("--permission-mode"); got != "default" {
+		t.Errorf("--permission-mode = %q, want default", got)
+	}
+	if sessOpts == nil || sessOpts.PermHandler == nil {
+		t.Fatal("SessionOpts.PermHandler = nil, want tool-free handler")
+	}
+	decision, decisionErr := sessOpts.PermHandler.CanUseTool(ports.ToolPermissionRequest{
+		ToolName: "FutureTool",
+		Input:    `{}`,
+	})
+	if decisionErr != nil {
+		t.Fatalf("CanUseTool(FutureTool): %v", decisionErr)
+	}
+	if decision.Behavior != "deny" {
+		t.Errorf("CanUseTool(FutureTool) behavior = %q, want deny", decision.Behavior)
+	}
+}
+
 func TestBuildSession_WebSearchAlwaysAllowed(t *testing.T) {
 	dir := t.TempDir()
 	eventCh := make(chan any, 100)

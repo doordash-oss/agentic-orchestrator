@@ -1384,6 +1384,19 @@ var sessionWatchdogConfig = ports.SessionWatchdogConfig{
 	SubagentHeartbeatInterval: 5 * time.Minute,
 }
 
+type toolFreePermissionHandler interface {
+	ToolFree() bool
+}
+
+func toolFreeDisallowedTools() []string {
+	return []string{
+		"Bash", "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
+		"WebSearch", "WebFetch", "Edit", "Write", "NotebookEdit",
+		"Agent", "Task", "Skill", "TodoWrite", "TaskCreate", "TaskGet",
+		"TaskList", "TaskUpdate", "AskUserQuestion", "ScheduleWakeup",
+	}
+}
+
 type sessionWatchdogProvider interface {
 	EnablesPendingToolWatchdog() bool
 }
@@ -1533,9 +1546,22 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		return nil, nil, nil, fmt.Errorf("building selected agents JSON: %w", err)
 	}
 
-	// Always auto-approve web tools so sub-agents can use them without
-	// permission prompts inside the Claude CLI.
-	opts.AllowedTools = append(opts.AllowedTools, "WebSearch", "WebFetch")
+	toolFree := false
+	if handler, ok := opts.PermHandler.(toolFreePermissionHandler); ok {
+		toolFree = handler.ToolFree()
+	}
+	dangerouslySkipPermissions := pr.DangerouslySkipPermissions
+	permissionMode := grillingPhasePermissionMode(opts.Phase)
+	if toolFree {
+		opts.AllowedTools = nil
+		opts.DisallowedTools = append(opts.DisallowedTools, toolFreeDisallowedTools()...)
+		dangerouslySkipPermissions = false
+		permissionMode = "default"
+	} else {
+		// General sessions auto-approve web tools so sub-agents can use them
+		// without permission prompts inside the Claude CLI.
+		opts.AllowedTools = append(opts.AllowedTools, "WebSearch", "WebFetch")
+	}
 
 	buildOpts := llm.CommandBuildOpts{
 		Model:                bareModel,
@@ -1543,13 +1569,13 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		SystemPrompt:         opts.SystemPrompt,
 		AllowedTools:         opts.AllowedTools,
 		DisallowedTools:      opts.DisallowedTools,
-		DangerouslySkipPerms: pr.DangerouslySkipPermissions,
+		DangerouslySkipPerms: dangerouslySkipPermissions,
 		AdditionalDirs:       opts.AdditionalDirs,
 		StateDir:             pr.StateDir,
 		AgentsJSON:           agentsJSON,
 		AgentNames:           opts.AgentNames,
 		EffortLevel:          opts.EffortLevel,
-		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
+		PermissionMode:       permissionMode,
 		ResumeSessionID:      opts.ResumeSessionID,
 		WritableRoots:        commandWritableRoots,
 		ReadRoots:            readRoots,
@@ -1574,7 +1600,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		SystemPrompt:    opts.SystemPrompt,
 		InitialPrompt:   opts.Prompt,
 		WritableRoots:   writableRoots,
-		DSP:             pr.DangerouslySkipPermissions,
+		DSP:             dangerouslySkipPermissions,
 		StateDir:        pr.StateDir,
 		MarkerPath:      opts.MarkerPath,
 		ResumeSessionID: opts.ResumeSessionID,

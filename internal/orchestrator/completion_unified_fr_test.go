@@ -604,6 +604,11 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 		Store:     fs,
 		Publisher: publisher,
 		CmdRunner: untrackedFinalReviewArtifactsRunner(t, candidates),
+		PhaseRunner: newPublishDescriptionPhaseRunner(
+			t,
+			"TITLE: Final review complete\nBODY:\n## Summary\n\nVerified changes",
+			false,
+		),
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
@@ -718,6 +723,11 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 		Store:     fs,
 		Publisher: publisher,
 		CmdRunner: untrackedFinalReviewArtifactsRunner(t, candidates),
+		PhaseRunner: newPublishDescriptionPhaseRunner(
+			t,
+			"TITLE: Final review complete\nBODY:\n## Summary\n\nVerified changes",
+			false,
+		),
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,

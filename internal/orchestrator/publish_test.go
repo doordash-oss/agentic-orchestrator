@@ -377,7 +377,10 @@ func TestOrchestrator_PublishRepo_EndToEnd_NoRebaser(t *testing.T) {
 		Publisher: pub,
 	}, orchestrator.Hooks{})
 
-	if err := o.Publish("feat-pubrepo"); err != nil {
+	if err := o.PublishWithOptions("feat-pubrepo", orchestrator.PublishOptions{
+		Title: "Publish repo",
+		Body:  "Verified body",
+	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 
@@ -428,7 +431,10 @@ func TestOrchestrator_PublishRepo_PullRebaseConflict_Sentinel(t *testing.T) {
 		Rebaser:   reb,
 	}, orchestrator.Hooks{})
 
-	err := o.Publish("feat-pubrepo-conflict")
+	err := o.PublishWithOptions("feat-pubrepo-conflict", orchestrator.PublishOptions{
+		Title: "Publish repo",
+		Body:  "Verified body",
+	})
 	if err == nil {
 		t.Fatal("expected conflict error, got nil")
 	}
@@ -497,7 +503,10 @@ func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testi
 		Rebaser:   reb,
 	}, orchestrator.Hooks{})
 
-	if err := o.Publish("feat-manual-publish-rebased"); err != nil {
+	if err := o.PublishWithOptions("feat-manual-publish-rebased", orchestrator.PublishOptions{
+		Title: "Publish repo",
+		Body:  "Verified body",
+	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 
@@ -557,7 +566,7 @@ func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testin
 	}
 }
 
-func TestOrchestrator_PublishRepo_FallsBackAndLogsDescriptionGenerationErrors(t *testing.T) {
+func TestOrchestrator_PublishRepo_FailsAndLogsDescriptionGenerationErrors(t *testing.T) {
 	f := &feature.Feature{
 		ID:     "feat-pub-fallback",
 		Name:   "cool-feature",
@@ -579,9 +588,9 @@ func TestOrchestrator_PublishRepo_FallsBackAndLogsDescriptionGenerationErrors(t 
 	pub.DiffStatFn = func(path, base string) (string, error) { return "stat", nil }
 	pub.PushFn = func(path, branch string) error { return nil }
 
-	var gotTitle, gotBody string
+	createPRCalls := 0
 	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
-		gotTitle, gotBody = title, body
+		createPRCalls++
 		return "https://github.com/org/r1/pull/1", nil
 	}
 
@@ -593,14 +602,15 @@ func TestOrchestrator_PublishRepo_FallsBackAndLogsDescriptionGenerationErrors(t 
 		PhaseRunner: pr,
 	}, orchestrator.Hooks{})
 
-	if err := o.Publish("feat-pub-fallback"); err != nil {
-		t.Fatalf("Publish: %v", err)
+	err := o.Publish("feat-pub-fallback")
+	if err == nil {
+		t.Fatal("Publish() error = nil, want description generation failure")
 	}
-	if gotTitle != "cool-feature" {
-		t.Errorf("CreatePR title = %q, want fallback title %q", gotTitle, "cool-feature")
+	if !strings.Contains(err.Error(), "generating description") {
+		t.Errorf("Publish() error = %v, want description generation context", err)
 	}
-	if !strings.Contains(gotBody, "## Summary") {
-		t.Errorf("CreatePR body = %q, want fallback body", gotBody)
+	if createPRCalls != 0 {
+		t.Fatalf("CreatePR calls = %d, want 0", createPRCalls)
 	}
 
 	logPath := filepath.Join(agent.ActiveRunDir(pr.StateDir, f), "publish", "error.log")
@@ -666,6 +676,44 @@ func TestOrchestrator_GeneratePublishDescriptionDerivesSelectedRepoContext(t *te
 	}
 }
 
+func TestOrchestrator_GeneratePublishDescriptionReturnsGenerationFailure(t *testing.T) {
+	f := &feature.Feature{
+		ID:          "feat-pub-desc-failure",
+		Name:        "strict-description",
+		Slug:        "strict-description",
+		Description: "Never publish fallback prose.",
+		Status:      feature.StatusCodeReady,
+		Models:      config.ModelConfig{Planning: "sonnet"},
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: mainBranch},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true},
+		},
+	}
+	pub := mocks.NewMockPublisher()
+	pub.CommitBodiesFn = func(path, base string) (string, error) { return "commit bodies", nil }
+	pub.DiffStatFn = func(path, base string) (string, error) { return "diff stat", nil }
+	pr := newPublishDescriptionPhaseRunner(t, "", true)
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lifecycleForFeature(f),
+		Store:       newFeatureStore(f),
+		Publisher:   pub,
+		PhaseRunner: pr,
+	}, orchestrator.Hooks{})
+
+	title, body, err := o.GeneratePublishDescription(
+		"feat-pub-desc-failure",
+		orchestrator.PublishDescriptionOptions{Repos: []string{"r1"}},
+	)
+	if err == nil {
+		t.Fatal("GeneratePublishDescription() error = nil, want generation failure")
+	}
+	if title != "" || body != "" {
+		t.Errorf("GeneratePublishDescription() = %q / %q, want empty output on failure", title, body)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DraftPublish — draft flag threaded from feature checkpoints to CreatePR
 // ---------------------------------------------------------------------------
@@ -703,7 +751,10 @@ func TestOrchestrator_PublishRepo_DraftPublish_True(t *testing.T) {
 		Publisher: pub,
 	}, orchestrator.Hooks{})
 
-	if err := o.Publish("feat-draft-true"); err != nil {
+	if err := o.PublishWithOptions("feat-draft-true", orchestrator.PublishOptions{
+		Title: "Publish repo",
+		Body:  "Verified body",
+	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if !gotDraft {
@@ -744,7 +795,10 @@ func TestOrchestrator_PublishRepo_DraftPublish_False(t *testing.T) {
 		Publisher: pub,
 	}, orchestrator.Hooks{})
 
-	if err := o.Publish("feat-draft-false"); err != nil {
+	if err := o.PublishWithOptions("feat-draft-false", orchestrator.PublishOptions{
+		Title: "Publish repo",
+		Body:  "Verified body",
+	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if gotDraft {
@@ -848,24 +902,28 @@ var _ session.SessionHandle = (*publishDescriptionSessionHandle)(nil)
 func newPublishDescriptionPhaseRunner(t *testing.T, output string, permissionFailure bool) *agent.PhaseRunner {
 	t.Helper()
 
-	sess := newPublishDescriptionSessionHandle()
-	if output != "" {
-		sess.msgLog.Append(mocks.AssistantTextMessage(output))
-		sess.result = &llm.ResultMessage{
-			Type:       "result",
-			Subtype:    "success",
-			Result:     "done",
-			StopReason: "end_turn",
+	newSession := func() *publishDescriptionSessionHandle {
+		sess := newPublishDescriptionSessionHandle()
+		if output != "" {
+			sess.msgLog.Append(mocks.AssistantTextMessage(output))
+			sess.result = &llm.ResultMessage{
+				Type:       "result",
+				Subtype:    "success",
+				Result:     "done",
+				StopReason: "end_turn",
+			}
+			sess.statusCh <- "SUCCESS"
+		} else if permissionFailure {
+			req := mocks.ControlRequestMsg("perm-1", "Bash").ControlRequest
+			sess.lastControl = req
+			sess.attachCh <- llm.SDKMessage{Type: "control_request", ControlRequest: req}
 		}
-		sess.statusCh <- "SUCCESS"
-	} else if permissionFailure {
-		req := mocks.ControlRequestMsg("perm-1", "Bash").ControlRequest
-		sess.lastControl = req
-		sess.attachCh <- llm.SDKMessage{Type: "control_request", ControlRequest: req}
+		return sess
 	}
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		sess := newSession()
 		sess.id = id
 		sess.featureID = featureID
 		sess.phase = phase

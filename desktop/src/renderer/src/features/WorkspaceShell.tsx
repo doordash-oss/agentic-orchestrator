@@ -914,7 +914,17 @@ function RunningCard({
   // Amber when a run wants you, blue pulse while it's genuinely working, quiet
   // otherwise — so a resting "Code ready" run never reads as live.
   const badgeState = needsYou ? 'attention' : bucket === 'active' ? 'live' : 'quiet';
-  const badge = needsYou ? 'Needs you' : bucket === 'active' ? 'Live' : label;
+  // Name the specific reason a parked run needs you (Interrupted / Failed /
+  // Review needed / Input needed); a live run with a pending prompt just says
+  // "Needs you"; otherwise Live or the resting state.
+  const badge =
+    bucket === 'intervention'
+      ? label
+      : needsYou
+        ? 'Needs you'
+        : bucket === 'active'
+          ? 'Live'
+          : label;
   const elapsed = formatElapsed(feature);
   return (
     <li className="run-card" data-state={badgeState}>

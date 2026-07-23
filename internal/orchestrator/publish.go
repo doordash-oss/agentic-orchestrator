@@ -84,7 +84,11 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	title := strings.TrimSpace(opts.Title)
 	body := strings.TrimSpace(opts.Body)
 	if title == "" || body == "" {
-		generatedTitle, generatedBody := o.generatePRDescription(f, prCtx)
+		generatedTitle, generatedBody, generateErr := o.generatePRDescription(f, prCtx)
+		if generateErr != nil {
+			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, generateErr.Error())
+			return "", fmt.Errorf("generate PR description: %w", generateErr)
+		}
 		if title == "" {
 			title = generatedTitle
 		}
@@ -165,12 +169,12 @@ func publishRequiresLeasePush(f *feature.Feature) bool {
 }
 
 // generatePRDescription produces a PR title/body from a structured PRContext
-// using the description-generation agent. When the agent is unavailable the
-// deterministic fallback is used. Generation errors are logged to the
-// feature-scoped publish error log so auto-publish failures are diagnosable.
-func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRContext) (string, string) {
+// using the description-generation agent. Generation errors are logged to the
+// feature-scoped publish error log and returned so publishing cannot proceed
+// with synthetic fallback content.
+func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRContext) (string, string, error) {
 	if o.deps.PhaseRunner == nil {
-		return agent.BuildPRDescriptionFallback(prCtx)
+		return "", "", errors.New("description generation agent is unavailable")
 	}
 	model := f.Models.Planning
 	if model == "" {
@@ -184,8 +188,9 @@ func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRC
 	)
 	if err != nil {
 		agent.LogPhaseError(o.deps.PhaseRunner.StateDir, f, "publish", "description generation: "+err.Error())
+		return "", "", err
 	}
-	return title, body
+	return title, body, nil
 }
 
 type PublishDescriptionOptions struct {
@@ -240,14 +245,13 @@ func (o *Orchestrator) GeneratePublishDescription(featureID string, opts Publish
 	}
 	prCtx.CommitBodies = strings.Join(commitSections, "\n\n")
 	prCtx.DiffStat = strings.Join(diffSections, "\n\n")
-	title, body := o.generatePRDescription(f, prCtx)
-	return title, body, nil
+	return o.generatePRDescription(f, prCtx)
 }
 
 // buildPRContext assembles the lean PRContext from the feature metadata and
 // git introspection (commit bodies + diff stat). Individual fetch failures
 // degrade gracefully — empty fields are acceptable inputs to the prompt and
-// fallback builders.
+// generator.
 func (o *Orchestrator) buildPRContext(f *feature.Feature, workDir, baseBranch string) agent.PRContext {
 	prCtx := agent.PRContext{
 		FeatureName:        f.Name,

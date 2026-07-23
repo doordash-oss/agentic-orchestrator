@@ -108,7 +108,8 @@ describe('WorkspaceShell tabs', () => {
     expect(row).toHaveTextContent('repo-a');
     expect(row).toHaveTextContent('Failed');
     expect(row).toHaveTextContent('Implement');
-    expect(row).toHaveTextContent('Needs you');
+    // A failed run is a parked intervention state: amber treatment, named badge.
+    expect(row).toHaveAttribute('data-state', 'attention');
     expect(row).toHaveTextContent('Provider exited before completion.');
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
@@ -161,7 +162,7 @@ describe('WorkspaceShell tabs', () => {
 
     render(<WorkspaceShell />);
 
-    const inProgressGroup = await screen.findByRole('region', { name: 'Running now' });
+    const inProgressGroup = await screen.findByRole('region', { name: 'In progress' });
     const publishedGroup = screen.getByRole('region', { name: 'Published' });
     const doneGroup = screen.getByRole('region', { name: 'Done' });
 

@@ -1659,6 +1659,10 @@ export interface components {
                 [key: string]: number;
             };
         };
+        VerificationItem: {
+            name: string;
+            state: string;
+        };
         ReviewGate: {
             reviewing_gate: boolean;
             review_fixing: boolean;
@@ -1782,6 +1786,7 @@ export interface components {
             timing: components["schemas"]["Timing"];
             cost: components["schemas"]["Cost"];
             review_gate: components["schemas"]["ReviewGate"];
+            verification_items?: components["schemas"]["VerificationItem"][];
             failure?: components["schemas"]["Failure"];
             need_user_input?: components["schemas"]["NeedUserInputGate"];
             actions: components["schemas"]["Action"][];

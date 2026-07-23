@@ -727,6 +727,13 @@ export const ReviewGateViewSchema = z.strictObject({
 });
 export type ReviewGateView = z.output<typeof ReviewGateViewSchema>;
 
+/** One harness-executed verification command and its current state. */
+export const VerificationItemViewSchema = z.strictObject({
+  name: z.string(),
+  state: z.string(),
+});
+export type VerificationItemView = z.output<typeof VerificationItemViewSchema>;
+
 export const FeatureSnapshotSchema = z.strictObject({
   id: FeatureIdSchema,
   name: z.string(),
@@ -754,6 +761,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   cycle: CycleViewSchema.optional(),
   /** Active plan or implementation/final-review gate from the server. */
   reviewGate: ReviewGateViewSchema,
+  /** Ordered per-command harness verification state during phaseStatus "verifying". */
+  verificationItems: z.array(VerificationItemViewSchema).optional(),
   failure: z
     .strictObject({ type: z.string().optional(), message: z.string().optional() })
     .optional(),

@@ -548,6 +548,14 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       validatingPlan: feature.review_gate.validating_plan,
       validatorStatuses: { ...(feature.review_gate.validator_statuses ?? {}) },
     },
+    ...(feature.verification_items === undefined
+      ? {}
+      : {
+          verificationItems: feature.verification_items.map((item) => ({
+            name: item.name,
+            state: item.state,
+          })),
+        }),
     ...(feature.failure === undefined
       ? {}
       : {

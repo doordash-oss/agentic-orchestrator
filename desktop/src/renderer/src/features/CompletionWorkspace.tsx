@@ -12,12 +12,20 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import type { CompletionPreflightResult, RepositoryDiffResult } from '../../../shared/ipc';
+import {
+  DiffViewer,
+  ResultBox,
+  PrLinkButton,
+  useCompletionAction,
+  isEligibleForPublish,
+  STATUS_LABELS,
+  FILE_OP_GLYPH,
+  type ActionResult,
+  type CompletionAction,
+  type DiffLayout,
+} from './completion/completionShared';
 
 export type CompletionStep = 'inspect' | 'publish' | 'merge' | 'done' | 'cleanup' | 'delete';
-type DiffLayout = 'side-by-side' | 'unified';
-type CompletionAction = 'publish' | 'merge' | 'mark-done' | 'cleanup' | 'delete';
-
-type ActionResult = { ok: true; result: string } | { ok: false; message: string };
 
 interface CompletionWorkspaceProps {
   featureId: string;
@@ -42,177 +50,6 @@ interface CompletionWorkspaceProps {
   openExternal: (url: string) => Promise<{ ok: boolean }>;
   revealPath: (featureId: string, repo: string) => Promise<{ ok: boolean }>;
   onHandoffToRebase?: () => void;
-}
-
-const STATUS_LABELS: Record<string, string> = {
-  eligible: 'Eligible',
-  already_published: 'Already published',
-  completed: 'Completed',
-  ineligible: 'Local only',
-  untouched: 'No changes',
-  blocked: 'Blocked',
-};
-
-function isEligibleForPublish(repo: {
-  publishable: boolean;
-  status: string;
-  touched: boolean;
-}): boolean {
-  return repo.publishable && repo.status === 'eligible' && repo.touched;
-}
-
-const FILE_OP_GLYPH: Record<string, string> = {
-  add: '+',
-  delete: '\u2212',
-  rename: '\u2192',
-  modify: 'M',
-};
-
-interface DiffLine {
-  type: 'add' | 'delete' | 'context' | 'hunk';
-  text: string;
-}
-
-function parseDiffLines(diffText: string): DiffLine[] {
-  return diffText.split('\n').map((line) => {
-    if (line.startsWith('@@')) return { type: 'hunk', text: line };
-    if (line.startsWith('+') && !line.startsWith('+++'))
-      return { type: 'add', text: line.slice(1) };
-    if (line.startsWith('-') && !line.startsWith('---'))
-      return { type: 'delete', text: line.slice(1) };
-    if (line.startsWith(' ')) return { type: 'context', text: line.slice(1) };
-    return { type: 'context', text: line };
-  });
-}
-
-function DiffViewer({
-  diffText,
-  renderSideBySide,
-}: {
-  diffText: string;
-  renderSideBySide: boolean;
-}) {
-  const lines = useMemo(() => parseDiffLines(diffText), [diffText]);
-  if (renderSideBySide) {
-    const leftLines: DiffLine[] = [];
-    const rightLines: DiffLine[] = [];
-    for (const line of lines) {
-      if (line.type === 'delete') {
-        leftLines.push(line);
-        rightLines.push({ type: 'context', text: '' });
-      } else if (line.type === 'add') {
-        leftLines.push({ type: 'context', text: '' });
-        rightLines.push(line);
-      } else {
-        leftLines.push(line);
-        rightLines.push(line);
-      }
-    }
-    return (
-      <div className="completion-workspace__diff-pane-container">
-        <div className="completion-workspace__diff-pane">
-          <span className="completion-workspace__diff-pane-label">Original</span>
-          <pre className="completion-workspace__diff-content">
-            {leftLines.map((line, i) => (
-              <span key={i} className={`completion-workspace__diff-line--${line.type}`}>
-                {line.text || '\n'}
-              </span>
-            ))}
-          </pre>
-        </div>
-        <div className="completion-workspace__diff-pane">
-          <span className="completion-workspace__diff-pane-label">Modified</span>
-          <pre className="completion-workspace__diff-content">
-            {rightLines.map((line, i) => (
-              <span key={i} className={`completion-workspace__diff-line--${line.type}`}>
-                {line.text || '\n'}
-              </span>
-            ))}
-          </pre>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <pre className="completion-workspace__diff-content">
-      {lines.map((line, i) => (
-        <span key={i} className={`completion-workspace__diff-line--${line.type}`}>
-          {line.type === 'add' ? '+ ' : line.type === 'delete' ? '- ' : ''}
-          {line.text || '\n'}
-        </span>
-      ))}
-    </pre>
-  );
-}
-
-function useCompletionAction() {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<ActionResult | null>(null);
-  const run = useCallback(
-    async (thunk: () => Promise<string>, refresh?: () => Promise<void>): Promise<boolean> => {
-      setBusy(true);
-      setResult(null);
-      try {
-        const resultStr = await thunk();
-        if (refresh) await refresh();
-        setResult({ ok: true, result: resultStr });
-        return true;
-      } catch (err) {
-        setResult({ ok: false, message: parseIpcError(err).message });
-        return false;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
-  return { busy, result, run };
-}
-
-function PrLinkButton({
-  url,
-  openExternal,
-}: {
-  url: string;
-  openExternal: (url: string) => Promise<{ ok: boolean }>;
-}) {
-  return (
-    <button
-      type="button"
-      className="completion-workspace__pr-link"
-      onClick={() => void openExternal(url)}
-    >
-      PR ↗
-    </button>
-  );
-}
-
-function ResultBox({ result }: { result: ActionResult | null }) {
-  if (result === null) return null;
-  if (result.ok) {
-    return (
-      <div
-        className="completion-workspace__result completion-workspace__result--success"
-        role="status"
-      >
-        <span className="completion-workspace__result-icon" aria-hidden="true">
-          {'\u2713'}
-        </span>
-        <span className="completion-workspace__result-text">{result.result}</span>
-      </div>
-    );
-  }
-  return (
-    <div
-      className="completion-workspace__result completion-workspace__result--failure"
-      role="alert"
-    >
-      <span className="completion-workspace__result-icon" aria-hidden="true">
-        {'\u26a0'}
-      </span>
-      <span className="completion-workspace__result-text">failed: {result.message}</span>
-    </div>
-  );
 }
 
 export function CompletionWorkspace({

@@ -66,7 +66,10 @@ describe('completionBarModel', () => {
   });
 
   it('mark-done is blocked with its blocker text when canMarkDone is false', () => {
-    const model = completionBarModel(pf({ canMarkDone: false, markDoneBlocker: 'publish first' }), ALL);
+    const model = completionBarModel(
+      pf({ canMarkDone: false, markDoneBlocker: 'publish first' }),
+      ALL,
+    );
     const done = model.find((m) => m.verb === 'mark-done')!;
     expect(done.state).toBe('blocked');
     expect(done.blocker).toBe('publish first');
@@ -74,6 +77,8 @@ describe('completionBarModel', () => {
 
   it('cleanup is available whenever offered', () => {
     const model = completionBarModel(pf({}), new Set(['cleanup']));
-    expect(model).toEqual([{ verb: 'cleanup', label: 'Clean up', state: 'available', primary: true }]);
+    expect(model).toEqual([
+      { verb: 'cleanup', label: 'Clean up', state: 'available', primary: true },
+    ]);
   });
 });

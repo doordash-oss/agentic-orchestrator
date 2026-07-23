@@ -291,7 +291,6 @@ const PRIMARY_CLASS: Record<CockpitPrimaryAction['variant'], string> = {
   stop: 'cockpit__stop',
   resume: 'cockpit__resume',
   restart: 'cockpit__restart',
-  complete: 'cockpit__completion-button',
 };
 
 /** A contextual verb the current state invites, rendered as a bar button. */
@@ -301,7 +300,7 @@ interface CockpitPrimaryAction {
   /** Shown (with an ellipsis) while a dispatch is in flight. */
   busyLabel?: string;
   ariaLabel?: string;
-  variant: 'setup' | 'primary' | 'stop' | 'resume' | 'restart' | 'complete';
+  variant: 'setup' | 'primary' | 'stop' | 'resume' | 'restart';
   onClick(): void;
   busy?: boolean;
   disabled?: boolean;

@@ -1,6 +1,11 @@
 import { useCallback, useMemo } from 'react';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
-import { ResultBox, useCompletionAction, STATUS_LABELS, type CompletionAction } from './completionShared';
+import {
+  ResultBox,
+  useCompletionAction,
+  STATUS_LABELS,
+  type CompletionAction,
+} from './completionShared';
 
 export interface MergeModalProps {
   featureId: string;
@@ -106,8 +111,8 @@ export function MergeModalBody({
       {mergeAction.result !== null && !mergeAction.result.ok && onHandoffToRebase !== undefined ? (
         <div className="completion-workspace__merge-handoff">
           <p className="completion-workspace__merge-handoff-hint">
-            A conflict or behind-base outcome can be resolved through the rebase journey. Hand
-            off, then return here to retry the merge.
+            A conflict or behind-base outcome can be resolved through the rebase journey. Hand off,
+            then return here to retry the merge.
           </p>
           <button
             type="button"

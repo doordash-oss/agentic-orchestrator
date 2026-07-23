@@ -68,31 +68,49 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     });
     await handle.page.getByRole('tab', { name: featureName }).click();
     const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
-    await cockpit.getByRole('button', { name: 'Open completion workspace' }).click();
-    const completion = handle.page.getByRole('region', { name: 'Completion workspace' });
-    await expect(completion).toBeVisible({ timeout: 30_000 });
-    await completion.getByRole('button', { name: /completion-lab/ }).click();
-    await completion.getByRole('button', { name: /README\.md/ }).click();
-    await expect(completion.locator('.completion-workspace__file-diff')).toBeVisible({
+    await expect(cockpit).toBeVisible({ timeout: 30_000 });
+
+    // Completion verbs live directly in the cockpit action bar at CodeReady.
+    const publishVerb = cockpit.getByRole('button', { name: 'Publish', exact: true });
+    await expect(publishVerb).toBeVisible({ timeout: 30_000 });
+    await publishVerb.click();
+    const publishModal = handle.page.getByRole('dialog', { name: 'Publish reviewed changes' });
+    await expect(publishModal).toBeVisible({ timeout: 15_000 });
+    await expect(publishModal.locator('.completion-workspace__publish')).toBeVisible();
+    await publishModal.getByRole('button', { name: 'Close' }).click();
+    await expect(publishModal).toHaveCount(0);
+
+    // The Changes stage tab hosts the read-only repository + diff inspection.
+    await cockpit.getByRole('tab', { name: 'Changes' }).click();
+    const changes = cockpit.locator('.completion-workspace__inspect');
+    await expect(changes).toBeVisible({ timeout: 15_000 });
+    await changes.getByRole('button', { name: /completion-lab/ }).click();
+    await changes.getByRole('button', { name: /README\.md/ }).click();
+    await expect(changes.locator('.completion-workspace__file-diff')).toBeVisible({
       timeout: 30_000,
     });
 
-    await completion.getByRole('button', { name: 'Completion step: delete' }).click();
-    const deleteButton = completion.getByRole('button', { name: 'Delete feature' });
-    await expect(deleteButton).toBeDisabled();
-    await completion.getByLabel('Type feature name to confirm').fill('wrong target');
-    await expect(deleteButton).toBeDisabled();
-    await completion.getByLabel('Type feature name to confirm').fill(featureName);
-    await expect(deleteButton).toBeEnabled();
+    // Merge and Clean up each open their own floating modal from the bar; the
+    // Mark done verb is reachable as a bar control alongside them.
+    await cockpit.getByRole('button', { name: 'Merge', exact: true }).click();
+    const mergeModal = handle.page.getByRole('dialog', { name: 'Merge local repositories' });
+    await expect(mergeModal).toBeVisible({ timeout: 15_000 });
+    await mergeModal.getByRole('button', { name: 'Close' }).click();
+    await expect(mergeModal).toHaveCount(0);
+
+    await cockpit.getByRole('button', { name: 'Clean up', exact: true }).click();
+    const cleanupDialog = handle.page.getByRole('dialog', { name: 'Clean worktrees?' });
+    await expect(cleanupDialog).toBeVisible({ timeout: 15_000 });
+    await expect(cleanupDialog.getByRole('button', { name: 'Clean worktrees' })).toBeVisible();
     await contractEvidenceShot(
       handle,
-      'completion-workspace-with-partial-multi-repository-outcome-and-typed-delete-conf-1440x900',
+      'completion-verbs-in-cockpit-bar-with-publish-changes-diff-merge-and-cleanup-modal-1440x900',
       1440,
       900,
       'dark',
     );
-    await completion.getByRole('button', { name: 'Close completion' }).click();
-    await expect(completion).toHaveCount(0);
+    await cleanupDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(cleanupDialog).toHaveCount(0);
 
     await handle.page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     const palette = handle.page.getByRole('dialog', { name: 'Command palette' });

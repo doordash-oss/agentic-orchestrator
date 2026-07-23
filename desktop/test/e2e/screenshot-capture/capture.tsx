@@ -19,7 +19,11 @@ import { CurrentRunInspection } from '../../../src/renderer/src/features/Current
 import { CycleJourneys } from '../../../src/renderer/src/features/CycleJourneys';
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
-import { CompletionWorkspace } from '../../../src/renderer/src/features/CompletionWorkspace';
+import { ChangesSurface } from '../../../src/renderer/src/features/completion/ChangesSurface';
+import { PublishModalBody } from '../../../src/renderer/src/features/completion/PublishModal';
+import { CleanupConfirm } from '../../../src/renderer/src/features/completion/CleanupConfirm';
+import { useCompletionPreflight } from '../../../src/renderer/src/features/completion/useCompletionPreflight';
+import type { CompletionAction } from '../../../src/renderer/src/features/completion/completionShared';
 import { SettingsPanel } from '../../../src/renderer/src/features/SettingsPanel';
 import { WorkspaceShell } from '../../../src/renderer/src/features/WorkspaceShell';
 import { UpdateNotice } from '../../../src/renderer/src/App';
@@ -42,7 +46,6 @@ import type {
   AttentionItem,
   FeatureActionRequest,
 } from '../../../src/shared/ipc';
-import type { CompletionStep } from '../../../src/renderer/src/features/CompletionWorkspace';
 
 function getScene(): string {
   const params = new URLSearchParams(window.location.search);
@@ -401,12 +404,57 @@ function RecoveryScene({ scene }: { scene: string }) {
 
 function CompletionScene({ scene }: { scene: string }): React.ReactElement {
   const api = (window as unknown as { agentico: AgenticoApi }).agentico;
-  const initialStep: CompletionStep =
-    scene === 'completion-publish'
-      ? 'publish'
-      : scene === 'completion-delete'
-        ? 'delete'
-        : 'inspect';
+  const completion = useCompletionPreflight('feat-electron-app', true, (id) =>
+    api.preflightCompletion({ featureId: id }),
+  );
+  const getRepositoryDiff = (id: string, repo: string, filePath?: string) =>
+    api.getRepositoryDiff({ featureId: id, repo, ...(filePath ? { filePath } : {}) });
+  const dispatchAction = (id: string, action: CompletionAction, body?: Record<string, unknown>) =>
+    api.dispatchFeatureAction({
+      featureId: id,
+      action,
+      ...(body ? { body } : {}),
+    } as FeatureActionRequest);
+  const openExternal = (url: string) => api.openExternal({ url });
+  const revealPath = (id: string, repo: string) => api.revealPath({ featureId: id, repo });
+
+  if (scene === 'completion-publish') {
+    return (
+      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', padding: '24px' }}>
+        <div className="cockpit__modal" style={{ maxWidth: '720px' }}>
+          {completion.preflight !== null ? (
+            <PublishModalBody
+              featureId="feat-electron-app"
+              preflight={completion.preflight}
+              dispatchAction={dispatchAction}
+              generatePublishDescription={(id, repos) =>
+                api.generatePublishDescription({ featureId: id, repos })
+              }
+              openExternal={openExternal}
+              onDispatched={() => {}}
+            />
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (scene === 'completion-delete') {
+    return (
+      <div style={{ height: '100vh', position: 'relative' }}>
+        {completion.preflight !== null ? (
+          <CleanupConfirm
+            featureId="feat-electron-app"
+            preflight={completion.preflight}
+            dispatchAction={dispatchAction}
+            onClose={() => {}}
+            onDispatched={() => {}}
+          />
+        ) : null}
+      </div>
+    );
+  }
+
   const isConstrained = scene === 'completion-constrained';
   return (
     <div
@@ -419,25 +467,15 @@ function CompletionScene({ scene }: { scene: string }): React.ReactElement {
         margin: isConstrained ? '0 auto' : undefined,
       }}
     >
-      <CompletionWorkspace
+      <ChangesSurface
         featureId="feat-electron-app"
-        featureName="Electron App for Agentic Orchestrator"
-        initialStep={initialStep}
-        onClose={() => {}}
-        preflightCompletion={(id) => api.preflightCompletion({ featureId: id })}
-        getRepositoryDiff={(id, repo, filePath) =>
-          api.getRepositoryDiff({ featureId: id, repo, ...(filePath ? { filePath } : {}) })
-        }
-        dispatchAction={(id, action, body) =>
-          api.dispatchFeatureAction({
-            featureId: id,
-            action,
-            ...(body ? { body } : {}),
-          } as FeatureActionRequest)
-        }
-        generatePublishDescription={(id) => api.generatePublishDescription({ featureId: id })}
-        openExternal={(url) => api.openExternal({ url })}
-        revealPath={(id, repo) => api.revealPath({ featureId: id, repo })}
+        preflight={completion.preflight}
+        loading={completion.loading}
+        error={completion.error}
+        onRetry={() => void completion.refresh()}
+        getRepositoryDiff={getRepositoryDiff}
+        openExternal={openExternal}
+        revealPath={revealPath}
       />
     </div>
   );

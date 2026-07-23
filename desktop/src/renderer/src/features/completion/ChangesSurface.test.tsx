@@ -4,17 +4,24 @@ import { ChangesSurface } from './ChangesSurface';
 import type { CompletionPreflightResult, RepositoryDiffResult } from '../../../../shared/ipc';
 
 const preflight: CompletionPreflightResult = {
-  featureId: 'f', sourceRevision: 'r', canMarkDone: true,
+  featureId: 'f',
+  sourceRevision: 'r',
+  canMarkDone: true,
   repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'eligible' }],
 };
 const diff: RepositoryDiffResult = {
-  featureId: 'f', repo: 'repo-a',
+  featureId: 'f',
+  repo: 'repo-a',
   files: [{ path: 'src/foo.go', operation: 'modify', addedLines: 3, removedLines: 1 }],
 };
 
 function props(over?: Partial<Parameters<typeof ChangesSurface>[0]>) {
   return {
-    featureId: 'f', preflight, loading: false, error: null, onRetry: vi.fn(),
+    featureId: 'f',
+    preflight,
+    loading: false,
+    error: null,
+    onRetry: vi.fn(),
     getRepositoryDiff: vi.fn(() => Promise.resolve(diff)),
     openExternal: vi.fn(() => Promise.resolve({ ok: true })),
     revealPath: vi.fn(() => Promise.resolve({ ok: true })),

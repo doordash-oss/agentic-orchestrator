@@ -14,7 +14,9 @@ function props(over?: Partial<Parameters<typeof PublishModalBody>[0]>) {
     featureId: 'f',
     preflight,
     dispatchAction: vi.fn(() => Promise.resolve({ result: 'published repo-a' })),
-    generatePublishDescription: vi.fn(() => Promise.resolve({ featureId: 'f', title: 'T', body: 'B' })),
+    generatePublishDescription: vi.fn(() =>
+      Promise.resolve({ featureId: 'f', title: 'T', body: 'B' }),
+    ),
     openExternal: vi.fn(() => Promise.resolve({ ok: true })),
     onDispatched: vi.fn(),
     ...over,
@@ -48,6 +50,8 @@ describe('PublishModalBody', () => {
   it('fills title/body from generate', async () => {
     render(<PublishModalBody {...props()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Generate PR narrative' }));
-    await waitFor(() => expect((screen.getByLabelText('PR title') as HTMLInputElement).value).toBe('T'));
+    await waitFor(() =>
+      expect((screen.getByLabelText('PR title') as HTMLInputElement).value).toBe('T'),
+    );
   });
 });

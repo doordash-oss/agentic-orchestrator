@@ -4,14 +4,28 @@ import { MergeModalBody } from './MergeModal';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
 
 const preflight: CompletionPreflightResult = {
-  featureId: 'f', sourceRevision: 'rev-1', canMarkDone: false,
-  repos: [{ repo: 'local', publishable: false, touched: true, status: 'eligible', baseBranch: 'main', branch: 'feat/x' }],
+  featureId: 'f',
+  sourceRevision: 'rev-1',
+  canMarkDone: false,
+  repos: [
+    {
+      repo: 'local',
+      publishable: false,
+      touched: true,
+      status: 'eligible',
+      baseBranch: 'main',
+      branch: 'feat/x',
+    },
+  ],
 };
 function props(over?: Partial<Parameters<typeof MergeModalBody>[0]>) {
   return {
-    featureId: 'f', preflight,
+    featureId: 'f',
+    preflight,
     dispatchAction: vi.fn(() => Promise.resolve({ result: 'merged' })),
-    onDispatched: vi.fn(), onHandoffToRebase: vi.fn(), ...over,
+    onDispatched: vi.fn(),
+    onHandoffToRebase: vi.fn(),
+    ...over,
   };
 }
 

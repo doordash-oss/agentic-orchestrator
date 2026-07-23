@@ -1,8 +1,3 @@
-/**
- * Publish modal body: lets users select eligible repositories and publish
- * reviewed changes with a shared PR title/body. Preflight is owned by the
- * cockpit; on a successful publish the cockpit is asked to refresh it.
- */
 import { useState, useCallback, useMemo } from 'react';
 import { parseIpcError } from '../../wizard/ipcError';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
@@ -97,10 +92,7 @@ export function PublishModalBody({
     }
   }, [featureId, generatePublishDescription, publishRepos]);
 
-  const eligibleRepos = useMemo(
-    () => preflight.repos.filter(isEligibleForPublish),
-    [preflight],
-  );
+  const eligibleRepos = useMemo(() => preflight.repos.filter(isEligibleForPublish), [preflight]);
 
   const publishedRepos = useMemo(
     () => preflight.repos.filter((r) => r.status === 'already_published'),
@@ -108,8 +100,7 @@ export function PublishModalBody({
   );
 
   const ineligibleRepos = useMemo(
-    () =>
-      preflight.repos.filter((r) => r.touched && !r.publishable && r.status !== 'completed'),
+    () => preflight.repos.filter((r) => r.touched && !r.publishable && r.status !== 'completed'),
     [preflight],
   );
 

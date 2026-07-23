@@ -1,8 +1,3 @@
-/**
- * Changes surface: read-only diff inspection driven by a preflight owned
- * by the parent cockpit. Lets users pick a repo, browse touched files, and
- * view a bounded diff.
- */
 import { useState, useCallback, useRef } from 'react';
 import { useMediaQuery } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
@@ -51,7 +46,8 @@ export function ChangesSurface({
   const repoDiffRequestRef = useRef(0);
   const fileDiffRequestRef = useRef(0);
   const constrainedLayout = useMediaQuery('(max-width: 900px)');
-  const diffLayout: DiffLayout = diffLayoutOverride ?? (constrainedLayout ? 'unified' : 'side-by-side');
+  const diffLayout: DiffLayout =
+    diffLayoutOverride ?? (constrainedLayout ? 'unified' : 'side-by-side');
 
   const loadRepoDiff = useCallback(
     async (repo: string) => {

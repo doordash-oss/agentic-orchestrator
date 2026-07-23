@@ -565,7 +565,7 @@ test('completion workspace screenshots', async ({ page }) => {
     1440,
     900,
     'guided-completion-with-multi-repository-side-by-side-diff-and-publish-scope-ligh-1440x900',
-    '.completion-workspace__header',
+    '.completion-workspace__inspect',
     async (p) => {
       await expect(p.locator('.completion-workspace__repos')).toBeVisible({ timeout: 15_000 });
       await p.locator('.completion-workspace__repo-select').first().click();
@@ -582,7 +582,7 @@ test('completion workspace screenshots', async ({ page }) => {
     1728,
     1117,
     'guided-completion-with-multi-repository-side-by-side-diff-and-partial-publish-re-1728x1117',
-    '.completion-workspace__header',
+    '.completion-workspace__publish',
     async (p) => {
       await expect(p.locator('.completion-workspace__publish')).toBeVisible({ timeout: 15_000 });
       // Verify the partial outcome scene: already-published, failed-with-last_error, and
@@ -606,7 +606,7 @@ test('completion workspace screenshots', async ({ page }) => {
     760,
     900,
     'constrained-completion-workspace-with-unified-diff-and-reachable-primary-actions-760x900',
-    '.completion-workspace__header',
+    '.completion-workspace__inspect',
     async (p) => {
       await expect(p.locator('.completion-workspace__repos')).toBeVisible({ timeout: 15_000 });
       await p.locator('.completion-workspace__repo-select').first().click();
@@ -622,16 +622,17 @@ test('completion workspace screenshots', async ({ page }) => {
     'light',
     1440,
     900,
-    'post-done-cleanup-and-exact-name-deletion-confirmation-with-clearly-distinct-con-1440x900',
-    '.completion-workspace__header',
+    'post-done-cleanup-worktrees-impact-dialog-with-removes-and-preserves-consequences-1440x900',
+    '.impact-dialog',
     async (p) => {
-      // The delete step composes both consequence hierarchies: the reversible
-      // cleanup summary (already applied) and the irreversible delete confirmation
-      // with exact-name protection — both visible in one scene.
-      await expect(p.locator('.completion-workspace__delete')).toBeVisible({ timeout: 10_000 });
-      await expect(p.getByText('Cleanup already applied — reversible')).toBeVisible();
-      await expect(p.getByText('Removes permanently')).toBeVisible();
-      await expect(p.getByPlaceholder('Electron App for Agentic Orchestrator')).toBeVisible();
+      // The cleanup dialog surfaces the reversible worktree-cleanup consequence
+      // hierarchy: what it removes versus what it preserves, plus the confirm.
+      await expect(p.getByRole('heading', { name: 'Clean worktrees?' })).toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(p.getByText('Completed feature worktrees')).toBeVisible();
+      await expect(p.getByText('Branches')).toBeVisible();
+      await expect(p.getByRole('button', { name: 'Clean worktrees' })).toBeVisible();
     },
   );
 });

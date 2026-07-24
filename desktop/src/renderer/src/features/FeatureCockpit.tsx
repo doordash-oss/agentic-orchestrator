@@ -1227,10 +1227,14 @@ export function FeatureCockpit({
   const visibleAttentionItems = attentionItems.filter(
     (item) => !(hasPendingReview && item.kind === 'review'),
   );
-  const previewAttentionItem =
+  const featureAttentionItems = visibleAttentionItems.filter(
+    (item) => item.kind !== 'recovery' && item.featureId === featureId,
+  );
+  const routedAttentionItem =
     attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined
       ? undefined
-      : visibleAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
+      : featureAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
+  const activeAttentionItem = routedAttentionItem ?? featureAttentionItems[0];
 
   const submitAttention = async (
     item: AttentionItem,
@@ -1592,17 +1596,17 @@ export function FeatureCockpit({
                       }
                       onAttentionPreviewClose={onAttentionPreviewClose}
                       attentionFooter={
-                        previewAttentionItem === undefined ? undefined : (
+                        activeAttentionItem === undefined ? undefined : (
                           <AttentionDetail
-                            item={previewAttentionItem}
-                            busy={attentionBusy === previewAttentionItem.id}
+                            item={activeAttentionItem}
+                            busy={attentionBusy === activeAttentionItem.id}
                             drafts={attentionDrafts}
                             setDrafts={setAttentionDrafts}
                             saveDraft={(action, options) =>
-                              saveAttentionDraft(previewAttentionItem.id, action, options)
+                              saveAttentionDraft(activeAttentionItem.id, action, options)
                             }
                             submit={(action, options) =>
-                              void submitAttention(previewAttentionItem, action, options)
+                              void submitAttention(activeAttentionItem, action, options)
                             }
                           />
                         )

@@ -295,7 +295,7 @@ export function CurrentRunInspection({
         </p>
       ) : null}
 
-      {preview === null && live.cohort.length === 0 ? (
+      {preview === null && live.cohort.length === 0 && attentionFooter === undefined ? (
         <p className="setup-step__empty">Loading current run inspection…</p>
       ) : (
         <div className="current-inspection__preview">
@@ -334,6 +334,12 @@ export function CurrentRunInspection({
               )}
               <PreviewMetrics preview={preview} verifying={verifying} />
             </>
+          ) : null}
+          {attentionFooter !== undefined && !fullscreen ? (
+            <section className="live-preview__attention" aria-label="Agent request">
+              <p className="cockpit__eyebrow">Your response</p>
+              {attentionFooter}
+            </section>
           ) : null}
         </div>
       )}

@@ -690,6 +690,66 @@ describe('FeatureCockpit convergence', () => {
       ).not.toBeInTheDocument(),
     );
   });
+
+  it('answers a pending feature request from the embedded live preview', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      }),
+    });
+    let latest: AttentionItem[] = [helpAttention];
+    mock.api.sendHelp.mockImplementation((request: unknown) => {
+      latest = [];
+      return Promise.resolve({ result: 'sent', request });
+    });
+
+    function Harness() {
+      const [items, setItems] = useState<AttentionItem[]>([helpAttention]);
+      const [drafts, setDrafts] = useState(emptyAttentionDrafts);
+      return (
+        <FeatureCockpit
+          featureId={FEATURE_ID}
+          titleHint="Search revamp"
+          onClose={vi.fn()}
+          onLoadedName={vi.fn()}
+          attentionItems={items}
+          refreshAttention={() => {
+            setItems(latest);
+            return Promise.resolve(latest);
+          }}
+          attentionDrafts={drafts}
+          setAttentionDrafts={setDrafts}
+        />
+      );
+    }
+
+    render(<Harness />);
+    const user = userEvent.setup();
+
+    const inspection = await screen.findByRole('region', { name: 'Current run inspection' });
+    const request = within(inspection).getByRole('region', { name: 'Agent request' });
+    expect(screen.queryByRole('dialog', { name: 'Live agent preview' })).not.toBeInTheDocument();
+
+    await user.type(
+      within(request).getByLabelText('Help reply'),
+      'Continue with the embedded evidence path.',
+    );
+    await user.click(within(request).getByRole('button', { name: 'Send reply' }));
+
+    expect(mock.api.sendHelp).toHaveBeenCalledWith({
+      featureId: FEATURE_ID,
+      sessionId: 'help-session',
+      message: 'Continue with the embedded evidence path.',
+    });
+    await waitFor(() =>
+      expect(
+        within(inspection).queryByRole('region', { name: 'Agent request' }),
+      ).not.toBeInTheDocument(),
+    );
+  });
 });
 
 describe('FeatureCockpit Stop', () => {

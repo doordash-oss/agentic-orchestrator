@@ -934,12 +934,17 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 	if hasAnyModelConfig(req.Models) {
 		models = mergeModelConfig(models, req.Models)
 	}
+	effort := cfg.Defaults.Effort
+	if req.Effort.Implementation != "" {
+		effort.Implementation = req.Effort.Implementation
+	}
 	pipeline := effectiveCreatePipeline(req.Pipeline, cfg)
 	checkpoints := pipeline.ProjectGates(req.Checkpoints, true).Checkpoints
 	f, err := t.orch.CreateFeature(req.Name, req.Description, req.Repos, models, req.ExitCriteria, req.Inquireness, req.Images, feature.CreateOptions{
 		UseCurrentBranch:        req.UseCurrentBranch,
 		UseCurrentBranchPerRepo: req.UseCurrentBranchPerRepo,
 		Checkpoints:             checkpoints,
+		Effort:                  effort,
 		Attachments:             req.Attachments,
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
@@ -948,7 +953,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 	if err != nil {
 		return serverruntime.CreateFeatureResponse{}, err
 	}
-	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Inquireness, f.Checkpoints, true); err != nil {
+	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Effort, f.Inquireness, f.Checkpoints, true); err != nil {
 		return serverruntime.CreateFeatureResponse{}, err
 	}
 	return serverruntime.CreateFeatureResponse{FeatureID: f.ID, Result: "created"}, nil
@@ -1050,6 +1055,7 @@ func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntim
 func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
 	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
 		Models:             req.Models,
+		Effort:             req.Effort,
 		Inquireness:        feature.Inquireness(req.Inquireness),
 		Checkpoints:        req.Checkpoints,
 		InputNotifications: feature.InputNotificationsMode(req.InputNotifications),
@@ -1067,7 +1073,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 	if pipeline == "" {
 		pipeline = f.EffectivePipeline()
 	}
-	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
 		return serverruntime.FeatureConfigUpdateResponse{}, err
 	}
 	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
@@ -2019,6 +2025,9 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntim
 			changed = true
 		}
 	}
+	if patch.Effort.Implementation != "" && setIfChanged(&dst.Effort.Implementation, patch.Effort.Implementation) {
+		changed = true
+	}
 	if patch.ExitCriteria != "" && setIfChanged(&dst.ExitCriteria, patch.ExitCriteria) {
 		changed = true
 	}
@@ -2096,7 +2105,7 @@ func featureRepoNames(f *feature.Feature) []string {
 	return repos
 }
 
-func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeline feature.PipelineProfile, models config.ModelConfig, inquireness feature.Inquireness, checkpoints feature.Checkpoints, publishable bool) error {
+func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeline feature.PipelineProfile, models config.ModelConfig, effort config.EffortConfig, inquireness feature.Inquireness, checkpoints feature.Checkpoints, publishable bool) error {
 	if t.configPath == "" {
 		return errors.New("config path is not available")
 	}
@@ -2120,6 +2129,7 @@ func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeli
 	profileKey := string(pipeline)
 	cfg.Defaults.PipelinePreferences[profileKey] = config.PipelinePreference{
 		Models:      models,
+		Effort:      effort,
 		Inquireness: string(inquireness),
 	}
 	configGates := feature.FeatureCheckpointsToConfig(projection.Checkpoints)

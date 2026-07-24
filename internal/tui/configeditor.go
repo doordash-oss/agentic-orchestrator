@@ -32,6 +32,7 @@ type ConfigEditorModel struct {
 	original feature.ConfigSnapshot
 
 	models      config.ModelConfig
+	effort      config.EffortConfig
 	inquireness feature.Inquireness
 	checkpoints feature.Checkpoints
 	pipeline    feature.PipelineProfile
@@ -65,6 +66,7 @@ type modelCell int
 const (
 	modelCellAgent modelCell = iota
 	modelCellModel
+	modelCellEffort
 	modelCellPhase
 )
 
@@ -108,12 +110,14 @@ func NewConfigEditorModel(f *feature.Feature, cat PhaseModelCatalog, provisional
 	normalized := pipeline.NormalizeCheckpoints(f.Checkpoints, provisionalPublishable)
 	snap := feature.ConfigSnapshot{
 		Models:      f.Models,
+		Effort:      f.Effort,
 		Inquireness: f.Inquireness,
 		Checkpoints: normalized,
 	}
 	return ConfigEditorModel{
 		original:               snap,
 		models:                 snap.Models,
+		effort:                 snap.Effort,
 		inquireness:            snap.Inquireness,
 		checkpoints:            snap.Checkpoints,
 		pipeline:               pipeline,
@@ -171,26 +175,57 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (ConfigEditorModel, tea.Cmd) {
 	// Per-row value cycling + context-sensitive tab/shift+tab.
 	switch m.rowCategory() {
 	case rowCatModels:
+		isImplRow := m.isImplementationRow()
 		switch key {
 		case "tab":
-			m.activeModelCell = modelCellModel
+			if isImplRow {
+				m.activeModelCell = cycleModelCellForward(m.activeModelCell)
+			} else {
+				m.activeModelCell = modelCellModel
+			}
 		case "shift+tab":
-			m.activeModelCell = modelCellAgent
+			if isImplRow {
+				m.activeModelCell = cycleModelCellBackward(m.activeModelCell)
+			} else {
+				m.activeModelCell = modelCellAgent
+			}
 		case "/":
 			if m.activeModelCell == modelCellModel {
 				m.startModelFilter()
 			}
 		case "right", "l":
-			if m.activeModelCell == modelCellAgent {
+			switch m.activeModelCell {
+			case modelCellAgent:
 				m.cycleAgent(+1)
-			} else {
+				if isImplRow {
+					m.resetIncompatibleEffort()
+				}
+			case modelCellEffort:
+				if isImplRow {
+					m.cycleEffort(+1)
+				}
+			default:
 				m.cycleModelForward()
+				if isImplRow {
+					m.resetIncompatibleEffort()
+				}
 			}
 		case "left", "h":
-			if m.activeModelCell == modelCellAgent {
+			switch m.activeModelCell {
+			case modelCellAgent:
 				m.cycleAgent(-1)
-			} else {
+				if isImplRow {
+					m.resetIncompatibleEffort()
+				}
+			case modelCellEffort:
+				if isImplRow {
+					m.cycleEffort(-1)
+				}
+			default:
 				m.cycleModelBackward()
+				if isImplRow {
+					m.resetIncompatibleEffort()
+				}
 			}
 		}
 	case rowCatInquireness:
@@ -241,6 +276,7 @@ func (m ConfigEditorModel) Snapshot() feature.ConfigSnapshot {
 	cp := m.pipeline.NormalizeCheckpoints(m.checkpoints, m.provisionalPublishable)
 	return feature.ConfigSnapshot{
 		Models:      m.models,
+		Effort:      m.effort,
 		Inquireness: m.inquireness,
 		Checkpoints: cp,
 	}
@@ -251,8 +287,15 @@ func (m ConfigEditorModel) Snapshot() feature.ConfigSnapshot {
 func (m ConfigEditorModel) HasChanges() bool {
 	s := m.Snapshot()
 	return s.Models != m.original.Models ||
+		s.Effort != m.original.Effort ||
 		s.Inquireness != m.original.Inquireness ||
 		s.Checkpoints != m.original.Checkpoints
+}
+
+// EffortChanged reports whether the Implementation effort differs from the
+// original snapshot.
+func (m ConfigEditorModel) EffortChanged() bool {
+	return m.effort != m.original.Effort
 }
 
 // ModelsChangeCount returns the number of phase-role fields in Models that
@@ -627,6 +670,116 @@ func (m *ConfigEditorModel) acceptFilteredModel() {
 }
 
 func (m ConfigEditorModel) ModelFilteringActive() bool { return m.modelFilterActive }
+
+// isImplementationRow reports whether the current row cursor is on the
+// Implementation field — the only row that exposes an Effort cell in this
+// phase.
+func (m ConfigEditorModel) isImplementationRow() bool {
+	return m.currentModelField() == "Implementation"
+}
+
+// effortOptionsForImplModel returns the ordered effort options for the
+// Implementation row: Auto first, followed by the selected model's ordered,
+// distinct supported levels. An unsupported or unknown model offers Auto only.
+func (m ConfigEditorModel) effortOptionsForImplModel() []string {
+	opts := []string{"auto"}
+	implModel := m.models.Implementation
+	if implModel == "" {
+		return opts
+	}
+	entries := m.catalog.ModelEntriesForField("Implementation")
+	for _, entry := range entries {
+		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, implModel) {
+			for _, cap := range entry.EffortCapabilities {
+				opts = append(opts, string(cap))
+			}
+			return opts
+		}
+	}
+	return opts
+}
+
+// effortDisplayValue returns the display string for the current effort value.
+// Auto renders with its live pipeline-derived value inline (e.g. "Auto (high)").
+func (m ConfigEditorModel) effortDisplayValue() string {
+	val := m.effort.Implementation
+	if val == "" || val == "auto" {
+		pipelineEffort := string(m.pipeline.EffortLevel())
+		return "Auto (" + pipelineEffort + ")"
+	}
+	return val
+}
+
+// cycleEffort advances or retreats the Implementation effort through the
+// ordered option list (Auto + model capabilities).
+func (m *ConfigEditorModel) cycleEffort(direction int) {
+	opts := m.effortOptionsForImplModel()
+	if len(opts) <= 1 {
+		return
+	}
+	current := m.effort.Implementation
+	if current == "" {
+		current = "auto"
+	}
+	idx := 0
+	for i, opt := range opts {
+		if opt == current {
+			idx = i
+			break
+		}
+	}
+	idx += direction
+	if idx < 0 {
+		idx = len(opts) - 1
+	}
+	if idx >= len(opts) {
+		idx = 0
+	}
+	m.effort.Implementation = opts[idx]
+}
+
+// resetIncompatibleEffort resets the Implementation effort to Auto when the
+// current explicit value is not supported by the newly selected model. This
+// ensures no hidden stale value persists after an Agent or Model change.
+func (m *ConfigEditorModel) resetIncompatibleEffort() {
+	val := m.effort.Implementation
+	if val == "" || val == "auto" {
+		return
+	}
+	opts := m.effortOptionsForImplModel()
+	supported := false
+	for _, opt := range opts {
+		if opt == val {
+			supported = true
+			break
+		}
+	}
+	if !supported {
+		m.effort.Implementation = "auto"
+	}
+}
+
+func cycleModelCellForward(cell modelCell) modelCell {
+	switch cell {
+	case modelCellAgent:
+		return modelCellModel
+	case modelCellModel:
+		return modelCellEffort
+	default:
+		return modelCellAgent
+	}
+}
+
+func cycleModelCellBackward(cell modelCell) modelCell {
+	switch cell {
+	case modelCellAgent:
+		return modelCellEffort
+	case modelCellModel:
+		return modelCellAgent
+	default:
+		return modelCellModel
+	}
+}
 
 func (m ConfigEditorModel) entryForFieldValue(field, value string) (PhaseModelEntry, bool) {
 	for _, entry := range m.catalog.ModelEntriesForField(field) {

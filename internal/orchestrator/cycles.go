@@ -19,12 +19,14 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -225,6 +227,14 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 	}
 
 	kbInfos := o.computeKBInfos(f)
+	implModel := f.Models.Implementation
+	pipelineEffort := f.EffectivePipeline().EffortLevel()
+	effortCaps := pr.EffortCapabilitiesForModel(implModel)
+	effectiveEffort, effortSource := llm.ResolveEffortFromString(f.Effort.Implementation, effortCaps, pipelineEffort)
+	if llm.EffortDrifted(llm.EffortLevel(f.Effort.Implementation), effortCaps) {
+		log.Printf("feature %s: implementation effort %q is not supported by model %q; falling back to Auto (%s)",
+			f.ID, f.Effort.Implementation, implModel, string(pipelineEffort))
+	}
 	cfg := agent.ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               o.deps.Store,
@@ -235,7 +245,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		MaxConsecFails:             3,
 		MaxConsecNoProgress:        3,
 		ExitCriteria:               f.ExitCriteria,
-		Model:                      f.Models.Implementation,
+		Model:                      implModel,
 		ReviewModel:                f.Models.Review,
 		ArtifactDir:                cycleBaseDir,
 		StateDir:                   filepath.Join(baseDir, featureID),
@@ -247,7 +257,9 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
-		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		EffortLevel:                pipelineEffort,
+		EffectiveEffort:            effectiveEffort,
+		EffortSource:               effortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),

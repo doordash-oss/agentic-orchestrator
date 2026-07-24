@@ -2085,6 +2085,8 @@ func (s *mutationTargetSessionView) InitialPrompt() string        { return "" }
 func (s *mutationTargetSessionView) ProviderName() string         { return "" }
 func (s *mutationTargetSessionView) Model() string                { return "" }
 func (s *mutationTargetSessionView) WorkDir() string              { return "" }
+func (s *mutationTargetSessionView) EffectiveEffort() llm.EffortLevel { return "" }
+func (s *mutationTargetSessionView) EffortSource() llm.EffortSource   { return "" }
 func (s *mutationTargetSessionView) MessageLog() ports.MessageLog { return nil }
 func (s *mutationTargetSessionView) Cost() *llm.ResultMessage     { return nil }
 func (s *mutationTargetSessionView) LatestUsage() *llm.Usage      { return nil }

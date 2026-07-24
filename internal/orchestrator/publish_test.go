@@ -737,6 +737,8 @@ func (s *publishDescriptionSessionHandle) InitialPrompt() string { return "" }
 func (s *publishDescriptionSessionHandle) ProviderName() string  { return "" }
 func (s *publishDescriptionSessionHandle) Model() string         { return "" }
 func (s *publishDescriptionSessionHandle) WorkDir() string       { return "" }
+func (s *publishDescriptionSessionHandle) EffectiveEffort() llm.EffortLevel { return "" }
+func (s *publishDescriptionSessionHandle) EffortSource() llm.EffortSource   { return "" }
 func (s *publishDescriptionSessionHandle) MessageLog() ports.MessageLog {
 	return s.msgLog
 }

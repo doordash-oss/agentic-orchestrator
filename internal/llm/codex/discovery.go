@@ -106,10 +106,11 @@ func parseCodexModelCatalogWithProgress(out []byte, report llm.ModelDiscoveryRep
 		windows := codexContextWindowOptions(raw.ContextWindow, raw.MaxContextWindow)
 		for i, window := range windows {
 			info := llm.ModelInfo{
-				ID:            id,
-				DisplayName:   displayName,
-				ContextWindow: window,
-				Category:      codexCategoryForDiscoveredModel(id),
+				ID:                 id,
+				DisplayName:        displayName,
+				ContextWindow:      window,
+				Category:           codexCategoryForDiscoveredModel(id),
+				EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax},
 			}
 			if label := llm.ContextWindowLabel(window); label != "" {
 				info.ID = llm.ModelWithContextWindow(id, window)

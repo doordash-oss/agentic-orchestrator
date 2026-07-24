@@ -117,6 +117,27 @@ func (pr *PhaseRunner) modelForRole(configured string, role llm.PhaseRole) strin
 	return pr.defaultModelForRole(role)
 }
 
+// EffortCapabilitiesForModel resolves the effort capabilities for a model
+// through the provider registry. Returns nil when the model is unknown or the
+// provider has no catalog (Auto-only).
+func (pr *PhaseRunner) EffortCapabilitiesForModel(model string) []llm.EffortLevel {
+	if pr.Registry == nil || model == "" {
+		return nil
+	}
+	prov, _, err := pr.Registry.ResolveModel(model)
+	if err != nil {
+		return nil
+	}
+	return llm.EffortCapabilitiesForModel(prov, model)
+}
+
+// logRuntimeWarning emits a warning through the standard logger channel.
+// Used for non-fatal issues like capability drift that should be visible to
+// the user without blocking execution.
+func (pr *PhaseRunner) logRuntimeWarning(f *feature.Feature, format string, args ...any) {
+	log.Printf("feature %s: "+format, append([]any{f.ID}, args...)...)
+}
+
 // NewPhaseRunner creates a PhaseRunner with a default execCommandRunner.
 func NewPhaseRunner(sm ports.SessionManager, store ports.FeatureStore, stateDir string) *PhaseRunner {
 	return &PhaseRunner{SessionManager: sm, FeatureStore: store, StateDir: stateDir, CommandRunner: &execCommandRunner{}}
@@ -217,7 +238,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	if sessOpts != nil {
 		providerName = sessOpts.ProviderName
 	}
-	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, phaseModel, "")
+	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, phaseModel, "", "", "")
 
 	// Track reads of KB/skill/guideline files for observability.
 	pr.installContextReadTracker(sess, sessionCtx, cfg.Phase.String(), sessionID, pr.StateDir)
@@ -470,7 +491,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	}
 
 	sessionCtx := phaseCtx.Child()
-	pr.Observer.SessionStarted(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, sessOpts.ProviderName, kbModel, repo.Name)
+	pr.Observer.SessionStarted(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, sessOpts.ProviderName, kbModel, repo.Name, "", "")
 	pr.installContextReadTracker(sess, sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, pr.StateDir)
 	pr.installSubagentProgressTracker(sess, sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID)
 	sessionStart := time.Now()
@@ -671,6 +692,18 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	implementationModel := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
 
+	// Resolve Implementation effort from the configured value, the selected
+	// model's capabilities, and the active pipeline. Auto (or empty) preserves
+	// current pipeline behavior; a supported explicit value is used unchanged;
+	// capability drift falls back to the pipeline level with a runtime warning.
+	pipelineEffort := f.EffectivePipeline().EffortLevel()
+	effortCaps := pr.EffortCapabilitiesForModel(implementationModel)
+	effectiveEffort, effortSource := llm.ResolveEffortFromString(f.Effort.Implementation, effortCaps, pipelineEffort)
+	if llm.EffortDrifted(llm.EffortLevel(f.Effort.Implementation), effortCaps) {
+		pr.logRuntimeWarning(f, "implementation effort %q is not supported by model %q; falling back to Auto (%s)",
+			f.Effort.Implementation, implementationModel, string(pipelineEffort))
+	}
+
 	// Cycles (rebase, review-comments) operate on the whole branch,
 	// not a specific roadmap phase — omit roadmap/phase-type context so the
 	// review prompt stays focused on the cycle's objectives.
@@ -704,7 +737,9 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		CommandRunner:              pr.CommandRunner,
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
-		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		EffortLevel:                pipelineEffort,
+		EffectiveEffort:            effectiveEffort,
+		EffortSource:               effortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),

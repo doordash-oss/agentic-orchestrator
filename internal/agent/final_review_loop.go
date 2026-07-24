@@ -802,7 +802,7 @@ func (s *featureFinalReviewLoopState) observeFinalReviewSession(sess ports.Sessi
 		return observe.SpanContext{}, time.Time{}, false
 	}
 	sessionCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun).Child()
-	cfg.Observer.SessionStarted(sessionCtx, feature.PhaseFinalReview.String(), sessionID, providerName, model, "")
+	cfg.Observer.SessionStarted(sessionCtx, feature.PhaseFinalReview.String(), sessionID, providerName, model, "", "", "")
 	(&ContextReadTracker{
 		KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 		SkillsDir:     cfg.SkillsDir,

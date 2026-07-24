@@ -25,6 +25,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -154,6 +155,7 @@ type CreateFeatureRequest struct {
 	Description             string                  `json:"description,omitempty"`
 	Repos                   []string                `json:"repos,omitempty"`
 	Models                  config.ModelConfig      `json:"models,omitempty"`
+	Effort                  config.EffortConfig     `json:"effort,omitempty"`
 	ExitCriteria            string                  `json:"exit_criteria,omitempty"`
 	Inquireness             string                  `json:"inquireness,omitempty"`
 	Images                  []string                `json:"images,omitempty"`
@@ -181,6 +183,7 @@ type ReviewDecisionRequest struct {
 
 type FeatureConfigMutationRequest struct {
 	Models             config.ModelConfig      `json:"models,omitempty"`
+	Effort             config.EffortConfig     `json:"effort,omitempty"`
 	Inquireness        string                  `json:"inquireness,omitempty"`
 	Checkpoints        feature.Checkpoints     `json:"checkpoints,omitempty"`
 	Pipeline           feature.PipelineProfile `json:"pipeline,omitempty"`
@@ -235,6 +238,7 @@ type RuntimeConfigMutationRequest struct {
 // must remain distinguishable from an omitted field.
 type RuntimeDefaultsMutation struct {
 	Models                   config.ModelConfig                   `json:"models,omitempty"`
+	Effort                   config.EffortConfig                  `json:"effort,omitempty"`
 	PipelinePreferences      map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
 	ExitCriteria             string                               `json:"exit_criteria,omitempty"`
 	Inquireness              string                               `json:"inquireness,omitempty"`
@@ -523,6 +527,9 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		return true
 	}
 	if !validatePipelineProfile(w, req.Pipeline) {
+		return true
+	}
+	if !validateEffortConfig(w, req.Effort, req.Models.Implementation, h.registry) {
 		return true
 	}
 	resp, err := h.mutations.UpdateFeatureConfig(featureID, req)
@@ -1023,6 +1030,35 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "risk_level must be low, medium, or high", nil)
 		return false
 	}
+}
+
+func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, implModel string, reg *llm.Registry) bool {
+	val := effort.Implementation
+	if val == "" {
+		return true
+	}
+	if !llm.IsValidExplicitEffort(llm.EffortLevel(val)) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request",
+			"effort.implementation must be one of: auto, low, medium, high, max", nil)
+		return false
+	}
+	if val == "auto" {
+		return true
+	}
+	if reg == nil || implModel == "" {
+		return true
+	}
+	prov, _, err := reg.ResolveModel(implModel)
+	if err != nil {
+		return true
+	}
+	caps := llm.EffortCapabilitiesForModel(prov, implModel)
+	if len(caps) > 0 && !llm.EffortCapabilitySupported(caps, llm.EffortLevel(val)) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request",
+			"effort.implementation value "+val+" is not supported by the selected Implementation model", nil)
+		return false
+	}
+	return true
 }
 
 func validateRepoList(w http.ResponseWriter, repos []string, required bool) bool {

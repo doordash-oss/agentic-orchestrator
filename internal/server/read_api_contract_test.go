@@ -2504,6 +2504,8 @@ func (s *fakeSessionView) InitialPrompt() string { return s.initialPrompt }
 func (s *fakeSessionView) ProviderName() string  { return s.provider }
 func (s *fakeSessionView) Model() string         { return s.model }
 func (s *fakeSessionView) WorkDir() string       { return s.workDir }
+func (s *fakeSessionView) EffectiveEffort() llm.EffortLevel { return "" }
+func (s *fakeSessionView) EffortSource() llm.EffortSource   { return "" }
 func (s *fakeSessionView) MessageLog() ports.MessageLog {
 	if s.log != nil {
 		return s.log

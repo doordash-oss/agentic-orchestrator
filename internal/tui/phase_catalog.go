@@ -41,14 +41,15 @@ var globalCatalogRoleToField = map[llm.PhaseRole]string{
 }
 
 type PhaseModelEntry struct {
-	Agent         string
-	ModelID       string
-	DisplayName   string
-	FullID        string
-	ContextWindow int
-	Category      string
-	Recommended   bool
-	Aliases       []string
+	Agent              string
+	ModelID            string
+	DisplayName        string
+	FullID             string
+	ContextWindow      int
+	Category           string
+	Recommended        bool
+	Aliases            []string
+	EffortCapabilities []llm.EffortLevel
 }
 
 // PhaseModelCatalog bundles API-provided per-phase model discovery shared by
@@ -336,13 +337,14 @@ func (c PhaseModelCatalog) entryFromInfo(agent string, info llm.ModelInfo) Phase
 		display = info.ID
 	}
 	return PhaseModelEntry{
-		Agent:         agent,
-		ModelID:       info.ID,
-		DisplayName:   display,
-		FullID:        info.ID,
-		ContextWindow: info.ContextWindow,
-		Category:      info.Category,
-		Aliases:       append([]string(nil), info.Aliases...),
+		Agent:              agent,
+		ModelID:            info.ID,
+		DisplayName:        display,
+		FullID:             info.ID,
+		ContextWindow:      info.ContextWindow,
+		Category:           info.Category,
+		Aliases:            append([]string(nil), info.Aliases...),
+		EffortCapabilities: append([]llm.EffortLevel(nil), info.EffortCapabilities...),
 	}
 }
 
@@ -420,5 +422,6 @@ func (c PhaseModelCatalog) providerModelsForField(field string) map[string][]str
 
 func cloneModelInfo(info llm.ModelInfo) llm.ModelInfo {
 	info.Aliases = append([]string(nil), info.Aliases...)
+	info.EffortCapabilities = append([]llm.EffortLevel(nil), info.EffortCapabilities...)
 	return info
 }

@@ -756,6 +756,9 @@ type DeleteFeatureResponse struct {
 	Result     string       `json:"result"`
 }
 
+// EffortConfig defines model for EffortConfig.
+type EffortConfig = config.EffortConfig
+
 // Error defines model for Error.
 type Error struct {
 	Code    string                 `json:"code"`
@@ -785,6 +788,7 @@ type FeatureActionResult struct {
 // FeatureConfig defines model for FeatureConfig.
 type FeatureConfig struct {
 	Checkpoints        Checkpoints                     `json:"checkpoints"`
+	Effort             EffortConfig                    `json:"effort,omitempty"`
 	InputNotifications FeatureConfigInputNotifications `json:"input_notifications,omitempty"`
 	Inquireness        string                          `json:"inquireness"`
 	Models             ModelDefaults                   `json:"models"`
@@ -816,6 +820,7 @@ type FeatureConfigUpdateResponse struct {
 // FeatureDefaults defines model for FeatureDefaults.
 type FeatureDefaults struct {
 	Checkpoints         config.Checkpoints                   `json:"checkpoints"`
+	Effort              EffortConfig                         `json:"effort,omitempty"`
 	Inquireness         string                               `json:"inquireness,omitempty"`
 	Models              ModelDefaults                        `json:"models"`
 	Pipeline            string                               `json:"pipeline,omitempty"`
@@ -1011,11 +1016,12 @@ type MergeFeatureResponse struct {
 
 // Model defines model for Model.
 type Model struct {
-	Aliases       []string `json:"aliases,omitempty"`
-	Category      string   `json:"category,omitempty"`
-	ContextWindow int      `json:"context_window,omitempty"`
-	DisplayName   string   `json:"display_name,omitempty"`
-	ID            string   `json:"id"`
+	Aliases            []string `json:"aliases,omitempty"`
+	Category           string   `json:"category,omitempty"`
+	ContextWindow      int      `json:"context_window,omitempty"`
+	DisplayName        string   `json:"display_name,omitempty"`
+	EffortCapabilities []string `json:"effort_capabilities,omitempty"`
+	ID                 string   `json:"id"`
 }
 
 // ModelCatalogResponse defines model for ModelCatalogResponse.
@@ -1431,6 +1437,8 @@ type SSEEvent struct {
 type SessionDetail struct {
 	CanAttach        bool             `json:"can_attach"`
 	ContextPct       int              `json:"context_percentage,omitempty"`
+	Effort           string           `json:"effort,omitempty"`
+	EffortSource     string           `json:"effort_source,omitempty"`
 	FeatureID        string           `json:"feature_id"`
 	ID               string           `json:"id"`
 	InitialPrompt    string           `json:"initial_prompt,omitempty"`
@@ -1478,20 +1486,22 @@ type SessionOutputChunk struct {
 
 // SessionSummary defines model for SessionSummary.
 type SessionSummary struct {
-	ContextPct int       `json:"context_percentage,omitempty"`
-	FeatureID  string    `json:"feature_id"`
-	ID         string    `json:"id"`
-	Iteration  int       `json:"iteration,omitempty"`
-	Kind       string    `json:"kind"`
-	Label      string    `json:"label,omitempty"`
-	Model      string    `json:"model,omitempty"`
-	Phase      string    `json:"phase"`
-	Provider   string    `json:"provider,omitempty"`
-	Repo       string    `json:"repo,omitempty"`
-	StartedAt  time.Time `json:"started_at"`
-	Status     string    `json:"status"`
-	TurnState  string    `json:"turn_state,omitempty"`
-	Usage      Usage     `json:"usage"`
+	ContextPct   int       `json:"context_percentage,omitempty"`
+	Effort       string    `json:"effort,omitempty"`
+	EffortSource string    `json:"effort_source,omitempty"`
+	FeatureID    string    `json:"feature_id"`
+	ID           string    `json:"id"`
+	Iteration    int       `json:"iteration,omitempty"`
+	Kind         string    `json:"kind"`
+	Label        string    `json:"label,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Phase        string    `json:"phase"`
+	Provider     string    `json:"provider,omitempty"`
+	Repo         string    `json:"repo,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	Status       string    `json:"status"`
+	TurnState    string    `json:"turn_state,omitempty"`
+	Usage        Usage     `json:"usage"`
 }
 
 // Setup defines model for Setup.

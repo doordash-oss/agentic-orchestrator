@@ -152,6 +152,7 @@ func NewWorkspaceEditConfigModel(cfg *config.Config, cat PhaseModelCatalog) Edit
 func workspaceDefaultsFeature(cfg *config.Config) *feature.Feature {
 	pipeline := feature.PipelineLarge
 	var models config.ModelConfig
+	var effort config.EffortConfig
 	var inquireness feature.Inquireness
 	var checkpoints feature.Checkpoints
 	if cfg != nil {
@@ -159,12 +160,14 @@ func workspaceDefaultsFeature(cfg *config.Config) *feature.Feature {
 			pipeline = parsed
 		}
 		models = cfg.Defaults.Models
+		effort = cfg.Defaults.Effort
 		inquireness = feature.Inquireness(cfg.Defaults.Inquireness)
 		checkpoints = feature.ConfigCheckpointsToFeature(cfg.Defaults.Checkpoints)
 	}
 	return &feature.Feature{
 		Name:        "Workspace Defaults",
 		Models:      models,
+		Effort:      effort,
 		Inquireness: inquireness,
 		Checkpoints: checkpoints,
 		Pipeline:    pipeline,

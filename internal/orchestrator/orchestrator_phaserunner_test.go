@@ -85,6 +85,8 @@ func (s *stubSessionHandle) InitialPrompt() string         { return "" }
 func (s *stubSessionHandle) ProviderName() string          { return "" }
 func (s *stubSessionHandle) Model() string                 { return "" }
 func (s *stubSessionHandle) WorkDir() string               { return "" }
+func (s *stubSessionHandle) EffectiveEffort() llm.EffortLevel { return "" }
+func (s *stubSessionHandle) EffortSource() llm.EffortSource   { return "" }
 
 // SessionView data access.
 func (s *stubSessionHandle) MessageLog() ports.MessageLog                         { return s.msgLog }

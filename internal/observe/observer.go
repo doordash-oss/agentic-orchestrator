@@ -168,9 +168,19 @@ func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Du
 }
 
 // SessionStarted emits a session.started event.
-func (o *Observer) SessionStarted(sc SpanContext, phase, sessionID, provider, model, repoName string) {
+func (o *Observer) SessionStarted(sc SpanContext, phase, sessionID, provider, model, repoName string, effortLevel string, effortSource string) {
 	if o == nil || !o.enabled {
 		return
+	}
+	data := map[string]any{
+		"provider": provider,
+		"model":    model,
+	}
+	if effortLevel != "" {
+		data["effort"] = effortLevel
+	}
+	if effortSource != "" {
+		data["effort_source"] = effortSource
 	}
 	o.emit(sc, Event{
 		Timestamp:    time.Now(),
@@ -182,14 +192,17 @@ func (o *Observer) SessionStarted(sc SpanContext, phase, sessionID, provider, mo
 		FeatureID:    sc.FeatureID,
 		SessionID:    sessionID,
 		RepoName:     repoName,
-		Data: map[string]any{
-			"provider": provider,
-			"model":    model,
-		},
+		Data:         data,
 	})
 	attrs := map[string]string{"phase": phase, "session_id": sessionID, "provider": provider, "model": model}
 	if repoName != "" {
 		attrs["repo"] = repoName
+	}
+	if effortLevel != "" {
+		attrs["effort"] = effortLevel
+	}
+	if effortSource != "" {
+		attrs["effort_source"] = effortSource
 	}
 	o.otel.StartSpan(sc, "session."+phase, addRunNumber(sc, attrs))
 }

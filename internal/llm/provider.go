@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // LLMProvider defines the interface that each coding tool (Claude Code, Codex,
@@ -287,6 +288,73 @@ const (
 	EffortHigh   EffortLevel = "high"
 	EffortMax    EffortLevel = "max"
 )
+
+// EffortAuto is the configuration value that means "derive the effective effort
+// from the active pipeline profile." It is never a member of
+// EffortCapabilities on a ModelInfo; it is only used in persisted configuration
+// and in the EffortSource enum to signal that the effective level was
+// auto-derived rather than explicitly chosen.
+const EffortAuto EffortLevel = "auto"
+
+// EffortSource indicates whether the effective effort level was derived from
+// the pipeline (Auto) or came from an explicit user configuration (Explicit).
+type EffortSource string
+
+const (
+	EffortSourceAuto     EffortSource = "auto"
+	EffortSourceExplicit EffortSource = "explicit"
+)
+
+// AllEffortLevels is the canonical ordered set of explicit effort levels from
+// lowest to highest, excluding Auto. Providers use this to build
+// EffortCapabilities slices and the resolver uses it for validation.
+var AllEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, EffortMax}
+
+// IsValidExplicitEffort reports whether level is one of the closed set
+// auto|low|medium|high|max. It accepts EffortAuto in addition to the four
+// explicit levels.
+func IsValidExplicitEffort(level EffortLevel) bool {
+	switch level {
+	case EffortAuto, EffortLow, EffortMedium, EffortHigh, EffortMax:
+		return true
+	}
+	return false
+}
+
+// EffortCapabilitiesForModel returns the ordered effort capabilities for a
+// model in the given provider's catalog. If the provider is nil or the model
+// is not found, it returns nil (Auto-only).
+func EffortCapabilitiesForModel(provider LLMProvider, model string) []EffortLevel {
+	if provider == nil {
+		return nil
+	}
+	cp, ok := provider.(CatalogProvider)
+	if !ok {
+		return nil
+	}
+	for _, entry := range cp.ModelCatalog() {
+		if strings.EqualFold(entry.ID, model) {
+			return entry.EffortCapabilities
+		}
+		for _, alias := range entry.Aliases {
+			if strings.EqualFold(alias, model) {
+				return entry.EffortCapabilities
+			}
+		}
+	}
+	return nil
+}
+
+// EffortCapabilitySupported reports whether level is in capabilities. EffortAuto
+// is never in capabilities (it is always implicitly supported).
+func EffortCapabilitySupported(capabilities []EffortLevel, level EffortLevel) bool {
+	for _, cap := range capabilities {
+		if cap == level {
+			return true
+		}
+	}
+	return false
+}
 
 // MapStandardEffortLevel maps a provider-agnostic EffortLevel to the CLI
 // --effort/model_reasoning_effort value shared by Claude and Codex: low,

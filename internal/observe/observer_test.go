@@ -160,7 +160,7 @@ func TestObserverPhaseLifecycle(t *testing.T) {
 		// These should not panic
 		obs.PhaseStarted(sc, "research")
 		obs.PhaseCompleted(sc, "research", time.Second, nil)
-		obs.SessionStarted(sc, "research", "sess1", "claude", "opus", "")
+		obs.SessionStarted(sc, "research", "sess1", "claude", "opus", "", "", "")
 		obs.SessionEnded(sc, "research", "sess1", "", SessionUsage{}, time.Second, nil)
 		obs.Shutdown()
 	})
@@ -334,7 +334,7 @@ func TestSessionStartedEmitsEvent(t *testing.T) {
 	phaseCtx := featureCtx.Child()
 	sessionCtx := phaseCtx.Child()
 
-	obs.SessionStarted(sessionCtx, "Research", "sess-1", "claude", "opus", "my-repo")
+	obs.SessionStarted(sessionCtx, "Research", "sess-1", "claude", "opus", "my-repo", "", "")
 
 	events := readEvents(t, stateDir, featureID)
 	if len(events) != 1 {
@@ -732,7 +732,7 @@ func TestNilObserverMethodsAreNoOps(t *testing.T) {
 	usage := SessionUsage{TotalCostUSD: 1.0}
 
 	// None of these should panic
-	obs.SessionStarted(sc, "research", "sess1", "claude", "opus", "repo")
+	obs.SessionStarted(sc, "research", "sess1", "claude", "opus", "repo", "", "")
 	obs.SessionEnded(sc, "research", "sess1", "repo", usage, time.Second, nil)
 	obs.IterationStarted(sc, 1)
 	obs.IterationEnded(sc, 1, usage, time.Second, "done")
@@ -762,7 +762,7 @@ func TestDisabledObserverMethodsAreNoOps(t *testing.T) {
 	sc := SpanContext{TraceID: "test", SpanID: "test", FeatureID: featureID}
 	usage := SessionUsage{TotalCostUSD: 1.0}
 
-	obs.SessionStarted(sc, "research", "sess1", "claude", "opus", "repo")
+	obs.SessionStarted(sc, "research", "sess1", "claude", "opus", "repo", "", "")
 	obs.SessionEnded(sc, "research", "sess1", "repo", usage, time.Second, nil)
 	obs.IterationStarted(sc, 1)
 	obs.IterationEnded(sc, 1, usage, time.Second, "done")
@@ -1536,7 +1536,7 @@ func TestSessionStartedCreatesOTelSpan(t *testing.T) {
 	}
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
-	obs.SessionStarted(sc, "implement", "sess-1", "claude", "opus", "my-repo")
+	obs.SessionStarted(sc, "implement", "sess-1", "claude", "opus", "my-repo", "", "")
 
 	obs.otel.mu.Lock()
 	spanCount := len(obs.otel.spans)
@@ -1709,7 +1709,7 @@ func TestPermissionAddsOTelSpanEvent(t *testing.T) {
 	sessionCtx := featureCtx.Child()
 
 	// Start a session span so AddSpanEvent has a target
-	obs.SessionStarted(sessionCtx, "implement", "sess-1", "claude", "opus", "")
+	obs.SessionStarted(sessionCtx, "implement", "sess-1", "claude", "opus", "", "", "")
 
 	// Permission events should add span events to the session span (no panic, no new span)
 	obs.otel.mu.Lock()
@@ -1750,7 +1750,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	usage := SessionUsage{TotalCostUSD: 1.0, InputTokens: 10, OutputTokens: 5}
 	obs.PhaseStarted(sc, "inquire")
 	obs.PhaseCompleted(sc, "inquire", time.Second, nil)
-	obs.SessionStarted(sc, "inquire", "s1", "claude", "opus", "repo-a")
+	obs.SessionStarted(sc, "inquire", "s1", "claude", "opus", "repo-a", "", "")
 	obs.SessionEnded(sc, "inquire", "s1", "repo-a", usage, time.Second, nil)
 	obs.IterationStarted(sc, 1)
 	obs.IterationEnded(sc, 1, usage, time.Second, "done")

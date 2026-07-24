@@ -103,6 +103,17 @@ type ImplementConfig struct {
 	// EffortLevel is the pipeline-driven effort level passed to providers.
 	EffortLevel llm.EffortLevel
 
+	// EffectiveEffort is the resolved provider-safe effort level for this
+	// launch. When non-empty, it overrides EffortLevel in BuildSessionOpts so
+	// the provider command receives the capability-resolved level rather than
+	// the raw pipeline level. Empty means no effort resolution was performed
+	// (tests, legacy callers) and EffortLevel is used directly.
+	EffectiveEffort llm.EffortLevel
+	// EffortSource records whether EffectiveEffort was derived from the
+	// pipeline (auto) or an explicit user configuration (explicit). Stored on
+	// the session and emitted in session.started for tracing.
+	EffortSource llm.EffortSource
+
 	// SkillsDir is the path to the reconciled skills directory on disk.
 	SkillsDir string
 
@@ -412,28 +423,35 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				runDir = filepath.Join(cfg.StateDir, "runs", feature.RunDirName(runNumber))
 			}
 			dirs := append([]string{runDir}, cfg.AdditionalDirs...)
-			implBuildOpts := BuildSessionOpts{
-				Model:                          cfg.Model,
-				Prompt:                         prompt,
-				SystemPrompt:                   implProtocol,
-				AdditionalDirs:                 dirs,
-				AgentNames:                     []string{},
-				PIDDir:                         cfg.StateDir,
-				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, permRepoName),
-				RepoName:                       cfg.RepoName,
-				WorkDir:                        cfg.WorkDir,
-				EffortLevel:                    cfg.EffortLevel,
-				Phase:                          feature.PhaseImplement,
-				SystemPromptHasUsefulResources: true,
-				MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
-			}
+		implBuildOpts := BuildSessionOpts{
+			Model:                          cfg.Model,
+			Prompt:                         prompt,
+			SystemPrompt:                   implProtocol,
+			AdditionalDirs:                 dirs,
+			AgentNames:                     []string{},
+			PIDDir:                         cfg.StateDir,
+			PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, permRepoName),
+			RepoName:                       cfg.RepoName,
+			WorkDir:                        cfg.WorkDir,
+			EffortLevel:                    cfg.EffortLevel,
+			Phase:                          feature.PhaseImplement,
+			SystemPromptHasUsefulResources: true,
+			MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
+		}
+		if cfg.EffectiveEffort != "" {
+			implBuildOpts.EffortLevel = cfg.EffectiveEffort
+		}
 			command, env, sessOpts, buildErr := cfg.BuildSession(implBuildOpts)
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
 
-			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-			if cfg.FinishOrViolateNudge {
+		sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+		if cfg.EffectiveEffort != "" {
+			sessOpts.EffectiveEffort = cfg.EffectiveEffort
+			sessOpts.EffortSource = cfg.EffortSource
+		}
+		if cfg.FinishOrViolateNudge {
 				sessOpts.TurnMode = ports.TurnModeInteractive
 			}
 			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
@@ -475,7 +493,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if sessOpts != nil {
 				implProvider = sessOpts.ProviderName
 			}
-			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, cfg.Model, cfg.RepoName)
+			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
 			implTracker := &ContextReadTracker{
 				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 				SkillsDir:     cfg.SkillsDir,
@@ -577,7 +595,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						sess, sessOpts = resumeSess, resumeOpts
 						sessionID = resumeSessionID
 						implSessionCtx = iterCtx.Child()
-						cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName)
+						cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
 						implTracker.Install(sess, implSessionCtx, "implement", sessionID)
 
 						waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))

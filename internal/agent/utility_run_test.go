@@ -88,6 +88,8 @@ func (s *utilityTestSession) InitialPrompt() string { return "" }
 func (s *utilityTestSession) ProviderName() string  { return "" }
 func (s *utilityTestSession) Model() string         { return "" }
 func (s *utilityTestSession) WorkDir() string       { return "" }
+func (s *utilityTestSession) EffectiveEffort() llm.EffortLevel { return "" }
+func (s *utilityTestSession) EffortSource() llm.EffortSource   { return "" }
 func (s *utilityTestSession) MessageLog() ports.MessageLog {
 	return s.msgLog
 }

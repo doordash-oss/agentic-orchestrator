@@ -252,6 +252,14 @@ type SessionOpts struct {
 	// Used by crash-resume: when a provider process dies mid-turn, the loop
 	// may start a fresh process that continues the same conversation.
 	SupportsSessionResume bool
+	// EffectiveEffort is the resolved provider-safe effort level for this
+	// session launch. Empty means no effort was resolved (utility sessions,
+	// legacy callers). Set by the implementation launch path from
+	// ResolveEffort before BuildSession.
+	EffectiveEffort llm.EffortLevel
+	// EffortSource records whether EffectiveEffort was derived from the
+	// pipeline (auto) or an explicit user configuration (explicit).
+	EffortSource llm.EffortSource
 }
 
 // MessageLog is the interface consumers use to observe a session's SDK
@@ -298,6 +306,13 @@ type SessionView interface {
 	ProviderName() string
 	Model() string
 	WorkDir() string
+
+	// EffectiveEffort returns the resolved provider-safe effort level for
+	// this session launch. Empty for sessions that did not resolve effort.
+	EffectiveEffort() llm.EffortLevel
+	// EffortSource returns whether EffectiveEffort was auto-derived from the
+	// pipeline or explicitly configured.
+	EffortSource() llm.EffortSource
 
 	MessageLog() MessageLog
 

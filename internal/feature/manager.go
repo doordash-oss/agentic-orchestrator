@@ -164,6 +164,7 @@ type CreateOptions struct {
 	// UseCurrentBranch.
 	UseCurrentBranchPerRepo map[string]bool
 	Checkpoints             Checkpoints
+	Effort                  config.EffortConfig
 	Attachments             []string // temp attachment file paths
 	RiskLevel               RiskLevel
 	Pipeline                PipelineProfile
@@ -298,6 +299,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		Pipeline:      opt.Pipeline,
 		Repos:         featureRepos,
 		Models:        models,
+		Effort:        opt.Effort,
 		ExitCriteria:  exitCriteria,
 		Inquireness:   inq,
 		MaxIterations: m.Config.Defaults.MaxIterations,

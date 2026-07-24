@@ -138,7 +138,9 @@ func (m *MockSessionView) StartedAt() time.Time          { return m.StartedAtVal
 func (m *MockSessionView) InitialPrompt() string         { return m.InitialPromptVal }
 func (m *MockSessionView) ProviderName() string          { return m.ProviderNameVal }
 func (m *MockSessionView) Model() string                 { return m.ModelVal }
-func (m *MockSessionView) WorkDir() string               { return m.WorkDirVal }
+func (m *MockSessionView) WorkDir() string                 { return m.WorkDirVal }
+func (m *MockSessionView) EffectiveEffort() llm.EffortLevel { return "" }
+func (m *MockSessionView) EffortSource() llm.EffortSource   { return "" }
 
 // --- Data access ---
 

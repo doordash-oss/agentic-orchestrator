@@ -1564,16 +1564,16 @@ roadmapAttemptLoop:
 				if sessOpts != nil {
 					providerName = sessOpts.ProviderName
 				}
-				cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName)
-				(&ContextReadTracker{
-					KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
-					SkillsDir:     cfg.SkillsDir,
-					GuidelinesDir: cfg.GuidelinesDir,
-					Observer:      cfg.Observer,
-				}).Install(sess, planSessionCtx, "plan", sessionID)
-				sessionStart := time.Now()
+			cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, "", "")
+			(&ContextReadTracker{
+				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
+				SkillsDir:     cfg.SkillsDir,
+				GuidelinesDir: cfg.GuidelinesDir,
+				Observer:      cfg.Observer,
+			}).Install(sess, planSessionCtx, "plan", sessionID)
+			sessionStart := time.Now()
 
-				logPath := filepath.Join(attemptDir, "output.txt")
+			logPath := filepath.Join(attemptDir, "output.txt")
 				logFile, err := os.Create(logPath)
 				if err == nil {
 					sess.SetLogFile(logFile)
@@ -1945,16 +1945,16 @@ phasePlanAttemptLoop:
 				if sessOpts != nil {
 					providerName = sessOpts.ProviderName
 				}
-				cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName)
-				(&ContextReadTracker{
-					KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
-					SkillsDir:     cfg.SkillsDir,
-					GuidelinesDir: cfg.GuidelinesDir,
-					Observer:      cfg.Observer,
-				}).Install(sess, planSessionCtx, "plan", sessionID)
-				sessionStart := time.Now()
+			cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, "", "")
+			(&ContextReadTracker{
+				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
+				SkillsDir:     cfg.SkillsDir,
+				GuidelinesDir: cfg.GuidelinesDir,
+				Observer:      cfg.Observer,
+			}).Install(sess, planSessionCtx, "plan", sessionID)
+			sessionStart := time.Now()
 
-				logPath := filepath.Join(attemptDir, "output.txt")
+			logPath := filepath.Join(attemptDir, "output.txt")
 				logFile, err := os.Create(logPath)
 				if err == nil {
 					sess.SetLogFile(logFile)

@@ -98,6 +98,7 @@ type NotificationConfig struct {
 
 type DefaultsConfig struct {
 	Models                   ModelConfig                   `yaml:"models" json:"models"`
+	Effort                   EffortConfig                  `yaml:"effort,omitempty" json:"effort,omitempty"`
 	PipelinePreferences      map[string]PipelinePreference `yaml:"pipeline_preferences,omitempty" json:"pipeline_preferences,omitempty"`
 	ExitCriteria             string                        `yaml:"exit_criteria" json:"exit_criteria,omitempty"`
 	Inquireness              string                        `yaml:"inquireness" json:"inquireness,omitempty"`
@@ -112,8 +113,9 @@ type DefaultsConfig struct {
 // PipelinePreference stores the last-used feature-creation settings for a
 // specific pipeline profile.
 type PipelinePreference struct {
-	Models      ModelConfig `yaml:"models,omitempty" json:"models,omitempty"`
-	Inquireness string      `yaml:"inquireness,omitempty" json:"inquireness,omitempty"`
+	Models      ModelConfig  `yaml:"models,omitempty" json:"models,omitempty"`
+	Effort      EffortConfig `yaml:"effort,omitempty" json:"effort,omitempty"`
+	Inquireness string       `yaml:"inquireness,omitempty" json:"inquireness,omitempty"`
 }
 
 type ModelConfig struct {
@@ -124,6 +126,15 @@ type ModelConfig struct {
 	Review         string `yaml:"review" json:"review,omitempty"`
 	Utilities      string `yaml:"utilities" json:"utilities,omitempty"`
 	KBBuild        string `yaml:"kb_build" json:"kb_build,omitempty"`
+}
+
+// EffortConfig holds per-role reasoning-effort configuration alongside
+// ModelConfig. Each field accepts the closed set auto|low|medium|high|max.
+// Empty or missing values load as Auto without triggering a load-time rewrite.
+// Only Implementation is populated in this phase; other role fields are
+// reserved for future expansion and serialize as omitempty.
+type EffortConfig struct {
+	Implementation string `yaml:"implementation,omitempty" json:"implementation,omitempty"`
 }
 
 // UnmarshalYAML migrates the legacy "chat" YAML key to "utilities".
@@ -427,6 +438,7 @@ func ApplyProviderDefaults(cfg *Config, defaults map[string]string) {
 func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference {
 	pref := PipelinePreference{
 		Models:      d.Models,
+		Effort:      d.Effort,
 		Inquireness: d.Inquireness,
 	}
 	if profile == "" || d.PipelinePreferences == nil {
@@ -437,10 +449,18 @@ func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference
 		return pref
 	}
 	pref.Models = overlayModelConfig(pref.Models, saved.Models)
+	pref.Effort = overlayEffortConfig(pref.Effort, saved.Effort)
 	if saved.Inquireness != "" {
 		pref.Inquireness = saved.Inquireness
 	}
 	return pref
+}
+
+func overlayEffortConfig(base, override EffortConfig) EffortConfig {
+	if override.Implementation != "" {
+		base.Implementation = override.Implementation
+	}
+	return base
 }
 
 func overlayModelConfig(base, override ModelConfig) ModelConfig {

@@ -202,43 +202,59 @@ function RepoInstrumentScene() {
 function RunGaugeScene({ mode = 'active' }: { mode?: 'active' | 'rest' | 'final-review' }) {
   const atRest = mode === 'rest';
   const finalReview = mode === 'final-review';
+  const stages = spineStages('large');
   return (
-    <div
-      className="workspace-shell__content"
-      style={{
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        padding: 'var(--space-4)',
-      }}
-    >
-      <div className="cockpit" aria-label="Feature cockpit" style={{ flex: 1 }}>
-        <div className="cockpit__content">
-          <main className="cockpit__stage">
-            <div className="cockpit__surface cockpit__surface--live">
-              <CurrentRunInspection
-                featureId="abcd1234ef567890"
-                runNumber={8}
-                currentPhase={atRest || finalReview ? 'Final Review' : 'Implement'}
-                featureStatus={
-                  atRest ? 'CodeReady' : finalReview ? 'FinalReviewing' : 'Implementing'
-                }
-                currentRoadmapPhase={atRest ? 12 : 2}
-                totalRoadmapPhases={atRest ? 12 : finalReview ? 2 : 5}
-                {...(atRest || finalReview
-                  ? {}
-                  : { currentIteration: 3, phaseStatus: 'implementing' })}
-                reviewGate={{
-                  reviewingGate: false,
-                  reviewFixing: false,
-                  validatingPlan: false,
-                  validatorStatuses: {},
-                }}
-                shouldStream={false}
-              />
-            </div>
-          </main>
+    <div className="workspace" style={{ height: '100vh' }}>
+      <div className="tab-strip__rail" aria-hidden="true" />
+      <div className="tab-panel tab-panel--cockpit">
+        <div className="cockpit" aria-label="Feature cockpit">
+          <PhaseSpine
+            stages={stages}
+            activeIndex={spineActiveIndex(CYCLES_FEATURE_SNAPSHOT, stages)}
+            tone={spineTone(CYCLES_FEATURE_SNAPSHOT)}
+            label="Feature pipeline"
+          />
+          <div className="cockpit__actions" role="group" aria-label="Feature actions">
+            <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
+              <code data-status="Implementing">Implementing</code>
+            </p>
+            <span className="cockpit__actions-spacer" />
+            <button type="button" className="cockpit__stop">
+              Stop
+            </button>
+            <details className="cockpit__overflow">
+              <summary className="cockpit__overflow-summary" aria-label="More actions">
+                <span aria-hidden="true">⋯</span>
+              </summary>
+            </details>
+          </div>
+          <div className="cockpit__content">
+            <main className="cockpit__stage">
+              <div className="cockpit__surface cockpit__surface--live">
+                <CurrentRunInspection
+                  featureId="abcd1234ef567890"
+                  runNumber={8}
+                  currentPhase={atRest || finalReview ? 'Final Review' : 'Implement'}
+                  featureStatus={
+                    atRest ? 'CodeReady' : finalReview ? 'FinalReviewing' : 'Implementing'
+                  }
+                  currentRoadmapPhase={atRest ? 12 : 2}
+                  totalRoadmapPhases={atRest ? 12 : finalReview ? 2 : 5}
+                  {...(atRest || finalReview
+                    ? {}
+                    : { currentIteration: 3, phaseStatus: 'implementing' })}
+                  reviewGate={{
+                    reviewingGate: false,
+                    reviewFixing: false,
+                    validatingPlan: false,
+                    validatorStatuses: {},
+                  }}
+                  shouldStream={false}
+                />
+              </div>
+              <div className="cockpit__stage-status" />
+            </main>
+          </div>
         </div>
       </div>
     </div>

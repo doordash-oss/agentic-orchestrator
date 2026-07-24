@@ -209,33 +209,35 @@ function RunGaugeScene({ mode = 'active' }: { mode?: 'active' | 'rest' | 'final-
         height: '100vh',
         display: 'flex',
         flexDirection: 'column',
-        overflow: 'auto',
+        overflow: 'hidden',
         padding: 'var(--space-4)',
       }}
     >
       <div className="cockpit" aria-label="Feature cockpit" style={{ flex: 1 }}>
         <div className="cockpit__content">
-          <main className="cockpit__canvas">
-            <CurrentRunInspection
-              featureId="abcd1234ef567890"
-              runNumber={8}
-              currentPhase={atRest || finalReview ? 'Final Review' : 'Implement'}
-              featureStatus={
-                atRest ? 'CodeReady' : finalReview ? 'FinalReviewing' : 'Implementing'
-              }
-              currentRoadmapPhase={atRest ? 12 : 2}
-              totalRoadmapPhases={atRest ? 12 : finalReview ? 2 : 5}
-              {...(atRest || finalReview
-                ? {}
-                : { currentIteration: 3, phaseStatus: 'implementing' })}
-              reviewGate={{
-                reviewingGate: false,
-                reviewFixing: false,
-                validatingPlan: false,
-                validatorStatuses: {},
-              }}
-              shouldStream={false}
-            />
+          <main className="cockpit__stage">
+            <div className="cockpit__surface cockpit__surface--live">
+              <CurrentRunInspection
+                featureId="abcd1234ef567890"
+                runNumber={8}
+                currentPhase={atRest || finalReview ? 'Final Review' : 'Implement'}
+                featureStatus={
+                  atRest ? 'CodeReady' : finalReview ? 'FinalReviewing' : 'Implementing'
+                }
+                currentRoadmapPhase={atRest ? 12 : 2}
+                totalRoadmapPhases={atRest ? 12 : finalReview ? 2 : 5}
+                {...(atRest || finalReview
+                  ? {}
+                  : { currentIteration: 3, phaseStatus: 'implementing' })}
+                reviewGate={{
+                  reviewingGate: false,
+                  reviewFixing: false,
+                  validatingPlan: false,
+                  validatorStatuses: {},
+                }}
+                shouldStream={false}
+              />
+            </div>
           </main>
         </div>
       </div>

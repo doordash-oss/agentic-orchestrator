@@ -935,9 +935,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		models = mergeModelConfig(models, req.Models)
 	}
 	effort := cfg.Defaults.Effort
-	if req.Effort.Implementation != "" {
-		effort.Implementation = req.Effort.Implementation
-	}
+	effort = config.OverlayEffortConfig(effort, req.Effort)
 	pipeline := effectiveCreatePipeline(req.Pipeline, cfg)
 	checkpoints := pipeline.ProjectGates(req.Checkpoints, true).Checkpoints
 	f, err := t.orch.CreateFeature(req.Name, req.Description, req.Repos, models, req.ExitCriteria, req.Inquireness, req.Images, feature.CreateOptions{
@@ -2025,8 +2023,12 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntim
 			changed = true
 		}
 	}
-	if patch.Effort.Implementation != "" && setIfChanged(&dst.Effort.Implementation, patch.Effort.Implementation) {
-		changed = true
+	if hasAnyEffortConfig(patch.Effort) {
+		next := config.OverlayEffortConfig(dst.Effort, patch.Effort)
+		if next != dst.Effort {
+			dst.Effort = next
+			changed = true
+		}
 	}
 	if patch.ExitCriteria != "" && setIfChanged(&dst.ExitCriteria, patch.ExitCriteria) {
 		changed = true
@@ -3194,6 +3196,16 @@ func hasAnyModelConfig(m config.ModelConfig) bool {
 		m.Review != "" ||
 		m.Utilities != "" ||
 		m.KBBuild != ""
+}
+
+func hasAnyEffortConfig(e config.EffortConfig) bool {
+	return e.Inquiry != "" ||
+		e.Research != "" ||
+		e.Planning != "" ||
+		e.Implementation != "" ||
+		e.Review != "" ||
+		e.Utilities != "" ||
+		e.KBBuild != ""
 }
 
 func mergeModelConfig(base, overlay config.ModelConfig) config.ModelConfig {

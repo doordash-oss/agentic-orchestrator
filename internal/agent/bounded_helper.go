@@ -64,6 +64,10 @@ type BoundedHelperConfig struct {
 	LogPath        string
 	Timeout        time.Duration
 	EffortLevel    llm.EffortLevel
+	// EffectiveEffort, when non-empty, overrides EffortLevel in BuildSessionOpts
+	// and is recorded on the session for observability.
+	EffectiveEffort llm.EffortLevel
+	EffortSource    llm.EffortSource
 	PermHandler    ports.PermissionHandler
 	RequireOutput  bool
 	// PhaseCompleteDir opts this helper into local phase_complete semantics.
@@ -86,6 +90,15 @@ type BoundedHelperResult struct {
 // that bounded helpers don't have: no one re-invokes a helper on a scheduled
 // wakeup, so a helper that yields on one is stranded mid-turn.
 var boundedHelperDisallowedTools = []string{"ScheduleWakeup"}
+
+// boundedHelperEffortLevel returns the effort level to pass to BuildSessionOpts:
+// the resolved effective effort when set, otherwise the pipeline-driven level.
+func boundedHelperEffortLevel(cfg BoundedHelperConfig) llm.EffortLevel {
+	if cfg.EffectiveEffort != "" {
+		return cfg.EffectiveEffort
+	}
+	return cfg.EffortLevel
+}
 
 // RunBoundedHelper runs a single-turn interactive helper session without phase_complete semantics.
 func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperConfig) (*BoundedHelperResult, error) {
@@ -126,13 +139,17 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		RepoName:        cfg.RepoName,
 		WorkDir:         cfg.WorkDir,
 		LogPath:         cfg.LogPath,
-		EffortLevel:     cfg.EffortLevel,
+		EffortLevel:     boundedHelperEffortLevel(cfg),
 		AgentNames:      []string{},
 		Phase:           cfg.Phase,
 		MarkerPath:      markerPath,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running bounded helper: building session: %w", err)
+	}
+	if sessOpts != nil && cfg.EffectiveEffort != "" {
+		sessOpts.EffectiveEffort = cfg.EffectiveEffort
+		sessOpts.EffortSource = cfg.EffortSource
 	}
 
 	return pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{

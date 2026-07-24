@@ -131,6 +131,32 @@ func (pr *PhaseRunner) EffortCapabilitiesForModel(model string) []llm.EffortLeve
 	return llm.EffortCapabilitiesForModel(prov, model)
 }
 
+// resolveEffortForRole resolves the effective effort level for a primary
+// session launch from the configured per-role effort value, the selected
+// model's capabilities, and the active pipeline. The role determines which
+// EffortConfig field is read; Utilities (PhaseChat) Auto always resolves to
+// low regardless of pipeline, while all other roles use the pipeline level
+// for Auto. Capability drift (explicit value no longer supported by the
+// model) falls back to the pipeline level (or low for Utilities) with a
+// runtime warning and does not mutate persisted state.
+func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRole, model string) (llm.EffortLevel, llm.EffortSource) {
+	field := llm.ConfigFieldForRole(role)
+	configured := config.EffortConfigFieldByName(f.Effort, field)
+	pipelineEffort := f.EffectivePipeline().EffortLevel()
+
+	if role == llm.PhaseChat && (configured == "" || configured == "auto") {
+		return llm.EffortLow, llm.EffortSourceAuto
+	}
+
+	caps := pr.EffortCapabilitiesForModel(model)
+	effectiveEffort, effortSource := llm.ResolveEffortFromString(configured, caps, pipelineEffort)
+	if llm.EffortDrifted(llm.EffortLevel(configured), caps) {
+		pr.logRuntimeWarning(f, "%s effort %q is not supported by model %q; falling back to Auto (%s)",
+			strings.ToLower(field), configured, model, string(pipelineEffort))
+	}
+	return effectiveEffort, effortSource
+}
+
 // logRuntimeWarning emits a warning through the standard logger channel.
 // Used for non-fatal issues like capability drift that should be visible to
 // the user without blocking execution.
@@ -178,6 +204,8 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	RemovePhaseComplete(artifactDir)
 	phaseModel := pr.modelForRole(cfg.ConfiguredModel, cfg.ModelRole)
 
+	effectiveEffort, effortSource := pr.resolveEffortForRole(f, cfg.ModelRole, phaseModel)
+
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          cfg.Spec,
 		IterationDir:  artifactDir,
@@ -195,6 +223,10 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	phaseCtx := featureCtx.Child()
 	pr.Observer.PhaseStarted(phaseCtx, cfg.Phase.String())
 
+	effortLevel := f.EffectivePipeline().EffortLevel()
+	if effectiveEffort != "" {
+		effortLevel = effectiveEffort
+	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          phaseModel,
 		Prompt:                         cfg.Prompt,
@@ -204,7 +236,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		PIDDir:                         pidDir,
 		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, ""),
 		WorkDir:                        workDir,
-		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
+		EffortLevel:                    effortLevel,
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
 		MarkerPath:                     filepath.Join(artifactDir, PhaseCompleteFile),
@@ -214,6 +246,10 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	}
 	if sessOpts == nil {
 		sessOpts = &ports.SessionOpts{}
+	}
+	if effectiveEffort != "" {
+		sessOpts.EffectiveEffort = effectiveEffort
+		sessOpts.EffortSource = effortSource
 	}
 	WriteDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, cfg.Prompt)
 	sessOpts.PermCacheScope = ""
@@ -238,7 +274,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	if sessOpts != nil {
 		providerName = sessOpts.ProviderName
 	}
-	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, phaseModel, "", "", "")
+	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, phaseModel, "", string(effectiveEffort), string(effortSource))
 
 	// Track reads of KB/skill/guideline files for observability.
 	pr.installContextReadTracker(sess, sessionCtx, cfg.Phase.String(), sessionID, pr.StateDir)
@@ -436,6 +472,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	prompt := BuildKBPrompt(repo.Name, repoPath, kbDir, existingKBPath, lastCommit)
 
 	kbModel := pr.modelForRole(f.Models.KBBuild, llm.PhaseKBBuild)
+	kbEffectiveEffort, kbEffortSource := pr.resolveEffortForRole(f, llm.PhaseKBBuild, kbModel)
 
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          KnowledgeBaseBuilderRoleSpec(),
@@ -454,6 +491,10 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 
 	pidDir := filepath.Join(pr.StateDir, f.ID)
 	logPath := filepath.Join(kbDir, "output.txt")
+	kbEffortLevel := f.EffectivePipeline().EffortLevel()
+	if kbEffectiveEffort != "" {
+		kbEffortLevel = kbEffectiveEffort
+	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:        kbModel,
 		Prompt:       prompt,
@@ -467,7 +508,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
 		RepoName:                       repo.Name,
 		WorkDir:                        workDir,
-		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
+		EffortLevel:                    kbEffortLevel,
 		Phase:                          feature.PhaseKnowledgeBase,
 		SystemPromptHasUsefulResources: true,
 		MarkerPath:                     filepath.Join(kbDir, PhaseCompleteFile),
@@ -478,6 +519,10 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	}
 	if sessOpts == nil {
 		sessOpts = &ports.SessionOpts{}
+	}
+	if kbEffectiveEffort != "" {
+		sessOpts.EffectiveEffort = kbEffectiveEffort
+		sessOpts.EffortSource = kbEffortSource
 	}
 	if sessOpts.LogPath == "" {
 		sessOpts.LogPath = logPath
@@ -491,7 +536,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	}
 
 	sessionCtx := phaseCtx.Child()
-	pr.Observer.SessionStarted(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, sessOpts.ProviderName, kbModel, repo.Name, "", "")
+	pr.Observer.SessionStarted(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, sessOpts.ProviderName, kbModel, repo.Name, string(kbEffectiveEffort), string(kbEffortSource))
 	pr.installContextReadTracker(sess, sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, pr.StateDir)
 	pr.installSubagentProgressTracker(sess, sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID)
 	sessionStart := time.Now()
@@ -570,6 +615,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 	}
 
 	planningModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
+	planEffort, planEffortSource := pr.resolveEffortForRole(f, llm.PhasePlanning, planningModel)
 	cfg := PlanLoopConfig{
 		Feature:                      f,
 		FeatureStore:                 pr.FeatureStore,
@@ -588,6 +634,8 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		BuildSession:                 pr.BuildSession,
 		AskingClause:                 pr.askingQuestionsClauseForModel(planningModel),
 		EffortLevel:                  f.EffectivePipeline().EffortLevel(),
+		EffectiveEffort:              planEffort,
+		EffortSource:                 planEffortSource,
 		SkillsDir:                    pr.SkillsDir,
 		GuidelinesDir:                pr.GuidelinesDir,
 		FinishOrViolateNudge:         pr.finishOrViolateNudgeForModel(planningModel),
@@ -634,6 +682,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 	}
 
 	phasePlanModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
+	phasePlanEffort, phasePlanEffortSource := pr.resolveEffortForRole(f, llm.PhasePlanning, phasePlanModel)
 	cfg := PhasePlanLoopConfig{
 		PlanLoopConfig: PlanLoopConfig{
 			Feature:                      f,
@@ -652,6 +701,8 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			BuildSession:                 pr.BuildSession,
 			AskingClause:                 pr.askingQuestionsClauseForModel(phasePlanModel),
 			EffortLevel:                  f.EffectivePipeline().EffortLevel(),
+			EffectiveEffort:              phasePlanEffort,
+			EffortSource:                 phasePlanEffortSource,
 			SkillsDir:                    pr.SkillsDir,
 			GuidelinesDir:                pr.GuidelinesDir,
 			FinishOrViolateNudge:         pr.finishOrViolateNudgeForModel(phasePlanModel),
@@ -780,6 +831,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 	maxIter, maxFails, maxNoProg := pr.resolveLoopLimits(f)
 	implementationModel := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
+	cycleReviewEffort, cycleReviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 
 	cfg := OrchestratorConfig{
 		Feature:                    f,
@@ -797,6 +849,8 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		EffectiveEffort:            cycleReviewEffort,
+		EffortSource:               cycleReviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(implementationModel),
@@ -841,6 +895,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 
 	model := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
+	implEffort, implEffortSource := pr.resolveEffortForRole(f, llm.PhaseImplementation, model)
 
 	cfg := OrchestratorConfig{
 		Feature:                    f,
@@ -860,6 +915,8 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		EffectiveEffort:            implEffort,
+		EffortSource:               implEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
@@ -896,6 +953,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 	maxIter, maxFails, maxNoProg := pr.resolveLoopLimits(f)
 	model := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
+	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 
 	cfg := OrchestratorConfig{
 		Feature:                    f,
@@ -914,6 +972,8 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		EffectiveEffort:            reviewEffort,
+		EffortSource:               reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),

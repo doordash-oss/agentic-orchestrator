@@ -175,20 +175,11 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (ConfigEditorModel, tea.Cmd) {
 	// Per-row value cycling + context-sensitive tab/shift+tab.
 	switch m.rowCategory() {
 	case rowCatModels:
-		isImplRow := m.isImplementationRow()
 		switch key {
 		case "tab":
-			if isImplRow {
-				m.activeModelCell = cycleModelCellForward(m.activeModelCell)
-			} else {
-				m.activeModelCell = modelCellModel
-			}
+			m.activeModelCell = cycleModelCellForward(m.activeModelCell)
 		case "shift+tab":
-			if isImplRow {
-				m.activeModelCell = cycleModelCellBackward(m.activeModelCell)
-			} else {
-				m.activeModelCell = modelCellAgent
-			}
+			m.activeModelCell = cycleModelCellBackward(m.activeModelCell)
 		case "/":
 			if m.activeModelCell == modelCellModel {
 				m.startModelFilter()
@@ -197,35 +188,23 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (ConfigEditorModel, tea.Cmd) {
 			switch m.activeModelCell {
 			case modelCellAgent:
 				m.cycleAgent(+1)
-				if isImplRow {
-					m.resetIncompatibleEffort()
-				}
+				m.resetIncompatibleEffort()
 			case modelCellEffort:
-				if isImplRow {
-					m.cycleEffort(+1)
-				}
+				m.cycleEffort(+1)
 			default:
 				m.cycleModelForward()
-				if isImplRow {
-					m.resetIncompatibleEffort()
-				}
+				m.resetIncompatibleEffort()
 			}
 		case "left", "h":
 			switch m.activeModelCell {
 			case modelCellAgent:
 				m.cycleAgent(-1)
-				if isImplRow {
-					m.resetIncompatibleEffort()
-				}
+				m.resetIncompatibleEffort()
 			case modelCellEffort:
-				if isImplRow {
-					m.cycleEffort(-1)
-				}
+				m.cycleEffort(-1)
 			default:
 				m.cycleModelBackward()
-				if isImplRow {
-					m.resetIncompatibleEffort()
-				}
+				m.resetIncompatibleEffort()
 			}
 		}
 	case rowCatInquireness:
@@ -292,8 +271,8 @@ func (m ConfigEditorModel) HasChanges() bool {
 		s.Checkpoints != m.original.Checkpoints
 }
 
-// EffortChanged reports whether the Implementation effort differs from the
-// original snapshot.
+// EffortChanged reports whether any effort value differs from the original
+// snapshot.
 func (m ConfigEditorModel) EffortChanged() bool {
 	return m.effort != m.original.Effort
 }
@@ -486,6 +465,27 @@ func (m *ConfigEditorModel) setModelValueForField(field, value string) {
 	}
 }
 
+// effortConfigFieldForDisplay maps a display field name (as used in the
+// catalog) to the corresponding config.EffortConfig field name.
+func effortConfigFieldForDisplay(field string) string {
+	switch field {
+	case "Clarify":
+		return "Inquiry"
+	case "KB Build":
+		return "KBBuild"
+	default:
+		return field
+	}
+}
+
+func (m ConfigEditorModel) effortValueForField(field string) string {
+	return config.EffortConfigFieldByName(m.effort, effortConfigFieldForDisplay(field))
+}
+
+func (m *ConfigEditorModel) setEffortValueForField(field, value string) {
+	config.SetEffortConfigFieldByName(&m.effort, effortConfigFieldForDisplay(field), value)
+}
+
 func (m ConfigEditorModel) currentModelEntries() []PhaseModelEntry {
 	field := m.currentModelField()
 	if field == "" {
@@ -671,25 +671,22 @@ func (m *ConfigEditorModel) acceptFilteredModel() {
 
 func (m ConfigEditorModel) ModelFilteringActive() bool { return m.modelFilterActive }
 
-// isImplementationRow reports whether the current row cursor is on the
-// Implementation field — the only row that exposes an Effort cell in this
-// phase.
-func (m ConfigEditorModel) isImplementationRow() bool {
-	return m.currentModelField() == "Implementation"
-}
-
-// effortOptionsForImplModel returns the ordered effort options for the
-// Implementation row: Auto first, followed by the selected model's ordered,
+// effortOptionsForCurrentRow returns the ordered effort options for the
+// current model row: Auto first, followed by the selected model's ordered,
 // distinct supported levels. An unsupported or unknown model offers Auto only.
-func (m ConfigEditorModel) effortOptionsForImplModel() []string {
+func (m ConfigEditorModel) effortOptionsForCurrentRow() []string {
 	opts := []string{"auto"}
-	implModel := m.models.Implementation
-	if implModel == "" {
+	field := m.currentModelField()
+	if field == "" {
 		return opts
 	}
-	entries := m.catalog.ModelEntriesForField("Implementation")
+	modelValue := m.modelValueForField(field)
+	if modelValue == "" {
+		return opts
+	}
+	entries := m.catalog.ModelEntriesForField(field)
 	for _, entry := range entries {
-		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, implModel) {
+		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, modelValue) {
 			for _, cap := range entry.EffortCapabilities {
 				opts = append(opts, string(cap))
 			}
@@ -699,25 +696,38 @@ func (m ConfigEditorModel) effortOptionsForImplModel() []string {
 	return opts
 }
 
-// effortDisplayValue returns the display string for the current effort value.
-// Auto renders with its live pipeline-derived value inline (e.g. "Auto (high)").
-func (m ConfigEditorModel) effortDisplayValue() string {
-	val := m.effort.Implementation
+// effortDisplayValueForField returns the display string for the effort value
+// of the given field. Auto renders with its live pipeline-derived value
+// inline (e.g. "Auto (high)"). Utilities Auto always displays low.
+func (m ConfigEditorModel) effortDisplayValueForField(field string) string {
+	val := m.effortValueForField(field)
 	if val == "" || val == "auto" {
 		pipelineEffort := string(m.pipeline.EffortLevel())
+		if field == "Utilities" {
+			pipelineEffort = "low"
+		}
 		return "Auto (" + pipelineEffort + ")"
 	}
 	return val
 }
 
-// cycleEffort advances or retreats the Implementation effort through the
+// effortDisplayValue returns the display string for the current row's effort.
+func (m ConfigEditorModel) effortDisplayValue() string {
+	return m.effortDisplayValueForField(m.currentModelField())
+}
+
+// cycleEffort advances or retreats the current row's effort through the
 // ordered option list (Auto + model capabilities).
 func (m *ConfigEditorModel) cycleEffort(direction int) {
-	opts := m.effortOptionsForImplModel()
+	field := m.currentModelField()
+	if field == "" {
+		return
+	}
+	opts := m.effortOptionsForCurrentRow()
 	if len(opts) <= 1 {
 		return
 	}
-	current := m.effort.Implementation
+	current := m.effortValueForField(field)
 	if current == "" {
 		current = "auto"
 	}
@@ -735,18 +745,22 @@ func (m *ConfigEditorModel) cycleEffort(direction int) {
 	if idx >= len(opts) {
 		idx = 0
 	}
-	m.effort.Implementation = opts[idx]
+	m.setEffortValueForField(field, opts[idx])
 }
 
-// resetIncompatibleEffort resets the Implementation effort to Auto when the
+// resetIncompatibleEffort resets the current row's effort to Auto when the
 // current explicit value is not supported by the newly selected model. This
 // ensures no hidden stale value persists after an Agent or Model change.
 func (m *ConfigEditorModel) resetIncompatibleEffort() {
-	val := m.effort.Implementation
+	field := m.currentModelField()
+	if field == "" {
+		return
+	}
+	val := m.effortValueForField(field)
 	if val == "" || val == "auto" {
 		return
 	}
-	opts := m.effortOptionsForImplModel()
+	opts := m.effortOptionsForCurrentRow()
 	supported := false
 	for _, opt := range opts {
 		if opt == val {
@@ -755,7 +769,7 @@ func (m *ConfigEditorModel) resetIncompatibleEffort() {
 		}
 	}
 	if !supported {
-		m.effort.Implementation = "auto"
+		m.setEffortValueForField(field, "auto")
 	}
 }
 
@@ -1212,7 +1226,7 @@ func (m ConfigEditorModel) renderModelsBoxWithTitle(width int, titleText string)
 	lines := []string{
 		title,
 		MutedStyle.Render("Assignments"),
-		MutedStyle.Render(fmt.Sprintf("%-14s %-12s %s", "Phase", toolNameAgent, "Model")),
+		MutedStyle.Render(fmt.Sprintf("%-14s %-12s %-20s %s", "Phase", toolNameAgent, "Model", "Effort")),
 	}
 	onModelsRow := m.rowCategory() == rowCatModels
 
@@ -1224,18 +1238,23 @@ func (m ConfigEditorModel) renderModelsBoxWithTitle(width int, titleText string)
 		value := m.modelValueForField(field)
 		agent := m.agentValueForField(field)
 		model := m.modelAssignmentSummary(field, value)
+		effort := m.effortDisplayValueForField(field)
 		prefix := "  "
 		renderedAgent := fmt.Sprintf("%-12s", agent)
-		renderedModel := model
+		renderedModel := fmt.Sprintf("%-20s", model)
+		renderedEffort := effort
 		if onModelsRow && i == m.rowCursor {
 			prefix = SelectedRowStyle.Render("▸ ")
-			if m.activeModelCell == modelCellAgent {
+			switch m.activeModelCell {
+			case modelCellAgent:
 				renderedAgent = SummarySelectedValueStyle.Render(fmt.Sprintf("%-12s", agent))
-			} else {
-				renderedModel = SummarySelectedValueStyle.Render(model)
+			case modelCellEffort:
+				renderedEffort = SummarySelectedValueStyle.Render(effort)
+			default:
+				renderedModel = SummarySelectedValueStyle.Render(fmt.Sprintf("%-20s", model))
 			}
 		}
-		rendered := fmt.Sprintf("%-14s %s %s", field, renderedAgent, renderedModel)
+		rendered := fmt.Sprintf("%-14s %s %s %s", field, renderedAgent, renderedModel, renderedEffort)
 		if onModelsRow && i == m.rowCursor {
 			rendered = SelectedRowStyle.Render(rendered)
 		}
@@ -1365,6 +1384,33 @@ func (m ConfigEditorModel) renderModelCascadeDetails(field string, width int) []
 	if len(parts) > 0 {
 		lines = append(lines, MutedStyle.Render("Details ")+strings.Join(parts, ", "))
 	}
+
+	effortOpts := m.effortOptionsForCurrentRow()
+	if len(effortOpts) > 1 {
+		currentEffort := m.effortValueForField(field)
+		if currentEffort == "" {
+			currentEffort = "auto"
+		}
+		var effortTokens []string
+		for _, opt := range effortOpts {
+			label := opt
+			if field == "Utilities" && opt == "auto" {
+				label = "auto (low)"
+			}
+			if opt == currentEffort {
+				effortTokens = append(effortTokens, selectedPillStyle.Render(label))
+			} else {
+				effortTokens = append(effortTokens, optionStyle.Render(label))
+			}
+		}
+		effortPrefix := MutedStyle.Render("Effort ")
+		if width > 0 {
+			lines = append(lines, wrapRenderedTokensWithPrefix(effortPrefix, effortTokens, width)...)
+		} else {
+			lines = append(lines, effortPrefix+strings.Join(effortTokens, " "))
+		}
+	}
+
 	return lines
 }
 

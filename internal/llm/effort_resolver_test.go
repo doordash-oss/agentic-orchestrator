@@ -100,3 +100,24 @@ func TestEffortDrifted(t *testing.T) {
 		t.Error("invalid effort should not be drifted (it's malformed, not drift)")
 	}
 }
+
+func TestConfigFieldForRole(t *testing.T) {
+	cases := []struct {
+		role llm.PhaseRole
+		want string
+	}{
+		{llm.PhaseInquiry, "Inquiry"},
+		{llm.PhaseResearch, "Research"},
+		{llm.PhasePlanning, "Planning"},
+		{llm.PhaseImplementation, "Implementation"},
+		{llm.PhaseReview, "Review"},
+		{llm.PhaseChat, "Utilities"},
+		{llm.PhaseKBBuild, "KBBuild"},
+	}
+	for _, c := range cases {
+		got := llm.ConfigFieldForRole(c.role)
+		if got != c.want {
+			t.Errorf("ConfigFieldForRole(%s): got %q, want %q", c.role, got, c.want)
+		}
+	}
+}

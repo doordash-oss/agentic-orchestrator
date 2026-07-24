@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -46,6 +47,15 @@ import (
 // PhaseImplementLoopResult, RebaseLoopResult, ReviewCommentsLoopResult,
 // RefactorFeatureLoopResult, ...) to signal that review approved the work.
 const finalStatusReviewPassed = "review_passed"
+
+// finalReviewEffortLevel returns the effort level to pass to BuildSessionOpts:
+// the resolved effective effort when set, otherwise the pipeline-driven level.
+func finalReviewEffortLevel(cfg OrchestratorConfig) llm.EffortLevel {
+	if cfg.EffectiveEffort != "" {
+		return cfg.EffectiveEffort
+	}
+	return cfg.EffortLevel
+}
 
 // FeatureFinalReviewResult is the unified feature-level FR loop's outcome.
 //
@@ -594,6 +604,8 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		SystemPromptPrefix:     "final-review-" + axisSlug,
 		CompletionAskingClause: cfg.AskingClause,
 		EffortLevel:            cfg.EffortLevel,
+		EffectiveEffort:        cfg.EffectiveEffort,
+		EffortSource:           cfg.EffortSource,
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
 	}
@@ -679,7 +691,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		PIDDir:                         s.stateDir,
 		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
 		WorkDir:                        s.workspace.Cwd,
-		EffortLevel:                    cfg.EffortLevel,
+		EffortLevel:                    finalReviewEffortLevel(cfg),
 		Phase:                          feature.PhaseReview,
 		SystemPromptHasUsefulResources: true,
 		MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
@@ -688,6 +700,10 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.EffectiveEffort != "" {
+		sessOpts.EffectiveEffort = cfg.EffectiveEffort
+		sessOpts.EffortSource = cfg.EffortSource
+	}
 	if cfg.FinishOrViolateNudge {
 		sessOpts.TurnMode = ports.TurnModeInteractive
 	}
@@ -802,7 +818,7 @@ func (s *featureFinalReviewLoopState) observeFinalReviewSession(sess ports.Sessi
 		return observe.SpanContext{}, time.Time{}, false
 	}
 	sessionCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun).Child()
-	cfg.Observer.SessionStarted(sessionCtx, feature.PhaseFinalReview.String(), sessionID, providerName, model, "", "", "")
+	cfg.Observer.SessionStarted(sessionCtx, feature.PhaseFinalReview.String(), sessionID, providerName, model, "", string(cfg.EffectiveEffort), string(cfg.EffortSource))
 	(&ContextReadTracker{
 		KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 		SkillsDir:     cfg.SkillsDir,

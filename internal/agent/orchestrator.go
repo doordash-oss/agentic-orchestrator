@@ -92,6 +92,15 @@ type OrchestratorConfig struct {
 	// EffortLevel is the pipeline-driven effort level passed to providers.
 	EffortLevel llm.EffortLevel
 
+	// EffectiveEffort is the resolved provider-safe effort level for this
+	// launch. When non-empty, it overrides EffortLevel in BuildSessionOpts so
+	// the provider command receives the capability-resolved level. Empty means
+	// no effort resolution was performed and EffortLevel is used directly.
+	EffectiveEffort llm.EffortLevel
+	// EffortSource records whether EffectiveEffort was derived from the
+	// pipeline (auto) or an explicit user configuration (explicit).
+	EffortSource llm.EffortSource
+
 	// SkillsDir is the path to the reconciled skills directory on disk.
 	SkillsDir string
 

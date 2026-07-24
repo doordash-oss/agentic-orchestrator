@@ -389,3 +389,27 @@ const (
 	PhaseChat           PhaseRole = "chat"
 	PhaseKBBuild        PhaseRole = "kb_build"
 )
+
+// ConfigFieldForRole maps a PhaseRole to the corresponding field name on
+// config.ModelConfig and config.EffortConfig. PhaseChat maps to "Utilities"
+// because the "chat" role uses the "utilities" model/effort field. Returns ""
+// for unrecognized roles.
+func ConfigFieldForRole(role PhaseRole) string {
+	switch role {
+	case PhaseInquiry:
+		return "Inquiry"
+	case PhaseResearch:
+		return "Research"
+	case PhasePlanning:
+		return "Planning"
+	case PhaseImplementation:
+		return "Implementation"
+	case PhaseReview:
+		return "Review"
+	case PhaseChat:
+		return "Utilities"
+	case PhaseKBBuild:
+		return "KBBuild"
+	}
+	return ""
+}

@@ -489,6 +489,15 @@ type PlanLoopConfig struct {
 	// EffortLevel is the pipeline-driven effort level passed to providers.
 	EffortLevel llm.EffortLevel
 
+	// EffectiveEffort is the resolved provider-safe effort level for this
+	// launch. When non-empty, it overrides EffortLevel in BuildSessionOpts so
+	// the provider command receives the capability-resolved level. Empty means
+	// no effort resolution was performed and EffortLevel is used directly.
+	EffectiveEffort llm.EffortLevel
+	// EffortSource records whether EffectiveEffort was derived from the
+	// pipeline (auto) or an explicit user configuration (explicit).
+	EffortSource llm.EffortSource
+
 	// SkillsDir is the path to the reconciled skills directory on disk.
 	// When non-empty, planning loops compose skill-read instructions in the
 	// user prompt instead of loading command templates into the system prompt.
@@ -521,6 +530,15 @@ func (cfg PlanLoopConfig) initialPlanningResearchArtifactPath() string {
 		return cfg.ResearchArtifactPath
 	}
 	return ""
+}
+
+// planEffortLevel returns the effort level to pass to BuildSessionOpts: the
+// resolved effective effort when set, otherwise the pipeline-driven level.
+func planEffortLevel(cfg PlanLoopConfig) llm.EffortLevel {
+	if cfg.EffectiveEffort != "" {
+		return cfg.EffectiveEffort
+	}
+	return cfg.EffortLevel
 }
 
 // PlanLoopResult represents the outcome of the planning loop.
@@ -713,7 +731,9 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 			LogPath:                logPath,
 			SystemPromptPrefix:     "validation-" + domainLower,
 			CompletionAskingClause: cfg.AskingClause,
-			EffortLevel:            cfg.EffortLevel,
+			EffortLevel:            planEffortLevel(cfg),
+			EffectiveEffort:        cfg.EffectiveEffort,
+			EffortSource:           cfg.EffortSource,
 			Kind:                   ports.KindValidator,
 			Label:                  domain.Name,
 		})
@@ -1522,7 +1542,7 @@ roadmapAttemptLoop:
 					PIDDir:                         pidDir,
 					PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
 					WorkDir:                        cfg.WorkDir,
-					EffortLevel:                    cfg.EffortLevel,
+					EffortLevel:                    planEffortLevel(cfg),
 					Phase:                          feature.PhasePlan,
 					SystemPromptHasUsefulResources: true,
 					MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
@@ -1531,6 +1551,10 @@ roadmapAttemptLoop:
 					return nil, fmt.Errorf("building roadmap session (attempt %d): %w", attempt, err)
 				}
 				sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+				if cfg.EffectiveEffort != "" {
+					sessOpts.EffectiveEffort = cfg.EffectiveEffort
+					sessOpts.EffortSource = cfg.EffortSource
+				}
 				if cfg.FinishOrViolateNudge {
 					sessOpts.TurnMode = ports.TurnModeInteractive
 				}
@@ -1564,7 +1588,7 @@ roadmapAttemptLoop:
 				if sessOpts != nil {
 					providerName = sessOpts.ProviderName
 				}
-			cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, "", "")
+			cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
 			(&ContextReadTracker{
 				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 				SkillsDir:     cfg.SkillsDir,
@@ -1903,7 +1927,7 @@ phasePlanAttemptLoop:
 					PIDDir:                         pidDir,
 					PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
 					WorkDir:                        cfg.WorkDir,
-					EffortLevel:                    cfg.EffortLevel,
+					EffortLevel:                    planEffortLevel(cfg.PlanLoopConfig),
 					Phase:                          feature.PhasePlan,
 					SystemPromptHasUsefulResources: true,
 					MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
@@ -1912,6 +1936,10 @@ phasePlanAttemptLoop:
 					return nil, fmt.Errorf("building phase plan session (attempt %d): %w", attempt, err)
 				}
 				sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+				if cfg.EffectiveEffort != "" {
+					sessOpts.EffectiveEffort = cfg.EffectiveEffort
+					sessOpts.EffortSource = cfg.EffortSource
+				}
 				if cfg.FinishOrViolateNudge {
 					sessOpts.TurnMode = ports.TurnModeInteractive
 				}
@@ -1945,7 +1973,7 @@ phasePlanAttemptLoop:
 				if sessOpts != nil {
 					providerName = sessOpts.ProviderName
 				}
-			cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, "", "")
+			cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
 			(&ContextReadTracker{
 				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 				SkillsDir:     cfg.SkillsDir,

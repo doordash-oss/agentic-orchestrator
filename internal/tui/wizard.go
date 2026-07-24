@@ -115,6 +115,7 @@ type WizardResult struct {
 	Attachments  []string // temp attachment file paths
 	Repos        []string
 	Models       config.ModelConfig
+	Effort       config.EffortConfig
 	ExitCriteria string
 	Inquireness  string
 	RiskLevel    string
@@ -149,6 +150,7 @@ type WizardModel struct {
 	repoError               string                       // validation error ("Select at least one repo")
 	repos                   map[string]config.RepoConfig // full repo configs for pipeline gate overrides
 	models                  config.ModelConfig
+	effort                  config.EffortConfig
 	modelCursor             int
 	modelFields             []string
 	pipelinePreferences     map[string]config.PipelinePreference
@@ -323,6 +325,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	initialPipelineCursor := 1 // default to large
 	initialPref := pipelinePrefs[pipelineOptions[initialPipelineCursor]]
 	models := initialPref.Models
+	effort := initialPref.Effort
 	inquirenessCursor := 1 // default to medium
 	for i, opt := range []string{"none", "medium", "high"} {
 		if opt == initialPref.Inquireness {
@@ -345,6 +348,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		selectedRepos:          make(map[string]bool),
 		repos:                  repoConfigs,
 		models:                 models,
+		effort:                 effort,
 		modelFields:            append([]string(nil), phaseCatalogFields...),
 		pipelinePreferences:    pipelinePrefs,
 		exitCriteria:           defaults.ExitCriteria,
@@ -639,6 +643,7 @@ func (m *WizardModel) snapshotPipelinePreference(profile string) {
 	}
 	m.pipelinePreferences[profile] = config.PipelinePreference{
 		Models:      m.models,
+		Effort:      m.effort,
 		Inquireness: m.inquirenessOptions[m.inquirenessCursor],
 	}
 }
@@ -655,6 +660,7 @@ func (m *WizardModel) applyPipelinePreference(profile string) {
 	pref.Models.Review = m.configCatalog.ClampModelValue("Review", pref.Models.Review)
 	pref.Models.KBBuild = m.configCatalog.ClampModelValue("KB Build", pref.Models.KBBuild)
 	m.models = pref.Models
+	m.effort = pref.Effort
 
 	for i, opt := range m.inquirenessOptions {
 		if opt == pref.Inquireness {
@@ -724,6 +730,7 @@ func (m *WizardModel) wizardSubCursor() int {
 func (m *WizardModel) syncConfigEditorFromWizard() {
 	projection := m.currentGateProjection()
 	m.configEditor.models = m.models
+	m.configEditor.effort = m.effort
 	if m.inquirenessCursor >= 0 && m.inquirenessCursor < len(m.inquirenessOptions) {
 		m.configEditor.inquireness = feature.Inquireness(m.inquirenessOptions[m.inquirenessCursor])
 	}
@@ -751,6 +758,7 @@ func (m WizardModel) wizardModelFocus() configFocusZone {
 // !provisionalPublishable are preserved (Snapshot() forces ManualPublish=true).
 func (m *WizardModel) syncWizardFromConfigEditor() {
 	m.models = m.configEditor.models
+	m.effort = m.configEditor.effort
 	m.inquirenessCursor = indexOfInquireness(m.configEditor.inquireness, m.inquirenessOptions)
 	m.setCheckpointState(m.configEditor.checkpoints)
 	start, _ := m.activeAxisBounds()
@@ -2453,6 +2461,7 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 			Attachments:             m.attachments,
 			Repos:                   repos,
 			Models:                  m.models,
+			Effort:                  m.effort,
 			ExitCriteria:            m.exitCriteria,
 			Inquireness:             m.inquirenessOptions[m.inquirenessCursor],
 			RiskLevel:               m.riskOptions[m.riskCursor],

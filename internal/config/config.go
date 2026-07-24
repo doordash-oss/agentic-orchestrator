@@ -131,10 +131,92 @@ type ModelConfig struct {
 // EffortConfig holds per-role reasoning-effort configuration alongside
 // ModelConfig. Each field accepts the closed set auto|low|medium|high|max.
 // Empty or missing values load as Auto without triggering a load-time rewrite.
-// Only Implementation is populated in this phase; other role fields are
-// reserved for future expansion and serialize as omitempty.
+// Every field corresponds to the same-named field on ModelConfig, except
+// Utilities which mirrors ModelConfig.Utilities (the "chat" role).
 type EffortConfig struct {
+	Inquiry        string `yaml:"inquiry,omitempty" json:"inquiry,omitempty"`
+	Research       string `yaml:"research,omitempty" json:"research,omitempty"`
+	Planning       string `yaml:"planning,omitempty" json:"planning,omitempty"`
 	Implementation string `yaml:"implementation,omitempty" json:"implementation,omitempty"`
+	Review         string `yaml:"review,omitempty" json:"review,omitempty"`
+	Utilities      string `yaml:"utilities,omitempty" json:"utilities,omitempty"`
+	KBBuild        string `yaml:"kb_build,omitempty" json:"kb_build,omitempty"`
+}
+
+// EffortConfigFieldByName returns the effort value for the named role. The
+// field name must match a ModelConfig field name (Inquiry, Research, Planning,
+// Implementation, Review, Utilities, KBBuild). Returns "" for unrecognized
+// names, which is treated as Auto by the resolver.
+func EffortConfigFieldByName(e EffortConfig, field string) string {
+	switch field {
+	case "Inquiry":
+		return e.Inquiry
+	case "Research":
+		return e.Research
+	case "Planning":
+		return e.Planning
+	case "Implementation":
+		return e.Implementation
+	case "Review":
+		return e.Review
+	case "Utilities":
+		return e.Utilities
+	case "KBBuild":
+		return e.KBBuild
+	}
+	return ""
+}
+
+// SetEffortConfigFieldByName sets the effort value for the named role on the
+// given EffortConfig pointer. The field name must match a ModelConfig field
+// name. Unrecognized names are silently ignored.
+func SetEffortConfigFieldByName(e *EffortConfig, field, value string) {
+	switch field {
+	case "Inquiry":
+		e.Inquiry = value
+	case "Research":
+		e.Research = value
+	case "Planning":
+		e.Planning = value
+	case "Implementation":
+		e.Implementation = value
+	case "Review":
+		e.Review = value
+	case "Utilities":
+		e.Utilities = value
+	case "KBBuild":
+		e.KBBuild = value
+	}
+}
+
+// ModelConfigFieldByName returns the model value for the named role from
+// ModelConfig. The field name must match a ModelConfig field name.
+func ModelConfigFieldByName(m ModelConfig, field string) string {
+	switch field {
+	case "Inquiry":
+		return m.Inquiry
+	case "Research":
+		return m.Research
+	case "Planning":
+		return m.Planning
+	case "Implementation":
+		return m.Implementation
+	case "Review":
+		return m.Review
+	case "Utilities":
+		return m.Utilities
+	case "KBBuild":
+		return m.KBBuild
+	}
+	return ""
+}
+
+// AllEffortRoles returns the canonical ordered list of role field names that
+// have both a model and an effort field. The order matches ModelConfig field
+// order. Utilities is included; callers that must omit it (e.g. the feature
+// overlay) filter it out.
+func AllEffortRoles() []string {
+	return []string{"Inquiry", "Research", "Planning", "Implementation", "Review", "Utilities", "KBBuild"}
 }
 
 // UnmarshalYAML migrates the legacy "chat" YAML key to "utilities".
@@ -449,16 +531,37 @@ func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference
 		return pref
 	}
 	pref.Models = overlayModelConfig(pref.Models, saved.Models)
-	pref.Effort = overlayEffortConfig(pref.Effort, saved.Effort)
+	pref.Effort = OverlayEffortConfig(pref.Effort, saved.Effort)
 	if saved.Inquireness != "" {
 		pref.Inquireness = saved.Inquireness
 	}
 	return pref
 }
 
-func overlayEffortConfig(base, override EffortConfig) EffortConfig {
+// OverlayEffortConfig overlays non-empty override fields onto base, preserving
+// the other base values. Used by the server mutation target and pipeline
+// preference resolution.
+func OverlayEffortConfig(base, override EffortConfig) EffortConfig {
+	if override.Inquiry != "" {
+		base.Inquiry = override.Inquiry
+	}
+	if override.Research != "" {
+		base.Research = override.Research
+	}
+	if override.Planning != "" {
+		base.Planning = override.Planning
+	}
 	if override.Implementation != "" {
 		base.Implementation = override.Implementation
+	}
+	if override.Review != "" {
+		base.Review = override.Review
+	}
+	if override.Utilities != "" {
+		base.Utilities = override.Utilities
+	}
+	if override.KBBuild != "" {
+		base.KBBuild = override.KBBuild
 	}
 	return base
 }

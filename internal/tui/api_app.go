@@ -7062,6 +7062,7 @@ func (m APIAppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 			Description:             strings.TrimSpace(result.Description),
 			Repos:                   append([]string(nil), result.Repos...),
 			Models:                  result.Models,
+			Effort:                  result.Effort,
 			ExitCriteria:            result.ExitCriteria,
 			Inquireness:             result.Inquireness,
 			Images:                  append([]string(nil), result.Images...),

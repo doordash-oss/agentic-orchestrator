@@ -500,6 +500,9 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) {
 		return
 	}
+	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
+		return
+	}
 	if !h.requireTrustedMutation(w, r) {
 		return
 	}
@@ -529,7 +532,7 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 	if !validatePipelineProfile(w, req.Pipeline) {
 		return true
 	}
-	if !validateEffortConfig(w, req.Effort, req.Models.Implementation, h.registry) {
+	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
 		return true
 	}
 	resp, err := h.mutations.UpdateFeatureConfig(featureID, req)
@@ -757,6 +760,9 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		}
 		var req RuntimeConfigMutationRequest
 		if !decodeMutationJSON(w, r, &req) {
+			return
+		}
+		if !validateEffortConfig(w, req.Defaults.Effort, req.Defaults.Models, h.registry) {
 			return
 		}
 		resp, err := h.mutations.RuntimeConfig(req)
@@ -1032,31 +1038,45 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 	}
 }
 
-func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, implModel string, reg *llm.Registry) bool {
-	val := effort.Implementation
-	if val == "" {
-		return true
+func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, models config.ModelConfig, reg *llm.Registry) bool {
+	roles := []struct {
+		val    string
+		model  string
+		label  string
+	}{
+		{effort.Inquiry, models.Inquiry, "inquiry"},
+		{effort.Research, models.Research, "research"},
+		{effort.Planning, models.Planning, "planning"},
+		{effort.Implementation, models.Implementation, "implementation"},
+		{effort.Review, models.Review, "review"},
+		{effort.Utilities, models.Utilities, "utilities"},
+		{effort.KBBuild, models.KBBuild, "kb_build"},
 	}
-	if !llm.IsValidExplicitEffort(llm.EffortLevel(val)) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request",
-			"effort.implementation must be one of: auto, low, medium, high, max", nil)
-		return false
-	}
-	if val == "auto" {
-		return true
-	}
-	if reg == nil || implModel == "" {
-		return true
-	}
-	prov, _, err := reg.ResolveModel(implModel)
-	if err != nil {
-		return true
-	}
-	caps := llm.EffortCapabilitiesForModel(prov, implModel)
-	if len(caps) > 0 && !llm.EffortCapabilitySupported(caps, llm.EffortLevel(val)) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request",
-			"effort.implementation value "+val+" is not supported by the selected Implementation model", nil)
-		return false
+	for _, r := range roles {
+		if r.val == "" {
+			continue
+		}
+		if !llm.IsValidExplicitEffort(llm.EffortLevel(r.val)) {
+			writeAPIError(w, http.StatusBadRequest, "bad_request",
+				"effort."+r.label+" must be one of: auto, low, medium, high, max", nil)
+			return false
+		}
+		if r.val == "auto" {
+			continue
+		}
+		if reg == nil || r.model == "" {
+			continue
+		}
+		prov, _, err := reg.ResolveModel(r.model)
+		if err != nil {
+			continue
+		}
+		caps := llm.EffortCapabilitiesForModel(prov, r.model)
+		if len(caps) > 0 && !llm.EffortCapabilitySupported(caps, llm.EffortLevel(r.val)) {
+			writeAPIError(w, http.StatusBadRequest, "bad_request",
+				"effort."+r.label+" value "+r.val+" is not supported by the selected "+r.label+" model", nil)
+			return false
+		}
 	}
 	return true
 }

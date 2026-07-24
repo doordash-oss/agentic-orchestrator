@@ -58,6 +58,10 @@ type ReviewHelperConfig struct {
 	CompletionAskingClause string
 	Timeout                time.Duration
 	EffortLevel            llm.EffortLevel
+	// EffectiveEffort, when non-empty, overrides EffortLevel in the
+	// BuildSessionOpts so the provider command receives the resolved level.
+	EffectiveEffort llm.EffortLevel
+	EffortSource    llm.EffortSource
 	// Kind classifies the helper session for TUI/observer purposes. Defaults to
 	// KindReviewHelper when unset.
 	Kind ports.SessionKind
@@ -79,6 +83,24 @@ type ReviewHelperResult struct {
 	Feedback string
 	Markers  ValidatorMarkers
 	Usage    llm.Usage
+}
+
+// reviewHelperEffortLevel returns the effort level to pass to BuildSessionOpts:
+// the resolved effective effort when set, otherwise the pipeline-driven level.
+func reviewHelperEffortLevel(cfg ReviewHelperConfig) llm.EffortLevel {
+	if cfg.EffectiveEffort != "" {
+		return cfg.EffectiveEffort
+	}
+	return cfg.EffortLevel
+}
+
+// setReviewHelperEffortOnOpts records the effective effort pair on sessOpts
+// when effort resolution was performed.
+func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg ReviewHelperConfig) {
+	if sessOpts != nil && cfg.EffectiveEffort != "" {
+		sessOpts.EffectiveEffort = cfg.EffectiveEffort
+		sessOpts.EffortSource = cfg.EffortSource
+	}
 }
 
 // RunReadOnlyReviewHelper runs a bounded review helper under the file-based
@@ -149,7 +171,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		RepoName:                       cfg.RepoName,
 		WorkDir:                        cfg.WorkDir,
 		LogPath:                        cfg.LogPath,
-		EffortLevel:                    cfg.EffortLevel,
+		EffortLevel:                    reviewHelperEffortLevel(cfg),
 		AgentNames:                     explorationAgentNames(),
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
@@ -167,6 +189,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
 	}
 	if sessOpts != nil {
+		setReviewHelperEffortOnOpts(sessOpts, cfg)
 		if cfg.Kind != 0 {
 			sessOpts.Kind = cfg.Kind
 		} else {
@@ -335,7 +358,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		RepoName:                       cfg.RepoName,
 		WorkDir:                        cfg.WorkDir,
 		LogPath:                        cfg.LogPath,
-		EffortLevel:                    cfg.EffortLevel,
+		EffortLevel:                    reviewHelperEffortLevel(cfg),
 		AgentNames:                     explorationAgentNames(),
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
@@ -352,6 +375,7 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
 	}
 	if sessOpts != nil {
+		setReviewHelperEffortOnOpts(sessOpts, cfg)
 		if cfg.Kind != 0 {
 			sessOpts.Kind = cfg.Kind
 		} else {

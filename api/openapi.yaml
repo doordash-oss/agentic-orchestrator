@@ -1717,7 +1717,19 @@ components:
         name: config
       type: object
       properties:
+        inquiry:
+          type: string
+        research:
+          type: string
+        planning:
+          type: string
         implementation:
+          type: string
+        review:
+          type: string
+        utilities:
+          type: string
+        kb_build:
           type: string
     Publishability:
       type: object

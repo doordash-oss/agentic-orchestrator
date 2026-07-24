@@ -4,6 +4,7 @@ import {
   actionById,
   dashboardState,
   displayFeatureMessage,
+  displayModelName,
   displayPhaseLabel,
   displayStatusLabel,
   featureBranch,
@@ -128,12 +129,47 @@ describe('formatDuration', () => {
 });
 
 describe('phaseMetric', () => {
-  it('reads a phase value by exact, case-insensitive, or Final Review fallback', () => {
+  it('reads the active roadmap implementation and planning accounting keys', () => {
+    expect(phaseMetric({ 'phase-5-impl': 760 }, 'Implement', 5)).toBe(760);
+    expect(phaseMetric({ 'phase-5-impl': 12.4 }, 'Review', 5)).toBe(12.4);
+    expect(phaseMetric({ 'phase-5-plan': 95 }, 'Plan', 5)).toBe(95);
+  });
+
+  it('retains phase-name and final-review fallbacks', () => {
     expect(phaseMetric({ Implement: 120, Plan: 30 }, 'Implement')).toBe(120);
     expect(phaseMetric({ implement: 120 }, 'Implement')).toBe(120);
     expect(phaseMetric({ Review: 45 }, 'Final Review')).toBe(45);
     expect(phaseMetric({ Plan: 5 }, 'Implement')).toBeUndefined();
-    expect(phaseMetric(undefined, 'Implement')).toBeUndefined();
+    expect(phaseMetric(undefined, 'Implement', 2)).toBeUndefined();
+  });
+});
+
+describe('displayModelName', () => {
+  const catalogue = {
+    providerOrder: ['opencode'],
+    providerModels: {
+      opencode: [
+        {
+          id: 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]',
+          displayName: 'GLM 5.2 (1.04M)',
+        },
+      ],
+    },
+    phaseDefaults: {},
+    phaseProviderModels: {},
+  };
+
+  it('uses catalogue display metadata for bare and provider-qualified ids', () => {
+    const model = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';
+    expect(displayModelName(model, catalogue)).toBe('GLM 5.2 (1.04M)');
+    expect(displayModelName(`opencode:${model}`, catalogue)).toBe('GLM 5.2 (1.04M)');
+  });
+
+  it('falls back to the last readable path segment', () => {
+    expect(
+      displayModelName('portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]', null),
+    ).toBe('glm-5p2[1.04M]');
+    expect(displayModelName('claude-sonnet-5', null)).toBe('claude-sonnet-5');
   });
 });
 

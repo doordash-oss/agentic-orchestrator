@@ -8259,6 +8259,13 @@ body {
   min-height: 100%;
 }
 
+@media (max-height: 700px) {
+  .cockpit__surface--live .current-inspection {
+    gap: var(--space-2);
+    padding: var(--space-2);
+  }
+}
+
 .current-inspection__preview {
   display: flex;
   flex: 1 1 auto;

@@ -78,7 +78,12 @@ export function aftercareRepositories(snapshot: FeatureSnapshot): AftercareRepos
       name,
       freshness:
         status?.freshness === undefined ? 'Freshness unavailable' : sentenceCase(status.freshness),
-      pullRequest: status?.prUrl === undefined ? 'No pull request' : 'PR open',
+      pullRequest:
+        status === undefined
+          ? 'PR unavailable'
+          : status.prUrl === undefined
+            ? 'No pull request'
+            : 'PR open',
       publishability:
         status === undefined
           ? 'Publishability unavailable'

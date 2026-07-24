@@ -535,6 +535,56 @@ describe('FeatureCockpit ready-to-start', () => {
 });
 
 describe('FeatureCockpit convergence', () => {
+  it('moves an open live surface to Aftercare when the feature comes to rest', async () => {
+    const active = featureSnapshot({
+      status: 'Implementing',
+      currentPhase: 'Implement',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [
+        { id: 'pause-stop', enabled: true, disabledReasons: [] },
+        { id: 'cleanup', enabled: true, disabledReasons: [] },
+      ],
+    });
+    const published = featureSnapshot({
+      status: 'Published',
+      currentPhase: 'Publish',
+      activeRun: 8,
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [
+        { id: 'rebase', enabled: true, disabledReasons: [] },
+        { id: 'cleanup', enabled: true, disabledReasons: [] },
+      ],
+    });
+    const mock = installAgenticoMock({ feature: active });
+    mock.api.getFeature.mockResolvedValueOnce(active).mockResolvedValue(published);
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rev-transition',
+      canMarkDone: true,
+      repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'eligible' }],
+    });
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 8,
+      artifactCount: 3,
+      timing: { totalSeconds: 120, byPhase: {} },
+      cost: { totalUsd: 1.2, byPhase: {} },
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const liveTab = await screen.findByRole('tab', { name: 'Live activity' });
+    await user.click(liveTab);
+    expect(liveTab).toHaveAttribute('aria-selected', 'true');
+
+    mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
+
+    const aftercareTab = await screen.findByRole('tab', { name: 'Aftercare' });
+    await waitFor(() => expect(aftercareTab).toHaveAttribute('aria-selected', 'true'));
+    expect(
+      screen.getByRole('heading', { name: 'Published and ready for what comes next' }),
+    ).toBeVisible();
+  });
+
   it('refetches on invalidations for this feature and on resync, ignoring others', async () => {
     const { mock } = renderCockpit();
     await screen.findByRole('heading', { name: 'Search revamp' });

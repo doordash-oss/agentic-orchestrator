@@ -899,6 +899,7 @@ export function FeatureCockpit({
   const isNarrow = useMediaQuery('(max-width: 900px)');
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
+  const restStateRef = useRef<{ featureId: string; atRest: boolean } | null>(null);
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const inspectorButtonRef = useRef<HTMLButtonElement>(null);
   const onLoadedNameRef = useRef(onLoadedName);
@@ -994,11 +995,26 @@ export function FeatureCockpit({
   }, [featureId, load, selectedRunNumber]);
 
   useEffect(() => {
+    if (state.phase !== 'loaded') return;
+    const atRest = isRunAtRest(state.snapshot.status);
+    const previous = restStateRef.current;
+    if (
+      atRest &&
+      (previous === null || previous.featureId !== featureId || previous.atRest === false)
+    ) {
+      setActiveSurface('aftercare');
+    }
+    restStateRef.current = { featureId, atRest };
+  }, [featureId, state]);
+
+  useEffect(() => {
     if (state.phase !== 'loaded' || !isRunAtRest(state.snapshot.status)) {
       setAftercareRun(null);
       return;
     }
     let current = true;
+    setAftercareRun(null);
+    setRunMetrics(null);
     void window.agentico
       .getRun({ featureId, runNumber: state.snapshot.activeRun })
       .then((run) => {
@@ -1012,7 +1028,10 @@ export function FeatureCockpit({
         }
       })
       .catch(() => {
-        if (current) setAftercareRun(null);
+        if (current) {
+          setAftercareRun(null);
+          setRunMetrics(null);
+        }
       });
     return () => {
       current = false;

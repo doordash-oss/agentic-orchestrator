@@ -65,7 +65,7 @@ describe('aftercareRepositories', () => {
       {
         name: 'repo-b',
         freshness: 'Freshness unavailable',
-        pullRequest: 'No pull request',
+        pullRequest: 'PR unavailable',
         publishability: 'Publishability unavailable',
       },
       {

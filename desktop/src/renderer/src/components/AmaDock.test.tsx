@@ -173,6 +173,43 @@ describe('AmaDock', () => {
     await waitFor(() => expect(mock.api.openSessionOutput).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('Yo! How can I help?')).toBeVisible();
   });
+
+  it('opens one expanded AMA dialog and keeps the draft when it closes', async () => {
+    installAgenticoMock();
+    renderDock();
+    const input = screen.getByRole('textbox', { name: 'Ask Agentico' });
+    await userEvent.type(input, 'Keep this draft');
+
+    const expand = screen.getByRole('button', { name: 'Expand AMA' });
+    await userEvent.click(expand);
+
+    const dialog = screen.getByRole('dialog', { name: 'Expanded AMA' });
+    expect(dialog).toBeVisible();
+    expect(screen.getAllByRole('textbox', { name: 'Ask Agentico' })).toHaveLength(1);
+    expect(screen.getAllByRole('region', { name: 'AMA transcript' })).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close expanded AMA' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Expanded AMA' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Ask Agentico' })).toHaveValue('Keep this draft');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Expand AMA' })).toHaveFocus());
+  });
+
+  it('dismisses expanded AMA with Escape without changing the saved drawer mode', async () => {
+    const mock = installAgenticoMock();
+    renderDock();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Expand AMA' }));
+    expect(screen.getByRole('dialog', { name: 'Expanded AMA' })).toBeVisible();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Expanded AMA' })).not.toBeInTheDocument(),
+    );
+    expect(mock.api.updateSettings).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Expand AMA' })).toHaveFocus());
+  });
 });
 
 function renderDock() {

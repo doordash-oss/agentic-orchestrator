@@ -283,6 +283,33 @@ body {
 
 /* --- AMA dock -------------------------------------------------------------- */
 
+.ama-dock__modal-layer {
+  display: contents;
+}
+
+.ama-dock__modal-layer[data-open='true'] {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: clamp(var(--space-3), 4vw, var(--space-6));
+  background: rgb(5 9 8 / 74%);
+}
+
+.ama-dock__modal-layer[data-open='true'] .ama-dock {
+  width: min(88rem, 100%);
+  height: min(88vh, 980px);
+  max-height: 100%;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 40%);
+}
+
+.ama-dock__modal-layer[data-open='true'] .ama-dock:focus-visible {
+  outline: none;
+}
+
 .ama-dock {
   flex: 0 0 auto;
   display: grid;
@@ -321,6 +348,18 @@ body {
   background: transparent;
   color: var(--color-text);
   font: 700 12px var(--font-mono);
+  cursor: pointer;
+}
+
+.ama-dock__icon-button {
+  display: inline-grid;
+  min-width: 32px;
+  min-height: 32px;
+  place-items: center;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text);
   cursor: pointer;
 }
 
@@ -375,7 +414,8 @@ body {
 }
 
 .ama-dock__composer button:disabled,
-.ama-dock__end:disabled {
+.ama-dock__end:disabled,
+.ama-dock__icon-button:disabled {
   opacity: 0.45;
   cursor: default;
 }

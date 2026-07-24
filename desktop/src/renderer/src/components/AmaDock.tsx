@@ -33,6 +33,8 @@ import {
 import { useAttentionDraftSaves } from '../features/useAttentionDraftSaves';
 import { buildConversation, reconcileMessages } from '../features/transcript/conversation';
 import { ConversationTranscript } from '../features/transcript/ConversationTranscript';
+import { CloseIcon, MaximizeIcon } from './icons';
+import { useModalDismiss } from './useModalDismiss';
 
 type DrawerMode = 'compact' | 'expanded';
 type TranscriptState =
@@ -57,6 +59,7 @@ export function AmaDock({
   routeRequest: RoutedRequest | null;
 }) {
   const [drawer, setDrawer] = useState<DrawerMode>('compact');
+  const [maximized, setMaximized] = useState(false);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [transcript, setTranscript] = useState<TranscriptState>({
     phase: 'idle',
@@ -74,6 +77,8 @@ export function AmaDock({
   const [pinToBottom, setPinToBottom] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const confirmEndRef = useRef<HTMLButtonElement>(null);
+  const modalRef = useRef<HTMLElement>(null);
+  const maximizeRef = useRef<HTMLButtonElement>(null);
   const subscriptionId = useRef<string | null>(null);
   const subscriptionGeneration = useRef(0);
   const activeDrafts = attentionDrafts ?? localDrafts;
@@ -108,6 +113,9 @@ export function AmaDock({
     setDrawer(next);
     window.agentico.updateSettings({ ama: { drawer: next } }).catch(() => undefined);
   }, []);
+
+  const closeMaximized = useCallback(() => setMaximized(false), []);
+  useModalDismiss(modalRef, closeMaximized, maximized);
 
   const closeOutputSubscription = useCallback(() => {
     subscriptionGeneration.current += 1;
@@ -359,150 +367,176 @@ export function AmaDock({
   });
 
   return (
-    <aside className="ama-dock" data-mode={drawer} aria-label="Ask Agentico">
-      <header className="ama-dock__header">
-        <button
-          type="button"
-          className="ama-dock__toggle"
-          aria-expanded={drawer === 'expanded'}
-          onClick={() => persistDrawer(drawer === 'expanded' ? 'compact' : 'expanded')}
-        >
-          AMA
-        </button>
-        <p className="ama-dock__status">
-          {sessionActive
-            ? 'Active'
-            : transcript.messages.length > 0
-              ? 'Read-only transcript'
-              : 'Ready'}
-          {amaAttentionItems.length > 0 ? ` · ${amaAttentionItems.length} pending` : ''}
-        </p>
-        {sessionActive ? (
+    <div
+      className="ama-dock__modal-layer"
+      data-open={maximized}
+      onMouseDown={maximized ? closeMaximized : undefined}
+    >
+      <aside
+        ref={modalRef}
+        className="ama-dock"
+        data-mode={maximized ? 'expanded' : drawer}
+        aria-label={maximized ? 'Expanded AMA' : 'Ask Agentico'}
+        role={maximized ? 'dialog' : undefined}
+        aria-modal={maximized ? true : undefined}
+        tabIndex={maximized ? -1 : undefined}
+        onMouseDown={maximized ? (event) => event.stopPropagation() : undefined}
+      >
+        <header className="ama-dock__header">
           <button
             type="button"
-            className="ama-dock__end"
-            disabled={busy}
-            aria-expanded={confirmingEnd}
-            onClick={askToEndChat}
+            className="ama-dock__toggle"
+            aria-expanded={drawer === 'expanded'}
+            onClick={() => persistDrawer(drawer === 'expanded' ? 'compact' : 'expanded')}
           >
-            End AMA
+            AMA
           </button>
-        ) : null}
-      </header>
-      {drawer === 'expanded' ? (
-        <div className="ama-dock__drawer" data-has-attention={amaAttentionItems.length > 0}>
-          {amaAttentionItems.length > 0 ? (
-            <section className="ama-dock__attention" aria-label="AMA questions">
-              {amaAttentionItems.map((item) => (
-                <div key={`${item.kind}:${item.id}`} className="ama-dock__attention-item">
-                  <AttentionDetail
-                    item={item}
-                    busy={attentionBusy === item.id}
-                    drafts={activeDrafts}
-                    setDrafts={updateDrafts}
-                    submit={(action, options) => void submitAttention(item.id, action, options)}
-                    saveDraft={(action, options) => saveDraft(item.id, action, options)}
-                  />
-                </div>
-              ))}
-            </section>
-          ) : null}
-          <ConversationTranscript
-            className="ama-dock__transcript"
-            ariaLabel="AMA transcript"
-            items={conversation}
-            waiting={waitingForAssistant}
-            idleLabel="Thinking through your question"
-            pinToBottomToken={pinToBottom}
-            status={
-              <>
-                {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
-                {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
-              </>
-            }
-            emptyState={
-              <div className="ama-dock__empty">
-                <strong>Ask anything about this workspace.</strong>
-                <span>
-                  I can inspect the project, explain what is happening, and help you decide what to
-                  do next.
-                </span>
-              </div>
-            }
-          />
-        </div>
-      ) : null}
-      {notice !== '' ? (
-        <p className="ama-dock__notice" role="status" aria-live="polite">
-          {notice}
-        </p>
-      ) : null}
-      {confirmingEnd ? (
-        <div
-          className="bulk-preview__confirm ama-dock__confirm"
-          role="group"
-          aria-label="End AMA confirmation"
-        >
-          <p className="bulk-preview__confirm-text">
-            End the active AMA session. The transcript stays read-only until a new AMA replaces it.
+          <p className="ama-dock__status">
+            {sessionActive
+              ? 'Active'
+              : transcript.messages.length > 0
+                ? 'Read-only transcript'
+                : 'Ready'}
+            {amaAttentionItems.length > 0 ? ` · ${amaAttentionItems.length} pending` : ''}
           </p>
-          <div className="ama-dock__confirm-actions">
+          <button
+            ref={maximizeRef}
+            type="button"
+            className="ama-dock__icon-button"
+            aria-label={maximized ? 'Close expanded AMA' : 'Expand AMA'}
+            title={maximized ? 'Close expanded AMA' : 'Expand AMA'}
+            onClick={() => setMaximized((current) => !current)}
+          >
+            {maximized ? <CloseIcon /> : <MaximizeIcon />}
+          </button>
+          {sessionActive ? (
             <button
               type="button"
-              className="ama-dock__toggle"
+              className="ama-dock__end"
               disabled={busy}
-              onClick={() => setConfirmingEnd(false)}
-            >
-              Cancel
-            </button>
-            <button
-              ref={confirmEndRef}
-              type="button"
-              className="bulk-preview__run"
-              disabled={busy}
-              onClick={() => void endChat()}
+              aria-expanded={confirmingEnd}
+              onClick={askToEndChat}
             >
               End AMA
             </button>
+          ) : null}
+        </header>
+        {drawer === 'expanded' || maximized ? (
+          <div className="ama-dock__drawer" data-has-attention={amaAttentionItems.length > 0}>
+            {amaAttentionItems.length > 0 ? (
+              <section className="ama-dock__attention" aria-label="AMA questions">
+                {amaAttentionItems.map((item) => (
+                  <div key={`${item.kind}:${item.id}`} className="ama-dock__attention-item">
+                    <AttentionDetail
+                      item={item}
+                      busy={attentionBusy === item.id}
+                      drafts={activeDrafts}
+                      setDrafts={updateDrafts}
+                      submit={(action, options) => void submitAttention(item.id, action, options)}
+                      saveDraft={(action, options) => saveDraft(item.id, action, options)}
+                    />
+                  </div>
+                ))}
+              </section>
+            ) : null}
+            <ConversationTranscript
+              className="ama-dock__transcript"
+              ariaLabel="AMA transcript"
+              items={conversation}
+              waiting={waitingForAssistant}
+              idleLabel="Thinking through your question"
+              pinToBottomToken={pinToBottom}
+              status={
+                <>
+                  {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
+                  {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
+                </>
+              }
+              emptyState={
+                <div className="ama-dock__empty">
+                  <strong>Ask anything about this workspace.</strong>
+                  <span>
+                    I can inspect the project, explain what is happening, and help you decide what
+                    to do next.
+                  </span>
+                </div>
+              }
+            />
           </div>
-        </div>
-      ) : null}
-      <form className="ama-dock__composer" onSubmit={(event) => void submit(event)}>
-        {images.length > 0 ? (
-          <ol className="composer__chips ama-dock__attachments" aria-label="Attached images">
-            {images.map((image) => (
-              <li key={image} className="composer__chip" data-kind="image">
-                <span>{basename(image)}</span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${basename(image)}`}
-                  onClick={() => setImages((current) => current.filter((item) => item !== image))}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ol>
         ) : null}
-        <textarea
-          ref={inputRef}
-          aria-label="Ask Agentico"
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          onPaste={onComposerPaste}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
-            event.preventDefault();
-            event.currentTarget.form?.requestSubmit();
-          }}
-          placeholder="Ask about this workspace"
-          rows={1}
-        />
-        <button type="submit" disabled={busy || message.trim() === ''}>
-          Send
-        </button>
-      </form>
-    </aside>
+        {notice !== '' ? (
+          <p className="ama-dock__notice" role="status" aria-live="polite">
+            {notice}
+          </p>
+        ) : null}
+        {confirmingEnd ? (
+          <div
+            className="bulk-preview__confirm ama-dock__confirm"
+            role="group"
+            aria-label="End AMA confirmation"
+          >
+            <p className="bulk-preview__confirm-text">
+              End the active AMA session. The transcript stays read-only until a new AMA replaces
+              it.
+            </p>
+            <div className="ama-dock__confirm-actions">
+              <button
+                type="button"
+                className="ama-dock__toggle"
+                disabled={busy}
+                onClick={() => setConfirmingEnd(false)}
+              >
+                Cancel
+              </button>
+              <button
+                ref={confirmEndRef}
+                type="button"
+                className="bulk-preview__run"
+                disabled={busy}
+                onClick={() => void endChat()}
+              >
+                End AMA
+              </button>
+            </div>
+          </div>
+        ) : null}
+        <form className="ama-dock__composer" onSubmit={(event) => void submit(event)}>
+          {images.length > 0 ? (
+            <ol className="composer__chips ama-dock__attachments" aria-label="Attached images">
+              {images.map((image) => (
+                <li key={image} className="composer__chip" data-kind="image">
+                  <span>{basename(image)}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${basename(image)}`}
+                    onClick={() => setImages((current) => current.filter((item) => item !== image))}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+          <textarea
+            ref={inputRef}
+            aria-label="Ask Agentico"
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            onPaste={onComposerPaste}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }}
+            placeholder="Ask about this workspace"
+            rows={1}
+          />
+          <button type="submit" disabled={busy || message.trim() === ''}>
+            Send
+          </button>
+        </form>
+      </aside>
+    </div>
   );
 }
 

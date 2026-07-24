@@ -10,6 +10,7 @@ import {
   fieldForCreationError,
   formatDuration,
   formatElapsed,
+  phaseMetric,
   groupDashboardFeatures,
   isReadyToStart,
   isRunAtRest,
@@ -123,6 +124,16 @@ describe('formatDuration', () => {
     expect(formatDuration(5400)).toBe('1h 30m');
     expect(formatDuration(0)).toBe('0s');
     expect(formatDuration(-5)).toBe('0s');
+  });
+});
+
+describe('phaseMetric', () => {
+  it('reads a phase value by exact, case-insensitive, or Final Review fallback', () => {
+    expect(phaseMetric({ Implement: 120, Plan: 30 }, 'Implement')).toBe(120);
+    expect(phaseMetric({ implement: 120 }, 'Implement')).toBe(120);
+    expect(phaseMetric({ Review: 45 }, 'Final Review')).toBe(45);
+    expect(phaseMetric({ Plan: 5 }, 'Implement')).toBeUndefined();
+    expect(phaseMetric(undefined, 'Implement')).toBeUndefined();
   });
 });
 

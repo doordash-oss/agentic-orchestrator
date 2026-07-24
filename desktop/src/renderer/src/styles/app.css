@@ -3707,6 +3707,12 @@ body {
   gap: var(--space-2);
 }
 
+.cockpit__run-totals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .cockpit__config-open {
   align-self: flex-start;
   border: 1px solid var(--color-hairline);
@@ -8251,6 +8257,26 @@ body {
 .current-inspection__metrics dd {
   margin: 0;
   font-family: var(--font-mono);
+}
+
+/* Phase cost carries the model that produced it, set off as a quiet tag. */
+.current-inspection__cost {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.current-inspection__model {
+  padding: 1px 6px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  color: var(--color-muted);
+  font-size: 11px;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --- Roadmap gauge ---------------------------------------------------------

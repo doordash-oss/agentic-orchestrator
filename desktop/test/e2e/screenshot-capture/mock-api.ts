@@ -1129,7 +1129,10 @@ function makeMockApi(
     },
     getRun: ({ runNumber }) => {
       const summary = SEALED_RUNS.find((r) => r.runNumber === runNumber);
-      if (summary === undefined) return Promise.reject(new Error(`Unknown mock run ${runNumber}`));
+      // The active (non-sealed) run still carries per-phase timing/cost detail.
+      if (summary === undefined) {
+        return Promise.resolve({ ...RUN_DETAIL, runNumber } as RunDetailView);
+      }
       return Promise.resolve({
         ...RUN_DETAIL,
         ...summary,
@@ -1149,6 +1152,17 @@ function makeMockApi(
         contextPercentage: 42,
         totalSeconds: 73,
         totalUsd: 0.12,
+        session: {
+          id: 'sess-impl-live',
+          featureId,
+          runNumber: 8,
+          phase: 'Implement',
+          kind: 'implement',
+          status: 'running',
+          startedAt: '2026-07-19T14:20:00Z',
+          model: 'claude-sonnet-5',
+          usage: {},
+        },
         transcript: [
           {
             index: 0,

@@ -25,7 +25,7 @@ import {
 import { PhaseSpine } from '../components/PhaseSpine';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
-import { CurrentRunInspection } from './CurrentRunInspection';
+import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
 import { ReviewSurface } from './ReviewSurface';
 import { FeatureConfigPanel } from './ConfigEditor';
 import { ArchiveMode } from './ArchiveMode';
@@ -60,6 +60,7 @@ import {
   displayPhaseLabel,
   displayStatusLabel,
   featureBranch,
+  formatDuration,
   isReadyToStart,
   isRunAtRest,
   setupProgress,
@@ -251,11 +252,13 @@ function InspectorContent({
   snapshot,
   branch,
   stale,
+  runMetrics,
   onOpenConfig,
 }: {
   snapshot: FeatureSnapshot;
   branch: string | null;
   stale: boolean;
+  runMetrics: RunMetrics | null;
   onOpenConfig(): void;
 }) {
   return (
@@ -271,6 +274,25 @@ function InspectorContent({
           </p>
         ) : null}
       </header>
+      {runMetrics !== null ? (
+        <section className="cockpit__run-totals" aria-label="This run">
+          <h3 className="setup-step__title">This run</h3>
+          <dl className="cockpit__facts">
+            <div className="cockpit__fact">
+              <dt>Total elapsed</dt>
+              <dd>
+                <code>{formatDuration(runMetrics.totalSeconds)}</code>
+              </dd>
+            </div>
+            <div className="cockpit__fact">
+              <dt>Total cost</dt>
+              <dd>
+                <code>${runMetrics.totalUsd.toFixed(2)}</code>
+              </dd>
+            </div>
+          </dl>
+        </section>
+      ) : null}
       <SetupDetails snapshot={snapshot} />
       {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
         <RepositoryInstrument repos={snapshot.repoStatus} />
@@ -501,12 +523,14 @@ function InspectorDrawer({
   snapshot,
   branch,
   stale,
+  runMetrics,
   onOpenConfig,
   onClose,
 }: {
   snapshot: FeatureSnapshot;
   branch: string | null;
   stale: boolean;
+  runMetrics: RunMetrics | null;
   onOpenConfig(): void;
   onClose(): void;
 }) {
@@ -548,6 +572,7 @@ function InspectorDrawer({
           snapshot={snapshot}
           branch={branch}
           stale={stale}
+          runMetrics={runMetrics}
           onOpenConfig={onOpenConfig}
         />
       </aside>
@@ -858,6 +883,7 @@ export function FeatureCockpit({
   const [cyclesDialog, setCyclesDialog] = useState(false);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
+  const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
   const [activeSurface, setActiveSurface] = useState<'document' | 'live' | 'changes'>('document');
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
@@ -1528,6 +1554,7 @@ export function FeatureCockpit({
               snapshot={snapshot}
               branch={branch}
               stale={stale}
+              runMetrics={runMetrics}
               onOpenConfig={() => {
                 setInspectorOpen(false);
                 setConfigOpen(true);
@@ -1595,6 +1622,7 @@ export function FeatureCockpit({
                           : attentionPreviewRequest.requestId
                       }
                       onAttentionPreviewClose={onAttentionPreviewClose}
+                      onRunMetrics={setRunMetrics}
                       attentionFooter={
                         activeAttentionItem === undefined ? undefined : (
                           <AttentionDetail
@@ -1675,6 +1703,7 @@ export function FeatureCockpit({
                   snapshot={snapshot}
                   branch={branch}
                   stale={stale}
+                  runMetrics={runMetrics}
                   onOpenConfig={() => setConfigOpen(true)}
                 />
               </aside>

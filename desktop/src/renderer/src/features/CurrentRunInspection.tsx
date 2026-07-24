@@ -3,6 +3,7 @@ import type {
   LivePreviewView,
   ReviewGateView,
   RunArtifactsListResult,
+  RunDetailView,
   RunLogView,
   RunTextContent,
   SessionSummary,
@@ -22,7 +23,7 @@ import {
   verificationSymbol,
   verificationTone,
 } from './verificationModel';
-import { displayStatusLabel, formatDuration, isRunAtRest } from './featureView';
+import { displayStatusLabel, formatDuration, isRunAtRest, phaseMetric } from './featureView';
 import { stripUnsafeAnsi } from './timelineModel';
 import { buildConversation } from './transcript/conversation';
 import { ConversationTranscript } from './transcript/ConversationTranscript';
@@ -70,6 +71,14 @@ interface CurrentRunInspectionProps {
   /** Response controls docked beneath the expanded conversation. */
   attentionFooter?: ReactNode;
   onAttentionPreviewClose?(): void;
+  /** Reports this run's totals up so the inspector sidebar can show them. */
+  onRunMetrics?(metrics: RunMetrics | null): void;
+}
+
+/** This run's cumulative totals, surfaced to the inspector sidebar. */
+export interface RunMetrics {
+  totalSeconds: number;
+  totalUsd: number;
 }
 
 type RunArtifact = RunArtifactsListResult['artifacts'][number];
@@ -163,8 +172,10 @@ export function CurrentRunInspection({
   attentionRequestId,
   attentionFooter,
   onAttentionPreviewClose,
+  onRunMetrics,
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
+  const [runDetail, setRunDetail] = useState<RunDetailView | null>(null);
   const [artifacts, setArtifacts] = useState<RunArtifactsListResult['artifacts']>([]);
   const [logs, setLogs] = useState<RunLogView[]>([]);
   const [content, setContent] = useState<{
@@ -202,7 +213,7 @@ export function CurrentRunInspection({
     const request = ++requestRef.current;
     setError(null);
     try {
-      const [nextPreview, nextArtifacts, logResult] = await Promise.all([
+      const [nextPreview, nextArtifacts, logResult, nextRunDetail] = await Promise.all([
         window.agentico.getLivePreview(featureId),
         window.agentico.listRunArtifacts({ featureId, runNumber }),
         window.agentico
@@ -212,16 +223,33 @@ export function CurrentRunInspection({
             value: { logs: [] as RunLogView[] },
             error: parseIpcError(cause).message,
           })),
+        // Per-phase timing/cost. Absent for runs without recorded detail; a
+        // failure must not blank the whole inspection, so it degrades to null.
+        runNumber >= 1
+          ? window.agentico.getRun({ featureId, runNumber }).catch(() => null)
+          : Promise.resolve(null),
       ]);
       if (request !== requestRef.current) return;
       setPreview(nextPreview);
       setArtifacts(orderRunArtifacts(nextArtifacts.artifacts));
       setLogs(logResult.value.logs);
       setLogListError(logResult.error);
+      setRunDetail(nextRunDetail);
+      onRunMetrics?.(
+        nextRunDetail === null
+          ? { totalSeconds: nextPreview.totalSeconds, totalUsd: nextPreview.totalUsd }
+          : {
+              totalSeconds: nextRunDetail.timing?.totalSeconds ?? nextPreview.totalSeconds,
+              totalUsd: nextRunDetail.cost?.totalUsd ?? nextPreview.totalUsd,
+            },
+      );
     } catch (cause) {
       if (request === requestRef.current) setError(parseIpcError(cause).message);
     }
-  }, [featureId, runNumber]);
+  }, [featureId, runNumber, onRunMetrics]);
+
+  // Clear the sidebar totals when the live surface goes away.
+  useEffect(() => () => onRunMetrics?.(null), [onRunMetrics]);
 
   useEffect(() => {
     void refresh();
@@ -332,7 +360,13 @@ export function CurrentRunInspection({
               {verifying ? null : (
                 <p className="current-inspection__activity">{preview.activity}</p>
               )}
-              <PreviewMetrics preview={preview} verifying={verifying} />
+              <PreviewMetrics
+                preview={preview}
+                runDetail={runDetail}
+                currentPhase={currentPhase}
+                model={preview.session?.model ?? selectedSession?.model ?? null}
+                verifying={verifying}
+              />
             </>
           ) : null}
           {attentionFooter !== undefined && !fullscreen ? (
@@ -468,6 +502,9 @@ export function CurrentRunInspection({
           selectedId={live.selectedId}
           selectSession={live.selectSession}
           preview={preview}
+          runDetail={runDetail}
+          currentPhase={currentPhase}
+          model={preview?.session?.model ?? selectedSession?.model ?? null}
           waitReason={waitReason}
           attentionFooter={attentionFooter}
           verifying={verifying}
@@ -743,13 +780,26 @@ function CohortRoster({
   );
 }
 
+/**
+ * Current-scope run metrics beneath the live activity: the session's context,
+ * and how long the current phase has run plus its cost and model. Run totals
+ * live in the inspector sidebar, not here.
+ */
 function PreviewMetrics({
   preview,
+  runDetail,
+  currentPhase,
+  model,
   verifying = false,
 }: {
   preview: LivePreviewView;
+  runDetail: RunDetailView | null;
+  currentPhase: string;
+  model: string | null;
   verifying?: boolean;
 }): React.ReactElement {
+  const phaseSeconds = phaseMetric(runDetail?.timing?.byPhase, currentPhase);
+  const phaseUsd = phaseMetric(runDetail?.cost?.byPhase, currentPhase);
   return (
     <dl className="current-inspection__metrics">
       {/* The harness runs the contract with no live LLM session, so the
@@ -761,12 +811,19 @@ function PreviewMetrics({
         </div>
       )}
       <div>
-        <dt>Elapsed</dt>
-        <dd>{formatDuration(preview.totalSeconds)}</dd>
+        <dt>Phase elapsed</dt>
+        <dd>{phaseSeconds === undefined ? '—' : formatDuration(phaseSeconds)}</dd>
       </div>
       <div>
-        <dt>Cost</dt>
-        <dd>${preview.totalUsd.toFixed(2)}</dd>
+        <dt>Phase cost</dt>
+        <dd className="current-inspection__cost">
+          <span>{phaseUsd === undefined ? '—' : `$${phaseUsd.toFixed(2)}`}</span>
+          {model !== null ? (
+            <span className="current-inspection__model" title={model}>
+              {model}
+            </span>
+          ) : null}
+        </dd>
       </div>
     </dl>
   );
@@ -780,6 +837,9 @@ function LivePreviewOverlay({
   selectedId,
   selectSession,
   preview,
+  runDetail,
+  currentPhase,
+  model,
   waitReason,
   attentionFooter,
   verifying,
@@ -792,6 +852,9 @@ function LivePreviewOverlay({
   selectedId: string | null;
   selectSession(id: string): void;
   preview: LivePreviewView | null;
+  runDetail: RunDetailView | null;
+  currentPhase: string;
+  model: string | null;
   waitReason?: string;
   attentionFooter?: ReactNode;
   verifying: boolean;
@@ -853,7 +916,13 @@ function LivePreviewOverlay({
                 {verifying ? null : (
                   <p className="current-inspection__activity">{preview.activity}</p>
                 )}
-                <PreviewMetrics preview={preview} verifying={verifying} />
+                <PreviewMetrics
+                  preview={preview}
+                  runDetail={runDetail}
+                  currentPhase={currentPhase}
+                  model={model}
+                  verifying={verifying}
+                />
               </div>
             ) : null}
             {attentionFooter !== undefined ? (

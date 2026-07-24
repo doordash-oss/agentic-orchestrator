@@ -245,6 +245,26 @@ export function formatDuration(totalSeconds: number): string {
   return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
 }
 
+/**
+ * Reads a per-phase metric (duration seconds or USD) for the named phase from a
+ * run's `by_phase` map. Matches the phase key exactly, then case-insensitively,
+ * and finally maps "Final Review" to the "Review" phase it is recorded under.
+ * Returns undefined when the phase has no recorded value.
+ */
+export function phaseMetric(
+  byPhase: Readonly<Record<string, number>> | undefined,
+  phase: string,
+): number | undefined {
+  if (byPhase === undefined) return undefined;
+  if (phase in byPhase) return byPhase[phase];
+  const target = phase.trim().toLocaleLowerCase();
+  for (const [key, value] of Object.entries(byPhase)) {
+    if (key.trim().toLocaleLowerCase() === target) return value;
+  }
+  if (target === 'final review') return phaseMetric(byPhase, 'Review');
+  return undefined;
+}
+
 /** Elapsed time for the queue card; null when there is no run time to show yet. */
 export function formatElapsed(snapshot: FeatureSnapshot): string | null {
   const total = snapshot.timing?.totalSeconds ?? 0;

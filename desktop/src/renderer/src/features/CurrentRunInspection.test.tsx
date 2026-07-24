@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionSummary } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { CurrentRunInspection } from './CurrentRunInspection';
@@ -302,6 +302,57 @@ describe('CurrentRunInspection', () => {
     const gauge = await screen.findByRole('region', { name: /Roadmap progress/ });
     expect(gauge).toHaveTextContent('Phase 4 of 4');
     expect(gauge).toHaveTextContent('Reviewing · Iteration 2');
+  });
+
+  it('shows current-phase elapsed/cost with the model, and reports run totals up', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running implementation',
+      contextPercentage: 21,
+      totalSeconds: 3844,
+      totalUsd: 21.62,
+      session: {
+        id: 'sess-impl',
+        featureId: 'abcd1234ef567890',
+        runNumber: 8,
+        phase: 'Implement',
+        kind: 'implement',
+        status: 'running',
+        startedAt: '2026-07-23T10:00:00Z',
+        model: 'claude-sonnet-5',
+        usage: {},
+      },
+      transcript: [],
+    });
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 8,
+      artifactCount: 0,
+      timing: { totalSeconds: 3844, byPhase: { Implement: 760 } },
+      cost: { totalUsd: 21.62, byPhase: { Implement: 12.4 } },
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    const onRunMetrics = vi.fn();
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        featureStatus="Implementing"
+        reviewGate={REVIEW_GATE}
+        onRunMetrics={onRunMetrics}
+      />,
+    );
+
+    // Current phase: 760s and $12.40, not the run totals (3844s / $21.62).
+    expect(await screen.findByText('12m 40s')).toBeInTheDocument();
+    expect(screen.getByText('$12.40')).toBeInTheDocument();
+    expect(screen.getByText('claude-sonnet-5')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(onRunMetrics).toHaveBeenCalledWith({ totalSeconds: 3844, totalUsd: 21.62 }),
+    );
   });
 
   it('sets final review apart from the last implementation phase', async () => {

@@ -31,7 +31,7 @@ func RepoFreshness(worktreePath string) string {
 	if worktreePath == "" {
 		return FreshnessUnknown
 	}
-	if out, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain").Output(); err != nil {
+	if out, err := exec.Command("git", "--no-optional-locks", "-C", worktreePath, "status", "--porcelain").Output(); err != nil {
 		return FreshnessUnknown
 	} else if strings.TrimSpace(string(out)) != "" {
 		return FreshnessLocalChanges

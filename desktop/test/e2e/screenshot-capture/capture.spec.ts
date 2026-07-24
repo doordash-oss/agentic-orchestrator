@@ -65,6 +65,26 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
+    'aftercare',
+    'dark',
+    1440,
+    900,
+    'published-feature-aftercare-desk-with-maintenance-runway-run-ledger-and-repository-readiness-1440x900',
+    '.aftercare',
+  );
+
+  await capture(
+    page,
+    'aftercare',
+    'dark',
+    760,
+    900,
+    'published-feature-aftercare-desk-retaining-all-cycle-actions-in-a-narrow-workspace-760x900',
+    '.aftercare',
+  );
+
+  await capture(
+    page,
     'background-ama-expanded',
     'dark',
     1440,

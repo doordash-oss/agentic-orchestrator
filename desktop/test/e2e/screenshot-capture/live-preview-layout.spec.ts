@@ -259,3 +259,38 @@ test('transcript accepts wheel and focused keyboard scrolling', async ({ page })
   await transcript.press('PageDown');
   await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });
+
+test('aftercare keeps its runway, ledger, and repository handoff legible at rest', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 760, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('http://localhost:9871/?scene=aftercare&theme=dark');
+
+    const desk = page.getByRole('region', { name: 'Feature aftercare' });
+    await expect(desk).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Aftercare' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await expect(page.getByRole('tab', { name: 'Run record' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Maintenance runway' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Run ledger' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Repository readiness' })).toBeVisible();
+    await expect(page.getByText('Waiting for the agent to respond…')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Prepare rebase/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Check comments/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Plan refactor/ })).toBeVisible();
+
+    const dimensions = await page.evaluate(() => ({
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+      deskWidth: document.querySelector('.aftercare')?.getBoundingClientRect().width ?? 0,
+    }));
+    expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
+    expect(dimensions.deskWidth).toBeGreaterThan(0);
+  }
+});

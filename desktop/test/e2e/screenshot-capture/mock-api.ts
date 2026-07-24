@@ -547,6 +547,81 @@ const REBASE_FEATURE_SNAPSHOT: FeatureSnapshot = {
   cycle: { type: 'rebase', status: 'running', count: 1 },
 };
 
+const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
+  ...CYCLES_FEATURE_SNAPSHOT,
+  name: 'Configure per-phase effort level',
+  slug: 'configure-per-phase-effort-level',
+  status: 'Published',
+  currentPhase: 'Publish',
+  pipeline: 'large',
+  description: 'Give each orchestration phase an explicit, durable effort level.',
+  repos: ['agentic-orchestrator'],
+  activeRun: 8,
+  setup: {
+    status: 'done',
+    attempt: 1,
+    tasks: [
+      {
+        key: 'worktree:agentic-orchestrator',
+        kind: 'worktree',
+        label: 'Create worktree',
+        repo: 'agentic-orchestrator',
+        branch: 'feature/configure-per-phase-effort-level',
+        status: 'done',
+        attempt: 1,
+      },
+    ],
+  },
+  reviewGate: {
+    reviewingGate: false,
+    reviewFixing: false,
+    validatingPlan: false,
+    validatorStatuses: {},
+  },
+  actions: [
+    { id: 'rebase', enabled: true, disabledReasons: [] },
+    {
+      id: 'review-comments',
+      enabled: true,
+      disabledReasons: [],
+      inputs: [
+        { name: 'repo', options: ['agentic-orchestrator'] },
+        { name: 'mode', options: ['auto', 'address_all'] },
+      ],
+    },
+    {
+      id: 'refactor',
+      enabled: true,
+      disabledReasons: [],
+      inputs: [
+        { name: 'repo' },
+        { name: 'prompt' },
+        { name: 'pipeline', options: ['medium', 'large', 'moonshot'] },
+      ],
+    },
+    {
+      id: 'publish',
+      enabled: false,
+      disabledReasons: [{ code: 'already_published', message: 'Already published.' }],
+    },
+    { id: 'cleanup', enabled: true, disabledReasons: [] },
+    { id: 'mark-done', enabled: true, disabledReasons: [] },
+    { id: 'rewind', enabled: true, disabledReasons: [] },
+  ],
+  repoStatus: [
+    {
+      name: 'agentic-orchestrator',
+      publishable: true,
+      touched: true,
+      prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+      freshness: 'in sync',
+      cycleType: 'review-comments',
+      cycleStatus: 'completed',
+    },
+  ],
+  cycle: {},
+};
+
 const RECOVERY_ITEMS = [
   {
     key: 'feature-alpha:signal-lab',
@@ -912,6 +987,9 @@ function makeMockApi(
       if (scene === 'rebase-preflight') {
         return Promise.resolve(REBASE_FEATURE_SNAPSHOT);
       }
+      if (scene === 'aftercare') {
+        return Promise.resolve(AFTERCARE_FEATURE_SNAPSHOT);
+      }
       if (scene === 'bulk-preview' || scene === 'bulk-queue') {
         const id = _featureId;
         if (id === 'alpha1234ef567890') {
@@ -1128,6 +1206,15 @@ function makeMockApi(
       } as RunListResult);
     },
     getRun: ({ runNumber }) => {
+      if (scene === 'aftercare') {
+        return Promise.resolve({
+          ...RUN_DETAIL,
+          runNumber,
+          artifactCount: 5,
+          timing: { totalSeconds: 14700, byPhase: RUN_DETAIL.timing?.byPhase ?? {} },
+          cost: { totalUsd: 95.18, byPhase: RUN_DETAIL.cost?.byPhase ?? {} },
+        } as RunDetailView);
+      }
       const summary = SEALED_RUNS.find((r) => r.runNumber === runNumber);
       // The active (non-sealed) run still carries per-phase timing/cost detail.
       if (summary === undefined) {
@@ -1372,6 +1459,25 @@ function makeMockApi(
     preflightCompletion: () => {
       const isPublishScene = scene === 'completion-publish';
       const isDeleteScene = scene === 'completion-delete';
+      if (scene === 'aftercare') {
+        return Promise.resolve({
+          featureId: 'abcd1234ef567890',
+          sourceRevision: 'rev-aftercare-mock',
+          canMarkDone: true,
+          repos: [
+            {
+              repo: 'agentic-orchestrator',
+              publishable: true,
+              touched: true,
+              status: 'already_published',
+              prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+              baseBranch: 'main',
+              branch: 'feature/configure-per-phase-effort-level',
+              freshness: 'up_to_date',
+            },
+          ],
+        });
+      }
       if (isPublishScene) {
         return Promise.resolve({
           featureId: 'feat-electron-app',
@@ -1663,6 +1769,7 @@ export {
   FEATURE_SNAPSHOT,
   CYCLES_FEATURE_SNAPSHOT,
   REBASE_FEATURE_SNAPSHOT,
+  AFTERCARE_FEATURE_SNAPSHOT,
   REWIND_PREVIEW,
   REWIND_RESULT,
 };

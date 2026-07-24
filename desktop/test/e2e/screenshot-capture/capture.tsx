@@ -26,6 +26,7 @@ import { useCompletionPreflight } from '../../../src/renderer/src/features/compl
 import type { CompletionAction } from '../../../src/renderer/src/features/completion/completionShared';
 import { SettingsPanel } from '../../../src/renderer/src/features/SettingsPanel';
 import { WorkspaceShell } from '../../../src/renderer/src/features/WorkspaceShell';
+import { FeatureCockpit } from '../../../src/renderer/src/features/FeatureCockpit';
 import { UpdateNotice } from '../../../src/renderer/src/App';
 import { AmaDock } from '../../../src/renderer/src/components/AmaDock';
 import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
@@ -289,6 +290,32 @@ function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
               </main>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AftercareScene() {
+  const [drafts, setDrafts] = React.useState(emptyAttentionDrafts);
+  return (
+    <div className="app-frame">
+      <header className="global-bar" aria-hidden="true">
+        <span className="global-bar__brand">Agentico</span>
+      </header>
+      <div className="workspace">
+        <div className="tab-strip__rail" aria-hidden="true" />
+        <div className="tab-panel tab-panel--cockpit">
+          <FeatureCockpit
+            featureId="abcd1234ef567890"
+            titleHint="Configure per-phase effort level"
+            onClose={() => undefined}
+            onLoadedName={() => undefined}
+            attentionItems={[]}
+            refreshAttention={() => Promise.resolve([])}
+            attentionDrafts={drafts}
+            setAttentionDrafts={setDrafts}
+          />
         </div>
       </div>
     </div>
@@ -810,6 +837,9 @@ function CaptureApp() {
   }
   if (scene === 'run-gauge-final-review') {
     return <RunGaugeScene mode="final-review" />;
+  }
+  if (scene === 'aftercare') {
+    return <AftercareScene />;
   }
   if (scene === 'rebase-preflight' || scene === 'review-refactor' || scene === 'cycle-gate') {
     return <CycleJourneysScene scene={scene} />;

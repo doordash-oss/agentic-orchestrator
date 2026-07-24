@@ -140,6 +140,14 @@ describe('FeatureConfigPanel', () => {
     render(<FeatureConfigPanel featureId="feat-1" />);
     const user = userEvent.setup();
 
+    expect(await screen.findByLabelText('Planning model')).toBeInTheDocument();
+    expect(screen.getByLabelText('Implementation model')).toBeInTheDocument();
+    expect(screen.getByLabelText('Review model')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Clarify model')).toBeNull();
+    expect(screen.queryByLabelText('Research model')).toBeNull();
+    expect(screen.queryByLabelText('Utilities model')).toBeNull();
+    expect(screen.queryByLabelText('KB Build model')).toBeNull();
+
     const roadmap = await screen.findByRole('checkbox', { name: /Roadmap review/ });
     // Medium pipeline: inquiry/research/design gates are not applicable.
     expect(screen.queryByRole('checkbox', { name: /Inquiry review/ })).toBeNull();

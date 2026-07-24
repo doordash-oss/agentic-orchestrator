@@ -211,7 +211,12 @@ function ConfigForm({
   onInputAlertsChange,
 }: ConfigFormProps) {
   const inquirenessName = useId();
-  const phaseFields = PHASE_FIELDS.filter((f) => showUtilities || f.key !== 'utilities');
+  const phaseFields = PHASE_FIELDS.filter((field) => {
+    if (pipeline === 'medium') {
+      return field.key === 'planning' || field.key === 'implementation' || field.key === 'review';
+    }
+    return showUtilities || field.key !== 'utilities';
+  });
   const gates = applicableGates(pipeline);
   const visibleGates = GATE_FIELDS.filter(
     (g) => gates.has(g.key) && (g.key !== 'manualPublish' || manualPublishAvailable),

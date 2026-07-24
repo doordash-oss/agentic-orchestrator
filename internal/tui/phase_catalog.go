@@ -27,7 +27,14 @@ var phaseCatalogFields = []string{"Clarify", "Research", "Planning", "Implementa
 // globalModelFields is phaseCatalogFields plus Utilities: the model used for
 // AMA chat and other workspace-wide utility calls. No single feature owns
 // that role, so it is intentionally absent from phaseCatalogFields.
-var globalModelFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
+// Automatic Review is a workspace-only model row (conservative Claude-only
+// reviewer selection); it is never exposed in feature-scoped editing.
+var globalModelFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build", "Automatic Review"}
+
+// automaticReviewField is the workspace-only Models-tab field name for the
+// automatic Bash-review reviewer model. An empty value means "Automatic"
+// (resolve a catalog-present Claude Haiku model at review time).
+const automaticReviewField = "Automatic Review"
 
 // globalCatalogRoleToField maps API phase roles to catalog field names.
 var globalCatalogRoleToField = map[llm.PhaseRole]string{
@@ -424,4 +431,21 @@ func cloneModelInfo(info llm.ModelInfo) llm.ModelInfo {
 	info.Aliases = append([]string(nil), info.Aliases...)
 	info.EffortCapabilities = append([]llm.EffortLevel(nil), info.EffortCapabilities...)
 	return info
+}
+
+// ClaudeEntries builds PhaseModelEntry list from the Claude provider's
+// catalog only. The Automatic Review model row offers Automatic plus ready
+// Claude catalog models, so it must not fall back to the multi-provider
+// per-field eligible lookup (which would surface every ready provider's
+// models for a field the server does not know about).
+func (c PhaseModelCatalog) ClaudeEntries() []PhaseModelEntry {
+	var entries []PhaseModelEntry
+	for _, id := range c.ProviderModels["claude"] {
+		if id == "" {
+			continue
+		}
+		info := c.modelInfoForProvider("claude", id)
+		entries = append(entries, c.entryFromInfo("claude", info))
+	}
+	return entries
 }

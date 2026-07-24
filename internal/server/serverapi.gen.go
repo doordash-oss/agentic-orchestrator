@@ -819,12 +819,13 @@ type FeatureConfigUpdateResponse struct {
 
 // FeatureDefaults defines model for FeatureDefaults.
 type FeatureDefaults struct {
-	Checkpoints         config.Checkpoints                   `json:"checkpoints"`
-	Effort              EffortConfig                         `json:"effort,omitempty"`
-	Inquireness         string                               `json:"inquireness,omitempty"`
-	Models              ModelDefaults                        `json:"models"`
-	Pipeline            string                               `json:"pipeline,omitempty"`
-	PipelinePreferences map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
+	AutomaticReviewEnabled bool                                 `json:"automatic_review_enabled,omitempty"`
+	Checkpoints            config.Checkpoints                   `json:"checkpoints"`
+	Effort                 EffortConfig                         `json:"effort,omitempty"`
+	Inquireness            string                               `json:"inquireness,omitempty"`
+	Models                 ModelDefaults                        `json:"models"`
+	Pipeline               string                               `json:"pipeline,omitempty"`
+	PipelinePreferences    map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
 }
 
 // FeatureDetail defines model for FeatureDetail.

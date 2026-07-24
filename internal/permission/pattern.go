@@ -23,6 +23,14 @@ import (
 // In production, the input is JSON like {"command":"ls -la"}.
 // For plain strings (e.g. in tests), the input is returned as-is.
 func extractBashCommand(input string) string {
+	return ExtractBashCommand(input)
+}
+
+// ExtractBashCommand extracts the command string from a Bash tool input. In
+// production the input is JSON like {"command":"ls -la"}; for plain strings
+// the input is returned as-is. Exported so the automatic Bash-review decorator
+// can extract the exact command without re-implementing the parse.
+func ExtractBashCommand(input string) string {
 	trimmed := strings.TrimSpace(input)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return input

@@ -1675,6 +1675,8 @@ components:
           x-go-type-import:
             path: github.com/doordash-oss/agentic-orchestrator/internal/config
             name: config
+        automatic_review_enabled:
+          type: boolean
     NotificationConfig:
       type: object
       required: [mute_feature_input]
@@ -2112,6 +2114,8 @@ components:
         utilities:
           type: string
         kb_build:
+          type: string
+        automatic_review:
           type: string
     Timing:
       type: object

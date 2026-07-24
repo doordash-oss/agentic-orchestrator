@@ -9052,9 +9052,9 @@ func (f *fakeTUIAPIClient) UpdateFeatureConfig(_ context.Context, featureID stri
 func (f *fakeTUIAPIClient) UpdateRuntimeConfig(_ context.Context, req server.RuntimeConfigMutationRequest) (server.RuntimeConfigUpdateResponse, error) {
 	f.calls = append(f.calls, "UpdateRuntimeConfig")
 	f.updateRuntimeConfigRequests = append(f.updateRuntimeConfigRequests, req)
-	if req.Defaults.Models != (config.ModelConfig{}) {
-		f.runtime.Defaults = req.Defaults.Models
-		f.runtime.FeatureDefaults.Models = req.Defaults.Models
+	if req.Defaults.Models != nil {
+		f.runtime.Defaults = server.ApplyModelConfigPatch(f.runtime.Defaults, *req.Defaults.Models)
+		f.runtime.FeatureDefaults.Models = f.runtime.Defaults
 	}
 	if req.Defaults.Inquireness != "" {
 		f.runtime.FeatureDefaults.Inquireness = req.Defaults.Inquireness

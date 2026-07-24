@@ -459,6 +459,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
+			// Copy the auto-review snapshot from sessOpts into implBuildOpts
+			// so crash-resume reuses the original values rather than reading
+			// the current (possibly edited) workspace config.
+			if sessOpts != nil && sessOpts.AutoReview.Enabled != nil {
+				implBuildOpts.AutoReview = sessOpts.AutoReview
+			}
 
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
 			if cfg.EffectiveEffort != "" {

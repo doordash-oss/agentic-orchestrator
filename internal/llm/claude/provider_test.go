@@ -85,6 +85,42 @@ func TestClaudeProvider_CheckReadinessAPIKey(t *testing.T) {
 	}
 }
 
+func TestClaudeProvider_CheckBareAuthOAuthRejected(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return []byte(`{"loggedIn":true,"authMethod":"claude.ai","email":"user@example.com"}`), nil
+		},
+	}
+	p.CheckReadiness(context.Background())
+	if p.CheckBareAuth() {
+		t.Fatal("CheckBareAuth() = true for OAuth, want false (--bare skips OAuth)")
+	}
+}
+
+func TestClaudeProvider_CheckBareAuthAPIKeyAccepted(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return []byte(`{"loggedIn":true,"authMethod":"api_key","apiKeySource":"ANTHROPIC_API_KEY"}`), nil
+		},
+	}
+	p.CheckReadiness(context.Background())
+	if !p.CheckBareAuth() {
+		t.Fatal("CheckBareAuth() = false for API key (non-keychain), want true")
+	}
+}
+
+func TestClaudeProvider_CheckBareAuthKeychainRejected(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return []byte(`{"loggedIn":true,"authMethod":"api_key","apiKeySource":"macOS Keychain"}`), nil
+		},
+	}
+	p.CheckReadiness(context.Background())
+	if p.CheckBareAuth() {
+		t.Fatal("CheckBareAuth() = true for keychain-stored API key, want false (--bare skips keychain)")
+	}
+}
+
 func assertCommand(t *testing.T, gotName string, gotArgs []string, wantName string, wantArgs []string) {
 	t.Helper()
 	if gotName != wantName {
@@ -632,6 +668,76 @@ func TestBuildInteractiveCommand_PermissionMode_CoexistsWithDSP(t *testing.T) {
 	}
 	if !slices.Contains(args, "--permission-mode") {
 		t.Errorf("missing --permission-mode:\n%v", args)
+	}
+}
+
+// TestBuildInteractiveCommand_IsolationFlags is a table-driven test covering
+// the hidden reviewer's launch-option isolation contract: ZeroTools emits
+// --tools "" (and suppresses --disallowedTools), NoSessionPersistence emits
+// --no-session-persistence, NoCustomization emits --bare, and all three can
+// coexist on the same invocation.
+func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		opts    llm.CommandBuildOpts
+		wantFlags []string
+		wantEmptyTools bool
+		wantNoDisallowed bool
+	}{
+		{
+			name:             "zero_tools",
+			opts:             llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, DisallowedTools: []string{"Bash", "Read"}},
+			wantEmptyTools:   true,
+			wantNoDisallowed: true,
+		},
+		{
+			name:      "no_session_persistence",
+			opts:      llm.CommandBuildOpts{Model: "haiku", NoSessionPersistence: true},
+			wantFlags: []string{"--no-session-persistence"},
+		},
+		{
+			name:           "no_customization",
+			opts:           llm.CommandBuildOpts{Model: "haiku", NoCustomization: true},
+			wantFlags:      []string{"--bare"},
+		},
+		{
+			name:           "zero_tools_and_no_session_persistence",
+			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true},
+			wantFlags:      []string{"--no-session-persistence"},
+			wantEmptyTools: true,
+		},
+		{
+			name:           "full_isolation",
+			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true, NoCustomization: true},
+			wantFlags:      []string{"--no-session-persistence", "--bare"},
+			wantEmptyTools: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := buildInteractiveCommand(defaultBinary, tc.opts)
+			for _, flag := range tc.wantFlags {
+				if !slices.Contains(args, flag) {
+					t.Errorf("missing %s: %v", flag, args)
+				}
+			}
+			if tc.wantEmptyTools {
+				hasEmptyTools := false
+				for i, a := range args {
+					if a == "--tools" && i+1 < len(args) && args[i+1] == "" {
+						hasEmptyTools = true
+					}
+				}
+				if !hasEmptyTools {
+					t.Errorf("missing --tools \"\": %v", args)
+				}
+			}
+			if tc.wantNoDisallowed {
+				if slices.Contains(args, "--disallowedTools") {
+					t.Errorf("must not emit --disallowedTools when ZeroTools=true: %v", args)
+				}
+			}
+		})
 	}
 }
 

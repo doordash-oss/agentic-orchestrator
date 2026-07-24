@@ -79,6 +79,16 @@ type ReadinessChecker interface {
 	CheckReadiness(ctx context.Context) ProviderReadiness
 }
 
+// BareAuthChecker is implemented by providers that can report whether their
+// authentication is usable in a no-customization subprocess launch (e.g.
+// Claude's --bare mode, which skips keychain reads, settings loading, and
+// OAuth). The automatic-review reviewer launches with NoCustomization=true,
+// so ResolveReviewer uses this to reject providers whose general readiness
+// passes but whose auth cannot survive the isolated launch.
+type BareAuthChecker interface {
+	CheckBareAuth() bool
+}
+
 // VersionEnforcer is implemented by providers whose installed CLI must meet
 // MinVersion() to be usable at startup. When EnforcesMinVersion reports true and
 // the installed CLI is older than MinVersion(), the provider is excluded from
@@ -241,6 +251,24 @@ type CommandBuildOpts struct {
 	// Code's "auto" mode because it injects a "work without stopping for
 	// clarifying questions" system-reminder that overrides [grill-me].
 	PermissionMode string
+	// ZeroTools, when true, asks the provider to expose zero tools (e.g.
+	// Claude's --tools ""). This is stronger than DisallowedTools because it
+	// removes the entire native and MCP tool surface rather than denylisting
+	// known tool names. Providers that do not support it leave their behavior
+	// unchanged.
+	ZeroTools bool
+	// NoSessionPersistence, when true, asks the provider to disable native
+	// session persistence (e.g. Claude's --no-session-persistence) so no
+	// provider transcript or session identity is created. Providers that do
+	// not support it leave their behavior unchanged.
+	NoSessionPersistence bool
+	// NoCustomization, when true, asks the provider to skip all project/user
+	// customization — CLAUDE.md auto-discovery, hooks, LSP, plugin sync,
+	// settings, rules, skills, and local configuration (e.g. Claude's
+	// --bare). This ensures the hidden reviewer's context contains only the
+	// static review policy and the declared execution-context fields, with
+	// no project-injected instructions that could alter the classification.
+	NoCustomization bool
 }
 
 // ProtocolOpts contains all parameters needed to create a Protocol instance.

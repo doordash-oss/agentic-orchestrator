@@ -736,12 +736,13 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaultsDTO {
 		}
 	}
 	return FeatureDefaultsDTO{
-		Models:              defaults.Models,
-		Effort:              defaults.Effort,
-		PipelinePreferences: prefs,
-		Inquireness:         defaults.Inquireness,
-		Pipeline:            defaults.Pipeline,
-		Checkpoints:         defaults.Checkpoints,
+		Models:                 defaults.Models,
+		Effort:                 defaults.Effort,
+		PipelinePreferences:    prefs,
+		Inquireness:            defaults.Inquireness,
+		Pipeline:               defaults.Pipeline,
+		Checkpoints:            defaults.Checkpoints,
+		AutomaticReviewEnabled: defaults.AutomaticReviewEnabled,
 	}
 }
 

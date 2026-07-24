@@ -15,6 +15,7 @@
 package ports
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -177,6 +178,11 @@ type ToolPermissionRequest struct {
 	SessionID    string
 	FeatureID    string
 	ProviderName string // "claude", "codex", etc. — used by provider-specific guards
+	// Ctx carries the session's lifecycle context so long-running permission
+	// handlers (e.g. the automatic-review classifier) can be cancelled when
+	// the session shuts down. Nil means no cancellation is possible; handlers
+	// should fall back to context.Background().
+	Ctx context.Context
 }
 
 // PermissionDecision is the outcome of a permission check.
@@ -260,6 +266,28 @@ type SessionOpts struct {
 	// EffortSource records whether EffectiveEffort was derived from the
 	// pipeline (auto) or an explicit user configuration (explicit).
 	EffortSource llm.EffortSource
+	// AutoReview carries the automatic-review snapshot that was captured when
+	// this session was built. The implement loop copies it back into
+	// BuildSessionOpts.AutoReview so crash-resume reuses the original snapshot
+	// rather than the current workspace config.
+	AutoReview AutoReviewSnapshot
+}
+
+// AutoReviewSnapshot bundles the automatic-review settings snapshotted when an
+// original session is built. Enabled is *bool so false stays distinguishable
+// from omitted (nil means read workspace defaults). Model is the reviewer
+// model selector; empty means "Automatic" (resolve a catalog-present Claude
+// Haiku model at review time). ReviewerProvider and ReviewerModel capture the
+// resolved reviewer's identity (provider name and bare model id) so crash-resume
+// can reconstruct the same reviewer without re-resolving against the current
+// (possibly changed) provider/catalog state. Both are empty when no reviewer
+// was resolved. Defined in ports so both the agent package and session adapters
+// can reference it without a circular import.
+type AutoReviewSnapshot struct {
+	Enabled          *bool
+	Model            string
+	ReviewerProvider string
+	ReviewerModel    string
 }
 
 // MessageLog is the interface consumers use to observe a session's SDK

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -37,6 +38,12 @@ type Provider struct {
 	runner  clirun.CommandRunner
 	// binary overrides the CLI executable name; empty means defaultBinary.
 	binary string
+	// bareAuthOK is cached by CheckReadiness and reports whether the
+	// authentication method is usable in a --bare subprocess launch (which
+	// skips keychain, settings, and OAuth). CheckBareAuth returns it so
+	// ResolveReviewer can reject an OAuth-only Claude installation whose
+	// general readiness would otherwise pass.
+	bareAuthOK bool
 }
 
 func (p *Provider) Name() string { return "claude" }
@@ -197,11 +204,17 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 	var status authStatus
 	if parseErr := json.Unmarshal(out, &status); parseErr == nil {
 		if status.LoggedIn {
+			p.mu.Lock()
+			p.bareAuthOK = isBareAuthUsable(status)
+			p.mu.Unlock()
 			return llm.ProviderReadiness{
 				Ready:  true,
 				Detail: formatReadyAuthDetail(status),
 			}
 		}
+		p.mu.Lock()
+		p.bareAuthOK = false
+		p.mu.Unlock()
 		return llm.ProviderReadiness{
 			Ready:  false,
 			Detail: "not authenticated",
@@ -209,6 +222,9 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 		}
 	}
 
+	p.mu.Lock()
+	p.bareAuthOK = false
+	p.mu.Unlock()
 	if err != nil {
 		return llm.ProviderReadiness{
 			Ready:  false,
@@ -221,6 +237,37 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 		Detail: fmt.Sprintf("could not parse 'claude auth status --json' output: %q", strings.TrimSpace(string(out))),
 		Remedy: "Run 'claude auth login'",
 	}
+}
+
+// CheckBareAuth reports whether the cached authentication method is usable in
+// a --bare subprocess launch. --bare skips keychain reads, settings loading,
+// and OAuth, so only ANTHROPIC_API_KEY in the environment (inherited by the
+// subprocess) or an API-key auth method with a non-keychain source can
+// authenticate the hidden reviewer. Returns false when CheckReadiness has not
+// run or determined the auth is incompatible.
+func (p *Provider) CheckBareAuth() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.bareAuthOK
+}
+
+// isBareAuthUsable reports whether the auth status is compatible with a
+// --bare launch. ANTHROPIC_API_KEY in the environment always works because the
+// subprocess inherits it. An API-key auth method also works when the key
+// source is not the keychain (e.g. env or config file read before --bare).
+// OAuth ("claude.ai") and keychain-based methods are never usable with --bare.
+func isBareAuthUsable(status authStatus) bool {
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		return true
+	}
+	if status.AuthMethod == "api_key" {
+		source := strings.ToLower(status.APIKeySource)
+		if !strings.Contains(source, "keychain") &&
+			!strings.Contains(source, "key chain") {
+			return true
+		}
+	}
+	return false
 }
 
 func formatReadyAuthDetail(status authStatus) string {
@@ -389,6 +436,15 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	args = append(args, "--include-partial-messages")
 	args = applyStreamingOpts(args, opts)
 
+	// --bare skips hooks, LSP, plugin sync, attribution, auto-memory,
+	// background prefetches, keychain reads, and CLAUDE.md auto-discovery.
+	// It ensures the hidden reviewer's context contains only the static
+	// review policy and the declared execution-context fields, with no
+	// project-injected instructions that could alter the classification.
+	if opts.NoCustomization {
+		args = InsertAfterBinary(args, "--bare")
+	}
+
 	if opts.DangerouslySkipPerms {
 		args = InsertAfterBinary(args, "--dangerously-skip-permissions")
 	}
@@ -461,11 +517,16 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if len(opts.DisallowedTools) > 0 {
+	if opts.ZeroTools {
+		args = append(args, "--tools", "")
+	} else if len(opts.DisallowedTools) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
 	}
 	if len(opts.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
+	}
+	if opts.NoSessionPersistence {
+		args = append(args, "--no-session-persistence")
 	}
 	if opts.ResumeSessionID != "" {
 		args = append(args, "--resume", opts.ResumeSessionID)

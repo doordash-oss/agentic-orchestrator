@@ -4786,11 +4786,12 @@ func (m APIAppModel) persistRuntimeUICmd(ui config.UIConfig) tea.Cmd {
 
 func apiWizardDefaults(runtime server.RuntimeConfigResponse) config.DefaultsConfig {
 	defaults := config.DefaultsConfig{
-		Models:              runtime.FeatureDefaults.Models,
-		PipelinePreferences: runtime.FeatureDefaults.PipelinePreferences,
-		Inquireness:         runtime.FeatureDefaults.Inquireness,
-		Pipeline:            runtime.FeatureDefaults.Pipeline,
-		Checkpoints:         runtime.FeatureDefaults.Checkpoints,
+		Models:                 runtime.FeatureDefaults.Models,
+		PipelinePreferences:    runtime.FeatureDefaults.PipelinePreferences,
+		Inquireness:            runtime.FeatureDefaults.Inquireness,
+		Pipeline:               runtime.FeatureDefaults.Pipeline,
+		Checkpoints:            runtime.FeatureDefaults.Checkpoints,
+		AutomaticReviewEnabled: runtime.FeatureDefaults.AutomaticReviewEnabled,
 	}
 	if defaults.Models == (config.ModelConfig{}) {
 		defaults.Models = runtime.Defaults
@@ -7806,13 +7807,16 @@ func (m APIAppModel) saveWorkspaceConfigCmd(editor EditConfigModel) tea.Cmd {
 		ctx := m.apiCtx()
 		snap := editor.editor.Snapshot()
 		checkpoints := feature.FeatureCheckpointsToConfig(snap.Checkpoints)
+		automaticReviewEnabled := editor.automaticReviewEnabled
+		modelsPatch := server.ModelConfigToPatch(snap.Models)
 		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
 			Defaults: server.RuntimeDefaultsMutation{
-				Models:      snap.Models,
-				Effort:      snap.Effort,
-				Inquireness: string(snap.Inquireness),
-				Checkpoints: &checkpoints,
-				Pipeline:    string(editor.pipeline),
+				Models:                 &modelsPatch,
+				Effort:                 snap.Effort,
+				Inquireness:            string(snap.Inquireness),
+				Checkpoints:            &checkpoints,
+				Pipeline:               string(editor.pipeline),
+				AutomaticReviewEnabled: &automaticReviewEnabled,
 			},
 			Notifications: &server.NotificationConfigDTO{
 				MuteFeatureInput: feature.NormalizeInputNotificationsMode(editor.inputAlertsMode) == feature.InputNotificationsMuted,

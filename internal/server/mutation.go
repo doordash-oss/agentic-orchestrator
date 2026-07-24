@@ -235,10 +235,16 @@ type RuntimeConfigMutationRequest struct {
 
 // RuntimeDefaultsMutation is the patch representation of DefaultsConfig.
 // Checkpoints is a pointer because its all-false value is a valid update and
-// must remain distinguishable from an omitted field.
+// must remain distinguishable from an omitted field. AutomaticReviewEnabled is
+// a pointer for the same reason: false is a meaningful value that must remain
+// distinguishable from an omitted toggle. Models is a pointer to
+// ModelConfigPatch because an all-empty patch is a valid update (e.g. clearing
+// an explicit AutomaticReview model back to the meaningful empty "Automatic"
+// value). ModelConfigPatch.AutomaticReview is itself a *string so an omitted
+// nested property stays distinguishable from an explicit empty value.
 type RuntimeDefaultsMutation struct {
-	Models                   config.ModelConfig                   `json:"models,omitempty"`
 	Effort                   config.EffortConfig                  `json:"effort,omitempty"`
+	Models                   *ModelConfigPatch                    `json:"models,omitempty"`
 	PipelinePreferences      map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
 	ExitCriteria             string                               `json:"exit_criteria,omitempty"`
 	Inquireness              string                               `json:"inquireness,omitempty"`
@@ -248,6 +254,78 @@ type RuntimeDefaultsMutation struct {
 	MaxConsecutiveNoProgress int                                  `json:"max_consecutive_no_progress,omitempty"`
 	MaxPhasePlanIterations   int                                  `json:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              *config.Checkpoints                  `json:"checkpoints,omitempty"`
+	AutomaticReviewEnabled   *bool                                `json:"automatic_review_enabled,omitempty"`
+}
+
+// ModelConfigPatch is the patch representation of config.ModelConfig for
+// runtime mutations. Phase-role model fields (Inquiry, Research, etc.) use
+// plain strings with empty-meaning-omitted semantics, matching the existing
+// mergeModelConfig behavior. AutomaticReview is *string because its empty
+// value is meaningful ("Automatic"): nil preserves the existing value while a
+// non-nil pointer (including one to "") sets it explicitly.
+type ModelConfigPatch struct {
+	Inquiry         string  `json:"inquiry,omitempty"`
+	Research        string  `json:"research,omitempty"`
+	Planning        string  `json:"planning,omitempty"`
+	Implementation  string  `json:"implementation,omitempty"`
+	Review          string  `json:"review,omitempty"`
+	Utilities       string  `json:"utilities,omitempty"`
+	KBBuild         string  `json:"kb_build,omitempty"`
+	AutomaticReview *string `json:"automatic_review,omitempty"`
+}
+
+// ApplyModelConfigPatch applies a ModelConfigPatch to a persisted
+// config.ModelConfig. Phase-role model fields use empty-meaning-omitted
+// semantics: a non-empty overlay value overwrites the base, an empty value
+// preserves the base. AutomaticReview uses *string presence: nil preserves
+// the existing value while a non-nil pointer (including one to "") sets it
+// explicitly, so a caller that sends only a phase-model change no longer
+// silently resets an explicit automatic-review model to "Automatic".
+func ApplyModelConfigPatch(base config.ModelConfig, patch ModelConfigPatch) config.ModelConfig {
+	if patch.Inquiry != "" {
+		base.Inquiry = patch.Inquiry
+	}
+	if patch.Research != "" {
+		base.Research = patch.Research
+	}
+	if patch.Planning != "" {
+		base.Planning = patch.Planning
+	}
+	if patch.Implementation != "" {
+		base.Implementation = patch.Implementation
+	}
+	if patch.Review != "" {
+		base.Review = patch.Review
+	}
+	if patch.Utilities != "" {
+		base.Utilities = patch.Utilities
+	}
+	if patch.KBBuild != "" {
+		base.KBBuild = patch.KBBuild
+	}
+	if patch.AutomaticReview != nil {
+		base.AutomaticReview = *patch.AutomaticReview
+	}
+	return base
+}
+
+// ModelConfigToPatch constructs a ModelConfigPatch from a config.ModelConfig,
+// setting every phase-role field and AutomaticReview as a non-nil pointer so
+// the patch carries all values. This is the inverse of ApplyModelConfigPatch
+// for full-config snapshots: every field is applied, matching the semantics
+// of the legacy mergeModelConfig overlay (which always copied AutomaticReview).
+func ModelConfigToPatch(m config.ModelConfig) ModelConfigPatch {
+	ar := m.AutomaticReview
+	return ModelConfigPatch{
+		Inquiry:         m.Inquiry,
+		Research:        m.Research,
+		Planning:        m.Planning,
+		Implementation:  m.Implementation,
+		Review:          m.Review,
+		Utilities:       m.Utilities,
+		KBBuild:         m.KBBuild,
+		AutomaticReview: &ar,
+	}
 }
 
 type PublishFeatureRequest struct {
@@ -762,7 +840,11 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) {
 			return
 		}
-		if !validateEffortConfig(w, req.Defaults.Effort, req.Defaults.Models, h.registry) {
+		models := h.configOrDefault().Defaults.Models
+		if req.Defaults.Models != nil {
+			models = ApplyModelConfigPatch(models, *req.Defaults.Models)
+		}
+		if !validateEffortConfig(w, req.Defaults.Effort, models, h.registry) {
 			return
 		}
 		resp, err := h.mutations.RuntimeConfig(req)

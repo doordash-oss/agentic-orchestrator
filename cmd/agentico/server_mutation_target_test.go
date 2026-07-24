@@ -674,7 +674,7 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	}
 	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
 		Defaults: serverruntime.RuntimeDefaultsMutation{
-			Models: config.ModelConfig{
+			Models: &serverruntime.ModelConfigPatch{
 				Research:       testResearchModelNew,
 				Implementation: testImplementationModelNew,
 			},

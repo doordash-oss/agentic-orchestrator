@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/guidelinedef"
@@ -1121,6 +1122,53 @@ func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.P
 	return permission.Guarded(inner)
 }
 
+// decorateHandlerWithAutoReview wraps the fully composed permission handler
+// with the automatic Bash-review decorator when enabled and the handler is the
+// general-phase policy. Disabled sessions get the composed handler unchanged
+// (byte-identical to the pre-feature path). The reviewer is already resolved
+// by the caller, so the enabled flag and reviewer identity are snapshotted as
+// values and a running session is unaffected by later workspace edits or
+// provider/catalog changes.
+func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, enabled bool, reviewer autoreview.Reviewer, workDir string, writableRoots []string) ports.PermissionHandler {
+	if !enabled {
+		return composed
+	}
+	if !permission.IsGeneralPhaseHandler(original) {
+		return composed
+	}
+	return &autoReviewPermissionDecorator{
+		inner:         composed,
+		reviewer:      reviewer,
+		workDir:       workDir,
+		writableRoots: append([]string(nil), writableRoots...),
+	}
+}
+
+// decorateWithAutoReview snapshots the workspace automatic-review defaults,
+// resolves the reviewer, and delegates to decorateHandlerWithAutoReview. When
+// opts.AutoReview.Enabled is non-nil (crash-resume), the reviewer is restored
+// from the snapshotted identity instead of re-resolved, so the resumed session
+// retains the original session's reviewer even if the provider/catalog state
+// changed. Otherwise the current workspace defaults are read, the reviewer is
+// resolved, and the full snapshot is returned for the caller to store. The
+// hidden reviewer itself is launched via autoreview.Classify (never
+// BuildSession), so it is never decorated and cannot recurse.
+func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.PermissionHandler, opts *BuildSessionOpts, workDir string, writableRoots []string) (ports.PermissionHandler, ports.AutoReviewSnapshot) {
+	if opts.AutoReview.Enabled != nil {
+		reviewer := autoreview.RestoreReviewer(pr.Registry, opts.AutoReview.ReviewerProvider, opts.AutoReview.ReviewerModel)
+		return decorateHandlerWithAutoReview(composed, original, *opts.AutoReview.Enabled, reviewer, workDir, writableRoots), opts.AutoReview
+	}
+	enabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
+	model := ""
+	if pr != nil && pr.Config != nil {
+		model = pr.Config.Defaults.Models.AutomaticReview
+	}
+	reviewer, _ := autoreview.ResolveReviewer(pr.Registry, model)
+	provName, revModel := reviewer.Identity()
+	snap := ports.AutoReviewSnapshot{Enabled: &enabled, Model: model, ReviewerProvider: provName, ReviewerModel: revModel}
+	return decorateHandlerWithAutoReview(composed, original, enabled, reviewer, workDir, writableRoots), snap
+}
+
 // resolveImplementArtifactDir returns the artifact directory for implementation
 // within the feature's active run. When in a roadmap phase, uses phase-scoped
 // directories. Includes refactor prefix when an active refactor cycle is in
@@ -1219,6 +1267,13 @@ type BuildSessionOpts struct {
 	// see its doc comment for why this changes text-parsed AskUserQuestion
 	// providers' behavior.
 	Interactive bool
+	// AutoReview carries the snapshotted automatic-review settings for this
+	// session. When AutoReview.Enabled is non-nil (crash-resume), the
+	// snapshotted values are used; otherwise BuildSession reads the current
+	// workspace defaults. The snapshot is copied as a single value across the
+	// BuildSessionOpts → SessionOpts → BuildSessionOpts crash-resume boundary
+	// so future reviewer-selection fields cannot be copied inconsistently.
+	AutoReview ports.AutoReviewSnapshot
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1418,6 +1473,17 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		Interactive:     opts.Interactive,
 	})
 
+	// Snapshot the automatic-review settings and decorate the permission
+	// handler. The snapshot is returned so it can be stored in sessOpts for
+	// the implement loop to copy back into BuildSessionOpts on crash-resume.
+	permHandler, arSnap := pr.decorateWithAutoReview(
+		permission.WrapGeneralPhaseHandlerWithSafeCreate(opts.PermHandler, commandWritableRoots),
+		opts.PermHandler,
+		&opts,
+		opts.WorkDir,
+		commandWritableRoots,
+	)
+
 	sessOpts = &ports.SessionOpts{
 		PIDDir: opts.PIDDir,
 		// commandWritableRoots is the same boundary just computed for the
@@ -1426,7 +1492,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		// directory the harness already created) can be trusted the same way
 		// AcceptEditsHandler already trusts an equivalent empty Write —
 		// see permission.WrapGeneralPhaseHandlerWithSafeCreate.
-		PermHandler:       permission.WrapGeneralPhaseHandlerWithSafeCreate(opts.PermHandler, commandWritableRoots),
+		PermHandler:       permHandler,
 		InitialPrompt:     opts.Prompt,
 		ContextWindow:     contextWindow,
 		RepoName:          opts.RepoName,
@@ -1436,6 +1502,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		DebugSystemPrompt: opts.SystemPrompt,
 		TurnMode:          opts.TurnMode,
 		Watchdog:          watchdogConfigForProvider(prov),
+		AutoReview:        arSnap,
 	}
 	if c, ok := prov.(finishOrViolateNudgeProvider); ok {
 		sessOpts.SupportsFinishOrViolateNudge = c.SupportsFinishOrViolateNudge()

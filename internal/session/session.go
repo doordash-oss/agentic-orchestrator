@@ -253,6 +253,14 @@ type Session struct {
 	// fallback). Guarded by mu.
 	liveBackgroundTasks map[string]struct{}
 
+	// lifecycleCtxVal and lifecycleCancel are created once with the session
+	// and reused by every permission request. The context is cancelled when
+	// the session shuts down, so long-running permission handlers like the
+	// automatic-review classifier can abort promptly. One goroutine-free
+	// pair avoids per-request goroutine accumulation.
+	lifecycleCtxVal  context.Context
+	lifecycleCancel  context.CancelFunc
+
 	// askUserAutoPick optionally answers confidence-qualified AskUserQuestion
 	// bundles before they enter pending TUI routing.
 	askUserAutoPick *ports.AskUserAutoPickConfig
@@ -572,6 +580,7 @@ func (s *Session) SetAttachDropReporter(r AttachDropReporter) {
 }
 
 func NewSession(id, featureID string, phase feature.Phase) *Session {
+	lctx, lcancel := context.WithCancel(context.Background())
 	return &Session{
 		id:                        id,
 		featureID:                 featureID,
@@ -589,6 +598,8 @@ func NewSession(id, featureID string, phase feature.Phase) *Session {
 		closing:                   make(chan struct{}),
 		done:                      make(chan struct{}),
 		resultShutdownGrace:       resultShutdownGrace,
+		lifecycleCtxVal:           lctx,
+		lifecycleCancel:           lcancel,
 	}
 }
 
@@ -737,6 +748,15 @@ func (s *Session) drainAttachStream() {
 	}
 }
 
+// lifecycleCtx returns the session-scoped context that is cancelled when
+// the session shuts down. It lets long-running permission handlers like the
+// automatic-review classifier abort promptly when the parent session is
+// closing. The context is created once in NewSession and reused by every
+// request, so no per-request goroutine is needed.
+func (s *Session) lifecycleCtx() context.Context {
+	return s.lifecycleCtxVal
+}
+
 // Start launches the subprocess and begins reading JSONL from stdout.
 func (s *Session) Start(command []string, workdir string, env []string, onMessage func(llm.SDKMessage)) error {
 	s.mu.Lock()
@@ -877,6 +897,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		//   3. wait for both goroutines to finish.
 		//   4. close attachCh; close done.
 		close(s.closing)
+		s.lifecycleCancel()
 		s.streamRing.Close()
 		close(s.controlCh)
 		<-s.drainerDone
@@ -1300,6 +1321,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		SessionID:    sessionID,
 		FeatureID:    s.featureID,
 		ProviderName: s.providerName,
+		Ctx:          s.lifecycleCtx(),
 	}
 
 	decision, err := handler.CanUseTool(permReq)

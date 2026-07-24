@@ -304,6 +304,9 @@ func (m ConfigEditorModel) ModelsChangeCount() int {
 	if cur.KBBuild != orig.KBBuild {
 		count++
 	}
+	if cur.AutomaticReview != orig.AutomaticReview {
+		count++
+	}
 	return count
 }
 
@@ -442,6 +445,8 @@ func (m ConfigEditorModel) modelValueForField(field string) string {
 		return m.models.Utilities
 	case "KB Build":
 		return m.models.KBBuild
+	case automaticReviewField:
+		return m.models.AutomaticReview
 	}
 	return ""
 }
@@ -462,6 +467,8 @@ func (m *ConfigEditorModel) setModelValueForField(field, value string) {
 		m.models.Utilities = value
 	case "KB Build":
 		m.models.KBBuild = value
+	case automaticReviewField:
+		m.models.AutomaticReview = value
 	}
 }
 
@@ -491,10 +498,38 @@ func (m ConfigEditorModel) currentModelEntries() []PhaseModelEntry {
 	if field == "" {
 		return nil
 	}
-	return m.catalog.ModelEntriesForField(field)
+	return m.fieldModelEntries(field, m.agentValueForField(field))
+}
+
+// fieldModelEntries returns the selectable model entries for a field. The
+// workspace-only Automatic Review row offers Automatic plus ready Claude
+// catalog models only, so it bypasses the generic per-field eligible lookup
+// (which would fall back to every ready provider for a field the server does
+// not know about). The synthetic "Automatic" entry uses an empty ModelID so
+// SelectionValue resolves to the empty "Automatic" sentinel.
+func (m ConfigEditorModel) fieldModelEntries(field, agent string) []PhaseModelEntry {
+	if field == automaticReviewField {
+		return m.withAutomaticOption(m.catalog.ClaudeEntries())
+	}
+	entries := m.catalog.EntriesForFieldAndAgent(field, agent)
+	if len(entries) == 0 {
+		entries = m.catalog.ModelEntriesForField(field)
+	}
+	return entries
+}
+
+func (m ConfigEditorModel) withAutomaticOption(entries []PhaseModelEntry) []PhaseModelEntry {
+	automatic := PhaseModelEntry{Agent: "claude", ModelID: "", DisplayName: "Automatic"}
+	return append([]PhaseModelEntry{automatic}, entries...)
 }
 
 func (m ConfigEditorModel) agentOptionsForField(field string) []string {
+	if field == automaticReviewField {
+		if len(m.catalog.ProviderModels["claude"]) > 0 {
+			return []string{"claude"}
+		}
+		return nil
+	}
 	var agents []string
 	for _, group := range m.catalog.ProviderEntryGroupsForField(field) {
 		if len(group.Models) > 0 {
@@ -565,17 +600,14 @@ func (m *ConfigEditorModel) cycleModelForward() {
 		return
 	}
 	agent := m.agentValueForField(field)
-	entries := m.catalog.EntriesForFieldAndAgent(field, agent)
-	if len(entries) == 0 {
-		entries = m.currentModelEntries()
-	}
+	entries := m.fieldModelEntries(field, agent)
 	if len(entries) == 0 {
 		return
 	}
 	current := m.modelValueForField(field)
 	nextIdx := 0 // stale-model preservation: unknown value advances to first eligible
 	for i, entry := range entries {
-		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, current) {
+		if m.catalogEntrySelected(entry, current) {
 			nextIdx = (i + 1) % len(entries)
 			break
 		}
@@ -589,17 +621,14 @@ func (m *ConfigEditorModel) cycleModelBackward() {
 		return
 	}
 	agent := m.agentValueForField(field)
-	entries := m.catalog.EntriesForFieldAndAgent(field, agent)
-	if len(entries) == 0 {
-		entries = m.currentModelEntries()
-	}
+	entries := m.fieldModelEntries(field, agent)
 	if len(entries) == 0 {
 		return
 	}
 	current := m.modelValueForField(field)
 	nextIdx := len(entries) - 1 // stale-model preservation: unknown value goes to last eligible
 	for i, entry := range entries {
-		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, current) {
+		if m.catalogEntrySelected(entry, current) {
 			nextIdx = (i - 1 + len(entries)) % len(entries)
 			break
 		}
@@ -613,10 +642,7 @@ func (m ConfigEditorModel) filteredModelEntriesForCurrentRow() []PhaseModelEntry
 		return nil
 	}
 	agent := m.agentValueForField(field)
-	entries := m.catalog.EntriesForFieldAndAgent(field, agent)
-	if len(entries) == 0 {
-		entries = m.currentModelEntries()
-	}
+	entries := m.fieldModelEntries(field, agent)
 	filter := strings.ToLower(strings.TrimSpace(m.modelFilter))
 	if filter == "" {
 		return entries
@@ -1306,6 +1332,12 @@ func (m ConfigEditorModel) modelPickerFocusIndex(entries []PhaseModelEntry, curr
 }
 
 func (m ConfigEditorModel) catalogEntrySelected(entry PhaseModelEntry, current string) bool {
+	// The synthetic "Automatic" entry carries an empty ModelID; the only
+	// catalog entry that ever does. An empty current value is the "Automatic"
+	// selection, so it is selected when current is also empty.
+	if current == "" && entry.ModelID == "" {
+		return true
+	}
 	return m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, current)
 }
 
@@ -1313,6 +1345,9 @@ func (m ConfigEditorModel) phaseAssignmentLabel(field string) string {
 	agent := m.agentValueForField(field)
 	value := m.modelValueForField(field)
 	if value == "" {
+		if field == automaticReviewField {
+			return field + " (Automatic)"
+		}
 		if agent == "" {
 			return field + " (default)"
 		}
@@ -1397,6 +1432,9 @@ func (m ConfigEditorModel) renderModelsBoxWithTitle(width int, titleText string)
 // eligible list for field.
 func (m ConfigEditorModel) modelAssignmentSummary(field, value string) string {
 	if value == "" {
+		if field == automaticReviewField {
+			return "Automatic"
+		}
 		return "(default)"
 	}
 	label := value

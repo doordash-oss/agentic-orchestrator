@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   LivePreviewView,
+  ModelCatalogue,
   ReviewGateView,
   RunArtifactsListResult,
   RunDetailView,
@@ -23,7 +24,13 @@ import {
   verificationSymbol,
   verificationTone,
 } from './verificationModel';
-import { displayStatusLabel, formatDuration, isRunAtRest, phaseMetric } from './featureView';
+import {
+  displayModelName,
+  displayStatusLabel,
+  formatDuration,
+  isRunAtRest,
+  phaseMetric,
+} from './featureView';
 import { stripUnsafeAnsi } from './timelineModel';
 import { buildConversation } from './transcript/conversation';
 import { ConversationTranscript } from './transcript/ConversationTranscript';
@@ -177,6 +184,7 @@ export function CurrentRunInspection({
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [runDetail, setRunDetail] = useState<RunDetailView | null>(null);
+  const [modelCatalogue, setModelCatalogue] = useState<ModelCatalogue | null>(null);
   const [artifacts, setArtifacts] = useState<RunArtifactsListResult['artifacts']>([]);
   const [logs, setLogs] = useState<RunLogView[]>([]);
   const [content, setContent] = useState<{
@@ -214,28 +222,31 @@ export function CurrentRunInspection({
     const request = ++requestRef.current;
     setError(null);
     try {
-      const [nextPreview, nextArtifacts, logResult, nextRunDetail] = await Promise.all([
-        window.agentico.getLivePreview(featureId),
-        window.agentico.listRunArtifacts({ featureId, runNumber }),
-        window.agentico
-          .listRunLogs({ featureId, runNumber })
-          .then((value) => ({ value, error: null }))
-          .catch((cause: unknown) => ({
-            value: { logs: [] as RunLogView[] },
-            error: parseIpcError(cause).message,
-          })),
-        // Per-phase timing/cost. Absent for runs without recorded detail; a
-        // failure must not blank the whole inspection, so it degrades to null.
-        runNumber >= 1
-          ? window.agentico.getRun({ featureId, runNumber }).catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const [nextPreview, nextArtifacts, logResult, nextRunDetail, nextModelCatalogue] =
+        await Promise.all([
+          window.agentico.getLivePreview(featureId),
+          window.agentico.listRunArtifacts({ featureId, runNumber }),
+          window.agentico
+            .listRunLogs({ featureId, runNumber })
+            .then((value) => ({ value, error: null }))
+            .catch((cause: unknown) => ({
+              value: { logs: [] as RunLogView[] },
+              error: parseIpcError(cause).message,
+            })),
+          // Per-phase timing/cost. Absent for runs without recorded detail; a
+          // failure must not blank the whole inspection, so it degrades to null.
+          runNumber >= 1
+            ? window.agentico.getRun({ featureId, runNumber }).catch(() => null)
+            : Promise.resolve(null),
+          window.agentico.getModelCatalogue().catch(() => null),
+        ]);
       if (request !== requestRef.current) return;
       setPreview(nextPreview);
       setArtifacts(orderRunArtifacts(nextArtifacts.artifacts));
       setLogs(logResult.value.logs);
       setLogListError(logResult.error);
       setRunDetail(nextRunDetail);
+      if (nextModelCatalogue !== null) setModelCatalogue(nextModelCatalogue);
       onRunMetrics?.(
         nextRunDetail === null
           ? { totalSeconds: nextPreview.totalSeconds, totalUsd: nextPreview.totalUsd }
@@ -365,6 +376,8 @@ export function CurrentRunInspection({
                 preview={preview}
                 runDetail={runDetail}
                 currentPhase={currentPhase}
+                currentRoadmapPhase={currentRoadmapPhase}
+                modelCatalogue={modelCatalogue}
                 model={preview.session?.model ?? selectedSession?.model ?? null}
                 verifying={verifying}
               />
@@ -505,6 +518,8 @@ export function CurrentRunInspection({
           preview={preview}
           runDetail={runDetail}
           currentPhase={currentPhase}
+          currentRoadmapPhase={currentRoadmapPhase}
+          modelCatalogue={modelCatalogue}
           model={preview?.session?.model ?? selectedSession?.model ?? null}
           waitReason={waitReason}
           attentionFooter={attentionFooter}
@@ -790,17 +805,21 @@ function PreviewMetrics({
   preview,
   runDetail,
   currentPhase,
+  currentRoadmapPhase,
+  modelCatalogue,
   model,
   verifying = false,
 }: {
   preview: LivePreviewView;
   runDetail: RunDetailView | null;
   currentPhase: string;
+  currentRoadmapPhase?: number;
+  modelCatalogue: ModelCatalogue | null;
   model: string | null;
   verifying?: boolean;
 }): React.ReactElement {
-  const phaseSeconds = phaseMetric(runDetail?.timing?.byPhase, currentPhase);
-  const phaseUsd = phaseMetric(runDetail?.cost?.byPhase, currentPhase);
+  const phaseSeconds = phaseMetric(runDetail?.timing?.byPhase, currentPhase, currentRoadmapPhase);
+  const phaseUsd = phaseMetric(runDetail?.cost?.byPhase, currentPhase, currentRoadmapPhase);
   return (
     <dl className="current-inspection__metrics">
       {/* The harness runs the contract with no live LLM session, so the
@@ -821,7 +840,7 @@ function PreviewMetrics({
           <span>{phaseUsd === undefined ? '—' : `$${phaseUsd.toFixed(2)}`}</span>
           {model !== null ? (
             <span className="current-inspection__model" title={model}>
-              {model}
+              {displayModelName(model, modelCatalogue)}
             </span>
           ) : null}
         </dd>
@@ -840,6 +859,8 @@ function LivePreviewOverlay({
   preview,
   runDetail,
   currentPhase,
+  currentRoadmapPhase,
+  modelCatalogue,
   model,
   waitReason,
   attentionFooter,
@@ -855,6 +876,8 @@ function LivePreviewOverlay({
   preview: LivePreviewView | null;
   runDetail: RunDetailView | null;
   currentPhase: string;
+  currentRoadmapPhase?: number;
+  modelCatalogue: ModelCatalogue | null;
   model: string | null;
   waitReason?: string;
   attentionFooter?: ReactNode;
@@ -921,6 +944,8 @@ function LivePreviewOverlay({
                   preview={preview}
                   runDetail={runDetail}
                   currentPhase={currentPhase}
+                  currentRoadmapPhase={currentRoadmapPhase}
+                  modelCatalogue={modelCatalogue}
                   model={model}
                   verifying={verifying}
                 />

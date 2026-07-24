@@ -306,6 +306,15 @@ describe('CurrentRunInspection', () => {
 
   it('shows current-phase elapsed/cost with the model, and reports run totals up', async () => {
     const mock = installAgenticoMock();
+    const canonicalModel = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';
+    mock.api.getModelCatalogue.mockResolvedValue({
+      providerOrder: ['opencode'],
+      providerModels: {
+        opencode: [{ id: canonicalModel, displayName: 'GLM 5.2 (1.04M)' }],
+      },
+      phaseDefaults: {},
+      phaseProviderModels: {},
+    });
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
       activity: 'Running implementation',
@@ -320,7 +329,7 @@ describe('CurrentRunInspection', () => {
         kind: 'implement',
         status: 'running',
         startedAt: '2026-07-23T10:00:00Z',
-        model: 'claude-sonnet-5',
+        model: canonicalModel,
         usage: {},
       },
       transcript: [],
@@ -328,8 +337,8 @@ describe('CurrentRunInspection', () => {
     mock.api.getRun.mockResolvedValue({
       runNumber: 8,
       artifactCount: 0,
-      timing: { totalSeconds: 3844, byPhase: { Implement: 760 } },
-      cost: { totalUsd: 21.62, byPhase: { Implement: 12.4 } },
+      timing: { totalSeconds: 3844, byPhase: { 'phase-5-impl': 760 } },
+      cost: { totalUsd: 21.62, byPhase: { 'phase-5-impl': 12.4 } },
     });
     mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
     mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
@@ -340,6 +349,7 @@ describe('CurrentRunInspection', () => {
         featureId="abcd1234ef567890"
         runNumber={8}
         currentPhase="Implement"
+        currentRoadmapPhase={5}
         featureStatus="Implementing"
         reviewGate={REVIEW_GATE}
         onRunMetrics={onRunMetrics}
@@ -349,7 +359,8 @@ describe('CurrentRunInspection', () => {
     // Current phase: 760s and $12.40, not the run totals (3844s / $21.62).
     expect(await screen.findByText('12m 40s')).toBeInTheDocument();
     expect(screen.getByText('$12.40')).toBeInTheDocument();
-    expect(screen.getByText('claude-sonnet-5')).toBeInTheDocument();
+    expect(screen.getByText('GLM 5.2 (1.04M)')).toHaveAttribute('title', canonicalModel);
+    expect(screen.queryByText(canonicalModel)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(onRunMetrics).toHaveBeenCalledWith({ totalSeconds: 3844, totalUsd: 21.62 }),
     );

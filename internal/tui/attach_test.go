@@ -158,6 +158,103 @@ func TestAttachModelViewUsesWatchVocabulary(t *testing.T) {
 	}
 }
 
+func TestAttachModelCompletedWatchShowsEffortAndSource(t *testing.T) {
+	cases := []struct {
+		name     string
+		effort   llm.EffortLevel
+		source   llm.EffortSource
+		wantText string
+	}{
+		{"auto high", llm.EffortHigh, llm.EffortSourceAuto, "high · Auto"},
+		{"explicit high", llm.EffortHigh, llm.EffortSourceExplicit, "high · Explicit"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mv := mocks.NewMockSessionView("sess-effort", "feat-effort")
+			mv.PhaseVal = feature.PhaseImplement
+			mv.EffectiveEffortVal = tc.effort
+			mv.EffortSourceVal = tc.source
+
+			m := attachModelFromSession(mv, 120, 40)
+			m.done = true
+
+			view := stripANSI(m.View())
+			if !strings.Contains(view, tc.wantText) {
+				t.Errorf("completed Watch surface missing %q:\n%s", tc.wantText, view)
+			}
+			if !strings.Contains(view, "completed") {
+				t.Errorf("completed Watch surface missing 'completed' status:\n%s", view)
+			}
+		})
+	}
+}
+
+func TestAttachModelCompletedWatchOmitsEffortWhenLegacyEmpty(t *testing.T) {
+	mv := mocks.NewMockSessionView("sess-legacy", "feat-legacy")
+	mv.PhaseVal = feature.PhaseImplement
+
+	m := attachModelFromSession(mv, 120, 40)
+	m.done = true
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "· Auto") || strings.Contains(view, "· Explicit") {
+		t.Errorf("completed Watch surface should omit effort for legacy sessions:\n%s", view)
+	}
+}
+
+func TestAttachModelCompletedWatchFits80ColumnsWithRepresentativeName(t *testing.T) {
+	cases := []struct {
+		name     string
+		effort   llm.EffortLevel
+		source   llm.EffortSource
+		wantText string
+	}{
+		{"auto high", llm.EffortHigh, llm.EffortSourceAuto, "high · Auto"},
+		{"explicit high", llm.EffortHigh, llm.EffortSourceExplicit, "high · Explicit"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mv := mocks.NewMockSessionView("session-effort", "feature-effort")
+			mv.PhaseVal = feature.PhaseImplement
+			mv.EffectiveEffortVal = tc.effort
+			mv.EffortSourceVal = tc.source
+
+			m := attachModelFromSession(mv, 80, 32)
+			m.featureName = "configure per-phase effort level"
+			m.done = true
+
+			view := stripANSI(m.View())
+			lines := strings.Split(view, "\n")
+
+			// The complete effort/source must survive at 80 columns.
+			if !strings.Contains(view, tc.wantText) {
+				t.Errorf("80-col Watch surface missing complete %q:\n%s", tc.wantText, view)
+			}
+
+			// The Watch title line must end with the closing border corner.
+			var titleLine string
+			maxWidth := 0
+			for _, line := range lines {
+				if w := lipgloss.Width(line); w > maxWidth {
+					maxWidth = w
+				}
+				if strings.Contains(line, "Watch ·") {
+					titleLine = line
+				}
+			}
+			if titleLine == "" {
+				t.Fatalf("Watch title line not found in view:\n%s", view)
+			}
+			if !strings.HasSuffix(titleLine, "╮") {
+				t.Errorf("Watch title line missing closing border ╮:\n%s", titleLine)
+			}
+			if maxWidth > 80 {
+				t.Errorf("max rendered width %d exceeds 80 columns;\ntitle: %s", maxWidth, titleLine)
+			}
+		})
+	}
+}
+
 func TestAttachHeaderSpellsAgentico(t *testing.T) {
 	header := stripANSI(AttachModel{}.renderAttachHeader(80))
 	if !strings.Contains(header, " ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀▀ █▀█") {

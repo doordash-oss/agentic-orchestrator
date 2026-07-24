@@ -103,9 +103,9 @@ type RebaseLoopConfig struct {
 	ReviewEffectiveEffort llm.EffortLevel
 	ReviewEffortSource    llm.EffortSource
 	SkillsDir             string
-	GuidelinesDir              string
-	Observer                   *observe.Observer
-	CommandRunner              ports.CommandRunner
+	GuidelinesDir         string
+	Observer              *observe.Observer
+	CommandRunner         ports.CommandRunner
 
 	// SessionStartFunc overrides SessionManager.StartSession for callers
 	// that need to synchronize session startup with outer lifecycle state.

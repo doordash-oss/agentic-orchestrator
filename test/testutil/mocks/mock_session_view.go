@@ -42,14 +42,16 @@ type MockSessionView struct {
 	LabelVal          string
 
 	// State
-	StatusVal        session.SessionStatus
-	IsActiveVal      bool
-	IterationVal     int
-	StartedAtVal     time.Time
-	InitialPromptVal string
-	ProviderNameVal  string
-	ModelVal         string
-	WorkDirVal       string
+	StatusVal          session.SessionStatus
+	IsActiveVal        bool
+	IterationVal       int
+	StartedAtVal       time.Time
+	InitialPromptVal   string
+	ProviderNameVal    string
+	ModelVal           string
+	WorkDirVal         string
+	EffectiveEffortVal llm.EffortLevel
+	EffortSourceVal    llm.EffortSource
 
 	// Data — types from internal/llm (moved in Phase 5)
 	CostVal                   *llm.ResultMessage
@@ -131,16 +133,16 @@ func (m *MockSessionView) Label() string           { return m.LabelVal }
 
 // --- State ---
 
-func (m *MockSessionView) Status() session.SessionStatus { return m.StatusVal }
-func (m *MockSessionView) IsActive() bool                { return m.IsActiveVal }
-func (m *MockSessionView) Iteration() int                { return m.IterationVal }
-func (m *MockSessionView) StartedAt() time.Time          { return m.StartedAtVal }
-func (m *MockSessionView) InitialPrompt() string         { return m.InitialPromptVal }
-func (m *MockSessionView) ProviderName() string          { return m.ProviderNameVal }
-func (m *MockSessionView) Model() string                 { return m.ModelVal }
-func (m *MockSessionView) WorkDir() string                 { return m.WorkDirVal }
-func (m *MockSessionView) EffectiveEffort() llm.EffortLevel { return "" }
-func (m *MockSessionView) EffortSource() llm.EffortSource   { return "" }
+func (m *MockSessionView) Status() session.SessionStatus    { return m.StatusVal }
+func (m *MockSessionView) IsActive() bool                   { return m.IsActiveVal }
+func (m *MockSessionView) Iteration() int                   { return m.IterationVal }
+func (m *MockSessionView) StartedAt() time.Time             { return m.StartedAtVal }
+func (m *MockSessionView) InitialPrompt() string            { return m.InitialPromptVal }
+func (m *MockSessionView) ProviderName() string             { return m.ProviderNameVal }
+func (m *MockSessionView) Model() string                    { return m.ModelVal }
+func (m *MockSessionView) WorkDir() string                  { return m.WorkDirVal }
+func (m *MockSessionView) EffectiveEffort() llm.EffortLevel { return m.EffectiveEffortVal }
+func (m *MockSessionView) EffortSource() llm.EffortSource   { return m.EffortSourceVal }
 
 // --- Data access ---
 

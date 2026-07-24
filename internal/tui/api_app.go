@@ -956,6 +956,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.wizard = &updated
 			}
 		}
+		if m.configEditor != nil {
+			m.configEditor.width = msg.Width
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleAPIKey(msg)
@@ -1071,6 +1074,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.configEditor = newAPIEditConfigModel(msg.featureID, m.featureNameByID(msg.featureID), msg.config, apiFeatureModelCatalog(m.catalog))
+		m.configEditor.width = m.width
 		if f := m.selectedAPIDashboardFeature(); f != nil && f.ID == msg.featureID {
 			m.configEditor.deferredEffectWarning = featureConfigChangesDeferred(f)
 		}
@@ -2577,18 +2581,18 @@ func (s *apiSessionView) IsActive() bool {
 	status := s.Status()
 	return status == ports.SessionRunning || status == ports.SessionWaitingHelp || status == ports.SessionWaitingPermission
 }
-func (s *apiSessionView) Iteration() int               { return s.iteration }
-func (s *apiSessionView) StartedAt() time.Time         { return s.startedAt }
-func (s *apiSessionView) InitialPrompt() string        { return s.initialPrompt }
-func (s *apiSessionView) ProviderName() string         { return s.provider }
-func (s *apiSessionView) Model() string                { return s.model }
-func (s *apiSessionView) WorkDir() string              { return s.workDir }
+func (s *apiSessionView) Iteration() int                   { return s.iteration }
+func (s *apiSessionView) StartedAt() time.Time             { return s.startedAt }
+func (s *apiSessionView) InitialPrompt() string            { return s.initialPrompt }
+func (s *apiSessionView) ProviderName() string             { return s.provider }
+func (s *apiSessionView) Model() string                    { return s.model }
+func (s *apiSessionView) WorkDir() string                  { return s.workDir }
 func (s *apiSessionView) EffectiveEffort() llm.EffortLevel { return s.effort }
-func (s *apiSessionView) EffortSource() llm.EffortSource { return s.effortSource }
-func (s *apiSessionView) MessageLog() ports.MessageLog { return s.log }
-func (s *apiSessionView) Cost() *llm.ResultMessage     { return s.cost }
-func (s *apiSessionView) LatestUsage() *llm.Usage      { return nil }
-func (s *apiSessionView) AccumulatedUsage() llm.Usage  { return llm.Usage{} }
+func (s *apiSessionView) EffortSource() llm.EffortSource   { return s.effortSource }
+func (s *apiSessionView) MessageLog() ports.MessageLog     { return s.log }
+func (s *apiSessionView) Cost() *llm.ResultMessage         { return s.cost }
+func (s *apiSessionView) LatestUsage() *llm.Usage          { return nil }
+func (s *apiSessionView) AccumulatedUsage() llm.Usage      { return llm.Usage{} }
 func (s *apiSessionView) LastControlRequest() *llm.ControlRequestMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -5053,6 +5057,7 @@ func (m APIAppModel) openRuntimeConfigEditor() APIAppModel {
 		Notifications: config.NotificationConfig{MuteFeatureInput: m.runtimeConfig.Notifications.MuteFeatureInput},
 	}
 	editor := NewWorkspaceEditConfigModel(cfg, apiPhaseModelCatalog(m.catalog))
+	editor.width = m.width
 	m.configEditor = &editor
 	m.statusMessage = ""
 	return m

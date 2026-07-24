@@ -748,6 +748,9 @@ func (m WizardModel) wizardModelFocus() configFocusZone {
 	if m.configEditor.activeModelCell == modelCellPhase {
 		return configFocusPhaseList
 	}
+	if m.configEditor.activeModelCell == modelCellEffort {
+		return configFocusEffortList
+	}
 	return configFocusAgentList
 }
 
@@ -959,7 +962,7 @@ func (m WizardModel) handleSummaryModelEditingKey(msg tea.KeyMsg) (WizardModel, 
 		case "right", "l", "tab":
 			m.configEditor.activeModelCell = modelCellAgent
 		case "left", "h", "shift+tab":
-			m.configEditor.activeModelCell = modelCellModel
+			m.configEditor.activeModelCell = modelCellEffort
 		default:
 			handled = false
 		}
@@ -967,8 +970,10 @@ func (m WizardModel) handleSummaryModelEditingKey(msg tea.KeyMsg) (WizardModel, 
 		switch keyMsg.String() {
 		case "up", "k":
 			m.configEditor.cycleAgent(-1)
+			m.configEditor.resetIncompatibleEffort()
 		case "down", "j":
 			m.configEditor.cycleAgent(+1)
+			m.configEditor.resetIncompatibleEffort()
 		case "right", "l", "tab":
 			m.configEditor.activeModelCell = modelCellModel
 		case "left", "h", "shift+tab":
@@ -980,14 +985,29 @@ func (m WizardModel) handleSummaryModelEditingKey(msg tea.KeyMsg) (WizardModel, 
 		switch keyMsg.String() {
 		case "up", "k":
 			m.configEditor.cycleModelBackward()
+			m.configEditor.resetIncompatibleEffort()
 		case "down", "j":
 			m.configEditor.cycleModelForward()
+			m.configEditor.resetIncompatibleEffort()
 		case "right", "l", "tab":
-			m.configEditor.activeModelCell = modelCellPhase
+			m.configEditor.activeModelCell = modelCellEffort
 		case "left", "h", "shift+tab":
 			m.configEditor.activeModelCell = modelCellAgent
 		case "/":
 			m.configEditor.startModelFilter()
+		default:
+			handled = false
+		}
+	case modelCellEffort:
+		switch keyMsg.String() {
+		case "up", "k":
+			m.configEditor.cycleEffort(-1)
+		case "down", "j":
+			m.configEditor.cycleEffort(+1)
+		case "right", "l", "tab":
+			m.configEditor.activeModelCell = modelCellPhase
+		case "left", "h", "shift+tab":
+			m.configEditor.activeModelCell = modelCellModel
 		default:
 			handled = false
 		}

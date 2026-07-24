@@ -2310,7 +2310,7 @@ func (m AttachModel) View() string {
 	if titleName == "" {
 		titleName = m.sess.ID()
 	}
-	panelTitle := fmt.Sprintf("Watch · %s · %s (%s)", titleName, m.sess.Phase(), statusText)
+	panelTitle := fitWatchPanelTitle(titleName, m.sess.Phase().String(), statusText, livePreviewEffortText(m.sess), panelW)
 	msgBox = renderBorderTitle(msgBox, panelTitle, lipgloss.NewStyle().Foreground(colorBrand))
 
 	var result strings.Builder
@@ -2434,6 +2434,37 @@ func (m AttachModel) View() string {
 	}
 
 	return rendered
+}
+
+// fitWatchPanelTitle builds the Watch panel border title, truncating the
+// variable-length feature name so the complete effort/source metadata and
+// closing border corner always fit within the panel width. The fixed suffix
+// (phase, status, effort/source) is preserved in full; only the feature name
+// is shortened with an ellipsis when the terminal is too narrow.
+func fitWatchPanelTitle(featureName, phase, status, effortText string, panelWidth int) string {
+	prefix := "Watch · "
+	suffix := fmt.Sprintf(" · %s (%s)", phase, status)
+	if effortText != "" {
+		suffix += " · " + effortText
+	}
+	// renderBorderTitle reserves: ╭─ (2) + space (1) + title + space (1) + ╮ (1) = 5 cells.
+	maxTitleWidth := panelWidth - 5
+	if maxTitleWidth < 1 {
+		maxTitleWidth = 1
+	}
+	avail := maxTitleWidth - lipgloss.Width(prefix) - lipgloss.Width(suffix)
+	if avail < 1 && effortText != "" {
+		// Not enough room with effort — drop it and retry with just phase/status.
+		suffix = fmt.Sprintf(" · %s (%s)", phase, status)
+		avail = maxTitleWidth - lipgloss.Width(prefix) - lipgloss.Width(suffix)
+	}
+	if avail < 1 {
+		return prefix + featureName + suffix
+	}
+	if lipgloss.Width(featureName) <= avail {
+		return prefix + featureName + suffix
+	}
+	return prefix + ansi.Truncate(featureName, max(avail-1, 0), "…") + suffix
 }
 
 // recapRowLineCount returns the number of wrapped terminal lines one recap

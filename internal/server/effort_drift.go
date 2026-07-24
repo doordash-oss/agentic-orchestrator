@@ -35,8 +35,8 @@ func effortDriftWarnings(f *feature.Feature, reg *llm.Registry) []Warning {
 		return nil
 	}
 	roles := []struct {
-		label string
-		model string
+		label  string
+		model  string
 		effort string
 	}{
 		{"inquiry", f.Models.Inquiry, f.Effort.Inquiry},

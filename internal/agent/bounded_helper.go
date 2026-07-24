@@ -68,8 +68,8 @@ type BoundedHelperConfig struct {
 	// and is recorded on the session for observability.
 	EffectiveEffort llm.EffortLevel
 	EffortSource    llm.EffortSource
-	PermHandler    ports.PermissionHandler
-	RequireOutput  bool
+	PermHandler     ports.PermissionHandler
+	RequireOutput   bool
 	// PhaseCompleteDir opts this helper into local phase_complete semantics.
 	// Empty preserves markerless bounded-helper behavior.
 	PhaseCompleteDir string

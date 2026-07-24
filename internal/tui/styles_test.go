@@ -105,6 +105,38 @@ func TestRenderBorderTitleWidth(t *testing.T) {
 	}
 }
 
+func TestRenderBorderTitleTruncatesOverflow(t *testing.T) {
+	t.Parallel()
+	// A title wider than the box must be truncated so the closing border
+	// corner is preserved and the top line does not exceed the box width.
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorSurface).
+		Width(30).
+		Padding(0, 1)
+	box := style.Render("test content")
+	origLines := strings.Split(box, "\n")
+	origWidth := lipgloss.Width(origLines[0])
+
+	longTitle := "This is a very long title that definitely overflows a 30-column box"
+	result := renderBorderTitle(box, longTitle, TitleStyle)
+	newLines := strings.Split(result, "\n")
+	clean := ansiRegex.ReplaceAllString(newLines[0], "")
+
+	if !strings.HasPrefix(clean, "╭─") {
+		t.Errorf("expected top line to start with ╭─, got %q", clean)
+	}
+	if !strings.HasSuffix(clean, "╮") {
+		t.Errorf("expected truncated top line to end with closing ╮, got %q", clean)
+	}
+	if w := lipgloss.Width(newLines[0]); w != origWidth {
+		t.Errorf("truncated top line width %d != box width %d:\n%s", w, origWidth, clean)
+	}
+	if !strings.Contains(clean, "…") {
+		t.Errorf("expected truncation ellipsis in top line, got %q", clean)
+	}
+}
+
 func TestPanelStyleV2BoxModel(t *testing.T) {
 	t.Parallel()
 	// Horizontal frame: 2 (border left+right) + 2 (padding left+right) = 4

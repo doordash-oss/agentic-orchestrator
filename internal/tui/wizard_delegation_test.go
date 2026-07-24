@@ -15,11 +15,13 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
@@ -547,7 +549,6 @@ func TestWizardReviewDelegation_ModelsEditorRendersAssignmentsAndChoices(t *test
 	needles := []string{
 		"Model Selection",
 		"Phase",
-		toolNameAgent,
 		"Model",
 		"Research",
 		"Planning",
@@ -667,5 +668,96 @@ func TestWizardManualPublishHidden_WhenNotPublishable(t *testing.T) {
 	view := m.View()
 	if strings.Contains(view, "Manual Publish") {
 		t.Error("Manual Publish row should be hidden when !provisionalPublishable")
+	}
+}
+
+func TestWizardReviewDelegation_EffortCellNavigation(t *testing.T) {
+	providerModels := map[string][]string{
+		"claude": {"opus", "sonnet"},
+	}
+	m := newWizardAtReviewForDelegation(t, providerModels, []string{"claude"}, nil)
+	m.summaryCursor = summaryFieldModels
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Clarify -> Research
+
+	if got := m.wizardModelFocus(); got != configFocusPhaseList {
+		t.Fatalf("initial focus = %v, want phase list", got)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.wizardModelFocus(); got != configFocusAgentList {
+		t.Fatalf("right from phase = %v, want agent list", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.wizardModelFocus(); got != configFocusModelList {
+		t.Fatalf("right from agent = %v, want model list", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.configEditor.activeModelCell; got != modelCellEffort {
+		t.Fatalf("right from model activeModelCell = %v, want modelCellEffort", got)
+	}
+	if got := m.wizardModelFocus(); got != configFocusEffortList {
+		t.Fatalf("right from model focus = %v, want effort list", got)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("left from effort activeModelCell = %v, want modelCellModel", got)
+	}
+	if got := m.wizardModelFocus(); got != configFocusModelList {
+		t.Fatalf("left from effort focus = %v, want model list", got)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if got := m.configEditor.activeModelCell; got != modelCellAgent {
+		t.Fatalf("shift+tab from model activeModelCell = %v, want modelCellAgent", got)
+	}
+}
+
+func TestWizardReviewDelegation_EffortPaneVisibleAtConstrainedWidths(t *testing.T) {
+	providerModels := map[string][]string{
+		"claude": {"opus", "sonnet"},
+	}
+	for _, termWidth := range []int{120, 80} {
+		t.Run(fmt.Sprintf("terminal_%d", termWidth), func(t *testing.T) {
+			m := newWizardAtReviewForDelegation(t, providerModels, []string{"claude"}, nil)
+			m.width = termWidth
+			m.height = 40
+
+			m.summaryCursor = summaryFieldModels
+			m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Clarify -> Research
+
+			// Navigate Phase -> Agent -> Model -> Effort.
+			m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+			m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+			m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+			if got := m.wizardModelFocus(); got != configFocusEffortList {
+				t.Fatalf("focus = %v, want configFocusEffortList", got)
+			}
+
+			panelWidth := m.wizardPanelWidth()
+			inputBoxWidth := panelWidth - 6
+			contentWidth := reviewEditorContentWidth(inputBoxWidth - 4)
+			rendered := m.configEditor.renderModelsWorkspaceWithFocusWidth(m.wizardModelFocus(), contentWidth)
+
+			// Assert every rendered line fits within the content width.
+			for i, line := range strings.Split(rendered, "\n") {
+				stripped := ansi.Strip(line)
+				if w := lipgloss.Width(stripped); w > contentWidth {
+					t.Errorf("line %d width %d exceeds content width %d at %d-column terminal:\n%s", i, w, contentWidth, termWidth, stripped)
+				}
+			}
+
+			snapshot := ansi.Strip(rendered)
+			t.Logf("\n--- wizard rendered at %d cols (content %d) ---\n%s", termWidth, contentWidth, snapshot)
+
+			if !strings.Contains(snapshot, "Effort") {
+				t.Errorf("Effort title not visible in wizard at %d-column terminal", termWidth)
+			}
+			if !strings.Contains(snapshot, "Auto (high)") {
+				t.Errorf("complete Auto (high) value not visible in wizard at %d-column terminal", termWidth)
+			}
+		})
 	}
 }

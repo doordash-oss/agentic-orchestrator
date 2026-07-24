@@ -81,13 +81,13 @@ func (s *utilityTestSession) Label() string           { return "" }
 func (s *utilityTestSession) Status() session.SessionStatus {
 	return session.SessionRunning
 }
-func (s *utilityTestSession) IsActive() bool        { return true }
-func (s *utilityTestSession) Iteration() int        { return 0 }
-func (s *utilityTestSession) StartedAt() time.Time  { return time.Time{} }
-func (s *utilityTestSession) InitialPrompt() string { return "" }
-func (s *utilityTestSession) ProviderName() string  { return "" }
-func (s *utilityTestSession) Model() string         { return "" }
-func (s *utilityTestSession) WorkDir() string       { return "" }
+func (s *utilityTestSession) IsActive() bool                   { return true }
+func (s *utilityTestSession) Iteration() int                   { return 0 }
+func (s *utilityTestSession) StartedAt() time.Time             { return time.Time{} }
+func (s *utilityTestSession) InitialPrompt() string            { return "" }
+func (s *utilityTestSession) ProviderName() string             { return "" }
+func (s *utilityTestSession) Model() string                    { return "" }
+func (s *utilityTestSession) WorkDir() string                  { return "" }
 func (s *utilityTestSession) EffectiveEffort() llm.EffortLevel { return "" }
 func (s *utilityTestSession) EffortSource() llm.EffortSource   { return "" }
 func (s *utilityTestSession) MessageLog() ports.MessageLog {

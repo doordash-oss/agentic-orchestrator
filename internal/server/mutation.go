@@ -1040,9 +1040,9 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 
 func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, models config.ModelConfig, reg *llm.Registry) bool {
 	roles := []struct {
-		val    string
-		model  string
-		label  string
+		val   string
+		model string
+		label string
 	}{
 		{effort.Inquiry, models.Inquiry, "inquiry"},
 		{effort.Research, models.Research, "research"},
@@ -1069,10 +1069,12 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 		}
 		prov, _, err := reg.ResolveModel(r.model)
 		if err != nil {
-			continue
+			writeAPIError(w, http.StatusBadRequest, "bad_request",
+				"effort."+r.label+" value "+r.val+" cannot be verified: "+r.label+" model "+r.model+" not found in registry", nil)
+			return false
 		}
 		caps := llm.EffortCapabilitiesForModel(prov, r.model)
-		if len(caps) > 0 && !llm.EffortCapabilitySupported(caps, llm.EffortLevel(r.val)) {
+		if len(caps) == 0 || !llm.EffortCapabilitySupported(caps, llm.EffortLevel(r.val)) {
 			writeAPIError(w, http.StatusBadRequest, "bad_request",
 				"effort."+r.label+" value "+r.val+" is not supported by the selected "+r.label+" model", nil)
 			return false

@@ -991,11 +991,33 @@ func (m ConfigEditorModel) renderModelsWorkspaceWithFocus(focus configFocusZone)
 	return m.renderModelsWorkspaceWithFocusWidth(focus, 0)
 }
 
+// Four-pane minimum widths. Each pane has a hard floor below which its
+// content (title, selection marker, inline value) becomes unusable. The
+// four-pane threshold is the sum of these floors plus the three 2-space
+// gutters, so the layout is only chosen when every pane can honor its
+// minimum without overflow.
+const (
+	modelPhasePanelMinWidth = 34
+	modelAgentPanelMinWidth = 16
+	modelListPanelMinWidth  = 44
+	// modelEffortPanelMinWidth is defined in editconfig.go (18).
+	modelWorkspaceGutter = 2
+)
+
+const modelWorkspaceFourPaneMinWidth = modelPhasePanelMinWidth + modelAgentPanelMinWidth + modelListPanelMinWidth + modelEffortPanelMinWidth + modelWorkspaceGutter*3
+
 func (m ConfigEditorModel) renderModelsWorkspaceWithFocusWidth(focus configFocusZone, width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("Model Selection")
-	phaseWidth, agentWidth, modelWidth := modelWorkspacePanelWidths(width)
+	if width > 0 && width < modelWorkspaceFourPaneMinWidth {
+		return strings.Join([]string{
+			title,
+			"",
+			m.renderModelsWorkspaceNarrow(focus, width),
+		}, "\n")
+	}
+	phaseWidth, agentWidth, modelWidth, effortWidth := modelWorkspacePanelWidths(width)
 	phasePane := m.renderModelPhaseList(focus, phaseWidth)
-	inspector := m.renderModelInspector(focus, agentWidth, modelWidth)
+	inspector := m.renderModelInspector(focus, agentWidth, modelWidth, effortWidth)
 	return strings.Join([]string{
 		title,
 		"",
@@ -1003,18 +1025,73 @@ func (m ConfigEditorModel) renderModelsWorkspaceWithFocusWidth(focus configFocus
 	}, "\n")
 }
 
-func modelWorkspacePanelWidths(width int) (int, int, int) {
-	phaseWidth, agentWidth, modelWidth := modelPhasePanelWidth, modelAgentPanelWidth, modelListPanelWidth
+// renderModelsWorkspaceNarrow renders a two-pane layout for constrained
+// widths: the Phase list on the left and a single inspector pane on the
+// right. The inspector pane follows keyboard focus so that navigating
+// Phase -> Agent -> Model -> Effort surfaces the corresponding pane.
+//
+// The split guarantees phaseWidth + gutter + inspectorWidth == width
+// exactly (no overflow) and both panes stay >= 1.
+func (m ConfigEditorModel) renderModelsWorkspaceNarrow(focus configFocusZone, width int) string {
+	const (
+		gutter       = modelWorkspaceGutter
+		phaseMin     = 24
+		inspectorMin = 20
+	)
+
+	available := width - gutter
+	var phaseWidth, inspectorWidth int
+	if available >= phaseMin+inspectorMin {
+		phaseWidth = min(available*2/5, modelPhasePanelWidth)
+		if phaseWidth < phaseMin {
+			phaseWidth = phaseMin
+		}
+		inspectorWidth = available - phaseWidth
+		if inspectorWidth < inspectorMin {
+			inspectorWidth = inspectorMin
+			phaseWidth = available - inspectorWidth
+		}
+	} else {
+		// Too narrow for both minimums: split 3:2, floor at 1.
+		phaseWidth = max(available*3/5, 1)
+		inspectorWidth = available - phaseWidth
+		if inspectorWidth < 1 {
+			inspectorWidth = 1
+			phaseWidth = max(available-1, 1)
+		}
+	}
+
+	phasePane := m.renderModelPhaseList(focus, phaseWidth)
+	field := m.currentModelField()
+	if field == "" {
+		inspector := titledConfigBox("Effort", MutedStyle.Render("No phase"), inspectorWidth, modelPanelHeight, focus == configFocusEffortList)
+		return lipgloss.JoinHorizontal(lipgloss.Top, phasePane, "  ", inspector)
+	}
+	agent := m.agentValueForField(field)
+	var inspector string
+	switch focus {
+	case configFocusAgentList:
+		inspector = m.renderAgentPicker(field, agent, focus, inspectorWidth)
+	case configFocusEffortList:
+		inspector = m.renderEffortPicker(field, focus, inspectorWidth)
+	default:
+		inspector = m.renderModelPicker(field, agent, focus, inspectorWidth)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, phasePane, "  ", inspector)
+}
+
+func modelWorkspacePanelWidths(width int) (int, int, int, int) {
+	phaseWidth, agentWidth, modelWidth, effortWidth := modelPhasePanelWidth, modelAgentPanelWidth, modelListPanelWidth, modelEffortPanelWidth
 	if width <= 0 {
-		return phaseWidth, agentWidth, modelWidth
+		return phaseWidth, agentWidth, modelWidth, effortWidth
 	}
-	available := width - 4 // two 2-space gutters between the three panels
+	available := width - modelWorkspaceGutter*3
 	if available <= 0 {
-		return phaseWidth, agentWidth, modelWidth
+		return phaseWidth, agentWidth, modelWidth, effortWidth
 	}
-	overflow := phaseWidth + agentWidth + modelWidth - available
+	overflow := phaseWidth + agentWidth + modelWidth + effortWidth - available
 	if overflow <= 0 {
-		return phaseWidth, agentWidth, modelWidth
+		return phaseWidth, agentWidth, modelWidth, effortWidth
 	}
 	shrink := func(current, minWidth int) int {
 		if overflow <= 0 {
@@ -1030,10 +1107,20 @@ func modelWorkspacePanelWidths(width int) (int, int, int) {
 		overflow -= delta
 		return current - delta
 	}
-	modelWidth = shrink(modelWidth, 44)
-	phaseWidth = shrink(phaseWidth, 34)
-	agentWidth = shrink(agentWidth, 16)
-	return phaseWidth, agentWidth, modelWidth
+	modelWidth = shrink(modelWidth, modelListPanelMinWidth)
+	phaseWidth = shrink(phaseWidth, modelPhasePanelMinWidth)
+	effortWidth = shrink(effortWidth, modelEffortPanelMinWidth)
+	agentWidth = shrink(agentWidth, modelAgentPanelMinWidth)
+	// Safety net: if overflow remains after all panels hit their floors,
+	// absorb it from the widest panel so the total never exceeds width.
+	if overflow > 0 {
+		if modelWidth >= overflow {
+			modelWidth -= overflow
+		} else if phaseWidth >= overflow {
+			phaseWidth -= overflow
+		}
+	}
+	return phaseWidth, agentWidth, modelWidth, effortWidth
 }
 
 func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone, width int) string {
@@ -1060,17 +1147,19 @@ func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone, width int
 	return titledConfigBox("Phases", strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusPhaseList)
 }
 
-func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidth, modelWidth int) string {
+func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidth, modelWidth, effortWidth int) string {
 	field := m.currentModelField()
 	if field == "" {
 		emptyAgents := titledConfigBox(configBoxTitleAgents, MutedStyle.Render("No phase"), agentWidth, modelPanelHeight, focus == configFocusAgentList)
 		emptyModels := titledConfigBox("Models", MutedStyle.Render("No phase"), modelWidth, modelPanelHeight, focus == configFocusModelList)
-		return lipgloss.JoinHorizontal(lipgloss.Top, emptyAgents, "  ", emptyModels)
+		emptyEffort := titledConfigBox("Effort", MutedStyle.Render("No phase"), effortWidth, modelPanelHeight, focus == configFocusEffortList)
+		return lipgloss.JoinHorizontal(lipgloss.Top, emptyAgents, "  ", emptyModels, "  ", emptyEffort)
 	}
 	agent := m.agentValueForField(field)
 	agents := m.renderAgentPicker(field, agent, focus, agentWidth)
 	models := m.renderModelPicker(field, agent, focus, modelWidth)
-	return lipgloss.JoinHorizontal(lipgloss.Top, agents, "  ", models)
+	effort := m.renderEffortPicker(field, focus, effortWidth)
+	return lipgloss.JoinHorizontal(lipgloss.Top, agents, "  ", models, "  ", effort)
 }
 
 func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, focus configFocusZone, width int) string {
@@ -1148,6 +1237,40 @@ func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFo
 		lines = append(lines, MutedStyle.Render("  ..."))
 	}
 	return titledConfigBox(title, strings.Join(lines, "\n"), width, modelPanelHeight, panelFocused)
+}
+
+func (m ConfigEditorModel) renderEffortPicker(field string, focus configFocusZone, width int) string {
+	opts := m.effortOptionsForCurrentRow()
+	current := m.effortValueForField(field)
+	if current == "" {
+		current = "auto"
+	}
+	panelFocused := focus == configFocusEffortList
+	var lines []string
+	for _, opt := range opts {
+		label := opt
+		if opt == "auto" {
+			label = m.effortDisplayValueForField(field)
+		}
+		// Hard-truncate without ellipsis so the "Auto (" prefix survives
+		// in narrow panes where truncateString's "..." would consume it.
+		if maxLabel := maxInt(width-6, 8); len(label) > maxLabel {
+			label = label[:maxLabel]
+		}
+		selected := opt == current
+		prefix := "  "
+		focused := selected && panelFocused
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		case selected && focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("Effort", strings.Join(lines, "\n"), width, modelPanelHeight, panelFocused)
 }
 
 func modelEntryLabelWidth(panelWidth int) int {

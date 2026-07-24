@@ -133,10 +133,10 @@ type mockCatalogProvider struct {
 	models []llm.ModelInfo
 }
 
-func (m *mockCatalogProvider) Name() string                          { return "mock" }
-func (m *mockCatalogProvider) MatchesModel(model string) bool        { return true }
-func (m *mockCatalogProvider) DetectCLI() bool                       { return true }
-func (m *mockCatalogProvider) AvailableModels() []string             { return nil }
+func (m *mockCatalogProvider) Name() string                   { return "mock" }
+func (m *mockCatalogProvider) MatchesModel(model string) bool { return true }
+func (m *mockCatalogProvider) DetectCLI() bool                { return true }
+func (m *mockCatalogProvider) AvailableModels() []string      { return nil }
 func (m *mockCatalogProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
 	return nil, nil, nil
 }

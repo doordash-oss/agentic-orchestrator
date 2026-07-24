@@ -52,16 +52,26 @@ const (
 	configFocusPhaseList
 	configFocusAgentList
 	configFocusModelList
+	configFocusEffortList
 	configFocusGateList
 	configFocusGateState
 )
 
 const (
-	modelPhasePanelWidth = 56
-	modelAgentPanelWidth = 22
-	modelListPanelWidth  = 74
-	modelPanelHeight     = 11
-	modelPhaseLabelWidth = 48
+	modelPhasePanelWidth  = 56
+	modelAgentPanelWidth  = 22
+	modelListPanelWidth   = 74
+	modelEffortPanelWidth = 24
+	modelPanelHeight      = 11
+	modelPhaseLabelWidth  = 48
+	// modelEffortPanelMinWidth is the smallest the Effort pane may shrink to
+	// in the four-pane layout. It must hold the inline Auto value
+	// "Auto (high)" (11 runes) after the titled box chrome (border 2 +
+	// padding 2) and the 2-rune selection prefix, i.e. width-6 >= 11.
+	modelEffortPanelMinWidth = 18
+	// editConfigOverlayWidthOverhead is the horizontal chrome consumed by the
+	// overlay box: rounded border (2) + horizontal padding (4).
+	editConfigOverlayWidthOverhead = 6
 )
 
 // EditConfigModel is the modal overlay opened by the `e` keybinding. Owns
@@ -92,6 +102,10 @@ type EditConfigModel struct {
 	// dispatch, which branches to saveWorkspaceConfigCmd instead of
 	// saveFeatureConfigCmd.
 	isWorkspace bool
+	// width is the terminal width propagated by the parent model via
+	// WindowSizeMsg. Zero until the first resize is received; the overlay
+	// falls back to natural panel widths when it is still zero.
+	width int
 }
 
 // NewEditConfigModel constructs the overlay for the given feature. The
@@ -360,7 +374,14 @@ func (m EditConfigModel) renderTabStrip() string {
 }
 
 func (m EditConfigModel) renderModelsWorkspace() string {
-	return m.editor.renderModelsWorkspaceWithFocus(m.focus)
+	contentWidth := 0
+	if m.width > 0 {
+		contentWidth = m.width - editConfigOverlayWidthOverhead
+		if contentWidth < 0 {
+			contentWidth = 0
+		}
+	}
+	return m.editor.renderModelsWorkspaceWithFocusWidth(m.focus, contentWidth)
 }
 
 func truncatePhaseLabelForWidth(label string, panelWidth int) string {
@@ -375,6 +396,14 @@ func truncatePhaseLabelForWidth(label string, panelWidth int) string {
 		if headWidth > 3 {
 			return truncateString(head, headWidth) + unavailableSuffix
 		}
+	}
+	if len(label) <= labelWidth {
+		return label
+	}
+	// When the full label (phase name + model assignment) doesn't fit,
+	// show just the phase name if it fits on its own.
+	if idx := strings.Index(label, " ("); idx > 0 && idx <= labelWidth {
+		return label[:idx]
 	}
 	return truncateString(label, labelWidth)
 }
@@ -760,7 +789,9 @@ func (m EditConfigModel) renderHintBar() string {
 		case configFocusAgentList:
 			keys = "↑↓ agent   → models   enter phase   esc cancel"
 		case configFocusModelList:
-			keys = "↑↓ model   / search   enter phase   esc cancel"
+			keys = "↑↓ model   → effort   / search   enter phase   esc cancel"
+		case configFocusEffortList:
+			keys = "↑↓ effort   ← models   enter phase   esc cancel"
 		default:
 			keys = "↑↓ phase   → agents   / search   enter save   esc cancel"
 		}
@@ -887,6 +918,10 @@ func (m *EditConfigModel) updateModelsWorkspaceKey(keyMsg tea.KeyPressMsg) bool 
 		case "down", "j":
 			m.editor.cycleModelForward()
 			return true
+		case "right", "l":
+			m.focus = configFocusEffortList
+			m.editor.activeModelCell = modelCellEffort
+			return true
 		case "left", "h":
 			m.focus = configFocusAgentList
 			m.editor.activeModelCell = modelCellAgent
@@ -896,6 +931,22 @@ func (m *EditConfigModel) updateModelsWorkspaceKey(keyMsg tea.KeyPressMsg) bool 
 			return true
 		case "/":
 			m.editor.startModelFilter()
+			return true
+		}
+	case configFocusEffortList:
+		switch key {
+		case "up", "k":
+			m.editor.cycleEffort(-1)
+			return true
+		case "down", "j":
+			m.editor.cycleEffort(+1)
+			return true
+		case "left", "h":
+			m.focus = configFocusModelList
+			m.editor.activeModelCell = modelCellModel
+			return true
+		case "enter":
+			m.focus = configFocusPhaseList
 			return true
 		}
 	}
@@ -970,7 +1021,7 @@ func (m *EditConfigModel) updateGatesWorkspaceKey(keyMsg tea.KeyPressMsg) bool {
 }
 
 func (m EditConfigModel) EnterIsLocal() bool {
-	return (m.activeTab == tabModels && (m.editor.ModelFilteringActive() || m.focus == configFocusAgentList || m.focus == configFocusModelList)) ||
+	return (m.activeTab == tabModels && (m.editor.ModelFilteringActive() || m.focus == configFocusAgentList || m.focus == configFocusModelList || m.focus == configFocusEffortList)) ||
 		(m.activeTab == tabBehavior && m.focus == configFocusBody) ||
 		(m.activeTab == tabGates && m.focus == configFocusGateState)
 }

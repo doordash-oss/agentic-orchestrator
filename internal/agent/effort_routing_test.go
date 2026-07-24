@@ -168,9 +168,9 @@ func TestResolveEffortForRoleWithPipelineOverride(t *testing.T) {
 
 func TestValidatorEffortLevel(t *testing.T) {
 	cases := []struct {
-		name           string
-		cfg            PlanLoopConfig
-		wantEffort     llm.EffortLevel
+		name       string
+		cfg        PlanLoopConfig
+		wantEffort llm.EffortLevel
 	}{
 		{
 			name: "uses validator effort when set",
@@ -217,8 +217,8 @@ func TestReviewHelperEffortFromImpl(t *testing.T) {
 			name: "uses review effort when set",
 			cfg: ImplementConfig{
 				EffortLevel:           llm.EffortHigh,
-				EffectiveEffort:        llm.EffortHigh,
-				ReviewEffectiveEffort:  llm.EffortMedium,
+				EffectiveEffort:       llm.EffortHigh,
+				ReviewEffectiveEffort: llm.EffortMedium,
 			},
 			wantEffort: llm.EffortMedium,
 		},
@@ -250,22 +250,22 @@ func TestReviewHelperEffortFromImpl(t *testing.T) {
 
 func TestFinalReviewEffortRouting(t *testing.T) {
 	cases := []struct {
-		name             string
-		cfg              OrchestratorConfig
-		wantAxisEffort   llm.EffortLevel
-		wantAxisSource   llm.EffortSource
-		wantFixEffort    llm.EffortLevel
-		wantFixSource    llm.EffortSource
+		name           string
+		cfg            OrchestratorConfig
+		wantAxisEffort llm.EffortLevel
+		wantAxisSource llm.EffortSource
+		wantFixEffort  llm.EffortLevel
+		wantFixSource  llm.EffortSource
 	}{
 		{
 			name: "review axes use review effort, fix uses impl effort",
 			cfg: OrchestratorConfig{
 				EffortLevel:           llm.EffortHigh,
-				EffectiveEffort:        llm.EffortHigh,
-				ImplEffectiveEffort:    llm.EffortMedium,
-				ImplEffortSource:       llm.EffortSourceExplicit,
-				ReviewEffectiveEffort:  llm.EffortMax,
-				ReviewEffortSource:     llm.EffortSourceExplicit,
+				EffectiveEffort:       llm.EffortHigh,
+				ImplEffectiveEffort:   llm.EffortMedium,
+				ImplEffortSource:      llm.EffortSourceExplicit,
+				ReviewEffectiveEffort: llm.EffortMax,
+				ReviewEffortSource:    llm.EffortSourceExplicit,
 			},
 			wantAxisEffort: llm.EffortMax,
 			wantAxisSource: llm.EffortSourceExplicit,
@@ -275,7 +275,7 @@ func TestFinalReviewEffortRouting(t *testing.T) {
 		{
 			name: "falls back to effective effort when role-specific not set",
 			cfg: OrchestratorConfig{
-				EffortLevel:    llm.EffortHigh,
+				EffortLevel:     llm.EffortHigh,
 				EffectiveEffort: llm.EffortMedium,
 				EffortSource:    llm.EffortSourceAuto,
 			},

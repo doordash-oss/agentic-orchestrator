@@ -102,9 +102,9 @@ type RefactorFeatureLoopConfig struct {
 	ReviewEffectiveEffort llm.EffortLevel
 	ReviewEffortSource    llm.EffortSource
 	SkillsDir             string
-	GuidelinesDir              string
-	Observer                   *observe.Observer
-	CommandRunner              ports.CommandRunner
+	GuidelinesDir         string
+	Observer              *observe.Observer
+	CommandRunner         ports.CommandRunner
 
 	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
 	// for the refactor cycle's sessions (refactor-plan step + the inner
@@ -486,14 +486,14 @@ planRevisionLoop:
 			DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 			DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 			PermissionCache:            cfg.PermissionCache,
-		BuildSession:               cfg.BuildSession,
-		AskingClause:               cfg.AskingClause,
-		EffortLevel:                cfg.EffortLevel,
-		EffectiveEffort:            cfg.ImplEffectiveEffort,
-		EffortSource:               cfg.ImplEffortSource,
-		ReviewEffectiveEffort:      cfg.ReviewEffectiveEffort,
-		ReviewEffortSource:         cfg.ReviewEffortSource,
-		SkillsDir:                  cfg.SkillsDir,
+			BuildSession:               cfg.BuildSession,
+			AskingClause:               cfg.AskingClause,
+			EffortLevel:                cfg.EffortLevel,
+			EffectiveEffort:            cfg.ImplEffectiveEffort,
+			EffortSource:               cfg.ImplEffortSource,
+			ReviewEffectiveEffort:      cfg.ReviewEffectiveEffort,
+			ReviewEffortSource:         cfg.ReviewEffortSource,
+			SkillsDir:                  cfg.SkillsDir,
 			GuidelinesDir:              cfg.GuidelinesDir,
 			FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
 			Observer:                   cfg.Observer,

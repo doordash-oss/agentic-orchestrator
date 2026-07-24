@@ -437,35 +437,35 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				runDir = filepath.Join(cfg.StateDir, "runs", feature.RunDirName(runNumber))
 			}
 			dirs := append([]string{runDir}, cfg.AdditionalDirs...)
-		implBuildOpts := BuildSessionOpts{
-			Model:                          cfg.Model,
-			Prompt:                         prompt,
-			SystemPrompt:                   implProtocol,
-			AdditionalDirs:                 dirs,
-			AgentNames:                     []string{},
-			PIDDir:                         cfg.StateDir,
-			PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, permRepoName),
-			RepoName:                       cfg.RepoName,
-			WorkDir:                        cfg.WorkDir,
-			EffortLevel:                    cfg.EffortLevel,
-			Phase:                          feature.PhaseImplement,
-			SystemPromptHasUsefulResources: true,
-			MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
-		}
-		if cfg.EffectiveEffort != "" {
-			implBuildOpts.EffortLevel = cfg.EffectiveEffort
-		}
+			implBuildOpts := BuildSessionOpts{
+				Model:                          cfg.Model,
+				Prompt:                         prompt,
+				SystemPrompt:                   implProtocol,
+				AdditionalDirs:                 dirs,
+				AgentNames:                     []string{},
+				PIDDir:                         cfg.StateDir,
+				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, permRepoName),
+				RepoName:                       cfg.RepoName,
+				WorkDir:                        cfg.WorkDir,
+				EffortLevel:                    cfg.EffortLevel,
+				Phase:                          feature.PhaseImplement,
+				SystemPromptHasUsefulResources: true,
+				MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
+			}
+			if cfg.EffectiveEffort != "" {
+				implBuildOpts.EffortLevel = cfg.EffectiveEffort
+			}
 			command, env, sessOpts, buildErr := cfg.BuildSession(implBuildOpts)
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
 
-		sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-		if cfg.EffectiveEffort != "" {
-			sessOpts.EffectiveEffort = cfg.EffectiveEffort
-			sessOpts.EffortSource = cfg.EffortSource
-		}
-		if cfg.FinishOrViolateNudge {
+			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			if cfg.EffectiveEffort != "" {
+				sessOpts.EffectiveEffort = cfg.EffectiveEffort
+				sessOpts.EffortSource = cfg.EffortSource
+			}
+			if cfg.FinishOrViolateNudge {
 				sessOpts.TurnMode = ports.TurnModeInteractive
 			}
 			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)

@@ -113,9 +113,9 @@ type ReviewCommentsLoopConfig struct {
 	ReviewEffectiveEffort llm.EffortLevel
 	ReviewEffortSource    llm.EffortSource
 	SkillsDir             string
-	GuidelinesDir              string
-	Observer                   *observe.Observer
-	CommandRunner              ports.CommandRunner
+	GuidelinesDir         string
+	Observer              *observe.Observer
+	CommandRunner         ports.CommandRunner
 
 	// RunImplementFn is a test seam: when non-nil, RunReviewCommentsLoop
 	// calls this instead of RunImplementationLoop so unit tests can drive

@@ -195,6 +195,23 @@ describe('AmaDock', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Expand AMA' })).toHaveFocus());
   });
 
+  it('keeps the compact drawer transcript node and scroll position across modal closes', async () => {
+    installAgenticoMock();
+    renderDock();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Expand AMA' }));
+    const transcript = screen.getByRole('region', { name: 'AMA transcript' });
+    transcript.scrollTop = 137;
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close expanded AMA' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Expand AMA' }));
+
+    const reopened = screen.getByRole('region', { name: 'AMA transcript' });
+    expect(reopened).toBe(transcript);
+    expect(reopened.scrollTop).toBe(137);
+    expect(screen.getAllByRole('region', { name: 'AMA transcript' })).toHaveLength(1);
+  });
+
   it('dismisses expanded AMA with Escape without changing the saved drawer mode', async () => {
     const mock = installAgenticoMock();
     renderDock();
@@ -208,6 +225,21 @@ describe('AmaDock', () => {
       expect(screen.queryByRole('dialog', { name: 'Expanded AMA' })).not.toBeInTheDocument(),
     );
     expect(mock.api.updateSettings).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Expand AMA' })).toHaveFocus());
+  });
+
+  it('dismisses expanded AMA from the backdrop', async () => {
+    installAgenticoMock();
+    renderDock();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Expand AMA' }));
+    const dialog = screen.getByRole('dialog', { name: 'Expanded AMA' });
+
+    fireEvent.mouseDown(dialog.parentElement!);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Expanded AMA' })).not.toBeInTheDocument(),
+    );
     await waitFor(() => expect(screen.getByRole('button', { name: 'Expand AMA' })).toHaveFocus());
   });
 });

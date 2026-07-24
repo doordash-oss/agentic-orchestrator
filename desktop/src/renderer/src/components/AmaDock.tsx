@@ -421,49 +421,51 @@ export function AmaDock({
             </button>
           ) : null}
         </header>
-        {drawer === 'expanded' || maximized ? (
-          <div className="ama-dock__drawer" data-has-attention={amaAttentionItems.length > 0}>
-            {amaAttentionItems.length > 0 ? (
-              <section className="ama-dock__attention" aria-label="AMA questions">
-                {amaAttentionItems.map((item) => (
-                  <div key={`${item.kind}:${item.id}`} className="ama-dock__attention-item">
-                    <AttentionDetail
-                      item={item}
-                      busy={attentionBusy === item.id}
-                      drafts={activeDrafts}
-                      setDrafts={updateDrafts}
-                      submit={(action, options) => void submitAttention(item.id, action, options)}
-                      saveDraft={(action, options) => saveDraft(item.id, action, options)}
-                    />
-                  </div>
-                ))}
-              </section>
-            ) : null}
-            <ConversationTranscript
-              className="ama-dock__transcript"
-              ariaLabel="AMA transcript"
-              items={conversation}
-              waiting={waitingForAssistant}
-              idleLabel="Thinking through your question"
-              pinToBottomToken={pinToBottom}
-              status={
-                <>
-                  {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
-                  {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
-                </>
-              }
-              emptyState={
-                <div className="ama-dock__empty">
-                  <strong>Ask anything about this workspace.</strong>
-                  <span>
-                    I can inspect the project, explain what is happening, and help you decide what
-                    to do next.
-                  </span>
+        <div
+          className="ama-dock__drawer"
+          data-has-attention={amaAttentionItems.length > 0}
+          hidden={drawer !== 'expanded' && !maximized}
+        >
+          {amaAttentionItems.length > 0 ? (
+            <section className="ama-dock__attention" aria-label="AMA questions">
+              {amaAttentionItems.map((item) => (
+                <div key={`${item.kind}:${item.id}`} className="ama-dock__attention-item">
+                  <AttentionDetail
+                    item={item}
+                    busy={attentionBusy === item.id}
+                    drafts={activeDrafts}
+                    setDrafts={updateDrafts}
+                    submit={(action, options) => void submitAttention(item.id, action, options)}
+                    saveDraft={(action, options) => saveDraft(item.id, action, options)}
+                  />
                 </div>
-              }
-            />
-          </div>
-        ) : null}
+              ))}
+            </section>
+          ) : null}
+          <ConversationTranscript
+            className="ama-dock__transcript"
+            ariaLabel="AMA transcript"
+            items={conversation}
+            waiting={waitingForAssistant}
+            idleLabel="Thinking through your question"
+            pinToBottomToken={pinToBottom}
+            status={
+              <>
+                {transcript.phase === 'loading' ? <p role="status">Loading transcript…</p> : null}
+                {transcript.phase === 'error' ? <p role="alert">{transcript.message}</p> : null}
+              </>
+            }
+            emptyState={
+              <div className="ama-dock__empty">
+                <strong>Ask anything about this workspace.</strong>
+                <span>
+                  I can inspect the project, explain what is happening, and help you decide what to
+                  do next.
+                </span>
+              </div>
+            }
+          />
+        </div>
         {notice !== '' ? (
           <p className="ama-dock__notice" role="status" aria-live="polite">
             {notice}

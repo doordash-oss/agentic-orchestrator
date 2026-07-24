@@ -23,6 +23,7 @@ export function useModalDismiss(
 
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
+        if (node?.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
         event.preventDefault();
         onClose();
         return;

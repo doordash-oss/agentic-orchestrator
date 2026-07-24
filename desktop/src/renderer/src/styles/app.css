@@ -452,6 +452,10 @@ body {
   overflow: hidden;
 }
 
+.ama-dock__drawer[hidden] {
+  display: none;
+}
+
 .ama-dock__drawer[data-has-attention='false'] {
   grid-template-columns: minmax(0, 1fr);
 }

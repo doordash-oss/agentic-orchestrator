@@ -29,7 +29,7 @@
 - Modify: `desktop/src/renderer/src/styles/app.css:284-442`
 
 **Interfaces:**
-- Consumes: the existing `AmaDock` state, `MaximizeIcon`, `MinimizeIcon`, and the live-preview modal focus behavior.
+- Consumes: the existing `AmaDock` state, `MaximizeIcon`, `CloseIcon`, and the live-preview modal focus behavior.
 - Produces: `useModalDismiss(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active?: boolean): void`, an `Expand AMA`/`Close expanded AMA` control, and the `ama-dock__modal-layer` styling contract.
 
 - [ ] **Step 1: Write the failing renderer tests**

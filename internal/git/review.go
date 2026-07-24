@@ -53,10 +53,10 @@ func ParsePRURL(prURL string) (owner, repo string, number int, err error) {
 	return "", "", 0, fmt.Errorf("could not parse PR URL: %s", prURL)
 }
 
-// FetchPRComments fetches inline PR review comments using the gh CLI. Returns
-// only top-level review comments (excludes replies). Each comment's Type field
-// is set to CommentTypeReview so completion can reply directly in the review
-// thread and then resolve the conversation.
+// FetchPRComments fetches inline review comments, general conversation
+// comments, and submitted review bodies using the gh CLI. It excludes replies
+// to inline comments so each returned item represents one addressable feedback
+// thread or top-level PR comment.
 func FetchPRComments(repoPath, prURL string) ([]ReviewComment, error) {
 	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
@@ -86,8 +86,73 @@ func FetchPRComments(repoPath, prURL string) ([]ReviewComment, error) {
 		}
 	}
 
+	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
+	issueCmd := exec.Command("gh", "api", "--paginate", issueEndpoint)
+	issueCmd.Dir = repoPath
+	issueOut, err := issueCmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR issue comments: %s: %w", strings.TrimSpace(string(issueOut)), err)
+	}
+
+	issueComments, err := parsePaginatedComments(issueOut)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range issueComments {
+		c.Type = CommentTypeIssue
+		result = append(result, c)
+	}
+
+	reviewsEndpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
+	reviewsCmd := exec.Command("gh", "api", "--paginate", reviewsEndpoint)
+	reviewsCmd.Dir = repoPath
+	reviewsOut, err := reviewsCmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR reviews: %s: %w", strings.TrimSpace(string(reviewsOut)), err)
+	}
+
+	reviews, err := parsePaginatedReviews(reviewsOut)
+	if err != nil {
+		return nil, err
+	}
+	for _, review := range reviews {
+		body := strings.TrimSpace(review.Body)
+		if body == "" {
+			continue
+		}
+		result = append(result, ReviewComment{
+			ID:        review.ID,
+			Body:      body,
+			User:      review.User,
+			CreatedAt: review.CreatedAt,
+			Type:      CommentTypeReviewBody,
+		})
+	}
+
 	SortReviewCommentsChronologically(result)
 	return result, nil
+}
+
+type prReview struct {
+	ID   int    `json:"id"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	CreatedAt string `json:"submitted_at"`
+}
+
+func parsePaginatedReviews(data []byte) ([]prReview, error) {
+	var reviews []prReview
+	dec := json.NewDecoder(bytes.NewReader(data))
+	for dec.More() {
+		var page []prReview
+		if err := dec.Decode(&page); err != nil {
+			return nil, fmt.Errorf("parsing PR reviews: %w", err)
+		}
+		reviews = append(reviews, page...)
+	}
+	return reviews, nil
 }
 
 // SortReviewCommentsChronologically orders comments by their GitHub creation
@@ -153,6 +218,24 @@ func ReplyToPRComment(repoPath, prURL string, commentID int, body string) error 
 	if err != nil {
 		return fmt.Errorf("replying to comment %d: %s: %w",
 			commentID, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// ReplyToIssueComment posts a top-level conversation comment on a PR.
+func ReplyToIssueComment(repoPath, prURL, body string) error {
+	body = InjectPRSignature(body)
+	owner, repo, number, err := ParsePRURL(prURL)
+	if err != nil {
+		return err
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
+	cmd := exec.Command("gh", "api", endpoint, "-f", "body="+body)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("posting issue comment: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

@@ -3566,7 +3566,7 @@ body {
 
 .cockpit__surface--live .current-inspection {
   flex: 1 1 100%;
-  min-height: 0;
+  min-height: 320px;
   margin-block: 0;
 }
 
@@ -8263,6 +8263,64 @@ body {
   .cockpit__surface--live .current-inspection {
     gap: var(--space-2);
     padding: var(--space-2);
+  }
+
+  .cockpit__surface--live .live-preview__frame {
+    min-height: 92px;
+  }
+
+  .cockpit__surface--live .current-inspection:has(.review-gate) .live-preview__frame {
+    height: 64px;
+    min-height: 64px;
+    max-height: 64px;
+  }
+
+  .cockpit__surface--live .current-inspection:has(.review-gate) .current-inspection__preview {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 64px auto;
+    align-items: end;
+    column-gap: var(--space-3);
+  }
+
+  .cockpit__surface--live
+    .current-inspection:has(.review-gate)
+    .current-inspection__preview
+    > .live-preview__frame {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .cockpit__surface--live
+    .current-inspection:has(.review-gate)
+    .current-inspection__preview
+    > .current-inspection__activity {
+    grid-row: 2;
+    margin: 0;
+  }
+
+  .cockpit__surface--live
+    .current-inspection:has(.review-gate)
+    .current-inspection__preview
+    > .current-inspection__metrics {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .cockpit__surface--live .review-gate {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-2);
+    padding-block: var(--space-1);
+  }
+
+  .cockpit__surface--live .review-gate__axes {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .cockpit__surface--live .review-gate__counts {
+    white-space: nowrap;
   }
 }
 

@@ -199,9 +199,13 @@ function RepoInstrumentScene() {
   );
 }
 
-function RunGaugeScene({ mode = 'active' }: { mode?: 'active' | 'rest' | 'final-review' }) {
+type RunGaugeMode = 'active' | 'reviewing' | 'verifying' | 'rest' | 'final-review';
+
+function RunGaugeScene({ mode = 'active' }: { mode?: RunGaugeMode }) {
   const atRest = mode === 'rest';
   const finalReview = mode === 'final-review';
+  const reviewing = mode === 'reviewing';
+  const verifying = mode === 'verifying';
   const stages = spineStages('large');
   return (
     <div className="app-frame">
@@ -248,13 +252,36 @@ function RunGaugeScene({ mode = 'active' }: { mode?: 'active' | 'rest' | 'final-
                     totalRoadmapPhases={atRest ? 12 : finalReview ? 2 : 5}
                     {...(atRest || finalReview
                       ? {}
-                      : { currentIteration: 3, phaseStatus: 'implementing' })}
+                      : {
+                          currentIteration: 3,
+                          phaseStatus: reviewing
+                            ? 'reviewing'
+                            : verifying
+                              ? 'verifying'
+                              : 'implementing',
+                        })}
                     reviewGate={{
-                      reviewingGate: false,
+                      reviewingGate: reviewing,
                       reviewFixing: false,
                       validatingPlan: false,
-                      validatorStatuses: {},
+                      validatorStatuses: reviewing
+                        ? {
+                            Craft: 'APPROVED',
+                            'Functionality/Evidence': 'running',
+                            Cleanliness: 'APPROVED',
+                            Design: 'running',
+                          }
+                        : {},
                     }}
+                    verificationItems={
+                      verifying
+                        ? [
+                            { name: 'npm run typecheck', state: 'passed' },
+                            { name: 'npm run build', state: 'running' },
+                            { name: 'make test-fast', state: 'pending' },
+                          ]
+                        : undefined
+                    }
                     shouldStream={false}
                   />
                 </div>
@@ -771,6 +798,12 @@ function CaptureApp() {
   }
   if (scene === 'run-gauge') {
     return <RunGaugeScene />;
+  }
+  if (scene === 'run-gauge-reviewing') {
+    return <RunGaugeScene mode="reviewing" />;
+  }
+  if (scene === 'run-gauge-verifying') {
+    return <RunGaugeScene mode="verifying" />;
   }
   if (scene === 'run-gauge-rest') {
     return <RunGaugeScene mode="rest" />;

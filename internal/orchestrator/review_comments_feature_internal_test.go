@@ -33,7 +33,7 @@ const (
 	agenticPRURL    = "https://github.com/example/agentic/pull/1"
 )
 
-func TestAggregateReviewCommentTargetsSkipsNonThreadedComments(t *testing.T) {
+func TestAggregateReviewCommentTargetsIncludesEveryPRFeedbackType(t *testing.T) {
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
 	f := &feature.Feature{
@@ -69,8 +69,8 @@ func TestAggregateReviewCommentTargetsSkipsNonThreadedComments(t *testing.T) {
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
-	if len(targets[0].Comments) != 1 || targets[0].Comments[0].ID != 1 {
-		t.Fatalf("aggregated comments = %+v, want only inline review comment 1", targets[0].Comments)
+	if len(targets[0].Comments) != 3 {
+		t.Fatalf("aggregated comments = %+v, want all three PR feedback types", targets[0].Comments)
 	}
 }
 

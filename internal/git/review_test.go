@@ -15,6 +15,8 @@
 package git
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -127,6 +129,52 @@ func TestParsePaginatedCommentsWithType(t *testing.T) {
 	}
 	if comments[1].Type != "issue" {
 		t.Errorf("comment[1].Type = %q, want %q", comments[1].Type, "issue")
+	}
+}
+
+func TestFetchPRCommentsIncludesEveryPRFeedbackSurface(t *testing.T) {
+	binDir := t.TempDir()
+	ghPath := filepath.Join(binDir, "gh")
+	script := `#!/bin/sh
+case "$3" in
+  repos/example/repo/pulls/7/comments)
+    printf '%s\n' '[{"id":11,"path":"main.go","line":12,"body":"inline","user":{"login":"alice"},"created_at":"2026-07-07T10:00:00Z"}]'
+    ;;
+  repos/example/repo/issues/7/comments)
+    printf '%s\n' '[{"id":22,"body":"conversation","user":{"login":"bob"},"created_at":"2026-07-07T11:00:00Z"}]'
+    ;;
+  repos/example/repo/pulls/7/reviews)
+    printf '%s\n' '[{"id":33,"body":"review summary","user":{"login":"carol"},"submitted_at":"2026-07-07T12:00:00Z"}]'
+    ;;
+  *)
+    printf 'unexpected gh arguments: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	comments, err := FetchPRComments(t.TempDir(), "https://github.com/example/repo/pull/7")
+	if err != nil {
+		t.Fatalf("FetchPRComments() error = %v", err)
+	}
+	if len(comments) != 3 {
+		t.Fatalf("FetchPRComments() returned %d comments, want 3: %+v", len(comments), comments)
+	}
+	for i, want := range []struct {
+		id          int
+		commentType string
+	}{
+		{id: 11, commentType: CommentTypeReview},
+		{id: 22, commentType: CommentTypeIssue},
+		{id: 33, commentType: CommentTypeReviewBody},
+	} {
+		if comments[i].ID != want.id || comments[i].Type != want.commentType {
+			t.Fatalf("comments[%d] = %+v, want id=%d type=%s", i, comments[i], want.id, want.commentType)
+		}
 	}
 }
 

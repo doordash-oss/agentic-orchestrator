@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SessionSummary } from '../../../shared/ipc';
+import type { ModelCatalogue, SessionSummary } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { CurrentRunInspection } from './CurrentRunInspection';
 
@@ -364,6 +364,76 @@ describe('CurrentRunInspection', () => {
     await waitFor(() =>
       expect(onRunMetrics).toHaveBeenCalledWith({ totalSeconds: 3844, totalUsd: 21.62 }),
     );
+  });
+
+  it('renders required inspection data before optional model metadata resolves', async () => {
+    const mock = installAgenticoMock();
+    const canonicalModel = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';
+    let resolveCatalogue: ((catalogue: ModelCatalogue) => void) | undefined;
+    mock.api.getModelCatalogue.mockReturnValue(
+      new Promise<ModelCatalogue>((resolve) => {
+        resolveCatalogue = resolve;
+      }),
+    );
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running implementation',
+      contextPercentage: 21,
+      totalSeconds: 3844,
+      totalUsd: 21.62,
+      session: {
+        id: 'sess-impl',
+        featureId: 'abcd1234ef567890',
+        runNumber: 8,
+        phase: 'Implement',
+        kind: 'implement',
+        status: 'running',
+        startedAt: '2026-07-23T10:00:00Z',
+        model: canonicalModel,
+        usage: {},
+      },
+      transcript: [],
+    });
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 8,
+      artifactCount: 0,
+      timing: { totalSeconds: 3844, byPhase: { 'phase-5-impl': 760 } },
+      cost: { totalUsd: 21.62, byPhase: { 'phase-5-impl': 12.4 } },
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        currentRoadmapPhase={5}
+        featureStatus="Implementing"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    expect(await screen.findByText('Running implementation')).toBeVisible();
+    expect(screen.getByText('12m 40s')).toBeVisible();
+    expect(screen.getByText('$12.40')).toBeVisible();
+    expect(screen.getByText('glm-5p2[1.04M]')).toHaveAttribute('title', canonicalModel);
+    expect(screen.getByRole('button', { name: 'Run artifacts (0)' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Bounded logs (0)' })).toBeVisible();
+
+    await act(async () => {
+      resolveCatalogue?.({
+        providerOrder: ['opencode'],
+        providerModels: {
+          opencode: [{ id: canonicalModel, displayName: 'GLM 5.2 (1.04M)' }],
+        },
+        phaseDefaults: {},
+        phaseProviderModels: {},
+      });
+    });
+
+    expect(await screen.findByText('GLM 5.2 (1.04M)')).toHaveAttribute('title', canonicalModel);
+    expect(screen.queryByText('glm-5p2[1.04M]')).not.toBeInTheDocument();
   });
 
   it('sets final review apart from the last implementation phase', async () => {

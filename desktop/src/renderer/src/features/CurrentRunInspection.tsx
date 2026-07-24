@@ -200,6 +200,7 @@ export function CurrentRunInspection({
   const [artifactFullscreen, setArtifactFullscreen] = useState(false);
   const [view, setView] = useState<PreviewView>('conversation');
   const requestRef = useRef(0);
+  const catalogueRequestRef = useRef(0);
 
   const live = useCohortTranscripts(featureId, runNumber, currentPhase, shouldStream);
   const selectedSession = live.cohort.find((session) => session.id === live.selectedId) ?? null;
@@ -218,35 +219,45 @@ export function CurrentRunInspection({
     setFullscreen(true);
   }, [attentionRequestId]);
 
+  useEffect(() => {
+    const request = ++catalogueRequestRef.current;
+    void window.agentico
+      .getModelCatalogue()
+      .then((catalogue) => {
+        if (request === catalogueRequestRef.current) setModelCatalogue(catalogue);
+      })
+      .catch(() => undefined);
+    return () => {
+      catalogueRequestRef.current += 1;
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     const request = ++requestRef.current;
     setError(null);
     try {
-      const [nextPreview, nextArtifacts, logResult, nextRunDetail, nextModelCatalogue] =
-        await Promise.all([
-          window.agentico.getLivePreview(featureId),
-          window.agentico.listRunArtifacts({ featureId, runNumber }),
-          window.agentico
-            .listRunLogs({ featureId, runNumber })
-            .then((value) => ({ value, error: null }))
-            .catch((cause: unknown) => ({
-              value: { logs: [] as RunLogView[] },
-              error: parseIpcError(cause).message,
-            })),
-          // Per-phase timing/cost. Absent for runs without recorded detail; a
-          // failure must not blank the whole inspection, so it degrades to null.
-          runNumber >= 1
-            ? window.agentico.getRun({ featureId, runNumber }).catch(() => null)
-            : Promise.resolve(null),
-          window.agentico.getModelCatalogue().catch(() => null),
-        ]);
+      const [nextPreview, nextArtifacts, logResult, nextRunDetail] = await Promise.all([
+        window.agentico.getLivePreview(featureId),
+        window.agentico.listRunArtifacts({ featureId, runNumber }),
+        window.agentico
+          .listRunLogs({ featureId, runNumber })
+          .then((value) => ({ value, error: null }))
+          .catch((cause: unknown) => ({
+            value: { logs: [] as RunLogView[] },
+            error: parseIpcError(cause).message,
+          })),
+        // Per-phase timing/cost. Absent for runs without recorded detail; a
+        // failure must not blank the whole inspection, so it degrades to null.
+        runNumber >= 1
+          ? window.agentico.getRun({ featureId, runNumber }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
       if (request !== requestRef.current) return;
       setPreview(nextPreview);
       setArtifacts(orderRunArtifacts(nextArtifacts.artifacts));
       setLogs(logResult.value.logs);
       setLogListError(logResult.error);
       setRunDetail(nextRunDetail);
-      if (nextModelCatalogue !== null) setModelCatalogue(nextModelCatalogue);
       onRunMetrics?.(
         nextRunDetail === null
           ? { totalSeconds: nextPreview.totalSeconds, totalUsd: nextPreview.totalUsd }

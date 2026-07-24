@@ -165,11 +165,26 @@ describe('displayModelName', () => {
     expect(displayModelName(`opencode:${model}`, catalogue)).toBe('GLM 5.2 (1.04M)');
   });
 
-  it('falls back to the last readable path segment', () => {
+  it('preserves colon tags in bare model ids when display metadata is unavailable', () => {
     expect(
       displayModelName('portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]', null),
     ).toBe('glm-5p2[1.04M]');
+    expect(displayModelName('ollama/llama3.1:8b', null)).toBe('llama3.1:8b');
     expect(displayModelName('claude-sonnet-5', null)).toBe('claude-sonnet-5');
+  });
+
+  it('strips a provider prefix without stripping the canonical colon tag', () => {
+    const taggedCatalogue = {
+      providerOrder: ['opencode'],
+      providerModels: {
+        opencode: [{ id: 'ollama/llama3.1:8b', displayName: 'Llama 3.1 8B' }],
+      },
+      phaseDefaults: {},
+      phaseProviderModels: {},
+    };
+
+    expect(displayModelName('opencode:ollama/llama3.1:8b', taggedCatalogue)).toBe('Llama 3.1 8B');
+    expect(displayModelName('opencode:ollama/llama3.1:8b', null)).toBe('llama3.1:8b');
   });
 });
 

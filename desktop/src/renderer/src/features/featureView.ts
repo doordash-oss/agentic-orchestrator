@@ -284,7 +284,22 @@ export function displayModelName(model: string, catalogue: ModelCatalogue | null
     const match = models.find((entry) => model === entry.id || model === `${provider}:${entry.id}`);
     if (match?.displayName !== undefined && match.displayName !== '') return match.displayName;
   }
-  const canonical = model.includes(':') ? model.slice(model.indexOf(':') + 1) : model;
+
+  let canonical = model;
+  for (const provider of Object.keys(catalogue?.providerModels ?? {})) {
+    const prefix = `${provider}:`;
+    if (model.startsWith(prefix)) {
+      canonical = model.slice(prefix.length);
+      break;
+    }
+  }
+  if (canonical === model) {
+    const providerSeparator = model.indexOf(':');
+    const firstPathSeparator = model.indexOf('/');
+    if (providerSeparator > 0 && firstPathSeparator > providerSeparator) {
+      canonical = model.slice(providerSeparator + 1);
+    }
+  }
   return canonical.split('/').filter(Boolean).at(-1) ?? canonical;
 }
 

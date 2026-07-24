@@ -1563,6 +1563,44 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 	assertJSONDoesNotContain(t, result, "https://github.com/acme/repo-a/pull/12")
 }
 
+func TestServerMutationTargetPublishActionRecoversFailedPublish(t *testing.T) {
+	target, manager, store, f := newPublishActionTarget(t)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusFailed
+		ff.LastError = "commit failed: index.lock already exists"
+		ff.FailureType = feature.FailureInfrastructure
+		return nil
+	}); err != nil {
+		t.Fatalf("mark feature failed: %v", err)
+	}
+	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+		prURL := "https://github.com/acme/repo-a/pull/13"
+		if err := manager.SetRepoPublished(featureID, repoName, prURL); err != nil {
+			return "", err
+		}
+		return prURL, nil
+	})
+
+	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{testRepoAName}})
+	if err != nil {
+		t.Fatalf("PublishFeature() error = %v", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Status != feature.StatusPublished {
+		t.Fatalf("feature status = %s, want Published", updated.Status)
+	}
+	if updated.LastError != "" || updated.FailureType != "" {
+		t.Fatalf("terminal failure = (%q, %q), want cleared", updated.LastError, updated.FailureType)
+	}
+	if result.FeatureID != f.ID || result.Result != "published" {
+		t.Fatalf("PublishFeature() result = %+v; want published feature", result)
+	}
+}
+
 func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *testing.T) {
 	target, _, _, f := newPublishActionTarget(t)
 	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {

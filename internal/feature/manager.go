@@ -1901,7 +1901,29 @@ func (m *Manager) TryCompletePublish(featureID string) (bool, error) {
 	if !f.AllReposPublished() {
 		return false, nil
 	}
-	// Only transition if feature is at ReviewPassed or CodeReady
+	// A manual publish can successfully finish after an earlier Publish-phase
+	// failure. Recover that stale terminal state now that every touched repo
+	// has a PR, clearing the failure fields before entering a successful status.
+	if f.Status == StatusFailed && f.CurrentPhase == PhasePublish {
+		if err := m.Store.Modify(featureID, func(current *Feature) error {
+			if current.Status != StatusFailed || current.CurrentPhase != PhasePublish || !current.AllReposPublished() {
+				return nil
+			}
+			if err := current.Transition(StatusCodeReady); err != nil {
+				return err
+			}
+			current.LastError = ""
+			current.FailureType = ""
+			return nil
+		}); err != nil {
+			return false, err
+		}
+		f, err = m.Get(featureID)
+		if err != nil {
+			return false, err
+		}
+	}
+	// Only transition if feature is at ReviewPassed or CodeReady.
 	if f.Status != StatusReviewPassed && f.Status != StatusCodeReady {
 		return false, nil
 	}

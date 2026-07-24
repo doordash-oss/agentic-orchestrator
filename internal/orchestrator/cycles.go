@@ -673,14 +673,30 @@ func (o *Orchestrator) replyToSavedReviewComments(
 			reply = "Addressed"
 		}
 
-		if !isThreadedReviewComment(c) {
-			continue
-		}
-		if err := o.deps.Reviewer.ReplyToPRComment(repo.Path, prURL, c.ID, reply); err != nil {
-			replyErrs = append(replyErrs, fmt.Sprintf("comment %d: %v", c.ID, err))
-		} else {
-			addressedIDs = append(addressedIDs, c.ID)
-			addressedReviewComments[c.ID] = true
+		switch c.Type {
+		case ports.CommentTypeIssue:
+			body := fmt.Sprintf("Re: [comment](%s#issuecomment-%d) by @%s\n\n%s",
+				prURL, c.ID, c.User.Login, reply)
+			if err := o.deps.Reviewer.ReplyToIssueComment(repo.Path, prURL, body); err != nil {
+				replyErrs = append(replyErrs, fmt.Sprintf("issue comment %d: %v", c.ID, err))
+			} else {
+				addressedIDs = append(addressedIDs, c.ID)
+			}
+		case ports.CommentTypeReviewBody:
+			body := fmt.Sprintf("Re: [review](%s#pullrequestreview-%d) by @%s\n\n%s",
+				prURL, c.ID, c.User.Login, reply)
+			if err := o.deps.Reviewer.ReplyToIssueComment(repo.Path, prURL, body); err != nil {
+				replyErrs = append(replyErrs, fmt.Sprintf("review body %d: %v", c.ID, err))
+			} else {
+				addressedIDs = append(addressedIDs, c.ID)
+			}
+		default:
+			if err := o.deps.Reviewer.ReplyToPRComment(repo.Path, prURL, c.ID, reply); err != nil {
+				replyErrs = append(replyErrs, fmt.Sprintf("comment %d: %v", c.ID, err))
+			} else {
+				addressedIDs = append(addressedIDs, c.ID)
+				addressedReviewComments[c.ID] = true
+			}
 		}
 	}
 

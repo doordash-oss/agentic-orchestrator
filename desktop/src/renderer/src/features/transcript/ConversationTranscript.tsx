@@ -232,6 +232,7 @@ export function ConversationTranscript({
       }
       aria-label={ariaLabel}
       aria-live="polite"
+      tabIndex={0}
       onScroll={(event) => {
         const element = event.currentTarget;
         stickToBottom.current =

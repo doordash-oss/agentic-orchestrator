@@ -750,6 +750,108 @@ describe('FeatureCockpit convergence', () => {
       ).not.toBeInTheDocument(),
     );
   });
+
+  it('closes an open abort confirmation when the next gate becomes active', async () => {
+    installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      }),
+    });
+    const nextGate: AttentionItem = {
+      ...gateAttention,
+      id: `${FEATURE_ID}::next`,
+      summary: 'Choose the follow-up deployment window.',
+      questions: [
+        {
+          index: 1,
+          prompt: 'Which follow-up deployment window should implementation use?',
+          answer: '',
+        },
+      ],
+    };
+
+    function Harness() {
+      const [items, setItems] = useState<AttentionItem[]>([gateAttention, nextGate]);
+      const [drafts, setDrafts] = useState(emptyAttentionDrafts);
+      return (
+        <>
+          <button type="button" onClick={() => setItems([nextGate])}>
+            Advance attention
+          </button>
+          <FeatureCockpit
+            featureId={FEATURE_ID}
+            titleHint="Search revamp"
+            onClose={vi.fn()}
+            onLoadedName={vi.fn()}
+            attentionItems={items}
+            refreshAttention={() => Promise.resolve(items)}
+            attentionDrafts={drafts}
+            setAttentionDrafts={setDrafts}
+          />
+        </>
+      );
+    }
+
+    render(<Harness />);
+    const user = userEvent.setup();
+
+    const inspection = await screen.findByRole('region', { name: 'Current run inspection' });
+    const request = within(inspection).getByRole('region', { name: 'Agent request' });
+    await user.click(within(request).getByRole('button', { name: 'Abort gate' }));
+    expect(screen.getByRole('dialog', { name: 'Confirm abort' })).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Advance attention' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Confirm abort' })).not.toBeInTheDocument();
+    expect(
+      within(request).getByLabelText(/Which follow-up deployment window should implementation use/),
+    ).toBeVisible();
+  });
+
+  it('skips review items when selecting an embedded feature response', async () => {
+    installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Implementing',
+        currentPhase: 'Implement',
+        setup: { status: 'done', attempt: 1, tasks: [] },
+        actions: [],
+      }),
+    });
+    const reviewAttention: AttentionItem = {
+      kind: 'review',
+      id: `review:${FEATURE_ID}:4:plan:PhasePlanNeedsReview`,
+      featureId: FEATURE_ID,
+      waitingSince: '2026-07-15T10:00:00.000Z',
+      reviewKind: 'Phase plan',
+      phase: 'plan',
+    };
+
+    function Harness() {
+      const [drafts, setDrafts] = useState(emptyAttentionDrafts);
+      return (
+        <FeatureCockpit
+          featureId={FEATURE_ID}
+          titleHint="Search revamp"
+          onClose={vi.fn()}
+          onLoadedName={vi.fn()}
+          attentionItems={[reviewAttention, helpAttention]}
+          refreshAttention={() => Promise.resolve([reviewAttention, helpAttention])}
+          attentionDrafts={drafts}
+          setAttentionDrafts={setDrafts}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    const inspection = await screen.findByRole('region', { name: 'Current run inspection' });
+    const request = within(inspection).getByRole('region', { name: 'Agent request' });
+    expect(within(request).getByLabelText('Help reply')).toBeVisible();
+    expect(within(request).queryByRole('button', { name: 'Open review' })).not.toBeInTheDocument();
+  });
 });
 
 describe('FeatureCockpit Stop', () => {

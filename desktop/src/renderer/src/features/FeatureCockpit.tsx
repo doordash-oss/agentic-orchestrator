@@ -1225,7 +1225,7 @@ export function FeatureCockpit({
   };
 
   const visibleAttentionItems = attentionItems.filter(
-    (item) => !(hasPendingReview && item.kind === 'review'),
+    (item) => item.kind !== 'review',
   );
   const featureAttentionItems = visibleAttentionItems.filter(
     (item) => item.kind !== 'recovery' && item.featureId === featureId,
@@ -1598,6 +1598,7 @@ export function FeatureCockpit({
                       attentionFooter={
                         activeAttentionItem === undefined ? undefined : (
                           <AttentionDetail
+                            key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
                             item={activeAttentionItem}
                             busy={attentionBusy === activeAttentionItem.id}
                             drafts={attentionDrafts}

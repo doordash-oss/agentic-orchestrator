@@ -3565,8 +3565,8 @@ body {
 }
 
 .cockpit__surface--live .current-inspection {
-  flex: 1 0 auto;
-  min-height: 100%;
+  flex: 1 1 100%;
+  min-height: 0;
   margin-block: 0;
 }
 
@@ -8245,11 +8245,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  min-height: 320px;
   margin-block: var(--space-4);
   padding: var(--space-4);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--color-panel) 92%, var(--color-signal));
+}
+
+.current-inspection:has(.current-inspection__resource-content),
+.current-inspection:has(.current-inspection__content) {
+  flex-basis: auto;
+  min-height: 100%;
 }
 
 .current-inspection__preview {
@@ -8457,7 +8464,7 @@ body {
   display: grid;
   flex: 1 1 auto;
   grid-template-rows: auto minmax(0, 1fr);
-  min-height: 220px;
+  min-height: 96px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
   background: var(--color-bg);

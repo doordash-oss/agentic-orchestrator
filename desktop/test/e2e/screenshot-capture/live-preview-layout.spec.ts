@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 interface LayoutMeasurements {
   previewHeight: number;
+  transcriptClientHeight: number;
+  transcriptScrollHeight: number;
   surfaceClientHeight: number;
   surfaceScrollHeight: number;
   surfaceTop: number;
@@ -18,10 +20,12 @@ async function measureLayout(page: Page, height: number): Promise<LayoutMeasurem
   await expect(page.locator('.current-inspection__metrics')).toBeVisible();
   return page.evaluate(() => {
     const preview = document.querySelector('.live-preview__frame');
+    const transcript = document.querySelector('.conversation__scroll');
     const surface = document.querySelector('.cockpit__surface--live');
     const metrics = document.querySelector('.current-inspection__metrics');
     const resources = document.querySelector('.current-inspection__resources');
     if (!(preview instanceof HTMLElement)) throw new Error('live preview missing');
+    if (!(transcript instanceof HTMLElement)) throw new Error('transcript missing');
     if (!(surface instanceof HTMLElement)) throw new Error('live surface missing');
     if (!(metrics instanceof HTMLElement)) throw new Error('metrics missing');
     if (!(resources instanceof HTMLElement)) throw new Error('resources missing');
@@ -30,6 +34,8 @@ async function measureLayout(page: Page, height: number): Promise<LayoutMeasurem
     const resourcesRect = resources.getBoundingClientRect();
     return {
       previewHeight: preview.getBoundingClientRect().height,
+      transcriptClientHeight: transcript.clientHeight,
+      transcriptScrollHeight: transcript.scrollHeight,
       surfaceClientHeight: surface.clientHeight,
       surfaceScrollHeight: surface.scrollHeight,
       surfaceTop: surfaceRect.top,
@@ -45,16 +51,18 @@ async function measureLayout(page: Page, height: number): Promise<LayoutMeasurem
 test('live preview absorbs extra stage height without overflowing the live surface', async ({
   page,
 }) => {
+  const short = await measureLayout(page, 600);
   const compact = await measureLayout(page, 900);
   const tall = await measureLayout(page, 1200);
 
   expect(tall.previewHeight).toBeGreaterThan(compact.previewHeight + 200);
-  expect(tall.previewHeight).toBeGreaterThan(360);
-  for (const layout of [compact, tall]) {
+  expect(compact.previewHeight).toBeGreaterThan(short.previewHeight);
+  for (const layout of [short, compact, tall]) {
     expect(layout.surfaceScrollHeight).toBeLessThanOrEqual(layout.surfaceClientHeight);
     expect(layout.metricsTop).toBeGreaterThanOrEqual(layout.surfaceTop);
     expect(layout.metricsBottom).toBeLessThanOrEqual(layout.surfaceBottom);
     expect(layout.resourcesTop).toBeGreaterThanOrEqual(layout.surfaceTop);
     expect(layout.resourcesBottom).toBeLessThanOrEqual(layout.surfaceBottom);
+    expect(layout.transcriptScrollHeight).toBeGreaterThanOrEqual(layout.transcriptClientHeight);
   }
 });

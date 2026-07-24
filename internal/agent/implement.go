@@ -855,7 +855,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				// the implementer — with no per-iteration reviewer there is
 				// nobody else to act on a red harness report.
 				if harnessVerification != nil && len(harnessVerification.RegressionItems) > 0 {
-					meta.MadeProgress = pt.ObserveVerifiedOutcome(CountOpenVerificationOutcomeBlockers(harnessVerification))
+					meta.MadeProgress = observeVerifiedImplementationOutcome(pt, CountOpenVerificationOutcomeBlockers(harnessVerification), cfg)
 					meta.ReviewStatus = ReviewChangesRequested.String()
 					_ = am.WriteMeta(iterDir, meta)
 					_ = am.WriteSummary(summaryPath, meta)
@@ -874,7 +874,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
 					continue
 				}
-				meta.MadeProgress = pt.ObserveVerifiedOutcome(0)
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
 				meta.ReviewStatus = reviewStatusSkipped
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
@@ -976,7 +976,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			switch reviewStatus {
 			case ReviewApproved:
-				meta.MadeProgress = pt.ObserveVerifiedOutcome(0)
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
 				meta.ReviewStatus = reviewStatus.String()
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
@@ -987,7 +987,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Iterations:  i,
 				}, nil
 			case ReviewChangesRequested:
-				meta.MadeProgress = pt.ObserveVerifiedOutcome(CountBlockingReviewFindings(feedback) + CountOpenVerificationOutcomeBlockers(harnessVerification))
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, CountBlockingReviewFindings(feedback)+CountOpenVerificationOutcomeBlockers(harnessVerification), cfg)
 				meta.ReviewStatus = reviewStatus.String()
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
@@ -1189,6 +1189,11 @@ func retryReviewFeedbackReminder(artifactDir string, reviewedIter int) string {
 func retryProgressFingerprints(progressPath string, cfg ImplementConfig) (string, string) {
 	narrativeFP, _ := ProgressFingerprint(progressPath)
 	return narrativeFP, WorktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg))
+}
+
+func observeVerifiedImplementationOutcome(pt *ProgressTracker, blockers int, cfg ImplementConfig) bool {
+	worktreeFP := WorktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg))
+	return pt.ObserveVerifiedOutcomeWithWorktree(blockers, worktreeFP)
 }
 
 // implementWorktreePaths returns the repo paths whose git state evidences

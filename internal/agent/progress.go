@@ -73,6 +73,9 @@ type ProgressTracker struct {
 	noProgressCount int
 	hasOutcome      bool
 	bestBlockers    int
+	// Verified stall-evidence state: the last worktree fingerprint seen by
+	// ObserveVerifiedOutcomeWithWorktree.
+	lastVerifiedWorktree string
 	// RETRY stall-evidence state: the last handoff-narrative and worktree
 	// fingerprints seen by ObserveRetryOutcome.
 	hasRetryObservation bool
@@ -115,20 +118,36 @@ func (pt *ProgressTracker) NoProgressCount() int {
 	return pt.noProgressCount
 }
 
-// ObserveVerifiedOutcome records a deterministic outcome. Progress is credited
-// only when the verified blocker count reaches a new low; repeated narrative or
-// file churn without fewer blockers does not reset the safety rail.
+// ObserveVerifiedOutcome records a deterministic outcome when no repository
+// fingerprint is available. Progress is credited when the verified blocker
+// count reaches a new low.
 func (pt *ProgressTracker) ObserveVerifiedOutcome(blockers int) bool {
+	return pt.ObserveVerifiedOutcomeWithWorktree(blockers, "")
+}
+
+// ObserveVerifiedOutcomeWithWorktree records a deterministic verifier/reviewer
+// outcome together with the repository state that produced it. Fewer blockers
+// or a changed worktree is progress; an empty fingerprint cannot disarm the
+// safety rail.
+func (pt *ProgressTracker) ObserveVerifiedOutcomeWithWorktree(blockers int, worktreeFP string) bool {
 	if blockers < 0 {
 		blockers = 0
+	}
+	worktreeChanged := worktreeFP != "" &&
+		pt.lastVerifiedWorktree != "" &&
+		worktreeFP != pt.lastVerifiedWorktree
+	if worktreeFP != "" {
+		pt.lastVerifiedWorktree = worktreeFP
 	}
 	if !pt.hasOutcome {
 		pt.hasOutcome = true
 		pt.bestBlockers = blockers
 		return true
 	}
-	if blockers < pt.bestBlockers {
-		pt.bestBlockers = blockers
+	if blockers < pt.bestBlockers || worktreeChanged {
+		if blockers < pt.bestBlockers {
+			pt.bestBlockers = blockers
+		}
 		pt.noProgressCount = 0
 		return true
 	}

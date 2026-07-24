@@ -94,6 +94,26 @@ func TestProgressTracker(t *testing.T) {
 	}
 }
 
+func TestProgressTrackerVerifiedOutcomeCreditsWorktreeChanges(t *testing.T) {
+	pt := NewProgressTracker()
+
+	if !pt.ObserveVerifiedOutcomeWithWorktree(2, "worktree-v1") {
+		t.Fatal("first verified outcome should establish a progress baseline")
+	}
+	if !pt.ObserveVerifiedOutcomeWithWorktree(2, "worktree-v2") {
+		t.Fatal("changed worktree should count as progress when blocker count is unchanged")
+	}
+	if pt.NoProgressCount() != 0 {
+		t.Fatalf("NoProgressCount = %d, want reset to 0 after a worktree change", pt.NoProgressCount())
+	}
+	if pt.ObserveVerifiedOutcomeWithWorktree(2, "worktree-v2") {
+		t.Fatal("unchanged blocker count and worktree should not count as progress")
+	}
+	if pt.NoProgressCount() != 1 {
+		t.Fatalf("NoProgressCount = %d, want 1 after an unchanged verified outcome", pt.NoProgressCount())
+	}
+}
+
 func TestProgressTrackerRetryOutcome(t *testing.T) {
 	pt := NewProgressTracker()
 

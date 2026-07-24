@@ -1315,6 +1315,62 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 	}
 }
 
+func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("retry phase via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	planPath := filepath.Join(runtimeDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n\n## Tasks\n\n**Repo:** repo-a\n\n- Retry the implementation.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile plan: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusFailed
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.LastError = "no progress for 3 consecutive iterations"
+		ff.Artifacts = map[string]string{"plan": planPath}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+
+	var dispatched []string
+	orch := orchestrator.New(orchestrator.Deps{
+		Lifecycle: manager,
+		Store:     store,
+	}, orchestrator.Hooks{})
+	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		dispatched = append(dispatched, f.ID+":"+planPath)
+		ch := make(chan *agent.OrchestratorResult)
+		close(ch)
+		return ch, nil
+	})
+	target := serverMutationTarget{orch: orch, store: store}
+
+	result, err := target.RetryFeature(f.ID)
+	if err != nil {
+		t.Fatalf("RetryFeature() error = %v", err)
+	}
+	if len(dispatched) != 1 || dispatched[0] != f.ID+":"+planPath {
+		t.Fatalf("phase dispatches = %v, want one implementation dispatch with plan path", dispatched)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load retried feature: %v", err)
+	}
+	if updated.Status != feature.StatusImplementing || updated.CurrentPhase != feature.PhaseImplement {
+		t.Fatalf("retried feature status/phase = %s/%s, want Implementing/Implement", updated.Status, updated.CurrentPhase)
+	}
+	if result.FeatureID != f.ID || result.Result != resultRetried {
+		t.Fatalf("RetryFeature() result = %+v, want retried feature", result)
+	}
+}
+
 func TestServerMutationTargetReviewDecisionRewindProceedsFromExistingRewind(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()

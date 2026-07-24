@@ -46,9 +46,14 @@ export class AttentionService {
       this.get('/api/v1/permissions', PermissionSnapshotResponseSchema),
       this.get('/api/v1/features', FeatureListResponseSchema),
     ]);
+    const featureIDs = new Set(featuresRaw.features.map((feature) => feature.id));
+    const hasListedFeature = (featureID: string | undefined): boolean =>
+      featureID === undefined || featureIDs.has(featureID);
+    const hasRequiredListedFeature = (featureID: string | undefined): featureID is string =>
+      featureID !== undefined && featureIDs.has(featureID);
     const items: AttentionItem[] = [
       ...permissionsRaw.requests
-        .filter((request) => request.status === 'pending')
+        .filter((request) => request.status === 'pending' && hasListedFeature(request.feature_id))
         .map((request) => ({
           kind: 'permission' as const,
           id: request.request_id,
@@ -70,7 +75,12 @@ export class AttentionService {
               }),
         })),
       ...promptsRaw.ask_user_questions
-        .filter((request) => request.status === 'pending' && (request.questions?.length ?? 0) > 0)
+        .filter(
+          (request) =>
+            request.status === 'pending' &&
+            (request.questions?.length ?? 0) > 0 &&
+            hasListedFeature(request.feature_id),
+        )
         .map((request) => ({
           kind: 'questions' as const,
           id: request.request_id,
@@ -98,7 +108,7 @@ export class AttentionService {
           })),
         })),
       ...promptsRaw.help_queue
-        .filter((help) => help.pending)
+        .filter((help) => help.pending && hasRequiredListedFeature(help.feature_id))
         .map((help) => ({
           kind: 'help' as const,
           id: `${help.feature_id}:${help.session_id ?? ''}`,
@@ -108,7 +118,7 @@ export class AttentionService {
           prompt: help.question,
         })),
       ...promptsRaw.need_user_inputs
-        .filter((gate) => gate.open && gate.feature_id !== undefined)
+        .filter((gate) => gate.open && hasRequiredListedFeature(gate.feature_id))
         .map((gate) => ({
           kind: 'gate' as const,
           id: `${gate.feature_id}:${gate.repo_name ?? ''}:${gate.cycle_type ?? ''}`,

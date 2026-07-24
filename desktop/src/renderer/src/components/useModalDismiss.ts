@@ -22,8 +22,8 @@ export function useModalDismiss(
     (focusable()[0] ?? node)?.focus();
 
     const onKey = (event: KeyboardEvent): void => {
+      if (node?.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
       if (event.key === 'Escape') {
-        if (node?.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
         event.preventDefault();
         onClose();
         return;

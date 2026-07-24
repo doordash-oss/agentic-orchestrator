@@ -20,6 +20,22 @@ it('dismisses only the nested modal on the first Escape', async () => {
   expect(outerClosed).not.toHaveBeenCalled();
 });
 
+it('wraps Tab focus within the nested modal while the outer modal stays open', () => {
+  render(<OuterFirstFocusTrapHarness />);
+  const first = screen.getByRole('button', { name: 'Nested first action' });
+  const last = screen.getByRole('button', { name: 'Nested last action' });
+
+  last.focus();
+  fireEvent.keyDown(window, { key: 'Tab' });
+  expect(first).toHaveFocus();
+  expect(screen.getByRole('dialog', { name: 'Outer dialog' })).toBeVisible();
+
+  first.focus();
+  fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+  expect(last).toHaveFocus();
+  expect(screen.getByRole('dialog', { name: 'Outer dialog' })).toBeVisible();
+});
+
 it('wraps Tab focus within the active modal', () => {
   render(<FocusTrapHarness />);
   const first = screen.getByRole('button', { name: 'First action' });
@@ -83,5 +99,23 @@ function FocusTrapHarness() {
       <button type="button">First action</button>
       <button type="button">Last action</button>
     </div>
+  );
+}
+
+function OuterFirstFocusTrapHarness() {
+  const outerRef = useRef<HTMLElement>(null);
+  const nestedRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => undefined, []);
+  useModalDismiss(outerRef, close);
+  useModalDismiss(nestedRef, close);
+
+  return (
+    <section ref={outerRef} role="dialog" aria-modal="true" aria-label="Outer dialog" tabIndex={-1}>
+      <button type="button">Outer action</button>
+      <div ref={nestedRef} role="dialog" aria-modal="true" aria-label="Nested dialog" tabIndex={-1}>
+        <button type="button">Nested first action</button>
+        <button type="button">Nested last action</button>
+      </div>
+    </section>
   );
 }

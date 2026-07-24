@@ -260,11 +260,66 @@ describe('FeatureCockpit snapshot rendering', () => {
     const tablist = await screen.findByRole('tablist', { name: 'Stage view' });
     const documentTab = within(tablist).getByRole('tab', { name: 'Document' });
     const liveTab = within(tablist).getByRole('tab', { name: /Live activity/ });
+    expect(within(tablist).queryByRole('tab', { name: 'Aftercare' })).not.toBeInTheDocument();
     expect(documentTab).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('region', { name: 'Review editor' })).toBeInTheDocument();
 
     await user.click(liveTab);
     expect(liveTab).toHaveAttribute('aria-selected', 'true');
+    expect(
+      await screen.findByRole('region', { name: 'Current run inspection' }),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ['CodeReady', 'Implementation complete'],
+    ['Published', 'Published and ready for what comes next'],
+    ['Done', 'Work complete'],
+  ])('defaults %s features to Aftercare while retaining Run record', async (status, heading) => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status,
+        activeRun: 8,
+        actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 8,
+      artifactCount: 5,
+      timing: { totalSeconds: 14700, byPhase: {} },
+      cost: { totalUsd: 95.18, byPhase: {} },
+    });
+    renderCockpit(mock);
+
+    const tablist = await screen.findByRole('tablist', { name: 'Stage view' });
+    const aftercareTab = within(tablist).getByRole('tab', { name: 'Aftercare' });
+    const runRecordTab = within(tablist).getByRole('tab', { name: 'Run record' });
+    expect(aftercareTab).toHaveAttribute('aria-selected', 'true');
+    expect(runRecordTab).toHaveAttribute('aria-selected', 'false');
+    expect(within(tablist).queryByRole('tab', { name: 'Live activity' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: heading })).toBeVisible();
+    await waitFor(() =>
+      expect(mock.api.getRun).toHaveBeenCalledWith({ featureId: FEATURE_ID, runNumber: 8 }),
+    );
+  });
+
+  it('opens the completed transcript from Run record', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        activeRun: 8,
+        actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 8,
+      artifactCount: 1,
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('tab', { name: 'Run record' }));
+
     expect(
       await screen.findByRole('region', { name: 'Current run inspection' }),
     ).toBeInTheDocument();

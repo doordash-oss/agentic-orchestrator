@@ -32,6 +32,8 @@ import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { RepositoryInstrument } from './RepositoryInstrument';
 import { CycleJourneys } from './CycleJourneys';
+import { AftercareDesk } from './AftercareDesk';
+import type { AftercareCycleId } from './aftercareModel';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
 import {
   completionBarModel,
@@ -884,7 +886,11 @@ export function FeatureCockpit({
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
-  const [activeSurface, setActiveSurface] = useState<'document' | 'live' | 'changes'>('document');
+  const [aftercareRun, setAftercareRun] = useState<RunDetailView | null>(null);
+  const [initialCycle, setInitialCycle] = useState<AftercareCycleId | undefined>();
+  const [activeSurface, setActiveSurface] = useState<
+    'aftercare' | 'document' | 'live' | 'changes'
+  >('document');
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
     run: RunDetailView | null;
@@ -986,6 +992,32 @@ export function FeatureCockpit({
       unsubscribe();
     };
   }, [featureId, load, selectedRunNumber]);
+
+  useEffect(() => {
+    if (state.phase !== 'loaded' || !isRunAtRest(state.snapshot.status)) {
+      setAftercareRun(null);
+      return;
+    }
+    let current = true;
+    void window.agentico
+      .getRun({ featureId, runNumber: state.snapshot.activeRun })
+      .then((run) => {
+        if (!current) return;
+        setAftercareRun(run);
+        if (run.timing !== undefined && run.cost !== undefined) {
+          setRunMetrics({
+            totalSeconds: run.timing.totalSeconds,
+            totalUsd: run.cost.totalUsd,
+          });
+        }
+      })
+      .catch(() => {
+        if (current) setAftercareRun(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [featureId, state]);
 
   useEffect(() => {
     if (selectedRunNumber === undefined || selectedRunNumber === null || selectedRunNumber <= 0) {
@@ -1305,19 +1337,25 @@ export function FeatureCockpit({
       });
   };
 
-  // The stage carries at most one surface at a time. A pending review owns the
-  // document; a run beyond setup owns live activity; when both exist the stage
-  // shows a tab strip. An active attention preview forces the live surface so
-  // its dialog is on stage.
+  // The stage carries at most one surface at a time. At-rest runs land on
+  // Aftercare and retain their transcript as Run record; active work keeps its
+  // live surface. An attention preview always forces the live surface.
+  const atRest = isRunAtRest(snapshot.status);
   const documentAvailable = hasPendingReview;
   const liveAvailable = showsRun(snapshot);
-  const stageSurfaces: { id: 'document' | 'live' | 'changes'; label: string }[] = [];
+  const stageSurfaces: {
+    id: 'aftercare' | 'document' | 'live' | 'changes';
+    label: string;
+  }[] = [];
+  if (atRest) stageSurfaces.push({ id: 'aftercare', label: 'Aftercare' });
   if (documentAvailable) stageSurfaces.push({ id: 'document', label: 'Document' });
-  if (liveAvailable) stageSurfaces.push({ id: 'live', label: 'Live activity' });
+  if (liveAvailable) {
+    stageSurfaces.push({ id: 'live', label: atRest ? 'Run record' : 'Live activity' });
+  }
   if (completionEnabled) stageSurfaces.push({ id: 'changes', label: 'Changes' });
   const surfaceIds = stageSurfaces.map((surface) => surface.id);
   const forcedLive = attentionPreviewRequest?.attentionId !== undefined && liveAvailable;
-  const resolvedSurface: 'document' | 'live' | 'changes' | null = forcedLive
+  const resolvedSurface: 'aftercare' | 'document' | 'live' | 'changes' | null = forcedLive
     ? 'live'
     : surfaceIds.includes(activeSurface)
       ? activeSurface
@@ -1422,7 +1460,10 @@ export function FeatureCockpit({
       label: 'Cycles',
       ariaLabel: 'Repository cycles',
       enabled: true,
-      onClick: () => setCyclesDialog(true),
+      onClick: () => {
+        setInitialCycle(undefined);
+        setCyclesDialog(true);
+      },
     });
   }
   if (rewindAction?.enabled === true) {
@@ -1597,6 +1638,19 @@ export function FeatureCockpit({
                     <ReviewSurface
                       featureId={featureId}
                       onResolved={() => load({ silent: true })}
+                    />
+                  </div>
+                ) : null}
+
+                {resolvedSurface === 'aftercare' ? (
+                  <div className="cockpit__surface cockpit__surface--aftercare">
+                    <AftercareDesk
+                      snapshot={snapshot}
+                      run={aftercareRun}
+                      onOpenCycle={(cycle) => {
+                        setInitialCycle(cycle);
+                        setCyclesDialog(true);
+                      }}
                     />
                   </div>
                 ) : null}
@@ -1783,11 +1837,15 @@ export function FeatureCockpit({
             <CockpitModal
               title="Repository cycles"
               ariaLabel="Repository cycles"
-              onClose={() => setCyclesDialog(false)}
+              onClose={() => {
+                setCyclesDialog(false);
+                setInitialCycle(undefined);
+              }}
             >
               <CycleJourneys
                 featureId={featureId}
                 snapshot={snapshot}
+                initialCycle={initialCycle}
                 onComplete={() => load({ silent: true })}
                 attentionItems={attentionItems}
                 onOpenGate={() => setCyclesDialog(false)}
@@ -1827,6 +1885,7 @@ export function FeatureCockpit({
                 onDispatched={onCompletionDispatched}
                 onHandoffToRebase={() => {
                   setCompletionModal(null);
+                  setInitialCycle('rebase');
                   setCyclesDialog(true);
                 }}
               />

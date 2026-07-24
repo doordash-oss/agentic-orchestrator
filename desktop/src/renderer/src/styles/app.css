@@ -7702,12 +7702,21 @@ body {
   border-color: var(--color-danger);
 }
 
+.cycle-journey[data-featured='true'] {
+  border-color: var(--color-signal);
+  box-shadow: inset 3px 0 0 var(--color-signal);
+}
+
 .cycle-journey__title {
   margin: 0;
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 15px;
   letter-spacing: 0.02em;
+}
+
+.cycle-journey__title:focus {
+  outline: none;
 }
 
 .cycle-journey__description {

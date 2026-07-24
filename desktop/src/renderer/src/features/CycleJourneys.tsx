@@ -4,7 +4,7 @@
  * Each journey confirms scope and impact before dispatch, shows per-repo
  * progress, and resolves NEED_USER_INPUT through the existing attention surface.
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import type {
   AttentionItem,
@@ -16,6 +16,7 @@ import type {
   ReviewCommentsStartResult,
   RefactorResult,
 } from '../../../shared/ipc';
+import type { AftercareCycleId } from './aftercareModel';
 
 type CyclePhase = 'idle' | 'dispatching' | 'active' | 'error';
 
@@ -72,6 +73,7 @@ export interface CycleJourneysProps {
   featureId: string;
   snapshot: FeatureSnapshot;
   onComplete: () => void;
+  initialCycle?: AftercareCycleId;
   attentionItems?: AttentionItem[];
   onOpenGate?: (featureId: string) => void;
 }
@@ -80,9 +82,11 @@ export function CycleJourneys({
   featureId,
   snapshot,
   onComplete,
+  initialCycle,
   attentionItems = [],
   onOpenGate,
 }: CycleJourneysProps) {
+  const featuredHeadingRef = useRef<HTMLHeadingElement>(null);
   const rebaseAction = snapshot.actions.find((a) => a.id === 'rebase');
   const reviewCommentsAction = snapshot.actions.find((a) => a.id === 'review-comments');
   const refactorAction = snapshot.actions.find((a) => a.id === 'refactor');
@@ -224,6 +228,10 @@ export function CycleJourneys({
   const pipelineOptions =
     refactorAction?.inputs?.find((input) => input.name === 'pipeline')?.options ?? [];
 
+  useEffect(() => {
+    if (initialCycle !== undefined) featuredHeadingRef.current?.focus();
+  }, [initialCycle]);
+
   return (
     <section className="cockpit__cycles" aria-label="Repository cycles">
       {hasCycleGate ? (
@@ -251,8 +259,20 @@ export function CycleJourneys({
         </div>
       ) : null}
       {canRebase ? (
-        <div className="cycle-journey cycle-journey--rebase" data-phase={rebaseState.phase}>
-          <h4 className="cycle-journey__title">Rebase</h4>
+        <div
+          role="region"
+          aria-label="Rebase cycle"
+          className="cycle-journey cycle-journey--rebase"
+          data-phase={rebaseState.phase}
+          data-featured={initialCycle === 'rebase'}
+        >
+          <h4
+            ref={initialCycle === 'rebase' ? featuredHeadingRef : undefined}
+            className="cycle-journey__title"
+            tabIndex={-1}
+          >
+            Rebase
+          </h4>
           <p className="cycle-journey__description">
             Rebase every repository onto its target branch with a fresh guarded preflight.
           </p>
@@ -348,10 +368,19 @@ export function CycleJourneys({
 
       {canReviewComments ? (
         <div
+          role="region"
+          aria-label="Review comments cycle"
           className="cycle-journey cycle-journey--review-comments"
           data-phase={reviewState.phase}
+          data-featured={initialCycle === 'review-comments'}
         >
-          <h4 className="cycle-journey__title">Review comments</h4>
+          <h4
+            ref={initialCycle === 'review-comments' ? featuredHeadingRef : undefined}
+            className="cycle-journey__title"
+            tabIndex={-1}
+          >
+            Review comments
+          </h4>
           <p className="cycle-journey__description">
             Select a repository, fetch its current review comments, inspect the bounded preview, and
             confirm the exact scope before start.
@@ -472,8 +501,20 @@ export function CycleJourneys({
       ) : null}
 
       {canRefactor ? (
-        <div className="cycle-journey cycle-journey--refactor" data-phase={refactorState.phase}>
-          <h4 className="cycle-journey__title">Refactor</h4>
+        <div
+          role="region"
+          aria-label="Refactor cycle"
+          className="cycle-journey cycle-journey--refactor"
+          data-phase={refactorState.phase}
+          data-featured={initialCycle === 'refactor'}
+        >
+          <h4
+            ref={initialCycle === 'refactor' ? featuredHeadingRef : undefined}
+            className="cycle-journey__title"
+            tabIndex={-1}
+          >
+            Refactor
+          </h4>
           <p className="cycle-journey__description">
             Requires an explicit single-repository or all-repositories choice, a prompt, and
             optional pipeline. All-repositories resolves to named repositories before confirmation.

@@ -90,6 +90,7 @@ export function WorkspaceShell({
   } | null>(null);
   const handledRouteRequest = useRef<number | null>(null);
   const listRequestRef = useRef(0);
+  const homeActiveRef = useRef(false);
   const [view, setView] = useState<'home' | 'create'>('home');
   const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
 
@@ -150,6 +151,23 @@ export function WorkspaceShell({
         loadList();
       }
     });
+  }, [loadList]);
+
+  // Out-of-band changes (a delete from another window, the CLI, or a missed
+  // invalidation) can leave the queue stale. Refetch when the app regains focus
+  // while Home is showing, so returning to the window always shows server truth.
+  useEffect(() => {
+    const refreshHome = () => {
+      if (document.visibilityState === 'visible' && homeActiveRef.current) {
+        loadList();
+      }
+    };
+    window.addEventListener('focus', refreshHome);
+    document.addEventListener('visibilitychange', refreshHome);
+    return () => {
+      window.removeEventListener('focus', refreshHome);
+      document.removeEventListener('visibilitychange', refreshHome);
+    };
   }, [loadList]);
 
   /** Persist failures never block the UI — tabs are presentation only. */
@@ -348,6 +366,8 @@ export function WorkspaceShell({
   const isSettingsActive = activeId === SETTINGS_TAB_ID;
   const activeIsOpen = activeId !== null && tabs.open.some((tab) => tab.featureId === activeId);
   const active = isSettingsActive ? SETTINGS_TAB_ID : activeIsOpen ? activeId : null;
+  // Read by the focus/visibility refresh so it only refetches when Home is shown.
+  homeActiveRef.current = active === null && view !== 'create';
   const tabCount = tabs.open.length + 2;
 
   const focusTab = (index: number): void => {

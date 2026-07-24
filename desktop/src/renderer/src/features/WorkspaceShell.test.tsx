@@ -172,6 +172,43 @@ describe('WorkspaceShell tabs', () => {
     expect(within(doneGroup).getByText('MCP server')).toBeInTheDocument();
   });
 
+  it('refetches the Home queue when the window regains focus', async () => {
+    const present = featureSnapshot({
+      id: FEATURE_ID,
+      name: 'translate README to Italian',
+      status: 'Interrupted',
+      currentPhase: 'Publish',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+    });
+    const mock = installAgenticoMock({
+      features: [
+        {
+          id: present.id,
+          name: present.name,
+          status: present.status,
+          currentPhase: present.currentPhase,
+          repos: present.repos,
+          createdAt: present.createdAt,
+          activeRun: present.activeRun,
+          runCount: 1,
+          warnings: [],
+        },
+      ],
+    });
+    mock.api.getFeature.mockResolvedValue(present);
+
+    render(<WorkspaceShell />);
+    expect(await screen.findByText('translate README to Italian')).toBeInTheDocument();
+
+    // Deleted out of band: the next list fetch no longer returns it.
+    mock.api.listFeatures.mockResolvedValue([]);
+    window.dispatchEvent(new Event('focus'));
+
+    await waitFor(() =>
+      expect(screen.queryByText('translate README to Italian')).not.toBeInTheDocument(),
+    );
+  });
+
   it('opens a persistent tab after creation and stores only identity/presentation', async () => {
     const mock = installAgenticoMock();
     render(<WorkspaceShell />);

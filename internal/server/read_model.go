@@ -144,6 +144,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		gate := needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
 		detail.NeedUserInput = &gate
 	}
+	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
 	return detail
 }
 

@@ -103,16 +103,30 @@ type ImplementConfig struct {
 	// EffortLevel is the pipeline-driven effort level passed to providers.
 	EffortLevel llm.EffortLevel
 
-	// EffectiveEffort is the resolved provider-safe effort level for this
-	// launch. When non-empty, it overrides EffortLevel in BuildSessionOpts so
-	// the provider command receives the capability-resolved level rather than
-	// the raw pipeline level. Empty means no effort resolution was performed
-	// (tests, legacy callers) and EffortLevel is used directly.
+	// EffectiveEffort is the resolved provider-safe effort level for the
+	// implementation agent sessions. When non-empty, it overrides EffortLevel
+	// in BuildSessionOpts so the provider command receives the
+	// capability-resolved level rather than the raw pipeline level. Empty
+	// means no effort resolution was performed (tests, legacy callers) and
+	// EffortLevel is used directly.
 	EffectiveEffort llm.EffortLevel
 	// EffortSource records whether EffectiveEffort was derived from the
 	// pipeline (auto) or an explicit user configuration (explicit). Stored on
 	// the session and emitted in session.started for tracing.
 	EffortSource llm.EffortSource
+
+	// ReviewEffectiveEffort is the resolved Review-role effort for the
+	// per-iteration implementation review axes. Review axes select the
+	// configured Review model, so their effort is coupled to the Review role
+	// rather than the Implementation role. When non-empty, it overrides the
+	// implementation effort in the review helper's BuildSessionOpts and is
+	// recorded on the session for observability. Empty means no Review effort
+	// resolution was performed and the implementation effort is used as
+	// fallback.
+	ReviewEffectiveEffort llm.EffortLevel
+	// ReviewEffortSource records whether ReviewEffectiveEffort was
+	// auto-derived or explicitly configured.
+	ReviewEffortSource llm.EffortSource
 
 	// SkillsDir is the path to the reconciled skills directory on disk.
 	SkillsDir string
@@ -1069,6 +1083,10 @@ func startCrashResumeSession(cfg ImplementConfig, sm ports.SessionManager, build
 		return nil, nil, fmt.Errorf("building crash-resume session: %w", err)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.EffectiveEffort != "" {
+		sessOpts.EffectiveEffort = cfg.EffectiveEffort
+		sessOpts.EffortSource = cfg.EffortSource
+	}
 	if cfg.FinishOrViolateNudge {
 		sessOpts.TurnMode = ports.TurnModeInteractive
 	}

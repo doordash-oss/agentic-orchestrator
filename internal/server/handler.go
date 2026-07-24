@@ -206,7 +206,9 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 	}
 	summaries := make([]FeatureSummary, 0, len(features))
 	for _, f := range features {
-		summaries = append(summaries, summarizeFeature(f))
+		summary := summarizeFeature(f)
+		summary.Warnings = append(summary.Warnings, effortDriftWarnings(f, h.registry)...)
+		summaries = append(summaries, summary)
 	}
 	revision := revisionForAny(struct {
 		Features []FeatureSummary

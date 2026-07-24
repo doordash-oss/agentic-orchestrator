@@ -140,9 +140,22 @@ func (pr *PhaseRunner) EffortCapabilitiesForModel(model string) []llm.EffortLeve
 // model) falls back to the pipeline level (or low for Utilities) with a
 // runtime warning and does not mutate persisted state.
 func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRole, model string) (llm.EffortLevel, llm.EffortSource) {
+	return pr.resolveEffortForRoleWithPipeline(f, role, model, "")
+}
+
+// resolveEffortForRoleWithPipeline is the shared resolver for both primary and
+// secondary session launches. When pipelineOverride is a valid PipelineProfile,
+// it supplies the Auto baseline for this launch only — used by refactor
+// requests whose temporary pipeline differs from the feature's configured
+// pipeline. An empty pipelineOverride falls back to f.EffectivePipeline().
+// Explicit role values are always preserved regardless of the Auto baseline.
+func (pr *PhaseRunner) resolveEffortForRoleWithPipeline(f *feature.Feature, role llm.PhaseRole, model string, pipelineOverride feature.PipelineProfile) (llm.EffortLevel, llm.EffortSource) {
 	field := llm.ConfigFieldForRole(role)
 	configured := config.EffortConfigFieldByName(f.Effort, field)
 	pipelineEffort := f.EffectivePipeline().EffortLevel()
+	if pipelineOverride.IsValid() {
+		pipelineEffort = pipelineOverride.EffortLevel()
+	}
 
 	if role == llm.PhaseChat && (configured == "" || configured == "auto") {
 		return llm.EffortLow, llm.EffortSourceAuto
@@ -155,6 +168,21 @@ func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRo
 			strings.ToLower(field), configured, model, string(pipelineEffort))
 	}
 	return effectiveEffort, effortSource
+}
+
+// ResolveSecondaryEffort is the exported entry point for secondary session
+// launches (validators, review helpers, fix agents, cycle workers, utility
+// helpers). It resolves the effective effort and source from the same
+// configured role as the selected model: Planning for planning agents, Review
+// for validators and review axes, Implementation for implementation and fix
+// workers, and Utilities for utility helpers. When pipelineOverride is a
+// valid PipelineProfile, it supplies the Auto baseline for this launch only
+// (used by refactor requests); an empty value falls back to the feature's
+// effective pipeline. Capability drift projects the affected role as Auto,
+// omits unsupported provider arguments, and emits a runtime warning through
+// the standard log channel without mutating persisted state.
+func (pr *PhaseRunner) ResolveSecondaryEffort(f *feature.Feature, role llm.PhaseRole, model string, pipelineOverride feature.PipelineProfile) (llm.EffortLevel, llm.EffortSource) {
+	return pr.resolveEffortForRoleWithPipeline(f, role, model, pipelineOverride)
 }
 
 // logRuntimeWarning emits a warning through the standard logger channel.
@@ -616,6 +644,8 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 
 	planningModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
 	planEffort, planEffortSource := pr.resolveEffortForRole(f, llm.PhasePlanning, planningModel)
+	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
+	validatorEffort, validatorEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 	cfg := PlanLoopConfig{
 		Feature:                      f,
 		FeatureStore:                 pr.FeatureStore,
@@ -636,6 +666,8 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		EffortLevel:                  f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:              planEffort,
 		EffortSource:                 planEffortSource,
+		ValidatorEffectiveEffort:     validatorEffort,
+		ValidatorEffortSource:        validatorEffortSource,
 		SkillsDir:                    pr.SkillsDir,
 		GuidelinesDir:                pr.GuidelinesDir,
 		FinishOrViolateNudge:         pr.finishOrViolateNudgeForModel(planningModel),
@@ -683,6 +715,8 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 
 	phasePlanModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
 	phasePlanEffort, phasePlanEffortSource := pr.resolveEffortForRole(f, llm.PhasePlanning, phasePlanModel)
+	phaseValidatorModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
+	phaseValidatorEffort, phaseValidatorEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, phaseValidatorModel)
 	cfg := PhasePlanLoopConfig{
 		PlanLoopConfig: PlanLoopConfig{
 			Feature:                      f,
@@ -703,6 +737,8 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			EffortLevel:                  f.EffectivePipeline().EffortLevel(),
 			EffectiveEffort:              phasePlanEffort,
 			EffortSource:                 phasePlanEffortSource,
+			ValidatorEffectiveEffort:     phaseValidatorEffort,
+			ValidatorEffortSource:        phaseValidatorEffortSource,
 			SkillsDir:                    pr.SkillsDir,
 			GuidelinesDir:                pr.GuidelinesDir,
 			FinishOrViolateNudge:         pr.finishOrViolateNudgeForModel(phasePlanModel),
@@ -754,6 +790,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		pr.logRuntimeWarning(f, "implementation effort %q is not supported by model %q; falling back to Auto (%s)",
 			f.Effort.Implementation, implementationModel, string(pipelineEffort))
 	}
+	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 
 	// Cycles (rebase, review-comments) operate on the whole branch,
 	// not a specific roadmap phase — omit roadmap/phase-type context so the
@@ -791,6 +828,8 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		EffortLevel:                pipelineEffort,
 		EffectiveEffort:            effectiveEffort,
 		EffortSource:               effortSource,
+		ReviewEffectiveEffort:      reviewEffort,
+		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
@@ -832,6 +871,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 	implementationModel := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
 	cycleReviewEffort, cycleReviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
+	cycleImplEffort, cycleImplEffortSource := pr.resolveEffortForRole(f, llm.PhaseImplementation, implementationModel)
 
 	cfg := OrchestratorConfig{
 		Feature:                    f,
@@ -851,6 +891,10 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            cycleReviewEffort,
 		EffortSource:               cycleReviewEffortSource,
+		ImplEffectiveEffort:        cycleImplEffort,
+		ImplEffortSource:           cycleImplEffortSource,
+		ReviewEffectiveEffort:      cycleReviewEffort,
+		ReviewEffortSource:         cycleReviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(implementationModel),
@@ -896,6 +940,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 	model := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
 	implEffort, implEffortSource := pr.resolveEffortForRole(f, llm.PhaseImplementation, model)
+	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 
 	cfg := OrchestratorConfig{
 		Feature:                    f,
@@ -917,6 +962,10 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            implEffort,
 		EffortSource:               implEffortSource,
+		ImplEffectiveEffort:        implEffort,
+		ImplEffortSource:           implEffortSource,
+		ReviewEffectiveEffort:      reviewEffort,
+		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
@@ -954,6 +1003,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 	model := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
 	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
+	implEffort, implEffortSource := pr.resolveEffortForRole(f, llm.PhaseImplementation, model)
 
 	cfg := OrchestratorConfig{
 		Feature:                    f,
@@ -974,6 +1024,10 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            reviewEffort,
 		EffortSource:               reviewEffortSource,
+		ImplEffectiveEffort:        implEffort,
+		ImplEffortSource:           implEffortSource,
+		ReviewEffectiveEffort:      reviewEffort,
+		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),

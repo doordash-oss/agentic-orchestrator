@@ -30,6 +30,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
 // RefactorEvidence carries user-provided visual and file references captured
@@ -141,6 +142,9 @@ func (o *Orchestrator) startFeatureRefactor(
 	if evidence.Pipeline.IsValid() {
 		refactorPipeline = evidence.Pipeline
 	}
+	planningEffort, planningEffortSource := pr.ResolveSecondaryEffort(f, llm.PhasePlanning, f.Models.Planning, refactorPipeline)
+	implEffort, implEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseImplementation, f.Models.Implementation, refactorPipeline)
+	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review, refactorPipeline)
 	cfg := agent.RefactorFeatureLoopConfig{
 		Feature:                    f,
 		FeatureStore:               o.deps.Store,
@@ -159,6 +163,12 @@ func (o *Orchestrator) startFeatureRefactor(
 		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
 		AskingClauseForModel:       pr.AskingClauseForModel,
 		EffortLevel:                refactorPipeline.EffortLevel(),
+		PlanningEffectiveEffort:    planningEffort,
+		PlanningEffortSource:       planningEffortSource,
+		ImplEffectiveEffort:        implEffort,
+		ImplEffortSource:           implEffortSource,
+		ReviewEffectiveEffort:      reviewEffort,
+		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge: pr.FinishOrViolateNudgeForModel(f.Models.Implementation) &&

@@ -235,6 +235,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		log.Printf("feature %s: implementation effort %q is not supported by model %q; falling back to Auto (%s)",
 			f.ID, f.Effort.Implementation, implModel, string(pipelineEffort))
 	}
+	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review, "")
 	cfg := agent.ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               o.deps.Store,
@@ -260,6 +261,8 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		EffortLevel:                pipelineEffort,
 		EffectiveEffort:            effectiveEffort,
 		EffortSource:               effortSource,
+		ReviewEffectiveEffort:      reviewEffort,
+		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),

@@ -27,6 +27,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -59,6 +60,9 @@ func (o *Orchestrator) startFeatureReviewComments(
 	if pr == nil {
 		return "", errors.New("phase runner not configured")
 	}
+
+	implEffort, implEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseImplementation, f.Models.Implementation, "")
+	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review, "")
 
 	// Aggregate comments across every Feature.Repos PR. Each repo's
 	// per-repo comments.json was saved by the TUI before dispatch
@@ -109,6 +113,10 @@ func (o *Orchestrator) startFeatureReviewComments(
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		ImplEffectiveEffort:        implEffort,
+		ImplEffortSource:           implEffortSource,
+		ReviewEffectiveEffort:      reviewEffort,
+		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,

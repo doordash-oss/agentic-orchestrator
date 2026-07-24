@@ -57,6 +57,62 @@ func finalReviewEffortLevel(cfg OrchestratorConfig) llm.EffortLevel {
 	return cfg.EffortLevel
 }
 
+// finalReviewAxisEffortLevel returns the effort level for final review axes
+// (Review model): the resolved Review-role effort when set, falling back to
+// EffectiveEffort then EffortLevel for legacy callers.
+func finalReviewAxisEffortLevel(cfg OrchestratorConfig) llm.EffortLevel {
+	if cfg.ReviewEffectiveEffort != "" {
+		return cfg.ReviewEffectiveEffort
+	}
+	return finalReviewEffortLevel(cfg)
+}
+
+// finalReviewAxisEffectiveEffort returns the resolved Review-role effective
+// effort for final review axes, falling back to EffectiveEffort for legacy.
+func finalReviewAxisEffectiveEffort(cfg OrchestratorConfig) llm.EffortLevel {
+	if cfg.ReviewEffectiveEffort != "" {
+		return cfg.ReviewEffectiveEffort
+	}
+	return cfg.EffectiveEffort
+}
+
+// finalReviewAxisEffortSource returns the resolved Review-role effort source
+// for final review axes, falling back to EffortSource for legacy.
+func finalReviewAxisEffortSource(cfg OrchestratorConfig) llm.EffortSource {
+	if cfg.ReviewEffectiveEffort != "" {
+		return cfg.ReviewEffortSource
+	}
+	return cfg.EffortSource
+}
+
+// finalReviewFixEffortLevel returns the effort level for the fix agent
+// (Implementation model): the resolved Implementation-role effort when set,
+// falling back to EffectiveEffort then EffortLevel.
+func finalReviewFixEffortLevel(cfg OrchestratorConfig) llm.EffortLevel {
+	if cfg.ImplEffectiveEffort != "" {
+		return cfg.ImplEffectiveEffort
+	}
+	return finalReviewEffortLevel(cfg)
+}
+
+// finalReviewFixEffectiveEffort returns the resolved Implementation-role
+// effective effort for the fix agent, falling back to EffectiveEffort.
+func finalReviewFixEffectiveEffort(cfg OrchestratorConfig) llm.EffortLevel {
+	if cfg.ImplEffectiveEffort != "" {
+		return cfg.ImplEffectiveEffort
+	}
+	return cfg.EffectiveEffort
+}
+
+// finalReviewFixEffortSource returns the resolved Implementation-role effort
+// source for the fix agent, falling back to EffortSource.
+func finalReviewFixEffortSource(cfg OrchestratorConfig) llm.EffortSource {
+	if cfg.ImplEffectiveEffort != "" {
+		return cfg.ImplEffortSource
+	}
+	return cfg.EffortSource
+}
+
 // FeatureFinalReviewResult is the unified feature-level FR loop's outcome.
 //
 // FinalStatus values:
@@ -603,9 +659,9 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		LogPath:                filepath.Join(axisDir, "review-output.txt"),
 		SystemPromptPrefix:     "final-review-" + axisSlug,
 		CompletionAskingClause: cfg.AskingClause,
-		EffortLevel:            cfg.EffortLevel,
-		EffectiveEffort:        cfg.EffectiveEffort,
-		EffortSource:           cfg.EffortSource,
+		EffortLevel:            finalReviewAxisEffortLevel(cfg),
+		EffectiveEffort:        finalReviewAxisEffectiveEffort(cfg),
+		EffortSource:           finalReviewAxisEffortSource(cfg),
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
 	}
@@ -691,7 +747,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		PIDDir:                         s.stateDir,
 		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
 		WorkDir:                        s.workspace.Cwd,
-		EffortLevel:                    finalReviewEffortLevel(cfg),
+		EffortLevel:                    finalReviewFixEffortLevel(cfg),
 		Phase:                          feature.PhaseReview,
 		SystemPromptHasUsefulResources: true,
 		MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
@@ -700,9 +756,9 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-	if cfg.EffectiveEffort != "" {
-		sessOpts.EffectiveEffort = cfg.EffectiveEffort
-		sessOpts.EffortSource = cfg.EffortSource
+	if finalReviewFixEffectiveEffort(cfg) != "" {
+		sessOpts.EffectiveEffort = finalReviewFixEffectiveEffort(cfg)
+		sessOpts.EffortSource = finalReviewFixEffortSource(cfg)
 	}
 	if cfg.FinishOrViolateNudge {
 		sessOpts.TurnMode = ports.TurnModeInteractive
@@ -818,7 +874,9 @@ func (s *featureFinalReviewLoopState) observeFinalReviewSession(sess ports.Sessi
 		return observe.SpanContext{}, time.Time{}, false
 	}
 	sessionCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun).Child()
-	cfg.Observer.SessionStarted(sessionCtx, feature.PhaseFinalReview.String(), sessionID, providerName, model, "", string(cfg.EffectiveEffort), string(cfg.EffortSource))
+	effort := finalReviewFixEffectiveEffort(cfg)
+	effortSource := finalReviewFixEffortSource(cfg)
+	cfg.Observer.SessionStarted(sessionCtx, feature.PhaseFinalReview.String(), sessionID, providerName, model, "", string(effort), string(effortSource))
 	(&ContextReadTracker{
 		KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 		SkillsDir:     cfg.SkillsDir,

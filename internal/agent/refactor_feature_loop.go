@@ -88,7 +88,20 @@ type RefactorFeatureLoopConfig struct {
 	AskingClause               string
 	AskingClauseForModel       func(model string) string
 	EffortLevel                llm.EffortLevel
-	SkillsDir                  string
+	// PlanningEffectiveEffort is the resolved Planning-role effort for the
+	// refactor-plan step, using the refactor's temporary pipeline as the Auto
+	// baseline. Empty falls back to EffortLevel.
+	PlanningEffectiveEffort llm.EffortLevel
+	PlanningEffortSource    llm.EffortSource
+	// ImplEffectiveEffort is the resolved Implementation-role effort for the
+	// refactor implement loop. Empty falls back to EffortLevel.
+	ImplEffectiveEffort llm.EffortLevel
+	ImplEffortSource    llm.EffortSource
+	// ReviewEffectiveEffort is the resolved Review-role effort for the
+	// refactor's per-iteration review gate. Empty falls back to EffortLevel.
+	ReviewEffectiveEffort llm.EffortLevel
+	ReviewEffortSource    llm.EffortSource
+	SkillsDir             string
 	GuidelinesDir              string
 	Observer                   *observe.Observer
 	CommandRunner              ports.CommandRunner
@@ -261,6 +274,8 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				BuildSession:               cfg.BuildSession,
 				AskingClauseForModel:       cfg.AskingClauseForModel,
 				EffortLevel:                cfg.EffortLevel,
+				PlanningEffectiveEffort:    cfg.PlanningEffectiveEffort,
+				PlanningEffortSource:       cfg.PlanningEffortSource,
 				KBInfos:                    cfg.KBInfos,
 				SkillsDir:                  cfg.SkillsDir,
 				GuidelinesDir:              cfg.GuidelinesDir,
@@ -471,10 +486,14 @@ planRevisionLoop:
 			DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 			DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 			PermissionCache:            cfg.PermissionCache,
-			BuildSession:               cfg.BuildSession,
-			AskingClause:               cfg.AskingClause,
-			EffortLevel:                cfg.EffortLevel,
-			SkillsDir:                  cfg.SkillsDir,
+		BuildSession:               cfg.BuildSession,
+		AskingClause:               cfg.AskingClause,
+		EffortLevel:                cfg.EffortLevel,
+		EffectiveEffort:            cfg.ImplEffectiveEffort,
+		EffortSource:               cfg.ImplEffortSource,
+		ReviewEffectiveEffort:      cfg.ReviewEffectiveEffort,
+		ReviewEffortSource:         cfg.ReviewEffortSource,
+		SkillsDir:                  cfg.SkillsDir,
 			GuidelinesDir:              cfg.GuidelinesDir,
 			FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
 			Observer:                   cfg.Observer,
@@ -683,10 +702,14 @@ type refactorPlanStepInput struct {
 	BuildSession               func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 	AskingClauseForModel       func(model string) string
 	EffortLevel                llm.EffortLevel
-	KBInfos                    []KBInfo
-	SkillsDir                  string
-	GuidelinesDir              string
-	FinishOrViolateNudge       bool
+	// PlanningEffectiveEffort is the resolved Planning-role effort; when
+	// non-empty it overrides EffortLevel in the plan step's BuildSessionOpts.
+	PlanningEffectiveEffort llm.EffortLevel
+	PlanningEffortSource    llm.EffortSource
+	KBInfos                 []KBInfo
+	SkillsDir               string
+	GuidelinesDir           string
+	FinishOrViolateNudge    bool
 }
 
 // runRefactorPlanStep launches a single Claude session to author the
@@ -728,6 +751,10 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		return "", err
 	}
 
+	planEffort := in.EffortLevel
+	if in.PlanningEffectiveEffort != "" {
+		planEffort = in.PlanningEffectiveEffort
+	}
 	cmd, env, sessOpts, err := in.BuildSession(BuildSessionOpts{
 		Model:                          model,
 		Prompt:                         prompt,
@@ -737,7 +764,7 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		PIDDir:                         filepath.Join(in.StateDir, in.Feature.ID),
 		PermHandler:                    permHandlerFor(in.DangerouslySkipPermissions, in.PermissionCache, ""),
 		WorkDir:                        in.Workspace.Cwd,
-		EffortLevel:                    in.EffortLevel,
+		EffortLevel:                    planEffort,
 		Phase:                          feature.PhasePlan,
 		SystemPromptHasUsefulResources: true,
 		MarkerPath:                     filepath.Join(in.ArtifactDir, PhaseCompleteFile),
@@ -746,6 +773,10 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		return "", fmt.Errorf("building refactor-plan session: %w", err)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if in.PlanningEffectiveEffort != "" {
+		sessOpts.EffectiveEffort = in.PlanningEffectiveEffort
+		sessOpts.EffortSource = in.PlanningEffortSource
+	}
 	if in.FinishOrViolateNudge {
 		sessOpts.TurnMode = ports.TurnModeInteractive
 	}

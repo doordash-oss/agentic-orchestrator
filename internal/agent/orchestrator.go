@@ -96,10 +96,31 @@ type OrchestratorConfig struct {
 	// launch. When non-empty, it overrides EffortLevel in BuildSessionOpts so
 	// the provider command receives the capability-resolved level. Empty means
 	// no effort resolution was performed and EffortLevel is used directly.
+	// In the implementation path this carries the Implementation-role effort;
+	// in the final review path it carries the Review-role effort. Prefer the
+	// role-specific fields below for new code.
 	EffectiveEffort llm.EffortLevel
 	// EffortSource records whether EffectiveEffort was derived from the
 	// pipeline (auto) or an explicit user configuration (explicit).
 	EffortSource llm.EffortSource
+
+	// ImplEffectiveEffort is the resolved Implementation-role effort for fix
+	// agents and implementation workers. When non-empty, it overrides
+	// EffortLevel in the fix agent's BuildSessionOpts. Empty falls back to
+	// EffectiveEffort then EffortLevel.
+	ImplEffectiveEffort llm.EffortLevel
+	// ImplEffortSource records whether ImplEffectiveEffort was auto-derived
+	// or explicitly configured.
+	ImplEffortSource llm.EffortSource
+
+	// ReviewEffectiveEffort is the resolved Review-role effort for review
+	// axes and validators. When non-empty, it overrides EffortLevel in the
+	// review helper's BuildSessionOpts. Empty falls back to EffectiveEffort
+	// then EffortLevel.
+	ReviewEffectiveEffort llm.EffortLevel
+	// ReviewEffortSource records whether ReviewEffectiveEffort was
+	// auto-derived or explicitly configured.
+	ReviewEffortSource llm.EffortSource
 
 	// SkillsDir is the path to the reconciled skills directory on disk.
 	SkillsDir string

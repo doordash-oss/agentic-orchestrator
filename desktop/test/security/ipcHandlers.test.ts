@@ -142,7 +142,10 @@ function makeServices(): IpcServices {
     openSessionOutput: vi.fn(() => 'sub-unused'),
     cancelSessionOutput: vi.fn(() => false),
     getCreationDefaults: vi.fn(() =>
-      Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
+      Promise.resolve({
+        repositories: [],
+        defaults: { models: [], effort: [], useCurrentBranch: false },
+      }),
     ),
     pickCreationFiles: vi.fn(() => Promise.resolve({ paths: [] })),
     readClipboardImage: vi.fn(() => Promise.resolve({ paths: [] })),

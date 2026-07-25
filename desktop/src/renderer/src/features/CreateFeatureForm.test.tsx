@@ -195,7 +195,10 @@ describe('CreateFeatureForm repository-first contract', () => {
     mock.api.getModelCatalogue.mockResolvedValue({
       providerOrder: ['claude'],
       providerModels: {
-        claude: [{ id: 'claude-opus' }, { id: 'claude-sonnet-4-5' }],
+        claude: [
+          { id: 'claude-opus', effortCapabilities: ['low', 'medium', 'high', 'max'] },
+          { id: 'claude-sonnet-4-5', effortCapabilities: ['low', 'medium', 'high'] },
+        ],
       },
       phaseDefaults: { planning: 'model-plan' },
       phaseProviderModels: { planning: { claude: ['claude-opus', 'claude-sonnet-4-5'] } },
@@ -205,11 +208,15 @@ describe('CreateFeatureForm repository-first contract', () => {
 
     const planningPicker = await screen.findByLabelText('Planning model');
     await user.selectOptions(planningPicker, 'claude-opus');
+    await user.selectOptions(screen.getByLabelText('Planning effort'), 'max');
     await user.click(screen.getByRole('button', { name: 'Create and start' }));
 
     await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
     expect(mock.api.createFeature).toHaveBeenCalledWith(
-      expect.objectContaining({ models: { planning: 'claude-opus' } }),
+      expect.objectContaining({
+        models: { planning: 'claude-opus' },
+        effort: { planning: 'max' },
+      }),
     );
   });
 
@@ -265,6 +272,7 @@ describe('CreateFeatureForm repository-first contract', () => {
             { phase: 'Planning', model: 'model-plan' },
             { phase: 'Knowledge base', model: 'model-kb' },
           ],
+          effort: [{ phase: 'Planning', effort: 'auto' }],
           useCurrentBranch: false,
         },
       }),

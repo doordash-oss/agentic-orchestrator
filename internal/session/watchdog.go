@@ -165,6 +165,25 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 	w.mu.Unlock()
 }
 
+// ResolveControlRequest starts a fresh idle window after a permission or
+// question response. Pending-request ownership lives on Session; the watchdog
+// only needs the activity boundary.
+func (w *sessionWatchdog) ResolveControlRequest(requestID string) {
+	if w == nil || requestID == "" {
+		return
+	}
+	w.refreshActivity()
+}
+
+// ClearControlRequests starts a fresh idle window after a bulk request reset.
+// Session remains the single source of truth for which requests are pending.
+func (w *sessionWatchdog) ClearControlRequests() {
+	if w == nil {
+		return
+	}
+	w.refreshActivity()
+}
+
 func (l watchdogToolLifecycle) observe(progress llm.ToolProgressMessage) watchdogToolLifecycle {
 	data := strings.TrimSpace(progress.Data)
 	id := strings.TrimSpace(progress.ToolUseID)

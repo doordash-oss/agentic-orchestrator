@@ -35,6 +35,7 @@ import { CHAT_SESSION_ID, defaultSettings } from '../../../src/shared/ipc';
 
 const DEMO_FEATURE_CONFIG = {
   models: { planning: 'demo:planner' },
+  effort: { planning: 'high' as const },
   inquireness: 'medium' as const,
   checkpoints: {
     inquiryReview: true,
@@ -1190,6 +1191,7 @@ function makeMockApi(
           pipeline: 'large',
           inquireness: 'medium',
           models: [],
+          effort: [],
           useCurrentBranch: false,
         },
       } as CreationDefaults),
@@ -1223,6 +1225,7 @@ function makeMockApi(
     getWorkspaceDefaults: () =>
       Promise.resolve({
         models: { planning: 'demo:planner' },
+        effort: { planning: 'high' },
         inquireness: 'medium' as const,
         checkpoints: DEMO_FEATURE_CONFIG.checkpoints,
         pipeline: 'large',
@@ -1234,8 +1237,16 @@ function makeMockApi(
         providerOrder: ['demo'],
         providerModels: {
           demo: [
-            { id: 'demo:planner', displayName: 'Demo Planner' },
-            { id: 'demo:builder', displayName: 'Demo Builder' },
+            {
+              id: 'demo:planner',
+              displayName: 'Demo Planner',
+              effortCapabilities: ['low', 'medium', 'high'],
+            },
+            {
+              id: 'demo:builder',
+              displayName: 'Demo Builder',
+              effortCapabilities: ['low', 'medium', 'high', 'max'],
+            },
           ],
         },
         phaseDefaults: { planning: 'demo:planner' },

@@ -1731,6 +1731,9 @@ export const RepositoryFileRefSchema = z.strictObject({
 });
 export type RepositoryFileRef = z.output<typeof RepositoryFileRefSchema>;
 
+export const EffortLevelSchema = z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+export type EffortLevel = z.output<typeof EffortLevelSchema>;
+
 /** The narrow creation input, validated at both IPC boundaries. */
 export const CreateFeatureInputSchema = z.strictObject({
   name: z
@@ -1752,6 +1755,7 @@ export const CreateFeatureInputSchema = z.strictObject({
   inquireness: z.enum(['none', 'medium', 'high']).default('medium'),
   exitCriteria: z.string().max(4000).default(''),
   models: z.record(z.string().min(1).max(64), z.string().min(1).max(200)).default({}),
+  effort: z.record(z.string().min(1).max(64), EffortLevelSchema).default({}),
   checkpoints: z
     .strictObject({
       inquiryReview: z.boolean(),
@@ -1803,6 +1807,8 @@ export const CreationDefaultsSchema = z.strictObject({
     inquireness: z.string().optional(),
     /** Per-phase default models, for read-only display. */
     models: z.array(z.strictObject({ phase: z.string(), model: z.string() })),
+    /** Per-phase effort defaults, for read-only display. */
+    effort: z.array(z.strictObject({ phase: z.string(), effort: EffortLevelSchema })),
     /** Server default branch choice: false ⇒ new feature branch. */
     useCurrentBranch: z.boolean(),
   }),
@@ -2121,6 +2127,17 @@ export const PhaseModelsSchema = z.strictObject({
 });
 export type PhaseModels = z.output<typeof PhaseModelsSchema>;
 
+export const PhaseEffortSchema = z.strictObject({
+  inquiry: EffortLevelSchema.optional(),
+  research: EffortLevelSchema.optional(),
+  planning: EffortLevelSchema.optional(),
+  implementation: EffortLevelSchema.optional(),
+  review: EffortLevelSchema.optional(),
+  utilities: EffortLevelSchema.optional(),
+  kbBuild: EffortLevelSchema.optional(),
+});
+export type PhaseEffort = z.output<typeof PhaseEffortSchema>;
+
 export const CheckpointsSchema = z.strictObject({
   inquiryReview: z.boolean(),
   researchReview: z.boolean(),
@@ -2141,6 +2158,7 @@ export type InputNotificationsMode = z.output<typeof InputNotificationsModeSchem
 
 export const FeatureConfigSchema = z.strictObject({
   models: PhaseModelsSchema,
+  effort: PhaseEffortSchema,
   inquireness: InquirenessSchema,
   checkpoints: CheckpointsSchema,
   pipeline: z.string().max(50),
@@ -2165,6 +2183,7 @@ export type FeatureConfigUpdateRequest = z.output<typeof FeatureConfigUpdateRequ
 
 export const WorkspaceDefaultsSchema = z.strictObject({
   models: PhaseModelsSchema,
+  effort: PhaseEffortSchema,
   inquireness: InquirenessSchema,
   checkpoints: CheckpointsSchema,
   pipeline: z.string().max(50),
@@ -2176,8 +2195,10 @@ export type WorkspaceDefaults = z.output<typeof WorkspaceDefaultsSchema>;
 export const CatalogueModelSchema = z.strictObject({
   id: z.string().min(1).max(200),
   displayName: z.string().max(200).optional(),
+  aliases: z.array(z.string().min(1).max(200)).max(20).optional(),
   category: z.string().max(50).optional(),
   contextWindow: z.number().int().nonnegative().optional(),
+  effortCapabilities: z.array(EffortLevelSchema).max(6).optional(),
 });
 export type CatalogueModel = z.output<typeof CatalogueModelSchema>;
 

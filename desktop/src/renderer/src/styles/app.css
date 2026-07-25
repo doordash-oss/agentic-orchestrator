@@ -3729,8 +3729,8 @@ body {
   min-width: 0;
   margin: 0;
 }
-/* In the wizard, stack each model picker's label/hint above a full-width
-   select so no model name is ever clipped, whatever the panel width. */
+/* In the wizard, stack each phase console's label/hint above a full-width
+   select so model and effort names stay legible at every panel width. */
 .review-contract .config-editor__row {
   grid-template-columns: 1fr;
   grid-template-areas:
@@ -10379,9 +10379,8 @@ body {
 }
 
 /* --- Structured configuration editor --------------------------------------- */
-/* Three quiet groups (Models / Behavior / Gates). The one loud element is the
- * per-phase model row: the empty option always names the effective default so
- * an untouched config still says exactly what will run. */
+/* Three quiet groups (Models / Behavior / Gates). Each model phase is one
+ * compact instrument: model selection above a capability-aware effort trim. */
 
 .config-editor {
   display: flex;
@@ -10434,6 +10433,42 @@ body {
   align-items: center;
   padding: var(--space-2) var(--space-1);
   border-top: 1px solid color-mix(in srgb, var(--color-hairline) 60%, transparent);
+}
+
+.config-editor__phase-console {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--color-accent) 38%, var(--color-hairline));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-accent) 5%, transparent),
+    transparent 42%
+  );
+}
+
+.config-editor__phase-console .config-editor__row:first-child {
+  border-top-color: color-mix(in srgb, var(--color-hairline) 80%, transparent);
+}
+
+.config-editor__effort-row {
+  padding-top: var(--space-1);
+  border-top: 0;
+}
+
+.config-editor__effort-row .config-editor__row-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.config-editor__effort-select {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
 }
 
 .config-editor__row--stacked {
@@ -10621,6 +10656,10 @@ body {
 }
 
 @media (max-width: 720px) {
+  .config-editor__phase-console {
+    padding-left: var(--space-2);
+  }
+
   .config-editor__row {
     grid-template-columns: 1fr;
     grid-template-areas:

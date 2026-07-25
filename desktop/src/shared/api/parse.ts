@@ -790,10 +790,21 @@ export const ServerModelDefaultsSchema = z.object({
   kb_build: z.string().optional(),
 });
 
+export const ServerEffortDefaultsSchema = z.object({
+  inquiry: z.string().optional(),
+  research: z.string().optional(),
+  planning: z.string().optional(),
+  implementation: z.string().optional(),
+  review: z.string().optional(),
+  utilities: z.string().optional(),
+  kb_build: z.string().optional(),
+});
+
 export const RuntimeConfigCreationSchema = z.object({
   api_version: z.string(),
   feature_defaults: z.object({
     models: ServerModelDefaultsSchema,
+    effort: ServerEffortDefaultsSchema.optional(),
     inquireness: z.string().optional(),
     pipeline: z.string().optional(),
   }),

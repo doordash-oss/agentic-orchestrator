@@ -1051,7 +1051,7 @@ func TestRunArgsVerifyEvidencePassesAndFails(t *testing.T) {
 		code := runArgs(
 			[]string{cliSubcommandVerifyEvidence, cliFlagContract, contractPath, cliFlagDir, iterDir},
 			&stdout, &stderr,
-			failingLauncher(t), failingServerLauncher(t), failingUpdater(t),
+			failingServerLauncher(t), failingUpdater(t),
 		)
 		return code, stdout.String(), stderr.String()
 	}

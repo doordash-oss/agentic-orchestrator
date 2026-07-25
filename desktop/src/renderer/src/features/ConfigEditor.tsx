@@ -7,18 +7,19 @@
  *  - `WorkspaceDefaultsPanel` edits workspace-wide defaults (plus the
  *    Utilities model) through getWorkspaceDefaults/updateWorkspaceDefaults.
  *
- * The model pickers are driven by the server's model catalogue: options are
- * grouped by provider, filtered to the phase's eligible set, and the empty
- * value always names the effective default so an untouched config still says
- * exactly what will run.
+ * Each phase is a paired model/effort console driven by the server's model
+ * catalogue. Model options are grouped by provider and effort options stay
+ * capability-aware, while untouched values name the effective defaults.
  */
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import type {
   Checkpoints,
+  EffortLevel,
   FeatureConfig,
   Inquireness,
   InputNotificationsMode,
   ModelCatalogue,
+  PhaseEffort,
   PhaseModels,
   WorkspaceDefaults,
 } from '../../../shared/ipc';
@@ -113,6 +114,20 @@ function selectionValue(catalogue: ModelCatalogue | null, provider: string, id: 
   return id;
 }
 
+function catalogueModelForSelection(catalogue: ModelCatalogue | null, value: string) {
+  if (catalogue === null || value === '') return undefined;
+  for (const provider of catalogue.providerOrder) {
+    const model = (catalogue.providerModels[provider] ?? []).find((candidate) =>
+      [candidate.id, ...(candidate.aliases ?? [])].some(
+        (candidateValue) =>
+          value === candidateValue || value === selectionValue(catalogue, provider, candidateValue),
+      ),
+    );
+    if (model !== undefined) return { provider, model };
+  }
+  return undefined;
+}
+
 interface ModelPickerProps {
   field: (typeof PHASE_FIELDS)[number];
   value: string;
@@ -137,12 +152,18 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
   }, [catalogue, field.role]);
 
   const recommended = catalogue?.phaseDefaults[field.key];
-  const knownValues = new Set(
+  const canonicalValues = new Set(
     groups.flatMap((g) => g.ids.map((id) => selectionValue(catalogue, g.provider, id))),
   );
   const effectiveDefault = defaultModel === '' ? 'server default' : defaultModel;
   const defaultUnavailable =
-    catalogue !== null && defaultModel !== '' && !knownValues.has(defaultModel);
+    catalogue !== null &&
+    defaultModel !== '' &&
+    catalogueModelForSelection(catalogue, defaultModel) === undefined;
+  const selectedAlias =
+    value !== '' && !canonicalValues.has(value)
+      ? catalogueModelForSelection(catalogue, value)
+      : undefined;
 
   return (
     <label className="config-editor__row">
@@ -158,8 +179,16 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
           Default — {effectiveDefault}
           {defaultUnavailable ? ' (unavailable)' : ''}
         </option>
-        {value !== '' && !knownValues.has(value) ? (
-          <option value={value}>{value} (unavailable)</option>
+        {value !== '' && !canonicalValues.has(value) ? (
+          <option value={value}>
+            {selectedAlias === undefined
+              ? `${value} (unavailable)`
+              : `${modelDisplayName(
+                  catalogue,
+                  selectedAlias.provider,
+                  selectedAlias.model.id,
+                )} — ${value} (alias)`}
+          </option>
         ) : null}
         {groups.map((group) => (
           <optgroup key={group.provider} label={group.provider}>
@@ -180,8 +209,135 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
   );
 }
 
+const EFFORT_LABELS: Record<EffortLevel, string> = {
+  auto: 'Auto',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'XHigh',
+  max: 'Max',
+};
+
+function automaticEffort(field: (typeof PHASE_FIELDS)[number], pipeline: string): EffortLevel {
+  if (field.key === 'utilities') return 'low';
+  return pipeline === 'medium' ? 'medium' : 'high';
+}
+
+function modelEffortCapabilities(
+  catalogue: ModelCatalogue | null,
+  modelValue: string,
+): readonly EffortLevel[] {
+  return catalogueModelForSelection(catalogue, modelValue)?.model.effortCapabilities ?? [];
+}
+
+interface ModelEffortRowProps {
+  field: (typeof PHASE_FIELDS)[number];
+  modelValue: string;
+  defaultModel: string;
+  effortValue?: EffortLevel;
+  defaultEffort?: EffortLevel;
+  catalogue: ModelCatalogue | null;
+  pipeline: string;
+  onModelChange(value: string, resetEffort?: EffortLevel): void;
+  onEffortChange(value: EffortLevel | undefined): void;
+}
+
+export function ModelEffortRow({
+  field,
+  modelValue,
+  defaultModel,
+  effortValue,
+  defaultEffort,
+  catalogue,
+  pipeline,
+  onModelChange,
+  onEffortChange,
+}: ModelEffortRowProps) {
+  const [resetNotice, setResetNotice] = useState(false);
+  const effectiveModel = modelValue === '' ? defaultModel : modelValue;
+  const capabilities = modelEffortCapabilities(catalogue, effectiveModel);
+  const controlledEffort = effortValue ?? (defaultEffort === undefined ? 'auto' : '');
+  const unavailableEffort =
+    controlledEffort !== '' &&
+    controlledEffort !== 'auto' &&
+    !capabilities.includes(controlledEffort)
+      ? controlledEffort
+      : undefined;
+  const pipelineEffort = automaticEffort(field, pipeline);
+  const pipelineLabel =
+    pipeline === 'medium' ? 'Medium' : pipeline === 'moonshot' ? 'Moonshot' : 'Large';
+
+  const changeModel = (nextModel: string) => {
+    const nextEffectiveModel = nextModel === '' ? defaultModel : nextModel;
+    const nextCapabilities = modelEffortCapabilities(catalogue, nextEffectiveModel);
+    const shouldReset =
+      controlledEffort !== '' &&
+      controlledEffort !== 'auto' &&
+      !nextCapabilities.includes(controlledEffort);
+    onModelChange(nextModel, shouldReset ? 'auto' : undefined);
+    if (shouldReset) {
+      setResetNotice(true);
+    } else {
+      setResetNotice(false);
+    }
+  };
+
+  return (
+    <div className="config-editor__phase-console">
+      <ModelPicker
+        field={field}
+        value={modelValue}
+        defaultModel={defaultModel}
+        catalogue={catalogue}
+        onChange={changeModel}
+      />
+      <label className="config-editor__row config-editor__effort-row">
+        <span className="config-editor__row-label">Effort</span>
+        <span className="config-editor__row-hint">
+          {resetNotice
+            ? 'Effort reset to Auto for the selected model.'
+            : capabilities.length === 0
+              ? 'This model uses automatic effort.'
+              : 'Reasoning depth for this phase'}
+        </span>
+        <select
+          className="config-editor__select config-editor__effort-select"
+          aria-label={`${field.label} effort`}
+          value={controlledEffort}
+          onChange={(event) => {
+            const next = event.target.value;
+            setResetNotice(false);
+            onEffortChange(next === '' ? undefined : (next as EffortLevel));
+          }}
+        >
+          {defaultEffort === undefined ? null : (
+            <option key="default" value="">
+              Default — {EFFORT_LABELS[defaultEffort]}
+            </option>
+          )}
+          <option key="auto" value="auto">
+            Auto — {field.key === 'utilities' ? 'Utilities' : pipelineLabel} default (
+            {pipelineEffort})
+          </option>
+          {unavailableEffort !== undefined ? (
+            <option key={`unavailable:${unavailableEffort}`} value={unavailableEffort}>
+              {EFFORT_LABELS[unavailableEffort]} (unavailable)
+            </option>
+          ) : null}
+          {capabilities.map((level) => (
+            <option key={level} value={level}>
+              {EFFORT_LABELS[level]}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 interface ConfigFormValue {
   models: PhaseModels;
+  effort: PhaseEffort;
   inquireness: Inquireness;
   checkpoints: Checkpoints;
 }
@@ -237,16 +393,28 @@ function ConfigForm({
           Choose the model for each phase. Default uses the workspace model for that phase.
         </p>
         {phaseFields.map((field) => (
-          <ModelPicker
+          <ModelEffortRow
             key={field.key}
             field={field}
-            value={value.models[field.key] ?? ''}
+            modelValue={value.models[field.key] ?? ''}
             defaultModel={defaults[field.key] ?? ''}
+            effortValue={value.effort[field.key]}
             catalogue={catalogue}
-            onChange={(model) =>
+            pipeline={pipeline}
+            onModelChange={(model, resetEffort) =>
               onChange({
                 ...value,
                 models: { ...value.models, [field.key]: model === '' ? undefined : model },
+                effort:
+                  resetEffort === undefined
+                    ? value.effort
+                    : { ...value.effort, [field.key]: resetEffort },
+              })
+            }
+            onEffortChange={(effort) =>
+              onChange({
+                ...value,
+                effort: { ...value.effort, [field.key]: effort },
               })
             }
           />
@@ -490,6 +658,7 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
       <ConfigForm
         value={{
           models: draft.models,
+          effort: draft.effort,
           inquireness: draft.inquireness,
           checkpoints: draft.checkpoints,
         }}
@@ -594,6 +763,7 @@ export function WorkspaceDefaultsPanel() {
       <ConfigForm
         value={{
           models: draft.models,
+          effort: draft.effort,
           inquireness: draft.inquireness,
           checkpoints: draft.checkpoints,
         }}

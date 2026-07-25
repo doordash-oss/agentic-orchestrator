@@ -120,7 +120,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],
-        defaults: { models: [], useCurrentBranch: false },
+        defaults: { models: [], effort: [], useCurrentBranch: false },
       }),
     ),
     loadLocalReviewDraft: vi.fn(() => null),

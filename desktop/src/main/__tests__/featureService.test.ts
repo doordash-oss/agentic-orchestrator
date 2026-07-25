@@ -33,6 +33,7 @@ function runtimeConfigBody(): Record<string, unknown> {
     api_version: 'v1',
     feature_defaults: {
       models: { planning: 'model-plan', implementation: 'model-impl', utilities: '' },
+      effort: { planning: 'high', implementation: 'max' },
       inquireness: 'medium',
       pipeline: 'medium',
       checkpoints: {},
@@ -134,6 +135,10 @@ describe('FeatureService.creationDefaults', () => {
       { phase: 'Planning', model: 'model-plan' },
       { phase: 'Implementation', model: 'model-impl' },
     ]);
+    expect(defaults.defaults.effort).toEqual([
+      { phase: 'Planning', effort: 'high' },
+      { phase: 'Implementation', effort: 'max' },
+    ]);
   });
 });
 
@@ -165,6 +170,24 @@ describe('FeatureService.createFeature', () => {
         risk_level: 'medium',
         inquireness: 'medium',
         idempotency_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      }),
+    );
+  });
+
+  it('posts explicit per-phase effort without materializing untouched defaults', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 201,
+      body: { api_version: 'v1', result: 'created', feature_id: 'abcd1234ef567890' },
+    }));
+    await service.createFeature({
+      ...input,
+      models: { planning: 'claude:opus' },
+      effort: { planning: 'max' },
+    });
+    expect(calls[0]?.init?.body).toEqual(
+      expect.objectContaining({
+        models: { planning: 'claude:opus' },
+        effort: { planning: 'max' },
       }),
     );
   });

@@ -11,10 +11,12 @@ import {
   FeatureConfigUpdateRequestSchema,
   FeatureIdSchema,
   type Checkpoints,
+  type EffortLevel,
   type FeatureConfig,
   type FeatureConfigSnapshot,
   type FeatureConfigUpdateRequest,
   type ModelCatalogue,
+  type PhaseEffort,
   type PhaseModels,
   type WorkspaceDefaults,
 } from '../shared/ipc';
@@ -39,6 +41,16 @@ const ServerModelsSchema = z.object({
   kb_build: z.string().optional(),
 });
 
+const ServerEffortSchema = z.object({
+  inquiry: z.string().optional(),
+  research: z.string().optional(),
+  planning: z.string().optional(),
+  implementation: z.string().optional(),
+  review: z.string().optional(),
+  utilities: z.string().optional(),
+  kb_build: z.string().optional(),
+});
+
 const ServerCheckpointsSchema = z.object({
   inquiry_review: z.boolean().optional(),
   research_review: z.boolean().optional(),
@@ -51,6 +63,7 @@ const ServerCheckpointsSchema = z.object({
 
 const ServerFeatureConfigSchema = z.object({
   models: ServerModelsSchema,
+  effort: ServerEffortSchema.optional(),
   inquireness: z.string().optional(),
   checkpoints: ServerCheckpointsSchema,
   pipeline: z.string().optional(),
@@ -69,6 +82,7 @@ const RuntimeConfigResponseSchema = z.object({
   api_version: z.string(),
   feature_defaults: z.object({
     models: ServerModelsSchema,
+    effort: ServerEffortSchema.optional(),
     inquireness: z.string().optional(),
     checkpoints: ServerCheckpointsSchema.optional(),
     pipeline: z.string().optional(),
@@ -79,8 +93,10 @@ const RuntimeConfigResponseSchema = z.object({
 const ServerModelInfoSchema = z.object({
   id: z.string(),
   display_name: z.string().optional(),
+  aliases: z.array(z.string()).optional(),
   category: z.string().optional(),
   context_window: z.number().int().optional(),
+  effort_capabilities: z.array(z.string()).optional(),
 });
 
 const ModelCatalogResponseSchema = z.object({
@@ -121,6 +137,46 @@ function toServerModels(models: PhaseModels): Record<string, string> {
   };
 }
 
+const EFFORT_LEVELS = new Set<EffortLevel>(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+function effortEntry(value: string | undefined): EffortLevel | undefined {
+  return value !== undefined && EFFORT_LEVELS.has(value as EffortLevel)
+    ? (value as EffortLevel)
+    : undefined;
+}
+
+function toPhaseEffort(effort: z.output<typeof ServerEffortSchema> | undefined): PhaseEffort {
+  if (effort === undefined) return {};
+  const inquiry = effortEntry(effort.inquiry);
+  const research = effortEntry(effort.research);
+  const planning = effortEntry(effort.planning);
+  const implementation = effortEntry(effort.implementation);
+  const review = effortEntry(effort.review);
+  const utilities = effortEntry(effort.utilities);
+  const kbBuild = effortEntry(effort.kb_build);
+  return {
+    ...(inquiry === undefined ? {} : { inquiry }),
+    ...(research === undefined ? {} : { research }),
+    ...(planning === undefined ? {} : { planning }),
+    ...(implementation === undefined ? {} : { implementation }),
+    ...(review === undefined ? {} : { review }),
+    ...(utilities === undefined ? {} : { utilities }),
+    ...(kbBuild === undefined ? {} : { kbBuild }),
+  };
+}
+
+function toServerEffort(effort: PhaseEffort): Record<string, string> {
+  return {
+    inquiry: effort.inquiry ?? '',
+    research: effort.research ?? '',
+    planning: effort.planning ?? '',
+    implementation: effort.implementation ?? '',
+    review: effort.review ?? '',
+    utilities: effort.utilities ?? '',
+    kb_build: effort.kbBuild ?? '',
+  };
+}
+
 function toCheckpoints(cp: z.output<typeof ServerCheckpointsSchema>): Checkpoints {
   return {
     inquiryReview: cp.inquiry_review ?? false,
@@ -156,6 +212,7 @@ function normalizeInputNotifications(value: string | undefined): 'default' | 'en
 function toFeatureConfig(cfg: z.output<typeof ServerFeatureConfigSchema>): FeatureConfig {
   return {
     models: toPhaseModels(cfg.models),
+    effort: toPhaseEffort(cfg.effort),
     inquireness: normalizeInquireness(cfg.inquireness),
     checkpoints: toCheckpoints(cfg.checkpoints),
     pipeline: cfg.pipeline ?? '',
@@ -194,6 +251,7 @@ export class ConfigService {
         method: 'POST',
         body: {
           models: toServerModels(req.config.models),
+          effort: toServerEffort(req.config.effort),
           inquireness: req.config.inquireness,
           checkpoints: toServerCheckpoints(req.config.checkpoints),
           ...(req.config.pipeline === '' ? {} : { pipeline: req.config.pipeline }),
@@ -216,6 +274,7 @@ export class ConfigService {
     const defaults = parsed.data.feature_defaults;
     return {
       models: toPhaseModels(defaults.models),
+      effort: toPhaseEffort(defaults.effort),
       inquireness: normalizeInquireness(defaults.inquireness),
       checkpoints: toCheckpoints(defaults.checkpoints ?? {}),
       pipeline: defaults.pipeline ?? '',
@@ -232,6 +291,7 @@ export class ConfigService {
         body: {
           defaults: {
             models: toServerModels(defaults.models),
+            effort: toServerEffort(defaults.effort),
             inquireness: defaults.inquireness,
             checkpoints: toServerCheckpoints(defaults.checkpoints),
             ...(defaults.pipeline === '' ? {} : { pipeline: defaults.pipeline }),
@@ -259,10 +319,20 @@ export class ConfigService {
         ...(m.display_name === undefined || m.display_name === ''
           ? {}
           : { displayName: m.display_name }),
+        ...(m.aliases === undefined
+          ? {}
+          : { aliases: m.aliases.filter((alias) => alias.trim() !== '') }),
         ...(m.category === undefined || m.category === '' ? {} : { category: m.category }),
         ...(m.context_window === undefined || m.context_window <= 0
           ? {}
           : { contextWindow: m.context_window }),
+        ...(m.effort_capabilities === undefined
+          ? {}
+          : {
+              effortCapabilities: m.effort_capabilities.filter((value): value is EffortLevel =>
+                EFFORT_LEVELS.has(value as EffortLevel),
+              ),
+            }),
       }));
     }
     return {

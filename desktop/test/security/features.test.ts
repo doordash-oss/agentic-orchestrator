@@ -125,7 +125,10 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     openSessionOutput: vi.fn(() => 'sub-unused'),
     cancelSessionOutput: vi.fn(() => false),
     getCreationDefaults: vi.fn(() =>
-      Promise.resolve({ repositories: [], defaults: { models: [], useCurrentBranch: false } }),
+      Promise.resolve({
+        repositories: [],
+        defaults: { models: [], effort: [], useCurrentBranch: false },
+      }),
     ),
     loadLocalReviewDraft: vi.fn(() => null),
     saveLocalReviewDraft: vi.fn((request) => ({ ...request, savedAt: '2026-07-16T00:00:00.000Z' })),

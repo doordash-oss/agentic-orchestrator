@@ -1445,6 +1445,7 @@ export interface components {
         };
         FeatureDefaults: {
             models: components["schemas"]["ModelDefaults"];
+            effort?: components["schemas"]["EffortConfig"];
             pipeline_preferences?: {
                 [key: string]: unknown;
             };
@@ -1462,12 +1463,22 @@ export interface components {
         };
         FeatureConfig: {
             models: components["schemas"]["ModelDefaults"];
+            effort?: components["schemas"]["EffortConfig"];
             /** @enum {string} */
             inquireness: "none" | "medium" | "high";
             checkpoints: components["schemas"]["Checkpoints"];
             pipeline?: string;
             /** @enum {string} */
             input_notifications?: "default" | "enabled" | "muted";
+        };
+        EffortConfig: {
+            inquiry?: string;
+            research?: string;
+            planning?: string;
+            implementation?: string;
+            review?: string;
+            utilities?: string;
+            kb_build?: string;
         };
         Publishability: {
             manual_publish: boolean;
@@ -1481,6 +1492,7 @@ export interface components {
             context_window?: number;
             aliases?: string[];
             category?: string;
+            effort_capabilities?: string[];
         };
         HelpQueue: {
             feature_id: string;
@@ -1816,6 +1828,8 @@ export interface components {
             started_at: string;
             iteration?: number;
             context_percentage?: number;
+            effort?: string;
+            effort_source?: string;
             usage: components["schemas"]["Usage"];
         };
         Cursor: {

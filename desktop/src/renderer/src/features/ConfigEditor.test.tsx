@@ -11,10 +11,15 @@ const CATALOGUE: ModelCatalogue = {
   providerOrder: ['claude', 'codex'],
   providerModels: {
     claude: [
-      { id: 'sonnet', displayName: 'Sonnet' },
-      { id: 'opus', displayName: 'Opus' },
+      { id: 'sonnet', displayName: 'Sonnet', effortCapabilities: ['low', 'medium', 'high'] },
+      {
+        id: 'opus',
+        displayName: 'Opus',
+        aliases: ['opus-latest'],
+        effortCapabilities: ['low', 'medium', 'high', 'max'],
+      },
     ],
-    codex: [{ id: 'gpt-a', displayName: 'GPT A' }],
+    codex: [{ id: 'gpt-a', displayName: 'GPT A', effortCapabilities: ['low', 'medium'] }],
   },
   phaseDefaults: { implementation: 'claude:sonnet' },
   phaseProviderModels: {
@@ -26,6 +31,7 @@ const SNAPSHOT: FeatureConfigSnapshot = {
   featureId: 'feat-1',
   current: {
     models: { implementation: 'claude:opus' },
+    effort: { implementation: 'high' },
     inquireness: 'medium',
     checkpoints: {
       inquiryReview: true,
@@ -41,6 +47,7 @@ const SNAPSHOT: FeatureConfigSnapshot = {
   },
   defaults: {
     models: { implementation: 'claude:sonnet' },
+    effort: { implementation: 'auto' },
     inquireness: 'medium',
     checkpoints: {
       inquiryReview: false,
@@ -111,6 +118,7 @@ describe('FeatureConfigPanel', () => {
     expect(save).toBeDisabled();
 
     await user.selectOptions(screen.getByLabelText('Implementation model'), 'claude:sonnet');
+    await user.selectOptions(screen.getByLabelText('Implementation effort'), 'medium');
     await user.click(screen.getByRole('radio', { name: /High/ }));
     await user.click(screen.getByRole('checkbox', { name: /Research review/ }));
     expect(save).toBeEnabled();
@@ -123,11 +131,56 @@ describe('FeatureConfigPanel', () => {
       config: {
         ...SNAPSHOT.current,
         models: { implementation: 'claude:sonnet' },
+        effort: { implementation: 'medium' },
         inquireness: 'high',
         checkpoints: { ...SNAPSHOT.current.checkpoints, researchReview: true },
       },
     });
     await screen.findByText(/Saved\./);
+  });
+
+  it('pairs each model with capability-aware effort and resets incompatible choices', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);
+    mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+
+    const effort = await screen.findByLabelText('Implementation effort');
+    expect(effort).toHaveValue('high');
+    expect(
+      within(effort).getByRole('option', { name: 'Auto — Large default (high)' }),
+    ).toBeVisible();
+    expect(within(effort).getByRole('option', { name: 'Max' })).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText('Implementation model'), 'codex:gpt-a');
+    expect(effort).toHaveValue('auto');
+    await waitFor(() => expect(within(effort).queryByRole('option', { name: 'High' })).toBeNull());
+    expect(screen.getByText('Effort reset to Auto for the selected model.')).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText('Implementation model'), '');
+    expect(within(effort).getByRole('option', { name: 'High' })).toBeVisible();
+  });
+
+  it('keeps a persisted model alias available with its canonical effort capabilities', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue({
+      ...SNAPSHOT,
+      current: {
+        ...SNAPSHOT.current,
+        models: { implementation: 'claude:opus-latest' },
+      },
+    });
+    mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
+    render(<FeatureConfigPanel featureId="feat-1" />);
+
+    const picker = await screen.findByLabelText('Implementation model');
+    expect(
+      within(picker).getByRole('option', { name: 'Opus — claude:opus-latest (alias)' }),
+    ).toBeVisible();
+    expect(
+      within(screen.getByLabelText('Implementation effort')).getByRole('option', { name: 'Max' }),
+    ).toBeVisible();
   });
 
   it('links roadmap review to phase plan review and hides gates the pipeline drops', async () => {
@@ -203,6 +256,7 @@ describe('FeatureConfigPanel', () => {
 
 const DEFAULTS: WorkspaceDefaults = {
   models: { planning: 'claude:sonnet' },
+  effort: { planning: 'auto' },
   inquireness: 'medium',
   checkpoints: SNAPSHOT.current.checkpoints,
   pipeline: 'large',

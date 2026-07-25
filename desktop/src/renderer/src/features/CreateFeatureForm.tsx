@@ -20,12 +20,13 @@ import {
   CREATION_REPOSITORY_FILE_LIMIT,
   type Checkpoints,
   type CreationDefaults,
+  type EffortLevel,
   type RepositoryFileRef,
 } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import {
   GATE_FIELDS,
-  ModelPicker,
+  ModelEffortRow,
   PHASE_FIELDS,
   applicableGates,
   useModelCatalogue,
@@ -130,6 +131,16 @@ function defaultModelsByKey(defaults: CreationDefaults): Partial<Record<PhaseKey
   return result;
 }
 
+function defaultEffortByKey(defaults: CreationDefaults): Partial<Record<PhaseKey, EffortLevel>> {
+  const byLabel = new Map(defaults.defaults.effort.map(({ phase, effort }) => [phase, effort]));
+  const result: Partial<Record<PhaseKey, EffortLevel>> = {};
+  for (const [label, key] of DEFAULT_MODEL_LABELS) {
+    const effort = byLabel.get(label);
+    if (effort !== undefined) result[key] = effort;
+  }
+  return result;
+}
+
 interface MentionToken {
   /** Index of the "@" character in the description. */
   start: number;
@@ -160,6 +171,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const [pipeline, setPipeline] = useState<Pipeline>('medium');
   const [checkpoints, setCheckpoints] = useState<CheckpointState>(checkpointsForPipeline('medium'));
   const [modelChoices, setModelChoices] = useState<Partial<Record<PhaseKey, string>>>({});
+  const [effortChoices, setEffortChoices] = useState<Partial<Record<PhaseKey, EffortLevel>>>({});
   const [riskLevel, setRiskLevel] = useState<'low' | 'medium' | 'high'>('medium');
   const [inquireness, setInquireness] = useState<'none' | 'medium' | 'high'>('medium');
   const [exitCriteria, setExitCriteria] = useState('');
@@ -427,9 +439,12 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     setFormError(null);
     setPending(true);
     const models: Record<string, string> = {};
+    const effort: Record<string, EffortLevel> = {};
     for (const field of PHASE_FIELDS) {
       const chosen = modelChoices[field.key] ?? '';
       if (chosen !== '') models[modelConfigKey(field.key)] = chosen;
+      const chosenEffort = effortChoices[field.key];
+      if (chosenEffort !== undefined) effort[modelConfigKey(field.key)] = chosenEffort;
     }
     const gates = applicableGates(pipeline);
     void (async () => {
@@ -447,6 +462,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
           inquireness,
           exitCriteria,
           models,
+          effort,
           checkpoints: {
             inquiryReview: gates.has('inquiryReview') && checkpoints.inquiryReview,
             researchReview: gates.has('researchReview') && checkpoints.researchReview,
@@ -526,6 +542,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const gates = applicableGates(pipeline);
   const visibleGates = GATE_FIELDS.filter((gate) => gates.has(gate.key));
   const defaults = defaultModelsByKey(state.defaults);
+  const effortDefaults = defaultEffortByKey(state.defaults);
 
   return (
     <form
@@ -930,14 +947,26 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
                 workspace model for that phase.
               </p>
               {PHASE_FIELDS.map((field) => (
-                <ModelPicker
+                <ModelEffortRow
                   key={field.key}
                   field={field}
-                  value={modelChoices[field.key] ?? ''}
+                  modelValue={modelChoices[field.key] ?? ''}
                   defaultModel={defaults[field.key] ?? ''}
+                  effortValue={effortChoices[field.key]}
+                  defaultEffort={effortDefaults[field.key]}
                   catalogue={catalogue}
-                  onChange={(model) =>
-                    setModelChoices((choices) => ({ ...choices, [field.key]: model }))
+                  pipeline={pipeline}
+                  onModelChange={(model, resetEffort) => {
+                    setModelChoices((choices) => ({ ...choices, [field.key]: model }));
+                    if (resetEffort !== undefined) {
+                      setEffortChoices((choices) => ({
+                        ...choices,
+                        [field.key]: resetEffort,
+                      }));
+                    }
+                  }}
+                  onEffortChange={(effort) =>
+                    setEffortChoices((choices) => ({ ...choices, [field.key]: effort }))
                   }
                 />
               ))}

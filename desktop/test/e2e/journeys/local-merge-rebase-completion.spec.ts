@@ -223,7 +223,9 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     await deleteButton.click();
     await waitForFeatureMissing(handle, featureId);
     await expect(handle.page.getByText('Feature no longer exists')).toBeVisible();
-    transcript.step('delete confirmed through the overflow menu and removed server-side feature state');
+    transcript.step(
+      'delete confirmed through the overflow menu and removed server-side feature state',
+    );
 
     persistAppLogs(handle, 'local-merge-rebase-completion-app-server');
     transcript.write(testInfo);

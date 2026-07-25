@@ -24,18 +24,21 @@ export function RebaseModal({
   const [preflight, setPreflight] = useState<RebasePreflightResult | null>(null);
   const [error, setError] = useState<WizardError | null>(null);
 
-  const loadPreflight = useCallback(async (preserveError = false) => {
-    setPhase('loading');
-    if (!preserveError) setError(null);
-    try {
-      setPreflight(await window.agentico.preflightRebase({ featureId }));
-      setPhase('ready');
-    } catch (err) {
-      setPreflight(null);
-      setError(parseIpcError(err));
-      setPhase('error');
-    }
-  }, [featureId]);
+  const loadPreflight = useCallback(
+    async (preserveError = false) => {
+      setPhase('loading');
+      if (!preserveError) setError(null);
+      try {
+        setPreflight(await window.agentico.preflightRebase({ featureId }));
+        setPhase('ready');
+      } catch (err) {
+        setPreflight(null);
+        setError(parseIpcError(err));
+        setPhase('error');
+      }
+    },
+    [featureId],
+  );
 
   useEffect(() => {
     void loadPreflight();

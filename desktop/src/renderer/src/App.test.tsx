@@ -25,6 +25,7 @@ function connection(overrides: Record<string, unknown>): ConnectionState {
 
 const WORKSPACE_DEFAULTS: WorkspaceDefaults = {
   models: {},
+  effort: {},
   inquireness: 'medium',
   checkpoints: {
     inquiryReview: false,

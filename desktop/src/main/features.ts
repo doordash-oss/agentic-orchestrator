@@ -40,6 +40,7 @@ import {
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
+  type EffortLevel,
   type FeatureSetupView,
   type FeatureSnapshot,
   type FeatureActionRequest,
@@ -94,6 +95,8 @@ const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['kb_build', 'Knowledge base'],
 ];
 
+const EFFORT_LEVELS = new Set<EffortLevel>(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+
 // Description generation is a synchronous utility LLM session. Its session
 // idle bounds are five minutes, so leave transport cleanup time beyond that
 // without weakening the 30-second default for ordinary API calls.
@@ -120,6 +123,13 @@ export class FeatureService {
         config.feature_defaults.models[key as keyof typeof config.feature_defaults.models];
       return model === undefined || model === '' ? [] : [{ phase: label, model }];
     });
+    const effort = PHASE_MODEL_LABELS.flatMap(([key, label]) => {
+      const value =
+        config.feature_defaults.effort?.[key as keyof typeof config.feature_defaults.effort];
+      return value === undefined || !EFFORT_LEVELS.has(value as EffortLevel)
+        ? []
+        : [{ phase: label, effort: value as EffortLevel }];
+    });
     return {
       repositories: readiness.repositories,
       defaults: {
@@ -132,6 +142,7 @@ export class FeatureService {
           ? {}
           : { inquireness: config.feature_defaults.inquireness }),
         models,
+        effort,
         // The creation contract's server default: a new feature branch.
         useCurrentBranch: false,
       },
@@ -162,6 +173,7 @@ export class FeatureService {
           ? {}
           : { exit_criteria: validated.exitCriteria.trim() }),
         models: validated.models,
+        effort: validated.effort,
         checkpoints: {
           inquiry_review: validated.checkpoints.inquiryReview,
           research_review: validated.checkpoints.researchReview,

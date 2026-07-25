@@ -186,6 +186,8 @@ func (p *Provider) MinVersion() [3]int { return [3]int{2, 1, 81} }
 
 func (p *Provider) EnvVarsToExclude() []string { return []string{"CLAUDECODE"} }
 
+func (p *Provider) SupportsNativeToollessReview() bool { return true }
+
 type authStatus struct {
 	LoggedIn     bool   `json:"loggedIn"`
 	AuthMethod   string `json:"authMethod"`

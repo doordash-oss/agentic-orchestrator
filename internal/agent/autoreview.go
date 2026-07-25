@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -29,19 +30,134 @@ const autoReviewBashToolName = "Bash"
 // policy. It asks the existing handler first and returns every non-empty
 // decision or existing error unchanged. Only an empty decision for canonical
 // Bash, when the session's snapshotted flag is enabled and reviewer is usable,
-// permits a single hidden classification. The guardrail classifier determines
-// eligibility: it parses the command structurally and checks it against the
-// curated development-command policy. A successful ALLOW is the only new
-// automatic decision; DEFER and every failure return the same empty
-// human-deferral decision. The decorator sits outside the CachingHandler, so
-// its allow bypasses the cache and creates no remembered rule, cache entry, or
-// audit event. The hidden reviewer is launched via autoreview.Classify (not
-// BuildSession), so it is never decorated and cannot recurse.
+// permits a hidden classification. Successful ALLOW and DEFER classifications
+// are memoized by the byte-exact extracted command for this decorator's
+// session, and concurrent identical classifications share one in-flight
+// attempt. The guardrail classifier determines eligibility: it parses the
+// command structurally and checks it against the curated development-command
+// policy. A successful ALLOW is the only new automatic decision; DEFER and
+// every failure return the same empty human-deferral decision. The decorator
+// sits outside the CachingHandler, so its allow bypasses the cache and creates
+// no remembered rule, cache entry, or audit event. The hidden reviewer is
+// launched via autoreview.Classify (not BuildSession), so it is never decorated
+// and cannot recurse.
 type autoReviewPermissionDecorator struct {
 	inner         ports.PermissionHandler
 	reviewer      autoreview.Reviewer
 	workDir       string
 	writableRoots []string
+	classify      autoReviewClassifyFunc
+	stateOnce     sync.Once
+	state         *autoReviewSessionState
+}
+
+type autoReviewClassifyFunc func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool)
+
+// autoReviewSessionState is owned by one decorator and therefore by one
+// original provider session. Its exact-command maps never enter the shared
+// permission cache or any durable store.
+type autoReviewSessionState struct {
+	mu       sync.Mutex
+	cached   map[string]autoreview.Decision
+	inFlight map[string]*autoReviewFlight
+	disposed bool
+}
+
+type autoReviewFlight struct {
+	done     chan struct{}
+	decision autoreview.Decision
+	ok       bool
+}
+
+func newAutoReviewSessionState() *autoReviewSessionState {
+	return &autoReviewSessionState{
+		cached:   make(map[string]autoreview.Decision),
+		inFlight: make(map[string]*autoReviewFlight),
+	}
+}
+
+func (d *autoReviewPermissionDecorator) sessionState() *autoReviewSessionState {
+	d.stateOnce.Do(func() {
+		d.state = newAutoReviewSessionState()
+	})
+	return d.state
+}
+
+// Dispose discards all automatic-review state when the owning session ends.
+func (d *autoReviewPermissionDecorator) Dispose() {
+	d.sessionState().dispose()
+}
+
+func (s *autoReviewSessionState) dispose() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.disposed {
+		return
+	}
+	s.disposed = true
+	clear(s.cached)
+	for command, flight := range s.inFlight {
+		flight.decision = ""
+		flight.ok = false
+		delete(s.inFlight, command)
+		close(flight.done)
+	}
+}
+
+func (s *autoReviewSessionState) review(ctx context.Context, command string, classify func(context.Context) (autoreview.Decision, bool)) (autoreview.Decision, bool) {
+	if ctx.Err() != nil {
+		return "", false
+	}
+	s.mu.Lock()
+	if s.disposed {
+		s.mu.Unlock()
+		return "", false
+	}
+	if decision, ok := s.cached[command]; ok {
+		s.mu.Unlock()
+		if ctx.Err() != nil {
+			return "", false
+		}
+		return decision, true
+	}
+	if flight, ok := s.inFlight[command]; ok {
+		s.mu.Unlock()
+		if ctx.Err() != nil {
+			return "", false
+		}
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-flight.done:
+			if ctx.Err() != nil {
+				return "", false
+			}
+			return flight.decision, flight.ok
+		}
+	}
+	flight := &autoReviewFlight{done: make(chan struct{})}
+	s.inFlight[command] = flight
+	s.mu.Unlock()
+
+	decision, ok := classify(ctx)
+	if ctx.Err() != nil {
+		decision, ok = "", false
+	}
+
+	s.mu.Lock()
+	if s.disposed || s.inFlight[command] != flight {
+		s.mu.Unlock()
+		return "", false
+	}
+	flight.decision = decision
+	flight.ok = ok
+	if ok && (decision == autoreview.Allow || decision == autoreview.Defer) {
+		s.cached[command] = decision
+	}
+	delete(s.inFlight, command)
+	close(flight.done)
+	s.mu.Unlock()
+	return decision, ok
 }
 
 func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
@@ -63,11 +179,17 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	result, ok := autoreview.Classify(ctx, d.reviewer, autoreview.ClassifyRequest{
-		ToolName:      req.ToolName,
-		Command:       command,
-		WorkDir:       d.workDir,
-		WritableRoots: d.writableRoots,
+	classify := d.classify
+	if classify == nil {
+		classify = autoreview.Classify
+	}
+	result, ok := d.sessionState().review(ctx, command, func(classifyCtx context.Context) (autoreview.Decision, bool) {
+		return classify(classifyCtx, d.reviewer, autoreview.ClassifyRequest{
+			ToolName:      req.ToolName,
+			Command:       command,
+			WorkDir:       d.workDir,
+			WritableRoots: d.writableRoots,
+		})
 	})
 	if !ok || result != autoreview.Allow {
 		return decision, nil

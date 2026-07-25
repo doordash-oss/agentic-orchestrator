@@ -122,7 +122,8 @@ type Session struct {
 	cleanupFuncs []func() // functions to call on session exit
 
 	// Permission handling.
-	permHandler PermissionHandler
+	permHandler                  PermissionHandler
+	permissionHandlerDisposeOnce sync.Once
 	// pendingControlRequests holds every control_request that has been
 	// surfaced to the TUI but not yet responded to, in arrival order.
 	// Multiple AskUserQuestion calls can be in flight concurrently when
@@ -258,8 +259,8 @@ type Session struct {
 	// the session shuts down, so long-running permission handlers like the
 	// automatic-review classifier can abort promptly. One goroutine-free
 	// pair avoids per-request goroutine accumulation.
-	lifecycleCtxVal  context.Context
-	lifecycleCancel  context.CancelFunc
+	lifecycleCtxVal context.Context
+	lifecycleCancel context.CancelFunc
 
 	// askUserAutoPick optionally answers confidence-qualified AskUserQuestion
 	// bundles before they enter pending TUI routing.
@@ -863,6 +864,8 @@ func terminateStartedCommand(cmd *exec.Cmd) {
 // readMessages is the main goroutine that reads JSONL from stdout and dispatches messages.
 func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 	defer func() {
+		s.lifecycleCancel()
+		s.disposePermissionHandler()
 		s.mu.Lock()
 		if s.logFile != nil {
 			_ = s.logFile.Close()
@@ -897,7 +900,6 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		//   3. wait for both goroutines to finish.
 		//   4. close attachCh; close done.
 		close(s.closing)
-		s.lifecycleCancel()
 		s.streamRing.Close()
 		close(s.controlCh)
 		<-s.drainerDone
@@ -1791,6 +1793,9 @@ func (s *Session) Interrupt() error {
 
 // Stop gracefully stops the session: close stdin → SIGTERM → SIGKILL.
 func (s *Session) Stop() error {
+	s.lifecycleCancel()
+	s.disposePermissionHandler()
+
 	s.mu.Lock()
 	proc := s.process
 	w := s.stdin
@@ -1833,6 +1838,21 @@ func (s *Session) Stop() error {
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	<-s.done
 	return nil
+}
+
+type disposablePermissionHandler interface {
+	Dispose()
+}
+
+func (s *Session) disposePermissionHandler() {
+	s.permissionHandlerDisposeOnce.Do(func() {
+		s.mu.Lock()
+		handler := s.permHandler
+		s.mu.Unlock()
+		if disposable, ok := handler.(disposablePermissionHandler); ok {
+			disposable.Dispose()
+		}
+	})
 }
 
 func (s *Session) Wait() {

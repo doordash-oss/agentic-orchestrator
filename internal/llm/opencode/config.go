@@ -48,6 +48,28 @@ var fileEditPermKeys = []string{permKeyEdit, permKeyWrite, permKeyApplyPatch}
 // decision ("ask" in normal mode, "allow" in dangerous-skip mode).
 var mediatedToolPermKeys = []string{permKeyBash, permKeyWebfetch, permKeyWebsearch, permKeyTask, permKeySkill}
 
+var nativeToollessSurfaceKeys = []string{
+	"*",
+	permKeyBash,
+	permKeyRead,
+	permKeyEdit,
+	permKeyWrite,
+	permKeyApplyPatch,
+	"glob",
+	"grep",
+	"list",
+	permKeyExternal,
+	permKeyWebfetch,
+	permKeyWebsearch,
+	permKeyTask,
+	permKeySkill,
+	permKeyQuestion,
+	"todowrite",
+	"todoread",
+	"lsp",
+	"doom_loop",
+}
+
 // catchAllPattern is the glob applied when no root pattern matches. OpenCode
 // resolves a surface by last-matching rule (not most-specific; default "ask"),
 // and Go marshals map keys sorted, so "*" precedes the "<root>/**" globs and a
@@ -101,6 +123,22 @@ func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, 
 		applyDisallowedTools(perm, disallowedTools[0])
 	}
 	return perm
+}
+
+func nativeToollessPermissionConfig() map[string]any {
+	permission := make(map[string]any, len(nativeToollessSurfaceKeys))
+	for _, key := range nativeToollessSurfaceKeys {
+		permission[key] = "deny"
+	}
+	return permission
+}
+
+func nativeToollessTools() map[string]bool {
+	tools := make(map[string]bool, len(nativeToollessSurfaceKeys))
+	for _, key := range nativeToollessSurfaceKeys {
+		tools[key] = false
+	}
+	return tools
 }
 
 func applyDisallowedTools(perm map[string]any, tools []string) {

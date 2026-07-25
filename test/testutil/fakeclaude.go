@@ -33,13 +33,14 @@ type FakeClaudeProvider struct {
 	Script string
 }
 
-func (p FakeClaudeProvider) Name() string                   { return "claude" }
-func (p FakeClaudeProvider) DetectCLI() bool                { return true }
-func (p FakeClaudeProvider) InstallHint() string            { return "" }
-func (p FakeClaudeProvider) VersionInfo() (string, error)   { return "test", nil }
-func (p FakeClaudeProvider) MinVersion() [3]int             { return [3]int{} }
-func (p FakeClaudeProvider) EnvVarsToExclude() []string     { return nil }
-func (p FakeClaudeProvider) CheckBareAuth() bool            { return true }
+func (p FakeClaudeProvider) Name() string                       { return "claude" }
+func (p FakeClaudeProvider) DetectCLI() bool                    { return true }
+func (p FakeClaudeProvider) InstallHint() string                { return "" }
+func (p FakeClaudeProvider) VersionInfo() (string, error)       { return "test", nil }
+func (p FakeClaudeProvider) MinVersion() [3]int                 { return [3]int{} }
+func (p FakeClaudeProvider) EnvVarsToExclude() []string         { return nil }
+func (p FakeClaudeProvider) CheckBareAuth() bool                { return true }
+func (p FakeClaudeProvider) SupportsNativeToollessReview() bool { return true }
 func (p FakeClaudeProvider) MatchesModel(model string) bool {
 	return strings.EqualFold(model, "haiku") || strings.EqualFold(model, "haiku[200K]")
 }

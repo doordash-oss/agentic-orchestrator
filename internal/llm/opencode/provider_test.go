@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -25,6 +26,16 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
+
+func TestProviderAttestsNativeToollessReview(t *testing.T) {
+	reviewer, ok := any(New()).(llm.NativeToollessReviewer)
+	if !ok {
+		t.Fatal("OpenCode Provider does not implement llm.NativeToollessReviewer")
+	}
+	if !reviewer.SupportsNativeToollessReview() {
+		t.Fatal("SupportsNativeToollessReview() = false, want true after the audited boundary is implemented")
+	}
+}
 
 func TestProviderName(t *testing.T) {
 	if got := New().Name(); got != "opencode" {
@@ -367,8 +378,11 @@ func configContentValue(t *testing.T, env []string) string {
 // permission values are decoded raw because a value may be a plain string
 // decision or a path-pattern object once writable roots are bounded.
 type parsedConfig struct {
-	Model      string                     `json:"model"`
-	Permission map[string]json.RawMessage `json:"permission"`
+	Model        string                     `json:"model"`
+	Instructions []string                   `json:"instructions"`
+	Tools        map[string]bool            `json:"tools"`
+	Permission   map[string]json.RawMessage `json:"permission"`
+	Agent        map[string]json.RawMessage `json:"agent"`
 }
 
 // permString returns a string-valued permission decision for key, failing the
@@ -428,6 +442,87 @@ func TestBuildCommand_NormalModeAsksForMediatedSurfaces(t *testing.T) {
 	// decision rather than a path-pattern object.
 	if got := permString(t, perm, "edit"); got != "ask" {
 		t.Errorf("normal-mode permission[edit] = %q, want ask", got)
+	}
+}
+
+func TestBuildCommand_NativeToollessReviewIsEphemeralAndDeniesEverySurface(t *testing.T) {
+	stateDir := t.TempDir()
+	p := New()
+	args, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:                "opencode:anthropic/claude-haiku-4-5[200K]",
+		EffortLevel:          llm.EffortLow,
+		ZeroTools:            true,
+		NoSessionPersistence: true,
+		NoCustomization:      true,
+		StateDir:             stateDir,
+		WorkDir:              "/workspace/project",
+		WritableRoots:        []string{"/workspace/project"},
+		ReadRoots:            []string{"/sensitive/mount"},
+		SystemPrompt:         "must not become an inherited instruction",
+		AgentsJSON:           `{"injected":{"prompt":"must not load"}}`,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand(native tool-less review) error: %v", err)
+	}
+	if !slices.Equal(args, []string{"opencode", "acp"}) {
+		t.Fatalf("BuildCommand(native tool-less review) args = %v, want [opencode acp]", args)
+	}
+
+	cfg := parseConfigContent(t, configContentValue(t, env))
+	if cfg.Model != "anthropic/claude-haiku-4-5" {
+		t.Errorf("review config model = %q, want exact stripped backend %q", cfg.Model, "anthropic/claude-haiku-4-5")
+	}
+	if len(cfg.Instructions) != 0 {
+		t.Errorf("review config instructions = %v, want none", cfg.Instructions)
+	}
+	if len(cfg.Agent) != 0 {
+		t.Errorf("review config agents = %v, want none", cfg.Agent)
+	}
+	for _, key := range []string{
+		"*", "bash", "read", "edit", "write", "apply_patch", "glob", "grep",
+		"list", "external_directory", "webfetch", "websearch", "task", "skill",
+		"question", "todowrite", "todoread", "lsp", "doom_loop",
+	} {
+		if enabled, present := cfg.Tools[key]; !present || enabled {
+			t.Errorf("review tools[%q] = (%t, %t), want present and false", key, enabled, present)
+		}
+		if got := permString(t, cfg.Permission, key); got != "deny" {
+			t.Errorf("review permission[%q] = %q, want deny", key, got)
+		}
+	}
+
+	for _, key := range []string{"OPENCODE_CONFIG", "XDG_CONFIG_HOME", "XDG_DATA_HOME"} {
+		value, ok := envValue(env, key)
+		if !ok || value == "" {
+			t.Errorf("review environment missing %s", key)
+			continue
+		}
+		rel, relErr := filepath.Rel(stateDir, value)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Errorf("%s = %q, want path beneath ephemeral state dir %q", key, value, stateDir)
+		}
+	}
+}
+
+func TestBuildCommand_NativeToollessReviewRejectsPartialIsolation(t *testing.T) {
+	tests := []struct {
+		name string
+		opts llm.CommandBuildOpts
+	}{
+		{name: "zero tools only", opts: llm.CommandBuildOpts{ZeroTools: true}},
+		{name: "no persistence only", opts: llm.CommandBuildOpts{NoSessionPersistence: true}},
+		{name: "no customization only", opts: llm.CommandBuildOpts{NoCustomization: true}},
+		{name: "two of three", opts: llm.CommandBuildOpts{ZeroTools: true, NoCustomization: true}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.opts.Model = "anthropic/claude-haiku-4-5"
+			tc.opts.StateDir = t.TempDir()
+			if args, env, err := New().BuildCommand(tc.opts); err == nil {
+				t.Fatalf("BuildCommand(partial native review) = (%v, %v, nil), want fail-closed error", args, env)
+			}
+		})
 	}
 }
 

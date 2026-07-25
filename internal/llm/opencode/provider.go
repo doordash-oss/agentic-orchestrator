@@ -136,6 +136,12 @@ func (p *Provider) SupportsFinishOrViolateNudge() bool { return true }
 // which callers treat as "resume unavailable" and fall back.
 func (p *Provider) SupportsSessionResume() bool { return true }
 
+// SupportsNativeToollessReview attests that the provider's isolated managed
+// configuration and ACP protocol implement Agentico's complete hidden-review
+// contract. BuildCommand activates that boundary only when all three native
+// isolation options are requested; ordinary OpenCode sessions are unchanged.
+func (p *Provider) SupportsNativeToollessReview() bool { return true }
+
 // MatchesModel reports whether this provider handles the given model string.
 //
 // An explicit "opencode:" routing prefix always matches when a backend model

@@ -24,11 +24,71 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
+type reviewerCapableProvider struct {
+	testutil.FakeClaudeProvider
+	name    string
+	catalog []llm.ModelInfo
+}
+
+func (p reviewerCapableProvider) Name() string { return p.name }
+
+func (p reviewerCapableProvider) ModelCatalog() []llm.ModelInfo {
+	return append([]llm.ModelInfo(nil), p.catalog...)
+}
+
+func (p reviewerCapableProvider) AvailableModels() []string {
+	models := make([]string, 0, len(p.catalog))
+	for _, model := range p.catalog {
+		models = append(models, model.ID)
+	}
+	return models
+}
+
+func (p reviewerCapableProvider) MatchesModel(selector string) bool {
+	for _, model := range p.catalog {
+		if strings.EqualFold(model.ID, selector) {
+			return true
+		}
+		for _, alias := range model.Aliases {
+			if strings.EqualFold(alias, selector) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (reviewerCapableProvider) SupportsNativeToollessReview() bool { return true }
+
+type reviewerIncapableProvider struct {
+	reviewerCapableProvider
+}
+
+func (reviewerIncapableProvider) SupportsNativeToollessReview() bool { return false }
+
+func newReviewerRegistry(t *testing.T, providers ...llm.LLMProvider) *llm.Registry {
+	t.Helper()
+	registry := llm.NewRegistry()
+	for _, provider := range providers {
+		registry.Register(provider)
+	}
+	return registry
+}
+
+func reviewerProvider(t *testing.T, name string, catalog ...llm.ModelInfo) reviewerCapableProvider {
+	t.Helper()
+	return reviewerCapableProvider{
+		FakeClaudeProvider: testutil.FakeClaudeProvider{Script: testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())},
+		name:               name,
+		catalog:            catalog,
+	}
+}
+
 func TestParseDecision(t *testing.T) {
 	cases := []struct {
-		in      string
-		want    Decision
-		wantOK  bool
+		in     string
+		want   Decision
+		wantOK bool
 	}{
 		{"ALLOW", Allow, true},
 		{"DEFER", Defer, true},
@@ -51,6 +111,34 @@ func TestParseDecision(t *testing.T) {
 	}
 }
 
+func TestReviewMessageRejectsUnexpectedNativeActivity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		msg  llm.SDKMessage
+	}{
+		{name: "assistant tool use", msg: llm.SDKMessage{Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "tool_use", Name: "Bash"}}}}}},
+		{name: "tool progress", msg: llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{}}},
+		{name: "child task start", msg: llm.SDKMessage{TaskStarted: &llm.TaskStartedMessage{}}},
+		{name: "file read", msg: llm.SDKMessage{FileReads: []llm.FileReadEvent{{}}}},
+		{name: "file change", msg: llm.SDKMessage{FileChanges: []llm.FileChangeEvent{{}}}},
+		{name: "extra user interaction", msg: llm.SDKMessage{User: &llm.UserMessage{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !unexpectedReviewActivity(tt.msg) {
+				t.Errorf("unexpectedReviewActivity(%s) = false, want true", tt.name)
+			}
+		})
+	}
+
+	textOnly := llm.SDKMessage{Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "ALLOW"}}}}}
+	if unexpectedReviewActivity(textOnly) {
+		t.Error("unexpectedReviewActivity(text-only assistant) = true, want false")
+	}
+}
+
 func TestReviewPromptContainsOnlyMinimalContext(t *testing.T) {
 	prompt := reviewPrompt(ClassifyRequest{
 		ToolName:      "Bash",
@@ -61,6 +149,30 @@ func TestReviewPromptContainsOnlyMinimalContext(t *testing.T) {
 	for _, want := range []string{"Bash", "go test ./...", "/tmp/work", "/tmp/out", "ALLOW", "DEFER"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("reviewPrompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildIsolatedEnvProviderValuesReplaceInheritedValues(t *testing.T) {
+	t.Setenv("CODEX_HOME", "/user/codex")
+	t.Setenv("OPENCODE_CONFIG", "/user/opencode.json")
+	env := buildIsolatedEnv(testutil.FakeClaudeProvider{}, "/tmp/review", []string{
+		"CODEX_HOME=/tmp/review/codex",
+		"OPENCODE_CONFIG=/tmp/review/opencode.json",
+	})
+	for key, want := range map[string]string{
+		"CLAUDE_CONFIG_DIR": "/tmp/review",
+		"CODEX_HOME":        "/tmp/review/codex",
+		"OPENCODE_CONFIG":   "/tmp/review/opencode.json",
+	} {
+		var values []string
+		for _, kv := range env {
+			if strings.HasPrefix(kv, key+"=") {
+				values = append(values, strings.TrimPrefix(kv, key+"="))
+			}
+		}
+		if len(values) != 1 || values[0] != want {
+			t.Errorf("buildIsolatedEnv %s values = %v, want [%q]", key, values, want)
 		}
 	}
 }
@@ -82,6 +194,152 @@ func TestResolveReviewerAutomaticHaiku(t *testing.T) {
 	}
 	if r.Model != "haiku[200K]" {
 		t.Fatalf("ResolveReviewer model = %q, want haiku[200K]", r.Model)
+	}
+}
+
+func TestResolveReviewerAutomaticProviderAndModelOrder(t *testing.T) {
+	claude := reviewerProvider(t, "claude",
+		llm.ModelInfo{ID: "claude-haiku-large", Aliases: []string{"haiku"}, Category: "cheap", ContextWindow: 200_000},
+		llm.ModelInfo{ID: "claude-haiku-small", Category: "cheap", ContextWindow: 100_000},
+	)
+	opencode := reviewerProvider(t, "opencode",
+		llm.ModelInfo{ID: "google/gemini-flash", Category: "cheap", ContextWindow: 64_000},
+	)
+	codex := reviewerProvider(t, "codex",
+		llm.ModelInfo{ID: "gpt-mini", Category: "cheap", ContextWindow: 32_000},
+	)
+
+	for _, providers := range [][]llm.LLMProvider{
+		{codex, opencode, claude},
+		{opencode, claude, codex},
+		{claude, codex, opencode},
+	} {
+		registry := newReviewerRegistry(t, providers...)
+		reviewer, ok := ResolveReviewer(registry, "")
+		if !ok {
+			t.Fatal("ResolveReviewer(empty) = false, want true")
+		}
+		if got, want := reviewer.Provider.Name(), "claude"; got != want {
+			t.Errorf("ResolveReviewer(empty) provider = %q, want %q", got, want)
+		}
+		if got, want := reviewer.Model, "claude-haiku-small"; got != want {
+			t.Errorf("ResolveReviewer(empty) model = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestResolveReviewerAutomaticSkipsUnavailableAndIncapableProviders(t *testing.T) {
+	claude := reviewerProvider(t, "claude",
+		llm.ModelInfo{ID: "sonnet", Category: "balanced", ContextWindow: 200_000},
+	)
+	opencode := reviewerIncapableProvider{reviewerProvider(t, "opencode",
+		llm.ModelInfo{ID: "anthropic/claude-haiku", Category: "cheap", ContextWindow: 200_000},
+	)}
+	codex := reviewerProvider(t, "codex",
+		llm.ModelInfo{ID: "gpt-cheap-unknown", Category: "cheap"},
+		llm.ModelInfo{ID: "gpt-cheap-known", Category: "cheap", ContextWindow: 64_000},
+	)
+	registry := newReviewerRegistry(t, claude, opencode, codex)
+
+	reviewer, ok := ResolveReviewer(registry, "")
+	if !ok {
+		t.Fatal("ResolveReviewer(empty) = false, want Codex fallback")
+	}
+	if got, want := reviewer.Provider.Name(), "codex"; got != want {
+		t.Errorf("ResolveReviewer(empty) provider = %q, want %q", got, want)
+	}
+	if got, want := reviewer.Model, "gpt-cheap-known"; got != want {
+		t.Errorf("ResolveReviewer(empty) model = %q, want %q", got, want)
+	}
+
+	registry.RestrictToProviders([]llm.LLMProvider{claude, opencode})
+	if _, ok := ResolveReviewer(registry, ""); ok {
+		t.Error("ResolveReviewer(empty) = true, want false when every active provider misses")
+	}
+}
+
+func TestResolveReviewerAutomaticProviderLocalPreferenceBands(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		catalog  []llm.ModelInfo
+		want     string
+	}{
+		{
+			name:     "claude haiku before other cheap",
+			provider: "claude",
+			catalog: []llm.ModelInfo{
+				{ID: "cheap-small", Category: "cheap", ContextWindow: 16_000},
+				{ID: "claude-haiku", Category: "cheap", ContextWindow: 200_000},
+			},
+			want: "claude-haiku",
+		},
+		{
+			name:     "opencode haiku before flash before other cheap",
+			provider: "opencode",
+			catalog: []llm.ModelInfo{
+				{ID: "vendor/cheap", Category: "cheap", ContextWindow: 8_000},
+				{ID: "google/gemini-flash", Category: "cheap", ContextWindow: 16_000},
+				{ID: "anthropic/claude-haiku", Category: "cheap", ContextWindow: 200_000},
+			},
+			want: "anthropic/claude-haiku",
+		},
+		{
+			name:     "codex cheap before mini",
+			provider: "codex",
+			catalog: []llm.ModelInfo{
+				{ID: "gpt-shrink", ContextWindow: 8_000},
+				{ID: "gpt-cheap", Category: "cheap", ContextWindow: 200_000},
+			},
+			want: "gpt-cheap",
+		},
+		{
+			name:     "canonical id breaks equal ties",
+			provider: "codex",
+			catalog: []llm.ModelInfo{
+				{ID: "z-cheap", Category: "cheap", ContextWindow: 32_000},
+				{ID: "a-cheap", Category: "cheap", ContextWindow: 32_000},
+			},
+			want: "a-cheap",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := reviewerProvider(t, tt.provider, tt.catalog...)
+			reviewer, ok := ResolveReviewer(newReviewerRegistry(t, provider), "")
+			if !ok {
+				t.Fatal("ResolveReviewer(empty) = false, want true")
+			}
+			if got := reviewer.Model; got != tt.want {
+				t.Errorf("ResolveReviewer(empty) model = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveReviewerExplicitExactProviderAndUniqueBareSelector(t *testing.T) {
+	claude := reviewerProvider(t, "claude",
+		llm.ModelInfo{ID: "claude-sonnet", Aliases: []string{"shared"}, Category: "balanced"},
+	)
+	opencode := reviewerProvider(t, "opencode",
+		llm.ModelInfo{ID: "anthropic/claude-sonnet", Aliases: []string{"shared", "unique-open"}, Category: "balanced"},
+	)
+	registry := newReviewerRegistry(t, opencode, claude)
+
+	reviewer, ok := ResolveReviewer(registry, "opencode:anthropic/claude-sonnet")
+	if !ok || reviewer.Provider.Name() != "opencode" || reviewer.Model != "anthropic/claude-sonnet" {
+		t.Errorf("ResolveReviewer(explicit OpenCode) = (%v, %v), want exact OpenCode model", reviewer, ok)
+	}
+	reviewer, ok = ResolveReviewer(registry, "unique-open")
+	if !ok || reviewer.Provider.Name() != "opencode" || reviewer.Model != "anthropic/claude-sonnet" {
+		t.Errorf("ResolveReviewer(unique bare) = (%v, %v), want canonical OpenCode model", reviewer, ok)
+	}
+	if _, ok := ResolveReviewer(registry, "shared"); ok {
+		t.Error("ResolveReviewer(ambiguous bare) = true, want false")
+	}
+	if _, ok := ResolveReviewer(registry, "claude:removed"); ok {
+		t.Error("ResolveReviewer(stale explicit) = true, want false")
 	}
 }
 

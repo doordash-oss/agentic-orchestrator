@@ -276,8 +276,8 @@ type SessionOpts struct {
 // AutoReviewSnapshot bundles the automatic-review settings snapshotted when an
 // original session is built. Enabled is *bool so false stays distinguishable
 // from omitted (nil means read workspace defaults). Model is the reviewer
-// model selector; empty means "Automatic" (resolve a catalog-present Claude
-// Haiku model at review time). ReviewerProvider and ReviewerModel capture the
+// model selector; empty means "Automatic" (resolve one deterministic eligible
+// provider/model before session creation). ReviewerProvider and ReviewerModel capture the
 // resolved reviewer's identity (provider name and bare model id) so crash-resume
 // can reconstruct the same reviewer without re-resolving against the current
 // (possibly changed) provider/catalog state. Both are empty when no reviewer

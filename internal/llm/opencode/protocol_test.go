@@ -216,6 +216,53 @@ func TestHandshake_HappyPath(t *testing.T) {
 	}
 }
 
+func TestHandshake_NativeToollessReviewDeclaresNoClientToolSurface(t *testing.T) {
+	h := newHandshakeHarness(t, llm.ProtocolOpts{
+		Model:                "opencode:anthropic/claude-haiku-4-5",
+		WorkDir:              "/work/dir",
+		InitialPrompt:        "Classify one command.",
+		NativeToollessReview: true,
+	})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.p.Handshake(context.Background()) }()
+
+	initReq := h.nextRequest(t)
+	var initParams InitializeParams
+	if err := json.Unmarshal(initReq.Params, &initParams); err != nil {
+		t.Fatalf("unmarshal initialize params: %v", err)
+	}
+	if initParams.ClientCapabilities.FS.ReadTextFile || initParams.ClientCapabilities.FS.WriteTextFile {
+		t.Fatalf("review initialize FS capability = %+v, want no client filesystem", initParams.ClientCapabilities.FS)
+	}
+	if initParams.ClientCapabilities.Terminal {
+		t.Fatal("review initialize declared terminal capability")
+	}
+	h.feed(t, responseLine(t, mustID(t, initReq.ID), map[string]any{"protocolVersion": 1}))
+
+	sessionReq := h.nextRequest(t)
+	var sessionParams SessionNewParams
+	if err := json.Unmarshal(sessionReq.Params, &sessionParams); err != nil {
+		t.Fatalf("unmarshal session/new params: %v", err)
+	}
+	if len(sessionParams.MCPServers) != 0 {
+		t.Fatalf("review session/new MCP servers = %v, want none", sessionParams.MCPServers)
+	}
+	h.feed(t, responseLine(t, mustID(t, sessionReq.ID), map[string]any{"sessionId": "hidden-review"}))
+
+	promptReq := h.nextRequest(t)
+	var promptParams PromptParams
+	if err := json.Unmarshal(promptReq.Params, &promptParams); err != nil {
+		t.Fatalf("unmarshal session/prompt params: %v", err)
+	}
+	if len(promptParams.Prompt) != 1 || promptParams.Prompt[0].Text != "Classify one command." {
+		t.Fatalf("review prompt = %+v, want exact minimal prompt", promptParams.Prompt)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Handshake() error: %v", err)
+	}
+}
+
 func TestHandshake_RejectsIncompatibleProtocolVersion(t *testing.T) {
 	h := newHandshakeHarness(t, llm.ProtocolOpts{WorkDir: "/w", InitialPrompt: "p"})
 	errCh := make(chan error, 1)
@@ -293,6 +340,146 @@ func TestParseLine_AssistantTextAccumulatesWithoutLoss(t *testing.T) {
 	// Chunks accumulate; the partial carries the full text so far, never just
 	// the latest delta and never a duplicate.
 	assertAssistantText(t, msgs, "Hello world")
+}
+
+func TestParseLine_NativeToollessReviewFailsClosedOnUnexpectedACPInteractions(t *testing.T) {
+	tests := []struct {
+		name string
+		line func(*testing.T) []byte
+	}{
+		{
+			name: "permission request",
+			line: func(t *testing.T) []byte {
+				return serverRequestLine(t, 201, requestPermissionMethod, map[string]any{
+					"sessionId": "ses_x",
+					"toolCall":  map[string]any{"kind": ToolKindExecute, "title": "run command"},
+					"options":   []any{},
+				})
+			},
+		},
+		{
+			name: "question request",
+			line: func(t *testing.T) []byte {
+				return serverRequestLine(t, 202, requestPermissionMethod, map[string]any{
+					"sessionId": "ses_x",
+					"toolCall":  map[string]any{"kind": ToolKindQuestion, "title": "Proceed?"},
+					"options":   []any{},
+				})
+			},
+		},
+		{
+			name: "client filesystem request",
+			line: func(t *testing.T) []byte {
+				return serverRequestLine(t, 203, readTextFileMethod, map[string]any{"path": "/secret"})
+			},
+		},
+		{
+			name: "tool call notification",
+			line: func(t *testing.T) []byte {
+				return notificationLine(t, "session/update", map[string]any{
+					"sessionId": "ses_x",
+					"update": map[string]any{
+						"sessionUpdate": UpdateToolCall,
+						"toolCallId":    "call_1",
+						"kind":          ToolKindThink,
+						"title":         "spawn child",
+					},
+				})
+			},
+		},
+		{
+			name: "child session activity",
+			line: func(t *testing.T) []byte {
+				return notificationLine(t, "session/update", map[string]any{
+					"sessionId": "ses_child",
+					"update": map[string]any{
+						"sessionUpdate": UpdateAgentMessageChunk,
+						"messageId":     "child_message",
+						"content":       map[string]any{"type": "text", "text": "child output"},
+					},
+				})
+			},
+		},
+		{
+			name: "malformed session update",
+			line: func(t *testing.T) []byte {
+				return notificationLine(t, "session/update", "not an update object")
+			},
+		},
+		{
+			name: "unknown session update",
+			line: func(t *testing.T) []byte {
+				return notificationLine(t, "session/update", map[string]any{
+					"sessionId": "ses_x",
+					"update":    map[string]any{"sessionUpdate": "available_commands_update"},
+				})
+			},
+		},
+		{
+			name: "unexpected response",
+			line: func(t *testing.T) []byte {
+				return responseLine(t, 999, map[string]any{})
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _, _ := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+			msgs := mustParse(t, p, tc.line(t))
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("unexpected review interaction produced %+v, want one terminal error", msgs)
+			}
+			if msgs[0].ControlRequest != nil || msgs[0].ToolProgress != nil {
+				t.Fatalf("unexpected review interaction escaped as interactive activity: %+v", msgs[0])
+			}
+		})
+	}
+}
+
+func TestNativeToollessReviewRejectsQuestionAndAdditionalTurn(t *testing.T) {
+	p, buf, promptID := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+	mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": UpdateAgentMessageChunk,
+			"messageId":     "msg_question",
+			"content":       map[string]any{"type": "text", "text": "Should this command be allowed?"},
+		},
+	}))
+
+	msgs := mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": StopReasonEndTurn}))
+	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+		t.Fatalf("question-shaped review response produced %+v, want terminal error", msgs)
+	}
+	if got := strings.Count(buf.String(), `"method":"session/prompt"`); got != 0 {
+		t.Fatalf("question-shaped review response sent %d continuation prompts, want none: %s", got, buf.String())
+	}
+	if err := p.SendUserMessage("second turn"); err == nil {
+		t.Fatal("SendUserMessage() in native tool-less review succeeded, want rejection")
+	}
+}
+
+func TestNativeToollessReviewPreservesExactDecisionAndCompletesOneTurn(t *testing.T) {
+	for _, decision := range []string{"ALLOW", "DEFER"} {
+		t.Run(decision, func(t *testing.T) {
+			p, _, promptID := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+			msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+				"sessionId": "ses_x",
+				"update": map[string]any{
+					"sessionUpdate": UpdateAgentMessageChunk,
+					"messageId":     "decision",
+					"content":       map[string]any{"type": "text", "text": decision},
+				},
+			}))
+			assertAssistantText(t, msgs, decision)
+
+			msgs = mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": StopReasonEndTurn}))
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+				t.Fatalf("%s review completion produced %+v, want one success result", decision, msgs)
+			}
+		})
+	}
 }
 
 func TestParseLine_AssistantTextResetsOnNewMessageID(t *testing.T) {

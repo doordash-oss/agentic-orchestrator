@@ -641,7 +641,7 @@ func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 		}
-		for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat, llm.PhaseKBBuild} {
+		for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat, llm.PhaseKBBuild, llm.PhaseAutomaticReview} {
 			resp.PhaseProviderModels[string(role)] = h.registry.EligibleModelsForPhase(role)
 		}
 	}

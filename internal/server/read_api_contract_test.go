@@ -2303,9 +2303,10 @@ func writeFile(t *testing.T, path, data string) {
 }
 
 type fakeProvider struct {
-	name    string
-	models  []string
-	catalog []llm.ModelInfo
+	name     string
+	models   []string
+	catalog  []llm.ModelInfo
+	toolLess bool
 }
 
 func (p fakeProvider) Name() string { return p.name }
@@ -2346,6 +2347,8 @@ func (p fakeProvider) VersionInfo() (string, error) { return "test", nil }
 func (p fakeProvider) MinVersion() [3]int { return [3]int{} }
 
 func (p fakeProvider) EnvVarsToExclude() []string { return nil }
+
+func (p fakeProvider) SupportsNativeToollessReview() bool { return p.toolLess }
 
 func (p fakeProvider) ModelCatalog() []llm.ModelInfo {
 	if len(p.catalog) > 0 {

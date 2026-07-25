@@ -72,10 +72,17 @@ type InitializeResult struct {
 
 // ThreadStartParams holds parameters for thread/start.
 type ThreadStartParams struct {
-	Model          string       `json:"model"`
-	Cwd            string       `json:"cwd"`
-	ApprovalPolicy string       `json:"approvalPolicy,omitempty"`
-	Sandbox        *SandboxMode `json:"sandbox,omitempty"`
+	Model                   string                    `json:"model"`
+	Cwd                     string                    `json:"cwd"`
+	ApprovalPolicy          string                    `json:"approvalPolicy,omitempty"`
+	Sandbox                 *SandboxMode              `json:"sandbox,omitempty"`
+	Ephemeral               bool                      `json:"ephemeral,omitempty"`
+	Config                  map[string]interface{}    `json:"config,omitempty"`
+	BaseInstructions        *string                   `json:"baseInstructions,omitempty"`
+	DeveloperInstructions   *string                   `json:"developerInstructions,omitempty"`
+	Environments            *[]map[string]interface{} `json:"environments,omitempty"`
+	DynamicTools            *[]map[string]interface{} `json:"dynamicTools,omitempty"`
+	SelectedCapabilityRoots *[]map[string]interface{} `json:"selectedCapabilityRoots,omitempty"`
 }
 
 // SandboxMode selects the coarse sandbox mode used during thread/start.
@@ -117,6 +124,7 @@ type TurnStartParams struct {
 	ThreadID          string             `json:"threadId"`
 	Input             []InputItem        `json:"input"`
 	Model             string             `json:"model,omitempty"`
+	Effort            string             `json:"effort,omitempty"`
 	ApprovalPolicy    string             `json:"approvalPolicy,omitempty"`
 	SandboxPolicy     *SandboxPolicy     `json:"sandboxPolicy,omitempty"`
 	CollaborationMode *CollaborationMode `json:"collaborationMode,omitempty"`
@@ -156,6 +164,7 @@ type Turn struct {
 // AgentMessageDelta is an incremental text chunk from the agent.
 type AgentMessageDelta struct {
 	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
 	ItemID   string `json:"itemId"`
 	Delta    string `json:"delta"`
 	Phase    string `json:"phase,omitempty"`

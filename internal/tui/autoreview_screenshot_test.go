@@ -42,16 +42,35 @@ func TestGenerateAutoReviewScreenshots(t *testing.T) {
 	}
 
 	cat := PhaseModelCatalog{
-		Fields:         append([]string(nil), globalModelFields...),
-		ProviderModels: map[string][]string{"claude": {"claude/haiku[200K]", "claude/sonnet-4-6", "claude/opus-4-7"}},
-		ProviderModelInfos: map[string][]llm.ModelInfo{"claude": {
-			{ID: "claude/haiku[200K]", DisplayName: "Claude Haiku", ContextWindow: 200000, Category: "cheap", Aliases: []string{"haiku"}},
-			{ID: "claude/sonnet-4-6", DisplayName: "Claude Sonnet 4.6", ContextWindow: 200000, Category: "balanced"},
-			{ID: "claude/opus-4-7", DisplayName: "Claude Opus 4.7", ContextWindow: 200000, Category: "capable"},
-		}},
-		ProviderOrder:       []string{"claude"},
-		PhaseDefaults:       map[string]string{},
-		PhaseProviderModels: map[string]map[string][]string{},
+		Fields: append([]string(nil), globalModelFields...),
+		ProviderModels: map[string][]string{
+			"claude":   {"claude/haiku[200K]", "claude/sonnet-4-6"},
+			"opencode": {"anthropic/claude-haiku", "google/gemini-2.5-flash"},
+			"codex":    {"gpt-5.4-mini", "gpt-5.4"},
+		},
+		ProviderModelInfos: map[string][]llm.ModelInfo{
+			"claude": {
+				{ID: "claude/haiku[200K]", DisplayName: "Claude Haiku", ContextWindow: 200000, Category: "cheap", Aliases: []string{"haiku"}},
+				{ID: "claude/sonnet-4-6", DisplayName: "Claude Sonnet 4.6", ContextWindow: 200000, Category: "balanced"},
+			},
+			"opencode": {
+				{ID: "anthropic/claude-haiku", DisplayName: "Claude Haiku via OpenCode", ContextWindow: 200000, Category: "cheap"},
+				{ID: "google/gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", ContextWindow: 1000000, Category: "cheap"},
+			},
+			"codex": {
+				{ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 mini", ContextWindow: 272000, Category: "cheap"},
+				{ID: "gpt-5.4", DisplayName: "GPT-5.4", ContextWindow: 272000, Category: "capable"},
+			},
+		},
+		ProviderOrder: []string{"claude", "opencode", "codex"},
+		PhaseDefaults: map[string]string{},
+		PhaseProviderModels: map[string]map[string][]string{
+			automaticReviewField: {
+				"claude":   {"claude/haiku[200K]", "claude/sonnet-4-6"},
+				"opencode": {"anthropic/claude-haiku", "google/gemini-2.5-flash"},
+				"codex":    {"gpt-5.4-mini", "gpt-5.4"},
+			},
+		},
 	}
 	cfg := &config.Config{Defaults: config.DefaultsConfig{
 		Models:                 config.ModelConfig{AutomaticReview: ""},
@@ -60,30 +79,32 @@ func TestGenerateAutoReviewScreenshots(t *testing.T) {
 		Pipeline:               "large",
 	}}
 
-	// Behavior tab: focus the Automatic Review setting so the Details panel
-	// shows it as "off" (disabled), with the always-visible scope hint.
-	behaviorM := NewWorkspaceEditConfigModel(cfg, cat)
-	behaviorM.activeTab = tabBehavior
-	behaviorM.focus = configFocusBody
-	behaviorM.behaviorCursor = len(behaviorM.behaviorSettings()) - 1
-	behaviorText := behaviorM.View()
-	behaviorPath := filepath.Join(outDir, "screenshots", "workspace-behavior-tab-with-automatic-review-disabled-and-the-always-visible-new-1440x900.png")
-	if err := renderScreenshot(behaviorText, behaviorPath); err != nil {
-		t.Fatalf("behavior screenshot: %v", err)
-	}
-	t.Logf("wrote %s", behaviorPath)
-
-	// Models tab: focus the Automatic Review row with its Claude-only picker
-	// open, set to Automatic, while disabled.
+	// Automatic mode remains editable while disabled and exposes all eligible
+	// provider groups in the dedicated reviewer role.
 	modelsM := NewWorkspaceEditConfigModel(cfg, cat)
 	modelsM.activeTab = tabModels
-	modelsM.focus = configFocusModelList
+	modelsM.focus = configFocusAgentList
 	modelsM.editor.rowCursor = modelsM.editor.modelsCount() - 1
-	modelsM.editor.activeModelCell = modelCellModel
 	modelsText := modelsM.View()
-	modelsPath := filepath.Join(outDir, "screenshots", "workspace-models-tab-with-automatic-review-set-to-automatic-its-claude-only-pick-1440x900.png")
+	modelsPath := filepath.Join(outDir, "screenshots", "workspace-models-tab-with-automatic-review-set-to-automatic-and-the-provider-sel-1440x900.png")
 	if err := renderScreenshot(modelsText, modelsPath); err != nil {
 		t.Fatalf("models screenshot: %v", err)
 	}
 	t.Logf("wrote %s", modelsPath)
+
+	// Explicit OpenCode mode shows its provider-local catalog while retaining
+	// the always-visible new-session lifecycle hint.
+	openCodeCfg := *cfg
+	openCodeCfg.Defaults.Models.AutomaticReview = "opencode:anthropic/claude-haiku"
+	openCodeM := NewWorkspaceEditConfigModel(&openCodeCfg, cat)
+	openCodeM.activeTab = tabModels
+	openCodeM.focus = configFocusModelList
+	openCodeM.editor.rowCursor = openCodeM.editor.modelsCount() - 1
+	openCodeM.editor.activeModelCell = modelCellModel
+	openCodeText := openCodeM.View()
+	openCodePath := filepath.Join(outDir, "screenshots", "workspace-models-tab-with-an-explicit-opencode-reviewer-selected-its-provider-lo-1440x900.png")
+	if err := renderScreenshot(openCodeText, openCodePath); err != nil {
+		t.Fatalf("OpenCode models screenshot: %v", err)
+	}
+	t.Logf("wrote %s", openCodePath)
 }

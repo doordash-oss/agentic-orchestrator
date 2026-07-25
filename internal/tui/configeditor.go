@@ -502,14 +502,13 @@ func (m ConfigEditorModel) currentModelEntries() []PhaseModelEntry {
 }
 
 // fieldModelEntries returns the selectable model entries for a field. The
-// workspace-only Automatic Review row offers Automatic plus ready Claude
-// catalog models only, so it bypasses the generic per-field eligible lookup
-// (which would fall back to every ready provider for a field the server does
-// not know about). The synthetic "Automatic" entry uses an empty ModelID so
-// SelectionValue resolves to the empty "Automatic" sentinel.
+// workspace-only Automatic Review row offers Automatic plus models from every
+// provider eligible for the dedicated reviewer role. The synthetic Automatic
+// entry uses an empty ModelID so the persisted value remains the meaningful
+// empty sentinel.
 func (m ConfigEditorModel) fieldModelEntries(field, agent string) []PhaseModelEntry {
 	if field == automaticReviewField {
-		return m.withAutomaticOption(m.catalog.ClaudeEntries())
+		return m.withAutomaticOption(m.catalog.EntriesForFieldAndAgent(field, agent))
 	}
 	entries := m.catalog.EntriesForFieldAndAgent(field, agent)
 	if len(entries) == 0 {
@@ -519,16 +518,19 @@ func (m ConfigEditorModel) fieldModelEntries(field, agent string) []PhaseModelEn
 }
 
 func (m ConfigEditorModel) withAutomaticOption(entries []PhaseModelEntry) []PhaseModelEntry {
-	automatic := PhaseModelEntry{Agent: "claude", ModelID: "", DisplayName: "Automatic"}
+	automatic := PhaseModelEntry{ModelID: "", DisplayName: "Automatic"}
 	return append([]PhaseModelEntry{automatic}, entries...)
 }
 
 func (m ConfigEditorModel) agentOptionsForField(field string) []string {
 	if field == automaticReviewField {
-		if len(m.catalog.ProviderModels["claude"]) > 0 {
-			return []string{"claude"}
+		var providers []string
+		for _, group := range m.catalog.ProviderEntryGroupsForField(field) {
+			if len(group.Models) > 0 {
+				providers = append(providers, group.Name)
+			}
 		}
-		return nil
+		return providers
 	}
 	var agents []string
 	for _, group := range m.catalog.ProviderEntryGroupsForField(field) {
@@ -591,7 +593,7 @@ func (m *ConfigEditorModel) cycleAgent(delta int) {
 	if !ok {
 		return
 	}
-	m.setModelValueForField(field, m.catalog.SelectionValue(entry))
+	m.setModelValueForField(field, m.catalog.SelectionValueForField(field, entry))
 }
 
 func (m *ConfigEditorModel) cycleModelForward() {
@@ -612,7 +614,7 @@ func (m *ConfigEditorModel) cycleModelForward() {
 			break
 		}
 	}
-	m.setModelValueForField(field, m.catalog.SelectionValue(entries[nextIdx]))
+	m.setModelValueForField(field, m.catalog.SelectionValueForField(field, entries[nextIdx]))
 }
 
 func (m *ConfigEditorModel) cycleModelBackward() {
@@ -633,7 +635,7 @@ func (m *ConfigEditorModel) cycleModelBackward() {
 			break
 		}
 	}
-	m.setModelValueForField(field, m.catalog.SelectionValue(entries[nextIdx]))
+	m.setModelValueForField(field, m.catalog.SelectionValueForField(field, entries[nextIdx]))
 }
 
 func (m ConfigEditorModel) filteredModelEntriesForCurrentRow() []PhaseModelEntry {
@@ -690,7 +692,8 @@ func (m *ConfigEditorModel) acceptFilteredModel() {
 		if idx >= len(entries) {
 			idx = len(entries) - 1
 		}
-		m.setModelValueForField(m.currentModelField(), m.catalog.SelectionValue(entries[idx]))
+		field := m.currentModelField()
+		m.setModelValueForField(field, m.catalog.SelectionValueForField(field, entries[idx]))
 	}
 	m.clearModelFilter()
 }
@@ -1189,9 +1192,15 @@ func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidt
 }
 
 func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, focus configFocusZone, width int) string {
+	title := configBoxTitleAgents
+	emptyLabel := "No agents"
+	if field == automaticReviewField {
+		title = "Providers"
+		emptyLabel = "No providers"
+	}
 	agents := m.agentOptionsForField(field)
 	if len(agents) == 0 {
-		return titledConfigBox(configBoxTitleAgents, MutedStyle.Render("No agents"), width, modelPanelHeight, focus == configFocusAgentList)
+		return titledConfigBox(title, MutedStyle.Render(emptyLabel), width, modelPanelHeight, focus == configFocusAgentList)
 	}
 	var lines []string
 	for _, agent := range agents {
@@ -1209,13 +1218,17 @@ func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, 
 		}
 		lines = append(lines, prefix+label)
 	}
-	return titledConfigBox(configBoxTitleAgents, strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusAgentList)
+	return titledConfigBox(title, strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusAgentList)
 }
 
 func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFocusZone, width int) string {
 	entries := m.filteredModelEntriesForCurrentRow()
 	panelFocused := focus == configFocusModelList || m.ModelFilteringActive()
 	title := truncateString("Models for "+agent, maxInt(width-4, 8))
+	automaticReviewer := field == automaticReviewField && m.modelValueForField(field) == ""
+	if automaticReviewer {
+		title = "Reviewer choice"
+	}
 	if len(entries) == 0 {
 		return titledConfigBox(title, MutedStyle.Render("No models"), width, modelPanelHeight, panelFocused)
 	}
@@ -1233,6 +1246,18 @@ func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFo
 		lines = append(lines, MutedStyle.Render("Search  ")+SummarySelectedValueStyle.Render(filter), "")
 	} else {
 		lines = append(lines, MutedStyle.Render("/ search"), "")
+	}
+	if automaticReviewer {
+		lines = append(lines, MutedStyle.Render("Automatic tries Claude → OpenCode → Codex"), "")
+	}
+	if current != "" {
+		if _, ok := m.entryForFieldValue(field, current); !ok {
+			staleLabel := current
+			if provider, model := splitProviderModel(current); provider != "" {
+				staleLabel = provider + "/" + model
+			}
+			lines = append(lines, MutedStyle.Render(staleLabel+" (unavailable)"), "")
+		}
 	}
 	if start > 0 {
 		lines = append(lines, MutedStyle.Render("  ..."))
@@ -1355,7 +1380,12 @@ func (m ConfigEditorModel) phaseAssignmentLabel(field string) string {
 	}
 	model := value
 	unavailable := ""
-	if entry, ok := m.entryForFieldValue(field, value); ok {
+	if _, ok := m.entryForFieldValue(field, value); field == automaticReviewField && ok {
+		if provider, modelID := splitProviderModel(value); provider != "" {
+			agent = provider
+			model = compactModelIDLabel(modelID)
+		}
+	} else if entry, ok := m.entryForFieldValue(field, value); ok {
 		model = compactModelEntryLabel(entry, value)
 	} else if value != "" {
 		if provider, modelID := splitProviderModel(value); provider != "" {

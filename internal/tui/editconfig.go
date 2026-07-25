@@ -395,7 +395,16 @@ func (m EditConfigModel) renderModelsWorkspace() string {
 			contentWidth = 0
 		}
 	}
-	return m.editor.renderModelsWorkspaceWithFocusWidth(m.focus, contentWidth)
+	view := m.editor.renderModelsWorkspaceWithFocusWidth(m.focus, contentWidth)
+	if !m.isWorkspace {
+		return view
+	}
+	state := "off"
+	if m.automaticReviewEnabled {
+		state = "on"
+	}
+	status := MutedStyle.Render("Automatic review: " + state + " · reviewer choice remains editable")
+	return status + "\n\n" + view
 }
 
 func truncatePhaseLabelForWidth(label string, panelWidth int) string {
@@ -596,7 +605,7 @@ func (m EditConfigModel) renderBehaviorDetailsPanel() string {
 		if m.automaticReviewEnabled {
 			selected = "on"
 		}
-		effect := "Lets a hidden Claude reviewer auto-approve two safe Bash commands for new sessions"
+		effect := "Lets one isolated reviewer auto-approve eligible Bash commands for new sessions"
 		if !m.automaticReviewEnabled {
 			effect = "Bash commands not covered by existing permission rules use manual review"
 		}
@@ -862,17 +871,23 @@ func (m EditConfigModel) renderHintBar() string {
 	var keys string
 	switch m.activeTab {
 	case tabModels:
+		providerLabel := "agent"
+		providersLabel := "agents"
+		if m.editor.currentModelField() == automaticReviewField {
+			providerLabel = "provider"
+			providersLabel = "providers"
+		}
 		switch m.focus {
 		case configFocusPhaseList:
-			keys = "↑↓ phase   → agents   enter save   esc cancel"
+			keys = "↑↓ phase   → " + providersLabel + "   enter save   esc cancel"
 		case configFocusAgentList:
-			keys = "↑↓ agent   → models   enter phase   esc cancel"
+			keys = "↑↓ " + providerLabel + "   → models   enter phase   esc cancel"
 		case configFocusModelList:
 			keys = "↑↓ model   → effort   / search   enter phase   esc cancel"
 		case configFocusEffortList:
 			keys = "↑↓ effort   ← models   enter phase   esc cancel"
 		default:
-			keys = "↑↓ phase   → agents   / search   enter save   esc cancel"
+			keys = "↑↓ phase   → " + providersLabel + "   / search   enter save   esc cancel"
 		}
 	case tabBehavior:
 		keys = "↑↓ setting   ←→ value   space toggle   enter tabs   esc cancel"

@@ -190,6 +190,35 @@ func TestPhaseModelCatalog_SelectionValue(t *testing.T) {
 	}
 }
 
+func TestPhaseModelCatalog_AutomaticReviewSelectionQualifiesOnlyAcrossEligibleProviders(t *testing.T) {
+	t.Parallel()
+
+	cat := PhaseModelCatalog{
+		ProviderOrder: []string{"claude", "opencode", "codex"},
+		ProviderModels: map[string][]string{
+			"claude":   {"haiku"},
+			"opencode": {"anthropic/haiku"},
+			"codex":    {"gpt-5.4"},
+		},
+		PhaseProviderModels: map[string]map[string][]string{
+			automaticReviewField: {
+				"claude": {"haiku"},
+				"codex":  {"gpt-5.4"},
+			},
+		},
+	}
+
+	claude := cat.EntriesForFieldAndAgent(automaticReviewField, "claude")[0]
+	if got := cat.SelectionValueForField(automaticReviewField, claude); got != "claude:haiku" {
+		t.Fatalf("multi-provider automatic-review value = %q, want claude:haiku", got)
+	}
+
+	cat.PhaseProviderModels[automaticReviewField] = map[string][]string{"claude": {"haiku"}}
+	if got := cat.SelectionValueForField(automaticReviewField, claude); got != "haiku" {
+		t.Fatalf("single eligible provider value = %q, want haiku", got)
+	}
+}
+
 func TestPhaseModelCatalog_MarksRecommendedEntry(t *testing.T) {
 	t.Parallel()
 	cat := gatewayWinningCatalog()

@@ -89,6 +89,365 @@ func TestCodexProtocol_StartThread_FreshVsResume(t *testing.T) {
 	})
 }
 
+func TestCodexProtocol_NativeToollessReviewConfiguresOneEphemeralTurn(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{
+		Model:                "gpt-5.4-mini[400K]",
+		WorkDir:              "/workspace",
+		InitialPrompt:        "classify",
+		NativeToollessReview: true,
+	})
+	var buf bytes.Buffer
+	p.SetStdin(&buf)
+	if err := p.startThread(); err != nil {
+		t.Fatalf("startThread() error: %v", err)
+	}
+
+	var threadReq struct {
+		Method string            `json:"method"`
+		Params ThreadStartParams `json:"params"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &threadReq); err != nil {
+		t.Fatalf("unmarshal thread/start: %v", err)
+	}
+	if threadReq.Method != "thread/start" {
+		t.Fatalf("method = %q, want thread/start", threadReq.Method)
+	}
+	if threadReq.Params.Model != "gpt-5.4-mini" {
+		t.Errorf("thread model = %q, want canonical model", threadReq.Params.Model)
+	}
+	if !threadReq.Params.Ephemeral {
+		t.Error("thread ephemeral = false")
+	}
+	if threadReq.Params.Sandbox == nil || *threadReq.Params.Sandbox != SandboxModeReadOnly {
+		t.Errorf("thread sandbox = %v, want read-only", threadReq.Params.Sandbox)
+	}
+	if threadReq.Params.Environments == nil || len(*threadReq.Params.Environments) != 0 {
+		t.Errorf("thread environments = %v, want explicit empty list", threadReq.Params.Environments)
+	}
+	if threadReq.Params.DynamicTools == nil || len(*threadReq.Params.DynamicTools) != 0 {
+		t.Errorf("thread dynamicTools = %v, want explicit empty list", threadReq.Params.DynamicTools)
+	}
+	if threadReq.Params.SelectedCapabilityRoots == nil || len(*threadReq.Params.SelectedCapabilityRoots) != 0 {
+		t.Errorf("thread selectedCapabilityRoots = %v, want explicit empty list", threadReq.Params.SelectedCapabilityRoots)
+	}
+
+	buf.Reset()
+	p.SetThreadIDForTest("thread-review")
+	if err := p.startTurn("classify"); err != nil {
+		t.Fatalf("startTurn() error: %v", err)
+	}
+	var turnReq struct {
+		Method string          `json:"method"`
+		Params TurnStartParams `json:"params"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &turnReq); err != nil {
+		t.Fatalf("unmarshal turn/start: %v", err)
+	}
+	if turnReq.Method != "turn/start" {
+		t.Fatalf("method = %q, want turn/start", turnReq.Method)
+	}
+	if turnReq.Params.Model != "gpt-5.4-mini" || turnReq.Params.Effort != "low" {
+		t.Errorf("turn model/effort = %q/%q, want gpt-5.4-mini/low", turnReq.Params.Model, turnReq.Params.Effort)
+	}
+	if turnReq.Params.ApprovalPolicy != "never" {
+		t.Errorf("turn approvalPolicy = %q, want never", turnReq.Params.ApprovalPolicy)
+	}
+	if turnReq.Params.SandboxPolicy == nil || turnReq.Params.SandboxPolicy.Type != "readOnly" ||
+		turnReq.Params.SandboxPolicy.NetworkAccess {
+		t.Errorf("turn sandboxPolicy = %+v, want readOnly without network", turnReq.Params.SandboxPolicy)
+	}
+	if turnReq.Params.CollaborationMode != nil {
+		t.Errorf("turn collaborationMode = %+v, want absent", turnReq.Params.CollaborationMode)
+	}
+
+	buf.Reset()
+	if err := p.SendUserMessage("continue"); err == nil {
+		t.Fatal("SendUserMessage() error = nil in native tool-less review")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("SendUserMessage() wrote a second turn: %s", buf.String())
+	}
+}
+
+func TestCodexProtocol_NativeToollessReviewExactDecisions(t *testing.T) {
+	for _, decision := range []string{"ALLOW", "DEFER"} {
+		t.Run(decision, func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+			p.SetThreadIDForTest("thread-review")
+			msgs, err := p.ParseLine([]byte(`{"method":"turn/started","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`))
+			if err != nil {
+				t.Fatalf("ParseLine(turn started) error: %v", err)
+			}
+			if len(msgs) != 0 {
+				t.Fatalf("turn started = %+v, want no messages", msgs)
+			}
+
+			line := []byte(`{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"` + decision + `","phase":"final_answer"}}}`)
+			msgs, err = p.ParseLine(line)
+			if err != nil {
+				t.Fatalf("ParseLine(agent message) error: %v", err)
+			}
+			if len(msgs) != 1 || msgs[0].Assistant == nil ||
+				msgs[0].Assistant.Message.Content[0].Text != decision {
+				t.Fatalf("agent message = %+v, want exact %s", msgs, decision)
+			}
+
+			msgs, err = p.ParseLine([]byte(`{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"completed"}}}`))
+			if err != nil {
+				t.Fatalf("ParseLine(turn completed) error: %v", err)
+			}
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+				t.Fatalf("turn completion = %+v, want success", msgs)
+			}
+		})
+	}
+}
+
+func TestCodexProtocol_NativeToollessReviewFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"command approval", `{"id":7,"method":"item/commandExecution/requestApproval","params":{"command":"pwd"}}`},
+		{"file approval", `{"id":8,"method":"item/fileChange/requestApproval","params":{"grantRoot":"/tmp"}}`},
+		{"question", `{"id":9,"method":"tool/requestUserInput","params":{"questions":[]}}`},
+		{"unknown request", `{"id":10,"method":"mcpServer/elicitation/request","params":{}}`},
+		{"command activity", `{"method":"item/started","params":{"threadId":"thread-review","item":{"id":"i","type":"commandExecution"}}}`},
+		{"file activity", `{"method":"item/started","params":{"threadId":"thread-review","item":{"id":"i","type":"fileChange"}}}`},
+		{"web activity", `{"method":"item/started","params":{"threadId":"thread-review","item":{"id":"i","type":"webSearch"}}}`},
+		{"MCP activity", `{"method":"item/started","params":{"threadId":"thread-review","item":{"id":"i","type":"mcpToolCall"}}}`},
+		{"dynamic tool activity", `{"method":"item/started","params":{"threadId":"thread-review","item":{"id":"i","type":"dynamicToolCall"}}}`},
+		{"child agent activity", `{"method":"item/started","params":{"threadId":"thread-review","item":{"id":"i","type":"collabAgentToolCall"}}}`},
+		{"provider error", `{"method":"error","params":{"error":{"message":"provider failed"}}}`},
+		{"malformed decision", `{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"completed"}}}`},
+		{"refusal", `{"method":"item/completed","params":{"threadId":"thread-review","item":{"id":"i","type":"agentMessage","text":"I cannot comply"}}}`},
+		{"truncation", `{"method":"item/completed","params":{"threadId":"thread-review","item":{"id":"i","type":"contextCompaction"}}}`},
+		{"cancellation", `{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"interrupted"}}}`},
+		{"malformed JSON", `{`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+			p.SetThreadIDForTest("thread-review")
+			msgs, err := p.ParseLine([]byte(tt.line))
+			if err != nil {
+				return
+			}
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("ParseLine() = %+v, want result/error or parse error", msgs)
+			}
+		})
+	}
+}
+
+func TestCodexProtocol_NativeToollessReviewViolationIsTerminal(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"off-main agent delta", `{"method":"item/agentMessage/delta","params":{"threadId":"thread-child","turnId":"turn-1","itemId":"i","delta":"ALLOW"}}`},
+		{"off-main turn completed", `{"method":"turn/completed","params":{"threadId":"thread-child","turn":{"id":"turn-child","status":"completed"}}}`},
+		{"off-main item completed", `{"method":"item/completed","params":{"threadId":"thread-child","turnId":"turn-child","item":{"id":"i","type":"agentMessage","text":"ALLOW"}}}`},
+		{"off-main item started", `{"method":"item/started","params":{"threadId":"thread-child","turnId":"turn-child","item":{"id":"i","type":"agentMessage"}}}`},
+		{"off-main token usage", `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-child","turnId":"turn-child","tokenUsage":{"total":{},"last":{}}}}`},
+		{"off-main reasoning delta", `{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-child","turnId":"turn-child","itemId":"i","delta":"thinking"}}`},
+		{"command output delta", `{"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-review","turnId":"turn-1","itemId":"i","delta":"output"}}`},
+		{"file output delta", `{"method":"item/fileChange/outputDelta","params":{"threadId":"thread-review","turnId":"turn-1","itemId":"i","delta":"patch"}}`},
+		{"child thread started", `{"method":"thread/started","params":{"thread":{"id":"thread-child"}}}`},
+		{"child thread status", `{"method":"thread/status/changed","params":{"threadId":"thread-child","status":"active"}}`},
+		{"malformed agent delta", `{"method":"item/agentMessage/delta","params":[]}`},
+		{"malformed turn completed", `{"method":"turn/completed","params":[]}`},
+		{"malformed item completed", `{"method":"item/completed","params":[]}`},
+		{"malformed item started", `{"method":"item/started","params":[]}`},
+		{"malformed turn started", `{"method":"turn/started","params":[]}`},
+		{"malformed thread started", `{"method":"thread/started","params":[]}`},
+		{"malformed thread status", `{"method":"thread/status/changed","params":[]}`},
+		{"malformed token usage", `{"method":"thread/tokenUsage/updated","params":[]}`},
+		{"malformed command output", `{"method":"item/commandExecution/outputDelta","params":[]}`},
+		{"malformed file output", `{"method":"item/fileChange/outputDelta","params":[]}`},
+		{"malformed reasoning delta", `{"method":"item/reasoning/summaryTextDelta","params":[]}`},
+		{"malformed rate limits", `{"method":"account/rateLimits/updated","params":[]}`},
+		{"malformed error", `{"method":"error","params":[]}`},
+		{"JSON-RPC error", `{"id":42,"error":{"code":-32603,"message":"provider failed"}}`},
+		{"empty agent output", `{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"i","type":"agentMessage","text":""}}}`},
+		{"failed turn", `{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"failed"}}}`},
+		{"interrupted turn", `{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"interrupted"}}}`},
+		{"unknown turn status", `{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"mystery"}}}`},
+		{"unrecognized envelope", `{}`},
+		{"unrecognized response", `{"id":42,"result":{"unexpected":true}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+			p.SetThreadIDForTest("thread-review")
+			msgs, err := p.ParseLine([]byte(`{"method":"turn/started","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`))
+			if err != nil {
+				t.Fatalf("ParseLine(turn started) error: %v", err)
+			}
+			if len(msgs) != 0 {
+				t.Fatalf("ParseLine(turn started) = %+v, want no messages", msgs)
+			}
+
+			msgs, err = p.ParseLine([]byte(tt.line))
+			if err != nil {
+				t.Fatalf("ParseLine(violation) error: %v", err)
+			}
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("ParseLine(violation) = %+v, want terminal result/error", msgs)
+			}
+
+			msgs, err = p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"ALLOW","phase":"final_answer"}}}`))
+			if err != nil {
+				t.Fatalf("ParseLine(later ALLOW) error: %v", err)
+			}
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("ParseLine(later ALLOW) = %+v, want attempt to remain failed", msgs)
+			}
+		})
+	}
+}
+
+func TestCodexProtocol_NativeToollessReviewRejectsInvalidTurnOrdering(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"agent delta before turn", `{"method":"item/agentMessage/delta","params":{"threadId":"thread-review","turnId":"turn-1","itemId":"i","delta":"ALLOW"}}`},
+		{"assistant completion before turn", `{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"i","type":"agentMessage","text":"ALLOW"}}}`},
+		{"turn completion before turn", `{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"completed"}}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+			p.SetThreadIDForTest("thread-review")
+
+			msgs, err := p.ParseLine([]byte(tt.line))
+			if err != nil {
+				t.Fatalf("ParseLine(violation) error: %v", err)
+			}
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("ParseLine(violation) = %+v, want terminal result/error", msgs)
+			}
+
+			msgs, err = p.ParseLine([]byte(`{"method":"turn/started","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`))
+			if err != nil {
+				t.Fatalf("ParseLine(later turn started) error: %v", err)
+			}
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("ParseLine(later turn started) = %+v, want attempt to remain failed", msgs)
+			}
+		})
+	}
+}
+
+func TestCodexProtocol_NativeToollessReviewRejectsMismatchedTurnActivity(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"agent delta missing turn ID", `{"method":"item/agentMessage/delta","params":{"threadId":"thread-review","itemId":"i","delta":"ALLOW"}}`},
+		{"agent delta from another turn", `{"method":"item/agentMessage/delta","params":{"threadId":"thread-review","turnId":"turn-other","itemId":"i","delta":"ALLOW"}}`},
+		{"assistant completion missing turn ID", `{"method":"item/completed","params":{"threadId":"thread-review","item":{"id":"i","type":"agentMessage","text":"ALLOW"}}}`},
+		{"assistant completion from another turn", `{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-other","item":{"id":"i","type":"agentMessage","text":"ALLOW"}}}`},
+		{"completion from another turn", `{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-other","status":"completed"}}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+			p.SetThreadIDForTest("thread-review")
+			msgs, err := p.ParseLine([]byte(`{"method":"turn/started","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`))
+			if err != nil {
+				t.Fatalf("ParseLine(turn started) error: %v", err)
+			}
+			if len(msgs) != 0 {
+				t.Fatalf("ParseLine(turn started) = %+v, want no messages", msgs)
+			}
+
+			msgs, err = p.ParseLine([]byte(tt.line))
+			if err != nil {
+				t.Fatalf("ParseLine(violation) error: %v", err)
+			}
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("ParseLine(violation) = %+v, want terminal result/error", msgs)
+			}
+
+			msgs, err = p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"ALLOW","phase":"final_answer"}}}`))
+			if err != nil {
+				t.Fatalf("ParseLine(later ALLOW) error: %v", err)
+			}
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("ParseLine(later ALLOW) = %+v, want attempt to remain failed", msgs)
+			}
+		})
+	}
+}
+
+func TestCodexProtocol_NativeToollessReviewRejectsDuplicateAssistantCompletion(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+	p.SetThreadIDForTest("thread-review")
+	lines := []string{
+		`{"method":"turn/started","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`,
+		`{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"DEFER","phase":"final_answer"}}}`,
+	}
+	for _, line := range lines {
+		if _, err := p.ParseLine([]byte(line)); err != nil {
+			t.Fatalf("ParseLine(%s) error: %v", line, err)
+		}
+	}
+
+	msgs, err := p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"item-2","type":"agentMessage","text":"ALLOW","phase":"final_answer"}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(second assistant completion) error: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+		t.Fatalf("ParseLine(second assistant completion) = %+v, want terminal result/error", msgs)
+	}
+
+	msgs, err = p.ParseLine([]byte(`{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"completed"}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(later turn completion) error: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+		t.Fatalf("ParseLine(later turn completion) = %+v, want attempt to remain failed", msgs)
+	}
+}
+
+func TestCodexProtocol_NativeToollessReviewMalformedJSONIsTerminal(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+	p.SetThreadIDForTest("thread-review")
+
+	if _, err := p.ParseLine([]byte(`{`)); err == nil {
+		t.Fatal("ParseLine(malformed JSON) error = nil, want parse error")
+	}
+
+	msgs, err := p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"item-1","type":"agentMessage","text":"ALLOW","phase":"final_answer"}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(later ALLOW) error: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+		t.Fatalf("ParseLine(later ALLOW) = %+v, want attempt to remain failed", msgs)
+	}
+}
+
+func TestCodexProtocol_NativeToollessReviewRejectsExtraTurn(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+	p.SetThreadIDForTest("thread-review")
+	line := []byte(`{"method":"turn/started","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
+	if msgs, err := p.ParseLine(line); err != nil || len(msgs) != 0 {
+		t.Fatalf("first turn/started = (%+v, %v), want no message", msgs, err)
+	}
+	msgs, err := p.ParseLine(line)
+	if err != nil {
+		t.Fatalf("second turn/started error: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+		t.Fatalf("second turn/started = %+v, want result/error", msgs)
+	}
+}
+
 func TestCodexProtocol_Interrupt_ReturnsNotSupported(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 	err := p.Interrupt()

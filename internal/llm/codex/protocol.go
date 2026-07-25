@@ -93,6 +93,10 @@ type Protocol struct {
 	lastAssistantDraft string
 	formatRetryCount   int
 	fileReadSeen       map[string]struct{}
+	turnStarted        bool
+	nativeReviewTurnID string
+	nativeDecisionSeen bool
+	nativeReviewFailed bool
 
 	logFunc func(string, ...interface{})
 }
@@ -106,6 +110,9 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 		// sandbox itself is danger-full-access; sending never is rejected by
 		// those installations before the first turn starts.
 		policy = "on-request"
+	}
+	if opts.NativeToollessReview {
+		policy = "never"
 	}
 	return &Protocol{
 		opts:             opts,
@@ -174,19 +181,41 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	var env envelope
 	if err := json.Unmarshal(line, &env); err != nil {
 		p.logDebug("[codex] failed to parse JSON-RPC envelope: %v", err)
+		if p.opts.NativeToollessReview {
+			p.markNativeToollessFailed()
+			return nil, fmt.Errorf("parsing Codex native tool-less review response: %w", err)
+		}
 		return nil, nil
+	}
+
+	if p.opts.NativeToollessReview {
+		p.mu.Lock()
+		failed := p.nativeReviewFailed
+		p.mu.Unlock()
+		if failed {
+			return []llm.SDKMessage{p.nativeToollessViolation("activity after terminal failure")}, nil
+		}
 	}
 
 	// Response to our request (has id but no method)
 	if env.ID != nil && env.Method == "" {
+		if p.opts.NativeToollessReview && len(env.Error) > 0 && string(env.Error) != "null" {
+			return []llm.SDKMessage{p.nativeToollessViolation("JSON-RPC error response")}, nil
+		}
 		if msg, ok := p.handleResponse(*env.ID, env.Result, env.Error); ok {
 			return []llm.SDKMessage{msg}, nil
+		}
+		if p.opts.NativeToollessReview {
+			return []llm.SDKMessage{p.nativeToollessViolation("malformed or unexpected JSON-RPC response")}, nil
 		}
 		return nil, nil
 	}
 
 	// Server-initiated request (has both id and method)
 	if env.ID != nil && env.Method != "" {
+		if p.opts.NativeToollessReview {
+			return []llm.SDKMessage{p.nativeToollessViolation("unexpected server request: " + env.Method)}, nil
+		}
 		msg, ok := p.parseServerRequest(env.Method, *env.ID, env.Params)
 		if ok {
 			return []llm.SDKMessage{msg}, nil
@@ -204,17 +233,26 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	}
 
 	p.logDebug("[codex] unrecognized JSON-RPC message (no method or id)")
+	if p.opts.NativeToollessReview {
+		return []llm.SDKMessage{p.nativeToollessViolation("malformed JSON-RPC envelope")}, nil
+	}
 	return nil, nil
 }
 
 // SendUserMessage sends a follow-up turn with user text.
 func (p *Protocol) SendUserMessage(text string) error {
+	if p.opts.NativeToollessReview {
+		return fmt.Errorf("Codex native tool-less review permits exactly one turn")
+	}
 	return p.sendFollowUpTurn(text)
 }
 
 // RespondToControl sends an allow/deny response for an approval request.
 // originalInput is ignored for Codex (only used by Claude).
 func (p *Protocol) RespondToControl(requestID string, allow bool, originalInput json.RawMessage, reason string) error {
+	if p.opts.NativeToollessReview {
+		return fmt.Errorf("Codex native tool-less review does not answer unexpected control requests")
+	}
 	if allow {
 		return p.writeAllowResponse(requestID)
 	}
@@ -316,6 +354,10 @@ func (p *Protocol) sendInitialize() error {
 func (p *Protocol) startThread() error {
 	id := int(nextID.Add(1))
 
+	if p.opts.NativeToollessReview && p.opts.ResumeSessionID != "" {
+		return fmt.Errorf("Codex native tool-less review cannot resume a persisted thread")
+	}
+
 	// Resume a persisted thread instead of starting a fresh one. The
 	// response carries the same {thread:{id}} shape as thread/start, so
 	// handleResponse closes threadReady for both paths. Model, approval
@@ -353,6 +395,23 @@ func (p *Protocol) startThread() error {
 			Sandbox:        &sandbox,
 		},
 	}
+	if p.opts.NativeToollessReview {
+		empty := ""
+		emptyList := []map[string]interface{}{}
+		req.Params = ThreadStartParams{
+			Model:                   model,
+			Cwd:                     p.opts.WorkDir,
+			ApprovalPolicy:          "never",
+			Sandbox:                 ptrSandboxMode(SandboxModeReadOnly),
+			Ephemeral:               true,
+			Config:                  nativeToollessThreadConfig(),
+			BaseInstructions:        &empty,
+			DeveloperInstructions:   &empty,
+			Environments:            &emptyList,
+			DynamicTools:            &emptyList,
+			SelectedCapabilityRoots: &emptyList,
+		}
+	}
 	return p.writeJSON(req)
 }
 
@@ -368,6 +427,27 @@ func (p *Protocol) startTurn(userPrompt string) error {
 	p.mu.Unlock()
 
 	model := p.model
+	if p.opts.NativeToollessReview {
+		req := Request{
+			JSONRPC: "2.0",
+			Method:  "turn/start",
+			ID:      id,
+			Params: TurnStartParams{
+				ThreadID: threadID,
+				Input: []InputItem{
+					{Type: "text", Text: userPrompt},
+				},
+				Model:          model,
+				Effort:         "low",
+				ApprovalPolicy: "never",
+				SandboxPolicy: &SandboxPolicy{
+					Type:          "readOnly",
+					NetworkAccess: false,
+				},
+			},
+		}
+		return p.writeJSON(req)
+	}
 
 	collabSettings := CollaborationSettings{
 		Model: model,
@@ -411,6 +491,9 @@ func (p *Protocol) startTurn(userPrompt string) error {
 }
 
 func (p *Protocol) sendFollowUpTurn(text string) error {
+	if p.opts.NativeToollessReview {
+		return fmt.Errorf("Codex native tool-less review permits exactly one turn")
+	}
 	id := int(nextID.Add(1))
 
 	p.mu.Lock()
@@ -562,7 +645,7 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (llm.
 	if err := json.Unmarshal(result, &threadResult); err == nil && threadResult.Thread.ID != "" {
 		p.mu.Lock()
 		p.threadID = threadResult.Thread.ID
-		if effectivePolicy := strings.TrimSpace(threadResult.ApprovalPolicy); effectivePolicy != "" {
+		if effectivePolicy := strings.TrimSpace(threadResult.ApprovalPolicy); effectivePolicy != "" && !p.opts.NativeToollessReview {
 			p.approvalPolicy = effectivePolicy
 		}
 		if p.threadReady != nil {
@@ -756,7 +839,18 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		var delta AgentMessageDelta
 		if err := json.Unmarshal(params, &delta); err != nil {
 			p.logDebug("[codex] failed to parse agent message delta: %v", err)
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed item/agentMessage/delta notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview && (delta.ThreadID == "" || delta.TurnID == "" || delta.ItemID == "") {
+			return p.nativeToollessViolation("malformed item/agentMessage/delta notification"), true
+		}
+		if p.opts.NativeToollessReview {
+			if detail := p.nativeToollessTurnMismatch(delta.ThreadID, delta.TurnID); detail != "" {
+				return p.nativeToollessViolation(detail), true
+			}
 		}
 
 		p.mu.Lock()
@@ -773,6 +867,16 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		p.mu.Unlock()
 
 		if !isMain {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected child-thread agent message activity"), true
+			}
+			return llm.SDKMessage{}, false
+		}
+
+		// Hidden review consumes only the completed final item. Codex deltas are
+		// cumulative snapshots, so forwarding them would concatenate prefixes
+		// (A + AL + ALLOW) and corrupt the exact-token decision.
+		if p.opts.NativeToollessReview {
 			return llm.SDKMessage{}, false
 		}
 
@@ -799,13 +903,28 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		var completed TurnCompletedParams
 		if err := json.Unmarshal(params, &completed); err != nil {
 			p.logDebug("[codex] failed to parse turn/completed: %v", err)
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed turn/completed notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview &&
+			(completed.ThreadID == "" || completed.Turn.ID == "" || completed.Turn.Status == "") {
+			return p.nativeToollessViolation("malformed turn/completed notification"), true
+		}
+		if p.opts.NativeToollessReview {
+			if detail := p.nativeToollessTurnMismatch(completed.ThreadID, completed.Turn.ID); detail != "" {
+				return p.nativeToollessViolation(detail), true
+			}
 		}
 
 		p.mu.Lock()
 		isMainTurn := p.isMainThread(completed.ThreadID)
 		p.mu.Unlock()
 		if !isMainTurn {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected child-thread turn completion"), true
+			}
 			return llm.SDKMessage{}, false
 		}
 
@@ -817,11 +936,20 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			outTok := p.outputTokens
 			costUSD := p.totalCostUSD
 			hadToolUse := p.turnHadToolUse
+			decisionSeen := p.nativeDecisionSeen
 			lastText := p.lastAssistantText
 			if lastText == "" {
 				lastText = p.lastAssistantDraft
 			}
 			p.mu.Unlock()
+
+			if p.opts.NativeToollessReview {
+				decision := strings.TrimSpace(lastText)
+				if !decisionSeen || (decision != "ALLOW" && decision != "DEFER") {
+					return p.nativeToollessViolation("malformed reviewer decision"), true
+				}
+				return p.successResult(inTok, cachedInTok, outTok, costUSD), true
+			}
 
 			// The entire text-parsed AskUserQuestion pipeline below exists only to
 			// imitate Claude's native AskUserQuestion tool call for a provider whose
@@ -879,25 +1007,12 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.formatRetryCount = 0
 			p.mu.Unlock()
 
-			msg := llm.SDKMessage{
-				Type:    "result",
-				Subtype: "success",
-				Result: &llm.ResultMessage{
-					Type:         "result",
-					Subtype:      "success",
-					TotalCostUSD: costUSD,
-				},
-			}
-			if inTok > 0 || outTok > 0 {
-				msg.Result.Usage = &llm.Usage{
-					InputTokens:          inTok,
-					CacheReadInputTokens: cachedInTok,
-					OutputTokens:         outTok,
-				}
-			}
-			return msg, true
+			return p.successResult(inTok, cachedInTok, outTok, costUSD), true
 
 		case "failed":
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("review turn failed"), true
+			}
 			p.mu.Lock()
 			inTok := p.inputTokens
 			cachedInTok := p.cachedInputTokens
@@ -941,6 +1056,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return msg, true
 
 		case "interrupted":
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("review turn interrupted"), true
+			}
 			p.mu.Lock()
 			inTok := p.inputTokens
 			cachedInTok := p.cachedInputTokens
@@ -970,13 +1088,27 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 		default:
 			p.logDebug("[codex] turn/completed with unknown status: %s", completed.Turn.Status)
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unknown review turn status: " + completed.Turn.Status), true
+			}
 			return llm.SDKMessage{}, false
 		}
 
 	case "thread/tokenUsage/updated":
 		var usage TokenUsageUpdatedParams
 		if err := json.Unmarshal(params, &usage); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed thread/tokenUsage/updated notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview {
+			if usage.ThreadID == "" || usage.TurnID == "" {
+				return p.nativeToollessViolation("malformed thread/tokenUsage/updated notification"), true
+			}
+			if detail := p.nativeToollessTurnMismatch(usage.ThreadID, usage.TurnID); detail != "" {
+				return p.nativeToollessViolation(detail), true
+			}
 		}
 		// Total = lifetime cumulative (for cost calculation on turn completion).
 		// Last = current context fill (resets on compaction; use for context %).
@@ -1028,7 +1160,16 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 	case "item/commandExecution/outputDelta":
 		var delta CommandOutputDelta
 		if err := json.Unmarshal(params, &delta); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed item/commandExecution/outputDelta notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview {
+			if delta.ThreadID == "" || delta.TurnID == "" || delta.ItemID == "" {
+				return p.nativeToollessViolation("malformed item/commandExecution/outputDelta notification"), true
+			}
+			return p.nativeToollessViolation("unexpected command activity"), true
 		}
 		p.mu.Lock()
 		p.turnHadToolUse = true
@@ -1046,7 +1187,16 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 	case "item/fileChange/outputDelta":
 		var delta FileChangeOutputDelta
 		if err := json.Unmarshal(params, &delta); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed item/fileChange/outputDelta notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview {
+			if delta.ThreadID == "" || delta.TurnID == "" || delta.ItemID == "" {
+				return p.nativeToollessViolation("malformed item/fileChange/outputDelta notification"), true
+			}
+			return p.nativeToollessViolation("unexpected file activity"), true
 		}
 		p.mu.Lock()
 		p.turnHadToolUse = true
@@ -1064,7 +1214,18 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 	case "item/reasoning/summaryTextDelta":
 		var delta ReasoningSummaryDelta
 		if err := json.Unmarshal(params, &delta); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed item/reasoning/summaryTextDelta notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview {
+			if delta.ThreadID == "" || delta.TurnID == "" || delta.ItemID == "" {
+				return p.nativeToollessViolation("malformed item/reasoning/summaryTextDelta notification"), true
+			}
+			if detail := p.nativeToollessTurnMismatch(delta.ThreadID, delta.TurnID); detail != "" {
+				return p.nativeToollessViolation(detail), true
+			}
 		}
 		return llm.SDKMessage{
 			Type:    codexRoleAssistant,
@@ -1084,6 +1245,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 	case "account/rateLimits/updated":
 		var rl RateLimitsUpdated
 		if err := json.Unmarshal(params, &rl); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed account/rateLimits/updated notification"), true
+			}
 			return llm.SDKMessage{}, false
 		}
 		var retryMS float64
@@ -1108,13 +1272,28 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 	case "item/completed":
 		var completed ItemCompletedParams
 		if err := json.Unmarshal(params, &completed); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed item/completed notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview &&
+			(completed.ThreadID == "" || completed.TurnID == "" || completed.Item.ID == "" || completed.Item.Type == "") {
+			return p.nativeToollessViolation("malformed item/completed notification"), true
+		}
+		if p.opts.NativeToollessReview {
+			if detail := p.nativeToollessTurnMismatch(completed.ThreadID, completed.TurnID); detail != "" {
+				return p.nativeToollessViolation(detail), true
+			}
 		}
 
 		p.mu.Lock()
 		isMainItem := p.isMainThread(completed.ThreadID)
 		p.mu.Unlock()
 		if !isMainItem {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected child-thread item completion"), true
+			}
 			return llm.SDKMessage{}, false
 		}
 
@@ -1126,7 +1305,43 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					delete(p.deltaBuf, completed.Item.ID)
 				}
 				p.mu.Unlock()
+				if p.opts.NativeToollessReview {
+					return p.nativeToollessViolation("empty reviewer output"), true
+				}
 				return llm.SDKMessage{}, false
+			}
+
+			if p.opts.NativeToollessReview {
+				decision := strings.TrimSpace(completed.Item.Text)
+				if decision != "ALLOW" && decision != "DEFER" {
+					return p.nativeToollessViolation("malformed reviewer output"), true
+				}
+				p.mu.Lock()
+				decisionSeen := p.nativeDecisionSeen
+				if !decisionSeen {
+					p.nativeDecisionSeen = true
+					p.lastAssistantText = completed.Item.Text
+					p.lastAssistantDraft = completed.Item.Text
+					if p.deltaBuf != nil {
+						delete(p.deltaBuf, completed.Item.ID)
+					}
+				}
+				p.mu.Unlock()
+				if decisionSeen {
+					return p.nativeToollessViolation("unexpected additional assistant completion"), true
+				}
+				return llm.SDKMessage{
+					Type: codexRoleAssistant,
+					Assistant: &llm.AssistantMessage{
+						Type: codexRoleAssistant,
+						Message: llm.ConversationMsg{
+							Role: codexRoleAssistant,
+							Content: []llm.ContentBlock{
+								{Type: "text", Text: completed.Item.Text},
+							},
+						},
+					},
+				}, true
 			}
 
 			p.mu.Lock()
@@ -1156,6 +1371,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 			}, true
 		case "commandExecution":
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected command activity"), true
+			}
 			return llm.SDKMessage{
 				Type: "tool_progress",
 				ToolProgress: &llm.ToolProgressMessage{
@@ -1167,6 +1385,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				FileReads: p.fileReadEventsForCommand(completed.Item),
 			}, true
 		case codexItemTypeFileChange:
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected file activity"), true
+			}
 			return llm.SDKMessage{
 				Type: "tool_progress",
 				ToolProgress: &llm.ToolProgressMessage{
@@ -1177,13 +1398,28 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				FileChanges: fileChangeEventsForItem(completed.Item),
 			}, true
 		default:
+			if p.opts.NativeToollessReview && completed.Item.Type != "userMessage" && completed.Item.Type != "reasoning" {
+				return p.nativeToollessViolation("unexpected item activity: " + completed.Item.Type), true
+			}
 			return llm.SDKMessage{}, false
 		}
 
 	case "item/started":
 		var started ItemStartedParams
 		if err := json.Unmarshal(params, &started); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed item/started notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview &&
+			(started.ThreadID == "" || started.TurnID == "" || started.Item.ID == "" || started.Item.Type == "") {
+			return p.nativeToollessViolation("malformed item/started notification"), true
+		}
+		if p.opts.NativeToollessReview {
+			if detail := p.nativeToollessTurnMismatch(started.ThreadID, started.TurnID); detail != "" {
+				return p.nativeToollessViolation(detail), true
+			}
 		}
 		p.mu.Lock()
 		isMainItem := p.isMainThread(started.ThreadID)
@@ -1192,10 +1428,16 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 		p.mu.Unlock()
 		if !isMainItem {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected child-thread item activity"), true
+			}
 			return llm.SDKMessage{}, false
 		}
 		switch started.Item.Type {
 		case "commandExecution":
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected command activity"), true
+			}
 			return llm.SDKMessage{
 				Type: "tool_progress",
 				ToolProgress: &llm.ToolProgressMessage{
@@ -1205,6 +1447,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 			}, true
 		case codexItemTypeFileChange:
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected file activity"), true
+			}
 			return llm.SDKMessage{
 				Type: "tool_progress",
 				ToolProgress: &llm.ToolProgressMessage{
@@ -1214,35 +1459,110 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 			}, true
 		default:
+			if p.opts.NativeToollessReview && started.Item.Type != "userMessage" &&
+				started.Item.Type != "agentMessage" && started.Item.Type != "reasoning" {
+				return p.nativeToollessViolation("unexpected item activity: " + started.Item.Type), true
+			}
 			return llm.SDKMessage{}, false
 		}
 
 	case "turn/started":
 		var turnStarted struct {
 			ThreadID string `json:"threadId"`
+			Turn     Turn   `json:"turn"`
 		}
-		_ = json.Unmarshal(params, &turnStarted)
+		if err := json.Unmarshal(params, &turnStarted); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed turn/started notification"), true
+			}
+			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview && (turnStarted.ThreadID == "" || turnStarted.Turn.ID == "") {
+			return p.nativeToollessViolation("malformed turn/started notification"), true
+		}
 		p.mu.Lock()
 		isMain := turnStarted.ThreadID == "" || p.threadID == "" || turnStarted.ThreadID == p.threadID
-		if isMain {
+		alreadyStarted := p.turnStarted
+		if isMain && !alreadyStarted {
+			p.turnStarted = true
+			p.nativeReviewTurnID = turnStarted.Turn.ID
+			p.nativeDecisionSeen = false
 			p.turnHadToolUse = false
 			p.lastAssistantText = ""
 			p.lastAssistantDraft = ""
 		}
 		p.mu.Unlock()
+		if p.opts.NativeToollessReview && !isMain {
+			return p.nativeToollessViolation("unexpected child-thread turn activity"), true
+		}
+		if p.opts.NativeToollessReview && isMain && alreadyStarted {
+			return p.nativeToollessViolation("unexpected extra turn"), true
+		}
+		return llm.SDKMessage{}, false
+
+	case "thread/started":
+		var started struct {
+			Thread Thread `json:"thread"`
+		}
+		if err := json.Unmarshal(params, &started); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed thread/started notification"), true
+			}
+			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview {
+			p.mu.Lock()
+			mainThread := p.threadID
+			p.mu.Unlock()
+			if started.Thread.ID == "" {
+				return p.nativeToollessViolation("malformed thread/started notification"), true
+			}
+			if mainThread != "" && started.Thread.ID != mainThread {
+				return p.nativeToollessViolation("unexpected child thread"), true
+			}
+		}
 		return llm.SDKMessage{}, false
 
 	case "thread/status/changed":
+		var changed struct {
+			ThreadID string `json:"threadId"`
+		}
+		if err := json.Unmarshal(params, &changed); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed thread/status/changed notification"), true
+			}
+			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview {
+			p.mu.Lock()
+			mainThread := p.threadID
+			p.mu.Unlock()
+			if changed.ThreadID == "" {
+				return p.nativeToollessViolation("malformed thread/status/changed notification"), true
+			}
+			if mainThread != "" && changed.ThreadID != mainThread {
+				return p.nativeToollessViolation("unexpected child-thread status activity"), true
+			}
+		}
 		return llm.SDKMessage{}, false
 
 	case "error":
 		var errNotif ErrorNotification
 		if err := json.Unmarshal(params, &errNotif); err != nil {
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("malformed error notification"), true
+			}
 			return llm.SDKMessage{}, false
+		}
+		if p.opts.NativeToollessReview && errNotif.Error.Message == "" {
+			return p.nativeToollessViolation("malformed error notification"), true
 		}
 		errText := errNotif.Error.Message
 		if errNotif.Error.ErrorInfo != nil && errNotif.Error.ErrorInfo.RawKind != "" {
 			errText = fmt.Sprintf("%s (%s)", errText, errNotif.Error.ErrorInfo.RawKind)
+		}
+		if p.opts.NativeToollessReview {
+			return p.nativeToollessViolation("provider error: " + errText), true
 		}
 		return llm.SDKMessage{
 			Type:    codexRoleAssistant,
@@ -1261,8 +1581,114 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 	default:
 		p.logDebug("[codex] unhandled notification: %s", method)
+		if p.opts.NativeToollessReview {
+			return p.nativeToollessViolation("unexpected notification: " + method), true
+		}
 		return llm.SDKMessage{}, false
 	}
+}
+
+func ptrSandboxMode(mode SandboxMode) *SandboxMode {
+	return &mode
+}
+
+func nativeToollessThreadConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"web_search":  "disabled",
+		"mcp_servers": map[string]interface{}{},
+		"plugins":     map[string]interface{}{},
+		"features": map[string]interface{}{
+			"shell_tool":               false,
+			"multi_agent":              false,
+			"apps":                     false,
+			"plugins":                  false,
+			"connectors":               false,
+			"web_search":               false,
+			"standalone_web_search":    false,
+			"web_search_request":       false,
+			"search_tool":              false,
+			"tool_search":              false,
+			"tool_suggest":             false,
+			"request_permissions_tool": false,
+			"memory_tool":              false,
+			"goals":                    false,
+			"image_generation":         false,
+			"computer_use":             false,
+			"browser_use":              false,
+			"in_app_browser":           false,
+			"js_repl":                  false,
+			"code_mode":                false,
+		},
+		"tools": map[string]interface{}{
+			"update_plan":                     map[string]interface{}{"enabled": false},
+			"experimental_request_user_input": map[string]interface{}{"enabled": false},
+		},
+		"skills": map[string]interface{}{
+			"bundled":              map[string]interface{}{"enabled": false},
+			"include_instructions": false,
+		},
+		"agents":                                  map[string]interface{}{},
+		"include_apps_instructions":               false,
+		"include_environment_context":             false,
+		"include_permissions_instructions":        false,
+		"include_collaboration_mode_instructions": false,
+	}
+}
+
+func (p *Protocol) nativeToollessViolation(detail string) llm.SDKMessage {
+	p.markNativeToollessFailed()
+	return llm.SDKMessage{
+		Type:    "result",
+		Subtype: "error",
+		Result: &llm.ResultMessage{
+			Type:    "result",
+			Subtype: "error",
+			Result:  "Codex native tool-less review failed closed: " + detail,
+			IsError: true,
+		},
+	}
+}
+
+func (p *Protocol) markNativeToollessFailed() {
+	p.mu.Lock()
+	p.nativeReviewFailed = true
+	p.mu.Unlock()
+}
+
+func (p *Protocol) nativeToollessTurnMismatch(threadID, turnID string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.threadID != "" && threadID != p.threadID {
+		return "unexpected child-thread turn activity"
+	}
+	if !p.turnStarted || p.nativeReviewTurnID == "" {
+		return "review activity before turn started"
+	}
+	if turnID != p.nativeReviewTurnID {
+		return "review activity for unexpected turn"
+	}
+	return ""
+}
+
+func (p *Protocol) successResult(inputTokens, cachedInputTokens, outputTokens int, costUSD float64) llm.SDKMessage {
+	msg := llm.SDKMessage{
+		Type:    "result",
+		Subtype: "success",
+		Result: &llm.ResultMessage{
+			Type:         "result",
+			Subtype:      "success",
+			TotalCostUSD: costUSD,
+		},
+	}
+	if inputTokens > 0 || outputTokens > 0 {
+		msg.Result.Usage = &llm.Usage{
+			InputTokens:          inputTokens,
+			CacheReadInputTokens: cachedInputTokens,
+			OutputTokens:         outputTokens,
+		}
+	}
+	return msg
 }
 
 // --- Helper functions ---

@@ -27,24 +27,24 @@ var phaseCatalogFields = []string{"Clarify", "Research", "Planning", "Implementa
 // globalModelFields is phaseCatalogFields plus Utilities: the model used for
 // AMA chat and other workspace-wide utility calls. No single feature owns
 // that role, so it is intentionally absent from phaseCatalogFields.
-// Automatic Review is a workspace-only model row (conservative Claude-only
-// reviewer selection); it is never exposed in feature-scoped editing.
+// Automatic Review is a workspace-only model row; it is never exposed in
+// feature-scoped editing.
 var globalModelFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build", "Automatic Review"}
 
 // automaticReviewField is the workspace-only Models-tab field name for the
-// automatic Bash-review reviewer model. An empty value means "Automatic"
-// (resolve a catalog-present Claude Haiku model at review time).
+// automatic Bash-review reviewer model. An empty value means "Automatic".
 const automaticReviewField = "Automatic Review"
 
 // globalCatalogRoleToField maps API phase roles to catalog field names.
 var globalCatalogRoleToField = map[llm.PhaseRole]string{
-	llm.PhaseInquiry:        "Clarify",
-	llm.PhaseResearch:       "Research",
-	llm.PhasePlanning:       "Planning",
-	llm.PhaseImplementation: "Implementation",
-	llm.PhaseReview:         "Review",
-	llm.PhaseChat:           "Utilities",
-	llm.PhaseKBBuild:        "KB Build",
+	llm.PhaseInquiry:         "Clarify",
+	llm.PhaseResearch:        "Research",
+	llm.PhasePlanning:        "Planning",
+	llm.PhaseImplementation:  "Implementation",
+	llm.PhaseReview:          "Review",
+	llm.PhaseChat:            "Utilities",
+	llm.PhaseKBBuild:         "KB Build",
+	llm.PhaseAutomaticReview: automaticReviewField,
 }
 
 type PhaseModelEntry struct {
@@ -163,8 +163,12 @@ func (c PhaseModelCatalog) orderedProviderModelIDsForField(field, provider strin
 	if len(all) == 0 {
 		return nil
 	}
-	eligible := c.PhaseProviderModels[field][provider]
-	if len(eligible) == 0 {
+	providerModels, fieldScoped := c.PhaseProviderModels[field]
+	eligible, providerEligible := providerModels[provider]
+	if fieldScoped && !providerEligible {
+		return nil
+	}
+	if !fieldScoped || len(eligible) == 0 {
 		return append([]string(nil), all...)
 	}
 	seen := map[string]bool{}
@@ -216,6 +220,32 @@ func (c PhaseModelCatalog) SelectionValue(entry PhaseModelEntry) string {
 		return ""
 	}
 	if len(c.ProviderOrder) <= 1 || entry.Agent == "" || entry.Agent == "default" || entry.Agent == "Available" {
+		return entry.ModelID
+	}
+	return entry.Agent + ":" + entry.ModelID
+}
+
+// SelectionValueForField returns the persisted value for an entry while
+// considering only the providers eligible for that field. The automatic-review
+// role may exclude ready providers that cannot prove native tool-less
+// execution, so qualifying based on the workspace-wide provider count would
+// create unnecessarily prefixed values in a single-eligible-provider catalog.
+func (c PhaseModelCatalog) SelectionValueForField(field string, entry PhaseModelEntry) string {
+	if entry.ModelID == "" {
+		return ""
+	}
+	providerCount := 0
+	if providerModels, ok := c.PhaseProviderModels[field]; ok {
+		for _, provider := range c.ProviderOrder {
+			if len(providerModels[provider]) > 0 {
+				providerCount++
+			}
+		}
+	}
+	if providerCount == 0 {
+		return c.SelectionValue(entry)
+	}
+	if providerCount == 1 || entry.Agent == "" || entry.Agent == "default" || entry.Agent == "Available" {
 		return entry.ModelID
 	}
 	return entry.Agent + ":" + entry.ModelID
@@ -431,21 +461,4 @@ func cloneModelInfo(info llm.ModelInfo) llm.ModelInfo {
 	info.Aliases = append([]string(nil), info.Aliases...)
 	info.EffortCapabilities = append([]llm.EffortLevel(nil), info.EffortCapabilities...)
 	return info
-}
-
-// ClaudeEntries builds PhaseModelEntry list from the Claude provider's
-// catalog only. The Automatic Review model row offers Automatic plus ready
-// Claude catalog models, so it must not fall back to the multi-provider
-// per-field eligible lookup (which would surface every ready provider's
-// models for a field the server does not know about).
-func (c PhaseModelCatalog) ClaudeEntries() []PhaseModelEntry {
-	var entries []PhaseModelEntry
-	for _, id := range c.ProviderModels["claude"] {
-		if id == "" {
-			continue
-		}
-		info := c.modelInfoForProvider("claude", id)
-		entries = append(entries, c.entryFromInfo("claude", info))
-	}
-	return entries
 }

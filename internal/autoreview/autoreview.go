@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package autoreview implements the default-off automatic Bash reviewer:
-// one isolated, tool-less, fully ephemeral hidden Claude classification.
-// It resolves a Claude reviewer from the workspace model selection and runs
-// a single conservative ALLOW/DEFER classification over a minimal execution
-// context, bypassing the session manager so the reviewer is absent from
-// session listings, attach streams, recovery state, durable message logs,
-// PID files, and raw provider output logs.
+// Package autoreview implements the default-off automatic Bash reviewer: one
+// isolated, tool-less, fully ephemeral hidden classification through Claude,
+// OpenCode, or Codex. It resolves one deterministic reviewer from the active
+// catalogs and runs a single conservative ALLOW/DEFER classification over a
+// minimal execution context, bypassing the session manager so the reviewer is
+// absent from session listings, attach streams, recovery state, durable
+// message logs, PID files, and raw provider output logs.
 package autoreview
 
 import (
@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -34,7 +35,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// Decision is the result of one Claude classification. Only exact ALLOW and
+// Decision is the result of one hidden classification. Only exact ALLOW and
 // DEFER tokens are successful classifications; every other outcome is a
 // review failure that the caller converts to ordinary human deferral.
 type Decision string
@@ -57,65 +58,202 @@ const defaultTimeout = 10 * time.Second
 // expires the escalation skips straight to SIGKILL.
 const gracePeriod = 2 * time.Second
 
-// Reviewer is a resolved Claude reviewer: the ready Claude provider plus the
+// Reviewer is a resolved automatic reviewer: the ready provider plus the
 // canonical bare model id to pass to BuildCommand.
 type Reviewer struct {
 	Provider llm.LLMProvider
 	Model    string
 }
 
-// ResolveReviewer resolves the Claude reviewer from the workspace model
-// selection. An empty model ("Automatic") resolves a catalog-present Claude
-// Haiku model; if Haiku is unavailable there is no reviewer. An explicit
-// selection resolves only the exact chosen ready Claude model and never
-// substitutes another model or provider. Returns ok=false when Claude is not
-// ready, the model is not catalog-resolvable, the resolved provider is not
-// Claude, or the provider's authentication is not usable in a --bare
-// subprocess launch (OAuth and keychain are rejected because --bare skips
-// keychain reads and settings loading).
+// ResolveReviewer resolves the workspace automatic-review selection against
+// active, catalog-present providers that explicitly attest native tool-less
+// execution. Automatic selection follows the fixed Claude, OpenCode, Codex
+// order and deterministic provider-local cheap-model preferences. Explicit
+// selection resolves only the configured provider/model (or a uniquely
+// resolvable bare selector) and never substitutes.
 func ResolveReviewer(registry *llm.Registry, model string) (Reviewer, bool) {
 	if registry == nil {
 		return Reviewer{}, false
 	}
-	claude := claudeProvider(registry)
-	if claude == nil {
-		return Reviewer{}, false
-	}
-	// The hidden reviewer launches with NoCustomization=true (--bare), which
-	// skips keychain, settings, and OAuth. A provider whose general readiness
-	// passes but whose auth cannot survive the isolated launch must not be
-	// selected as a reviewer — it would provider-fail on every eligible
-	// request and silently fall back to the human prompt.
-	if checker, ok := claude.(llm.BareAuthChecker); ok && !checker.CheckBareAuth() {
-		return Reviewer{}, false
-	}
 	selector := strings.TrimSpace(model)
 	if selector == "" {
-		selector = "haiku"
+		return resolveAutomaticReviewer(registry)
 	}
-	prov, bare, err := registry.ResolveModel(selector)
-	if err != nil || prov == nil || prov.Name() != claude.Name() {
-		return Reviewer{}, false
-	}
-	// An explicit selection must resolve to a catalog-present model.
-	// ResolveModel's provider-qualified branch returns the bare model even
-	// when it is not in the active catalog, so a stale value such as
-	// "claude:removed-model" would otherwise create a reviewer and launch
-	// Claude instead of snapshotting no reviewer and preserving normal
-	// human review.
-	if !prov.MatchesModel(bare) {
-		return Reviewer{}, false
-	}
-	return Reviewer{Provider: claude, Model: bare}, true
+	return resolveExplicitReviewer(registry, selector)
 }
 
-func claudeProvider(registry *llm.Registry) llm.LLMProvider {
-	for _, p := range registry.DetectedProviders() {
-		if p.Name() == "claude" {
-			return p
+var automaticProviderOrder = []string{"claude", "opencode", "codex"}
+
+type reviewCandidate struct {
+	model llm.ModelInfo
+	band  int
+}
+
+func resolveAutomaticReviewer(registry *llm.Registry) (Reviewer, bool) {
+	providers := eligibleReviewerProviders(registry)
+	for _, name := range automaticProviderOrder {
+		provider := providers[name]
+		if provider == nil {
+			continue
+		}
+		catalog := reviewerCatalog(provider)
+		candidates := make([]reviewCandidate, 0, len(catalog))
+		for _, model := range catalog {
+			if band, ok := automaticPreferenceBand(name, model); ok {
+				candidates = append(candidates, reviewCandidate{model: model, band: band})
+			}
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			a, b := candidates[i], candidates[j]
+			if a.band != b.band {
+				return a.band < b.band
+			}
+			aKnown, bKnown := a.model.ContextWindow > 0, b.model.ContextWindow > 0
+			if aKnown != bKnown {
+				return aKnown
+			}
+			if aKnown && a.model.ContextWindow != b.model.ContextWindow {
+				return a.model.ContextWindow < b.model.ContextWindow
+			}
+			return strings.ToLower(a.model.ID) < strings.ToLower(b.model.ID)
+		})
+		return Reviewer{Provider: provider, Model: candidates[0].model.ID}, true
+	}
+	return Reviewer{}, false
+}
+
+func resolveExplicitReviewer(registry *llm.Registry, selector string) (Reviewer, bool) {
+	providers := eligibleReviewerProviders(registry)
+	if idx := strings.IndexByte(selector, ':'); idx > 0 {
+		if provider := providers[selector[:idx]]; provider != nil {
+			if canonical, ok := catalogModel(provider, selector[idx+1:]); ok {
+				return Reviewer{Provider: provider, Model: canonical}, true
+			}
+			return Reviewer{}, false
 		}
 	}
-	return nil
+
+	type match struct {
+		provider llm.LLMProvider
+		model    string
+	}
+	matches := make(map[string]match)
+	for _, provider := range providers {
+		if canonical, ok := catalogModel(provider, selector); ok {
+			key := provider.Name() + "\x00" + strings.ToLower(canonical)
+			matches[key] = match{provider: provider, model: canonical}
+		}
+	}
+	if len(matches) != 1 {
+		return Reviewer{}, false
+	}
+	for _, matched := range matches {
+		return Reviewer{Provider: matched.provider, Model: matched.model}, true
+	}
+	return Reviewer{}, false
+}
+
+func eligibleReviewerProviders(registry *llm.Registry) map[string]llm.LLMProvider {
+	result := make(map[string]llm.LLMProvider, len(automaticProviderOrder))
+	for _, provider := range registry.DetectedProviders() {
+		if !isBuiltinReviewerProvider(provider.Name()) {
+			continue
+		}
+		capability, ok := provider.(llm.NativeToollessReviewer)
+		if !ok || !capability.SupportsNativeToollessReview() || len(reviewerCatalog(provider)) == 0 {
+			continue
+		}
+		if provider.Name() == "claude" {
+			if checker, ok := provider.(llm.BareAuthChecker); ok && !checker.CheckBareAuth() {
+				continue
+			}
+		}
+		result[provider.Name()] = provider
+	}
+	return result
+}
+
+func isBuiltinReviewerProvider(name string) bool {
+	for _, candidate := range automaticProviderOrder {
+		if name == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func reviewerCatalog(provider llm.LLMProvider) []llm.ModelInfo {
+	catalogProvider, ok := provider.(llm.CatalogProvider)
+	if !ok {
+		return nil
+	}
+	return catalogProvider.ModelCatalog()
+}
+
+func catalogModel(provider llm.LLMProvider, selector string) (string, bool) {
+	var found string
+	for _, model := range reviewerCatalog(provider) {
+		matches := strings.EqualFold(model.ID, selector)
+		for _, alias := range model.Aliases {
+			matches = matches || strings.EqualFold(alias, selector)
+		}
+		if !matches {
+			continue
+		}
+		if found != "" && !strings.EqualFold(found, model.ID) {
+			return "", false
+		}
+		found = model.ID
+	}
+	return found, found != ""
+}
+
+func automaticPreferenceBand(provider string, model llm.ModelInfo) (int, bool) {
+	haiku := modelMatchesHint(model, "haiku")
+	flash := modelMatchesHint(model, "flash")
+	mini := modelMatchesHint(model, "mini") || modelMatchesHint(model, "shrink")
+	switch provider {
+	case "claude":
+		if haiku {
+			return 0, true
+		}
+		if model.Category == "cheap" {
+			return 1, true
+		}
+	case "opencode":
+		if haiku {
+			return 0, true
+		}
+		if flash {
+			return 1, true
+		}
+		if model.Category == "cheap" {
+			return 2, true
+		}
+	case "codex":
+		if model.Category == "cheap" {
+			return 0, true
+		}
+		if mini {
+			return 1, true
+		}
+	}
+	return 0, false
+}
+
+func modelMatchesHint(model llm.ModelInfo, hint string) bool {
+	if strings.Contains(strings.ToLower(model.ID), hint) {
+		return true
+	}
+	for _, alias := range model.Aliases {
+		if strings.Contains(strings.ToLower(alias), hint) {
+			return true
+		}
+	}
+	return false
 }
 
 // RestoreReviewer reconstructs a Reviewer from a snapshotted provider name
@@ -183,10 +321,10 @@ type readResult struct {
 	text    string
 }
 
-// Classify runs one isolated, tool-less, fully ephemeral hidden Claude
-// classification. It launches the Claude CLI directly (bypassing the session
-// manager), wires a throwaway protocol, sends the static review policy plus
-// the minimal execution context, and reads exactly one low-effort turn.
+// Classify runs one isolated, tool-less, fully ephemeral hidden classification.
+// It launches the resolved provider CLI directly (bypassing the session
+// manager), wires a throwaway native protocol, sends the static review policy
+// plus the minimal execution context, and reads exactly one low-effort turn.
 //
 // The whole attempt is bounded by the request timeout (or defaultTimeout).
 // Every control_request (tool permission, hook, question, or any other
@@ -237,10 +375,11 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 	}
 
 	proto := reviewer.Provider.NewProtocol(llm.ProtocolOpts{
-		Model:         reviewer.Model,
-		WorkDir:       req.WorkDir,
-		InitialPrompt: reviewPrompt(req),
-		WritableRoots: req.WritableRoots,
+		Model:                reviewer.Model,
+		WorkDir:              req.WorkDir,
+		InitialPrompt:        reviewPrompt(req),
+		WritableRoots:        req.WritableRoots,
+		NativeToollessReview: true,
 	})
 	proto.SetStdin(stdin)
 
@@ -266,6 +405,9 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 				return
 			}
 			for _, msg := range msgs {
+				if unexpectedReviewActivity(msg) {
+					return
+				}
 				// Defensive deny-all boundary: any control_request (tool
 				// permission, hook callback, AskUserQuestion, or other
 				// interaction) is denied and immediately fails the review.
@@ -314,14 +456,37 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 	return parseDecision(rr.text)
 }
 
-// buildReviewCommand constructs the Claude CLI command with zero tools, no
-// session persistence, and no customization injection. The --bare flag skips
-// CLAUDE.md auto-discovery, hooks, LSP, plugin sync, and settings so the
-// reviewer's context contains only the static review policy. An isolated
-// config directory prevents user-level Claude config from loading, and
-// CLAUDECODE env vars are stripped so no Agentico injection leaks into the
-// reviewer context. The temp config directory is cleaned up by the caller
-// via the returned cleanup function.
+func unexpectedReviewActivity(msg llm.SDKMessage) bool {
+	if msg.User != nil ||
+		msg.ToolProgress != nil ||
+		msg.HookStarted != nil ||
+		msg.HookProgress != nil ||
+		msg.HookResponse != nil ||
+		msg.Compact != nil ||
+		msg.TaskStarted != nil ||
+		msg.TaskProgress != nil ||
+		msg.TaskNotification != nil ||
+		len(msg.FileReads) > 0 ||
+		len(msg.FileChanges) > 0 ||
+		msg.StreamDeltaType == "input_json" {
+		return true
+	}
+	if msg.Assistant == nil {
+		return false
+	}
+	for _, block := range msg.Assistant.Message.Content {
+		if !block.IsText() && !block.IsThinking() {
+			return true
+		}
+	}
+	return false
+}
+
+// buildReviewCommand constructs the native CLI command with zero tools, no
+// session persistence, and no customization injection. Each provider maps
+// those options to its audited boundary. An isolated config directory prevents
+// user-level Claude configuration from loading; OpenCode and Codex provide
+// their own isolated environment entries and cleanup through BuildCommand.
 func buildReviewCommand(reviewer Reviewer, req ClassifyRequest) (args []string, env []string, cleanup func(), err error) {
 	configDir, mErr := os.MkdirTemp("", "autoreview-claude-config-*")
 	if mErr != nil {
@@ -335,6 +500,7 @@ func buildReviewCommand(reviewer Reviewer, req ClassifyRequest) (args []string, 
 		ZeroTools:            true,
 		NoSessionPersistence: true,
 		NoCustomization:      true,
+		StateDir:             configDir,
 		WorkDir:              req.WorkDir,
 		WritableRoots:        req.WritableRoots,
 	})
@@ -357,13 +523,21 @@ func buildReviewCommand(reviewer Reviewer, req ClassifyRequest) (args []string, 
 // project/user Claude configuration is loaded.
 func buildIsolatedEnv(provider llm.LLMProvider, configDir string, providerEnv []string) []string {
 	excludePrefixes := provider.EnvVarsToExclude()
+	overrides := make(map[string]struct{}, len(providerEnv)+1)
+	overrides["CLAUDE_CONFIG_DIR"] = struct{}{}
+	for _, kv := range providerEnv {
+		if key, _, ok := strings.Cut(kv, "="); ok && key != "" {
+			overrides[key] = struct{}{}
+		}
+	}
 	base := os.Environ()
 	env := make([]string, 0, len(base)+len(providerEnv)+1)
 	for _, kv := range base {
 		if hasExcludedPrefix(kv, excludePrefixes) {
 			continue
 		}
-		if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+		key, _, _ := strings.Cut(kv, "=")
+		if _, overridden := overrides[key]; overridden {
 			continue
 		}
 		env = append(env, kv)

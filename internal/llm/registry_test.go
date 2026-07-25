@@ -69,6 +69,15 @@ type stubCatalogProvider struct {
 
 func (p *stubCatalogProvider) ModelCatalog() []llm.ModelInfo { return p.catalog }
 
+type stubToollessCatalogProvider struct {
+	stubCatalogProvider
+	toolLess bool
+}
+
+func (p *stubToollessCatalogProvider) SupportsNativeToollessReview() bool {
+	return p.toolLess
+}
+
 func (s *stubFullProvider) AskingQuestionsClause() string            { return s.askingClause }
 func (s *stubFullProvider) ComputeCost(string, int64, int64) float64 { return s.cost }
 func (s *stubFullProvider) ContextWindowForModel(string) int         { return s.contextWindow }
@@ -1105,6 +1114,69 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 			t.Error("claude chat should not include opus")
 		}
 	})
+}
+
+func TestRegistry_AutomaticReviewEligibilityUsesCapabilityAndFullCatalog(t *testing.T) {
+	t.Parallel()
+
+	reg := llm.NewRegistry()
+	reg.Register(&stubToollessCatalogProvider{
+		stubCatalogProvider: stubCatalogProvider{
+			stubProvider: stubProvider{name: "claude", hasCLI: true},
+			catalog: []llm.ModelInfo{
+				{ID: "haiku", Category: "cheap"},
+				{ID: "sonnet", Category: "balanced"},
+				{ID: "opus", Category: "capable"},
+				{ID: "preview-model"},
+			},
+		},
+		toolLess: true,
+	})
+	reg.Register(&stubToollessCatalogProvider{
+		stubCatalogProvider: stubCatalogProvider{
+			stubProvider: stubProvider{name: "opencode", hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "anthropic/haiku", Category: "cheap"}},
+		},
+		toolLess: false,
+	})
+	reg.Register(&stubToollessCatalogProvider{
+		stubCatalogProvider: stubCatalogProvider{
+			stubProvider: stubProvider{name: "codex", hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "gpt-5.4", Category: "capable"}},
+		},
+		toolLess: true,
+	})
+	reg.Register(&stubToollessCatalogProvider{
+		stubCatalogProvider: stubCatalogProvider{
+			stubProvider: stubProvider{name: "unready", hasCLI: false},
+			catalog:      []llm.ModelInfo{{ID: "offline-model", Category: "cheap"}},
+		},
+		toolLess: true,
+	})
+	reg.Register(&stubToollessCatalogProvider{
+		stubCatalogProvider: stubCatalogProvider{
+			stubProvider: stubProvider{name: "empty", hasCLI: true, models: []string{"fallback-model"}},
+		},
+		toolLess: true,
+	})
+
+	got := reg.EligibleModelsForPhase(llm.PhaseAutomaticReview)
+	if want := []string{"haiku", "sonnet", "opus", "preview-model"}; !slices.Equal(got["claude"], want) {
+		t.Fatalf("claude automatic-review models = %v, want full catalog %v", got["claude"], want)
+	}
+	if want := []string{"gpt-5.4"}; !slices.Equal(got["codex"], want) {
+		t.Fatalf("codex automatic-review models = %v, want %v", got["codex"], want)
+	}
+	for _, excluded := range []string{"opencode", "unready", "empty"} {
+		if _, ok := got[excluded]; ok {
+			t.Errorf("automatic-review groups include ineligible provider %q: %v", excluded, got)
+		}
+	}
+
+	// The new capability gate is exclusive to the dedicated reviewer role.
+	if got := reg.EligibleModelsForPhase(llm.PhaseResearch)["opencode"]; !slices.Equal(got, []string{"anthropic/haiku"}) {
+		t.Fatalf("research eligibility changed by automatic-review capability: %v", got)
+	}
 }
 
 // TestRegistry_ProviderGroup proves an additional provider is surfaced as a

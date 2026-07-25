@@ -19,6 +19,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -36,6 +39,30 @@ type stubHandler struct {
 	decision ports.PermissionDecision
 	err      error
 	calls    int
+}
+
+type deferHandler struct{}
+
+func (deferHandler) CanUseTool(ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	return ports.PermissionDecision{}, nil
+}
+
+type observedContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+	checks   atomic.Int32
+	after    int32
+}
+
+func (c *observedContext) Err() error {
+	err := c.Context.Err()
+	if err == nil && c.checks.Add(1) >= c.after {
+		c.once.Do(func() {
+			close(c.observed)
+		})
+	}
+	return err
 }
 
 func (s *stubHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
@@ -124,6 +151,530 @@ func TestDecoratorReviewerFailureDefers(t *testing.T) {
 	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("reviewer failure should defer: got %+v err %v", got, err)
+	}
+}
+
+func TestDecoratorMemoizesSuccessfulExactCommands(t *testing.T) {
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			calls.Add(1)
+			return autoreview.Allow, true
+		},
+	}
+
+	for range 2 {
+		got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+		if err != nil || got.Behavior != permission.DecisionAllow {
+			t.Fatalf("exact command should allow: got %+v err %v", got, err)
+		}
+	}
+	got, err := d.CanUseTool(bashReq(`{"command":"go test  ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("byte-distinct command should allow after fresh review: got %+v err %v", got, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want 2", got)
+	}
+}
+
+func TestDecoratorMemoizesDeferButRetriesFailure(t *testing.T) {
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			switch calls.Add(1) {
+			case 1:
+				return "", false
+			default:
+				return autoreview.Defer, true
+			}
+		},
+	}
+
+	for range 3 {
+		got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+		if err != nil || got.Behavior != "" {
+			t.Fatalf("failed or deferred review should enter human flow: got %+v err %v", got, err)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want failure retried once and DEFER cached", got)
+	}
+}
+
+func TestDecoratorCoalescesConcurrentExactCommands(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			if calls.Add(1) == 1 {
+				close(started)
+			}
+			<-release
+			return autoreview.Allow, true
+		},
+	}
+
+	const participants = 8
+	results := make(chan ports.PermissionDecision, participants)
+	var wg sync.WaitGroup
+	for range participants {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, _ := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+			results <- got
+		}()
+	}
+	<-started
+	close(release)
+	wg.Wait()
+	close(results)
+
+	for got := range results {
+		if got.Behavior != permission.DecisionAllow {
+			t.Errorf("shared result = %+v, want allow", got)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("classification calls = %d, want 1", got)
+	}
+}
+
+func TestDecoratorCanceledFollowerDetachesWithoutCancelingLeader(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			calls.Add(1)
+			close(started)
+			<-release
+			return autoreview.Allow, true
+		},
+	}
+
+	leaderResult := make(chan ports.PermissionDecision, 1)
+	go func() {
+		got, _ := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+		leaderResult <- got
+	}()
+	<-started
+
+	followerCtx, cancelFollower := context.WithCancel(context.Background())
+	followerObserved := &observedContext{Context: followerCtx, observed: make(chan struct{}), after: 2}
+	followerResult := make(chan ports.PermissionDecision, 1)
+	go func() {
+		req := bashReq(`{"command":"go test ./..."}`)
+		req.Ctx = followerObserved
+		got, _ := d.CanUseTool(req)
+		followerResult <- got
+	}()
+	<-followerObserved.observed
+	cancelFollower()
+	if got := <-followerResult; got.Behavior != "" {
+		t.Fatalf("canceled follower = %+v, want human deferral", got)
+	}
+
+	close(release)
+	if got := <-leaderResult; got.Behavior != permission.DecisionAllow {
+		t.Fatalf("leader = %+v, want allow", got)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("classification calls = %d, want 1", got)
+	}
+}
+
+func TestDecoratorCanceledRequestRejectsCachedAllow(t *testing.T) {
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			calls.Add(1)
+			return autoreview.Allow, true
+		},
+	}
+
+	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("initial review = %+v, %v; want allow", got, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := bashReq(`{"command":"go test ./..."}`)
+	req.Ctx = ctx
+	got, err = d.CanUseTool(req)
+	if err != nil || got.Behavior != "" {
+		t.Fatalf("canceled cache hit = %+v, %v; want human deferral", got, err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("classification calls = %d, want cached decision rejected without retry", got)
+	}
+}
+
+func TestAutoReviewCacheHitRechecksCancellation(t *testing.T) {
+	state := newAutoReviewSessionState()
+	state.cached["go test ./..."] = autoreview.Allow
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &observedContext{Context: parent, observed: make(chan struct{}), after: 1}
+
+	state.mu.Lock()
+	result := make(chan bool, 1)
+	go func() {
+		_, ok := state.review(ctx, "go test ./...", func(context.Context) (autoreview.Decision, bool) {
+			t.Error("cached request unexpectedly classified")
+			return autoreview.Allow, true
+		})
+		result <- ok
+	}()
+	<-ctx.observed
+	cancel()
+	state.mu.Unlock()
+
+	if ok := <-result; ok {
+		t.Fatal("cache hit accepted cancellation that arrived after the initial check")
+	}
+}
+
+func TestDecoratorDistinctCommandsProceedIndependently(t *testing.T) {
+	started := make(chan string, 2)
+	releases := map[string]chan struct{}{
+		"go test ./...":      make(chan struct{}),
+		"git status --short": make(chan struct{}),
+	}
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(_ context.Context, _ autoreview.Reviewer, req autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			started <- req.Command
+			<-releases[req.Command]
+			return autoreview.Allow, true
+		},
+	}
+
+	results := make(chan ports.PermissionDecision, 2)
+	for _, input := range []string{`{"command":"go test ./..."}`, `{"command":"git status --short"}`} {
+		go func() {
+			got, _ := d.CanUseTool(bashReq(input))
+			results <- got
+		}()
+	}
+	seen := map[string]bool{<-started: true, <-started: true}
+	if !seen["go test ./..."] || !seen["git status --short"] {
+		t.Fatalf("started commands = %v, want both distinct commands before either completes", seen)
+	}
+	close(releases["go test ./..."])
+	close(releases["git status --short"])
+	for range 2 {
+		if got := <-results; got.Behavior != permission.DecisionAllow {
+			t.Fatalf("distinct command result = %+v, want allow", got)
+		}
+	}
+}
+
+func TestAutoReviewFollowerReceivesLeaderFailure(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			if calls.Add(1) == 1 {
+				close(started)
+				<-release
+				return "", false
+			}
+			return autoreview.Allow, true
+		},
+	}
+
+	leaderResult := make(chan ports.PermissionDecision, 1)
+	go func() {
+		got, _ := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+		leaderResult <- got
+	}()
+	<-started
+
+	followerResult := make(chan ports.PermissionDecision, 1)
+	followerCtx := &observedContext{Context: context.Background(), observed: make(chan struct{}), after: 2}
+	go func() {
+		req := bashReq(`{"command":"go test ./..."}`)
+		req.Ctx = followerCtx
+		got, _ := d.CanUseTool(req)
+		followerResult <- got
+	}()
+	<-followerCtx.observed
+	close(release)
+
+	for name, result := range map[string]<-chan ports.PermissionDecision{
+		"leader":   leaderResult,
+		"follower": followerResult,
+	} {
+		if got := <-result; got.Behavior != "" {
+			t.Fatalf("%s after leader failure = %+v, want human deferral", name, got)
+		}
+	}
+
+	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("retry after leader failure = %+v, %v; want fresh allow review", got, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want failed leader plus retry", got)
+	}
+}
+
+func TestDecoratorCanceledLeaderAllowsRetry(t *testing.T) {
+	var calls atomic.Int32
+	firstStarted := make(chan struct{})
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(ctx context.Context, _ autoreview.Reviewer, _ autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			if calls.Add(1) == 1 {
+				close(firstStarted)
+				<-ctx.Done()
+				return "", false
+			}
+			return autoreview.Allow, true
+		},
+	}
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderResult := make(chan ports.PermissionDecision, 1)
+	go func() {
+		req := bashReq(`{"command":"go test ./..."}`)
+		req.Ctx = leaderCtx
+		got, _ := d.CanUseTool(req)
+		leaderResult <- got
+	}()
+	<-firstStarted
+
+	followerResult := make(chan ports.PermissionDecision, 1)
+	followerCtx := &observedContext{Context: context.Background(), observed: make(chan struct{}), after: 2}
+	go func() {
+		req := bashReq(`{"command":"go test ./..."}`)
+		req.Ctx = followerCtx
+		got, _ := d.CanUseTool(req)
+		followerResult <- got
+	}()
+	<-followerCtx.observed
+
+	cancelLeader()
+	if got := <-leaderResult; got.Behavior != "" {
+		t.Fatalf("canceled leader = %+v, want human deferral", got)
+	}
+	if got := <-followerResult; got.Behavior != "" {
+		t.Fatalf("follower after canceled leader = %+v, want human deferral", got)
+	}
+
+	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("retry after canceled leader = %+v, %v; want allow", got, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want canceled attempt plus retry", got)
+	}
+}
+
+func TestDecoratorSessionTeardownReleasesFollowers(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(ctx context.Context, _ autoreview.Reviewer, _ autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			if calls.Add(1) == 1 {
+				close(started)
+				<-ctx.Done()
+				return "", false
+			}
+			return autoreview.Allow, true
+		},
+	}
+
+	sessionCtx, teardown := context.WithCancel(context.Background())
+	leaderResult := make(chan ports.PermissionDecision, 1)
+	go func() {
+		req := bashReq(`{"command":"go test ./..."}`)
+		req.Ctx = sessionCtx
+		got, _ := d.CanUseTool(req)
+		leaderResult <- got
+	}()
+	<-started
+
+	followerObserved := &observedContext{Context: sessionCtx, observed: make(chan struct{}), after: 2}
+	followerResult := make(chan ports.PermissionDecision, 1)
+	go func() {
+		req := bashReq(`{"command":"go test ./..."}`)
+		req.Ctx = followerObserved
+		got, _ := d.CanUseTool(req)
+		followerResult <- got
+	}()
+	<-followerObserved.observed
+
+	teardown()
+	for name, result := range map[string]<-chan ports.PermissionDecision{
+		"leader":   leaderResult,
+		"follower": followerResult,
+	} {
+		if got := <-result; got.Behavior != "" {
+			t.Fatalf("%s after session teardown = %+v, want human deferral", name, got)
+		}
+	}
+
+	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("new-session retry after teardown = %+v, %v; want allow", got, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want torn-down review plus retry", got)
+	}
+}
+
+func TestDecoratorSessionDisposalClearsCachedDecision(t *testing.T) {
+	var calls atomic.Int32
+	newDecorator := func() *autoReviewPermissionDecorator {
+		return &autoReviewPermissionDecorator{
+			inner:    deferHandler{},
+			reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+			classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+				calls.Add(1)
+				return autoreview.Allow, true
+			},
+		}
+	}
+
+	endedSession := newDecorator()
+	manager := session.NewManager(nil)
+	t.Cleanup(manager.Shutdown)
+	ownedSession, err := manager.StartSession(
+		"cached-review-session",
+		"feature-1",
+		feature.PhaseImplement,
+		[]string{"sh", "-c", "while IFS= read -r line; do :; done"},
+		t.TempDir(),
+		nil,
+		&session.SessionOpts{PermHandler: endedSession},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	got, err := endedSession.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("initial review = %+v, %v; want allow", got, err)
+	}
+	state := endedSession.sessionState()
+	if err := ownedSession.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	state.mu.Lock()
+	cachedLen := len(state.cached)
+	inFlightLen := len(state.inFlight)
+	disposed := state.disposed
+	state.mu.Unlock()
+	if !disposed || cachedLen != 0 || inFlightLen != 0 {
+		t.Fatalf("disposed state = {disposed:%t cached:%d inFlight:%d}, want true, 0, 0", disposed, cachedLen, inFlightLen)
+	}
+
+	got, err = endedSession.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != "" {
+		t.Fatalf("ended session review = %+v, %v; want human deferral", got, err)
+	}
+
+	newSession := newDecorator()
+	got, err = newSession.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("new session review = %+v, %v; want fresh allow", got, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want ended-session review plus fresh new-session review", got)
+	}
+}
+
+func TestDecoratorStateIsSessionOwned(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	newDecorator := func() *autoReviewPermissionDecorator {
+		return &autoReviewPermissionDecorator{
+			inner:    deferHandler{},
+			reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+			classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+				calls.Add(1)
+				started <- struct{}{}
+				<-release
+				return autoreview.Allow, true
+			},
+		}
+	}
+
+	first := newDecorator()
+	second := newDecorator()
+	results := make(chan ports.PermissionDecision, 2)
+	for _, decorator := range []*autoReviewPermissionDecorator{first, second} {
+		go func() {
+			got, _ := decorator.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+			results <- got
+		}()
+	}
+	<-started
+	<-started
+	close(release)
+	for range 2 {
+		if got := <-results; got.Behavior != permission.DecisionAllow {
+			t.Fatalf("session result = %+v, want allow", got)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want one per concurrent session-owned decorator", got)
+	}
+}
+
+func TestDecoratorMemoizationDoesNotMutatePermissionState(t *testing.T) {
+	permissionDir := filepath.Join(t.TempDir(), "permissions")
+	cache := permission.NewCache(permission.NewStore(permissionDir))
+	inner := permission.Guarded(&permission.CachingHandler{
+		Inner:    &permission.AcceptEditsHandler{},
+		Cache:    cache,
+		RepoName: "repo",
+	})
+	d := &autoReviewPermissionDecorator{
+		inner:    inner,
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			return autoreview.Allow, true
+		},
+	}
+
+	for range 2 {
+		got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+		if err != nil || got.Behavior != permission.DecisionAllow {
+			t.Fatalf("memoized allow = %+v, %v; want allow", got, err)
+		}
+	}
+	if rules := cache.Rules(); len(rules) != 0 {
+		t.Fatalf("process-global permission rules = %v, want none", rules)
+	}
+	if entries, err := os.ReadDir(permissionDir); err == nil && len(entries) != 0 {
+		t.Fatalf("durable permission entries = %v, want none", entries)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read permission dir: %v", err)
 	}
 }
 

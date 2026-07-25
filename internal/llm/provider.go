@@ -89,6 +89,15 @@ type BareAuthChecker interface {
 	CheckBareAuth() bool
 }
 
+// NativeToollessReviewer is implemented only by providers whose automatic-
+// review launch and protocol have been audited to expose no native tool,
+// question, child-session, customization, or persistence surface. General
+// provider support is deliberately insufficient: automatic review requires an
+// explicit positive attestation of the complete isolation contract.
+type NativeToollessReviewer interface {
+	SupportsNativeToollessReview() bool
+}
+
 // VersionEnforcer is implemented by providers whose installed CLI must meet
 // MinVersion() to be usable at startup. When EnforcesMinVersion reports true and
 // the installed CLI is older than MinVersion(), the provider is excluded from
@@ -283,6 +292,11 @@ type ProtocolOpts struct {
 	DSP            bool
 	StateDir       string
 	MarkerPath     string
+	// NativeToollessReview selects the provider's audited one-turn reviewer
+	// protocol boundary. Providers that attest NativeToollessReviewer use this
+	// to omit every tool, question, child-session, continuation, and persistent
+	// session surface while leaving ordinary sessions unchanged.
+	NativeToollessReview bool
 	// ResumeSessionID, when non-empty, asks the protocol to resume a prior
 	// provider session identity rather than start a fresh one. Empty means a
 	// normal new session, so providers that do not resume leave their behavior
@@ -414,13 +428,14 @@ var ErrNotSupported = fmt.Errorf("operation not supported by this provider")
 type PhaseRole string
 
 const (
-	PhaseInquiry        PhaseRole = "inquiry"
-	PhaseResearch       PhaseRole = "research"
-	PhasePlanning       PhaseRole = "planning"
-	PhaseImplementation PhaseRole = "implementation"
-	PhaseReview         PhaseRole = "review"
-	PhaseChat           PhaseRole = "chat"
-	PhaseKBBuild        PhaseRole = "kb_build"
+	PhaseInquiry         PhaseRole = "inquiry"
+	PhaseResearch        PhaseRole = "research"
+	PhasePlanning        PhaseRole = "planning"
+	PhaseImplementation  PhaseRole = "implementation"
+	PhaseReview          PhaseRole = "review"
+	PhaseChat            PhaseRole = "chat"
+	PhaseKBBuild         PhaseRole = "kb_build"
+	PhaseAutomaticReview PhaseRole = "automatic_review"
 )
 
 // ConfigFieldForRole maps a PhaseRole to the corresponding field name on

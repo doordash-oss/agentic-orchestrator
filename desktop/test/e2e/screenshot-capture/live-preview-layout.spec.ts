@@ -260,9 +260,7 @@ test('transcript accepts wheel and focused keyboard scrolling', async ({ page })
   await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 });
 
-test('aftercare keeps its runway, ledger, and repository handoff legible at rest', async ({
-  page,
-}) => {
+test('aftercare keeps its runway and compact feature facts legible at rest', async ({ page }) => {
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 760, height: 900 },
@@ -272,14 +270,11 @@ test('aftercare keeps its runway, ledger, and repository handoff legible at rest
 
     const desk = page.getByRole('region', { name: 'Feature aftercare' });
     await expect(desk).toBeVisible();
-    await expect(page.getByRole('tab', { name: 'Aftercare' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await expect(page.getByRole('tab', { name: 'Run record' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Maintenance runway' })).toBeVisible();
-    await expect(page.getByRole('region', { name: 'Run ledger' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Repository readiness' })).toBeVisible();
+    await expect(page.getByRole('tablist', { name: 'Stage view' })).toHaveCount(0);
+    await expect(page.getByLabel('Feature pipeline')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Run record' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Choose one focused action' })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Feature facts' })).toBeVisible();
     await expect(page.getByText('Waiting for the agent to respond…')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /Prepare rebase/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Check comments/ })).toBeVisible();
@@ -288,7 +283,7 @@ test('aftercare keeps its runway, ledger, and repository handoff legible at rest
     const dimensions = await page.evaluate(() => ({
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: document.documentElement.clientWidth,
-      deskWidth: document.querySelector('.aftercare')?.getBoundingClientRect().width ?? 0,
+      deskWidth: document.querySelector('.aftercare-workspace')?.getBoundingClientRect().width ?? 0,
     }));
     expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
     expect(dimensions.deskWidth).toBeGreaterThan(0);

@@ -324,6 +324,53 @@ function AftercareScene() {
   );
 }
 
+function PostImplementationScene({ scene }: { scene: string }) {
+  const [drafts, setDrafts] = React.useState(emptyAttentionDrafts);
+  const gateItems: AttentionItem[] =
+    scene === 'post-cycle-gate'
+      ? [
+          {
+            kind: 'gate',
+            id: 'post-cycle-gate',
+            featureId: 'abcd1234ef567890',
+            waitingSince: '2026-07-25T10:00:00.000Z',
+            repoName: 'agentic-orchestrator',
+            cycleType: 'review-comments',
+            summary: 'The agent needs one decision before it can finish the review response.',
+            questions: [
+              {
+                index: 1,
+                prompt: 'Which compatibility behavior should remain explicit?',
+                answer: '',
+              },
+            ],
+          },
+        ]
+      : [];
+  return (
+    <div className="app-frame">
+      <header className="global-bar" aria-hidden="true">
+        <span className="global-bar__brand">Agentico</span>
+      </header>
+      <div className="workspace">
+        <div className="tab-strip__rail" aria-hidden="true" />
+        <div className="tab-panel tab-panel--cockpit">
+          <FeatureCockpit
+            featureId="abcd1234ef567890"
+            titleHint="Configure per-phase effort level"
+            onClose={() => undefined}
+            onLoadedName={() => undefined}
+            attentionItems={gateItems}
+            refreshAttention={() => Promise.resolve(gateItems)}
+            attentionDrafts={drafts}
+            setAttentionDrafts={setDrafts}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CycleModalScene({ scene }: { scene: string }) {
   const snapshot = scene === 'rebase-preflight' ? REBASE_FEATURE_SNAPSHOT : CYCLES_FEATURE_SNAPSHOT;
   const title =
@@ -865,6 +912,9 @@ function CaptureApp() {
   }
   if (scene === 'aftercare') {
     return <AftercareScene />;
+  }
+  if (scene.startsWith('post-cycle-')) {
+    return <PostImplementationScene scene={scene} />;
   }
   if (scene === 'rebase-preflight' || scene === 'review-refactor' || scene === 'cycle-gate') {
     return <CycleModalScene scene={scene} />;

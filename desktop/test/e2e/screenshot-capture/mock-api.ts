@@ -990,6 +990,57 @@ function makeMockApi(
       if (scene === 'aftercare') {
         return Promise.resolve(AFTERCARE_FEATURE_SNAPSHOT);
       }
+      if (scene.startsWith('post-cycle-')) {
+        const cycle =
+          scene === 'post-cycle-rebase'
+            ? {
+                type: 'rebase',
+                status: 'running',
+                count: 2,
+                iteration: 1,
+                phase: 'resolve_conflicts',
+              }
+            : scene === 'post-cycle-refactor'
+              ? {
+                  type: 'refactor',
+                  status: 'running',
+                  count: 1,
+                  iteration: 2,
+                  phase: 'implement_validate',
+                }
+              : scene === 'post-cycle-failed'
+                ? {
+                    type: 'rebase',
+                    status: 'failed',
+                    count: 2,
+                    iteration: 1,
+                    phase: 'resolve_conflicts',
+                  }
+                : {
+                    type: 'review-comments',
+                    status: scene === 'post-cycle-gate' ? 'need_user_input' : 'running',
+                    count: 1,
+                    iteration: 1,
+                    phase: 'address_validate',
+                  };
+        return Promise.resolve({
+          ...AFTERCARE_FEATURE_SNAPSHOT,
+          cycle,
+          phaseStatus:
+            cycle.type === 'review-comments'
+              ? 'addressing-review-comments'
+              : cycle.type === 'refactor'
+                ? 'refactoring'
+                : 'rebasing',
+          actions:
+            scene === 'post-cycle-failed'
+              ? [{ id: 'retry', enabled: true, disabledReasons: [] }]
+              : [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+          ...(scene === 'post-cycle-failed'
+            ? { failure: { type: 'rebase_conflict', message: 'The rebase worker stopped safely.' } }
+            : {}),
+        } as FeatureSnapshot);
+      }
       if (scene === 'bulk-preview' || scene === 'bulk-queue') {
         const id = _featureId;
         if (id === 'alpha1234ef567890') {

@@ -69,8 +69,61 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'dark',
     1440,
     900,
-    'published-feature-aftercare-desk-with-maintenance-runway-run-ledger-and-repository-readiness-1440x900',
-    '.aftercare',
+    'published-feature-aftercare-launchpad-with-focused-runway-and-feature-facts-1440x900',
+    '.aftercare-workspace',
+  );
+
+  await capture(
+    page,
+    'post-cycle-rebase',
+    'dark',
+    1440,
+    900,
+    'focused-rebase-cycle-with-authoritative-spine-and-live-agent-canvas-1440x900',
+    '.cycle-workspace',
+  );
+
+  await capture(
+    page,
+    'post-cycle-review',
+    'dark',
+    1440,
+    900,
+    'focused-review-comments-cycle-with-live-agent-canvas-1440x900',
+    '.cycle-workspace',
+  );
+
+  await capture(
+    page,
+    'post-cycle-refactor',
+    'dark',
+    1440,
+    900,
+    'focused-refactor-cycle-with-live-agent-canvas-1440x900',
+    '.cycle-workspace',
+  );
+
+  await capture(
+    page,
+    'post-cycle-gate',
+    'dark',
+    1440,
+    900,
+    'cycle-need-user-input-floating-free-text-modal-1440x900',
+    '.need-input-modal',
+    async (capturePage) => {
+      await capturePage.waitForTimeout(250);
+    },
+  );
+
+  await capture(
+    page,
+    'post-cycle-failed',
+    'dark',
+    1440,
+    900,
+    'failed-cycle-with-preserved-context-retry-and-return-actions-1440x900',
+    '.cycle-workspace__failure',
   );
 
   await capture(
@@ -79,8 +132,8 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'dark',
     760,
     900,
-    'published-feature-aftercare-desk-retaining-all-cycle-actions-in-a-narrow-workspace-760x900',
-    '.aftercare',
+    'published-feature-aftercare-launchpad-retaining-actions-and-feature-facts-760x900',
+    '.aftercare-workspace',
   );
 
   await capture(
@@ -422,7 +475,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     1440,
     900,
     'guarded-rebase-preflight-with-repository-targets-freshness-blockers-and-impact-c-1440x900',
-    '.cycle-journey--rebase',
+    '.cycle-modal[data-phase]',
   );
 
   await capture(
@@ -432,7 +485,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     1440,
     900,
     'guarded-rebase-preflight-with-repository-targets-freshness-blockers-and-impact-c-1440x900-28539a80',
-    '.cycle-journey--rebase',
+    '.cycle-modal[data-phase]',
   );
 
   await capture(
@@ -441,12 +494,14 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'light',
     1440,
     900,
-    'review-comments-preview-beside-explicitly-scoped-refactor-inputs-and-repository-1440x900',
-    '.cycle-journey--review-comments',
+    'prompt-first-refactor-with-resolved-repository-scope-1440x900',
+    '.cycle-modal[data-phase]',
     async (p) => {
-      await p.locator('.cycle-journey--review-comments select').selectOption('signal-lab');
-      await p.locator('.cycle-journey__fetch').click();
-      await expect(p.locator('.cycle-journey__comments-preview')).toBeVisible({ timeout: 10_000 });
+      await p
+        .locator('.cycle-modal__prompt textarea')
+        .fill('Separate canonical effort values from provider aliases.');
+      await p.getByRole('radio', { name: 'All repositories' }).check();
+      await expect(p.locator('.cycle-journey__resolved-repos')).toBeVisible({ timeout: 10_000 });
     },
   );
 
@@ -456,12 +511,14 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'dark',
     1440,
     900,
-    'review-comments-preview-beside-explicitly-scoped-refactor-inputs-and-repository-1440x900-dfb57b6e',
-    '.cycle-journey--review-comments',
+    'prompt-first-refactor-with-resolved-repository-scope-1440x900-dark',
+    '.cycle-modal[data-phase]',
     async (p) => {
-      await p.locator('.cycle-journey--review-comments select').selectOption('signal-lab');
-      await p.locator('.cycle-journey__fetch').click();
-      await expect(p.locator('.cycle-journey__comments-preview')).toBeVisible({ timeout: 10_000 });
+      await p
+        .locator('.cycle-modal__prompt textarea')
+        .fill('Separate canonical effort values from provider aliases.');
+      await p.getByRole('radio', { name: 'All repositories' }).check();
+      await expect(p.locator('.cycle-journey__resolved-repos')).toBeVisible({ timeout: 10_000 });
     },
   );
 
@@ -564,16 +621,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       await killButton.click();
       await expect(p.locator('.impact-dialog__backdrop')).toBeVisible({ timeout: 5_000 });
     },
-  );
-
-  await capture(
-    page,
-    'cycle-gate',
-    'dark',
-    760,
-    900,
-    'repository-cycle-need_user_input-and-recovery-navigation-in-constrained-layout-d-760x900',
-    '.cycle-journey__gate',
   );
 });
 

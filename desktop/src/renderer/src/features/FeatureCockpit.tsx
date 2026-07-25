@@ -115,6 +115,9 @@ const TASK_STATUS_ICON: Record<SetupTaskView['status'], string> = {
   failed: '✕',
 };
 
+const MAX_ITERATIONS_RESTART_DELTA = 10;
+const MAX_PLAN_ITERATIONS_RESTART_DELTA = 2;
+
 function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch: string | null }) {
   return (
     <dl className="cockpit__facts">
@@ -697,7 +700,7 @@ function RestartConfirmDialog({
   }, [busy, onClose]);
 
   const repos = snapshot.repos.join(', ');
-  const hasFailure = snapshot.failure !== undefined && snapshot.failure.type !== undefined;
+  const extendsIterationBudget = snapshot.failure?.type === 'max_iterations';
 
   return (
     <div className="impact-dialog__backdrop">
@@ -715,7 +718,7 @@ function RestartConfirmDialog({
           This reruns the <strong>{snapshot.currentPhase}</strong> phase for this feature
           {repos.length > 0 ? ` across ${repos}` : ''}.
         </p>
-        {hasFailure ? (
+        {extendsIterationBudget ? (
           <p className="impact-dialog__note">
             A maximum-iteration restart applies the established extra iteration budget increments
             for this phase.
@@ -1063,7 +1066,7 @@ export function FeatureCockpit({
 
   const dispatchLifecycleAction = useCallback(
     (
-      action: 'start' | 'resume' | 'retry' | 'restart',
+      request: FeatureActionRequest,
       pendingAnnouncement: string,
       acceptedAnnouncement: string,
       errorLabel: 'Start' | 'Resume' | 'Retry' | 'Restart',
@@ -1074,7 +1077,7 @@ export function FeatureCockpit({
       setActionError(null);
       setAnnouncement(pendingAnnouncement);
       window.agentico
-        .dispatchFeatureAction({ featureId, action })
+        .dispatchFeatureAction(request)
         .then(() => {
           setAnnouncement(acceptedAnnouncement);
           return load({ silent: true });
@@ -1089,51 +1092,63 @@ export function FeatureCockpit({
           setBusy(false);
         });
     },
-    [featureId, load],
+    [load],
   );
 
   const start = useCallback(
     () =>
       dispatchLifecycleAction(
-        'start',
+        { featureId, action: 'start' },
         'Starting from the current server snapshot…',
         'Start accepted. Refreshing authoritative run state…',
         'Start',
       ),
-    [dispatchLifecycleAction],
+    [dispatchLifecycleAction, featureId],
   );
 
   const resume = useCallback(
     () =>
       dispatchLifecycleAction(
-        'resume',
+        { featureId, action: 'resume' },
         'Resuming from the paused gate…',
         'Resume accepted. Refreshing authoritative state…',
         'Resume',
       ),
-    [dispatchLifecycleAction],
+    [dispatchLifecycleAction, featureId],
   );
 
   const retry = useCallback(
     () =>
       dispatchLifecycleAction(
-        'retry',
+        { featureId, action: 'retry' },
         'Retrying from the server snapshot…',
         'Retry accepted. Refreshing authoritative state…',
         'Retry',
       ),
-    [dispatchLifecycleAction],
+    [dispatchLifecycleAction, featureId],
   );
 
+  const restartExtendsIterationBudget =
+    state.phase === 'loaded' && state.snapshot.failure?.type === 'max_iterations';
   const confirmRestart = useCallback(() => {
     setRestartDialog(false);
+    const request: FeatureActionRequest = restartExtendsIterationBudget
+      ? {
+          featureId,
+          action: 'restart',
+          body: {
+            max_iterations_delta: MAX_ITERATIONS_RESTART_DELTA,
+            max_plan_iterations_delta: MAX_PLAN_ITERATIONS_RESTART_DELTA,
+          },
+        }
+      : { featureId, action: 'restart' };
     dispatchLifecycleAction(
-      'restart',
+      request,
       'Restarting from the server snapshot…',
       'Restart accepted. Refreshing authoritative state…',
       'Restart',
     );
-  }, [dispatchLifecycleAction]);
+  }, [dispatchLifecycleAction, featureId, restartExtendsIterationBudget]);
 
   const restart = useCallback(() => {
     setRestartDialog(true);

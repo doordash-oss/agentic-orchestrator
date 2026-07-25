@@ -794,7 +794,17 @@ const CompletionRepoNameSchema = z.string().min(1).max(128);
 export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({
     featureId: FeatureIdSchema,
-    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry', 'restart']),
+    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry']),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    action: z.literal('restart'),
+    body: z
+      .strictObject({
+        max_iterations_delta: z.number().int().nonnegative(),
+        max_plan_iterations_delta: z.number().int().nonnegative(),
+      })
+      .optional(),
   }),
   z.strictObject({
     featureId: FeatureIdSchema,

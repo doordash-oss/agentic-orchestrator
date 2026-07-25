@@ -64,6 +64,23 @@ describe('operational IPC schemas', () => {
     expect(
       FeatureActionRequestSchema.parse({
         featureId: 'abcd1234',
+        action: 'restart',
+        body: {
+          max_iterations_delta: 10,
+          max_plan_iterations_delta: 2,
+        },
+      }),
+    ).toStrictEqual({
+      featureId: 'abcd1234',
+      action: 'restart',
+      body: {
+        max_iterations_delta: 10,
+        max_plan_iterations_delta: 2,
+      },
+    });
+    expect(
+      FeatureActionRequestSchema.parse({
+        featureId: 'abcd1234',
         action: 'publish',
         body: {
           source_revision: 'rev-1',

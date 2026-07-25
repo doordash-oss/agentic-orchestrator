@@ -1332,6 +1332,9 @@ func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusFailed
 		ff.CurrentPhase = feature.PhaseImplement
+		ff.FailureType = feature.FailureMaxIterations
+		ff.MaxIterations = 10
+		ff.MaxPlanIterations = 3
 		ff.LastError = "no progress for 3 consecutive iterations"
 		ff.Artifacts = map[string]string{"plan": planPath}
 		return nil
@@ -1366,8 +1369,65 @@ func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
 	if updated.Status != feature.StatusImplementing || updated.CurrentPhase != feature.PhaseImplement {
 		t.Fatalf("retried feature status/phase = %s/%s, want Implementing/Implement", updated.Status, updated.CurrentPhase)
 	}
+	if updated.MaxIterations != 20 {
+		t.Fatalf("MaxIterations = %d, want 20", updated.MaxIterations)
+	}
+	if updated.MaxPlanIterations != 3 {
+		t.Fatalf("MaxPlanIterations = %d, want unchanged 3 outside Plan", updated.MaxPlanIterations)
+	}
 	if result.FeatureID != f.ID || result.Result != resultRetried {
 		t.Fatalf("RetryFeature() result = %+v, want retried feature", result)
+	}
+}
+
+func TestRetryFeatureIterationDeltas(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		feature  *feature.Feature
+		wantMax  int
+		wantPlan int
+	}{
+		{
+			name: "max iterations",
+			feature: &feature.Feature{
+				Status:       feature.StatusFailed,
+				FailureType:  feature.FailureMaxIterations,
+				CurrentPhase: feature.PhasePlan,
+			},
+			wantMax:  10,
+			wantPlan: 2,
+		},
+		{
+			name: "other failure",
+			feature: &feature.Feature{
+				Status:       feature.StatusFailed,
+				FailureType:  feature.FailureInfrastructure,
+				CurrentPhase: feature.PhasePlan,
+			},
+		},
+		{
+			name: "stale failure type on active feature",
+			feature: &feature.Feature{
+				Status:       feature.StatusImplementing,
+				FailureType:  feature.FailureMaxIterations,
+				CurrentPhase: feature.PhaseImplement,
+			},
+		},
+		{name: "missing feature"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotMax, gotPlan := retryFeatureIterationDeltas(tt.feature)
+			if gotMax != tt.wantMax || gotPlan != tt.wantPlan {
+				t.Fatalf("retryFeatureIterationDeltas() = (%d, %d), want (%d, %d)", gotMax, gotPlan, tt.wantMax, tt.wantPlan)
+			}
+		})
 	}
 }
 

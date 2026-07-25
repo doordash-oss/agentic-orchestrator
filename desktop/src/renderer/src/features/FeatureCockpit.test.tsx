@@ -1012,6 +1012,63 @@ describe('FeatureCockpit convergence', () => {
   });
 });
 
+describe('FeatureCockpit Restart', () => {
+  it('extends the budget when restarting a max-iteration failure', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Failed',
+        currentPhase: 'Implement',
+        failure: { type: 'max_iterations', message: 'reached maximum iteration count' },
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Restart' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restart Search revamp?' });
+    expect(dialog).toHaveTextContent('maximum-iteration restart');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm restart' }));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'restart',
+        body: {
+          max_iterations_delta: 10,
+          max_plan_iterations_delta: 2,
+        },
+      }),
+    );
+  });
+
+  it('keeps ordinary restarts bodyless and does not claim a budget extension', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Interrupted',
+        currentPhase: 'Implement',
+        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Restart' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restart Search revamp?' });
+    expect(dialog).not.toHaveTextContent('maximum-iteration restart');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm restart' }));
+
+    await waitFor(() =>
+      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+        featureId: FEATURE_ID,
+        action: 'restart',
+      }),
+    );
+  });
+});
+
 describe('FeatureCockpit Stop', () => {
   function activeSnapshot() {
     return featureSnapshot({

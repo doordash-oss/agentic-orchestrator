@@ -84,6 +84,9 @@ const (
 
 	dispatchNone = "none"
 
+	maxIterationsRetryDelta     = 10
+	maxPlanIterationsRetryDelta = 2
+
 	toolNameBash            = "Bash"
 	toolNameAskUserQuestion = "AskUserQuestion"
 
@@ -1726,16 +1729,21 @@ func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.Ret
 	if t.orch == nil {
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
+	var current *feature.Feature
 	if t.store != nil {
 		f, err := t.store.Load(featureID)
-		if err == nil && isFailedSetupFeature(f) {
-			if err := t.orch.RetrySetup(featureID); err != nil {
-				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+		if err == nil {
+			current = f
+			if isFailedSetupFeature(f) {
+				if err := t.orch.RetrySetup(featureID); err != nil {
+					return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+				}
+				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
 			}
-			return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
 		}
 	}
-	outcome, err := t.orch.RestartPhase(featureID, 0, 0)
+	maxIterationsDelta, maxPlanIterationsDelta := retryFeatureIterationDeltas(current)
+	outcome, err := t.orch.RestartPhase(featureID, maxIterationsDelta, maxPlanIterationsDelta)
 	if err != nil {
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
@@ -1744,6 +1752,13 @@ func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.Ret
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
+}
+
+func retryFeatureIterationDeltas(f *feature.Feature) (int, int) {
+	if f == nil || f.Status != feature.StatusFailed || f.FailureType != feature.FailureMaxIterations {
+		return 0, 0
+	}
+	return maxIterationsRetryDelta, maxPlanIterationsRetryDelta
 }
 
 func isFailedSetupFeature(f *feature.Feature) bool {

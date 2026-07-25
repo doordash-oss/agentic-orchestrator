@@ -344,6 +344,43 @@ describe('FeatureService.dispatchAction', () => {
     });
   });
 
+  it('forwards max-iteration restart deltas to the server action endpoint', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        feature_id: 'abcd1234ef567890',
+        result: 'restarted',
+        phase: 'implement',
+      },
+    }));
+
+    await expect(
+      service.dispatchAction({
+        featureId: 'abcd1234ef567890',
+        action: 'restart',
+        body: {
+          max_iterations_delta: 10,
+          max_plan_iterations_delta: 2,
+        },
+      }),
+    ).resolves.toMatchObject({
+      featureId: 'abcd1234ef567890',
+      action: 'restart',
+      result: 'restarted',
+      phase: 'implement',
+      sessionIds: [],
+    });
+    expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/restart');
+    expect(calls[0]?.init).toStrictEqual({
+      method: 'POST',
+      body: {
+        max_iterations_delta: 10,
+        max_plan_iterations_delta: 2,
+      },
+    });
+  });
+
   it('requests a server-authored publish narrative for selected repositories only', async () => {
     const { service, calls } = makeService(() => ({
       status: 200,

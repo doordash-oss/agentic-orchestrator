@@ -386,6 +386,8 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeControlRequest, Tool: msg.ControlRequest.Request.ToolName, Status: controlRequestStatusPending, Redacted: true})
 		case msg.Result != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: "result", Status: msg.Result.Subtype, Redacted: true})
+		case msg.Status != nil:
+			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: "status", Text: msg.Status.Message})
 		case msg.ToolProgress != nil:
 			if rows := fileChangeDTOsFromSDKFileChanges(index, msg.ToolProgress.ToolName, msg.FileChanges, root); len(rows) > 0 {
 				out = append(out, rows...)

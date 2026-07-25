@@ -15,7 +15,12 @@ The following tool categories are approved automatically and never prompt:
 
 ### Requires Approval
 
-Any Bash command not covered by the default or cached rules requires user approval. Common examples:
+Any Bash command not covered by the default or cached rules normally requires
+user approval. When the optional Automatic Bash review feature is enabled, an
+unresolved canonical Bash request may first pass a deterministic guardrail and
+one model review. Only an exact `ALLOW` can continue automatically; every
+other result reaches the ordinary human prompt. This creates no durable
+permission rule.
 
 - Build commands (`go build`, `npm run build`, `make`)
 - Test commands (`go test`, `npm test`, `pytest`)
@@ -177,4 +182,10 @@ When an agent requests a tool, the permission system evaluates in this order:
 
 1. **Session handler** — checks if the tool is in the always-approved category (read-only tools, file edits during implementation)
 2. **Cache check** — looks up the tool pattern in cached rules (global + per-repo), deny-wins
-3. **TUI prompt** — if no cached rule matches, surfaces the permission request to the user in the watch view or dashboard
+3. **Automatic Bash review** — when enabled, only an otherwise-unresolved canonical Bash request that passes the deterministic guardrail receives one bounded model attempt; session-cache hits and coalesced followers stay silent
+4. **TUI prompt** — if automatic review is disabled, ineligible, unavailable, returns `DEFER`, or fails, the ordinary human prompt appears in the watch view or dashboard
+
+Automatic review never overrides earlier decisions, stores no durable
+permission rule, and is not command sandboxing. See
+[Configuration — Automatic Bash Review](configuration.md#automatic-bash-review)
+for the guardrail, reviewer, lifecycle, and evidence contract.

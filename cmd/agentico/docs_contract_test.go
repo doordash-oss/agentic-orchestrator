@@ -309,6 +309,87 @@ func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
 	}
 }
 
+func TestUserFacingDocsDescribeAutomaticBashReviewContract(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	requiredByDoc := map[string][]string{
+		"README.md": {
+			"automatic_review_enabled",
+			"automatic_review",
+			"disabled by default",
+			"Claude → OpenCode → Codex",
+			"new sessions",
+			"one low-effort 10-second attempt",
+			"ordinary human prompt",
+			"Auto-approved Bash: ",
+			"bounded operator event",
+			"session-only",
+			"does not sandbox commands",
+		},
+		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
+			"defaults.automatic_review_enabled",
+			"defaults.models.automatic_review",
+			"disabled by default",
+			"enabled key is absent",
+			"empty **Automatic**",
+			"remains editable while automatic review is disabled",
+			"new sessions",
+			"Claude → OpenCode → Codex",
+			"preferred cheap model",
+			"must resolve uniquely",
+			"substitutes another model",
+			"unresolved canonical Bash",
+			"existing allow, deny, or error",
+			"safe-create decision",
+			"every visible chain and pipeline segment",
+			"Make, Just, Task, Bazel",
+			"test, lint/check, build/compile, format, generation",
+			"prohibited target component",
+			"`2>&1`",
+			"`/dev/null`",
+			"no session persistence or user/project customization",
+			"exact case-sensitive `ALLOW` or `DEFER`",
+			"10-second",
+			"no retries",
+			"ordinary human prompt",
+			"byte-exact session-only",
+			"Nothing is reused across sessions",
+			"no durable permission rule",
+			"Auto-approved Bash: ",
+			"at most 200 bytes",
+			"bounded operator event",
+			"non-Bash requests",
+			"existing decisions",
+			"disabled or unavailable reviewers",
+			"session-cache hits",
+			"in-flight followers",
+			"does not sandbox commands",
+		},
+		filepath.Join("skills", "chat", "user-guide", "permissions.md"): {
+			"Automatic Bash review",
+			"deterministic guardrail",
+			"ordinary human prompt",
+			"no durable permission rule",
+		},
+	}
+	for rel, wants := range requiredByDoc {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := strings.Join(strings.Fields(string(body)), " ")
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s missing automatic-review contract token %q", rel, want)
+			}
+		}
+		for _, banned := range []string{"sandboxed command", "guaranteed safe", "all Bash commands"} {
+			if strings.Contains(text, banned) {
+				t.Errorf("%s contains unsafe automatic-review claim %q", rel, banned)
+			}
+		}
+	}
+}
+
 // Guards live smoke-shell launch path: renamed binary path and help text.
 func TestSmokeScriptDocsRetainRenamedSurface(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")

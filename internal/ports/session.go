@@ -172,17 +172,25 @@ type SessionWatchdogConfig struct {
 
 // ToolPermissionRequest describes a pending tool-use permission check.
 type ToolPermissionRequest struct {
-	RequestID    string
-	ToolName     string
-	Input        string
-	SessionID    string
-	FeatureID    string
-	ProviderName string // "claude", "codex", etc. — used by provider-specific guards
+	RequestID        string
+	ToolName         string
+	Input            string
+	SessionID        string
+	LogicalSessionID string
+	FeatureID        string
+	Phase            feature.Phase
+	RepoName         string
+	Iteration        int
+	ProviderName     string // "claude", "codex", etc. — used by provider-specific guards
 	// Ctx carries the session's lifecycle context so long-running permission
 	// handlers (e.g. the automatic-review classifier) can be cancelled when
 	// the session shuts down. Nil means no cancellation is possible; handlers
 	// should fall back to context.Background().
 	Ctx context.Context
+	// AppendStatus synchronously appends a sanitized, provider-neutral status
+	// to the owning session before a permission decision returns. It is
+	// optional and best-effort; callers must not change the decision on error.
+	AppendStatus func(string) error
 }
 
 // PermissionDecision is the outcome of a permission check.

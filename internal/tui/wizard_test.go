@@ -3847,6 +3847,14 @@ func TestWizardRefreshReposPreservesSelectionsOnCollision(t *testing.T) {
 }
 
 func TestWizardDirPickerDelegatesAllMessages(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, name := range []string{"first", "second"} {
+		if err := os.Mkdir(filepath.Join(home, name), 0o755); err != nil {
+			t.Fatalf("create deterministic picker entry %q: %v", name, err)
+		}
+	}
+
 	repos := []string{"repo-a"}
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")

@@ -162,6 +162,10 @@ type Session struct {
 	// in a Task() call. Codex does not emit these messages.
 	onSubagentEvent func(msg llm.SDKMessage)
 
+	// onMessage forwards locally appended records through the same manager
+	// event path as provider-originated messages.
+	onMessage func(msg llm.SDKMessage)
+
 	// For attach mode: subscribers receive copies of messages
 	attachCh                  chan llm.SDKMessage
 	criticalAttachSendTimeout time.Duration
@@ -765,6 +769,7 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 
 	s.workDir = workdir
 	s.startedAt = time.Now()
+	s.onMessage = onMessage
 
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = workdir
@@ -1317,13 +1322,18 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		sessionID = s.protocol.SessionID()
 	}
 	permReq := ToolPermissionRequest{
-		RequestID:    req.RequestID,
-		ToolName:     req.Request.ToolName,
-		Input:        string(req.Request.Input),
-		SessionID:    sessionID,
-		FeatureID:    s.featureID,
-		ProviderName: s.providerName,
-		Ctx:          s.lifecycleCtx(),
+		RequestID:        req.RequestID,
+		ToolName:         req.Request.ToolName,
+		Input:            string(req.Request.Input),
+		SessionID:        sessionID,
+		LogicalSessionID: s.id,
+		FeatureID:        s.featureID,
+		Phase:            s.phase,
+		RepoName:         s.repoName,
+		Iteration:        s.iteration,
+		ProviderName:     s.providerName,
+		Ctx:              s.lifecycleCtx(),
+		AppendStatus:     s.appendLocalStatus,
 	}
 
 	decision, err := handler.CanUseTool(permReq)
@@ -1351,6 +1361,36 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		}
 		return true
 	}
+}
+
+func (s *Session) appendLocalStatus(text string) error {
+	if s == nil || s.messageLog == nil {
+		return errors.New("session message log unavailable")
+	}
+	sessionID := ""
+	if s.protocol != nil {
+		sessionID = s.protocol.SessionID()
+	}
+	msg := llm.SDKMessage{
+		Type: "status",
+		Status: &llm.StatusMessage{
+			Type:      "status",
+			SessionID: sessionID,
+			Message:   text,
+		},
+	}
+	s.messageLog.Append(msg)
+	select {
+	case s.attachCh <- msg:
+	default:
+	}
+	s.mu.Lock()
+	onMessage := s.onMessage
+	s.mu.Unlock()
+	if onMessage != nil {
+		onMessage(msg)
+	}
+	return nil
 }
 
 func (s *Session) tryAutoPickAskUser(req *llm.ControlRequestMessage) bool {

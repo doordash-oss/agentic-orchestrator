@@ -19,6 +19,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,11 +29,106 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
+
+func TestDecoratorEmitsOneAutomaticReviewEventWithStatusFailure(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "feature-automatic-review"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	observer := observe.New(true, stateDir, false, "", false, "agentic")
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		observer: observer,
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			return autoreview.Result{Decision: autoreview.Allow, Outcome: autoreview.OutcomeAllow}
+		},
+	}
+	req := bashReq(`{"command":"go test ./..."}`)
+	req.FeatureID = featureID
+	req.SessionID = "provider-session"
+	req.LogicalSessionID = "logical-session"
+	req.Phase = feature.PhaseImplement
+	req.RepoName = "repo-a"
+	req.Iteration = 3
+	req.AppendStatus = func(string) error { return errors.New("disk full token=secret-value") }
+
+	got, err := d.CanUseTool(req)
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("CanUseTool() = %+v, %v; want allow", got, err)
+	}
+	events := filterEventsByType(readObserveEvents(t, stateDir, featureID), "automatic_review.completed")
+	if len(events) != 1 {
+		t.Fatalf("automatic review events = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.SessionID != "logical-session" || event.Phase != "implement" || event.RepoName != "repo-a" || event.Iteration != 3 {
+		t.Fatalf("event context = %+v", event)
+	}
+	if event.Data["outcome"] != "allow" || event.Data["status_persisted"] != false || event.Data["status_failure_class"] != "append_error" {
+		t.Fatalf("event data = %+v", event.Data)
+	}
+	if reason, _ := event.Data["status_failure_reason"].(string); strings.Contains(reason, "secret-value") || !strings.Contains(reason, "[redacted]") {
+		t.Fatalf("status failure reason = %q, want bounded redaction", reason)
+	}
+
+	if got, err := d.CanUseTool(req); err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("cached CanUseTool() = %+v, %v; want allow", got, err)
+	}
+	events = filterEventsByType(readObserveEvents(t, stateDir, featureID), "automatic_review.completed")
+	if len(events) != 1 {
+		t.Fatalf("cached automatic review events = %d, want leader-only one", len(events))
+	}
+}
+
+func TestDecoratorCancellationBeforeSideEffectsEmitsCanceledWithoutStatus(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "feature-canceled-review"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	observer := observe.New(true, stateDir, false, "", false, "agentic")
+	ctx, cancel := context.WithCancel(context.Background())
+	var statusCalls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		observer: observer,
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			cancel()
+			return autoreview.Result{Decision: autoreview.Allow, Outcome: autoreview.OutcomeAllow}
+		},
+		appendStatus: func(string) error {
+			statusCalls.Add(1)
+			return nil
+		},
+	}
+	req := bashReq(`{"command":"go test ./..."}`)
+	req.Ctx = ctx
+	req.FeatureID = featureID
+
+	got, err := d.CanUseTool(req)
+	if err != nil || got.Behavior != "" {
+		t.Fatalf("CanUseTool() = %+v, %v; want human deferral after cancellation", got, err)
+	}
+	if got := statusCalls.Load(); got != 0 {
+		t.Fatalf("status append calls = %d, want 0", got)
+	}
+	events := filterEventsByType(readObserveEvents(t, stateDir, featureID), "automatic_review.completed")
+	if len(events) != 1 || events[0].Data["outcome"] != "canceled" {
+		t.Fatalf("automatic review events = %+v, want one canceled outcome", events)
+	}
+	if _, ok := events[0].Data["status_persisted"]; ok {
+		t.Fatalf("canceled event unexpectedly includes status_persisted: %+v", events[0].Data)
+	}
+}
 
 // stubHandler returns a fixed decision/error for every request.
 type stubHandler struct {
@@ -133,6 +229,91 @@ func TestDecoratorEligibleAllowApproves(t *testing.T) {
 	got2, err := d.CanUseTool(bashReq(`{"command":"git status --short"}`))
 	if err != nil || got2.Behavior != "allow" {
 		t.Fatalf("eligible ALLOW should approve git status: got %+v err %v", got2, err)
+	}
+}
+
+func TestDecoratorFreshLeaderAllowAppendsStatusBeforeReturning(t *testing.T) {
+	var statuses []string
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			if len(statuses) != 0 {
+				t.Fatal("status appended before classification completed")
+			}
+			return autoreview.Allow, true
+		},
+		appendStatus: func(status string) error {
+			statuses = append(statuses, status)
+			return nil
+		},
+	}
+
+	got, err := d.CanUseTool(bashReq("{\"command\":\"go\\t test ./...\"}"))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("CanUseTool() = %+v, %v; want allow", got, err)
+	}
+	if len(statuses) != 1 || statuses[0] != "Auto-approved Bash: go test ./..." {
+		t.Fatalf("statuses = %v, want one sanitized automatic approval", statuses)
+	}
+}
+
+func TestDecoratorStatusAppendFailureDoesNotChangeAllow(t *testing.T) {
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			return autoreview.Allow, true
+		},
+		appendStatus: func(string) error { return errors.New("status sink unavailable") },
+	}
+
+	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("CanUseTool() = %+v, %v; want allow despite status error", got, err)
+	}
+}
+
+func TestDecoratorStatusOmittedForCacheHitAndFollower(t *testing.T) {
+	var statusCalls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			close(started)
+			<-release
+			return autoreview.Allow, true
+		},
+		appendStatus: func(string) error {
+			statusCalls.Add(1)
+			return nil
+		},
+	}
+
+	leader := make(chan ports.PermissionDecision, 1)
+	go func() {
+		got, _ := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+		leader <- got
+	}()
+	<-started
+	follower := make(chan ports.PermissionDecision, 1)
+	go func() {
+		got, _ := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+		follower <- got
+	}()
+	close(release)
+	for _, result := range []<-chan ports.PermissionDecision{leader, follower} {
+		if got := <-result; got.Behavior != permission.DecisionAllow {
+			t.Fatalf("coalesced result = %+v, want allow", got)
+		}
+	}
+	if got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`)); err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("cache result = %+v, %v; want allow", got, err)
+	}
+	if got := statusCalls.Load(); got != 1 {
+		t.Fatalf("status append calls = %d, want leader-only one", got)
 	}
 }
 

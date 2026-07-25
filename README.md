@@ -217,6 +217,8 @@ defaults:
     review: "gpt-5.4[272K]"      # Model for review phase (Codex)
     utilities: "sonnet[200K]"    # Model for chat and utility tasks
     kb_build: "sonnet[200K]"     # Model for knowledge base builds
+    automatic_review: ""         # Empty selects Automatic
+  automatic_review_enabled: false
   exit_criteria: |
     - Feature fully implemented per plan
     - Unit tests added/updated as needed
@@ -238,6 +240,30 @@ repos:
 workspace_roots:
   - /home/user/projects      # Scanned for git repos on startup
 ```
+
+Automatic Bash review is disabled by default, including when its keys are
+missing from an older config. Set `defaults.automatic_review_enabled: true`
+and optionally choose `defaults.models.automatic_review`; an empty model means
+Automatic provider selection: the first eligible provider in the fixed Claude
+→ OpenCode → Codex order, using its preferred cheap model. An explicit model
+uses only its resolved provider and canonical model, with no substitution or
+provider cascade. The workspace model remains editable while the feature is
+disabled, and changes apply only to new sessions.
+
+This feature considers only unresolved Bash permission requests after existing
+policy, remembered rules, and restricted handlers have deferred. Eligible
+commands receive one low-effort 10-second attempt in native zero-tool mode and
+must return exact `ALLOW` or `DEFER`; all other results use the ordinary human
+prompt. Results are byte-exact, session-only cached and create no durable
+permission rule.
+
+Only a fresh leading `ALLOW` adds
+`Auto-approved Bash: <redacted summary>` before execution. Each actual model
+attempt emits one bounded operator event; existing decisions, guardrail
+deferrals, cache hits, coalesced followers, disabled paths, and unavailable
+reviewers emit neither a status nor an operator event. Automatic review does
+not sandbox commands or guarantee their safety; deterministic guardrails and
+human approval remain the safety boundary.
 
 ### Model Overrides
 

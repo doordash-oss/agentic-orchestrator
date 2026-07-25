@@ -818,6 +818,17 @@ func TestRenderAttachMessages(t *testing.T) {
 	}
 }
 
+func TestRenderAttachMessagesUsesAccessibleAutomaticApprovalStyle(t *testing.T) {
+	output := renderAttachMessages([]llm.SDKMessage{{
+		Type:   "status",
+		Status: &llm.StatusMessage{Message: "Auto-approved Bash: go test ./..."},
+	}}, filterAll, 120, nil)
+
+	if !strings.Contains(output, extractFgEscape(colorSubtext)) {
+		t.Fatalf("automatic approval output = %q, want accessible secondary text color", output)
+	}
+}
+
 func TestRenderAttachMessages_ControlRequestCanUseToolRendersAsToolUse(t *testing.T) {
 	msgs := []llm.SDKMessage{
 		{

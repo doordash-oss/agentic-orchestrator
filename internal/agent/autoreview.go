@@ -16,9 +16,12 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -42,16 +45,20 @@ const autoReviewBashToolName = "Bash"
 // launched via autoreview.Classify (not BuildSession), so it is never decorated
 // and cannot recurse.
 type autoReviewPermissionDecorator struct {
-	inner         ports.PermissionHandler
-	reviewer      autoreview.Reviewer
-	workDir       string
-	writableRoots []string
-	classify      autoReviewClassifyFunc
-	stateOnce     sync.Once
-	state         *autoReviewSessionState
+	inner            ports.PermissionHandler
+	reviewer         autoreview.Reviewer
+	workDir          string
+	writableRoots    []string
+	classify         autoReviewClassifyFunc
+	classifyDetailed autoReviewClassifyDetailedFunc
+	appendStatus     func(string) error
+	observer         *observe.Observer
+	stateOnce        sync.Once
+	state            *autoReviewSessionState
 }
 
 type autoReviewClassifyFunc func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool)
+type autoReviewClassifyDetailedFunc func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result
 
 // autoReviewSessionState is owned by one decorator and therefore by one
 // original provider session. Its exact-command maps never enter the shared
@@ -140,9 +147,6 @@ func (s *autoReviewSessionState) review(ctx context.Context, command string, cla
 	s.mu.Unlock()
 
 	decision, ok := classify(ctx)
-	if ctx.Err() != nil {
-		decision, ok = "", false
-	}
 
 	s.mu.Lock()
 	if s.disposed || s.inFlight[command] != flight {
@@ -179,20 +183,107 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	classify := d.classify
-	if classify == nil {
-		classify = autoreview.Classify
-	}
 	result, ok := d.sessionState().review(ctx, command, func(classifyCtx context.Context) (autoreview.Decision, bool) {
-		return classify(classifyCtx, d.reviewer, autoreview.ClassifyRequest{
+		startedAt := time.Now()
+		classifyReq := autoreview.ClassifyRequest{
 			ToolName:      req.ToolName,
 			Command:       command,
 			WorkDir:       d.workDir,
 			WritableRoots: d.writableRoots,
-		})
+		}
+		var detailed autoreview.Result
+		switch {
+		case d.classifyDetailed != nil:
+			detailed = d.classifyDetailed(classifyCtx, d.reviewer, classifyReq)
+		case d.classify != nil:
+			decision, classified := d.classify(classifyCtx, d.reviewer, classifyReq)
+			detailed = compatibilityAutoReviewResult(decision, classified)
+		default:
+			detailed = autoreview.ClassifyDetailed(classifyCtx, d.reviewer, classifyReq)
+		}
+		if err := classifyCtx.Err(); err != nil {
+			if err == context.DeadlineExceeded {
+				detailed = autoreview.Result{Outcome: autoreview.OutcomeTimeout, FailureReason: "review attempt timed out"}
+			} else {
+				detailed = autoreview.Result{Outcome: autoreview.OutcomeCanceled, FailureReason: "review attempt canceled"}
+			}
+		}
+
+		var statusPersisted *bool
+		statusFailureClass := ""
+		statusFailureReason := ""
+		if detailed.Outcome == autoreview.OutcomeAllow && classifyCtx.Err() == nil {
+			persisted := false
+			statusPersisted = &persisted
+			appendStatus := d.appendStatus
+			if appendStatus == nil {
+				appendStatus = req.AppendStatus
+			}
+			switch {
+			case appendStatus == nil:
+				statusFailureClass = "unavailable"
+				statusFailureReason = "session status sink unavailable"
+			default:
+				if err := appendStatus(permission.AutomaticReviewStatusLine(command)); err != nil {
+					statusFailureClass = "append_error"
+					statusFailureReason = permission.AutomaticReviewBoundReason(err.Error())
+				} else {
+					persisted = true
+				}
+			}
+		}
+		d.emitAutomaticReview(req, detailed, time.Since(startedAt), statusPersisted, statusFailureClass, statusFailureReason)
+		return detailed.Decision, detailed.Outcome == autoreview.OutcomeAllow || detailed.Outcome == autoreview.OutcomeDefer
 	})
 	if !ok || result != autoreview.Allow {
 		return decision, nil
 	}
 	return ports.PermissionDecision{Behavior: permission.DecisionAllow}, nil
+}
+
+func compatibilityAutoReviewResult(decision autoreview.Decision, ok bool) autoreview.Result {
+	if !ok {
+		return autoreview.Result{Outcome: autoreview.OutcomeMalformedResponse, FailureReason: "review classification failed"}
+	}
+	if decision == autoreview.Allow {
+		return autoreview.Result{Decision: decision, Outcome: autoreview.OutcomeAllow}
+	}
+	return autoreview.Result{Decision: decision, Outcome: autoreview.OutcomeDefer}
+}
+
+func (d *autoReviewPermissionDecorator) emitAutomaticReview(
+	req ports.ToolPermissionRequest,
+	result autoreview.Result,
+	duration time.Duration,
+	statusPersisted *bool,
+	statusFailureClass string,
+	statusFailureReason string,
+) {
+	if d.observer == nil {
+		return
+	}
+	sc, ok := d.observer.ActivePhaseSpanContext(req.FeatureID)
+	if !ok {
+		sc = observe.SpanContextForFeature(req.FeatureID, "", "", "")
+	}
+	provider, model := d.reviewer.Identity()
+	sessionID := req.LogicalSessionID
+	if sessionID == "" {
+		sessionID = req.SessionID
+	}
+	d.observer.AutomaticReviewCompleted(sc, observe.AutomaticReviewEventInput{
+		Phase:               strings.ToLower(req.Phase.String()),
+		SessionID:           sessionID,
+		RepoName:            req.RepoName,
+		Iteration:           req.Iteration,
+		Provider:            provider,
+		Model:               model,
+		Outcome:             result.Outcome,
+		Duration:            duration,
+		CommandSummary:      permission.AutomaticReviewCommandSummary(permission.ExtractBashCommand(req.Input)),
+		FailureReason:       permission.AutomaticReviewBoundReason(result.FailureReason),
+		StatusPersisted:     statusPersisted,
+		StatusFailureClass:  statusFailureClass,
+		StatusFailureReason: statusFailureReason,
+	})
 }

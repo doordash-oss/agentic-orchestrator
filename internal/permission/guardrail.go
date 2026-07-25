@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -25,6 +26,11 @@ import (
 // will attempt to classify. Longer commands defer to the human prompt without
 // attempting to classify a truncated prefix.
 const GuardrailMaxCommandLen = 4096
+
+const (
+	automaticReviewStatusPrefix = "Auto-approved Bash: "
+	automaticReviewStatusLimit  = 200
+)
 
 // GuardrailClassify determines whether a Bash command is eligible for
 // automatic review by the hidden reviewer. The command must be valid UTF-8,
@@ -59,6 +65,128 @@ func GuardrailClassify(command, workDir string, writableRoots []string) bool {
 // second privacy vocabulary or truncation algorithm.
 func GuardrailBoundSummary(command string) string {
 	return sanitizeAuditInputSummary(command, maxAuditInputSummary)
+}
+
+// AutomaticReviewCommandSummary returns the provider-neutral command summary
+// shared by automatic-review status and observation records.
+func AutomaticReviewCommandSummary(command string) string {
+	command = stripUnsafeControlContent(command)
+	command = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		if !unicode.IsControl(r) {
+			return r
+		}
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		return -1
+	}, command)
+	summary := sanitizeAuditField(strings.Join(strings.Fields(command), " "))
+	return boundAuditText(summary, automaticReviewStatusLimit-len(automaticReviewStatusPrefix))
+}
+
+// AutomaticReviewStatusLine returns the complete durable approval status,
+// including its exact prefix and truncation marker, bounded to 200 bytes.
+func AutomaticReviewStatusLine(command string) string {
+	return automaticReviewStatusPrefix + AutomaticReviewCommandSummary(command)
+}
+
+// AutomaticReviewBoundReason sanitizes a best-effort failure reason with the
+// same secret/control vocabulary and 200-byte UTF-8-safe bound as the status.
+func AutomaticReviewBoundReason(reason string) string {
+	reason = stripUnsafeControlContent(reason)
+	reason = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		if unicode.IsControl(r) {
+			if unicode.IsSpace(r) {
+				return ' '
+			}
+			return -1
+		}
+		return r
+	}, reason)
+	return boundAuditText(sanitizeAuditField(strings.Join(strings.Fields(reason), " ")), automaticReviewStatusLimit)
+}
+
+// stripUnsafeControlContent removes complete terminal control strings rather
+// than leaving their payload visible after deleting only the introducer and
+// terminator. It recognizes both seven-bit ESC forms and their C1 equivalents.
+func stripUnsafeControlContent(text string) string {
+	const (
+		controlNormal = iota
+		controlEscape
+		controlCSI
+		controlOSC
+		controlString
+		controlOSCEscape
+		controlStringEscape
+	)
+
+	state := controlNormal
+	var safe strings.Builder
+	for _, r := range text {
+		switch state {
+		case controlNormal:
+			switch r {
+			case '\x1b':
+				state = controlEscape
+			case '\u009b':
+				state = controlCSI
+			case '\u009d':
+				state = controlOSC
+			case '\u0090', '\u009e', '\u009f':
+				state = controlString
+			default:
+				safe.WriteRune(r)
+			}
+		case controlEscape:
+			switch r {
+			case '[':
+				state = controlCSI
+			case ']':
+				state = controlOSC
+			case 'P', '^', '_':
+				state = controlString
+			default:
+				state = controlNormal
+			}
+		case controlCSI:
+			if r >= 0x40 && r <= 0x7e {
+				state = controlNormal
+			}
+		case controlOSC:
+			switch r {
+			case '\a', '\u009c':
+				state = controlNormal
+			case '\x1b':
+				state = controlOSCEscape
+			}
+		case controlString:
+			switch r {
+			case '\u009c':
+				state = controlNormal
+			case '\x1b':
+				state = controlStringEscape
+			}
+		case controlOSCEscape:
+			if r == '\\' {
+				state = controlNormal
+			} else {
+				state = controlOSC
+			}
+		case controlStringEscape:
+			if r == '\\' {
+				state = controlNormal
+			} else {
+				state = controlString
+			}
+		}
+	}
+	return safe.String()
 }
 
 // classifySegment checks one parsed segment for structural and policy

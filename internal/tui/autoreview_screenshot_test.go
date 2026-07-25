@@ -15,25 +15,128 @@
 //go:build autoreview_screenshots
 
 // This file is excluded from normal builds and tests by the build tag. It
-// generates the two required 1440x900 visual-evidence screenshots by
-// rendering the real workspace config editor and capturing via headless
-// Chrome. The ANSI-to-HTML renderer and Chrome launcher live in
-// screenshot_helpers_test.go so they can be reused by future visual-evidence
-// tests without another bespoke terminal renderer per feature.
+// generates automatic-review visual evidence by rendering real TUI surfaces
+// and capturing them via headless Chrome. The ANSI-to-HTML renderer and Chrome
+// launcher live in screenshot_helpers_test.go so they can be reused by future
+// visual-evidence tests without another bespoke terminal renderer per feature.
 //
 // Run with:
 //
-//	go test ./internal/tui/ -tags=autoreview_screenshots -run TestGenerateAutoReviewScreenshots -v
+//	go test ./internal/tui/ -tags=autoreview_screenshots -run 'TestGenerate(AutoReview|AutomaticReviewTransparency)Screenshots' -v
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
+
+func TestGenerateAutomaticReviewTransparencyScreenshots(t *testing.T) {
+	outDir := os.Getenv("AUTOREVIEW_SCREENSHOT_DIR")
+	if outDir == "" {
+		outDir = "."
+	}
+
+	const (
+		command    = "go test ./internal/permission -run TestAutomaticReviewStatusLineSanitizesAndBoundsCommand -count=1"
+		statusText = "Auto-approved Bash: " + command
+	)
+	messages := []llm.SDKMessage{
+		{
+			Type: "assistant",
+			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+				Content: []llm.ContentBlock{{Type: "text", Text: "I’ll run the focused sanitizer regression test, then continue with the surrounding suite."}},
+			}},
+		},
+		{Type: "status", Status: &llm.StatusMessage{Type: "status", Message: statusText}},
+		{
+			Type: "assistant",
+			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+				Content: []llm.ContentBlock{{
+					Type:  "tool_use",
+					ID:    "toolu_auto_review",
+					Name:  "Bash",
+					Input: json.RawMessage(`{"command":"` + command + `"}`),
+				}},
+			}},
+		},
+	}
+
+	liveFeature := &feature.Feature{
+		ID:               "c20e8f6293287450",
+		Slug:             "automatic-permission-review",
+		Status:           feature.StatusImplementing,
+		CurrentPhase:     feature.PhaseImplement,
+		CurrentIteration: 1,
+		Repos:            []feature.FeatureRepo{{Name: "agentic-orchestrator"}},
+	}
+	liveSession := newLivePreviewSessionWithIteration(
+		"session-transparent-live",
+		feature.PhaseImplement,
+		1,
+		messages...,
+	)
+	liveView := newLivePreviewModel(liveFeature).
+		withSession(liveSession).
+		withHeight(38).
+		ViewCompact(108)
+	livePath := filepath.Join(
+		outDir,
+		"screenshots",
+		"live-preview-showing-a-redacted-automatic-bash-approval-status-immediately-befor-1440x900.png",
+	)
+	if err := renderScreenshot(liveView, livePath); err != nil {
+		t.Fatalf("live-preview screenshot: %v", err)
+	}
+	t.Logf("wrote %s", livePath)
+
+	completedSession := session.NewSession("session-transparent-completed", liveFeature.ID, feature.PhaseImplement)
+	completedSession.SetStatus(session.SessionDone)
+	completedSession.SetIteration(1)
+	for _, message := range messages {
+		completedSession.MessageLog().Append(message)
+	}
+	completedSession.MessageLog().Append(llm.SDKMessage{
+		Type: "user",
+		User: &llm.UserMessage{Message: llm.ConversationMsg{
+			Content: []llm.ContentBlock{{
+				Type:      "tool_result",
+				ToolUseID: "toolu_auto_review",
+				Content:   json.RawMessage(`"ok  github.com/doordash-oss/agentic-orchestrator/internal/permission  0.142s"`),
+			}},
+		}},
+	})
+	completedSession.MessageLog().Append(llm.SDKMessage{
+		Type: "assistant",
+		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Content: []llm.ContentBlock{{Type: "text", Text: "The focused test passed. The same approval status remains in completed-session history."}},
+		}},
+	})
+	completedSession.MessageLog().Append(llm.SDKMessage{
+		Type:   "result",
+		Result: &llm.ResultMessage{Subtype: "success"},
+	})
+
+	attach := testAttachModel(completedSession, 108, 40, nil, 0)
+	attach.readOnly = true
+	attach.updateViewport()
+	attachView := attach.View()
+	attachPath := filepath.Join(
+		outDir,
+		"screenshots",
+		"completed-session-attach-history-showing-the-same-durable-automatic-bash-approva-1440x900.png",
+	)
+	if err := renderScreenshot(attachView, attachPath); err != nil {
+		t.Fatalf("completed attach screenshot: %v", err)
+	}
+	t.Logf("wrote %s", attachPath)
+}
 
 func TestGenerateAutoReviewScreenshots(t *testing.T) {
 	outDir := os.Getenv("AUTOREVIEW_SCREENSHOT_DIR")

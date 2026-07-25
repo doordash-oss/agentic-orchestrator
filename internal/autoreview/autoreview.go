@@ -47,6 +47,28 @@ const (
 	Defer Decision = "DEFER"
 )
 
+// Outcome is the stable terminal classification for an actual model attempt.
+type Outcome string
+
+const (
+	OutcomeAllow                 Outcome = "allow"
+	OutcomeDefer                 Outcome = "defer"
+	OutcomeTimeout               Outcome = "timeout"
+	OutcomeMalformedResponse     Outcome = "malformed_response"
+	OutcomeProviderError         Outcome = "provider_error"
+	OutcomeUnexpectedInteraction Outcome = "unexpected_interaction"
+	OutcomeCanceled              Outcome = "canceled"
+)
+
+// Result is the typed, bounded-input-free result of one actual review attempt.
+// FailureReason is a generic classification reason and never contains model
+// output, prompt content, command text, environment values, or file contents.
+type Result struct {
+	Decision      Decision
+	Outcome       Outcome
+	FailureReason string
+}
+
 // defaultTimeout bounds the whole hidden attempt — launch, handshake,
 // response, cancellation, and cleanup — to one low-effort turn. Tests inject
 // a shorter value via ClassifyRequest.Timeout so concurrent sessions stay
@@ -301,24 +323,15 @@ type ClassifyRequest struct {
 	Timeout       time.Duration
 }
 
-// attemptOutcome is the terminal outcome of a classification attempt,
-// produced solely by the reader goroutine and communicated through a
-// channel. The caller owns the final decision: a handshake error is
-// terminal and overrides any reader result.
-type attemptOutcome int
-
-const (
-	outcomeFailure attemptOutcome = iota
-	outcomeSuccess
-)
-
 // readResult is the reader goroutine's terminal output: the outcome and
 // the accumulated assistant text. It is sent through a buffered channel so
 // the reader never blocks, and the caller selects on that channel or the
 // deadline — no shared mutable state crosses the goroutine boundary.
 type readResult struct {
-	outcome attemptOutcome
-	text    string
+	outcome    Outcome
+	reason     string
+	text       string
+	successful bool
 }
 
 // Classify runs one isolated, tool-less, fully ephemeral hidden classification.
@@ -337,9 +350,12 @@ type readResult struct {
 // output all fail. Raw reviewer output is discarded after parsing. On any
 // termination path the subprocess is reaped synchronously. Returns ok=false
 // for every failure; the caller converts that to ordinary human deferral.
-func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Decision, bool) {
+func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyRequest) Result {
 	if reviewer.Provider == nil || reviewer.Model == "" {
-		return "", false
+		return failedResult(OutcomeProviderError, "reviewer unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return contextFailureResult(err)
 	}
 
 	timeout := req.Timeout
@@ -354,7 +370,7 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 		if cleanup != nil {
 			cleanup()
 		}
-		return "", false
+		return failedResult(OutcomeProviderError, "provider command build failed")
 	}
 	defer cleanup()
 
@@ -364,14 +380,14 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return "", false
+		return failedResult(OutcomeProviderError, "provider stdin setup failed")
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", false
+		return failedResult(OutcomeProviderError, "provider stdout setup failed")
 	}
 	if err := cmd.Start(); err != nil {
-		return "", false
+		return failedResult(OutcomeProviderError, "provider launch failed")
 	}
 
 	proto := reviewer.Provider.NewProtocol(llm.ProtocolOpts{
@@ -391,7 +407,7 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
-		result := readResult{outcome: outcomeFailure}
+		result := readResult{outcome: OutcomeProviderError, reason: "provider ended without a successful result"}
 		var assistantText strings.Builder
 		defer func() {
 			result.text = assistantText.String()
@@ -402,10 +418,14 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 		for scanner.Scan() {
 			msgs, perr := proto.ParseLine(scanner.Bytes())
 			if perr != nil {
+				result.outcome = OutcomeMalformedResponse
+				result.reason = "provider protocol response was malformed"
 				return
 			}
 			for _, msg := range msgs {
 				if unexpectedReviewActivity(msg) {
+					result.outcome = OutcomeUnexpectedInteraction
+					result.reason = "reviewer attempted an unexpected interaction"
 					return
 				}
 				// Defensive deny-all boundary: any control_request (tool
@@ -415,6 +435,8 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 				// bypass the deny-all boundary.
 				if msg.ControlRequest != nil {
 					_ = proto.RespondToControl(msg.ControlRequest.RequestID, false, nil, "denied: automatic review exposes no tools")
+					result.outcome = OutcomeUnexpectedInteraction
+					result.reason = "reviewer requested an interaction"
 					return
 				}
 				if msg.Assistant != nil {
@@ -422,11 +444,18 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 				}
 				if msg.Result != nil {
 					if msg.Result.IsSuccess() && !msg.Result.IsTurnTruncated() && msg.Result.StopReason != "refusal" {
-						result.outcome = outcomeSuccess
+						result.successful = true
+						result.reason = ""
+					} else {
+						result.reason = "provider returned an unsuccessful review result"
 					}
 					return
 				}
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			result.outcome = OutcomeMalformedResponse
+			result.reason = "provider response stream was malformed"
 		}
 	}()
 
@@ -437,23 +466,55 @@ func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Deci
 
 	// Wait for the reader to complete or the deadline to fire.
 	var rr readResult
+	timedOut := false
 	select {
 	case rr = <-readCh:
 	case <-deadlineCtx.Done():
+		timedOut = true
 	}
 
 	_ = stdin.Close()
 	terminateAndWait(deadlineCtx, cmd, readDone)
 
 	// A handshake error takes precedence over any reader result.
+	if err := ctx.Err(); err != nil {
+		return contextFailureResult(err)
+	}
+	if timedOut || deadlineCtx.Err() == context.DeadlineExceeded {
+		return failedResult(OutcomeTimeout, "review attempt timed out")
+	}
 	if handshakeErr != nil {
-		rr.outcome = outcomeFailure
+		return failedResult(OutcomeProviderError, "provider handshake failed")
 	}
+	if !rr.successful {
+		return failedResult(rr.outcome, rr.reason)
+	}
+	decision, ok := parseDecision(rr.text)
+	if !ok {
+		return failedResult(OutcomeMalformedResponse, "reviewer response was not an exact decision token")
+	}
+	if decision == Allow {
+		return Result{Decision: decision, Outcome: OutcomeAllow}
+	}
+	return Result{Decision: decision, Outcome: OutcomeDefer}
+}
 
-	if rr.outcome != outcomeSuccess {
-		return "", false
+// Classify preserves the original decision/bool API for callers that do not
+// need the typed operational outcome.
+func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Decision, bool) {
+	result := ClassifyDetailed(ctx, reviewer, req)
+	return result.Decision, result.Outcome == OutcomeAllow || result.Outcome == OutcomeDefer
+}
+
+func failedResult(outcome Outcome, reason string) Result {
+	return Result{Outcome: outcome, FailureReason: reason}
+}
+
+func contextFailureResult(err error) Result {
+	if err == context.DeadlineExceeded {
+		return failedResult(OutcomeTimeout, "review attempt timed out")
 	}
-	return parseDecision(rr.text)
+	return failedResult(OutcomeCanceled, "review attempt canceled")
 }
 
 func unexpectedReviewActivity(msg llm.SDKMessage) bool {

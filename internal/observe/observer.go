@@ -20,7 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 )
 
 // Observer is the central observability facade. It coordinates JSONL event
@@ -54,6 +56,23 @@ type ContextFileReadMeta struct {
 	Source         string
 	ProviderItemID string
 	ExitCode       *int
+}
+
+// AutomaticReviewEventInput carries one bounded actual-review outcome.
+type AutomaticReviewEventInput struct {
+	Phase               string
+	SessionID           string
+	RepoName            string
+	Iteration           int
+	Provider            string
+	Model               string
+	Outcome             autoreview.Outcome
+	Duration            time.Duration
+	CommandSummary      string
+	FailureReason       string
+	StatusPersisted     *bool
+	StatusFailureClass  string
+	StatusFailureReason string
 }
 
 // New creates an Observer. When enabled is false, all methods return immediately.
@@ -618,6 +637,55 @@ func (o *Observer) PermissionResolved(sc SpanContext, sessionID string, repoName
 		"tool_name": toolName,
 		"decision":  decision,
 	}))
+}
+
+// AutomaticReviewCompleted emits exactly one best-effort event for an actual
+// automatic-review attempt. Nil and disabled observers are no-ops.
+func (o *Observer) AutomaticReviewCompleted(sc SpanContext, in AutomaticReviewEventInput) {
+	if o == nil || !o.enabled {
+		return
+	}
+	duration := in.Duration
+	if duration < 0 {
+		duration = 0
+	}
+	data := map[string]any{
+		"provider":        in.Provider,
+		"model":           in.Model,
+		"outcome":         string(in.Outcome),
+		"command_summary": permission.AutomaticReviewCommandSummary(in.CommandSummary),
+	}
+	if in.FailureReason != "" {
+		data["failure_reason"] = permission.AutomaticReviewBoundReason(in.FailureReason)
+	}
+	if in.StatusPersisted != nil {
+		data["status_persisted"] = *in.StatusPersisted
+		if !*in.StatusPersisted {
+			data["status_failure_class"] = permission.AutomaticReviewBoundReason(in.StatusFailureClass)
+			data["status_failure_reason"] = permission.AutomaticReviewBoundReason(in.StatusFailureReason)
+		}
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "automatic_review.completed",
+		Phase:        in.Phase,
+		Status:       string(in.Outcome),
+		FeatureID:    sc.FeatureID,
+		SessionID:    in.SessionID,
+		RepoName:     in.RepoName,
+		Iteration:    in.Iteration,
+		DurationMs:   duration.Milliseconds(),
+		Data:         data,
+	})
+	attrs := map[string]string{
+		"provider": in.Provider,
+		"model":    in.Model,
+		"outcome":  string(in.Outcome),
+	}
+	o.otel.AddSpanEvent(sc.ParentSpanID, "automatic_review.completed", addRunNumber(sc, attrs))
 }
 
 // QuestionAsked emits a question.asked event.

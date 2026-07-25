@@ -2522,6 +2522,44 @@ func TestSession_StatusChSignalAfterResultCallback(t *testing.T) {
 	<-done
 }
 
+func TestSessionAppendLocalStatusIsOrderedAndNonTerminal(t *testing.T) {
+	t.Parallel()
+
+	s := NewSession("status-session", "feature-1", feature.PhaseImplement)
+	s.messageLog.Append(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
+		Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "before"}}},
+	}})
+	var callbackRecordCount int
+	s.onMessage = func(msg llm.SDKMessage) {
+		if msg.Status == nil || msg.Status.Message != "Auto-approved Bash: go test ./..." {
+			t.Errorf("status callback message = %+v", msg)
+		}
+		callbackRecordCount = s.messageLog.Len()
+	}
+
+	if err := s.appendLocalStatus("Auto-approved Bash: go test ./..."); err != nil {
+		t.Fatalf("appendLocalStatus() error = %v", err)
+	}
+	messages := s.messageLog.Messages()
+	if len(messages) != 2 || messages[1].Status == nil || messages[1].Status.Message != "Auto-approved Bash: go test ./..." {
+		t.Fatalf("message log = %+v, want ordered status after assistant", messages)
+	}
+	if callbackRecordCount != 2 {
+		t.Fatalf("callback record count = %d, want post-append count 2", callbackRecordCount)
+	}
+	if s.Status() != SessionRunning || s.messageLog.LastResultMessage() != nil {
+		t.Fatalf("status append changed terminal state: status=%s result=%+v", s.Status(), s.messageLog.LastResultMessage())
+	}
+	select {
+	case attached := <-s.attachCh:
+		if attached.Status == nil || attached.Status.Message != "Auto-approved Bash: go test ./..." {
+			t.Fatalf("attach message = %+v", attached)
+		}
+	default:
+		t.Fatal("status was not delivered to attach channel")
+	}
+}
+
 func taskStartedMsg(taskID string) llm.SDKMessage {
 	return llm.SDKMessage{
 		Type: "system", Subtype: "task_started",

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
@@ -1296,6 +1297,67 @@ func TestPermissionResolvedEmitsRepoAndIteration(t *testing.T) {
 	if dec, ok := evt.Data["decision"].(string); !ok || dec != "allow" {
 		t.Errorf("Data[decision] = %v, want %q", evt.Data["decision"], "allow")
 	}
+}
+
+func TestAutomaticReviewCompletedEmitsTypedBoundedEvent(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	featureID := "automatic_review_event"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	obs := New(true, stateDir, false, "", false, "agentic")
+	sc := SpanContextForFeature(featureID, "trace-automatic-review", "", "").WithRun(4).Child()
+	persisted := false
+	obs.AutomaticReviewCompleted(sc, AutomaticReviewEventInput{
+		Phase:               "implement",
+		SessionID:           "session-1",
+		RepoName:            "repo-a",
+		Iteration:           2,
+		Provider:            "claude",
+		Model:               "haiku",
+		Outcome:             autoreview.OutcomeAllow,
+		Duration:            1250 * time.Millisecond,
+		CommandSummary:      "go\t test ./... token=secret-value \x1b]52;c;clipboard\a",
+		StatusPersisted:     &persisted,
+		StatusFailureClass:  "append_error",
+		StatusFailureReason: "sink unavailable token=secret-value",
+	})
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.EventType != "automatic_review.completed" || event.TraceID != sc.TraceID || event.SpanID != sc.SpanID || event.RunNumber != 4 {
+		t.Fatalf("event context = %+v", event)
+	}
+	if event.SessionID != "session-1" || event.RepoName != "repo-a" || event.Phase != "implement" || event.Iteration != 2 || event.DurationMs != 1250 {
+		t.Fatalf("event envelope = %+v", event)
+	}
+	for key, want := range map[string]any{
+		"provider":              "claude",
+		"model":                 "haiku",
+		"outcome":               "allow",
+		"command_summary":       "go test ./... token=[redacted]",
+		"status_persisted":      false,
+		"status_failure_class":  "append_error",
+		"status_failure_reason": "sink unavailable token=[redacted]",
+	} {
+		if got := event.Data[key]; got != want {
+			t.Errorf("event.Data[%q] = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
+func TestAutomaticReviewCompletedNilAndDisabledAreNoOps(t *testing.T) {
+	t.Parallel()
+
+	var nilObserver *Observer
+	nilObserver.AutomaticReviewCompleted(SpanContext{}, AutomaticReviewEventInput{})
+	disabled := New(false, t.TempDir(), false, "", false, "agentic")
+	disabled.AutomaticReviewCompleted(SpanContext{}, AutomaticReviewEventInput{})
 }
 
 func TestQuestionAskedEmitsRepoAndIteration(t *testing.T) {

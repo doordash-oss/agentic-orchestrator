@@ -495,3 +495,44 @@ func TestClassifyCancelledContextFails(t *testing.T) {
 		t.Fatalf("Classify(cancelled ctx) = true, want false")
 	}
 }
+
+func TestClassifyDetailedOutcomeTaxonomy(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		timeout time.Duration
+		want    Outcome
+	}{
+		{name: "allow", body: testutil.FakeClaudeAllowScriptBody(), want: OutcomeAllow},
+		{name: "defer", body: testutil.FakeClaudeDeferScriptBody(), want: OutcomeDefer},
+		{name: "malformed response", body: testutil.FakeClaudeMalformedScriptBody(), want: OutcomeMalformedResponse},
+		{name: "unexpected interaction", body: testutil.FakeClaudeToolUseScriptBody(), want: OutcomeUnexpectedInteraction},
+		{name: "provider error", body: testutil.FakeClaudeErrorResultScriptBody(), want: OutcomeProviderError},
+		{name: "timeout", body: testutil.FakeClaudeSleepScriptBody(), timeout: 100 * time.Millisecond, want: OutcomeTimeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := testutil.WriteFakeClaudeScript(t, tt.body)
+			reg := testutil.NewFakeClaudeRegistry(t, script)
+			reviewer, _ := ResolveReviewer(reg, "")
+			got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{
+				ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir(), Timeout: tt.timeout,
+			})
+			if got.Outcome != tt.want {
+				t.Errorf("ClassifyDetailed().Outcome = %q, want %q; result=%+v", got.Outcome, tt.want, got)
+			}
+			if strings.Contains(got.FailureReason, "ALLOW") || strings.Contains(got.FailureReason, "DEFER") {
+				t.Errorf("ClassifyDetailed().FailureReason leaked reviewer output: %q", got.FailureReason)
+			}
+		})
+	}
+
+	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeSleepScriptBody())
+	reg := testutil.NewFakeClaudeRegistry(t, script)
+	reviewer, _ := ResolveReviewer(reg, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := ClassifyDetailed(ctx, reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); got.Outcome != OutcomeCanceled {
+		t.Errorf("ClassifyDetailed(canceled).Outcome = %q, want %q", got.Outcome, OutcomeCanceled)
+	}
+}

@@ -1156,7 +1156,9 @@ func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, e
 func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.PermissionHandler, opts *BuildSessionOpts, workDir string, writableRoots []string) (ports.PermissionHandler, ports.AutoReviewSnapshot) {
 	if opts.AutoReview.Enabled != nil {
 		reviewer := autoreview.RestoreReviewer(pr.Registry, opts.AutoReview.ReviewerProvider, opts.AutoReview.ReviewerModel)
-		return decorateHandlerWithAutoReview(composed, original, *opts.AutoReview.Enabled, reviewer, workDir, writableRoots), opts.AutoReview
+		handler := decorateHandlerWithAutoReview(composed, original, *opts.AutoReview.Enabled, reviewer, workDir, writableRoots)
+		installAutoReviewObserver(handler, pr.Observer)
+		return handler, opts.AutoReview
 	}
 	enabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
 	model := ""
@@ -1166,7 +1168,15 @@ func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.Permissio
 	reviewer, _ := autoreview.ResolveReviewer(pr.Registry, model)
 	provName, revModel := reviewer.Identity()
 	snap := ports.AutoReviewSnapshot{Enabled: &enabled, Model: model, ReviewerProvider: provName, ReviewerModel: revModel}
-	return decorateHandlerWithAutoReview(composed, original, enabled, reviewer, workDir, writableRoots), snap
+	handler := decorateHandlerWithAutoReview(composed, original, enabled, reviewer, workDir, writableRoots)
+	installAutoReviewObserver(handler, pr.Observer)
+	return handler, snap
+}
+
+func installAutoReviewObserver(handler ports.PermissionHandler, observer *observe.Observer) {
+	if decorator, ok := handler.(*autoReviewPermissionDecorator); ok {
+		decorator.observer = observer
+	}
 }
 
 // resolveImplementArtifactDir returns the artifact directory for implementation

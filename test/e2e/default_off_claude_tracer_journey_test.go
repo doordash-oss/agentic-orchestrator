@@ -15,13 +15,16 @@
 package e2e
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -245,6 +248,88 @@ func TestDefaultOffClaudeTracerJourney(t *testing.T) {
 			t.Fatalf("crash-resume with changed auth should defer: got %+v err %v", got, err)
 		}
 	})
+}
+
+// TestAutomaticReviewTransparencyJourney exercises the complete successful
+// review path through PhaseRunner: one real fake-provider attempt produces one
+// bounded status before allow is returned and one typed durable observer event.
+func TestAutomaticReviewTransparencyJourney(t *testing.T) {
+	if testing.Short() {
+		t.Skip("journey test launches a fake Claude subprocess")
+	}
+
+	const (
+		featureID = "a11aa11aa11aa11a"
+		sessionID = "session-transparent"
+		command   = "go test ./internal/permission"
+	)
+	stateDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatalf("create feature state: %v", err)
+	}
+
+	cfg := config.NewDefault()
+	cfg.Defaults.AutomaticReviewEnabled = true
+	observer := observe.New(true, stateDir, false, "", false, "agentic-test")
+	phaseContext := observe.SpanContextForFeature(featureID, "", "", "").Child()
+	observer.PhaseStarted(phaseContext, "implement")
+
+	pr := agent.NewPhaseRunner(nil, feature.NewStore(stateDir), stateDir)
+	pr.Registry = fakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	pr.Config = cfg
+	pr.Observer = observer
+	_, _, sessOpts, err := pr.BuildSession(agent.BuildSessionOpts{
+		Model:       "haiku",
+		Prompt:      "test automatic Bash review transparency",
+		PermHandler: permission.Guarded(&permission.AcceptEditsHandler{}),
+		WorkDir:     t.TempDir(),
+		Phase:       feature.PhaseImplement,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession failed: %v", err)
+	}
+
+	var statuses []string
+	got, err := sessOpts.PermHandler.CanUseTool(ports.ToolPermissionRequest{
+		Ctx:              t.Context(),
+		ToolName:         "Bash",
+		Input:            `{"command":"` + command + `"}`,
+		FeatureID:        featureID,
+		LogicalSessionID: sessionID,
+		Phase:            feature.PhaseImplement,
+		RepoName:         "agentic-orchestrator",
+		Iteration:        1,
+		AppendStatus: func(status string) error {
+			statuses = append(statuses, status)
+			return nil
+		},
+	})
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("automatic review decision = %+v, err %v; want allow", got, err)
+	}
+	wantStatus := permission.AutomaticReviewStatusLine(command)
+	if len(statuses) != 1 || statuses[0] != wantStatus {
+		t.Fatalf("statuses = %q, want exactly [%q]", statuses, wantStatus)
+	}
+
+	eventBytes, err := os.ReadFile(filepath.Join(stateDir, featureID, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read observer events: %v", err)
+	}
+	events := string(eventBytes)
+	if count := strings.Count(events, `"event_type":"automatic_review.completed"`); count != 1 {
+		t.Fatalf("automatic-review event count = %d, want 1; events:\n%s", count, events)
+	}
+	for _, want := range []string{
+		`"outcome":"allow"`,
+		`"command_summary":"go test ./internal/permission"`,
+		`"status_persisted":true`,
+		`"session_id":"session-transparent"`,
+	} {
+		if !strings.Contains(events, want) {
+			t.Fatalf("observer events missing %s:\n%s", want, events)
+		}
+	}
 }
 
 // oauthFakeClaude wraps FakeClaudeProvider but reports bare auth as

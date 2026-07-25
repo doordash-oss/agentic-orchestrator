@@ -307,6 +307,28 @@ func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 	}
 }
 
+func TestTranscriptDTOsExposeStatusTextInPlace(t *testing.T) {
+	t.Parallel()
+
+	rows := transcriptDTOs([]llm.SDKMessage{
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "before"}},
+		}}},
+		{Type: "status", Status: &llm.StatusMessage{Type: "status", Message: "Auto-approved Bash: go test ./..."}},
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeToolUse, Name: toolNameBash}},
+		}}},
+	}, 4)
+
+	if len(rows) != 3 {
+		t.Fatalf("transcriptDTOs() returned %d rows, want 3: %+v", len(rows), rows)
+	}
+	status := rows[1]
+	if status.Index != 5 || status.Role != roleSystem || status.Type != "status" || status.Text != "Auto-approved Bash: go test ./..." || status.Redacted {
+		t.Fatalf("status row = %+v, want textual system status at index 5", status)
+	}
+}
+
 func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

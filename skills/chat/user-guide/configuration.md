@@ -38,6 +38,97 @@ defaults:
 | `utilities` | `sonnet[200K]` | Chat (AMA), utility skills |
 | `kb_build` | `sonnet[200K]` | Knowledge base construction |
 
+## Automatic Bash Review
+
+Automatic Bash review uses two workspace keys:
+
+```yaml
+defaults:
+  automatic_review_enabled: false
+  models:
+    automatic_review: ""
+```
+
+The full names are `defaults.automatic_review_enabled` and
+`defaults.models.automatic_review`. The feature is disabled by default. When
+the enabled key is absent, as in a legacy config, it remains disabled; a
+missing reviewer-model key has the same empty **Automatic** value as a fresh
+config. The workspace Models row remains editable while automatic review is
+disabled; saved changes apply only to new sessions because each session
+snapshots the enabled flag and resolved reviewer.
+
+Automatic selection uses the fixed provider order Claude → OpenCode → Codex
+and chooses the first eligible provider's preferred cheap model. A
+provider-qualified explicit selection uses only the named provider and
+canonical model; a bare selection must resolve uniquely. Neither form
+substitutes another model or cascades to another provider. If the selection is
+unavailable, the normal human permission flow remains unchanged.
+
+### Policy and guardrail boundary
+
+Automatic review runs only for an unresolved canonical Bash request after the
+existing permission policy genuinely defers. It never overrides an existing
+allow, deny, or error, a remembered permission rule, skip-permissions
+behavior, a safe-create decision, or a specialized restricted policy.
+
+Before a model is called, a deterministic guardrail parses every visible chain
+and pipeline segment; every segment must qualify. Curated direct development
+families include test, lint/check, build/compile, format, generation,
+documentation, benchmark, and static-analysis commands, with command-specific
+flag and path rules. Project runners such as Make, Just, Task, Bazel, Gradle,
+Maven, and package scripts require an explicit conventional development
+target. Target names are split on `-`, `_`, and `:`; a prohibited target
+component such as `install`, `deploy`, `clean`, `watch`, `run`, or `push`
+always takes precedence over a development component.
+
+Strictly read-only source-control commands may qualify. Ambiguous shell syntax,
+nested execution or substitution, sensitive paths, direct networking, package
+mutation, non-read-only source control, direct scripts or interpreters,
+unrecognized writes, prohibited task targets, and path-bearing redirections
+defer to the human. Descriptor-only routing such as `2>&1` or `1>&2`, and
+stdout/stderr redirection to `/dev/null`, are recognized; input redirection and
+output to any other path defer.
+
+This guardrail is conservative eligibility filtering. Automatic review does
+not sandbox commands and does not guarantee command safety.
+
+### Reviewer and lifecycle contract
+
+The reviewer receives only the canonical tool name, byte-exact command,
+working directory, and declared writable roots. It runs through the selected
+provider's native zero-tool mode, with no session persistence or user/project
+customization, at low effort, for one 10-second attempt. The response must be
+the exact case-sensitive `ALLOW` or `DEFER` token. There are no retries and no
+provider cascade after an attempt. `DEFER`, timeout, malformed output, provider
+failure, unexpected interaction, and cancellation silently return to the
+ordinary human prompt.
+
+Exact `ALLOW` and `DEFER` decisions use a byte-exact session-only cache.
+Concurrent identical requests coalesce behind one leader; only that leader
+performs status and event side effects. Nothing is reused across sessions, and
+automatic approval creates no durable permission rule, remembered cache entry,
+or permission audit record.
+
+### Transparency and operational evidence
+
+Only a fresh leading model `ALLOW` appends the provider-neutral line
+`Auto-approved Bash: <summary>` before native execution continues. The summary
+collapses whitespace, strips unsafe controls, applies the permission-audit
+secret redaction vocabulary, stays valid UTF-8, and keeps the complete line at
+most 200 bytes including `...` when truncated. Live preview, active attach,
+completed-session attach history, transcript reads, and session-output
+streaming preserve the same text and message-log position.
+
+Every actual model attempt also emits one bounded operator event with original
+feature/session context, reviewer identity, duration, redacted command
+summary, and an outcome of `allow`, `defer`, `timeout`, `malformed_response`,
+`provider_error`, `unexpected_interaction`, or `canceled`. An allow event also
+records whether status persistence succeeded. Guardrail deferrals, non-Bash
+requests, existing decisions, disabled or unavailable reviewers, session-cache
+hits, and in-flight followers emit neither status nor an automatic-review
+event. Status-delivery and observer failures are best-effort side-effect
+failures: they never change the permission decision or cause a retry.
+
 Model names can use canonical context-window IDs (e.g., `opus[1M]`) or provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`). Bare aliases such as `opus` are still accepted and resolved against the registry, which merges each provider's hardcoded catalog (see `internal/llm/claude`, `internal/llm/codex`, and `internal/llm/opencode`). Configured model names are canonicalized at startup so the on-disk config reflects the registry's canonical spelling.
 
 ### OpenCode model IDs

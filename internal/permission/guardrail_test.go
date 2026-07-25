@@ -985,3 +985,91 @@ func TestGuardrailRedactionAndBounding(t *testing.T) {
 		}
 	})
 }
+
+func TestAutomaticReviewStatusLineSanitizesAndBoundsCommand(t *testing.T) {
+	t.Parallel()
+
+	const prefix = "Auto-approved Bash: "
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{
+			name:    "collapses whitespace and strips controls",
+			command: "go\x00 test\t./...\n-count=1\r",
+			want:    prefix + "go test ./... -count=1",
+		},
+		{
+			name:    "redacts shared secret patterns",
+			command: "printf 'Authorization: Bearer abc123 token=secret-value ghp_1234567890abcdefghijkl'",
+			want:    prefix + "printf 'Authorization: [redacted] [redacted] token=[redacted] [redacted]'",
+		},
+		{
+			name:    "strips complete terminal control strings",
+			command: "go test \x1b[31mred\x1b[0m \x1b]52;c;clipboard-secret\a./... \x1bPdevice-secret\x1b\\-count=1",
+			want:    prefix + "go test red ./... -count=1",
+		},
+		{
+			name:    "strips C1 control strings and bidi formatting",
+			command: "go test \u009d52;c;clipboard\u009c./...\u202e -count=1",
+			want:    prefix + "go test ./... -count=1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := permission.AutomaticReviewStatusLine(tt.command); got != tt.want {
+				t.Errorf("AutomaticReviewStatusLine(%q) = %q, want %q", tt.command, got, tt.want)
+			}
+		})
+	}
+
+	got := permission.AutomaticReviewStatusLine(strings.Repeat("界", 100))
+	if len(got) > 200 {
+		t.Fatalf("AutomaticReviewStatusLine() length = %d bytes, want <= 200", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("AutomaticReviewStatusLine() = %q, want valid UTF-8", got)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("AutomaticReviewStatusLine() = %q, want truncation marker", got)
+	}
+}
+
+func TestAutomaticReviewStatusLineUsesEverySharedSecretPattern(t *testing.T) {
+	t.Parallel()
+
+	secrets := []string{
+		"Authorization: Bearer abc123",
+		"api_key=abc123",
+		"access_token=abc123",
+		"refresh_token=abc123",
+		"auth_token=abc123",
+		"id_token=abc123",
+		"token=abc123",
+		"secret=abc123",
+		"password=abc123",
+		"passwd=abc123",
+		"pwd=abc123",
+		"ghp_1234567890abcdefghijkl",
+		"github_pat_1234567890abcdefghijkl",
+		"sk-1234567890abcdefghijkl",
+		"xoxb-1234567890-abcdefghijkl",
+		"AKIA1234567890ABCDEF",
+	}
+	for _, secret := range secrets {
+		t.Run(secret[:min(len(secret), 16)], func(t *testing.T) {
+			t.Parallel()
+			got := permission.AutomaticReviewStatusLine("go test ./... " + secret)
+			if strings.Contains(got, "abc123") ||
+				strings.Contains(got, "1234567890abcdefghijkl") ||
+				strings.Contains(got, "1234567890ABCDEF") {
+				t.Errorf("AutomaticReviewStatusLine(%q) leaked secret: %q", secret, got)
+			}
+			if !strings.Contains(strings.ToLower(got), "[redacted]") {
+				t.Errorf("AutomaticReviewStatusLine(%q) = %q, want redaction marker", secret, got)
+			}
+		})
+	}
+}

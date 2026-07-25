@@ -73,6 +73,30 @@ function renderCohort() {
 }
 
 describe('CurrentRunInspection', () => {
+  it('reserves a stable two-pane record desk while the archive loads', () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockReturnValue(new Promise(() => undefined));
+    mock.api.listRunArtifacts.mockReturnValue(new Promise(() => undefined));
+    mock.api.listRunLogs.mockReturnValue(new Promise(() => undefined));
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Publish"
+        featureStatus="Published"
+        reviewGate={REVIEW_GATE}
+        presentation="record"
+        shouldStream={false}
+      />,
+    );
+
+    expect(screen.getByText('Loading run record…')).toBeVisible();
+    expect(screen.getByLabelText('Loading run record')).toHaveClass(
+      'current-inspection__record-skeleton',
+    );
+  });
+
   it('shows authoritative live activity and loads bounded artifacts and logs', async () => {
     const user = userEvent.setup();
     const mock = installAgenticoMock();

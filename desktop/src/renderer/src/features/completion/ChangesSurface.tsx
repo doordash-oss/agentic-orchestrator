@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useMediaQuery } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import {
@@ -55,6 +55,7 @@ export function ChangesSurface({
       fileDiffRequestRef.current += 1;
       setDiffLoading(true);
       setDiff(null);
+      setDiffError(null);
       setSelectedFile(null);
       setFileDiff(null);
       try {
@@ -118,8 +119,40 @@ export function ChangesSurface({
     [loadFileDiff, selectedRepo],
   );
 
+  useEffect(() => {
+    const firstRepo = preflight?.repos[0]?.repo;
+    if (firstRepo === undefined || selectedRepo !== null) return;
+    setSelectedRepo(firstRepo);
+    void loadRepoDiff(firstRepo);
+  }, [loadRepoDiff, preflight, selectedRepo]);
+
+  useEffect(() => {
+    const firstFile = diff?.files[0]?.path;
+    if (firstFile === undefined || selectedFile !== null || selectedRepo === null) return;
+    setSelectedFile(firstFile);
+    void loadFileDiff(selectedRepo, firstFile);
+  }, [diff, loadFileDiff, selectedFile, selectedRepo]);
+
+  const activeRepo = preflight?.repos.find((repo) => repo.repo === selectedRepo);
+
   return (
-    <section className="completion-workspace__inspect" aria-label="Changes">
+    <section className="changes-manifest" aria-label="Changes">
+      <header className="changes-manifest__intro">
+        <div>
+          <p className="cockpit__eyebrow">Repository delta</p>
+          <h3>Change manifest</h3>
+          <p>
+            Review the files produced by this feature before opening the worktree or pull request.
+          </p>
+        </div>
+        <div className="changes-manifest__summary" aria-label="Change summary">
+          <strong>{preflight?.repos.length ?? '—'}</strong>
+          <span>{preflight?.repos.length === 1 ? 'repository' : 'repositories'}</span>
+          <strong>{diff?.files.length ?? '—'}</strong>
+          <span>{diff?.files.length === 1 ? 'changed file' : 'changed files'}</span>
+        </div>
+      </header>
+
       {error !== null ? (
         <div className="completion-workspace__error" role="alert">
           {error}
@@ -128,109 +161,185 @@ export function ChangesSurface({
           </button>
         </div>
       ) : null}
-      {loading ? <div className="completion-workspace__loading">Loading changes…</div> : null}
+      {loading ? <ChangesManifestSkeleton /> : null}
       {diffError !== null ? (
         <div className="completion-workspace__error" role="alert">
           {diffError}
         </div>
       ) : null}
       {preflight !== null ? (
-        <div className="completion-workspace__repos">
-          <h3>Repositories</h3>
+        <div className="changes-manifest__repositories" role="tablist" aria-label="Repositories">
           {preflight.repos.map((repo) => (
-            <div
+            <button
               key={repo.repo}
-              className={`completion-workspace__repo ${selectedRepo === repo.repo ? 'is-selected' : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={selectedRepo === repo.repo}
+              className="changes-manifest__repository"
+              onClick={() => handleRepoSelect(repo.repo)}
             >
-              <button
-                type="button"
-                className="completion-workspace__repo-select"
-                onClick={() => handleRepoSelect(repo.repo)}
-              >
-                <span className="completion-workspace__repo-name">{repo.repo}</span>
-                <span className="completion-workspace__repo-status" data-status={repo.status}>
-                  {STATUS_LABELS[repo.status] ?? repo.status}
-                </span>
-              </button>
-              {repo.prUrl !== undefined ? (
-                <PrLinkButton url={repo.prUrl} openExternal={openExternal} />
-              ) : null}
-              <button
-                type="button"
-                className="completion-workspace__reveal"
-                onClick={() => void revealPath(featureId, repo.repo)}
-              >
-                Reveal
-              </button>
-            </div>
+              <span className="changes-manifest__repository-mark" aria-hidden="true" />
+              <span className="completion-workspace__repo-name">{repo.repo}</span>
+              <span className="completion-workspace__repo-status" data-status={repo.status}>
+                {STATUS_LABELS[repo.status] ?? repo.status}
+              </span>
+            </button>
           ))}
         </div>
       ) : null}
 
-      {selectedRepo && diffLoading && (
-        <div className="completion-workspace__diff-loading">Loading diff…</div>
-      )}
-
-      {selectedRepo && diff && (
-        <div className="completion-workspace__diff">
-          <div className="completion-workspace__diff-toolbar">
-            <label className="completion-workspace__layout-toggle">
-              <input
-                type="checkbox"
-                checked={diffLayout === 'side-by-side'}
-                onChange={(e) =>
-                  setDiffLayoutOverride(e.target.checked ? 'side-by-side' : 'unified')
-                }
-              />
-              Side-by-side
-            </label>
-            {diff.partialFailure && (
-              <span className="completion-workspace__partial-failure">{diff.partialFailure}</span>
-            )}
-            {diff.truncated && <span className="completion-workspace__truncated">Truncated</span>}
+      {selectedRepo !== null ? (
+        <div className="changes-manifest__repository-bar">
+          <div>
+            <span>Inspecting</span>
+            <strong>{selectedRepo}</strong>
           </div>
-          <div className="completion-workspace__files">
-            {diff.files.map((file) => (
-              <button
-                key={file.path + (file.oldPath ?? '')}
-                type="button"
-                className={`completion-workspace__file ${selectedFile === file.path ? 'is-selected' : ''}`}
-                onClick={() => handleFileSelect(file.path)}
-              >
-                <span className="completion-workspace__file-op" data-op={file.operation}>
-                  {FILE_OP_GLYPH[file.operation] ?? 'M'}
-                </span>
-                <span className="completion-workspace__file-path">{file.path}</span>
-                {file.addedLines !== undefined && file.removedLines !== undefined && (
-                  <span className="completion-workspace__file-lines">
-                    +{file.addedLines} −{file.removedLines}
-                  </span>
-                )}
-                {file.binary && <span className="completion-workspace__file-binary">binary</span>}
-              </button>
-            ))}
-            {diff.files.length === 0 && !diff.partialFailure && (
-              <p className="completion-workspace__no-changes">No changes</p>
+          <div className="changes-manifest__repository-actions">
+            {activeRepo?.prUrl === undefined ? null : (
+              <PrLinkButton url={activeRepo.prUrl} openExternal={openExternal} />
             )}
+            <button
+              type="button"
+              className="completion-workspace__reveal"
+              onClick={() => void revealPath(featureId, selectedRepo)}
+            >
+              Reveal in Finder
+            </button>
           </div>
-
-          {selectedFile && fileLoading && (
-            <div className="completion-workspace__file-loading">Loading file diff…</div>
-          )}
-
-          {selectedFile && !fileLoading && fileDiff && (
-            <div className="completion-workspace__file-diff">
-              <DiffViewer diffText={fileDiff} renderSideBySide={diffLayout === 'side-by-side'} />
-            </div>
-          )}
-
-          {selectedFile && !fileLoading && !fileDiff && (
-            <div className="completion-workspace__file-placeholder">
-              No diff content available for this file.
-            </div>
-          )}
         </div>
-      )}
+      ) : null}
+
+      {selectedRepo !== null && diffLoading ? <DiffSkeleton /> : null}
+
+      {selectedRepo !== null && diff !== null ? (
+        <div className="changes-manifest__workspace">
+          <aside className="changes-manifest__files" aria-label="Changed files">
+            <div className="changes-manifest__files-heading">
+              <span>Files</span>
+              <strong>{diff.files.length}</strong>
+            </div>
+            <div className="completion-workspace__files">
+              {diff.files.map((file) => (
+                <button
+                  key={file.path + (file.oldPath ?? '')}
+                  type="button"
+                  className={`completion-workspace__file ${selectedFile === file.path ? 'is-selected' : ''}`}
+                  onClick={() => handleFileSelect(file.path)}
+                >
+                  <span className="completion-workspace__file-op" data-op={file.operation}>
+                    {FILE_OP_GLYPH[file.operation] ?? 'M'}
+                  </span>
+                  <span className="completion-workspace__file-path">{file.path}</span>
+                  {file.addedLines !== undefined && file.removedLines !== undefined ? (
+                    <span className="completion-workspace__file-lines">
+                      +{file.addedLines} −{file.removedLines}
+                    </span>
+                  ) : null}
+                  {file.binary ? (
+                    <span className="completion-workspace__file-binary">binary</span>
+                  ) : null}
+                </button>
+              ))}
+              {diff.files.length === 0 && !diff.partialFailure ? (
+                <p className="completion-workspace__no-changes">
+                  No local changes in this repository.
+                </p>
+              ) : null}
+            </div>
+          </aside>
+
+          <section className="changes-manifest__preview" aria-label="File difference">
+            <header className="changes-manifest__preview-toolbar">
+              <div>
+                <span>Selected file</span>
+                <strong>{selectedFile ?? 'Choose a file'}</strong>
+              </div>
+              <div className="changes-manifest__preview-controls">
+                {diff.partialFailure ? (
+                  <span className="completion-workspace__partial-failure">
+                    {diff.partialFailure}
+                  </span>
+                ) : null}
+                {diff.truncated ? (
+                  <span className="completion-workspace__truncated">Truncated</span>
+                ) : null}
+                <div role="group" aria-label="Diff layout" className="changes-manifest__layout">
+                  <button
+                    type="button"
+                    aria-pressed={diffLayout === 'unified'}
+                    onClick={() => setDiffLayoutOverride('unified')}
+                  >
+                    Unified
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={diffLayout === 'side-by-side'}
+                    onClick={() => setDiffLayoutOverride('side-by-side')}
+                  >
+                    Split
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            {selectedFile !== null && fileLoading ? (
+              <div className="changes-manifest__file-loading">
+                <span />
+                <span />
+                <span />
+              </div>
+            ) : null}
+
+            {selectedFile !== null && !fileLoading && fileDiff !== null ? (
+              <div className="completion-workspace__file-diff">
+                <DiffViewer diffText={fileDiff} renderSideBySide={diffLayout === 'side-by-side'} />
+              </div>
+            ) : null}
+
+            {selectedFile !== null && !fileLoading && fileDiff === null ? (
+              <div className="completion-workspace__file-placeholder">
+                No diff content is available for this file.
+              </div>
+            ) : null}
+
+            {selectedFile === null ? (
+              <div className="changes-manifest__empty-preview">
+                <span aria-hidden="true">↳</span>
+                <p>Select a changed file to inspect its patch.</p>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
     </section>
+  );
+}
+
+function ChangesManifestSkeleton(): React.ReactElement {
+  return (
+    <div className="changes-manifest__skeleton" aria-label="Loading change manifest" role="status">
+      <span />
+      <div>
+        <span />
+        <span />
+      </div>
+    </div>
+  );
+}
+
+function DiffSkeleton(): React.ReactElement {
+  return (
+    <div className="changes-manifest__diff-skeleton" aria-label="Loading repository changes">
+      <div>
+        {Array.from({ length: 5 }, (_, index) => (
+          <span key={index} />
+        ))}
+      </div>
+      <div>
+        {Array.from({ length: 8 }, (_, index) => (
+          <span key={index} />
+        ))}
+      </div>
+    </div>
   );
 }

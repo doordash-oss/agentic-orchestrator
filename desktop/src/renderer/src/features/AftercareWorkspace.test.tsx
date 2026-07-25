@@ -31,6 +31,7 @@ describe('AftercareWorkspace', () => {
         onAction={vi.fn()}
         onOpenRunRecord={vi.fn()}
         onOpenChanges={vi.fn()}
+        onOpenPullRequest={vi.fn()}
       />,
     );
 
@@ -47,17 +48,26 @@ describe('AftercareWorkspace', () => {
     const onAction = vi.fn();
     const onOpenRunRecord = vi.fn();
     const onOpenChanges = vi.fn();
+    const onOpenPullRequest = vi.fn();
     const user = userEvent.setup();
     render(
       <AftercareWorkspace
         snapshot={featureSnapshot({
           status: 'Published',
           actions: [{ id: 'refactor', enabled: true, disabledReasons: [] }],
+          repoStatus: [
+            {
+              name: 'agentic-orchestrator',
+              publishable: true,
+              prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+            },
+          ],
         })}
         run={completedRun}
         onAction={onAction}
         onOpenRunRecord={onOpenRunRecord}
         onOpenChanges={onOpenChanges}
+        onOpenPullRequest={onOpenPullRequest}
       />,
     );
 
@@ -65,8 +75,12 @@ describe('AftercareWorkspace', () => {
     await user.click(screen.getByRole('button', { name: 'Run record' }));
     await user.click(screen.getByRole('button', { name: 'Changes' }));
     await user.click(screen.getByRole('button', { name: /Start another focused pass/ }));
+    await user.click(screen.getByRole('button', { name: 'Open pull request' }));
     expect(onOpenRunRecord).toHaveBeenCalledOnce();
     expect(onOpenChanges).toHaveBeenCalledOnce();
     expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ id: 'refactor' }));
+    expect(onOpenPullRequest).toHaveBeenCalledWith(
+      'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+    );
   });
 });

@@ -4,13 +4,19 @@ import { displayStatusLabel, featureBranch, formatDuration } from './featureView
 export interface FeatureFactsRailProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
+  onOpenPullRequest(url: string): void;
 }
 
-export function FeatureFactsRail({ snapshot, run }: FeatureFactsRailProps): React.ReactElement {
+export function FeatureFactsRail({
+  snapshot,
+  run,
+  onOpenPullRequest,
+}: FeatureFactsRailProps): React.ReactElement {
   const branch = featureBranch(snapshot);
   const repository = snapshot.repoStatus?.[0];
   const elapsed = run?.timing?.totalSeconds ?? snapshot.timing?.totalSeconds;
   const cost = run?.cost?.totalUsd;
+  const prUrl = repository?.prUrl;
 
   return (
     <aside className="feature-facts" aria-label="Feature facts">
@@ -26,13 +32,17 @@ export function FeatureFactsRail({ snapshot, run }: FeatureFactsRailProps): Reac
         <Fact label="Run" value={`#${snapshot.activeRun}`} mono />
         <Fact label="Elapsed" value={elapsed === undefined ? '—' : formatDuration(elapsed)} mono />
         <Fact label="Cost" value={cost === undefined ? '—' : `$${cost.toFixed(2)}`} mono />
-        {repository?.prUrl === undefined ? null : (
+        {prUrl === undefined ? null : (
           <div className="feature-facts__fact">
             <dt>Pull request</dt>
             <dd>
-              <a href={repository.prUrl} target="_blank" rel="noopener noreferrer">
-                Open PR ↗
-              </a>
+              <button
+                type="button"
+                className="feature-facts__link"
+                onClick={() => onOpenPullRequest(prUrl)}
+              >
+                Open pull request <span aria-hidden="true">↗</span>
+              </button>
             </dd>
           </div>
         )}

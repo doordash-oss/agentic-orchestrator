@@ -82,7 +82,7 @@ export interface CurrentRunInspectionProps {
   /** Reports this run's totals up so the inspector sidebar can show them. */
   onRunMetrics?(metrics: RunMetrics | null): void;
   /** Cycle work supplies its own phase spine and uses this surface as a live canvas. */
-  presentation?: 'regular' | 'cycle';
+  presentation?: 'regular' | 'cycle' | 'record';
 }
 
 /** This run's cumulative totals, surfaced to the inspector sidebar. */
@@ -208,6 +208,8 @@ export function CurrentRunInspection({
   const live = useCohortTranscripts(featureId, runNumber, currentPhase, shouldStream);
   const selectedSession = live.cohort.find((session) => session.id === live.selectedId) ?? null;
   const stage = useTranscriptStage(live.cohort, live.transcripts, selectedSession, preview);
+  const initialLoading =
+    preview === null && live.cohort.length === 0 && attentionFooter === undefined;
   // The review gate wins over a stale "verifying" marker: while an axis review
   // is active there is no harness contract running to display.
   const verifying = isVerifyingPhase(phaseStatus, verificationItems) && !reviewGate.reviewingGate;
@@ -316,14 +318,26 @@ export function CurrentRunInspection({
   );
 
   return (
-    <section className="current-inspection" aria-label="Current run inspection">
+    <section
+      className="current-inspection"
+      aria-label="Current run inspection"
+      data-presentation={presentation}
+    >
       <header className="current-inspection__header">
         <div>
           <p className="cockpit__eyebrow">
-            {presentation === 'cycle' ? 'Current cycle' : 'Mutable current run'}
+            {presentation === 'cycle'
+              ? 'Current cycle'
+              : presentation === 'record'
+                ? 'Sealed run'
+                : 'Mutable current run'}
           </p>
           <h3 className="setup-step__title">
-            {presentation === 'cycle' ? 'Live agent activity' : 'Live preview and files'}
+            {presentation === 'cycle'
+              ? 'Live agent activity'
+              : presentation === 'record'
+                ? 'Activity and artifacts'
+                : 'Live preview and files'}
           </h3>
         </div>
         <button
@@ -337,7 +351,7 @@ export function CurrentRunInspection({
         </button>
       </header>
 
-      {presentation === 'regular' ? (
+      {presentation !== 'cycle' ? (
         <RoadmapGauge
           currentPhase={currentPhase}
           featureStatus={featureStatus}
@@ -355,8 +369,12 @@ export function CurrentRunInspection({
         </p>
       ) : null}
 
-      {preview === null && live.cohort.length === 0 && attentionFooter === undefined ? (
-        <p className="setup-step__empty">Loading current run inspection…</p>
+      {initialLoading ? (
+        presentation === 'record' ? (
+          <RunRecordSkeleton />
+        ) : (
+          <p className="setup-step__empty">Loading current run inspection…</p>
+        )
       ) : (
         <div className="current-inspection__preview">
           <div className="live-preview__frame">
@@ -412,116 +430,131 @@ export function CurrentRunInspection({
         </div>
       )}
 
-      {verifying && verificationItems !== undefined ? (
-        <VerificationSummary items={verificationItems} />
-      ) : (
-        <ReviewGateSummary
-          gate={reviewGate}
-          currentPhase={currentPhase}
-          currentRoadmapPhase={currentRoadmapPhase}
-        />
-      )}
-
-      <div className="current-inspection__resources">
-        <ResourceSection
-          key={`artifacts-${featureId}`}
-          title="Run artifacts"
-          count={artifacts.length}
-        >
-          {artifacts.length === 0 ? (
-            <p className="setup-step__empty">No current-run artifacts yet.</p>
+      {initialLoading && presentation === 'record' ? null : (
+        <>
+          {verifying && verificationItems !== undefined ? (
+            <VerificationSummary items={verificationItems} />
           ) : (
-            <ol className="current-inspection__artifact-list">
-              {artifacts.map((artifact, index) => (
-                <li key={artifact.id} className="current-inspection__artifact-item">
-                  <span className="current-inspection__artifact-index" aria-hidden="true">
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
-                  <button
-                    type="button"
-                    className="current-inspection__artifact-button"
-                    disabled={artifact.contentAvailable === false || loadingContent}
-                    aria-label={`Open artifact ${artifact.id}`}
-                    onClick={() => void openContent('artifact', artifact.id)}
-                  >
-                    {artifact.id}
-                  </button>
-                </li>
-              ))}
-            </ol>
+            <ReviewGateSummary
+              gate={reviewGate}
+              currentPhase={currentPhase}
+              currentRoadmapPhase={currentRoadmapPhase}
+            />
           )}
-        </ResourceSection>
-        <ResourceSection key={`logs-${featureId}`} title="Bounded logs" count={logs.length}>
-          {logs.length === 0 ? (
-            <p className="setup-step__empty">
-              {logListError === null
-                ? 'No run logs yet.'
-                : `Could not refresh run logs: ${logListError}`}
-            </p>
-          ) : (
-            <ol className="current-inspection__artifact-list" aria-label="Available run logs">
-              {logs.map((log, index) => (
-                <li key={log.id} className="current-inspection__artifact-item">
-                  <span className="current-inspection__artifact-index" aria-hidden="true">
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
-                  <button
-                    type="button"
-                    className="current-inspection__artifact-button"
-                    disabled={loadingContent}
-                    aria-label={`Open log ${log.path}`}
-                    title={`${log.path} · ${formatBytes(log.size)}`}
-                    onClick={() => void openContent('log', log.id, log.size, log.path)}
-                  >
-                    {log.path} · {formatBytes(log.size)}
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
-        </ResourceSection>
-      </div>
 
-      {contentError !== null ? (
-        <p role="alert" className="form-field__error">
-          Could not open this file: {contentError}
-        </p>
-      ) : null}
-
-      {content !== null ? (
-        <div className="current-inspection__content">
-          <div className="current-inspection__content-header">
-            <span>{content.label}</span>
-            {content.kind === 'log' && content.value.offset > 0 ? <span>Latest 64 KB</span> : null}
-            {content.value.truncated ? <span>Bounded page · more content remains</span> : null}
-            {content.kind === 'artifact' ? (
-              <button
-                type="button"
-                className="live-preview__icon-button"
-                aria-label="Enlarge artifact"
-                title="Enlarge artifact"
-                onClick={() => setArtifactFullscreen(true)}
+          <div className="current-inspection__archive">
+            <div className="current-inspection__resources">
+              <ResourceSection
+                key={`artifacts-${featureId}`}
+                title="Run artifacts"
+                count={artifacts.length}
               >
-                <MaximizeIcon />
-              </button>
+                {artifacts.length === 0 ? (
+                  <p className="setup-step__empty">No current-run artifacts yet.</p>
+                ) : (
+                  <ol className="current-inspection__artifact-list">
+                    {artifacts.map((artifact, index) => (
+                      <li key={artifact.id} className="current-inspection__artifact-item">
+                        <span className="current-inspection__artifact-index" aria-hidden="true">
+                          {String(index + 1).padStart(2, '0')}
+                        </span>
+                        <button
+                          type="button"
+                          className="current-inspection__artifact-button"
+                          disabled={artifact.contentAvailable === false || loadingContent}
+                          aria-label={`Open artifact ${artifact.id}`}
+                          onClick={() => void openContent('artifact', artifact.id)}
+                        >
+                          {artifact.id}
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </ResourceSection>
+              <ResourceSection key={`logs-${featureId}`} title="Bounded logs" count={logs.length}>
+                {logs.length === 0 ? (
+                  <p className="setup-step__empty">
+                    {logListError === null
+                      ? 'No run logs yet.'
+                      : `Could not refresh run logs: ${logListError}`}
+                  </p>
+                ) : (
+                  <ol className="current-inspection__artifact-list" aria-label="Available run logs">
+                    {logs.map((log, index) => (
+                      <li key={log.id} className="current-inspection__artifact-item">
+                        <span className="current-inspection__artifact-index" aria-hidden="true">
+                          {String(index + 1).padStart(2, '0')}
+                        </span>
+                        <button
+                          type="button"
+                          className="current-inspection__artifact-button"
+                          disabled={loadingContent}
+                          aria-label={`Open log ${log.path}`}
+                          title={`${log.path} · ${formatBytes(log.size)}`}
+                          onClick={() => void openContent('log', log.id, log.size, log.path)}
+                        >
+                          {log.path} · {formatBytes(log.size)}
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </ResourceSection>
+            </div>
+
+            {contentError !== null ? (
+              <p role="alert" className="form-field__error">
+                Could not open this file: {contentError}
+              </p>
             ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                setArtifactFullscreen(false);
-                setContent(null);
-              }}
-            >
-              Close
-            </button>
+
+            {content !== null ? (
+              <div className="current-inspection__content">
+                <div className="current-inspection__content-header">
+                  <span>{content.label}</span>
+                  {content.kind === 'log' && content.value.offset > 0 ? (
+                    <span>Latest 64 KB</span>
+                  ) : null}
+                  {content.value.truncated ? (
+                    <span>Bounded page · more content remains</span>
+                  ) : null}
+                  {content.kind === 'artifact' ? (
+                    <button
+                      type="button"
+                      className="live-preview__icon-button"
+                      aria-label="Enlarge artifact"
+                      title="Enlarge artifact"
+                      onClick={() => setArtifactFullscreen(true)}
+                    >
+                      <MaximizeIcon />
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setArtifactFullscreen(false);
+                      setContent(null);
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+                {content.kind === 'artifact' ? (
+                  <RenderedArtifact
+                    text={content.value.text}
+                    ariaLabel="Current run artifact content"
+                  />
+                ) : (
+                  <pre aria-label="Current run log content">
+                    {stripUnsafeAnsi(content.value.text)}
+                  </pre>
+                )}
+              </div>
+            ) : null}
           </div>
-          {content.kind === 'artifact' ? (
-            <RenderedArtifact text={content.value.text} ariaLabel="Current run artifact content" />
-          ) : (
-            <pre aria-label="Current run log content">{stripUnsafeAnsi(content.value.text)}</pre>
-          )}
-        </div>
-      ) : null}
+        </>
+      )}
 
       {artifactFullscreen && content?.kind === 'artifact' ? (
         <ArtifactOverlay artifact={content.value} onClose={() => setArtifactFullscreen(false)} />
@@ -548,6 +581,30 @@ export function CurrentRunInspection({
         />
       ) : null}
     </section>
+  );
+}
+
+function RunRecordSkeleton(): React.ReactElement {
+  return (
+    <div
+      className="current-inspection__record-skeleton"
+      aria-label="Loading run record"
+      role="status"
+    >
+      <div className="current-inspection__record-skeleton-activity">
+        <strong>Loading run record…</strong>
+        <span />
+        <span />
+        <span />
+      </div>
+      <div className="current-inspection__record-skeleton-archive">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+    </div>
   );
 }
 

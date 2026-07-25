@@ -843,11 +843,13 @@ function CockpitModal({
   title,
   ariaLabel,
   onClose,
+  variant = 'default',
   children,
 }: {
   title: string;
   ariaLabel: string;
   onClose(): void;
+  variant?: 'default' | 'workspace';
   children: ReactNode;
 }) {
   const modalRef = useRef<HTMLDivElement>(null);
@@ -857,7 +859,7 @@ function CockpitModal({
     <div className="cockpit__modal-overlay" onMouseDown={onClose}>
       <div
         ref={modalRef}
-        className="cockpit__modal"
+        className={`cockpit__modal ${variant === 'workspace' ? 'cockpit__modal--workspace' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel}
@@ -870,7 +872,13 @@ function CockpitModal({
             Close
           </button>
         </header>
-        <div className="cockpit__modal-body">{children}</div>
+        <div
+          className={`cockpit__modal-body ${
+            variant === 'workspace' ? 'cockpit__modal-body--workspace' : ''
+          }`}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -1662,6 +1670,9 @@ export function FeatureCockpit({
               onAction={openAftercareAction}
               onOpenRunRecord={() => setRunRecordOpen(true)}
               onOpenChanges={() => setChangesOpen(true)}
+              onOpenPullRequest={(url) => {
+                void window.agentico.openExternal({ url });
+              }}
             />
           </>
         ) : (
@@ -1674,6 +1685,9 @@ export function FeatureCockpit({
             onRetry={retry}
             onReturnToAftercare={() => setDismissedFailureId(cycleIdentity(snapshot) ?? undefined)}
             onOpenRunRecord={() => setRunRecordOpen(true)}
+            onOpenPullRequest={(url) => {
+              void window.agentico.openExternal({ url });
+            }}
           />
         )}
 
@@ -1713,6 +1727,7 @@ export function FeatureCockpit({
             title={`Run ${snapshot.activeRun} record`}
             ariaLabel="Run record"
             onClose={() => setRunRecordOpen(false)}
+            variant="workspace"
           >
             <CurrentRunInspection
               featureId={featureId}
@@ -1727,7 +1742,7 @@ export function FeatureCockpit({
               verificationItems={snapshot.verificationItems}
               waitReason={snapshot.waitReason}
               shouldStream={false}
-              presentation={postImplementationMode.kind === 'cycle' ? 'cycle' : 'regular'}
+              presentation="record"
             />
           </CockpitModal>
         ) : null}
@@ -1737,6 +1752,7 @@ export function FeatureCockpit({
             title="Changes"
             ariaLabel="Feature changes"
             onClose={() => setChangesOpen(false)}
+            variant="workspace"
           >
             <ChangesSurface
               featureId={featureId}

@@ -13,6 +13,7 @@ export interface AftercareWorkspaceProps {
   onAction(action: AftercareAction): void;
   onOpenRunRecord(): void;
   onOpenChanges(): void;
+  onOpenPullRequest(url: string): void;
 }
 
 export function AftercareWorkspace({
@@ -22,6 +23,7 @@ export function AftercareWorkspace({
   onAction,
   onOpenRunRecord,
   onOpenChanges,
+  onOpenPullRequest,
 }: AftercareWorkspaceProps): React.ReactElement {
   const actions = aftercareActions(snapshot);
   const copy = aftercareCopy(snapshot.status);
@@ -86,7 +88,7 @@ export function AftercareWorkspace({
           </button>
         </nav>
       </main>
-      <FeatureFactsRail snapshot={snapshot} run={run} />
+      <FeatureFactsRail snapshot={snapshot} run={run} onOpenPullRequest={onOpenPullRequest} />
     </section>
   );
 }

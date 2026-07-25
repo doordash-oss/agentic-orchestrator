@@ -31,6 +31,7 @@ describe('CycleWorkspace', () => {
         onRetry={vi.fn()}
         onReturnToAftercare={vi.fn()}
         onOpenRunRecord={vi.fn()}
+        onOpenPullRequest={vi.fn()}
       />,
     );
 
@@ -63,6 +64,7 @@ describe('CycleWorkspace', () => {
         onRetry={vi.fn()}
         onReturnToAftercare={vi.fn()}
         onOpenRunRecord={vi.fn()}
+        onOpenPullRequest={vi.fn()}
       />,
     );
     expect(screen.getByRole('alert')).toHaveTextContent('Validation could not complete.');

@@ -30,17 +30,32 @@ function props(over?: Partial<Parameters<typeof ChangesSurface>[0]>) {
 }
 
 describe('ChangesSurface', () => {
-  it('lists repositories from preflight', () => {
-    render(<ChangesSurface {...props()} />);
-    expect(screen.getByText('repo-a')).toBeInTheDocument();
+  it('presents a change manifest and loads the first repository immediately', async () => {
+    const getRepositoryDiff = vi.fn(() => Promise.resolve(diff));
+    render(<ChangesSurface {...props({ getRepositoryDiff })} />);
+    expect(screen.getByRole('heading', { name: 'Change manifest' })).toBeVisible();
+    expect(screen.getByRole('tab', { name: /repo-a/ })).toBeInTheDocument();
+    await waitFor(() => expect(getRepositoryDiff).toHaveBeenCalledWith('f', 'repo-a'));
   });
 
   it('loads a repo diff on selection', async () => {
+    const multiRepoPreflight: CompletionPreflightResult = {
+      ...preflight,
+      repos: [
+        ...preflight.repos,
+        { repo: 'repo-b', publishable: true, touched: true, status: 'eligible' },
+      ],
+    };
     const getRepositoryDiff = vi.fn(() => Promise.resolve(diff));
-    render(<ChangesSurface {...props({ getRepositoryDiff })} />);
-    fireEvent.click(screen.getByText('repo-a'));
-    await waitFor(() => expect(getRepositoryDiff).toHaveBeenCalledWith('f', 'repo-a'));
+    render(<ChangesSurface {...props({ preflight: multiRepoPreflight, getRepositoryDiff })} />);
+    fireEvent.click(screen.getByRole('tab', { name: /repo-b/ }));
+    await waitFor(() => expect(getRepositoryDiff).toHaveBeenCalledWith('f', 'repo-b'));
     expect(await screen.findByText('src/foo.go')).toBeInTheDocument();
+  });
+
+  it('uses a stable manifest skeleton while repository data is loading', () => {
+    render(<ChangesSurface {...props({ loading: true, preflight: null })} />);
+    expect(screen.getByLabelText('Loading change manifest')).toBeVisible();
   });
 
   it('shows an error with retry', () => {

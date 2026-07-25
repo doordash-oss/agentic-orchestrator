@@ -75,6 +75,47 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
+    'aftercare',
+    'dark',
+    1440,
+    900,
+    'aftercare-change-manifest-with-repository-switchboard-file-index-and-split-diff-1440x900',
+    '.aftercare-workspace',
+    async (p) => {
+      await p.getByRole('button', { name: 'Changes' }).click();
+      await expect(p.getByRole('dialog', { name: 'Feature changes' })).toBeVisible();
+      await expect(p.getByText('New description with completion workspace support.')).toBeVisible({
+        timeout: 15_000,
+      });
+      await p.waitForTimeout(250);
+    },
+  );
+
+  await capture(
+    page,
+    'aftercare',
+    'dark',
+    1440,
+    900,
+    'wide-run-record-desk-with-live-activity-artifact-ledger-and-bounded-content-1440x900',
+    '.aftercare-workspace',
+    async (p) => {
+      await p.getByRole('button', { name: 'Run record' }).click();
+      await expect(p.getByRole('dialog', { name: 'Run record' })).toBeVisible();
+      await expect(p.getByRole('heading', { name: 'Activity and artifacts' })).toBeVisible({
+        timeout: 15_000,
+      });
+      await p.getByRole('button', { name: /Run artifacts/ }).click();
+      await p.getByRole('button', { name: 'Open artifact inquire/out.md' }).click();
+      await expect(p.getByLabel('Current run artifact content')).toBeVisible({
+        timeout: 15_000,
+      });
+      await p.waitForTimeout(250);
+    },
+  );
+
+  await capture(
+    page,
     'post-cycle-rebase',
     'dark',
     1440,

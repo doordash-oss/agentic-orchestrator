@@ -1129,6 +1129,27 @@ body {
   color: var(--color-signal);
 }
 
+.feature-facts__link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-signal);
+  font: 13px/1.45 var(--font-mono);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.feature-facts__link:hover {
+  color: var(--color-text);
+}
+
+.feature-facts__link:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0.2rem;
+}
+
 .cycle-workspace__main {
   display: flex;
   flex-direction: column;
@@ -4853,6 +4874,27 @@ body {
   padding: var(--space-5);
 }
 
+/* Workspace overlays are inspection desks rather than do-and-dismiss cards.
+ * Their wider, fixed canvas prevents repository manifests and run archives
+ * from collapsing into a long vertical document. */
+.cockpit__modal--workspace {
+  width: min(78rem, calc(100vw - 4rem));
+  height: min(50rem, calc(100vh - 4rem));
+  max-height: none;
+}
+
+.cockpit__modal-body--workspace {
+  display: flex;
+  overflow: hidden;
+  padding: 0;
+}
+
+.cockpit__modal-body--workspace > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Always-visible status badge: the cockpit shell surfaces the feature status
  * in the action bar so it remains readable in narrow mode, where the inspector
  * aside is hidden and the status otherwise lives only in the drawer. The dot
@@ -6194,6 +6236,385 @@ body {
 .completion-workspace__diff-line--context {
   display: block;
   color: var(--color-text);
+}
+
+/* Change manifest ---------------------------------------------------------
+ * A repository switchboard sits above a two-pane file desk. The active repo
+ * is carried by a signal rail, borrowing the visual language of a branch
+ * pointer rather than turning repository selection into a stack of cards. */
+.changes-manifest {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  min-height: 0;
+  background: color-mix(in srgb, var(--color-bg) 70%, var(--color-panel));
+}
+
+.changes-manifest__intro {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-panel);
+}
+
+.changes-manifest__intro h3 {
+  margin: var(--space-1) 0 0;
+  font: 600 1.75rem/1.05 var(--font-display);
+  letter-spacing: 0.01em;
+}
+
+.changes-manifest__intro > div:first-child > p:last-child {
+  max-width: 40rem;
+  margin: var(--space-2) 0 0;
+  color: var(--color-muted);
+  font-size: 0.83rem;
+}
+
+.changes-manifest__summary {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 0.1rem var(--space-2);
+  flex: 0 0 auto;
+  min-width: 10.5rem;
+  border-left: 1px solid var(--color-hairline);
+  padding-left: var(--space-5);
+}
+
+.changes-manifest__summary strong {
+  color: var(--color-signal);
+  font: 600 1.1rem var(--font-display);
+  text-align: right;
+}
+
+.changes-manifest__summary span {
+  color: var(--color-muted);
+  font: 0.72rem var(--font-mono);
+}
+
+.changes-manifest__repositories {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-panel);
+}
+
+.changes-manifest__repository {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(7rem, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 15rem;
+  border: 0;
+  border-right: 1px solid var(--color-hairline);
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.changes-manifest__repository:hover {
+  background: color-mix(in srgb, var(--color-signal) 6%, transparent);
+}
+
+.changes-manifest__repository:focus-visible {
+  z-index: 1;
+  outline: var(--focus-ring);
+  outline-offset: -3px;
+}
+
+.changes-manifest__repository[aria-selected='true'] {
+  background: color-mix(in srgb, var(--color-signal) 9%, var(--color-panel));
+}
+
+.changes-manifest__repository-mark {
+  width: 0.4rem;
+  height: 0.4rem;
+  border: 1px solid var(--color-muted);
+  border-radius: 50%;
+}
+
+.changes-manifest__repository[aria-selected='true'] .changes-manifest__repository-mark {
+  border-color: var(--color-signal);
+  background: var(--color-signal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-signal) 16%, transparent);
+}
+
+.changes-manifest__repository-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 3.25rem;
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--color-hairline);
+  background: color-mix(in srgb, var(--color-panel) 88%, var(--color-bg));
+}
+
+.changes-manifest__repository-bar > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.changes-manifest__repository-bar span,
+.changes-manifest__files-heading span,
+.changes-manifest__preview-toolbar span {
+  color: var(--color-muted);
+  font: 0.68rem var(--font-mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.changes-manifest__repository-bar strong {
+  overflow: hidden;
+  font: 600 0.84rem var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-manifest__repository-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.changes-manifest__workspace {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.3fr) minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.changes-manifest__files {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--color-hairline);
+  background: var(--color-panel);
+}
+
+.changes-manifest__files-heading,
+.changes-manifest__preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 3.15rem;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.changes-manifest__files-heading strong {
+  min-width: 1.55rem;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  padding: 0.1rem var(--space-2);
+  color: var(--color-muted);
+  font: 0.68rem var(--font-mono);
+  text-align: center;
+}
+
+.changes-manifest__files .completion-workspace__files {
+  flex: 1 1 auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  padding: var(--space-2);
+  background: transparent;
+}
+
+.changes-manifest__files .completion-workspace__file {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-2);
+  border-radius: calc(var(--radius) + 1px);
+  padding: var(--space-2) var(--space-3);
+}
+
+.changes-manifest__files .completion-workspace__file-lines,
+.changes-manifest__files .completion-workspace__file-binary {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.changes-manifest__preview {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  background: color-mix(in srgb, var(--color-bg) 83%, var(--color-panel));
+}
+
+.changes-manifest__preview-toolbar > div:first-child {
+  display: grid;
+  min-width: 0;
+}
+
+.changes-manifest__preview-toolbar strong {
+  overflow: hidden;
+  font: 0.75rem var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-manifest__preview-controls,
+.changes-manifest__layout {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.changes-manifest__layout {
+  gap: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.changes-manifest__layout button {
+  border: 0;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  color: var(--color-muted);
+  font: 0.68rem var(--font-mono);
+  cursor: pointer;
+}
+
+.changes-manifest__layout button + button {
+  border-left: 1px solid var(--color-hairline);
+}
+
+.changes-manifest__layout button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--color-signal) 15%, var(--color-panel));
+  color: var(--color-signal);
+}
+
+.changes-manifest__preview .completion-workspace__file-diff {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.changes-manifest__empty-preview,
+.changes-manifest__file-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 0;
+  color: var(--color-muted);
+}
+
+.changes-manifest__empty-preview > span {
+  color: var(--color-signal);
+  font: 1.5rem var(--font-mono);
+}
+
+.changes-manifest__empty-preview p {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.changes-manifest__skeleton,
+.changes-manifest__diff-skeleton {
+  display: grid;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-4) var(--space-5);
+}
+
+.changes-manifest__skeleton > span,
+.changes-manifest__skeleton div > span,
+.changes-manifest__diff-skeleton span,
+.changes-manifest__file-loading span,
+.current-inspection__record-skeleton span {
+  display: block;
+  min-height: 0.75rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-hairline) 80%, transparent),
+    color-mix(in srgb, var(--color-signal) 13%, var(--color-panel)),
+    color-mix(in srgb, var(--color-hairline) 80%, transparent)
+  );
+  background-size: 220% 100%;
+  animation: workspace-skeleton-scan 1.4s ease-in-out infinite;
+}
+
+.changes-manifest__skeleton {
+  grid-row: 2 / -1;
+  grid-template-rows: 2.75rem minmax(18rem, 1fr);
+}
+
+.changes-manifest__skeleton > span {
+  width: min(22rem, 60%);
+}
+
+.changes-manifest__skeleton > div {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.28fr) minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.changes-manifest__skeleton div > span {
+  height: 100%;
+  border-radius: var(--radius);
+}
+
+.changes-manifest__diff-skeleton {
+  grid-template-columns: minmax(13rem, 0.28fr) minmax(0, 1fr);
+}
+
+.changes-manifest__diff-skeleton > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.changes-manifest__diff-skeleton > div:last-child span:nth-child(3n + 1) {
+  width: 72%;
+}
+
+.changes-manifest__file-loading {
+  flex-direction: column;
+  align-items: stretch;
+  padding: var(--space-6);
+}
+
+.changes-manifest__file-loading span:nth-child(2) {
+  width: 78%;
+}
+
+.changes-manifest__file-loading span:nth-child(3) {
+  width: 56%;
+}
+
+@keyframes workspace-skeleton-scan {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .changes-manifest__skeleton > span,
+  .changes-manifest__skeleton div > span,
+  .changes-manifest__diff-skeleton span,
+  .changes-manifest__file-loading span,
+  .current-inspection__record-skeleton span {
+    animation: none;
+  }
 }
 
 .completion-workspace__publish-repos {
@@ -10197,6 +10618,136 @@ body {
   gap: var(--space-4);
 }
 
+.current-inspection__archive {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The record variant behaves like a horizontal archive desk: activity stays
+ * visible on the left while the artifact ledger scrolls independently on the
+ * right. Opening a long roadmap no longer stretches the whole modal. */
+.current-inspection[data-presentation='record'] {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'header header'
+    'roadmap roadmap'
+    'preview archive'
+    'gate archive';
+  gap: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-panel);
+}
+
+.current-inspection[data-presentation='record'] > .current-inspection__header {
+  grid-area: header;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.current-inspection[data-presentation='record'] > .roadmap-gauge {
+  grid-area: roadmap;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-hairline);
+  border-radius: 0;
+}
+
+.current-inspection[data-presentation='record'] > .current-inspection__preview {
+  grid-area: preview;
+  min-height: 0;
+  padding: var(--space-4);
+  overflow: hidden;
+}
+
+.current-inspection[data-presentation='record']
+  > .current-inspection__preview
+  .live-preview__frame {
+  min-height: 13rem;
+  height: 100%;
+}
+
+.current-inspection[data-presentation='record'] > .review-gate {
+  grid-area: gate;
+  margin: 0 var(--space-4) var(--space-4);
+}
+
+.current-inspection[data-presentation='record'] > .current-inspection__archive {
+  grid-area: archive;
+  overflow: auto;
+  border-left: 1px solid var(--color-hairline);
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--color-bg) 72%, var(--color-panel));
+}
+
+.current-inspection[data-presentation='record'] .current-inspection__resources {
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+}
+
+.current-inspection[data-presentation='record'] .current-inspection__artifact-list {
+  grid-template-columns: 1fr;
+}
+
+.current-inspection[data-presentation='record'] .current-inspection__content {
+  margin-top: var(--space-4);
+}
+
+.current-inspection[data-presentation='record'] .current-inspection__artifact-markdown {
+  max-height: none;
+  background: var(--color-panel);
+}
+
+.current-inspection__record-skeleton {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr);
+  min-height: 0;
+}
+
+.current-inspection__record-skeleton-activity,
+.current-inspection__record-skeleton-archive {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.current-inspection__record-skeleton-archive {
+  border-left: 1px solid var(--color-hairline);
+  background: color-mix(in srgb, var(--color-bg) 72%, var(--color-panel));
+}
+
+.current-inspection__record-skeleton strong {
+  color: var(--color-muted);
+  font: 600 1rem var(--font-display);
+}
+
+.current-inspection__record-skeleton-activity span:first-of-type {
+  height: 12rem;
+  border-radius: var(--radius);
+}
+
+.current-inspection__record-skeleton-activity span:nth-of-type(2) {
+  width: 72%;
+}
+
+.current-inspection__record-skeleton-activity span:nth-of-type(3) {
+  width: 44%;
+}
+
+.current-inspection__record-skeleton-archive span {
+  min-height: 2.25rem;
+  border-radius: var(--radius);
+}
+
 .current-inspection__resource {
   min-width: 0;
 }
@@ -10375,6 +10926,82 @@ body {
 
   .current-inspection__resources {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .cockpit__modal--workspace {
+    width: calc(100vw - 1.5rem);
+    height: calc(100vh - 1.5rem);
+  }
+
+  .changes-manifest__intro {
+    align-items: start;
+    padding: var(--space-4);
+  }
+
+  .changes-manifest__summary {
+    display: none;
+  }
+
+  .changes-manifest__workspace {
+    grid-template-columns: minmax(11rem, 0.38fr) minmax(0, 1fr);
+  }
+
+  .changes-manifest__preview-controls {
+    display: none;
+  }
+
+  .current-inspection[data-presentation='record'] {
+    display: flex;
+    overflow: auto;
+  }
+
+  .current-inspection[data-presentation='record'] > .current-inspection__archive {
+    overflow: visible;
+    border-top: 1px solid var(--color-hairline);
+    border-left: 0;
+  }
+
+  .current-inspection__record-skeleton {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .current-inspection__record-skeleton-archive {
+    border-top: 1px solid var(--color-hairline);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .changes-manifest {
+    overflow: auto;
+  }
+
+  .changes-manifest__workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .changes-manifest__files {
+    max-height: 15rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-hairline);
+  }
+
+  .changes-manifest__preview {
+    min-height: 22rem;
+  }
+
+  .changes-manifest__repository-bar {
+    align-items: flex-start;
+  }
+
+  .changes-manifest__repository-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 

@@ -419,7 +419,33 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(
       await screen.findByRole('region', { name: 'Current run inspection' }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: 'Run record' })).toBeVisible();
+    expect(screen.getByRole('dialog', { name: 'Run record' })).toHaveClass(
+      'cockpit__modal--workspace',
+    );
+  });
+
+  it('opens the feature pull request through the guarded desktop bridge', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        repoStatus: [
+          {
+            name: 'agentic-orchestrator',
+            publishable: true,
+            prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+          },
+        ],
+      }),
+    });
+    mock.api.openExternal.mockResolvedValue({ ok: true });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Open pull request' }));
+
+    expect(mock.api.openExternal).toHaveBeenCalledWith({
+      url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+    });
   });
 
   it('moves focus into the inspector drawer and restores it after Escape', async () => {

@@ -14,6 +14,7 @@ export interface CycleWorkspaceProps {
   onRetry(): void;
   onReturnToAftercare(): void;
   onOpenRunRecord(): void;
+  onOpenPullRequest(url: string): void;
 }
 
 export function CycleWorkspace({
@@ -26,6 +27,7 @@ export function CycleWorkspace({
   onRetry,
   onReturnToAftercare,
   onOpenRunRecord,
+  onOpenPullRequest,
 }: CycleWorkspaceProps): React.ReactElement {
   const failed = snapshot.cycle?.status === 'failed';
   const stoppable =
@@ -116,7 +118,7 @@ export function CycleWorkspace({
           onRunMetrics={onRunMetrics}
         />
       </main>
-      <FeatureFactsRail snapshot={snapshot} run={run} />
+      <FeatureFactsRail snapshot={snapshot} run={run} onOpenPullRequest={onOpenPullRequest} />
     </section>
   );
 }

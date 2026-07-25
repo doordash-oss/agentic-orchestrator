@@ -1144,6 +1144,7 @@ type Cursor struct {
 type Cycle struct {
 	Count     int    `json:"count,omitempty"`
 	Iteration int    `json:"iteration,omitempty"`
+	Phase     string `json:"phase,omitempty"`
 	Status    string `json:"status,omitempty"`
 	Type      string `json:"type,omitempty"`
 }

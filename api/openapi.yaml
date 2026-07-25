@@ -3171,6 +3171,8 @@ components:
           type: integer
         iteration:
           type: integer
+        phase:
+          type: string
     Checkpoints:
       type: object
       required:

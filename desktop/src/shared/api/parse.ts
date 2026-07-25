@@ -402,6 +402,7 @@ export const ServerCycleSchema = z.object({
   status: z.string().optional(),
   count: z.number().int().nonnegative().optional(),
   iteration: z.number().int().nonnegative().optional(),
+  phase: z.string().optional(),
 });
 export type ServerCycle = z.output<typeof ServerCycleSchema>;
 

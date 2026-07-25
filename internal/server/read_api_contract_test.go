@@ -306,6 +306,9 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if summaryCycle["type"] != actionRefactor || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
 		t.Fatalf("summary feature cycle = %+v, want running refactor #1", summaryCycle)
 	}
+	if summaryCycle["phase"] != "implement_validate" {
+		t.Fatalf("summary feature cycle phase = %v, want implement_validate", summaryCycle["phase"])
+	}
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureDTO := detail[entityFeature].(map[string]any)
@@ -315,6 +318,9 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	}
 	if cycle["type"] != actionRefactor || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
 		t.Fatalf("detail feature cycle = %+v, want running refactor #1", cycle)
+	}
+	if cycle["phase"] != "implement_validate" {
+		t.Fatalf("detail feature cycle phase = %v, want implement_validate", cycle["phase"])
 	}
 }
 
@@ -348,6 +354,9 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 	cycle := featureBody["cycle"].(map[string]any)
 	if cycle["type"] != actionRebase || cycle["status"] != feature.RepoCycleRunning {
 		t.Fatalf("cycle = %+v, want active rebase", cycle)
+	}
+	if cycle["phase"] != "inspect_rebase" {
+		t.Fatalf("cycle phase = %v, want inspect_rebase", cycle["phase"])
 	}
 	status := map[string]RepoStatusDTO{}
 	for _, raw := range featureBody["repo_status"].([]any) {

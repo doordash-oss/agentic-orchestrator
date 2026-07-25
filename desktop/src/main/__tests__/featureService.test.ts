@@ -464,6 +464,31 @@ describe('FeatureService.getFeature', () => {
     });
   });
 
+  it('maps the authoritative active cycle phase', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: detailBody({
+        cycle: {
+          type: 'rebase',
+          status: 'running',
+          count: 2,
+          iteration: 1,
+          phase: 'resolve_conflicts',
+        },
+      }),
+    }));
+
+    await expect(service.getFeature('abcd1234ef567890')).resolves.toMatchObject({
+      cycle: {
+        type: 'rebase',
+        status: 'running',
+        count: 2,
+        iteration: 1,
+        phase: 'resolve_conflicts',
+      },
+    });
+  });
+
   it('falls back to feature progress when the active run detail omits roadmap fields', async () => {
     const body = detailBody({
       status: 'Implementing',

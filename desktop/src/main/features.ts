@@ -549,6 +549,7 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
             ...(feature.cycle.iteration === undefined
               ? {}
               : { iteration: feature.cycle.iteration }),
+            ...(feature.cycle.phase === undefined ? {} : { phase: feature.cycle.phase }),
           },
         }),
     reviewGate: {

@@ -715,6 +715,7 @@ export const CycleViewSchema = z.strictObject({
   status: z.string().optional(),
   count: z.number().int().nonnegative().optional(),
   iteration: z.number().int().nonnegative().optional(),
+  phase: z.string().optional(),
 });
 export type CycleView = z.output<typeof CycleViewSchema>;
 

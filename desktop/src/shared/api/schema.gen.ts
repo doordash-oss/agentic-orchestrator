@@ -1604,6 +1604,7 @@ export interface components {
             status?: string;
             count?: number;
             iteration?: number;
+            phase?: string;
         };
         Checkpoints: {
             inquiry_review: boolean;

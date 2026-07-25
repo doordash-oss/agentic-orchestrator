@@ -187,6 +187,7 @@ func activeCycleDTO(f *feature.Feature) *CycleDTO {
 			Status:    f.ActiveCycle.Status,
 			Count:     f.ActiveCycle.Count,
 			Iteration: f.ActiveCycle.Iteration,
+			Phase:     activeCyclePhase(f, f.ActiveCycle.Type),
 		}
 	}
 	for _, repo := range f.Repos {
@@ -219,6 +220,31 @@ func activeRepoCycleDTO(f *feature.Feature, cycle *feature.RepoCycleState) *Cycl
 		Status:    cycle.Status,
 		Count:     activeCycleCount(f, cycle),
 		Iteration: cycle.Iteration,
+		Phase:     activeCyclePhase(f, cycle.Type),
+	}
+}
+
+func activeCyclePhase(f *feature.Feature, cycleType feature.RepoCycleType) string {
+	switch cycleType {
+	case feature.CycleRebase:
+		if f != nil && f.RebaseOperation != nil {
+			switch f.RebaseOperation.Stage {
+			case feature.RebaseStageSmartRebase:
+				return "resolve_conflicts"
+			case feature.RebaseStageFinalReview:
+				return "final_review"
+			}
+		}
+		return "inspect_rebase"
+	case feature.CycleReviewComments:
+		return "address_validate"
+	case feature.CycleRefactor:
+		if f != nil && f.CurrentPhaseStatus == "refactor-planning" {
+			return "plan_refactor"
+		}
+		return "implement_validate"
+	default:
+		return ""
 	}
 }
 

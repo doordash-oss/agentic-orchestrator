@@ -455,7 +455,7 @@ describe('WorkspaceShell tabs', () => {
     mock.api.getFeature.mockImplementation(() => Promise.resolve(current));
     render(<WorkspaceShell />);
 
-    await screen.findByRole('heading', { name: 'Search revamp' });
+    await screen.findByRole('region', { name: 'Feature aftercare' });
     await waitFor(() => expect(mock.api.listFeatures).toHaveBeenCalledTimes(1));
     current = done;
 

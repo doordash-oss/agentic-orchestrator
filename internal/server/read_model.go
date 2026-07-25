@@ -250,7 +250,10 @@ func activeCyclePhase(f *feature.Feature, cycleType feature.RepoCycleType) strin
 
 func isActiveRepoCycleStatus(status string) bool {
 	switch status {
-	case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
+	case feature.RepoCycleRunning,
+		feature.RepoCycleReviewing,
+		feature.RepoCycleNeedUserInput,
+		feature.RepoCycleFailed:
 		return true
 	default:
 		return false

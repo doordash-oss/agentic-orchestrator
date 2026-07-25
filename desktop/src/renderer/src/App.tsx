@@ -13,7 +13,7 @@ import { AmaDock } from './components/AmaDock';
 import { CommandPalette } from './components/CommandPalette';
 import { HelpOverlay } from './components/HelpOverlay';
 import { ReadinessGate } from './components/ReadinessGate';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AttentionInbox,
   emptyAttentionDrafts,
@@ -32,11 +32,6 @@ export default function App() {
   const connection = useConnectionState();
   const runtimeReady = connection.status === 'ready';
   const [serverAttentionItems, setServerAttentionItems] = useState<AttentionItem[]>([]);
-  const [recoveryItems, setRecoveryItems] = useState<{
-    liveCount: number;
-    deadCount: number;
-    firstSeenAt: string;
-  } | null>(null);
   const [attentionDrafts, setAttentionDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   const [featureNames, setFeatureNames] = useState<Record<string, string>>({});
   const [attentionJump, setAttentionJump] = useState<{
@@ -97,32 +92,19 @@ export default function App() {
   }, [runtimeReady]);
 
   const refreshRecovery = useCallback(async () => {
-    if (!runtimeReady) {
-      setRecoveryItems(null);
-      return;
-    }
+    if (!runtimeReady) return;
     try {
-      const snapshot = await window.agentico.scanRecovery();
-      const live = snapshot.items.filter((i) => i.processAlive).length;
-      const dead = snapshot.items.length - live;
-      if (live > 0 || dead > 0) {
-        setRecoveryItems((prev) =>
-          prev === null
-            ? { liveCount: live, deadCount: dead, firstSeenAt: new Date().toISOString() }
-            : { ...prev, liveCount: live, deadCount: dead },
-        );
-      } else {
-        setRecoveryItems(null);
-      }
+      // The watchdog owns routine recovery. Its scan stays deliberately quiet;
+      // only an exhausted lifecycle failure is promoted by the server.
+      await window.agentico.scanRecovery();
     } catch {
-      setRecoveryItems(null);
+      // A best-effort watchdog scan must not become user-visible attention.
     }
   }, [runtimeReady]);
 
   useEffect(() => {
     if (!runtimeReady) {
       setServerAttentionItems([]);
-      setRecoveryItems(null);
       return;
     }
     void refreshAttention();
@@ -190,19 +172,7 @@ export default function App() {
       ? 'error'
       : 'progress';
 
-  // Recovery items sort ahead of all other attention so recovery receives
-  // contextual priority (Task 8 acceptance criterion 1).
-  const attentionItems = useMemo<AttentionItem[]>(() => {
-    if (recoveryItems === null) return serverAttentionItems;
-    const recoveryAttention: AttentionItem = {
-      kind: 'recovery',
-      id: 'recovery-scan',
-      waitingSince: recoveryItems.firstSeenAt,
-      liveCount: recoveryItems.liveCount,
-      deadCount: recoveryItems.deadCount,
-    };
-    return [recoveryAttention, ...serverAttentionItems];
-  }, [recoveryItems, serverAttentionItems]);
+  const attentionItems: AttentionItem[] = serverAttentionItems;
 
   return (
     <div className="app-frame">

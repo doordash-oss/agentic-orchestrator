@@ -17,6 +17,7 @@ import {
 } from 'react';
 import {
   isPendingReviewStatus,
+  type CycleView,
   type FeatureSnapshot,
   type RunDetailView,
   type SetupTaskView,
@@ -32,8 +33,16 @@ import { FeatureConfigPanel } from './ConfigEditor';
 import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { RepositoryInstrument } from './RepositoryInstrument';
-import { AftercareDesk } from './AftercareDesk';
+import { AftercareWorkspace } from './AftercareWorkspace';
 import type { AftercareCycleId } from './aftercareModel';
+import { CycleWorkspace } from './CycleWorkspace';
+import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
+import {
+  cycleIdentity,
+  resolvePostImplementationMode,
+  type AftercareAction,
+  type CycleReceipt,
+} from './postImplementationModel';
 import { RebaseModal } from './cycles/RebaseModal';
 import { ReviewCommentsModal } from './cycles/ReviewCommentsModal';
 import { RefactorModal } from './cycles/RefactorModal';
@@ -117,6 +126,28 @@ const TASK_STATUS_ICON: Record<SetupTaskView['status'], string> = {
 
 const MAX_ITERATIONS_RESTART_DELTA = 10;
 const MAX_PLAN_ITERATIONS_RESTART_DELTA = 2;
+
+function ownsPostImplementationStage(cycle?: CycleView): boolean {
+  return (
+    cycle?.type !== undefined &&
+    ['running', 'reviewing', 'need_user_input', 'failed'].includes(cycle.status ?? '')
+  );
+}
+
+function asAftercareCycleId(value?: string): AftercareCycleId | null {
+  return value === 'rebase' || value === 'review-comments' || value === 'refactor' ? value : null;
+}
+
+function cycleReceiptLabel(id: AftercareCycleId): string {
+  switch (id) {
+    case 'rebase':
+      return 'Rebase';
+    case 'review-comments':
+      return 'Review comments';
+    case 'refactor':
+      return 'Refactor';
+  }
+}
 
 function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch: string | null }) {
   return (
@@ -877,12 +908,15 @@ export function FeatureCockpit({
   const [rewindDialog, setRewindDialog] = useState(false);
   const [cycleModal, setCycleModal] = useState<AftercareCycleId | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
+  const [runRecordOpen, setRunRecordOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
+  const [dismissedFailureId, setDismissedFailureId] = useState<string | undefined>();
+  const [cycleReceipt, setCycleReceipt] = useState<CycleReceipt | undefined>();
+  const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
   const [configOpen, setConfigOpen] = useState(false);
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
   const [aftercareRun, setAftercareRun] = useState<RunDetailView | null>(null);
-  const [activeSurface, setActiveSurface] = useState<'aftercare' | 'document' | 'live' | 'changes'>(
-    'document',
-  );
+  const [activeSurface, setActiveSurface] = useState<'document' | 'live' | 'changes'>('document');
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
     run: RunDetailView | null;
@@ -891,7 +925,7 @@ export function FeatureCockpit({
   const isNarrow = useMediaQuery('(max-width: 900px)');
   const actionInFlightRef = useRef(false);
   const loadRequestRef = useRef(0);
-  const restStateRef = useRef<{ featureId: string; atRest: boolean } | null>(null);
+  const previousCycleRef = useRef<{ featureId: string; cycle?: CycleView } | null>(null);
   const stopButtonRef = useRef<HTMLButtonElement>(null);
   const inspectorButtonRef = useRef<HTMLButtonElement>(null);
   const onLoadedNameRef = useRef(onLoadedName);
@@ -904,6 +938,12 @@ export function FeatureCockpit({
     setActiveSurface('document');
     onAttentionPreviewClose?.();
   }, [attentionPreviewRequest, onAttentionPreviewClose]);
+
+  useEffect(() => {
+    if (attentionPreviewRequest?.attentionId !== undefined) {
+      setDismissedGateId(undefined);
+    }
+  }, [attentionPreviewRequest]);
 
   const load = useCallback(
     (options: { silent?: boolean } = {}) => {
@@ -988,15 +1028,21 @@ export function FeatureCockpit({
 
   useEffect(() => {
     if (state.phase !== 'loaded') return;
-    const atRest = isRunAtRest(state.snapshot.status);
-    const previous = restStateRef.current;
-    if (
-      atRest &&
-      (previous === null || previous.featureId !== featureId || previous.atRest === false)
-    ) {
-      setActiveSurface('aftercare');
+    const previous =
+      previousCycleRef.current?.featureId === featureId
+        ? previousCycleRef.current.cycle
+        : undefined;
+    const current = state.snapshot.cycle;
+    if (ownsPostImplementationStage(previous) && !ownsPostImplementationStage(current)) {
+      const id = asAftercareCycleId(previous?.type);
+      if (id !== null) {
+        setCycleReceipt({ id, message: `${cycleReceiptLabel(id)} cycle complete.` });
+      }
     }
-    restStateRef.current = { featureId, atRest };
+    previousCycleRef.current = {
+      featureId,
+      ...(current === undefined ? {} : { cycle: current }),
+    };
   }, [featureId, state]);
 
   useEffect(() => {
@@ -1313,7 +1359,15 @@ export function FeatureCockpit({
     attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined
       ? undefined
       : featureAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
-  const activeAttentionItem = routedAttentionItem ?? featureAttentionItems[0];
+  const activeAttentionItem =
+    routedAttentionItem?.kind === 'gate'
+      ? featureAttentionItems.find((item) => item.kind !== 'gate')
+      : (routedAttentionItem ?? featureAttentionItems.find((item) => item.kind !== 'gate'));
+  const preferredGate =
+    routedAttentionItem?.kind === 'gate'
+      ? routedAttentionItem
+      : featureAttentionItems.find((item): item is AttentionGate => item.kind === 'gate');
+  const activeGate = preferredGate?.id === dismissedGateId ? undefined : preferredGate;
 
   const submitAttention = async (
     item: AttentionItem,
@@ -1365,18 +1419,20 @@ export function FeatureCockpit({
   const documentAvailable = hasPendingReview;
   const liveAvailable = showsRun(snapshot);
   const stageSurfaces: {
-    id: 'aftercare' | 'document' | 'live' | 'changes';
+    id: 'document' | 'live' | 'changes';
     label: string;
   }[] = [];
-  if (atRest) stageSurfaces.push({ id: 'aftercare', label: 'Aftercare' });
   if (documentAvailable) stageSurfaces.push({ id: 'document', label: 'Document' });
   if (liveAvailable) {
     stageSurfaces.push({ id: 'live', label: atRest ? 'Run record' : 'Live activity' });
   }
   if (completionEnabled) stageSurfaces.push({ id: 'changes', label: 'Changes' });
   const surfaceIds = stageSurfaces.map((surface) => surface.id);
-  const forcedLive = attentionPreviewRequest?.attentionId !== undefined && liveAvailable;
-  const resolvedSurface: 'aftercare' | 'document' | 'live' | 'changes' | null = forcedLive
+  const forcedLive =
+    attentionPreviewRequest?.attentionId !== undefined &&
+    routedAttentionItem?.kind !== 'gate' &&
+    liveAvailable;
+  const resolvedSurface: 'document' | 'live' | 'changes' | null = forcedLive
     ? 'live'
     : surfaceIds.includes(activeSurface)
       ? activeSurface
@@ -1569,6 +1625,260 @@ export function FeatureCockpit({
       )
     ) : null;
 
+  const postImplementationMode = resolvePostImplementationMode(snapshot, dismissedFailureId);
+  const postMenuActions = menuActions.filter(
+    (action) =>
+      !['start', 'stop', 'setup', 'rebase', 'review-comments', 'refactor'].includes(action.key),
+  );
+  const openAftercareAction = (action: AftercareAction): void => {
+    if (action.id === 'publish') {
+      setCompletionModal('publish');
+      return;
+    }
+    setCycleModal(action.id);
+  };
+
+  if (!isArchiveMode && postImplementationMode.kind !== 'regular') {
+    return (
+      <section
+        className="cockpit cockpit--post-implementation"
+        aria-label={`Feature ${snapshot.name}`}
+      >
+        {postImplementationMode.kind === 'aftercare' ? (
+          <>
+            <CockpitActionBar
+              status={snapshot.status}
+              primaryActions={[]}
+              menuActions={postMenuActions}
+              extraControls={completionControls}
+              isNarrow={isNarrow}
+              inspectorButtonRef={inspectorButtonRef}
+              onOpenInspector={() => setInspectorOpen(true)}
+            />
+            <AftercareWorkspace
+              snapshot={snapshot}
+              run={aftercareRun}
+              receipt={cycleReceipt}
+              onAction={openAftercareAction}
+              onOpenRunRecord={() => setRunRecordOpen(true)}
+              onOpenChanges={() => setChangesOpen(true)}
+            />
+          </>
+        ) : (
+          <CycleWorkspace
+            snapshot={snapshot}
+            run={aftercareRun}
+            presentation={postImplementationMode.cycle}
+            onRunMetrics={setRunMetrics}
+            onStop={() => void openStopDialog()}
+            onRetry={retry}
+            onReturnToAftercare={() => setDismissedFailureId(cycleIdentity(snapshot) ?? undefined)}
+            onOpenRunRecord={() => setRunRecordOpen(true)}
+          />
+        )}
+
+        {actionError === null ? null : (
+          <div role="alert" className="create-form__error">
+            <span className="create-form__error-code">{actionError.error.code}</span>
+            <p className="create-form__error-message">
+              {actionError.action} was rejected — {actionError.error.message}
+            </p>
+          </div>
+        )}
+        <p className="cockpit__announcement" role="status" aria-live="polite">
+          {announcement}
+        </p>
+
+        {activeGate === undefined ? null : (
+          <NeedUserInputModal
+            item={activeGate}
+            busy={attentionBusy === activeGate.id}
+            drafts={attentionDrafts}
+            setDrafts={setAttentionDrafts}
+            onAnswerLater={() => {
+              setDismissedGateId(activeGate.id);
+              onAttentionPreviewClose?.();
+            }}
+            onResolved={async () => {
+              setDismissedGateId(activeGate.id);
+              await refreshAttention();
+              await load({ silent: true });
+              onAttentionPreviewClose?.();
+            }}
+          />
+        )}
+
+        {runRecordOpen ? (
+          <CockpitModal
+            title={`Run ${snapshot.activeRun} record`}
+            ariaLabel="Run record"
+            onClose={() => setRunRecordOpen(false)}
+          >
+            <CurrentRunInspection
+              featureId={featureId}
+              runNumber={snapshot.activeRun}
+              currentPhase={snapshot.currentPhase}
+              featureStatus={snapshot.status}
+              currentRoadmapPhase={snapshot.currentRoadmapPhase}
+              totalRoadmapPhases={snapshot.totalRoadmapPhases}
+              currentIteration={snapshot.currentIteration}
+              phaseStatus={snapshot.phaseStatus}
+              reviewGate={snapshot.reviewGate}
+              verificationItems={snapshot.verificationItems}
+              waitReason={snapshot.waitReason}
+              shouldStream={false}
+              presentation={postImplementationMode.kind === 'cycle' ? 'cycle' : 'regular'}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {changesOpen ? (
+          <CockpitModal
+            title="Changes"
+            ariaLabel="Feature changes"
+            onClose={() => setChangesOpen(false)}
+          >
+            <ChangesSurface
+              featureId={featureId}
+              preflight={completion.preflight}
+              loading={completion.loading}
+              error={completion.error}
+              onRetry={() => void completion.refresh()}
+              getRepositoryDiff={(id, repo, filePath) =>
+                window.agentico.getRepositoryDiff({
+                  featureId: id,
+                  repo,
+                  ...(filePath === undefined ? {} : { filePath }),
+                })
+              }
+              openExternal={(url) => window.agentico.openExternal({ url })}
+              revealPath={(id, repo) => window.agentico.revealPath({ featureId: id, repo })}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {stopDialog ? (
+          <StopConfirmDialog
+            snapshot={snapshot}
+            liveSessionCount={liveSessionCount}
+            busy={busy}
+            onClose={closeStopDialog}
+            onConfirm={confirmStop}
+          />
+        ) : null}
+
+        {cycleModal === 'rebase' ? (
+          <CockpitModal title="Rebase" ariaLabel="Rebase" onClose={() => setCycleModal(null)}>
+            <RebaseModal
+              featureId={featureId}
+              snapshot={snapshot}
+              onDispatched={() => load({ silent: true })}
+              onCancel={() => setCycleModal(null)}
+              attentionItems={attentionItems}
+              onOpenGate={() => setCycleModal(null)}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {cycleModal === 'review-comments' ? (
+          <CockpitModal
+            title="Review comments"
+            ariaLabel="Review comments"
+            onClose={() => setCycleModal(null)}
+          >
+            <ReviewCommentsModal
+              featureId={featureId}
+              snapshot={snapshot}
+              onDispatched={() => load({ silent: true })}
+              onCancel={() => setCycleModal(null)}
+              attentionItems={attentionItems}
+              onOpenGate={() => setCycleModal(null)}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {cycleModal === 'refactor' ? (
+          <CockpitModal title="Refactor" ariaLabel="Refactor" onClose={() => setCycleModal(null)}>
+            <RefactorModal
+              featureId={featureId}
+              snapshot={snapshot}
+              onDispatched={() => load({ silent: true })}
+              onCancel={() => setCycleModal(null)}
+              attentionItems={attentionItems}
+              onOpenGate={() => setCycleModal(null)}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {completionModal === 'publish' && completion.preflight !== null ? (
+          <CockpitModal
+            title="Publish"
+            ariaLabel="Publish reviewed changes"
+            onClose={() => setCompletionModal(null)}
+          >
+            <PublishModalBody
+              featureId={featureId}
+              preflight={completion.preflight}
+              dispatchAction={dispatchCompletion}
+              generatePublishDescription={(id, repos) =>
+                window.agentico.generatePublishDescription({ featureId: id, repos })
+              }
+              openExternal={(url) => window.agentico.openExternal({ url })}
+              onDispatched={onCompletionDispatched}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {completionModal === 'merge' && completion.preflight !== null ? (
+          <CockpitModal
+            title="Merge"
+            ariaLabel="Merge local repositories"
+            onClose={() => setCompletionModal(null)}
+          >
+            <MergeModalBody
+              featureId={featureId}
+              preflight={completion.preflight}
+              dispatchAction={dispatchCompletion}
+              onDispatched={onCompletionDispatched}
+              onHandoffToRebase={() => {
+                setCompletionModal(null);
+                setCycleModal('rebase');
+              }}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {completionModal === 'mark-done' && completion.preflight !== null ? (
+          <CockpitModal
+            title="Mark done"
+            ariaLabel="Mark feature done"
+            onClose={() => setCompletionModal(null)}
+          >
+            <MarkDoneModalBody
+              featureId={featureId}
+              preflight={completion.preflight}
+              dispatchAction={dispatchCompletion}
+              onDispatched={() => {
+                onCompletionDispatched();
+                setCompletionModal(null);
+              }}
+            />
+          </CockpitModal>
+        ) : null}
+
+        {completionModal === 'cleanup' && completion.preflight !== null ? (
+          <CleanupConfirm
+            featureId={featureId}
+            preflight={completion.preflight}
+            dispatchAction={dispatchCompletion}
+            onClose={() => setCompletionModal(null)}
+            onDispatched={onCompletionDispatched}
+          />
+        ) : null}
+      </section>
+    );
+  }
+
   return (
     <section className="cockpit" aria-label={`Feature ${snapshot.name}`}>
       {isArchiveMode ? (
@@ -1670,16 +1980,6 @@ export function FeatureCockpit({
                   </div>
                 ) : null}
 
-                {resolvedSurface === 'aftercare' ? (
-                  <div className="cockpit__surface cockpit__surface--aftercare">
-                    <AftercareDesk
-                      snapshot={snapshot}
-                      run={aftercareRun}
-                      onOpenCycle={(cycle) => setCycleModal(cycle)}
-                    />
-                  </div>
-                ) : null}
-
                 {resolvedSurface === 'live' ? (
                   <div className="cockpit__surface cockpit__surface--live">
                     <CurrentRunInspection
@@ -1696,7 +1996,8 @@ export function FeatureCockpit({
                       waitReason={snapshot.waitReason}
                       shouldStream={stopAction !== undefined}
                       attentionRequestId={
-                        attentionPreviewRequest?.attentionId === undefined
+                        attentionPreviewRequest?.attentionId === undefined ||
+                        routedAttentionItem?.kind === 'gate'
                           ? undefined
                           : attentionPreviewRequest.requestId
                       }
@@ -1798,6 +2099,25 @@ export function FeatureCockpit({
               <FeatureConfigPanel featureId={featureId} />
             </CockpitModal>
           ) : null}
+
+          {activeGate === undefined ? null : (
+            <NeedUserInputModal
+              item={activeGate}
+              busy={attentionBusy === activeGate.id}
+              drafts={attentionDrafts}
+              setDrafts={setAttentionDrafts}
+              onAnswerLater={() => {
+                setDismissedGateId(activeGate.id);
+                onAttentionPreviewClose?.();
+              }}
+              onResolved={async () => {
+                setDismissedGateId(activeGate.id);
+                await refreshAttention();
+                await load({ silent: true });
+                onAttentionPreviewClose?.();
+              }}
+            />
+          )}
 
           {stopDialog ? (
             <StopConfirmDialog

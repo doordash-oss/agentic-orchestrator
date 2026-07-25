@@ -1,19 +1,12 @@
 import type { FeatureSnapshot, RunDetailView } from '../../../shared/ipc';
-import {
-  displayStatusLabel,
-  featureBranch,
-  formatDuration,
-} from './featureView';
+import { displayStatusLabel, featureBranch, formatDuration } from './featureView';
 
 export interface FeatureFactsRailProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
 }
 
-export function FeatureFactsRail({
-  snapshot,
-  run,
-}: FeatureFactsRailProps): React.ReactElement {
+export function FeatureFactsRail({ snapshot, run }: FeatureFactsRailProps): React.ReactElement {
   const branch = featureBranch(snapshot);
   const repository = snapshot.repoStatus?.[0];
   const elapsed = run?.timing?.totalSeconds ?? snapshot.timing?.totalSeconds;
@@ -46,9 +39,7 @@ export function FeatureFactsRail({
         <Fact
           label="Freshness"
           value={
-            repository?.freshness === undefined
-              ? 'Unavailable'
-              : sentenceCase(repository.freshness)
+            repository?.freshness === undefined ? 'Unavailable' : sentenceCase(repository.freshness)
           }
         />
       </dl>

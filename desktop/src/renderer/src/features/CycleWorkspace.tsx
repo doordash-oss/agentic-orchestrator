@@ -28,10 +28,14 @@ export function CycleWorkspace({
   onOpenRunRecord,
 }: CycleWorkspaceProps): React.ReactElement {
   const failed = snapshot.cycle?.status === 'failed';
-  const stoppable = !failed && snapshot.actions.some((action) => action.id === 'pause-stop' && action.enabled);
+  const stoppable =
+    !failed && snapshot.actions.some((action) => action.id === 'pause-stop' && action.enabled);
 
   return (
-    <section className="post-workspace cycle-workspace" aria-label={`${cycleLabel(presentation.id)} cycle`}>
+    <section
+      className="post-workspace cycle-workspace"
+      aria-label={`${cycleLabel(presentation.id)} cycle`}
+    >
       <main className="cycle-workspace__main">
         <header className="cycle-workspace__header">
           <div>
@@ -59,7 +63,11 @@ export function CycleWorkspace({
           ) : null}
         </header>
 
-        <ol className="cycle-workspace__spine" aria-label="Cycle progress">
+        <ol
+          className="cycle-workspace__spine"
+          aria-label="Cycle progress"
+          data-stage-count={presentation.stages.length}
+        >
           {presentation.stages.map((stage) => (
             <li
               key={stage.id}
@@ -89,25 +97,24 @@ export function CycleWorkspace({
             <h3>The agent could not finish this cycle.</h3>
             <p>{failureMessage(snapshot)}</p>
           </section>
-        ) : (
-          <CurrentRunInspection
-            featureId={snapshot.id}
-            runNumber={snapshot.activeRun}
-            currentPhase={snapshot.currentPhase}
-            featureStatus={snapshot.status}
-            currentRoadmapPhase={snapshot.currentRoadmapPhase}
-            totalRoadmapPhases={snapshot.totalRoadmapPhases}
-            currentIteration={snapshot.currentIteration}
-            phaseStatus={snapshot.phaseStatus}
-            reviewGate={snapshot.reviewGate}
-            verificationItems={snapshot.verificationItems}
-            waitReason={snapshot.waitReason}
-            shouldStream
-            presentation="cycle"
-            attentionFooter={attentionFooter}
-            onRunMetrics={onRunMetrics}
-          />
-        )}
+        ) : null}
+        <CurrentRunInspection
+          featureId={snapshot.id}
+          runNumber={snapshot.activeRun}
+          currentPhase={snapshot.currentPhase}
+          featureStatus={snapshot.status}
+          currentRoadmapPhase={snapshot.currentRoadmapPhase}
+          totalRoadmapPhases={snapshot.totalRoadmapPhases}
+          currentIteration={snapshot.currentIteration}
+          phaseStatus={snapshot.phaseStatus}
+          reviewGate={snapshot.reviewGate}
+          verificationItems={snapshot.verificationItems}
+          waitReason={snapshot.waitReason}
+          shouldStream={!failed}
+          presentation="cycle"
+          attentionFooter={failed ? undefined : attentionFooter}
+          onRunMetrics={onRunMetrics}
+        />
       </main>
       <FeatureFactsRail snapshot={snapshot} run={run} />
     </section>
@@ -127,6 +134,8 @@ function cycleLabel(id: CyclePresentation['id']): string {
 
 function failureMessage(snapshot: FeatureSnapshot): string {
   if (snapshot.failure?.message !== undefined) return snapshot.failure.message;
-  const repositoryError = snapshot.repoStatus?.find((repository) => repository.lastError)?.lastError;
+  const repositoryError = snapshot.repoStatus?.find(
+    (repository) => repository.lastError,
+  )?.lastError;
   return repositoryError ?? 'The runtime stopped before the cycle reached its next checkpoint.';
 }

@@ -324,6 +324,14 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	}
 }
 
+func TestActiveRepoCycleStatusRetainsFailedCycleContext(t *testing.T) {
+	t.Parallel()
+
+	if !isActiveRepoCycleStatus(feature.RepoCycleFailed) {
+		t.Fatal("failed repository cycle was hidden from the feature read model")
+	}
+}
+
 func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 	store, f := seedReadFeature(t)
 	f.ID = "feat-rebase"

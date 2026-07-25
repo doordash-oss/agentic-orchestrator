@@ -99,7 +99,7 @@ export function cyclePresentation(snapshot: FeatureSnapshot): CyclePresentation 
       : needsInput
         ? 'Agent is waiting for your input'
         : `${cycleName(cycle.type)} cycle in progress`,
-    current: needsInput ? 'Waiting for input' : active?.label ?? 'Working',
+    current: needsInput ? 'Waiting for input' : (active?.label ?? 'Working'),
     ...(next === undefined ? {} : { next: next.label }),
   };
 }

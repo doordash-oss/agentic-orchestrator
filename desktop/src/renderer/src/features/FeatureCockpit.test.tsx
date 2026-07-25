@@ -276,9 +276,9 @@ describe('FeatureCockpit snapshot rendering', () => {
   });
 
   it.each([
-    ['CodeReady', 'Implementation complete'],
-    ['Published', 'Published and ready for what comes next'],
-    ['Done', 'Work complete'],
+    ['CodeReady', 'Implementation complete.'],
+    ['Published', 'Published. Choose what comes next.'],
+    ['Done', 'Work complete.'],
   ])('defaults %s features to Aftercare while retaining Run record', async (status, heading) => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
@@ -295,12 +295,10 @@ describe('FeatureCockpit snapshot rendering', () => {
     });
     renderCockpit(mock);
 
-    const tablist = await screen.findByRole('tablist', { name: 'Stage view' });
-    const aftercareTab = within(tablist).getByRole('tab', { name: 'Aftercare' });
-    const runRecordTab = within(tablist).getByRole('tab', { name: 'Run record' });
-    expect(aftercareTab).toHaveAttribute('aria-selected', 'true');
-    expect(runRecordTab).toHaveAttribute('aria-selected', 'false');
-    expect(within(tablist).queryByRole('tab', { name: 'Live activity' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
+    expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Feature pipeline')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run record' })).toBeVisible();
     expect(screen.getByRole('heading', { name: heading })).toBeVisible();
     await waitFor(() =>
       expect(mock.api.getRun).toHaveBeenCalledWith({ featureId: FEATURE_ID, runNumber: 8 }),
@@ -328,7 +326,51 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(screen.queryByRole('dialog', { name: 'Repository cycles' })).not.toBeInTheDocument();
   });
 
-  it('lists each enabled maintenance cycle separately in the overflow menu', async () => {
+  it('gives a running maintenance cycle exclusive ownership of the stage', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        cycle: {
+          type: 'review-comments',
+          status: 'running',
+          count: 2,
+          iteration: 1,
+          phase: 'address_validate',
+        },
+        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+
+    expect(await screen.findByRole('region', { name: 'Review comments cycle' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Live agent activity' })).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Feature aftercare' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Feature pipeline')).not.toBeInTheDocument();
+  });
+
+  it('offers Publish from CodeReady without repeating the feature title in Aftercare', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        name: 'Search revamp',
+        status: 'CodeReady',
+        actions: [{ id: 'publish', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'publish-ready',
+      canPublish: true,
+      repos: [{ repo: 'repo-a', publishable: true, touched: true, status: 'eligible' }],
+    });
+    renderCockpit(mock);
+
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    expect(within(aftercare).getByRole('button', { name: /Publish this feature/ })).toBeVisible();
+    expect(within(aftercare).queryByText('Search revamp')).not.toBeInTheDocument();
+  });
+
+  it('lists each enabled maintenance cycle separately on the runway', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Published',
@@ -345,15 +387,16 @@ describe('FeatureCockpit snapshot rendering', () => {
       }),
     });
     renderCockpit(mock);
-    const user = userEvent.setup();
-
-    const actions = await screen.findByRole('group', { name: 'Feature actions' });
-    await user.click(within(actions).getByLabelText('More actions'));
-
-    expect(within(actions).getByRole('menuitem', { name: 'Rebase' })).toBeVisible();
-    expect(within(actions).getByRole('menuitem', { name: 'Review comments' })).toBeVisible();
-    expect(within(actions).getByRole('menuitem', { name: 'Refactor' })).toBeVisible();
-    expect(within(actions).queryByRole('menuitem', { name: 'Repository cycles' })).toBeNull();
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    expect(
+      within(aftercare).getByRole('button', { name: /Bring branches up to date/ }),
+    ).toBeVisible();
+    expect(
+      within(aftercare).getByRole('button', { name: /Address review feedback/ }),
+    ).toBeVisible();
+    expect(
+      within(aftercare).getByRole('button', { name: /Start another focused pass/ }),
+    ).toBeVisible();
   });
 
   it('opens the completed transcript from Run record', async () => {
@@ -371,11 +414,12 @@ describe('FeatureCockpit snapshot rendering', () => {
     renderCockpit(mock);
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole('tab', { name: 'Run record' }));
+    await user.click(await screen.findByRole('button', { name: 'Run record' }));
 
     expect(
       await screen.findByRole('region', { name: 'Current run inspection' }),
     ).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Run record' })).toBeVisible();
   });
 
   it('moves focus into the inspector drawer and restores it after Escape', async () => {
@@ -631,10 +675,10 @@ describe('FeatureCockpit convergence', () => {
 
     mock.emitAppEvent({ type: 'invalidated', kind: 'feature.updated', featureId: FEATURE_ID });
 
-    const aftercareTab = await screen.findByRole('tab', { name: 'Aftercare' });
-    await waitFor(() => expect(aftercareTab).toHaveAttribute('aria-selected', 'true'));
+    expect(await screen.findByRole('region', { name: 'Feature aftercare' })).toBeVisible();
+    expect(screen.queryByRole('tablist', { name: 'Stage view' })).not.toBeInTheDocument();
     expect(
-      screen.getByRole('heading', { name: 'Published and ready for what comes next' }),
+      screen.getByRole('heading', { name: 'Published. Choose what comes next.' }),
     ).toBeVisible();
   });
 
@@ -735,7 +779,7 @@ describe('FeatureCockpit convergence', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('saves expanded-preview gate drafts without disabling an immediate abort click', async () => {
+  it('saves floating gate drafts while leaving the agent paused', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Implementing',
@@ -744,13 +788,7 @@ describe('FeatureCockpit convergence', () => {
         actions: [],
       }),
     });
-    let resolveDraft!: () => void;
-    mock.api.saveGateDraft.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveDraft = () => resolve({ result: 'drafted' });
-        }),
-    );
+    mock.api.saveGateDraft.mockResolvedValue({ result: 'drafted' });
     function Harness() {
       const [drafts, setDrafts] = useState(emptyAttentionDrafts);
       return (
@@ -770,13 +808,12 @@ describe('FeatureCockpit convergence', () => {
     render(<Harness />);
     const user = userEvent.setup();
 
-    const preview = await screen.findByRole('dialog', { name: 'Live agent preview' });
-    const request = within(preview).getByRole('region', { name: 'Agent request' });
+    const request = await screen.findByRole('dialog', { name: 'Agent needs your input' });
     await user.type(
       within(request).getByLabelText(/Which deployment window should implementation use/),
       'After packaged attention evidence passes.',
     );
-    await user.click(within(request).getByRole('button', { name: 'Abort gate' }));
+    await user.click(within(request).getByRole('button', { name: 'Answer later' }));
 
     expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
       featureId: FEATURE_ID,
@@ -785,11 +822,12 @@ describe('FeatureCockpit convergence', () => {
           'After packaged attention evidence passes.',
       },
     });
-    expect(screen.getByRole('dialog', { name: 'Confirm abort' })).toBeVisible();
     expect(mock.api.resolveGate).not.toHaveBeenCalled();
-
-    resolveDraft();
-    await waitFor(() => expect(screen.getByText('Draft saved.')).toBeVisible());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Agent needs your input' }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   it('sends a help reply from the expanded conversation footer', async () => {
@@ -909,7 +947,7 @@ describe('FeatureCockpit convergence', () => {
     );
   });
 
-  it('closes an open abort confirmation when the next gate becomes active', async () => {
+  it('opens a new floating modal when the next gate becomes active', async () => {
     installAgenticoMock({
       feature: featureSnapshot({
         status: 'Implementing',
@@ -956,16 +994,18 @@ describe('FeatureCockpit convergence', () => {
     render(<Harness />);
     const user = userEvent.setup();
 
-    const inspection = await screen.findByRole('region', { name: 'Current run inspection' });
-    const request = within(inspection).getByRole('region', { name: 'Agent request' });
-    await user.click(within(request).getByRole('button', { name: 'Abort gate' }));
-    expect(screen.getByRole('dialog', { name: 'Confirm abort' })).toBeVisible();
+    const request = await screen.findByRole('dialog', { name: 'Agent needs your input' });
+    await user.click(within(request).getByRole('button', { name: 'Answer later' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Agent needs your input' }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Advance attention' }));
 
-    expect(screen.queryByRole('dialog', { name: 'Confirm abort' })).not.toBeInTheDocument();
     expect(
-      within(request).getByLabelText(/Which follow-up deployment window should implementation use/),
+      within(await screen.findByRole('dialog', { name: 'Agent needs your input' })).getByLabelText(
+        /Which follow-up deployment window should implementation use/,
+      ),
     ).toBeVisible();
   });
 

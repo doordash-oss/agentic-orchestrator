@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from 'react';
+import { useCallback, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { AttentionItem } from '../../../shared/ipc';
 import { useModalDismiss } from '../components/useModalDismiss';
 import type { AttentionDrafts } from './AttentionInbox';
@@ -40,24 +33,35 @@ export function NeedUserInputModal({
       Object.fromEntries(item.questions.map((question) => [question.index, question.answer])),
     [detailKey, drafts.gates, item.questions],
   );
+  const itemRef = useRef(item);
+  itemRef.current = item;
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const answerLaterRef = useRef(onAnswerLater);
+  answerLaterRef.current = onAnswerLater;
   const complete = item.questions.every((question) => (draft[question.index] ?? '').trim() !== '');
 
   const saveDraft = useCallback(async (): Promise<void> => {
-    if (item.questions.length === 0) return;
+    const currentItem = itemRef.current;
+    const currentDraft = draftRef.current;
+    if (currentItem.questions.length === 0) return;
     await window.agentico.saveGateDraft({
-      featureId: item.featureId,
-      ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
-      ...(item.cycleType === undefined ? {} : { cycleType: item.cycleType }),
+      featureId: currentItem.featureId,
+      ...(currentItem.repoName === undefined ? {} : { repoName: currentItem.repoName }),
+      ...(currentItem.cycleType === undefined ? {} : { cycleType: currentItem.cycleType }),
       answers: Object.fromEntries(
-        item.questions.map((question) => [question.prompt, draft[question.index] ?? '']),
+        currentItem.questions.map((question) => [
+          question.prompt,
+          currentDraft[question.index] ?? '',
+        ]),
       ),
     });
-  }, [draft, item]);
+  }, []);
 
   const answerLater = useCallback(() => {
     void saveDraft().catch(() => undefined);
-    onAnswerLater();
-  }, [onAnswerLater, saveDraft]);
+    answerLaterRef.current();
+  }, [saveDraft]);
 
   useModalDismiss(dialogRef, answerLater);
 

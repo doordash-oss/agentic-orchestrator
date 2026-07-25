@@ -97,6 +97,11 @@ type Session struct {
 	turnMode       ports.SessionTurnMode
 	label          string // context-specific sub-label (validator domain, helper target, …)
 
+	// effectiveEffort and effortSource record the resolved provider-safe
+	// effort for this session launch. Set from SessionOpts before Start().
+	effectiveEffort llm.EffortLevel
+	effortSource    llm.EffortSource
+
 	// Provider protocol — handles all wire-level communication.
 	// Set before Start() via SessionOpts.Protocol.
 	protocol llm.Protocol
@@ -312,6 +317,16 @@ func (s *Session) SessionID() string {
 }
 func (s *Session) PermCacheScope() string { return s.permCacheScope }
 func (s *Session) Model() string          { return s.model }
+func (s *Session) EffectiveEffort() llm.EffortLevel {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.effectiveEffort
+}
+func (s *Session) EffortSource() llm.EffortSource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.effortSource
+}
 func (s *Session) LatestUsage() *llm.Usage {
 	s.mu.Lock()
 	defer s.mu.Unlock()

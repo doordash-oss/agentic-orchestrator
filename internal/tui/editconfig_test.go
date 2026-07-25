@@ -15,10 +15,13 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
@@ -214,4 +217,125 @@ func TestEditConfig_UpDownHonorsActiveBodyBounds(t *testing.T) {
 
 func newTestEditConfigModel(f *feature.Feature) EditConfigModel {
 	return NewEditConfigModel(f, testCatalog(), true)
+}
+
+func TestEditConfig_EffortPaneNavigation(t *testing.T) {
+	m := newTestEditConfigModel(&feature.Feature{
+		ID:   "f1",
+		Name: "effort",
+		Models: config.ModelConfig{
+			Research: "claude/sonnet-4-6",
+		},
+	})
+	m.enterActiveTabBody()
+	m.editor.rowCursor = 1 // Research
+
+	if m.focus != configFocusPhaseList {
+		t.Fatalf("initial focus = %v, want phase list", m.focus)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.focus != configFocusAgentList {
+		t.Fatalf("right from phase = %v, want agent list", m.focus)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.focus != configFocusModelList {
+		t.Fatalf("right from agent = %v, want model list", m.focus)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.focus != configFocusEffortList {
+		t.Fatalf("right from model = %v, want effort list", m.focus)
+	}
+	if got := m.editor.activeModelCell; got != modelCellEffort {
+		t.Fatalf("activeModelCell = %v, want modelCellEffort", got)
+	}
+
+	before := m.editor.effortValueForField("Research")
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	after := m.editor.effortValueForField("Research")
+	if before == after {
+		t.Fatalf("down on effort panel did not cycle: before=%q after=%q", before, after)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.focus != configFocusModelList {
+		t.Fatalf("left from effort = %v, want model list", m.focus)
+	}
+	if got := m.editor.activeModelCell; got != modelCellModel {
+		t.Fatalf("activeModelCell = %v, want modelCellModel", got)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.focus != configFocusPhaseList {
+		t.Fatalf("enter from model = %v, want phase list", m.focus)
+	}
+}
+
+func TestEditConfig_WorkspaceRendersEffortPane(t *testing.T) {
+	m := newTestEditConfigModel(&feature.Feature{
+		ID:   "f1",
+		Name: "render",
+		Models: config.ModelConfig{
+			Research: "claude/sonnet-4-6",
+		},
+	})
+	m.enterActiveTabBody()
+	m.editor.rowCursor = 1 // Research
+	view := m.renderModelsWorkspace()
+	if !strings.Contains(view, "Effort") {
+		t.Errorf("workspace view missing Effort pane:\n%s", view)
+	}
+	if !strings.Contains(view, "Auto (") {
+		t.Errorf("workspace view missing Auto display value:\n%s", view)
+	}
+}
+
+func TestEditConfig_EffortPaneVisibleAtRepresentativeWidths(t *testing.T) {
+	for _, termWidth := range []int{120, 80} {
+		t.Run(fmt.Sprintf("terminal_%d", termWidth), func(t *testing.T) {
+			m := NewEditConfigModel(&feature.Feature{
+				ID:       "f1",
+				Name:     "viewport",
+				Pipeline: feature.PipelineLarge,
+				Models: config.ModelConfig{
+					Research: "claude/sonnet-4-6",
+				},
+			}, testWorkspaceCatalog(), true)
+			m.width = termWidth
+			m.enterActiveTabBody()
+			m.editor.rowCursor = 1 // Research
+
+			// Navigate Phase → Agent → Model → Effort.
+			for range 3 {
+				m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+			}
+			if m.focus != configFocusEffortList {
+				t.Fatalf("focus = %v, want configFocusEffortList", m.focus)
+			}
+
+			view := m.renderModelsWorkspace()
+			contentWidth := termWidth - editConfigOverlayWidthOverhead
+
+			// Assert every rendered line fits within the content width
+			// (no overflow / clipped border).
+			for i, line := range strings.Split(view, "\n") {
+				stripped := ansi.Strip(line)
+				if w := lipgloss.Width(stripped); w > contentWidth {
+					t.Errorf("line %d width %d exceeds content width %d at %d-column terminal:\n%s", i, w, contentWidth, termWidth, stripped)
+				}
+			}
+
+			// Assert the complete effort value and closing border are
+			// visible (not truncated to "Auto (high" with no closing
+			// parenthesis or border).
+			snapshot := ansi.Strip(view)
+			t.Logf("\n--- rendered at %d cols (content %d) ---\n%s", termWidth, contentWidth, snapshot)
+
+			if !strings.Contains(snapshot, "Effort") {
+				t.Errorf("Effort title not visible at %d-column terminal", termWidth)
+			}
+			if !strings.Contains(snapshot, "Auto (high)") {
+				t.Errorf("complete Auto (high) value not visible at %d-column terminal", termWidth)
+			}
+		})
+	}
 }

@@ -661,6 +661,7 @@ func TestEffortMapping_PureFunctionParity(t *testing.T) {
 		{"openai/gpt-5", llm.EffortLow, "low", true},
 		{"openai/gpt-5", llm.EffortMedium, "medium", true},
 		{"openai/gpt-5", llm.EffortHigh, "high", true},
+		{"openai/gpt-5", llm.EffortXHigh, "high", true},
 		{"openai/gpt-5", llm.EffortMax, "high", true},
 		{"openai/gpt-5", "", "", false},
 		{"anthropic/claude-sonnet-4-5", llm.EffortHigh, "", false},

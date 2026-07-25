@@ -77,14 +77,16 @@ func (s *stubSessionHandle) Kind() ports.SessionKind { return ports.KindPhase }
 func (s *stubSessionHandle) Label() string           { return "" }
 
 // SessionView state.
-func (s *stubSessionHandle) Status() session.SessionStatus { return session.SessionRunning }
-func (s *stubSessionHandle) IsActive() bool                { return true }
-func (s *stubSessionHandle) Iteration() int                { return 0 }
-func (s *stubSessionHandle) StartedAt() time.Time          { return time.Time{} }
-func (s *stubSessionHandle) InitialPrompt() string         { return "" }
-func (s *stubSessionHandle) ProviderName() string          { return "" }
-func (s *stubSessionHandle) Model() string                 { return "" }
-func (s *stubSessionHandle) WorkDir() string               { return "" }
+func (s *stubSessionHandle) Status() session.SessionStatus    { return session.SessionRunning }
+func (s *stubSessionHandle) IsActive() bool                   { return true }
+func (s *stubSessionHandle) Iteration() int                   { return 0 }
+func (s *stubSessionHandle) StartedAt() time.Time             { return time.Time{} }
+func (s *stubSessionHandle) InitialPrompt() string            { return "" }
+func (s *stubSessionHandle) ProviderName() string             { return "" }
+func (s *stubSessionHandle) Model() string                    { return "" }
+func (s *stubSessionHandle) WorkDir() string                  { return "" }
+func (s *stubSessionHandle) EffectiveEffort() llm.EffortLevel { return "" }
+func (s *stubSessionHandle) EffortSource() llm.EffortSource   { return "" }
 
 // SessionView data access.
 func (s *stubSessionHandle) MessageLog() ports.MessageLog                         { return s.msgLog }

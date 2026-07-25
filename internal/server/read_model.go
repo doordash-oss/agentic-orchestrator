@@ -144,6 +144,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		gate := needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
 		detail.NeedUserInput = &gate
 	}
+	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
 	return detail
 }
 
@@ -736,6 +737,7 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaultsDTO {
 	}
 	return FeatureDefaultsDTO{
 		Models:              defaults.Models,
+		Effort:              defaults.Effort,
 		PipelinePreferences: prefs,
 		Inquireness:         defaults.Inquireness,
 		Pipeline:            defaults.Pipeline,
@@ -776,12 +778,17 @@ func publishabilityByRepo(f *feature.Feature) map[string]bool {
 }
 
 func modelDTO(model llm.ModelInfo) ModelDTO {
+	caps := make([]string, 0, len(model.EffortCapabilities))
+	for _, cap := range model.EffortCapabilities {
+		caps = append(caps, string(cap))
+	}
 	return ModelDTO{
-		ID:            model.ID,
-		DisplayName:   model.DisplayName,
-		ContextWindow: model.ContextWindow,
-		Aliases:       append([]string(nil), model.Aliases...),
-		Category:      model.Category,
+		ID:                 model.ID,
+		DisplayName:        model.DisplayName,
+		ContextWindow:      model.ContextWindow,
+		Aliases:            append([]string(nil), model.Aliases...),
+		Category:           model.Category,
+		EffortCapabilities: caps,
 	}
 }
 
@@ -1029,6 +1036,7 @@ func featureConfigDTO(f *feature.Feature) FeatureConfigDTO {
 	pipeline := f.Pipeline
 	return FeatureConfigDTO{
 		Models:             f.Models,
+		Effort:             f.Effort,
 		Inquireness:        string(f.Inquireness),
 		Checkpoints:        checkpointsDTO(pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())),
 		Pipeline:           string(pipeline),

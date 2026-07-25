@@ -277,15 +277,28 @@ func renderBorderTitle(box, title string, titleStyle lipgloss.Style) string {
 	// is the border color lipgloss applied.
 	borderColor := leadingANSI(line)
 
-	rendered := titleStyle.Render(title)
 	// Build: "╭─" + " Title " + "──...──" + "╮", with border color
 	// wrapping the non-title parts.
 	insertPoint := 2 // after "╭─"
 	opener := string(cleanRunes[:insertPoint])
 	closer := string(cleanRunes[len(cleanRunes)-1:])
 
+	rendered := titleStyle.Render(title)
 	newTop := borderColor + opener + "\x1b[0m " + rendered + " " + borderColor
 	remainingWidth := visWidth - lipgloss.Width(newTop) - 1
+	if remainingWidth < 0 {
+		// Title overflows the border — truncate so the closing corner
+		// and surrounding frame are preserved instead of clipped.
+		// visWidth - insertPoint - 1(space) - 1(space) - 1(closer)
+		maxTitleWidth := visWidth - insertPoint - 3
+		if maxTitleWidth > 0 {
+			rendered = titleStyle.Render(ansi.Truncate(title, maxTitleWidth, "…"))
+			newTop = borderColor + opener + "\x1b[0m " + rendered + " " + borderColor
+			remainingWidth = visWidth - lipgloss.Width(newTop) - 1
+		} else {
+			remainingWidth = 0
+		}
+	}
 	if remainingWidth > 0 {
 		newTop += strings.Repeat("─", remainingWidth)
 	}

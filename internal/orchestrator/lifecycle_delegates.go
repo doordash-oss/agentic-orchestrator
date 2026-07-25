@@ -576,6 +576,7 @@ func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 // operation, not "leave alone".
 type UpdateFeatureConfigInput struct {
 	Models             config.ModelConfig
+	Effort             config.EffortConfig
 	Inquireness        feature.Inquireness
 	Checkpoints        feature.Checkpoints
 	InputNotifications feature.InputNotificationsMode
@@ -606,16 +607,19 @@ func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeature
 	err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		before = feature.ConfigSnapshot{
 			Models:             f.Models,
+			Effort:             f.Effort,
 			Inquireness:        f.Inquireness,
 			Checkpoints:        f.Checkpoints,
 			InputNotifications: feature.NormalizeInputNotificationsMode(f.InputNotifications),
 		}
 		f.Models = input.Models
+		f.Effort = input.Effort
 		f.Inquireness = input.Inquireness
 		f.Checkpoints = f.Pipeline.NormalizeCheckpoints(input.Checkpoints, f.IsPublishable())
 		f.InputNotifications = feature.PersistInputNotificationsMode(input.InputNotifications)
 		after = feature.ConfigSnapshot{
 			Models:             f.Models,
+			Effort:             f.Effort,
 			Inquireness:        f.Inquireness,
 			Checkpoints:        f.Checkpoints,
 			InputNotifications: feature.NormalizeInputNotificationsMode(f.InputNotifications),

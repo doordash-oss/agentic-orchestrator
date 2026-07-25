@@ -1657,6 +1657,8 @@ components:
       properties:
         models:
           $ref: "#/components/schemas/ModelDefaults"
+        effort:
+          $ref: "#/components/schemas/EffortConfig"
         pipeline_preferences:
           type: object
           additionalProperties:
@@ -1697,6 +1699,8 @@ components:
       properties:
         models:
           $ref: "#/components/schemas/ModelDefaults"
+        effort:
+          $ref: "#/components/schemas/EffortConfig"
         inquireness:
           type: string
         checkpoints:
@@ -1706,6 +1710,27 @@ components:
         input_notifications:
           type: string
           enum: [default, enabled, muted]
+    EffortConfig:
+      x-go-type: config.EffortConfig
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/config
+        name: config
+      type: object
+      properties:
+        inquiry:
+          type: string
+        research:
+          type: string
+        planning:
+          type: string
+        implementation:
+          type: string
+        review:
+          type: string
+        utilities:
+          type: string
+        kb_build:
+          type: string
     Publishability:
       type: object
       required: [manual_publish, repos]
@@ -1733,6 +1758,11 @@ components:
             type: string
         category:
           type: string
+        effort_capabilities:
+          type: array
+          items:
+            type: string
+          x-go-name: EffortCapabilities
     HelpQueue:
       type: object
       required: [feature_id, question, pending]
@@ -2401,6 +2431,10 @@ components:
         context_percentage:
           type: integer
           x-go-name: ContextPct
+        effort:
+          type: string
+        effort_source:
+          type: string
         usage:
           $ref: "#/components/schemas/Usage"
     Cursor:

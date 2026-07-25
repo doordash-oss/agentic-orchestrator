@@ -2070,25 +2070,27 @@ type mutationTargetAskUserCall struct {
 	answers   map[string]string
 }
 
-func (s *mutationTargetSessionView) ID() string                   { return s.id }
-func (s *mutationTargetSessionView) FeatureID() string            { return s.featureID }
-func (s *mutationTargetSessionView) Phase() feature.Phase         { return s.phase }
-func (s *mutationTargetSessionView) RepoName() string             { return "" }
-func (s *mutationTargetSessionView) PermCacheScope() string       { return s.permCacheScope }
-func (s *mutationTargetSessionView) Kind() ports.SessionKind      { return ports.KindPhase }
-func (s *mutationTargetSessionView) Label() string                { return "" }
-func (s *mutationTargetSessionView) Status() ports.SessionStatus  { return s.status }
-func (s *mutationTargetSessionView) IsActive() bool               { return s.active }
-func (s *mutationTargetSessionView) Iteration() int               { return 0 }
-func (s *mutationTargetSessionView) StartedAt() time.Time         { return time.Time{} }
-func (s *mutationTargetSessionView) InitialPrompt() string        { return "" }
-func (s *mutationTargetSessionView) ProviderName() string         { return "" }
-func (s *mutationTargetSessionView) Model() string                { return "" }
-func (s *mutationTargetSessionView) WorkDir() string              { return "" }
-func (s *mutationTargetSessionView) MessageLog() ports.MessageLog { return nil }
-func (s *mutationTargetSessionView) Cost() *llm.ResultMessage     { return nil }
-func (s *mutationTargetSessionView) LatestUsage() *llm.Usage      { return nil }
-func (s *mutationTargetSessionView) AccumulatedUsage() llm.Usage  { return llm.Usage{} }
+func (s *mutationTargetSessionView) ID() string                       { return s.id }
+func (s *mutationTargetSessionView) FeatureID() string                { return s.featureID }
+func (s *mutationTargetSessionView) Phase() feature.Phase             { return s.phase }
+func (s *mutationTargetSessionView) RepoName() string                 { return "" }
+func (s *mutationTargetSessionView) PermCacheScope() string           { return s.permCacheScope }
+func (s *mutationTargetSessionView) Kind() ports.SessionKind          { return ports.KindPhase }
+func (s *mutationTargetSessionView) Label() string                    { return "" }
+func (s *mutationTargetSessionView) Status() ports.SessionStatus      { return s.status }
+func (s *mutationTargetSessionView) IsActive() bool                   { return s.active }
+func (s *mutationTargetSessionView) Iteration() int                   { return 0 }
+func (s *mutationTargetSessionView) StartedAt() time.Time             { return time.Time{} }
+func (s *mutationTargetSessionView) InitialPrompt() string            { return "" }
+func (s *mutationTargetSessionView) ProviderName() string             { return "" }
+func (s *mutationTargetSessionView) Model() string                    { return "" }
+func (s *mutationTargetSessionView) WorkDir() string                  { return "" }
+func (s *mutationTargetSessionView) EffectiveEffort() llm.EffortLevel { return "" }
+func (s *mutationTargetSessionView) EffortSource() llm.EffortSource   { return "" }
+func (s *mutationTargetSessionView) MessageLog() ports.MessageLog     { return nil }
+func (s *mutationTargetSessionView) Cost() *llm.ResultMessage         { return nil }
+func (s *mutationTargetSessionView) LatestUsage() *llm.Usage          { return nil }
+func (s *mutationTargetSessionView) AccumulatedUsage() llm.Usage      { return llm.Usage{} }
 func (s *mutationTargetSessionView) LastControlRequest() *llm.ControlRequestMessage {
 	if len(s.pending) == 0 {
 		return nil

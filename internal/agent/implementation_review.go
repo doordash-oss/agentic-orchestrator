@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -32,6 +33,20 @@ type implementationReviewGate string
 
 const implementationReviewGatePerPhase implementationReviewGate = "per_phase"
 const implementationReviewGateFinal implementationReviewGate = "final"
+
+// reviewHelperEffortFromImpl returns the effort level to pass to an
+// implementation review helper's BuildSessionOpts: the resolved Review-role
+// effort when set, otherwise the implementation effort level (preserving the
+// pre-coupling fallback for callers that did not resolve Review effort).
+func reviewHelperEffortFromImpl(cfg ImplementConfig) llm.EffortLevel {
+	if cfg.ReviewEffectiveEffort != "" {
+		return cfg.ReviewEffectiveEffort
+	}
+	if cfg.EffectiveEffort != "" {
+		return cfg.EffectiveEffort
+	}
+	return cfg.EffortLevel
+}
 
 type implementationReviewGateMembership struct {
 	Gate    implementationReviewGate
@@ -304,7 +319,9 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		LogPath:                filepath.Join(axisDir, "review-output.txt"),
 		SystemPromptPrefix:     "implementation-review-" + axisSlug,
 		CompletionAskingClause: cfg.AskingClause,
-		EffortLevel:            cfg.EffortLevel,
+		EffortLevel:            reviewHelperEffortFromImpl(cfg),
+		EffectiveEffort:        cfg.ReviewEffectiveEffort,
+		EffortSource:           cfg.ReviewEffortSource,
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
 	}

@@ -488,6 +488,7 @@ func fallbackModelInfos() []llm.ModelInfo {
 			info.DisplayName = d.displayName + " (" + label + ")"
 			info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, d.backendID)
 		}
+		info.EffortCapabilities = effortCapabilitiesForBackend(d.backendID)
 		models = append(models, info)
 	}
 	return models
@@ -502,6 +503,20 @@ func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
 	p.mu.Lock()
 	p.catalog = models
 	p.mu.Unlock()
+}
+
+// effortCapabilitiesForBackend returns the ordered, semantically distinct
+// effort levels for an OpenCode backend model. Only the "openai" backend
+// provider exposes a stable reasoningEffort control; its maximum (max) maps to
+// "high" — the same value high produces — so max is a semantic alias and is
+// collapsed from the advertised capabilities. Other backend providers have no
+// stable effort control and remain Auto-only (empty capabilities).
+func effortCapabilitiesForBackend(backendID string) []llm.EffortLevel {
+	provider, _, ok := strings.Cut(backendID, "/")
+	if !ok || !effortSupportedProviders[provider] {
+		return nil
+	}
+	return []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh}
 }
 
 // setRates replaces the discovered pricing table. Called by discovery before the

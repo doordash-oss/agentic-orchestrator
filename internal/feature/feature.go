@@ -525,6 +525,7 @@ func (c Checkpoints) AutoPublish() bool { return !c.ManualPublish }
 // feature-level fields on Feature.
 type ConfigSnapshot struct {
 	Models             config.ModelConfig
+	Effort             config.EffortConfig
 	Inquireness        Inquireness
 	Checkpoints        Checkpoints
 	InputNotifications InputNotificationsMode
@@ -606,6 +607,7 @@ type Feature struct {
 
 	Repos                []FeatureRepo       `yaml:"repos"`
 	Models               config.ModelConfig  `yaml:"models"`
+	Effort               config.EffortConfig `yaml:"effort,omitempty"`
 	ExitCriteria         string              `yaml:"exit_criteria"`
 	Inquireness          Inquireness         `yaml:"inquireness"`
 	PermissionsQueue     []PermissionRequest `yaml:"permissions_queue"`

@@ -29,12 +29,24 @@ import (
 // testCatalog returns a deterministic 3-provider catalog covering all 5 phase
 // roles with 2–3 model choices each.
 func testCatalog() PhaseModelCatalog {
+	claudeInfos := []llm.ModelInfo{
+		{ID: "claude/sonnet-4-6", Category: "balanced", EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh}},
+		{ID: "claude/opus-4-7", Category: "capable", EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}},
+	}
+	codexInfos := []llm.ModelInfo{
+		{ID: "codex/gpt-5-codex", Category: "balanced"},
+	}
+	providerInfos := map[string][]llm.ModelInfo{"claude": claudeInfos, "codex": codexInfos}
 	cat := PhaseModelCatalog{
 		Fields:        []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"},
 		ProviderOrder: []string{"claude", "codex"},
 		ProviderModels: map[string][]string{
 			"claude": {"claude/sonnet-4-6", "claude/opus-4-7"},
 			"codex":  {"codex/gpt-5-codex"},
+		},
+		ProviderModelInfos: map[string][]llm.ModelInfo{
+			"claude": claudeInfos,
+			"codex":  codexInfos,
 		},
 		PhaseDefaults: map[string]string{
 			"Clarify":        "claude/sonnet-4-6",
@@ -51,6 +63,14 @@ func testCatalog() PhaseModelCatalog {
 			"Implementation": {"claude": {"claude/sonnet-4-6", "claude/opus-4-7"}, "codex": {"codex/gpt-5-codex"}},
 			"Review":         {"claude": {"claude/sonnet-4-6", "claude/opus-4-7"}, "codex": {"codex/gpt-5-codex"}},
 			"KB Build":       {"claude": {"claude/sonnet-4-6", "claude/opus-4-7"}, "codex": {"codex/gpt-5-codex"}},
+		},
+		PhaseProviderModelInfos: map[string]map[string][]llm.ModelInfo{
+			"Clarify":        providerInfos,
+			"Research":       providerInfos,
+			"Planning":       providerInfos,
+			"Implementation": providerInfos,
+			"Review":         providerInfos,
+			"KB Build":       providerInfos,
 		},
 	}
 	return cat
@@ -72,6 +92,9 @@ func testWorkspaceCatalog() PhaseModelCatalog {
 	cat.PhaseProviderModels["Utilities"] = map[string][]string{
 		"claude": {"claude/sonnet-4-6", "claude/opus-4-7"},
 		"codex":  {"codex/gpt-5-codex"},
+	}
+	if cat.PhaseProviderModelInfos != nil {
+		cat.PhaseProviderModelInfos["Utilities"] = cat.PhaseProviderModelInfos["Clarify"]
 	}
 	return cat
 }
@@ -924,5 +947,154 @@ func TestConfigEditor_Snapshot_ManualPublishForced(t *testing.T) {
 	e2.checkpoints.ManualPublish = false
 	if e2.Snapshot().Checkpoints.ManualPublish {
 		t.Error("Snapshot should not force ManualPublish=true when provisionalPublishable=true")
+	}
+}
+
+func TestEffortOptionsForEveryRow(t *testing.T) {
+	t.Parallel()
+	models := config.ModelConfig{
+		Inquiry:        "claude/sonnet-4-6",
+		Research:       "claude/sonnet-4-6",
+		Planning:       "claude/opus-4-7",
+		Implementation: "claude/sonnet-4-6",
+		Review:         "claude/sonnet-4-6",
+		Utilities:      "claude/sonnet-4-6",
+		KBBuild:        "claude/sonnet-4-6",
+	}
+	e := NewConfigEditorModel(&feature.Feature{
+		Models:   models,
+		Pipeline: feature.PipelineLarge,
+	}, testWorkspaceCatalog(), true)
+
+	fields := []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
+	for i, field := range fields {
+		e.rowCursor = i
+		opts := e.effortOptionsForCurrentRow()
+		if len(opts) < 2 {
+			t.Errorf("field %s: expected at least 2 effort options (auto + caps), got %d", field, len(opts))
+		}
+		if opts[0] != "auto" {
+			t.Errorf("field %s: first option should be auto, got %q", field, opts[0])
+		}
+	}
+}
+
+func TestEffortCyclingForNonImplementationRow(t *testing.T) {
+	t.Parallel()
+	e := NewConfigEditorModel(&feature.Feature{
+		Models:   config.ModelConfig{Research: "claude/sonnet-4-6"},
+		Pipeline: feature.PipelineLarge,
+	}, testCatalog(), true)
+	e.rowCursor = 1
+	e.activeModelCell = modelCellEffort
+	e.cycleEffort(+1)
+	if e.effort.Research != "low" {
+		t.Errorf("cycling Research effort from auto: got %q, want low", e.effort.Research)
+	}
+	e.cycleEffort(+1)
+	if e.effort.Research != "medium" {
+		t.Errorf("cycling Research effort from low: got %q, want medium", e.effort.Research)
+	}
+}
+
+func TestEffortIncompatibleResetForAnyRow(t *testing.T) {
+	t.Parallel()
+	e := NewConfigEditorModel(&feature.Feature{
+		Models:   config.ModelConfig{Review: "claude/opus-4-7"},
+		Effort:   config.EffortConfig{Review: "max"},
+		Pipeline: feature.PipelineLarge,
+	}, testCatalog(), true)
+	e.rowCursor = 4
+	e.activeModelCell = modelCellModel
+	e.cycleModelForward()
+	e.resetIncompatibleEffort()
+	val := e.effortValueForField("Review")
+	if val != "" && val != "auto" {
+		t.Errorf("Review effort should be reset to auto after model change, got %q", val)
+	}
+}
+
+func TestUtilitiesAutoDisplaysLow(t *testing.T) {
+	t.Parallel()
+	e := NewConfigEditorModel(&feature.Feature{
+		Pipeline: feature.PipelineMoonshot,
+	}, testWorkspaceCatalog(), true)
+	e.rowCursor = 5
+	display := e.effortDisplayValue()
+	if !strings.Contains(display, "low") {
+		t.Errorf("Utilities Auto should display low, got %q", display)
+	}
+	e.rowCursor = 0
+	display = e.effortDisplayValue()
+	if strings.Contains(display, "low") {
+		t.Errorf("Clarify Auto should display pipeline level (high for moonshot), got %q", display)
+	}
+}
+
+func TestTabCyclesThroughEffortForEveryRow(t *testing.T) {
+	t.Parallel()
+	e := NewConfigEditorModel(&feature.Feature{
+		Pipeline: feature.PipelineLarge,
+	}, testWorkspaceCatalog(), true)
+	fields := []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
+	for i := range fields {
+		e.rowCursor = i
+		e.activeModelCell = modelCellAgent
+		e, _ = e.Update(tea.KeyPressMsg{Text: "tab"})
+		if e.activeModelCell != modelCellModel {
+			t.Errorf("row %d: tab from Agent should go to Model, got %v", i, e.activeModelCell)
+		}
+		e, _ = e.Update(tea.KeyPressMsg{Text: "tab"})
+		if e.activeModelCell != modelCellEffort {
+			t.Errorf("row %d: tab from Model should go to Effort, got %v", i, e.activeModelCell)
+		}
+		e, _ = e.Update(tea.KeyPressMsg{Text: "tab"})
+		if e.activeModelCell != modelCellAgent {
+			t.Errorf("row %d: tab from Effort should go to Agent, got %v", i, e.activeModelCell)
+		}
+	}
+}
+
+func TestEffortChangedForAnyRole(t *testing.T) {
+	t.Parallel()
+	e := NewConfigEditorModel(&feature.Feature{
+		Pipeline: feature.PipelineLarge,
+	}, testCatalog(), true)
+	if e.EffortChanged() {
+		t.Error("no changes: EffortChanged should be false")
+	}
+	e.effort.Research = "high"
+	if !e.EffortChanged() {
+		t.Error("after changing Research effort: EffortChanged should be true")
+	}
+}
+
+func TestFeatureEditorHasNoUtilitiesRow(t *testing.T) {
+	t.Parallel()
+	cat := testCatalog()
+	if len(cat.Fields) != 6 {
+		t.Errorf("feature catalog should have 6 fields, got %d", len(cat.Fields))
+	}
+	for _, f := range cat.Fields {
+		if f == "Utilities" {
+			t.Error("feature catalog should not include Utilities")
+		}
+	}
+}
+
+func TestWorkspaceEditorHasUtilitiesRow(t *testing.T) {
+	t.Parallel()
+	cat := testWorkspaceCatalog()
+	if len(cat.Fields) != 7 {
+		t.Errorf("workspace catalog should have 7 fields, got %d", len(cat.Fields))
+	}
+	found := false
+	for _, f := range cat.Fields {
+		if f == "Utilities" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("workspace catalog should include Utilities")
 	}
 }

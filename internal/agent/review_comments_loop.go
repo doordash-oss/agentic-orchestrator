@@ -104,10 +104,18 @@ type ReviewCommentsLoopConfig struct {
 	BuildSession               func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 	AskingClause               string
 	EffortLevel                llm.EffortLevel
-	SkillsDir                  string
-	GuidelinesDir              string
-	Observer                   *observe.Observer
-	CommandRunner              ports.CommandRunner
+	// ImplEffectiveEffort is the resolved Implementation-role effort for the
+	// review-comments implement workers. Empty falls back to EffortLevel.
+	ImplEffectiveEffort llm.EffortLevel
+	ImplEffortSource    llm.EffortSource
+	// ReviewEffectiveEffort is the resolved Review-role effort for the
+	// review-comments per-iteration review gate. Empty falls back to EffortLevel.
+	ReviewEffectiveEffort llm.EffortLevel
+	ReviewEffortSource    llm.EffortSource
+	SkillsDir             string
+	GuidelinesDir         string
+	Observer              *observe.Observer
+	CommandRunner         ports.CommandRunner
 
 	// RunImplementFn is a test seam: when non-nil, RunReviewCommentsLoop
 	// calls this instead of RunImplementationLoop so unit tests can drive
@@ -285,6 +293,10 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		BuildSession:               cfg.BuildSession,
 		AskingClause:               cfg.AskingClause,
 		EffortLevel:                cfg.EffortLevel,
+		EffectiveEffort:            cfg.ImplEffectiveEffort,
+		EffortSource:               cfg.ImplEffortSource,
+		ReviewEffectiveEffort:      cfg.ReviewEffectiveEffort,
+		ReviewEffortSource:         cfg.ReviewEffortSource,
 		SkillsDir:                  cfg.SkillsDir,
 		GuidelinesDir:              cfg.GuidelinesDir,
 		Observer:                   cfg.Observer,

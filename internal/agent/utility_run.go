@@ -38,8 +38,12 @@ type UtilityRunConfig struct {
 	Timeout     time.Duration
 	Phase       feature.Phase
 	EffortLevel llm.EffortLevel
-	PermHandler ports.PermissionHandler
-	RequireText bool
+	// EffectiveEffort, when non-empty, overrides EffortLevel and is recorded
+	// on the session for observability.
+	EffectiveEffort llm.EffortLevel
+	EffortSource    llm.EffortSource
+	PermHandler     ports.PermissionHandler
+	RequireText     bool
 }
 
 // UtilityRunResult captures the extracted text plus terminal helper state.
@@ -79,17 +83,19 @@ func (pr *PhaseRunner) RunUtilitySession(ctx context.Context, cfg UtilityRunConf
 	}
 
 	result, err := pr.RunBoundedHelper(ctx, BoundedHelperConfig{
-		SessionID:     cfg.SessionID,
-		FeatureID:     cfg.FeatureID,
-		Phase:         cfg.Phase,
-		Model:         cfg.Model,
-		Prompt:        cfg.Prompt,
-		WorkDir:       workDir,
-		RepoName:      cfg.RepoName,
-		Timeout:       cfg.Timeout,
-		EffortLevel:   effort,
-		PermHandler:   cfg.PermHandler,
-		RequireOutput: cfg.RequireText,
+		SessionID:       cfg.SessionID,
+		FeatureID:       cfg.FeatureID,
+		Phase:           cfg.Phase,
+		Model:           cfg.Model,
+		Prompt:          cfg.Prompt,
+		WorkDir:         workDir,
+		RepoName:        cfg.RepoName,
+		Timeout:         cfg.Timeout,
+		EffortLevel:     effort,
+		EffectiveEffort: cfg.EffectiveEffort,
+		EffortSource:    cfg.EffortSource,
+		PermHandler:     cfg.PermHandler,
+		RequireOutput:   cfg.RequireText,
 	})
 	if result == nil {
 		return nil, err

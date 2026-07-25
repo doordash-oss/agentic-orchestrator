@@ -162,6 +162,11 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, cont
 	}
 	items = append(items,
 		livePreviewMetadataItem{label: "Phase Model", value: livePreviewPhaseModel(f, sess)},
+	)
+	if effort := livePreviewEffortText(sess); effort != "" {
+		items = append(items, livePreviewMetadataItem{label: "Effort", value: effort})
+	}
+	items = append(items,
 		livePreviewMetadataItem{label: "Elapsed", value: livePreviewElapsedText(f)},
 		livePreviewMetadataItem{label: labelCost, value: livePreviewCostText(f)},
 	)
@@ -496,6 +501,26 @@ func livePreviewPhaseModel(f *feature.Feature, sess session.SessionView) string 
 		return "—"
 	}
 	return compactPhaseModelLabel(firstNonEmpty(configuredModel, "—"))
+}
+
+// livePreviewEffortText renders the resolved effort level alongside whether
+// it was auto-derived from the pipeline or explicitly configured, e.g.
+// "high · Auto" / "high · Explicit". Returns "" for sessions that did not
+// record a resolved effort (legacy or pre-effort launches) so the metadata
+// grid omits the item entirely rather than showing an empty value.
+func livePreviewEffortText(sess session.SessionView) string {
+	if sess == nil {
+		return ""
+	}
+	level := sess.EffectiveEffort()
+	if level == "" {
+		return ""
+	}
+	source := "Auto"
+	if sess.EffortSource() == llm.EffortSourceExplicit {
+		source = "Explicit"
+	}
+	return string(level) + " · " + source
 }
 
 func livePreviewConfiguredPhaseModel(f *feature.Feature, phase feature.Phase) string {

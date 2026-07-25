@@ -4793,7 +4793,7 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	}
 	editing := model.(APIAppModel)
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Edit Config · Workspace Defaults", testSectionLabelModels, "Behavior", testSectionLabelGates, testSectionLabelPhases, "Agents", testLabelModelsForCodex} {
+	for _, want := range []string{"Edit Config · Workspace Defaults", testSectionLabelModels, "Behavior", testSectionLabelGates, testSectionLabelPhases, testLabelModelsForCodex} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -5021,7 +5021,7 @@ func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptio
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
 	editing := model.(APIAppModel)
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Edit Config · Workspace Defaults", testSectionLabelPhases, "Agents", testLabelModelsForCodex, testSectionLabelUtilities, "gpt-5.4-mini"} {
+	for _, want := range []string{"Edit Config · Workspace Defaults", testSectionLabelPhases, testLabelModelsForCodex, testSectionLabelUtilities, "gpt-5.4-mini"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("runtime config view missing %q:\n%s", want, view)
 		}
@@ -5055,6 +5055,123 @@ func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptio
 
 	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Utilities != testModelCodexGPT55Mini {
 		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited utilities default model", got)
+	}
+}
+
+func TestAPIAppModel_ResizeThenWorkspaceConfigEffortComplete(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		runtime: server.RuntimeConfigResponse{
+			Defaults: config.ModelConfig{
+				Research:       testModelCodexGPT54,
+				Planning:       testModelCodexGPT54,
+				Implementation: testModelCodexGPT54,
+				Review:         testModelCodexGPT54,
+				KBBuild:        testModelCodexGPT54,
+			},
+			FeatureDefaults: server.FeatureDefaultsDTO{
+				Pipeline: testPipelineSizeLarge,
+			},
+			Providers: []string{testProviderCodex},
+		},
+		catalog: server.ModelCatalogResponse{
+			ProviderOrder: []string{testProviderCodex},
+			ProviderModels: map[string][]server.ModelDTO{
+				testProviderCodex: {{ID: testModelCodexGPT54}},
+			},
+		},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	app = model.(APIAppModel)
+
+	model, _ = app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	editing := model.(APIAppModel)
+
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	editing = model.(APIAppModel)
+
+	view := stripANSI(editing.View().Content)
+	if !strings.Contains(view, "Auto (high)") {
+		t.Errorf("complete Auto (high) not visible after resize → workspace open:\n%s", view)
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w > 120 {
+			t.Errorf("line %d width %d exceeds 120-column terminal:\n%s", i, w, line)
+		}
+	}
+}
+
+func TestAPIAppModel_ResizeThenFeatureConfigEffortComplete(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
+		}},
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement}, server.FeatureDetailDTO{
+			Pipeline: testPipelineSizeLarge,
+		})},
+		featureConfig: server.FeatureConfigResponse{
+			FeatureID: testFeatureIDActive,
+			Current: server.FeatureConfigDTO{
+				Models:      config.ModelConfig{Research: testModelCodexGPT54, Planning: testModelCodexGPT54, Implementation: testModelCodexGPT54, Review: testModelCodexGPT54, KBBuild: testModelCodexGPT54},
+				Inquireness: testInquirenessTargeted,
+				Pipeline:    testPipelineSizeLarge,
+			},
+			Defaults: server.FeatureConfigDTO{
+				Models: config.ModelConfig{Research: testModelCodexGPT54},
+			},
+		},
+		catalog: server.ModelCatalogResponse{
+			ProviderOrder: []string{testProviderCodex},
+			ProviderModels: map[string][]server.ModelDTO{
+				testProviderCodex: {{ID: testModelCodexGPT54}},
+			},
+		},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	app = model.(APIAppModel)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd == nil {
+		t.Fatal("Update(e) returned nil command, want feature config fetch command")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	editing := model.(APIAppModel)
+
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	editing = model.(APIAppModel)
+
+	view := stripANSI(editing.View().Content)
+	if !strings.Contains(view, "Auto (high)") {
+		t.Errorf("complete Auto (high) not visible after resize → feature config open:\n%s", view)
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w > 120 {
+			t.Errorf("line %d width %d exceeds 120-column terminal:\n%s", i, w, line)
+		}
 	}
 }
 

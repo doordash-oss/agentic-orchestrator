@@ -32,6 +32,7 @@ type ConfigEditorModel struct {
 	original feature.ConfigSnapshot
 
 	models      config.ModelConfig
+	effort      config.EffortConfig
 	inquireness feature.Inquireness
 	checkpoints feature.Checkpoints
 	pipeline    feature.PipelineProfile
@@ -65,6 +66,7 @@ type modelCell int
 const (
 	modelCellAgent modelCell = iota
 	modelCellModel
+	modelCellEffort
 	modelCellPhase
 )
 
@@ -108,12 +110,14 @@ func NewConfigEditorModel(f *feature.Feature, cat PhaseModelCatalog, provisional
 	normalized := pipeline.NormalizeCheckpoints(f.Checkpoints, provisionalPublishable)
 	snap := feature.ConfigSnapshot{
 		Models:      f.Models,
+		Effort:      f.Effort,
 		Inquireness: f.Inquireness,
 		Checkpoints: normalized,
 	}
 	return ConfigEditorModel{
 		original:               snap,
 		models:                 snap.Models,
+		effort:                 snap.Effort,
 		inquireness:            snap.Inquireness,
 		checkpoints:            snap.Checkpoints,
 		pipeline:               pipeline,
@@ -173,24 +177,34 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (ConfigEditorModel, tea.Cmd) {
 	case rowCatModels:
 		switch key {
 		case "tab":
-			m.activeModelCell = modelCellModel
+			m.activeModelCell = cycleModelCellForward(m.activeModelCell)
 		case "shift+tab":
-			m.activeModelCell = modelCellAgent
+			m.activeModelCell = cycleModelCellBackward(m.activeModelCell)
 		case "/":
 			if m.activeModelCell == modelCellModel {
 				m.startModelFilter()
 			}
 		case "right", "l":
-			if m.activeModelCell == modelCellAgent {
+			switch m.activeModelCell {
+			case modelCellAgent:
 				m.cycleAgent(+1)
-			} else {
+				m.resetIncompatibleEffort()
+			case modelCellEffort:
+				m.cycleEffort(+1)
+			default:
 				m.cycleModelForward()
+				m.resetIncompatibleEffort()
 			}
 		case "left", "h":
-			if m.activeModelCell == modelCellAgent {
+			switch m.activeModelCell {
+			case modelCellAgent:
 				m.cycleAgent(-1)
-			} else {
+				m.resetIncompatibleEffort()
+			case modelCellEffort:
+				m.cycleEffort(-1)
+			default:
 				m.cycleModelBackward()
+				m.resetIncompatibleEffort()
 			}
 		}
 	case rowCatInquireness:
@@ -241,6 +255,7 @@ func (m ConfigEditorModel) Snapshot() feature.ConfigSnapshot {
 	cp := m.pipeline.NormalizeCheckpoints(m.checkpoints, m.provisionalPublishable)
 	return feature.ConfigSnapshot{
 		Models:      m.models,
+		Effort:      m.effort,
 		Inquireness: m.inquireness,
 		Checkpoints: cp,
 	}
@@ -251,8 +266,15 @@ func (m ConfigEditorModel) Snapshot() feature.ConfigSnapshot {
 func (m ConfigEditorModel) HasChanges() bool {
 	s := m.Snapshot()
 	return s.Models != m.original.Models ||
+		s.Effort != m.original.Effort ||
 		s.Inquireness != m.original.Inquireness ||
 		s.Checkpoints != m.original.Checkpoints
+}
+
+// EffortChanged reports whether any effort value differs from the original
+// snapshot.
+func (m ConfigEditorModel) EffortChanged() bool {
+	return m.effort != m.original.Effort
 }
 
 // ModelsChangeCount returns the number of phase-role fields in Models that
@@ -443,6 +465,27 @@ func (m *ConfigEditorModel) setModelValueForField(field, value string) {
 	}
 }
 
+// effortConfigFieldForDisplay maps a display field name (as used in the
+// catalog) to the corresponding config.EffortConfig field name.
+func effortConfigFieldForDisplay(field string) string {
+	switch field {
+	case "Clarify":
+		return "Inquiry"
+	case "KB Build":
+		return "KBBuild"
+	default:
+		return field
+	}
+}
+
+func (m ConfigEditorModel) effortValueForField(field string) string {
+	return config.EffortConfigFieldByName(m.effort, effortConfigFieldForDisplay(field))
+}
+
+func (m *ConfigEditorModel) setEffortValueForField(field, value string) {
+	config.SetEffortConfigFieldByName(&m.effort, effortConfigFieldForDisplay(field), value)
+}
+
 func (m ConfigEditorModel) currentModelEntries() []PhaseModelEntry {
 	field := m.currentModelField()
 	if field == "" {
@@ -627,6 +670,130 @@ func (m *ConfigEditorModel) acceptFilteredModel() {
 }
 
 func (m ConfigEditorModel) ModelFilteringActive() bool { return m.modelFilterActive }
+
+// effortOptionsForCurrentRow returns the ordered effort options for the
+// current model row: Auto first, followed by the selected model's ordered,
+// distinct supported levels. An unsupported or unknown model offers Auto only.
+func (m ConfigEditorModel) effortOptionsForCurrentRow() []string {
+	opts := []string{"auto"}
+	field := m.currentModelField()
+	if field == "" {
+		return opts
+	}
+	modelValue := m.modelValueForField(field)
+	if modelValue == "" {
+		return opts
+	}
+	entries := m.catalog.ModelEntriesForField(field)
+	for _, entry := range entries {
+		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, modelValue) {
+			for _, cap := range entry.EffortCapabilities {
+				opts = append(opts, string(cap))
+			}
+			return opts
+		}
+	}
+	return opts
+}
+
+// effortDisplayValueForField returns the display string for the effort value
+// of the given field. Auto renders with its live pipeline-derived value
+// inline (e.g. "Auto (high)"). Utilities Auto always displays low.
+func (m ConfigEditorModel) effortDisplayValueForField(field string) string {
+	val := m.effortValueForField(field)
+	if val == "" || val == "auto" {
+		pipelineEffort := string(m.pipeline.EffortLevel())
+		if field == "Utilities" {
+			pipelineEffort = "low"
+		}
+		return "Auto (" + pipelineEffort + ")"
+	}
+	return val
+}
+
+// effortDisplayValue returns the display string for the current row's effort.
+func (m ConfigEditorModel) effortDisplayValue() string {
+	return m.effortDisplayValueForField(m.currentModelField())
+}
+
+// cycleEffort advances or retreats the current row's effort through the
+// ordered option list (Auto + model capabilities).
+func (m *ConfigEditorModel) cycleEffort(direction int) {
+	field := m.currentModelField()
+	if field == "" {
+		return
+	}
+	opts := m.effortOptionsForCurrentRow()
+	if len(opts) <= 1 {
+		return
+	}
+	current := m.effortValueForField(field)
+	if current == "" {
+		current = "auto"
+	}
+	idx := 0
+	for i, opt := range opts {
+		if opt == current {
+			idx = i
+			break
+		}
+	}
+	idx += direction
+	if idx < 0 {
+		idx = len(opts) - 1
+	}
+	if idx >= len(opts) {
+		idx = 0
+	}
+	m.setEffortValueForField(field, opts[idx])
+}
+
+// resetIncompatibleEffort resets the current row's effort to Auto when the
+// current explicit value is not supported by the newly selected model. This
+// ensures no hidden stale value persists after an Agent or Model change.
+func (m *ConfigEditorModel) resetIncompatibleEffort() {
+	field := m.currentModelField()
+	if field == "" {
+		return
+	}
+	val := m.effortValueForField(field)
+	if val == "" || val == "auto" {
+		return
+	}
+	opts := m.effortOptionsForCurrentRow()
+	supported := false
+	for _, opt := range opts {
+		if opt == val {
+			supported = true
+			break
+		}
+	}
+	if !supported {
+		m.setEffortValueForField(field, "auto")
+	}
+}
+
+func cycleModelCellForward(cell modelCell) modelCell {
+	switch cell {
+	case modelCellAgent:
+		return modelCellModel
+	case modelCellModel:
+		return modelCellEffort
+	default:
+		return modelCellAgent
+	}
+}
+
+func cycleModelCellBackward(cell modelCell) modelCell {
+	switch cell {
+	case modelCellAgent:
+		return modelCellEffort
+	case modelCellModel:
+		return modelCellAgent
+	default:
+		return modelCellModel
+	}
+}
 
 func (m ConfigEditorModel) entryForFieldValue(field, value string) (PhaseModelEntry, bool) {
 	for _, entry := range m.catalog.ModelEntriesForField(field) {
@@ -824,11 +991,33 @@ func (m ConfigEditorModel) renderModelsWorkspaceWithFocus(focus configFocusZone)
 	return m.renderModelsWorkspaceWithFocusWidth(focus, 0)
 }
 
+// Four-pane minimum widths. Each pane has a hard floor below which its
+// content (title, selection marker, inline value) becomes unusable. The
+// four-pane threshold is the sum of these floors plus the three 2-space
+// gutters, so the layout is only chosen when every pane can honor its
+// minimum without overflow.
+const (
+	modelPhasePanelMinWidth = 34
+	modelAgentPanelMinWidth = 16
+	modelListPanelMinWidth  = 44
+	// modelEffortPanelMinWidth is defined in editconfig.go (18).
+	modelWorkspaceGutter = 2
+)
+
+const modelWorkspaceFourPaneMinWidth = modelPhasePanelMinWidth + modelAgentPanelMinWidth + modelListPanelMinWidth + modelEffortPanelMinWidth + modelWorkspaceGutter*3
+
 func (m ConfigEditorModel) renderModelsWorkspaceWithFocusWidth(focus configFocusZone, width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("Model Selection")
-	phaseWidth, agentWidth, modelWidth := modelWorkspacePanelWidths(width)
+	if width > 0 && width < modelWorkspaceFourPaneMinWidth {
+		return strings.Join([]string{
+			title,
+			"",
+			m.renderModelsWorkspaceNarrow(focus, width),
+		}, "\n")
+	}
+	phaseWidth, agentWidth, modelWidth, effortWidth := modelWorkspacePanelWidths(width)
 	phasePane := m.renderModelPhaseList(focus, phaseWidth)
-	inspector := m.renderModelInspector(focus, agentWidth, modelWidth)
+	inspector := m.renderModelInspector(focus, agentWidth, modelWidth, effortWidth)
 	return strings.Join([]string{
 		title,
 		"",
@@ -836,18 +1025,73 @@ func (m ConfigEditorModel) renderModelsWorkspaceWithFocusWidth(focus configFocus
 	}, "\n")
 }
 
-func modelWorkspacePanelWidths(width int) (int, int, int) {
-	phaseWidth, agentWidth, modelWidth := modelPhasePanelWidth, modelAgentPanelWidth, modelListPanelWidth
+// renderModelsWorkspaceNarrow renders a two-pane layout for constrained
+// widths: the Phase list on the left and a single inspector pane on the
+// right. The inspector pane follows keyboard focus so that navigating
+// Phase -> Agent -> Model -> Effort surfaces the corresponding pane.
+//
+// The split guarantees phaseWidth + gutter + inspectorWidth == width
+// exactly (no overflow) and both panes stay >= 1.
+func (m ConfigEditorModel) renderModelsWorkspaceNarrow(focus configFocusZone, width int) string {
+	const (
+		gutter       = modelWorkspaceGutter
+		phaseMin     = 24
+		inspectorMin = 20
+	)
+
+	available := width - gutter
+	var phaseWidth, inspectorWidth int
+	if available >= phaseMin+inspectorMin {
+		phaseWidth = min(available*2/5, modelPhasePanelWidth)
+		if phaseWidth < phaseMin {
+			phaseWidth = phaseMin
+		}
+		inspectorWidth = available - phaseWidth
+		if inspectorWidth < inspectorMin {
+			inspectorWidth = inspectorMin
+			phaseWidth = available - inspectorWidth
+		}
+	} else {
+		// Too narrow for both minimums: split 3:2, floor at 1.
+		phaseWidth = max(available*3/5, 1)
+		inspectorWidth = available - phaseWidth
+		if inspectorWidth < 1 {
+			inspectorWidth = 1
+			phaseWidth = max(available-1, 1)
+		}
+	}
+
+	phasePane := m.renderModelPhaseList(focus, phaseWidth)
+	field := m.currentModelField()
+	if field == "" {
+		inspector := titledConfigBox("Effort", MutedStyle.Render("No phase"), inspectorWidth, modelPanelHeight, focus == configFocusEffortList)
+		return lipgloss.JoinHorizontal(lipgloss.Top, phasePane, "  ", inspector)
+	}
+	agent := m.agentValueForField(field)
+	var inspector string
+	switch focus {
+	case configFocusAgentList:
+		inspector = m.renderAgentPicker(field, agent, focus, inspectorWidth)
+	case configFocusEffortList:
+		inspector = m.renderEffortPicker(field, focus, inspectorWidth)
+	default:
+		inspector = m.renderModelPicker(field, agent, focus, inspectorWidth)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, phasePane, "  ", inspector)
+}
+
+func modelWorkspacePanelWidths(width int) (int, int, int, int) {
+	phaseWidth, agentWidth, modelWidth, effortWidth := modelPhasePanelWidth, modelAgentPanelWidth, modelListPanelWidth, modelEffortPanelWidth
 	if width <= 0 {
-		return phaseWidth, agentWidth, modelWidth
+		return phaseWidth, agentWidth, modelWidth, effortWidth
 	}
-	available := width - 4 // two 2-space gutters between the three panels
+	available := width - modelWorkspaceGutter*3
 	if available <= 0 {
-		return phaseWidth, agentWidth, modelWidth
+		return phaseWidth, agentWidth, modelWidth, effortWidth
 	}
-	overflow := phaseWidth + agentWidth + modelWidth - available
+	overflow := phaseWidth + agentWidth + modelWidth + effortWidth - available
 	if overflow <= 0 {
-		return phaseWidth, agentWidth, modelWidth
+		return phaseWidth, agentWidth, modelWidth, effortWidth
 	}
 	shrink := func(current, minWidth int) int {
 		if overflow <= 0 {
@@ -863,10 +1107,20 @@ func modelWorkspacePanelWidths(width int) (int, int, int) {
 		overflow -= delta
 		return current - delta
 	}
-	modelWidth = shrink(modelWidth, 44)
-	phaseWidth = shrink(phaseWidth, 34)
-	agentWidth = shrink(agentWidth, 16)
-	return phaseWidth, agentWidth, modelWidth
+	modelWidth = shrink(modelWidth, modelListPanelMinWidth)
+	phaseWidth = shrink(phaseWidth, modelPhasePanelMinWidth)
+	effortWidth = shrink(effortWidth, modelEffortPanelMinWidth)
+	agentWidth = shrink(agentWidth, modelAgentPanelMinWidth)
+	// Safety net: if overflow remains after all panels hit their floors,
+	// absorb it from the widest panel so the total never exceeds width.
+	if overflow > 0 {
+		if modelWidth >= overflow {
+			modelWidth -= overflow
+		} else if phaseWidth >= overflow {
+			phaseWidth -= overflow
+		}
+	}
+	return phaseWidth, agentWidth, modelWidth, effortWidth
 }
 
 func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone, width int) string {
@@ -893,17 +1147,19 @@ func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone, width int
 	return titledConfigBox("Phases", strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusPhaseList)
 }
 
-func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidth, modelWidth int) string {
+func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidth, modelWidth, effortWidth int) string {
 	field := m.currentModelField()
 	if field == "" {
 		emptyAgents := titledConfigBox(configBoxTitleAgents, MutedStyle.Render("No phase"), agentWidth, modelPanelHeight, focus == configFocusAgentList)
 		emptyModels := titledConfigBox("Models", MutedStyle.Render("No phase"), modelWidth, modelPanelHeight, focus == configFocusModelList)
-		return lipgloss.JoinHorizontal(lipgloss.Top, emptyAgents, "  ", emptyModels)
+		emptyEffort := titledConfigBox("Effort", MutedStyle.Render("No phase"), effortWidth, modelPanelHeight, focus == configFocusEffortList)
+		return lipgloss.JoinHorizontal(lipgloss.Top, emptyAgents, "  ", emptyModels, "  ", emptyEffort)
 	}
 	agent := m.agentValueForField(field)
 	agents := m.renderAgentPicker(field, agent, focus, agentWidth)
 	models := m.renderModelPicker(field, agent, focus, modelWidth)
-	return lipgloss.JoinHorizontal(lipgloss.Top, agents, "  ", models)
+	effort := m.renderEffortPicker(field, focus, effortWidth)
+	return lipgloss.JoinHorizontal(lipgloss.Top, agents, "  ", models, "  ", effort)
 }
 
 func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, focus configFocusZone, width int) string {
@@ -983,6 +1239,40 @@ func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFo
 	return titledConfigBox(title, strings.Join(lines, "\n"), width, modelPanelHeight, panelFocused)
 }
 
+func (m ConfigEditorModel) renderEffortPicker(field string, focus configFocusZone, width int) string {
+	opts := m.effortOptionsForCurrentRow()
+	current := m.effortValueForField(field)
+	if current == "" {
+		current = "auto"
+	}
+	panelFocused := focus == configFocusEffortList
+	var lines []string
+	for _, opt := range opts {
+		label := opt
+		if opt == "auto" {
+			label = m.effortDisplayValueForField(field)
+		}
+		// Hard-truncate without ellipsis so the "Auto (" prefix survives
+		// in narrow panes where truncateString's "..." would consume it.
+		if maxLabel := maxInt(width-6, 8); len(label) > maxLabel {
+			label = label[:maxLabel]
+		}
+		selected := opt == current
+		prefix := "  "
+		focused := selected && panelFocused
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		case selected && focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("Effort", strings.Join(lines, "\n"), width, modelPanelHeight, panelFocused)
+}
+
 func modelEntryLabelWidth(panelWidth int) int {
 	width := panelWidth - 30
 	if width < 18 {
@@ -1059,7 +1349,7 @@ func (m ConfigEditorModel) renderModelsBoxWithTitle(width int, titleText string)
 	lines := []string{
 		title,
 		MutedStyle.Render("Assignments"),
-		MutedStyle.Render(fmt.Sprintf("%-14s %-12s %s", "Phase", toolNameAgent, "Model")),
+		MutedStyle.Render(fmt.Sprintf("%-14s %-12s %-20s %s", "Phase", toolNameAgent, "Model", "Effort")),
 	}
 	onModelsRow := m.rowCategory() == rowCatModels
 
@@ -1071,18 +1361,23 @@ func (m ConfigEditorModel) renderModelsBoxWithTitle(width int, titleText string)
 		value := m.modelValueForField(field)
 		agent := m.agentValueForField(field)
 		model := m.modelAssignmentSummary(field, value)
+		effort := m.effortDisplayValueForField(field)
 		prefix := "  "
 		renderedAgent := fmt.Sprintf("%-12s", agent)
-		renderedModel := model
+		renderedModel := fmt.Sprintf("%-20s", model)
+		renderedEffort := effort
 		if onModelsRow && i == m.rowCursor {
 			prefix = SelectedRowStyle.Render("▸ ")
-			if m.activeModelCell == modelCellAgent {
+			switch m.activeModelCell {
+			case modelCellAgent:
 				renderedAgent = SummarySelectedValueStyle.Render(fmt.Sprintf("%-12s", agent))
-			} else {
-				renderedModel = SummarySelectedValueStyle.Render(model)
+			case modelCellEffort:
+				renderedEffort = SummarySelectedValueStyle.Render(effort)
+			default:
+				renderedModel = SummarySelectedValueStyle.Render(fmt.Sprintf("%-20s", model))
 			}
 		}
-		rendered := fmt.Sprintf("%-14s %s %s", field, renderedAgent, renderedModel)
+		rendered := fmt.Sprintf("%-14s %s %s %s", field, renderedAgent, renderedModel, renderedEffort)
 		if onModelsRow && i == m.rowCursor {
 			rendered = SelectedRowStyle.Render(rendered)
 		}
@@ -1212,6 +1507,33 @@ func (m ConfigEditorModel) renderModelCascadeDetails(field string, width int) []
 	if len(parts) > 0 {
 		lines = append(lines, MutedStyle.Render("Details ")+strings.Join(parts, ", "))
 	}
+
+	effortOpts := m.effortOptionsForCurrentRow()
+	if len(effortOpts) > 1 {
+		currentEffort := m.effortValueForField(field)
+		if currentEffort == "" {
+			currentEffort = "auto"
+		}
+		var effortTokens []string
+		for _, opt := range effortOpts {
+			label := opt
+			if field == "Utilities" && opt == "auto" {
+				label = "auto (low)"
+			}
+			if opt == currentEffort {
+				effortTokens = append(effortTokens, selectedPillStyle.Render(label))
+			} else {
+				effortTokens = append(effortTokens, optionStyle.Render(label))
+			}
+		}
+		effortPrefix := MutedStyle.Render("Effort ")
+		if width > 0 {
+			lines = append(lines, wrapRenderedTokensWithPrefix(effortPrefix, effortTokens, width)...)
+		} else {
+			lines = append(lines, effortPrefix+strings.Join(effortTokens, " "))
+		}
+	}
+
 	return lines
 }
 

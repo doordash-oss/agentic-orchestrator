@@ -169,10 +169,11 @@ func parseOpenCodeModels(out []byte) ([]llm.ModelInfo, map[string]modelRate, err
 		}
 
 		info := llm.ModelInfo{
-			ID:            id,
-			DisplayName:   display,
-			ContextWindow: window,
-			Category:      categoryForModel(id, display),
+			ID:                 id,
+			DisplayName:        display,
+			ContextWindow:      window,
+			Category:           categoryForModel(id, display),
+			EffortCapabilities: effortCapabilitiesForBackend(id),
 		}
 		// A valid window promotes the id to the suffixed form and keeps the bare
 		// backend id reachable as an alias (backward compatibility); an unknown

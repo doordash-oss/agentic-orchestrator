@@ -28,6 +28,12 @@ type ModelInfo struct {
 	ContextWindow int      `yaml:"context_window"`    // Max tokens
 	Aliases       []string `yaml:"aliases,omitempty"` // Alternative names, e.g. ["opus", "claude-opus-4-8"]
 	Category      string   `yaml:"category"`          // "cheap", "balanced", "capable"
+	// EffortCapabilities is the ordered list of semantically distinct effort
+	// levels the provider can honor for this model, from lowest to highest.
+	// Empty means the model has no explicit effort control and is Auto-only.
+	// Semantic aliases (e.g. an OpenCode max that executes identically to high)
+	// are collapsed so the API never advertises duplicate semantics.
+	EffortCapabilities []EffortLevel `yaml:"effort_capabilities,omitempty" json:"effort_capabilities,omitempty"`
 }
 
 // ContextWindowLabel formats a token window for compact model IDs.

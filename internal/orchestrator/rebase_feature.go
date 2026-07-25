@@ -25,6 +25,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -437,6 +438,8 @@ func (o *Orchestrator) rebaseLoopConfigForFeature(
 	if pr == nil {
 		return agent.RebaseLoopConfig{}, errors.New("phase runner not configured")
 	}
+	implEffort, implEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseImplementation, f.Models.Implementation, "")
+	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review, "")
 	return agent.RebaseLoopConfig{
 		Feature:                    f,
 		FeatureStore:               o.deps.Store,
@@ -454,6 +457,10 @@ func (o *Orchestrator) rebaseLoopConfigForFeature(
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		ImplEffectiveEffort:        implEffort,
+		ImplEffortSource:           implEffortSource,
+		ReviewEffectiveEffort:      reviewEffort,
+		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,

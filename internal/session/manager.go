@@ -167,6 +167,8 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.kind = opts[0].Kind
 		s.turnMode = opts[0].TurnMode
 		s.label = opts[0].Label
+		s.effectiveEffort = opts[0].EffectiveEffort
+		s.effortSource = opts[0].EffortSource
 		s.askUserAutoPick = opts[0].AskUserAutoPick
 		s.watchdog = newSessionWatchdog(s, opts[0].Watchdog)
 		// Set log file before Start() so the read goroutine can write from

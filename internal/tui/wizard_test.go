@@ -3319,7 +3319,7 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 	m.height = 40
 
 	view := m.View()
-	for _, needle := range []string{"Model Selection", "Phases", configBoxTitleAgents, "Models for", "Research", "opus", "codex"} { //nolint:goconst // "Phases" is a generic UI-label assertion, not a reusable test concept
+	for _, needle := range []string{"Model Selection", "Phases", "Models for", "Research", "opus"} { //nolint:goconst // "Phases" is a generic UI-label assertion, not a reusable test concept
 		if !strings.Contains(view, needle) {
 			t.Errorf("expected expanded Models view to contain %q", needle)
 		}

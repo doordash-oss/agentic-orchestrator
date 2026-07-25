@@ -64,8 +64,12 @@ type BoundedHelperConfig struct {
 	LogPath        string
 	Timeout        time.Duration
 	EffortLevel    llm.EffortLevel
-	PermHandler    ports.PermissionHandler
-	RequireOutput  bool
+	// EffectiveEffort, when non-empty, overrides EffortLevel in BuildSessionOpts
+	// and is recorded on the session for observability.
+	EffectiveEffort llm.EffortLevel
+	EffortSource    llm.EffortSource
+	PermHandler     ports.PermissionHandler
+	RequireOutput   bool
 	// PhaseCompleteDir opts this helper into local phase_complete semantics.
 	// Empty preserves markerless bounded-helper behavior.
 	PhaseCompleteDir string
@@ -86,6 +90,15 @@ type BoundedHelperResult struct {
 // that bounded helpers don't have: no one re-invokes a helper on a scheduled
 // wakeup, so a helper that yields on one is stranded mid-turn.
 var boundedHelperDisallowedTools = []string{"ScheduleWakeup"}
+
+// boundedHelperEffortLevel returns the effort level to pass to BuildSessionOpts:
+// the resolved effective effort when set, otherwise the pipeline-driven level.
+func boundedHelperEffortLevel(cfg BoundedHelperConfig) llm.EffortLevel {
+	if cfg.EffectiveEffort != "" {
+		return cfg.EffectiveEffort
+	}
+	return cfg.EffortLevel
+}
 
 // RunBoundedHelper runs a single-turn interactive helper session without phase_complete semantics.
 func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperConfig) (*BoundedHelperResult, error) {
@@ -126,13 +139,17 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		RepoName:        cfg.RepoName,
 		WorkDir:         cfg.WorkDir,
 		LogPath:         cfg.LogPath,
-		EffortLevel:     cfg.EffortLevel,
+		EffortLevel:     boundedHelperEffortLevel(cfg),
 		AgentNames:      []string{},
 		Phase:           cfg.Phase,
 		MarkerPath:      markerPath,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running bounded helper: building session: %w", err)
+	}
+	if sessOpts != nil && cfg.EffectiveEffort != "" {
+		sessOpts.EffectiveEffort = cfg.EffectiveEffort
+		sessOpts.EffortSource = cfg.EffortSource
 	}
 
 	return pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
@@ -232,10 +249,14 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			sessionCtx = featureCtx.Child()
 		}
 		providerName := ""
+		effort := ""
+		effortSource := ""
 		if cfg.sessOpts != nil {
 			providerName = cfg.sessOpts.ProviderName
+			effort = string(cfg.sessOpts.EffectiveEffort)
+			effortSource = string(cfg.sessOpts.EffortSource)
 		}
-		pr.Observer.SessionStarted(sessionCtx, observerPhase, cfg.sessionID, providerName, cfg.model, cfg.repoName)
+		pr.Observer.SessionStarted(sessionCtx, observerPhase, cfg.sessionID, providerName, cfg.model, cfg.repoName, effort, effortSource)
 		pr.installContextReadTracker(sess, sessionCtx, observerPhase, cfg.sessionID, pr.StateDir)
 		pr.installSubagentProgressTracker(sess, sessionCtx, observerPhase, cfg.sessionID)
 	}

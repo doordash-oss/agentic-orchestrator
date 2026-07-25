@@ -368,6 +368,8 @@ type APILivePreviewPresentation struct {
 	Status         string
 	Activity       string
 	ContextPct     int
+	Effort         string
+	EffortSource   string
 	CostUSD        float64
 	Attention      []string
 	TranscriptRows []server.TranscriptMessageDTO
@@ -954,6 +956,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.wizard = &updated
 			}
 		}
+		if m.configEditor != nil {
+			m.configEditor.width = msg.Width
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleAPIKey(msg)
@@ -1069,6 +1074,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.configEditor = newAPIEditConfigModel(msg.featureID, m.featureNameByID(msg.featureID), msg.config, apiFeatureModelCatalog(m.catalog))
+		m.configEditor.width = m.width
 		if f := m.selectedAPIDashboardFeature(); f != nil && f.ID == msg.featureID {
 			m.configEditor.deferredEffectWarning = featureConfigChangesDeferred(f)
 		}
@@ -2416,6 +2422,8 @@ type apiSessionView struct {
 	workDir                string
 	initialPrompt          string
 	contextPct             int
+	effort                 llm.EffortLevel
+	effortSource           llm.EffortSource
 	log                    *session.MessageLog
 	cost                   *llm.ResultMessage
 	client                 APIClient
@@ -2484,6 +2492,8 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 		provider:               preview.Provider,
 		model:                  preview.Model,
 		contextPct:             preview.ContextPct,
+		effort:                 llm.EffortLevel(preview.Effort),
+		effortSource:           llm.EffortSource(preview.EffortSource),
 		log:                    log,
 		cost:                   cost,
 		statusCh:               make(chan string, 8),
@@ -2571,16 +2581,18 @@ func (s *apiSessionView) IsActive() bool {
 	status := s.Status()
 	return status == ports.SessionRunning || status == ports.SessionWaitingHelp || status == ports.SessionWaitingPermission
 }
-func (s *apiSessionView) Iteration() int               { return s.iteration }
-func (s *apiSessionView) StartedAt() time.Time         { return s.startedAt }
-func (s *apiSessionView) InitialPrompt() string        { return s.initialPrompt }
-func (s *apiSessionView) ProviderName() string         { return s.provider }
-func (s *apiSessionView) Model() string                { return s.model }
-func (s *apiSessionView) WorkDir() string              { return s.workDir }
-func (s *apiSessionView) MessageLog() ports.MessageLog { return s.log }
-func (s *apiSessionView) Cost() *llm.ResultMessage     { return s.cost }
-func (s *apiSessionView) LatestUsage() *llm.Usage      { return nil }
-func (s *apiSessionView) AccumulatedUsage() llm.Usage  { return llm.Usage{} }
+func (s *apiSessionView) Iteration() int                   { return s.iteration }
+func (s *apiSessionView) StartedAt() time.Time             { return s.startedAt }
+func (s *apiSessionView) InitialPrompt() string            { return s.initialPrompt }
+func (s *apiSessionView) ProviderName() string             { return s.provider }
+func (s *apiSessionView) Model() string                    { return s.model }
+func (s *apiSessionView) WorkDir() string                  { return s.workDir }
+func (s *apiSessionView) EffectiveEffort() llm.EffortLevel { return s.effort }
+func (s *apiSessionView) EffortSource() llm.EffortSource   { return s.effortSource }
+func (s *apiSessionView) MessageLog() ports.MessageLog     { return s.log }
+func (s *apiSessionView) Cost() *llm.ResultMessage         { return s.cost }
+func (s *apiSessionView) LatestUsage() *llm.Usage          { return nil }
+func (s *apiSessionView) AccumulatedUsage() llm.Usage      { return llm.Usage{} }
 func (s *apiSessionView) LastControlRequest() *llm.ControlRequestMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3006,6 +3018,8 @@ func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, trans
 		workDir:                firstNonEmpty(workDir...),
 		initialPrompt:          detail.InitialPrompt,
 		contextPct:             detail.ContextPct,
+		effort:                 llm.EffortLevel(detail.Effort),
+		effortSource:           llm.EffortSource(detail.EffortSource),
 		log:                    log,
 		cost:                   &llm.ResultMessage{TotalCostUSD: detail.Usage.CostUSD},
 		client:                 client,
@@ -5043,6 +5057,7 @@ func (m APIAppModel) openRuntimeConfigEditor() APIAppModel {
 		Notifications: config.NotificationConfig{MuteFeatureInput: m.runtimeConfig.Notifications.MuteFeatureInput},
 	}
 	editor := NewWorkspaceEditConfigModel(cfg, apiPhaseModelCatalog(m.catalog))
+	editor.width = m.width
 	m.configEditor = &editor
 	m.statusMessage = ""
 	return m
@@ -7052,6 +7067,7 @@ func (m APIAppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 			Description:             strings.TrimSpace(result.Description),
 			Repos:                   append([]string(nil), result.Repos...),
 			Models:                  result.Models,
+			Effort:                  result.Effort,
 			ExitCriteria:            result.ExitCriteria,
 			Inquireness:             result.Inquireness,
 			Images:                  append([]string(nil), result.Images...),
@@ -7771,6 +7787,7 @@ func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 		snap := editor.editor.Snapshot()
 		_, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, server.FeatureConfigMutationRequest{
 			Models:             snap.Models,
+			Effort:             snap.Effort,
 			Inquireness:        string(snap.Inquireness),
 			Checkpoints:        snap.Checkpoints,
 			Pipeline:           editor.pipeline,
@@ -7792,6 +7809,7 @@ func (m APIAppModel) saveWorkspaceConfigCmd(editor EditConfigModel) tea.Cmd {
 		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
 			Defaults: server.RuntimeDefaultsMutation{
 				Models:      snap.Models,
+				Effort:      snap.Effort,
 				Inquireness: string(snap.Inquireness),
 				Checkpoints: &checkpoints,
 				Pipeline:    string(editor.pipeline),
@@ -8255,11 +8273,13 @@ func apiFeatureConfigPublishable(publish server.PublishabilityDTO) bool {
 
 func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 	cat := PhaseModelCatalog{
-		Fields:              append([]string(nil), globalModelFields...),
-		ProviderModels:      map[string][]string{},
-		ProviderOrder:       append([]string(nil), resp.ProviderOrder...),
-		PhaseDefaults:       map[string]string{},
-		PhaseProviderModels: map[string]map[string][]string{},
+		Fields:                  append([]string(nil), globalModelFields...),
+		ProviderModels:          map[string][]string{},
+		ProviderModelInfos:      map[string][]llm.ModelInfo{},
+		ProviderOrder:           append([]string(nil), resp.ProviderOrder...),
+		PhaseDefaults:           map[string]string{},
+		PhaseProviderModels:     map[string]map[string][]string{},
+		PhaseProviderModelInfos: map[string]map[string][]llm.ModelInfo{},
 	}
 	missingProviders := map[string]bool{}
 	cat.PhaseDefaults["Clarify"] = resp.PhaseDefaults.Inquiry
@@ -8271,15 +8291,28 @@ func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 	cat.PhaseDefaults[phaseLabelKBBuild] = resp.PhaseDefaults.KBBuild
 	for provider, models := range resp.ProviderModels {
 		ids := make([]string, 0, len(models))
+		infos := make([]llm.ModelInfo, 0, len(models))
 		for _, model := range models {
 			if model.ID != "" {
 				ids = append(ids, model.ID)
+				info := llm.ModelInfo{
+					ID:            model.ID,
+					DisplayName:   model.DisplayName,
+					ContextWindow: model.ContextWindow,
+					Aliases:       append([]string(nil), model.Aliases...),
+					Category:      model.Category,
+				}
+				for _, cap := range model.EffortCapabilities {
+					info.EffortCapabilities = append(info.EffortCapabilities, llm.EffortLevel(cap))
+				}
+				infos = append(infos, info)
 			}
 		}
 		if len(ids) == 0 {
 			continue
 		}
 		cat.ProviderModels[provider] = ids
+		cat.ProviderModelInfos[provider] = infos
 		if !stringSliceContains(cat.ProviderOrder, provider) {
 			missingProviders[provider] = true
 		}
@@ -9138,6 +9171,8 @@ func apiLivePreviewPresentation(featureID string, dto server.LivePreviewResponse
 		out.Provider = dto.Session.Provider
 		out.Model = dto.Session.Model
 		out.Status = dto.Session.Status
+		out.Effort = dto.Session.Effort
+		out.EffortSource = dto.Session.EffortSource
 	}
 	for _, req := range dto.Attention {
 		summary := strings.TrimSpace(req.Summary)

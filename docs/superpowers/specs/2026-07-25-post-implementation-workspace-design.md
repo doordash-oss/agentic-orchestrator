@@ -1,7 +1,7 @@
 # Post-Implementation Workspace Design
 
-**Date:** 2026-07-25  
-**Status:** Approved  
+**Date:** 2026-07-25
+**Status:** Approved
 **Scope:** Desktop feature cockpit, post-implementation cycles, and feature-linked
 `need_user_input` presentation.
 

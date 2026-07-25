@@ -126,11 +126,11 @@ func (pr *PhaseRunner) EffortCapabilitiesForModel(model string) []llm.EffortLeve
 	if pr.Registry == nil || model == "" {
 		return nil
 	}
-	prov, _, err := pr.Registry.ResolveModel(model)
+	prov, resolvedModel, err := pr.Registry.ResolveModel(model)
 	if err != nil {
 		return nil
 	}
-	return llm.EffortCapabilitiesForModel(prov, model)
+	return llm.EffortCapabilitiesForModel(prov, resolvedModel)
 }
 
 // resolveEffortForRole resolves the effective effort level for a primary

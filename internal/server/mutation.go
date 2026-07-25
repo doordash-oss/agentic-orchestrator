@@ -1320,13 +1320,13 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 		if reg == nil || r.model == "" {
 			continue
 		}
-		prov, _, err := reg.ResolveModel(r.model)
+		prov, resolvedModel, err := reg.ResolveModel(r.model)
 		if err != nil {
 			writeAPIError(w, http.StatusBadRequest, "bad_request",
 				"effort."+r.label+" value "+r.val+" cannot be verified: "+r.label+" model "+r.model+" not found in registry", nil)
 			return false
 		}
-		caps := llm.EffortCapabilitiesForModel(prov, r.model)
+		caps := llm.EffortCapabilitiesForModel(prov, resolvedModel)
 		if len(caps) == 0 || !llm.EffortCapabilitySupported(caps, llm.EffortLevel(r.val)) {
 			writeAPIError(w, http.StatusBadRequest, "bad_request",
 				"effort."+r.label+" value "+r.val+" is not supported by the selected "+r.label+" model", nil)

@@ -25,24 +25,13 @@ import (
 // autoReviewBashToolName is the canonical Bash tool name the decorator matches.
 const autoReviewBashToolName = "Bash"
 
-// autoReviewEligibleCommands is the exact, byte-for-byte set of Bash commands
-// the automatic Bash-review decorator may send to a reviewer. The command
-// extracted from the canonical Bash input is compared without trimming,
-// normalizing, splitting, or variant tolerance.
-var autoReviewEligibleCommands = map[string]bool{
-	"go test ./...":      true,
-	"git status --short": true,
-}
-
-func autoReviewEligibleCommand(command string) bool {
-	return autoReviewEligibleCommands[command]
-}
-
 // autoReviewPermissionDecorator wraps the fully composed session permission
 // policy. It asks the existing handler first and returns every non-empty
 // decision or existing error unchanged. Only an empty decision for canonical
 // Bash, when the session's snapshotted flag is enabled and reviewer is usable,
-// permits a single hidden classification. A successful ALLOW is the only new
+// permits a single hidden classification. The guardrail classifier determines
+// eligibility: it parses the command structurally and checks it against the
+// curated development-command policy. A successful ALLOW is the only new
 // automatic decision; DEFER and every failure return the same empty
 // human-deferral decision. The decorator sits outside the CachingHandler, so
 // its allow bypasses the cache and creates no remembered rule, cache entry, or
@@ -67,7 +56,7 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 		return decision, nil
 	}
 	command := permission.ExtractBashCommand(req.Input)
-	if !autoReviewEligibleCommand(command) {
+	if !permission.GuardrailClassify(command, d.workDir, d.writableRoots) {
 		return decision, nil
 	}
 	ctx := req.Ctx

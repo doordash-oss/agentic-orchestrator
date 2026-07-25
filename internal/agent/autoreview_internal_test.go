@@ -17,6 +17,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -134,19 +136,42 @@ func TestDecoratorNoReviewerDefers(t *testing.T) {
 	}
 }
 
-func TestDecoratorDoesNotTrimCommand(t *testing.T) {
+func TestDecoratorIneligibleVariantsDefer(t *testing.T) {
 	inner := &stubHandler{}
 	d := &autoReviewPermissionDecorator{inner: inner, reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"}}
-	// Variants with surrounding whitespace or chaining must not be eligible.
+	// The structural guardrail replaces exact-string matching. These variants
+	// defer because of structural or policy rejection, not whitespace tolerance.
 	for _, in := range []string{
-		`{"command":" go test ./... "}`,
-		`{"command":"go test ./... && echo done"}`,
-		`{"command":"go test ./../"}`,
-		`{"command":"git status"}`,
+		`{"command":"go test ./... && echo done"}`,   // compound with ineligible segment
+		`{"command":"go test ./../"}`,                // parent escape
+		`{"command":"rm -rf /"}`,                     // not in policy
+		`{"command":"go test -exec ./runner ./..."}`, // hazardous flag
 	} {
 		got, err := d.CanUseTool(bashReq(in))
 		if err != nil || got.Behavior != "" {
 			t.Errorf("variant %s should defer, got %+v err %v", in, got, err)
+		}
+	}
+}
+
+func TestDecoratorEligibleVariantsApprove(t *testing.T) {
+	inner := &stubHandler{}
+	d := &autoReviewPermissionDecorator{inner: inner, reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"}}
+	// The structural guardrail recognizes these commands as eligible.
+	for _, in := range []string{
+		`{"command":"go test -v ./..."}`,                  // safe flag
+		`{"command":"go test ./... 2>/dev/null"}`,         // accepted redirect
+		`{"command":"go build ./... && go test ./..."}`,   // eligible compound
+		`{"command":"git --no-pager diff --no-textconv"}`, // git with --no-pager and --no-textconv
+		`{"command":"cargo test"}`,                        // Rust test
+		`{"command":"npm test"}`,                          // JS test
+		`{"command":"make test"}`,                         // Make target
+		`{"command":"pytest"}`,                            // Python test
+		`{"command":"go test -run TestFoo ./..."}`,        // value flag with separate value
+	} {
+		got, err := d.CanUseTool(bashReq(in))
+		if err != nil || got.Behavior != "allow" {
+			t.Errorf("variant %s should be eligible+approved, got %+v err %v", in, got, err)
 		}
 	}
 }
@@ -395,10 +420,398 @@ func TestIntegrationCloseVariantsDeferWithoutModelCall(t *testing.T) {
 	}
 	composed, original := composedGeneralHandler()
 	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
-	for _, cmd := range []string{"go test ./../", "git status", " go test ./... ", "go test ./... && echo done", "git status  --short"} {
+	// The structural guardrail rejects these for structural or policy reasons.
+	// Using an ALLOW provider verifies zero reviewer calls: if the guardrail
+	// incorrectly passed the command, the decorator would return "allow".
+	for _, cmd := range []string{
+		"go test ./../",
+		"go test ./... && echo done",
+		"rm -rf /",
+		"go test -exec ./runner ./...",
+		"go list -export -toolexec=./runner ./...",
+		"go list -export -toolexec ./runner ./...",
+		// Quoted hazardous flags must defer — quoting does not change flag semantics
+		"go test '-exec' ./runner ./...",
+		"eslint '--plugin' evil .",
+		"protoc '--plugin=./evil' foo.proto",
+		"pytest '-p' myplugin",
+		"mocha '--require' foo",
+		// External wrapper paths must defer as direct scripts
+		"/tmp/gradlew test",
+		"../gradlew test",
+		"./untrusted/gradlew test",
+		// Sensitive bare basenames must defer
+		"prettier --write .env",
+		"gcc -o .git/hooks/pre-commit main.c",
+		"go build -o .git/hooks/pre-commit ./cmd/app",
+		"go build -o .claude/settings.json ./cmd/app",
+		// Git sensitive pathspecs must defer
+		"git status /etc/passwd",
+		"git --no-pager show --no-textconv HEAD:.env",
+		// Helper/plugin flags must defer
+		"gcc -plugin foo.so main.c",
+		"javac -processor foo Main.java",
+		"pytest --cov-config=evil.ini",
+		"pytest --cov-config evil.ini",
+		"javac -cp .:/tmp/processor.jar Main.java",
+		"javac -classpath=.:/tmp/processor.jar Main.java",
+		"javac -sourcepath src:/tmp/src Main.java",
+		"javac -bootclasspath .:/tmp/rt.jar Main.java",
+		"javac -extdirs lib:/tmp/ext Main.java",
+		"javac -endorseddirs lib:/tmp/endorsed Main.java",
+		// Compiler helper/search-path forms must defer
+		"kotlinc -Xplugin=./evil.jar main.kt",
+		"kotlinc -cp .:/tmp/lib.jar main.kt",
+		"kotlinc -classpath=.:/tmp/lib.jar main.kt",
+		"gcc -B ./toolchain main.c",
+		// Runner --flag=value bypasses must defer
+		"make --file=/tmp/evil.mk test",
+		"just --justfile=/tmp/evil.just test",
+		"task --taskfile=/tmp/evil.yml test",
+		"./gradlew --init-script=/tmp/evil.gradle test",
+		// Runner flags without a recognized target must not invoke defaults
+		"make --silent",
+		"make -j4",
+		"make -j 4",
+		"just --quiet",
+		"task --silent",
+		"./gradlew --quiet",
+		"./gradlew -x test",
+		"./mvnw --quiet",
+		"./mvnw -T 2",
+		// Runner variable overrides must defer before reviewer invocation
+		"make test SHELL=./foo-test",
+		"just test shell=./foo-test",
+		"task test SHELL=./foo-test",
+		// Prohibited target components are case-insensitive.
+		"make test-Deploy",
+		"just lint-Release",
+		"task build-Publish",
+		"./gradlew test-Release",
+		"./mvnw verify-Deploy",
+		"npm run test-Publish",
+		"pnpm run lint-Release",
+		"yarn run build-Deploy",
+		// Execution-capable assignment variables must defer
+		"GOFLAGS=-toolexec=./runner go test ./...",
+		"CFLAGS=-B./toolchain gcc main.c",
+		// Git diff without --no-textconv must defer
+		"git --no-pager diff",
+		// air (live-reload daemon) must defer
+		"air",
+		// Mixed-fragment word concatenation bypasses must defer
+		"prettier --write .''env",
+		"go test -e''xec ./runner ./...",
+		// Compiler strict mode: attached hazardous flags must defer
+		"gcc -B./toolchain main.c",
+		"gcc -Wl,--plugin,evil.so main.c",
+		"gcc -Wl,-plugin,./evil.so main.c",
+		// CMake cache variables that select executables or loaded code must defer
+		"cmake -D CMAKE_C_COMPILER=./runner -S . -B build",
+		"cmake -DCMAKE_C_COMPILER=./runner -S . -B build",
+		"cmake -D CMAKE_PROJECT_TOP_LEVEL_INCLUDES=./evil.cmake -S . -B build",
+		"cmake -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./evil.cmake -S . -B build",
+		// go vet strict mode: -vettool must defer
+		"go vet -vettool=./runner ./...",
+		// Bazel strict mode: = forms must defer
+		"bazel build --override_repository=repo=/tmp/evil //target",
+		"bazel build delete-all",
+		// Buf strict mode: = forms must defer
+		"buf generate --template=evil.yaml",
+		// Protoc strict mode: unknown plugin output must defer
+		"protoc --evil_out=. foo.proto",
+		// Git --show-signature invokes GPG helper — must defer
+		"git --no-pager log --no-textconv --show-signature",
+		// Inline value skipping: safe =value flag must not consume next arg
+		"go test -run=Test -exec=/tmp/runner ./...",
+		"bazel test --jobs=1 --override_repository=repo=/tmp/evil //...",
+		// Response-file indirection must defer
+		"gcc @options main.c",
+		"clang-tidy @params src/main.cpp",
+		"cppcheck @options src/",
+		// Go nested pass-through flags must defer
+		"go build -ldflags '-linkmode=external -extld=./runner' ./...",
+		// Go pass-through flags (-gcflags, -asmflags, -gccgoflags) and compiler
+		// selection (-compiler) must defer — their values bypass the policy
+		"go build -gcflags '-B' ./...",
+		"go test -gcflags '-B' ./...",
+		"go build -asmflags '-I' ./...",
+		"go test -asmflags '-I' ./...",
+		"go test -gccgoflags '-B./toolchain' ./...",
+		"go build -compiler gccgo ./...",
+		"go test -compiler gccgo ./...",
+		"go vet -compiler gccgo ./...",
+		// Code-loading tools in strict tier: plugin/helper flags must defer
+		"pylint --load-plugins=evil src/",
+		"pylint --init-hook x src/",
+		"pylint -f evil.EvilReporter src/",
+		"pylint -f=evil.EvilReporter src/",
+		"pylint -fevil.EvilReporter src/",
+		"pylint --output-format evil.EvilReporter src/",
+		"pylint --output-format=evil.EvilReporter src/",
+		"pylint --format=evil.EvilReporter src/",
+		"clang-tidy --load=./evil.so src/main.cpp",
+		"clang-tidy --extra-arg=-fplugin src/main.cpp",
+		"clang-tidy '--config={ExtraArgsBefore: [-Xclang, -load, -Xclang, ./evil.so]}' src/main.cpp",
+		"clang-tidy '--config={ExtraArgs: [-Xclang, -load, -Xclang, ./evil.so]}' src/main.cpp",
+		"clang-tidy --config '{ExtraArgsBefore: [-Xclang, -load, -Xclang, ./evil.so]}' src/main.cpp",
+		"clang-tidy --config-file=evil.yaml src/main.cpp",
+		"clang-tidy --config-file evil.yaml src/main.cpp",
+		"clang-tidy --fix src/main.cpp",
+		"mypy --python-executable=./evil src/",
+		"mypy --python-executable ./evil src/",
+		"cppcheck --addon=./evil.py src/",
+		"cppcheck --library=evil.cfg src/",
+		"javac -J-javaagent:./evil.jar Main.java",
+		"kotlinc -J-javaagent:./evil.jar main.kt",
+		"ktlint --ruleset=./evil.jar src/main.kt",
+		"ktlint --ruleset ./evil.jar src/main.kt",
+		"ktlint -R ./evil.jar src/main.kt",
+		// Buf input operands must be root-bounded and non-sensitive
+		"buf lint /etc/passwd",
+		"buf generate /tmp/external",
+		"buf lint .env",
+		// Git symbolic-ref mutating forms must defer
+		"git symbolic-ref HEAD refs/heads/other",
+		"git symbolic-ref -d HEAD",
+		"git symbolic-ref --delete HEAD",
+		// Cargo --config override and unverified external subcommand must defer
+		"cargo check --config build.rustc-wrapper=./runner",
+		"cargo test-unit",
+		// Code-loading and executable-selection flags must defer
+		"eslint --parser ./evil.js .",
+		"eslint --format ./evil.js .",
+		"eslint --format=./evil.js .",
+		"eslint -f ./evil.js .",
+		"eslint -f=./evil.js .",
+		"eslint -f./evil.js .",
+		"mocha --reporter ./evil.js",
+		"vitest --reporter ./evil.js",
+		"mockgen -exec_only ./runner",
+		// Embedded file-backed style selectors must be interpreted as paths.
+		"clang-format --style=file:/tmp/evil-format main.cpp",
+		"clang-format --style file:/tmp/evil-format main.cpp",
+		"clang-format -style=file:/tmp/evil-format main.cpp",
+		"clang-format -style file:/tmp/evil-format main.cpp",
+		"clang-format --style=file:.env main.cpp",
+		// Multi-mode and destructive-clean commands must defer.
+		"ruff server",
+		"ruff clean",
+		"golangci-lint cache clean",
+		"jest --clearCache",
+		"pytest --cache-clear",
+		// Destructive target components override development verbs everywhere.
+		"make test-remove",
+		"make test-uninstall",
+		"make test-destroy",
+		"make test-delete",
+		"just test-remove",
+		"just test-uninstall",
+		"task test-delete",
+		"task test-destroy",
+		"bazel test //ops:test-remove",
+		"bazel build //ops:build-destroy",
+		"./gradlew test-remove",
+		"./gradlew test-uninstall",
+		"./mvnw test-delete",
+		"./mvnw test-destroy",
+		"npm run test-remove",
+		"npm run test-uninstall",
+		"pnpm run test-delete",
+		"yarn run test-destroy",
+		// Bazel opaque pass-through options must defer
+		"bazel test --test_arg=delete-all //target",
+		"bazel test --test_env=LD_PRELOAD=./evil.so //target",
+		"bazel test --config=repo_defined //target",
+		"bazel build --disk_cache=grpc://external.example //target",
+		"bazel build --repository_cache=/tmp/cache //target",
+		"bazel build --copt=-fplugin=./evil.so //target",
+		"bazel build --copt -fplugin=./evil.so //target",
+		"bazel build --linkopt=--plugin=evil.so //target",
+		"bazel build --python_path=./runner //target",
+		"bazel build --action_env=LD_PRELOAD=./evil.so //target",
+		"bazel build --define=FOO=bar //target",
+		"bazel build --features=evil //target",
+		// Secret-bearing attached macro flags must defer before reviewer invocation.
+		"gcc -DPASSWORD=hunter2 -c main.c",
+		"gcc -DAPI_KEY=hunter2 -c main.c",
+		"cppcheck -DPASSWORD=hunter2 src/",
+		// NUL and control bytes must defer
+		"go test \x00 ./...",
+		"go test \x01 ./...",
+	} {
 		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
 		if err != nil || got.Behavior != "" {
 			t.Errorf("variant %q should defer, got %+v err %v", cmd, got, err)
+		}
+	}
+}
+
+func TestIntegrationCompilerExecutableSelectorsDeferWithoutModelCall(t *testing.T) {
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatalf("ResolveReviewer = false, want true")
+	}
+	composed, original := composedGeneralHandler()
+	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	for _, cmd := range []string{
+		"clang -flto=thin -fuse-ld=lld -fthinlto-distributor=./runner main.c",
+		"clang -fuse-ld=./runner main.c",
+		"clang -flto=thin -c main.c",
+	} {
+		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Errorf("compiler selector %q should defer, got %+v err %v", cmd, got, err)
+		}
+	}
+}
+
+func TestIntegrationCompilerPassThroughOutputsDeferWithoutModelCall(t *testing.T) {
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatalf("ResolveReviewer = false, want true")
+	}
+	composed, original := composedGeneralHandler()
+	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	for _, cmd := range []string{
+		"gcc -Wp,-MD,/tmp/deps main.c",
+		"gcc -Wa,-o,/tmp/asm.o main.c",
+		"gcc -Wl,-Map,/tmp/link.map main.c",
+	} {
+		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Errorf("compiler pass-through %q should defer, got %+v err %v", cmd, got, err)
+		}
+	}
+}
+
+func TestIntegrationCMakeNativePassThroughDeferWithoutModelCall(t *testing.T) {
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatalf("ResolveReviewer = false, want true")
+	}
+	composed, original := composedGeneralHandler()
+	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	for _, cmd := range []string{
+		"cmake --build build -- SHELL=./runner",
+		"cmake --build build -- clean",
+		"cmake --build build -- install",
+	} {
+		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Errorf("cmake native pass-through %q should defer, got %+v err %v", cmd, got, err)
+		}
+	}
+}
+
+func TestIntegrationCMakePresetsDeferWithoutModelCall(t *testing.T) {
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatalf("ResolveReviewer = false, want true")
+	}
+	composed, original := composedGeneralHandler()
+	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	for _, cmd := range []string{
+		"cmake --preset evil-compiler",
+		"cmake --preset=evil-include",
+	} {
+		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Errorf("cmake preset %q should defer, got %+v err %v", cmd, got, err)
+		}
+	}
+}
+
+func TestIntegrationPackageScriptPassThroughDefersWithoutModelCall(t *testing.T) {
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatalf("ResolveReviewer = false, want true")
+	}
+	composed, original := composedGeneralHandler()
+	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	for _, cmd := range []string{
+		"npm test -- --silent",
+		"pnpm test -- --quiet",
+		"yarn test -- --verbose",
+		"npm run test -- --silent",
+		"pnpm run test -- --quiet",
+		"yarn run test -- --verbose",
+	} {
+		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Errorf("package script pass-through %q should defer, got %+v err %v", cmd, got, err)
+		}
+	}
+}
+
+func TestIntegrationBazelProhibitedLabelsDeferWithoutModelCall(t *testing.T) {
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatalf("ResolveReviewer = false, want true")
+	}
+	composed, original := composedGeneralHandler()
+	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+	for _, cmd := range []string{
+		"bazel build //:deploy",
+		"bazel build //tools:install",
+		"bazel test //ops:release",
+	} {
+		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Errorf("bazel prohibited label %q should defer, got %+v err %v", cmd, got, err)
+		}
+	}
+}
+
+func TestIntegrationSymlinkEscapesDeferWithoutModelCall(t *testing.T) {
+	workDir := t.TempDir()
+	externalDir := t.TempDir()
+	if err := os.Symlink(externalDir, filepath.Join(workDir, "escape")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	externalFile := filepath.Join(externalDir, "victim.go")
+	if err := os.WriteFile(externalFile, []byte("package external\n"), 0o600); err != nil {
+		t.Fatalf("write external file: %v", err)
+	}
+	if err := os.Symlink(externalFile, filepath.Join(workDir, "victim.go")); err != nil {
+		t.Skipf("file symlink unavailable: %v", err)
+	}
+	subdir := filepath.Join(workDir, "subdir")
+	if err := os.Mkdir(subdir, 0o700); err != nil {
+		t.Fatalf("create subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "changed.go"), []byte("package root\n"), 0o600); err != nil {
+		t.Fatalf("write root changed file: %v", err)
+	}
+	if err := os.Symlink(externalFile, filepath.Join(subdir, "changed.go")); err != nil {
+		t.Skipf("changed-directory symlink unavailable: %v", err)
+	}
+
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatalf("ResolveReviewer = false, want true")
+	}
+	composed, original := composedGeneralHandler()
+	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, workDir, []string{workDir})
+	for _, cmd := range []string{
+		"cd escape && make test",
+		"go test ./escape/...",
+		"go build -o escape/app ./...",
+		"gofmt -w victim.go",
+		"prettier --write escape",
+		"go build -o victim.go ./...",
+		"cd subdir && gofmt -w changed.go",
+	} {
+		got, err := handler.CanUseTool(bashReq(`{"command":"` + cmd + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Errorf("symlink escape %q should defer, got %+v err %v", cmd, got, err)
 		}
 	}
 }

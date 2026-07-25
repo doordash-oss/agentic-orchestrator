@@ -202,7 +202,11 @@ describe('FeatureCockpit snapshot rendering', () => {
         actions: [
           { id: 'publish', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
           { id: 'merge', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
-          { id: 'mark-done', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
+          {
+            id: 'mark-done',
+            enabled: false,
+            disabledReasons: [{ code: 'run_active', message: '' }],
+          },
           { id: 'cleanup', enabled: false, disabledReasons: [{ code: 'run_active', message: '' }] },
         ],
       }),
@@ -301,6 +305,55 @@ describe('FeatureCockpit snapshot rendering', () => {
     await waitFor(() =>
       expect(mock.api.getRun).toHaveBeenCalledWith({ featureId: FEATURE_ID, runNumber: 8 }),
     );
+  });
+
+  it('opens the dedicated Rebase dialog from the Aftercare runway', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        actions: [{ id: 'rebase', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    mock.api.preflightRebase.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'rebase-revision',
+      repos: [],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: /Prepare rebase/ }));
+
+    expect(await screen.findByRole('dialog', { name: 'Rebase' })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Repository cycles' })).not.toBeInTheDocument();
+  });
+
+  it('lists each enabled maintenance cycle separately in the overflow menu', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        actions: [
+          { id: 'rebase', enabled: true, disabledReasons: [] },
+          {
+            id: 'review-comments',
+            enabled: true,
+            disabledReasons: [],
+            inputs: [{ name: 'mode', options: ['auto', 'address_all'] }],
+          },
+          { id: 'refactor', enabled: true, disabledReasons: [] },
+        ],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const actions = await screen.findByRole('group', { name: 'Feature actions' });
+    await user.click(within(actions).getByLabelText('More actions'));
+
+    expect(within(actions).getByRole('menuitem', { name: 'Rebase' })).toBeVisible();
+    expect(within(actions).getByRole('menuitem', { name: 'Review comments' })).toBeVisible();
+    expect(within(actions).getByRole('menuitem', { name: 'Refactor' })).toBeVisible();
+    expect(within(actions).queryByRole('menuitem', { name: 'Repository cycles' })).toBeNull();
   });
 
   it('opens the completed transcript from Run record', async () => {

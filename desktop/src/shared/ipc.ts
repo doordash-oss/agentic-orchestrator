@@ -1006,6 +1006,7 @@ export const ReviewCommentViewSchema = z.strictObject({
     .max(64 * 1024)
     .optional(),
   author: z.string().max(200).optional(),
+  type: z.string().max(50).optional(),
   threadId: z.string().max(200).optional(),
 });
 export type ReviewCommentView = z.output<typeof ReviewCommentViewSchema>;

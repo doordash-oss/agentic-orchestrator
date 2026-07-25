@@ -308,12 +308,15 @@ export class FeatureService {
       repo: response.repo,
       comments: (response.comments ?? []).map((comment) => ({
         id: comment.id,
-        ...(comment.file === undefined || comment.file === '' ? {} : { file: comment.file }),
+        ...(comment.file === undefined && comment.path === undefined
+          ? {}
+          : { file: comment.file ?? comment.path }),
         ...(comment.line === undefined ? {} : { line: comment.line }),
         ...(comment.body === undefined ? {} : { body: redactText(comment.body) }),
-        ...(comment.author === undefined || comment.author === ''
+        ...(comment.author === undefined && comment.user_login === undefined
           ? {}
-          : { author: comment.author }),
+          : { author: comment.author ?? comment.user_login }),
+        ...(comment.type === undefined || comment.type === '' ? {} : { type: comment.type }),
         ...(comment.thread_id === undefined || comment.thread_id === ''
           ? {}
           : { threadId: comment.thread_id }),

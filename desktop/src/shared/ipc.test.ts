@@ -23,6 +23,7 @@ import {
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
   PublishDescriptionRequestSchema,
+  ReviewCommentViewSchema,
 } from './ipc';
 import { assertNoPrototypePollution } from './sanitize';
 
@@ -572,5 +573,23 @@ describe('recoverable local review draft schemas', () => {
     expect(LocalReviewDraftStoreSchema.safeParse({ schemaVersion: 2, drafts: [] }).success).toBe(
       false,
     );
+  });
+});
+
+describe('ReviewCommentViewSchema', () => {
+  it('preserves the server feedback type used by comment badges', () => {
+    expect(
+      ReviewCommentViewSchema.parse({
+        id: 41,
+        file: 'desktop/src/main/features.ts',
+        author: 'octocat',
+        type: 'issue',
+      }),
+    ).toEqual({
+      id: 41,
+      file: 'desktop/src/main/features.ts',
+      author: 'octocat',
+      type: 'issue',
+    });
   });
 });

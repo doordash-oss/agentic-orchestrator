@@ -870,9 +870,12 @@ export type RebaseStartResponse = z.output<typeof RebaseStartResponseSchema>;
 export const ServerReviewCommentSchema = z.object({
   id: z.number().int(),
   file: z.string().optional(),
+  path: z.string().optional(),
   line: z.number().int().optional(),
   body: z.string().optional(),
   author: z.string().optional(),
+  user_login: z.string().optional(),
+  type: z.string().optional(),
   thread_id: z.string().optional(),
 });
 export type ServerReviewComment = z.output<typeof ServerReviewCommentSchema>;

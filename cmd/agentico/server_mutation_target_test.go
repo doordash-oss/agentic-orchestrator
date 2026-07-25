@@ -2099,6 +2099,38 @@ func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing
 	}
 }
 
+func TestServerMutationTargetReviewCommentsStartStagesConversationAndReviewBodyComments(t *testing.T) {
+	target, store, f := newReviewCommentsActionTarget(t)
+	reviewer := target.reviewer.(*fakeReviewCommentOperator)
+	issue := reviewComment(301, "conversation feedback")
+	issue.Type = ports.CommentTypeIssue
+	reviewBody := reviewComment(302, "review summary feedback")
+	reviewBody.Type = ports.CommentTypeReviewBody
+	reviewer.comments = []ports.ReviewComment{issue, reviewBody}
+
+	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
+		Repo: testRepoAName,
+		Mode: reviewModeAuto,
+	})
+	if err == nil {
+		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
+	}
+	if result.CommentCount != 2 || result.Result != resultFailed {
+		t.Fatalf("StartReviewComments() result = %+v; want both supported comments staged before dispatch", result)
+	}
+	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName)
+	if err != nil {
+		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
+	}
+	if len(staged.Comments) != 2 ||
+		staged.Comments[0].ID != issue.ID ||
+		staged.Comments[0].Type != ports.CommentTypeIssue ||
+		staged.Comments[1].ID != reviewBody.ID ||
+		staged.Comments[1].Type != ports.CommentTypeReviewBody {
+		t.Fatalf("staged review comments = %+v; want issue 301 and review_body 302", staged.Comments)
+	}
+}
+
 func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t *testing.T) {
 	target, store, f := newReviewCommentsActionTarget(t)
 	reviewer := target.reviewer.(*fakeReviewCommentOperator)

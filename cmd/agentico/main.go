@@ -1980,7 +1980,7 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 	} else {
 		resp.Source = "provided"
 	}
-	comments = threadedReviewComments(comments)
+	comments = supportedReviewComments(comments)
 	if len(comments) == 0 {
 		resp.Result = "no_comments"
 		return resp, fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
@@ -2234,10 +2234,13 @@ func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewCo
 	return out
 }
 
-func threadedReviewComments(comments []ports.ReviewComment) []ports.ReviewComment {
+func supportedReviewComments(comments []ports.ReviewComment) []ports.ReviewComment {
 	filtered := comments[:0]
 	for _, comment := range comments {
-		if comment.Type == "" || comment.Type == ports.CommentTypeReview {
+		// Keep this aligned with isSupportedPRFeedback in
+		// internal/orchestrator/review_comments_feature.go.
+		switch comment.Type {
+		case "", ports.CommentTypeReview, ports.CommentTypeIssue, ports.CommentTypeReviewBody:
 			filtered = append(filtered, comment)
 		}
 	}

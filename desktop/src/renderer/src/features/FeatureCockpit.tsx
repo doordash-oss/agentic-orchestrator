@@ -23,6 +23,7 @@ import {
   type FeatureActionRequest,
 } from '../../../shared/ipc';
 import { PhaseSpine } from '../components/PhaseSpine';
+import { useModalDismiss } from '../components/useModalDismiss';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
@@ -31,9 +32,11 @@ import { FeatureConfigPanel } from './ConfigEditor';
 import { ArchiveMode } from './ArchiveMode';
 import { RewindJourney } from './RewindJourney';
 import { RepositoryInstrument } from './RepositoryInstrument';
-import { CycleJourneys } from './CycleJourneys';
 import { AftercareDesk } from './AftercareDesk';
 import type { AftercareCycleId } from './aftercareModel';
+import { RebaseModal } from './cycles/RebaseModal';
+import { ReviewCommentsModal } from './cycles/ReviewCommentsModal';
+import { RefactorModal } from './cycles/RefactorModal';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
 import {
   completionBarModel,
@@ -814,21 +817,7 @@ function CockpitModal({
   children: ReactNode;
 }) {
   const modalRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    modalRef.current
-      ?.querySelector<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      )
-      ?.focus();
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  useModalDismiss(modalRef, onClose);
 
   return (
     <div className="cockpit__modal-overlay" onMouseDown={onClose}>
@@ -838,6 +827,7 @@ function CockpitModal({
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel}
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="cockpit__modal-header">
@@ -882,15 +872,14 @@ export function FeatureCockpit({
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [rewindDialog, setRewindDialog] = useState(false);
-  const [cyclesDialog, setCyclesDialog] = useState(false);
+  const [cycleModal, setCycleModal] = useState<AftercareCycleId | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
   const [aftercareRun, setAftercareRun] = useState<RunDetailView | null>(null);
-  const [initialCycle, setInitialCycle] = useState<AftercareCycleId | undefined>();
-  const [activeSurface, setActiveSurface] = useState<
-    'aftercare' | 'document' | 'live' | 'changes'
-  >('document');
+  const [activeSurface, setActiveSurface] = useState<'aftercare' | 'document' | 'live' | 'changes'>(
+    'document',
+  );
   const [rewindLanding, setRewindLanding] = useState<{
     outcome: FeatureActionResult;
     run: RunDetailView | null;
@@ -1301,9 +1290,7 @@ export function FeatureCockpit({
       });
   };
 
-  const visibleAttentionItems = attentionItems.filter(
-    (item) => item.kind !== 'review',
-  );
+  const visibleAttentionItems = attentionItems.filter((item) => item.kind !== 'review');
   const featureAttentionItems = visibleAttentionItems.filter(
     (item) => item.kind !== 'recovery' && item.featureId === featureId,
   );
@@ -1382,11 +1369,6 @@ export function FeatureCockpit({
 
   const reasonsOf = (action: ReturnType<typeof actionById>): string[] =>
     action?.disabledReasons.map((reason) => displayFeatureMessage(reason.message)) ?? [];
-  const cyclesEnabled =
-    rebaseAction?.enabled === true ||
-    reviewCommentsAction?.enabled === true ||
-    refactorAction?.enabled === true;
-
   const primaryActions: CockpitPrimaryAction[] = [];
   if (setupAction?.enabled === true) {
     primaryActions.push({
@@ -1473,16 +1455,28 @@ export function FeatureCockpit({
   if (restartAction?.enabled === true) {
     menuActions.push({ key: 'restart', label: 'Restart', enabled: true, onClick: restart });
   }
-  if (cyclesEnabled) {
+  if (rebaseAction?.enabled === true) {
     menuActions.push({
-      key: 'cycles',
-      label: 'Cycles',
-      ariaLabel: 'Repository cycles',
+      key: 'rebase',
+      label: 'Rebase',
       enabled: true,
-      onClick: () => {
-        setInitialCycle(undefined);
-        setCyclesDialog(true);
-      },
+      onClick: () => setCycleModal('rebase'),
+    });
+  }
+  if (reviewCommentsAction?.enabled === true) {
+    menuActions.push({
+      key: 'review-comments',
+      label: 'Review comments',
+      enabled: true,
+      onClick: () => setCycleModal('review-comments'),
+    });
+  }
+  if (refactorAction?.enabled === true) {
+    menuActions.push({
+      key: 'refactor',
+      label: 'Refactor',
+      enabled: true,
+      onClick: () => setCycleModal('refactor'),
     });
   }
   if (rewindAction?.enabled === true) {
@@ -1666,10 +1660,7 @@ export function FeatureCockpit({
                     <AftercareDesk
                       snapshot={snapshot}
                       run={aftercareRun}
-                      onOpenCycle={(cycle) => {
-                        setInitialCycle(cycle);
-                        setCyclesDialog(true);
-                      }}
+                      onOpenCycle={(cycle) => setCycleModal(cycle)}
                     />
                   </div>
                 ) : null}
@@ -1852,22 +1843,45 @@ export function FeatureCockpit({
             />
           ) : null}
 
-          {cyclesDialog ? (
-            <CockpitModal
-              title="Repository cycles"
-              ariaLabel="Repository cycles"
-              onClose={() => {
-                setCyclesDialog(false);
-                setInitialCycle(undefined);
-              }}
-            >
-              <CycleJourneys
+          {cycleModal === 'rebase' ? (
+            <CockpitModal title="Rebase" ariaLabel="Rebase" onClose={() => setCycleModal(null)}>
+              <RebaseModal
                 featureId={featureId}
                 snapshot={snapshot}
-                initialCycle={initialCycle}
-                onComplete={() => load({ silent: true })}
+                onDispatched={() => load({ silent: true })}
+                onCancel={() => setCycleModal(null)}
                 attentionItems={attentionItems}
-                onOpenGate={() => setCyclesDialog(false)}
+                onOpenGate={() => setCycleModal(null)}
+              />
+            </CockpitModal>
+          ) : null}
+
+          {cycleModal === 'review-comments' ? (
+            <CockpitModal
+              title="Review comments"
+              ariaLabel="Review comments"
+              onClose={() => setCycleModal(null)}
+            >
+              <ReviewCommentsModal
+                featureId={featureId}
+                snapshot={snapshot}
+                onDispatched={() => load({ silent: true })}
+                onCancel={() => setCycleModal(null)}
+                attentionItems={attentionItems}
+                onOpenGate={() => setCycleModal(null)}
+              />
+            </CockpitModal>
+          ) : null}
+
+          {cycleModal === 'refactor' ? (
+            <CockpitModal title="Refactor" ariaLabel="Refactor" onClose={() => setCycleModal(null)}>
+              <RefactorModal
+                featureId={featureId}
+                snapshot={snapshot}
+                onDispatched={() => load({ silent: true })}
+                onCancel={() => setCycleModal(null)}
+                attentionItems={attentionItems}
+                onOpenGate={() => setCycleModal(null)}
               />
             </CockpitModal>
           ) : null}
@@ -1904,8 +1918,7 @@ export function FeatureCockpit({
                 onDispatched={onCompletionDispatched}
                 onHandoffToRebase={() => {
                   setCompletionModal(null);
-                  setInitialCycle('rebase');
-                  setCyclesDialog(true);
+                  setCycleModal('rebase');
                 }}
               />
             </CockpitModal>

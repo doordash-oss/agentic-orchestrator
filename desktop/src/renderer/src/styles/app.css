@@ -4234,6 +4234,24 @@ body {
   background: var(--color-panel);
   box-shadow: 0 24px 60px color-mix(in srgb, #000 45%, transparent);
   overflow: hidden;
+  animation: cockpit-modal-enter 160ms ease-out;
+}
+
+@keyframes cockpit-modal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cockpit__modal {
+    animation: none;
+  }
 }
 
 .cockpit__modal-header {
@@ -8048,6 +8066,170 @@ body {
   background: transparent;
   border-color: var(--color-hairline);
   cursor: default;
+}
+
+.cycle-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.cycle-modal__context {
+  margin: 0;
+  color: var(--color-muted);
+  font: 13px var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.cycle-modal select,
+.cycle-modal textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: 14px var(--font-body);
+}
+
+.cycle-modal textarea {
+  min-height: 132px;
+  resize: vertical;
+}
+
+.cycle-modal select:focus-visible,
+.cycle-modal textarea:focus-visible {
+  border-color: var(--color-signal);
+  outline: var(--focus-ring);
+  outline-offset: 0;
+}
+
+.cycle-modal__prompt textarea {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.cycle-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin: var(--space-1) calc(-1 * var(--space-5)) calc(-1 * var(--space-5));
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-hairline);
+}
+
+.cycle-modal__primary,
+.cycle-modal__cancel {
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.cycle-modal__primary {
+  border: 1px solid var(--color-signal);
+  background: var(--color-signal);
+  color: var(--color-bg);
+  font: 600 15px var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+.cycle-modal__cancel {
+  border: 1px solid var(--color-hairline);
+  background: transparent;
+  color: var(--color-text);
+  font: 700 13px var(--font-body);
+}
+
+.cycle-modal__primary:hover:not(:disabled),
+.cycle-modal__cancel:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.cycle-modal__primary:focus-visible,
+.cycle-modal__cancel:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cycle-modal__primary:disabled,
+.cycle-modal__cancel:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.cycle-modal__all-clear {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+}
+
+.cycle-modal__all-clear > span {
+  color: var(--color-success);
+  font: 600 28px var(--font-display);
+}
+
+.cycle-modal__all-clear h4 {
+  margin: 0;
+  font: 600 21px var(--font-display);
+}
+
+.cycle-modal__all-clear p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.cycle-journey__comment-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.cycle-modal__comment-type {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: 1px var(--space-2);
+  color: var(--color-muted);
+  font: 11px var(--font-mono);
+}
+
+.cycle-modal__comment-type[data-type='review'] {
+  border-color: var(--color-signal);
+  color: var(--color-signal);
+}
+
+.cycle-modal__comment-type[data-type='issue'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.cycle-modal__comment-type[data-type='review_body'] {
+  color: var(--color-muted);
+}
+
+.cycle-modal__blockers,
+.cycle-journey__preflight-repo[data-blocked='true'] {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+}
+
+.cycle-modal__blockers {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  color: var(--color-danger);
+  font-size: 12px;
+}
+
+.cycle-modal__blockers p {
+  margin: 0;
 }
 
 /* ─── Bulk resume/retry preview panel ─── */

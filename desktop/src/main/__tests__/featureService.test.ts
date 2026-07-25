@@ -589,3 +589,39 @@ describe('FeatureService.listFeatures', () => {
     ]);
   });
 });
+
+describe('FeatureService.fetchReviewComments', () => {
+  it('maps server path, author login, and feedback type into the renderer view', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        feature_id: 'abcd1234ef567890',
+        repo: 'repo-a',
+        comments: [
+          {
+            id: 41,
+            path: 'desktop/src/main/features.ts',
+            line: 312,
+            body: 'Keep conversation comments in scope.',
+            user_login: 'octocat',
+            type: 'issue',
+          },
+        ],
+      },
+    }));
+
+    await expect(
+      service.fetchReviewComments({ featureId: 'abcd1234ef567890', repo: 'repo-a' }),
+    ).resolves.toMatchObject({
+      comments: [
+        {
+          id: 41,
+          file: 'desktop/src/main/features.ts',
+          author: 'octocat',
+          type: 'issue',
+        },
+      ],
+    });
+  });
+});

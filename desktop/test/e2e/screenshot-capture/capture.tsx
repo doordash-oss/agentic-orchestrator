@@ -16,7 +16,9 @@ import { ArchiveMode } from '../../../src/renderer/src/features/ArchiveMode';
 import { RewindJourney } from '../../../src/renderer/src/features/RewindJourney';
 import { RepositoryInstrument } from '../../../src/renderer/src/features/RepositoryInstrument';
 import { CurrentRunInspection } from '../../../src/renderer/src/features/CurrentRunInspection';
-import { CycleJourneys } from '../../../src/renderer/src/features/CycleJourneys';
+import { RebaseModal } from '../../../src/renderer/src/features/cycles/RebaseModal';
+import { ReviewCommentsModal } from '../../../src/renderer/src/features/cycles/ReviewCommentsModal';
+import { RefactorModal } from '../../../src/renderer/src/features/cycles/RefactorModal';
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
 import { ChangesSurface } from '../../../src/renderer/src/features/completion/ChangesSurface';
@@ -322,8 +324,14 @@ function AftercareScene() {
   );
 }
 
-function CycleJourneysScene({ scene }: { scene: string }) {
+function CycleModalScene({ scene }: { scene: string }) {
   const snapshot = scene === 'rebase-preflight' ? REBASE_FEATURE_SNAPSHOT : CYCLES_FEATURE_SNAPSHOT;
+  const title =
+    scene === 'rebase-preflight'
+      ? 'Rebase'
+      : scene === 'review-refactor'
+        ? 'Refactor'
+        : 'Review comments';
   const gateItems =
     scene === 'cycle-gate'
       ? [
@@ -352,7 +360,7 @@ function CycleJourneysScene({ scene }: { scene: string }) {
       }}
     >
       <div
-        className="cockpit__cycles-drawer"
+        className="cockpit__modal"
         style={{
           padding: '0',
           flex: isConstrained ? '1 1 auto' : undefined,
@@ -360,20 +368,37 @@ function CycleJourneysScene({ scene }: { scene: string }) {
           overflow: 'auto',
         }}
       >
-        <header className="cockpit__cycles-header">
-          <h3>Repository cycles</h3>
-          <button type="button" className="cockpit__cycles-close">
+        <header className="cockpit__modal-header">
+          <h3>{title}</h3>
+          <button type="button" className="cockpit__modal-close">
             Close
           </button>
         </header>
-        <div style={{ padding: 'var(--space-3) var(--space-4)' }}>
-          <CycleJourneys
-            featureId="abcd1234ef567890"
-            snapshot={snapshot}
-            onComplete={() => {}}
-            attentionItems={gateItems}
-            onOpenGate={() => {}}
-          />
+        <div className="cockpit__modal-body">
+          {scene === 'rebase-preflight' ? (
+            <RebaseModal
+              featureId="abcd1234ef567890"
+              snapshot={snapshot}
+              onCancel={() => {}}
+              onDispatched={() => {}}
+            />
+          ) : scene === 'review-refactor' ? (
+            <RefactorModal
+              featureId="abcd1234ef567890"
+              snapshot={snapshot}
+              onCancel={() => {}}
+              onDispatched={() => {}}
+            />
+          ) : (
+            <ReviewCommentsModal
+              featureId="abcd1234ef567890"
+              snapshot={snapshot}
+              onCancel={() => {}}
+              onDispatched={() => {}}
+              attentionItems={gateItems}
+              onOpenGate={() => {}}
+            />
+          )}
         </div>
       </div>
       {scene === 'cycle-gate' ? (
@@ -842,7 +867,7 @@ function CaptureApp() {
     return <AftercareScene />;
   }
   if (scene === 'rebase-preflight' || scene === 'review-refactor' || scene === 'cycle-gate') {
-    return <CycleJourneysScene scene={scene} />;
+    return <CycleModalScene scene={scene} />;
   }
   if (scene === 'bulk-preview' || scene === 'bulk-queue') {
     return <BulkPreviewScene />;

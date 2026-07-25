@@ -470,9 +470,9 @@ func reasoningEffortFor(backend string, level llm.EffortLevel) (string, bool) {
 		return "medium", true
 	case llm.EffortHigh:
 		return "high", true
-	case llm.EffortMax:
-		// OpenAI reasoning effort tops out at "high"; map the highest Agentico
-		// level to it rather than inventing an unsupported value.
+	case llm.EffortXHigh, llm.EffortMax:
+		// OpenAI reasoning effort tops out at "high"; map the two highest
+		// Agentico levels to it rather than inventing an unsupported value.
 		return "high", true
 	default:
 		return "", false

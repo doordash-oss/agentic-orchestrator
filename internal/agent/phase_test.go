@@ -1935,7 +1935,8 @@ func TestBuildSession_Claude_EffortLevel(t *testing.T) {
 		{"low effort", llm.EffortLow, "low"},
 		{"medium effort", llm.EffortMedium, "medium"},
 		{"high effort", llm.EffortHigh, "high"},
-		{"max effort maps to xhigh", llm.EffortMax, "xhigh"},
+		{"xhigh effort", llm.EffortXHigh, "xhigh"},
+		{"max effort", llm.EffortMax, "max"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

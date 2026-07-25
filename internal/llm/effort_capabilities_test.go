@@ -34,7 +34,7 @@ func TestClaudeCatalogHasEffortCapabilities(t *testing.T) {
 		if len(m.EffortCapabilities) == 0 {
 			t.Errorf("model %s: expected non-empty EffortCapabilities", m.ID)
 		}
-		want := []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}
+		want := []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
 		if !equalEffortLevels(m.EffortCapabilities, want) {
 			t.Errorf("model %s: got %v, want %v", m.ID, m.EffortCapabilities, want)
 		}
@@ -51,7 +51,7 @@ func TestCodexCatalogHasEffortCapabilities(t *testing.T) {
 		if len(m.EffortCapabilities) == 0 {
 			t.Errorf("model %s: expected non-empty EffortCapabilities", m.ID)
 		}
-		want := []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}
+		want := []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
 		if !equalEffortLevels(m.EffortCapabilities, want) {
 			t.Errorf("model %s: got %v, want %v", m.ID, m.EffortCapabilities, want)
 		}
@@ -114,13 +114,13 @@ func TestEffortCapabilitiesForModelViaRegistry(t *testing.T) {
 	reg.Register(opencodeProv)
 
 	caps := llm.EffortCapabilitiesForModel(claudeProv, "sonnet[200K]")
-	if len(caps) != 4 {
-		t.Errorf("claude sonnet[200K]: expected 4 capabilities, got %d", len(caps))
+	if len(caps) != 5 {
+		t.Errorf("claude sonnet[200K]: expected 5 capabilities, got %d", len(caps))
 	}
 
 	caps = llm.EffortCapabilitiesForModel(codexProv, "gpt-5.4[272K]")
-	if len(caps) != 4 {
-		t.Errorf("codex gpt-5.4[272K]: expected 4 capabilities, got %d", len(caps))
+	if len(caps) != 5 {
+		t.Errorf("codex gpt-5.4[272K]: expected 5 capabilities, got %d", len(caps))
 	}
 
 	caps = llm.EffortCapabilitiesForModel(opencodeProv, "openai/gpt-5[400K]")
@@ -147,8 +147,8 @@ func TestEffortCapabilitiesForModelViaRegistry(t *testing.T) {
 func TestEffortCapabilitiesForModelViaAlias(t *testing.T) {
 	p := &codex.Provider{}
 	caps := llm.EffortCapabilitiesForModel(p, "gpt-5.4")
-	if len(caps) != 4 {
-		t.Errorf("alias gpt-5.4: expected 4 capabilities, got %d", len(caps))
+	if len(caps) != 5 {
+		t.Errorf("alias gpt-5.4: expected 5 capabilities, got %d", len(caps))
 	}
 }
 
@@ -166,13 +166,13 @@ func TestEffortCapabilitySupported(t *testing.T) {
 }
 
 func TestIsValidExplicitEffort(t *testing.T) {
-	valid := []llm.EffortLevel{llm.EffortAuto, llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}
+	valid := []llm.EffortLevel{llm.EffortAuto, llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}
 	for _, level := range valid {
 		if !llm.IsValidExplicitEffort(level) {
 			t.Errorf("expected %q to be valid", level)
 		}
 	}
-	invalid := []llm.EffortLevel{"", "ultra", "xhigh", "extreme"}
+	invalid := []llm.EffortLevel{"", "ultra", "extreme"}
 	for _, level := range invalid {
 		if llm.IsValidExplicitEffort(level) {
 			t.Errorf("expected %q to be invalid", level)

@@ -277,15 +277,18 @@ type ProtocolOpts struct {
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider
-// maps to its own CLI-specific naming. Utility sessions can request Low
-// directly; pipeline profiles determine phase effort as Medium → Medium and
-// Large/Moonshot → High.
+// maps to its own CLI-specific naming. The canonical ordered set is
+// low < medium < high < xhigh < max. Not every provider exposes all five;
+// each provider's ModelInfo.EffortCapabilities advertises only the levels it
+// supports. Utility sessions can request Low directly; pipeline profiles
+// determine phase effort as Medium → Medium and Large/Moonshot → High.
 type EffortLevel string
 
 const (
 	EffortLow    EffortLevel = "low"
 	EffortMedium EffortLevel = "medium"
 	EffortHigh   EffortLevel = "high"
+	EffortXHigh  EffortLevel = "xhigh"
 	EffortMax    EffortLevel = "max"
 )
 
@@ -308,14 +311,14 @@ const (
 // AllEffortLevels is the canonical ordered set of explicit effort levels from
 // lowest to highest, excluding Auto. Providers use this to build
 // EffortCapabilities slices and the resolver uses it for validation.
-var AllEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, EffortMax}
+var AllEffortLevels = []EffortLevel{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
 
 // IsValidExplicitEffort reports whether level is one of the closed set
-// auto|low|medium|high|max. It accepts EffortAuto in addition to the four
+// auto|low|medium|high|xhigh|max. It accepts EffortAuto in addition to the five
 // explicit levels.
 func IsValidExplicitEffort(level EffortLevel) bool {
 	switch level {
-	case EffortAuto, EffortLow, EffortMedium, EffortHigh, EffortMax:
+	case EffortAuto, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
 		return true
 	}
 	return false
@@ -358,7 +361,7 @@ func EffortCapabilitySupported(capabilities []EffortLevel, level EffortLevel) bo
 
 // MapStandardEffortLevel maps a provider-agnostic EffortLevel to the CLI
 // --effort/model_reasoning_effort value shared by Claude and Codex: low,
-// medium, high, xhigh, defaulting to high for unrecognized levels.
+// medium, high, xhigh, max, defaulting to high for unrecognized levels.
 func MapStandardEffortLevel(level EffortLevel) string {
 	switch level {
 	case EffortLow:
@@ -367,8 +370,10 @@ func MapStandardEffortLevel(level EffortLevel) string {
 		return "medium"
 	case EffortHigh:
 		return "high"
-	case EffortMax:
+	case EffortXHigh:
 		return "xhigh"
+	case EffortMax:
+		return "max"
 	default:
 		return "high" // safe default
 	}

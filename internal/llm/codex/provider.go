@@ -336,17 +336,17 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
 		{ID: "gpt-5.5[272K]", DisplayName: "GPT-5.5 (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-5.5"}, Category: "capable",
-			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}},
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}},
 		{ID: "gpt-5.4[272K]", DisplayName: "GPT-5.4 (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-5.4"}, Category: "balanced",
-			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}},
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}},
 		{ID: "gpt-5.4[1M]", DisplayName: "GPT-5.4 (1M)", ContextWindow: 1_000_000, Category: "capable",
-			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}},
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}},
 		{ID: "gpt-5.4-mini[400K]", DisplayName: "GPT-5.4 Mini (400K)", ContextWindow: 400_000, Aliases: []string{"gpt-5.4-mini"}, Category: "balanced",
-			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}},
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}},
 		{ID: "gpt-5.3-codex[400K]", DisplayName: "GPT-5.3 Codex (400K)", Aliases: []string{"gpt-5.3-codex"}, ContextWindow: 400_000, Category: "balanced",
-			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}},
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}},
 		{ID: "gpt-5.2[400K]", DisplayName: "GPT-5.2 (400K)", ContextWindow: 400_000, Aliases: []string{"gpt-5.2"},
-			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax}},
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax}},
 	}
 }
 

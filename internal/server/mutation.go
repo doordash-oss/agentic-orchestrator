@@ -1058,7 +1058,7 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 		}
 		if !llm.IsValidExplicitEffort(llm.EffortLevel(r.val)) {
 			writeAPIError(w, http.StatusBadRequest, "bad_request",
-				"effort."+r.label+" must be one of: auto, low, medium, high, max", nil)
+				"effort."+r.label+" must be one of: auto, low, medium, high, xhigh, max", nil)
 			return false
 		}
 		if r.val == "auto" {

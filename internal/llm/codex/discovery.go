@@ -110,7 +110,7 @@ func parseCodexModelCatalogWithProgress(out []byte, report llm.ModelDiscoveryRep
 				DisplayName:        displayName,
 				ContextWindow:      window,
 				Category:           codexCategoryForDiscoveredModel(id),
-				EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax},
+				EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax},
 			}
 			if label := llm.ContextWindowLabel(window); label != "" {
 				info.ID = llm.ModelWithContextWindow(id, window)

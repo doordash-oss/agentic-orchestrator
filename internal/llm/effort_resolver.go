@@ -20,7 +20,7 @@ package llm
 //
 //   - When configured is empty or EffortAuto, the pipeline effort is used with
 //     source auto. This preserves current pipeline behavior.
-//   - When configured is an explicit level (low|medium|high|max) and the model
+//   - When configured is an explicit level (low|medium|high|xhigh|max) and the model
 //     supports it, the configured value is used unchanged with source explicit.
 //   - When configured is explicit but the model no longer supports it
 //     (capability drift), the pipeline effort is used with source auto. The

@@ -129,7 +129,7 @@ type ModelConfig struct {
 }
 
 // EffortConfig holds per-role reasoning-effort configuration alongside
-// ModelConfig. Each field accepts the closed set auto|low|medium|high|max.
+// ModelConfig. Each field accepts the closed set auto|low|medium|high|xhigh|max.
 // Empty or missing values load as Auto without triggering a load-time rewrite.
 // Every field corresponds to the same-named field on ModelConfig, except
 // Utilities which mirrors ModelConfig.Utilities (the "chat" role).

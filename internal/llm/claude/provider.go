@@ -306,8 +306,8 @@ func claudeModelInfoFromProbe(candidate claudeModelProbeCandidate, contextWindow
 		ContextWindow: contextWindow,
 		Category:      candidate.Category,
 		// All Claude models support the full effort range via --effort:
-		// low, medium, high, xhigh (max). Each is semantically distinct.
-		EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortMax},
+		// low, medium, high, xhigh, max. Each is semantically distinct.
+		EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax},
 	}
 	info.Aliases = appendClaudeAlias(info.Aliases, info.ID, candidate.Selector)
 	info.Aliases = appendClaudeAlias(info.Aliases, info.ID, resolved)

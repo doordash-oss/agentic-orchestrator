@@ -56,7 +56,7 @@ function formatBytes(bytes: number): string {
 
 type PreviewView = 'conversation' | 'trace';
 
-interface CurrentRunInspectionProps {
+export interface CurrentRunInspectionProps {
   featureId: string;
   runNumber: number;
   currentPhase: string;
@@ -81,6 +81,8 @@ interface CurrentRunInspectionProps {
   onAttentionPreviewClose?(): void;
   /** Reports this run's totals up so the inspector sidebar can show them. */
   onRunMetrics?(metrics: RunMetrics | null): void;
+  /** Cycle work supplies its own phase spine and uses this surface as a live canvas. */
+  presentation?: 'regular' | 'cycle';
 }
 
 /** This run's cumulative totals, surfaced to the inspector sidebar. */
@@ -181,6 +183,7 @@ export function CurrentRunInspection({
   attentionFooter,
   onAttentionPreviewClose,
   onRunMetrics,
+  presentation = 'regular',
 }: CurrentRunInspectionProps): React.ReactElement {
   const [preview, setPreview] = useState<LivePreviewView | null>(null);
   const [runDetail, setRunDetail] = useState<RunDetailView | null>(null);
@@ -316,8 +319,12 @@ export function CurrentRunInspection({
     <section className="current-inspection" aria-label="Current run inspection">
       <header className="current-inspection__header">
         <div>
-          <p className="cockpit__eyebrow">Mutable current run</p>
-          <h3 className="setup-step__title">Live preview and files</h3>
+          <p className="cockpit__eyebrow">
+            {presentation === 'cycle' ? 'Current cycle' : 'Mutable current run'}
+          </p>
+          <h3 className="setup-step__title">
+            {presentation === 'cycle' ? 'Live agent activity' : 'Live preview and files'}
+          </h3>
         </div>
         <button
           type="button"
@@ -330,15 +337,17 @@ export function CurrentRunInspection({
         </button>
       </header>
 
-      <RoadmapGauge
-        currentPhase={currentPhase}
-        featureStatus={featureStatus}
-        currentRoadmapPhase={currentRoadmapPhase}
-        totalRoadmapPhases={totalRoadmapPhases}
-        currentIteration={currentIteration}
-        phaseStatus={phaseStatus}
-        reviewGate={reviewGate}
-      />
+      {presentation === 'regular' ? (
+        <RoadmapGauge
+          currentPhase={currentPhase}
+          featureStatus={featureStatus}
+          currentRoadmapPhase={currentRoadmapPhase}
+          totalRoadmapPhases={totalRoadmapPhases}
+          currentIteration={currentIteration}
+          phaseStatus={phaseStatus}
+          reviewGate={reviewGate}
+        />
+      ) : null}
 
       {error !== null ? (
         <p role="alert" className="form-field__error">

@@ -8613,10 +8613,16 @@ body {
 }
 
 .repo-instrument__pr-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--color-signal);
+  font: inherit;
+  text-align: left;
   text-decoration: none;
   font-size: 12px;
   overflow-wrap: anywhere;
+  cursor: pointer;
 }
 
 .repo-instrument__pr-link:hover {

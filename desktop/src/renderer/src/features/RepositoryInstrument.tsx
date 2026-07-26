@@ -32,9 +32,10 @@ const REBASE_STATUS_LABELS: Record<string, string> = {
 
 export interface RepositoryInstrumentProps {
   repos: RepoStatusView[];
+  onOpenPullRequest(url: string): void;
 }
 
-export function RepositoryInstrument({ repos }: RepositoryInstrumentProps) {
+export function RepositoryInstrument({ repos, onOpenPullRequest }: RepositoryInstrumentProps) {
   if (repos.length === 0) return null;
 
   return (
@@ -64,14 +65,14 @@ export function RepositoryInstrument({ repos }: RepositoryInstrumentProps) {
                 <div className="repo-instrument__fact">
                   <dt>PR</dt>
                   <dd>
-                    <a
-                      href={repo.prUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
                       className="repo-instrument__pr-link"
+                      aria-label="Open pull request"
+                      onClick={() => onOpenPullRequest(repo.prUrl!)}
                     >
                       {repo.prUrl}
-                    </a>
+                    </button>
                   </dd>
                 </div>
               ) : null}

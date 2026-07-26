@@ -11,6 +11,7 @@ export interface CycleWorkspaceProps {
   attentionFooter?: ReactNode;
   onRunMetrics(metrics: RunMetrics | null): void;
   onStop(): void;
+  onResume(): void;
   onRetry(): void;
   onReturnToAftercare(): void;
   onOpenRunRecord(): void;
@@ -24,14 +25,18 @@ export function CycleWorkspace({
   attentionFooter,
   onRunMetrics,
   onStop,
+  onResume,
   onRetry,
   onReturnToAftercare,
   onOpenRunRecord,
   onOpenPullRequest,
 }: CycleWorkspaceProps): React.ReactElement {
   const failed = snapshot.cycle?.status === 'failed';
+  const interrupted = snapshot.cycle?.status === 'interrupted';
   const stoppable =
     !failed && snapshot.actions.some((action) => action.id === 'pause-stop' && action.enabled);
+  const resumable =
+    interrupted && snapshot.actions.some((action) => action.id === 'resume' && action.enabled);
 
   return (
     <section
@@ -58,6 +63,10 @@ export function CycleWorkspace({
                 Return to Aftercare
               </button>
             </div>
+          ) : resumable ? (
+            <button type="button" className="cycle-workspace__primary" onClick={onResume}>
+              Resume cycle
+            </button>
           ) : stoppable ? (
             <button type="button" className="cycle-workspace__stop" onClick={onStop}>
               Stop cycle
@@ -112,7 +121,7 @@ export function CycleWorkspace({
           reviewGate={snapshot.reviewGate}
           verificationItems={snapshot.verificationItems}
           waitReason={snapshot.waitReason}
-          shouldStream={!failed}
+          shouldStream={!failed && !interrupted}
           presentation="cycle"
           attentionFooter={failed ? undefined : attentionFooter}
           onRunMetrics={onRunMetrics}

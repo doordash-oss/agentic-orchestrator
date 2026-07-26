@@ -193,7 +193,10 @@ function RepoInstrumentScene() {
               </div>
             </header>
             {snapshot.repoStatus !== undefined && (
-              <RepositoryInstrument repos={snapshot.repoStatus} />
+              <RepositoryInstrument
+                repos={snapshot.repoStatus}
+                onOpenPullRequest={() => undefined}
+              />
             )}
           </aside>
         </div>

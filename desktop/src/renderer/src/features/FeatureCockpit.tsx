@@ -293,12 +293,14 @@ function InspectorContent({
   stale,
   runMetrics,
   onOpenConfig,
+  onOpenPullRequest,
 }: {
   snapshot: FeatureSnapshot;
   branch: string | null;
   stale: boolean;
   runMetrics: RunMetrics | null;
   onOpenConfig(): void;
+  onOpenPullRequest(url: string): void;
 }) {
   return (
     <>
@@ -334,7 +336,7 @@ function InspectorContent({
       ) : null}
       <SetupDetails snapshot={snapshot} />
       {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
-        <RepositoryInstrument repos={snapshot.repoStatus} />
+        <RepositoryInstrument repos={snapshot.repoStatus} onOpenPullRequest={onOpenPullRequest} />
       ) : null}
       <section className="cockpit__config-entry" aria-label="Feature configuration">
         <h3 className="setup-step__title">Configuration</h3>
@@ -564,6 +566,7 @@ function InspectorDrawer({
   stale,
   runMetrics,
   onOpenConfig,
+  onOpenPullRequest,
   onClose,
 }: {
   snapshot: FeatureSnapshot;
@@ -571,6 +574,7 @@ function InspectorDrawer({
   stale: boolean;
   runMetrics: RunMetrics | null;
   onOpenConfig(): void;
+  onOpenPullRequest(url: string): void;
   onClose(): void;
 }) {
   const drawerRef = useRef<HTMLElement>(null);
@@ -613,6 +617,7 @@ function InspectorDrawer({
           stale={stale}
           runMetrics={runMetrics}
           onOpenConfig={onOpenConfig}
+          onOpenPullRequest={onOpenPullRequest}
         />
       </aside>
     </div>
@@ -1682,6 +1687,7 @@ export function FeatureCockpit({
             presentation={postImplementationMode.cycle}
             onRunMetrics={setRunMetrics}
             onStop={() => void openStopDialog()}
+            onResume={resume}
             onRetry={retry}
             onReturnToAftercare={() => setDismissedFailureId(cycleIdentity(snapshot) ?? undefined)}
             onOpenRunRecord={() => setRunRecordOpen(true)}
@@ -1954,6 +1960,9 @@ export function FeatureCockpit({
                 setInspectorOpen(false);
                 setConfigOpen(true);
               }}
+              onOpenPullRequest={(url) => {
+                void window.agentico.openExternal({ url });
+              }}
               onClose={closeInspector}
             />
           ) : null}
@@ -2101,6 +2110,9 @@ export function FeatureCockpit({
                   stale={stale}
                   runMetrics={runMetrics}
                   onOpenConfig={() => setConfigOpen(true)}
+                  onOpenPullRequest={(url) => {
+                    void window.agentico.openExternal({ url });
+                  }}
                 />
               </aside>
             ) : null}

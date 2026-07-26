@@ -448,6 +448,59 @@ describe('FeatureCockpit snapshot rendering', () => {
     });
   });
 
+  it('opens the regular inspector pull request through the guarded desktop bridge', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Interrupted',
+        repoStatus: [
+          {
+            name: 'agentic-orchestrator',
+            publishable: true,
+            prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/109',
+          },
+        ],
+      }),
+    });
+    mock.api.openExternal.mockResolvedValue({ ok: true });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('button', { name: 'Open pull request' }));
+
+    expect(mock.api.openExternal).toHaveBeenCalledWith({
+      url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/109',
+    });
+  });
+
+  it('keeps a stopped rebase in its focused workspace and resumes the cycle', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Interrupted',
+        currentPhase: 'Publish',
+        cycle: {
+          type: 'rebase',
+          status: 'interrupted',
+          count: 1,
+          phase: 'resolve_conflicts',
+        },
+        actions: [{ id: 'resume', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    const cycle = await screen.findByRole('region', { name: 'Rebase cycle' });
+    expect(within(cycle).getByRole('heading', { name: 'Rebase cycle paused' })).toBeVisible();
+    expect(screen.queryByRole('group', { name: 'Feature pipeline' })).not.toBeInTheDocument();
+
+    await user.click(within(cycle).getByRole('button', { name: 'Resume cycle' }));
+
+    expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
+      featureId: FEATURE_ID,
+      action: 'resume',
+    });
+  });
+
   it('moves focus into the inspector drawer and restores it after Escape', async () => {
     matchMediaState.narrowCockpit = true;
     renderCockpit();

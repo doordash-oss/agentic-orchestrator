@@ -27,6 +27,25 @@ describe('postImplementationModel', () => {
     expect(mode.kind).toBe('cycle');
   });
 
+  it('keeps an interrupted cycle in its focused paused workspace', () => {
+    const snapshot = featureSnapshot({
+      status: 'Interrupted',
+      cycle: {
+        type: 'rebase',
+        status: 'interrupted',
+        count: 1,
+        phase: 'resolve_conflicts',
+      },
+    });
+
+    expect(resolvePostImplementationMode(snapshot).kind).toBe('cycle');
+    expect(cyclePresentation(snapshot)).toMatchObject({
+      headline: 'Rebase cycle paused',
+      current: 'Resolve conflicts',
+      next: 'Final review',
+    });
+  });
+
   it('orders publish before available cycle actions', () => {
     const snapshot = featureSnapshot({
       status: 'CodeReady',

@@ -38,7 +38,13 @@ export interface CycleReceipt {
 }
 
 const AFTERCARE_STATUSES = new Set(['CodeReady', 'Published', 'Done']);
-const OWNING_CYCLE_STATUSES = new Set(['running', 'reviewing', 'need_user_input', 'failed']);
+const OWNING_CYCLE_STATUSES = new Set([
+  'running',
+  'reviewing',
+  'need_user_input',
+  'failed',
+  'interrupted',
+]);
 const ACTION_ORDER: AftercareActionId[] = ['publish', 'rebase', 'review-comments', 'refactor'];
 
 export function resolvePostImplementationMode(
@@ -90,6 +96,7 @@ export function cyclePresentation(snapshot: FeatureSnapshot): CyclePresentation 
   const next = stages.slice(activeIndex + 1).find((stage) => !stage.conditional);
   const needsInput = cycle.status === 'need_user_input' || snapshot.status === 'NeedUserInput';
   const failed = cycle.status === 'failed';
+  const interrupted = cycle.status === 'interrupted';
   return {
     id: cycle.type,
     count,
@@ -98,7 +105,9 @@ export function cyclePresentation(snapshot: FeatureSnapshot): CyclePresentation 
       ? `${cycleName(cycle.type)} cycle needs attention`
       : needsInput
         ? 'Agent is waiting for your input'
-        : `${cycleName(cycle.type)} cycle in progress`,
+        : interrupted
+          ? `${cycleName(cycle.type)} cycle paused`
+          : `${cycleName(cycle.type)} cycle in progress`,
     current: needsInput ? 'Waiting for input' : (active?.label ?? 'Working'),
     ...(next === undefined ? {} : { next: next.label }),
   };

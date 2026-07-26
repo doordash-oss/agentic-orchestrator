@@ -206,8 +206,11 @@ export function CurrentRunInspection({
   const catalogueRequestRef = useRef(0);
 
   const live = useCohortTranscripts(featureId, runNumber, currentPhase, shouldStream);
-  const selectedSession = live.cohort.find((session) => session.id === live.selectedId) ?? null;
-  const stage = useTranscriptStage(live.cohort, live.transcripts, selectedSession, preview);
+  const presentedCohort =
+    presentation === 'cycle' ? focusCurrentCycleSession(live.cohort, live.selectedId) : live.cohort;
+  const selectedSession =
+    presentedCohort.find((session) => session.id === live.selectedId) ?? presentedCohort[0] ?? null;
+  const stage = useTranscriptStage(presentedCohort, live.transcripts, selectedSession, preview);
   const initialLoading =
     preview === null && live.cohort.length === 0 && attentionFooter === undefined;
   // The review gate wins over a stale "verifying" marker: while an axis review
@@ -606,6 +609,25 @@ function RunRecordSkeleton(): React.ReactElement {
       </div>
     </div>
   );
+}
+
+function focusCurrentCycleSession(
+  cohort: readonly SessionSummary[],
+  selectedId: string | null,
+): SessionSummary[] {
+  const selected = cohort.find((session) => session.id === selectedId);
+  if (selected !== undefined && !isTerminalSessionStatus(selected.status)) return [selected];
+
+  const active = cohort.find((session) => !isTerminalSessionStatus(session.status));
+  if (active !== undefined) return [active];
+
+  // During the short handoff between cycle sessions, retain one useful frame
+  // instead of flashing an empty canvas or restoring the entire run roster.
+  if (selected !== undefined) return [selected];
+  const latest = [...cohort].sort((left, right) =>
+    right.startedAt.localeCompare(left.startedAt),
+  )[0];
+  return latest === undefined ? [] : [latest];
 }
 
 function RenderedArtifact({ text, ariaLabel }: { text: string; ariaLabel: string }) {

@@ -73,6 +73,72 @@ function renderCohort() {
 }
 
 describe('CurrentRunInspection', () => {
+  it('keeps cycle activity focused on the current session instead of historical agents', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Resolving the rebase',
+      contextPercentage: 7,
+      totalSeconds: 90,
+      totalUsd: 0.03,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValueOnce({
+      runNumber: 8,
+      sessions: [
+        validator({ id: 'implement-1', label: 'Implement #1', status: 'running' }),
+        validator({ id: 'structural', label: 'Structural', status: 'running' }),
+        validator({ id: 'implement-2', label: 'Implement #2', status: 'running' }),
+      ],
+    });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 8,
+      sessions: [
+        validator({ id: 'implement-1', label: 'Implement #1', status: 'completed' }),
+        validator({ id: 'structural', label: 'Structural', status: 'completed' }),
+        validator({ id: 'implement-2', label: 'Implement #2', status: 'running' }),
+      ],
+    });
+    mock.api.getSessionTranscript.mockImplementation(({ sessionId }: { sessionId: string }) =>
+      Promise.resolve({
+        sessionId,
+        cursor: { total: 1, start: 0, end: 1 },
+        messages: [
+          {
+            index: 0,
+            role: 'assistant',
+            type: 'text',
+            text:
+              sessionId === 'implement-2'
+                ? 'Working on the current rebase.'
+                : 'Historical session.',
+          },
+        ],
+      }),
+    );
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        reviewGate={REVIEW_GATE}
+        presentation="cycle"
+      />,
+    );
+
+    await waitFor(() => expect(mock.api.listRunSessions).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('tablist', { name: 'Live agents' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByText('Working on the current rebase.')).toBeVisible();
+    expect(screen.queryByRole('tablist', { name: 'Live agents' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Implement #1')).not.toBeInTheDocument();
+    expect(screen.queryByText('Structural')).not.toBeInTheDocument();
+  });
+
   it('reserves a stable two-pane record desk while the archive loads', () => {
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockReturnValue(new Promise(() => undefined));

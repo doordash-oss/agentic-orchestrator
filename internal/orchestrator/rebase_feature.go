@@ -47,6 +47,85 @@ func (o *Orchestrator) StartFeatureRebase(featureID string) error {
 	return nil
 }
 
+// ResumeFeatureRebase restores a user-interrupted feature-level rebase without
+// discarding the preserved conflict worktree or starting a new cycle count.
+func (o *Orchestrator) ResumeFeatureRebase(featureID string) error {
+	if o.deps.Lifecycle == nil || o.deps.Store == nil {
+		return errors.New("feature lifecycle not configured")
+	}
+	o.clearFeatureRebaseStopRequest(featureID)
+	var stage feature.RebaseStage
+	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if f.Status != feature.StatusInterrupted ||
+			f.ActiveCycle == nil ||
+			featureRebaseActiveCycleType(f) != feature.CycleRebase ||
+			f.ActiveCycle.Status != feature.RepoCycleInterrupted ||
+			f.RebaseOperation == nil {
+			return errors.New("feature has no interrupted rebase cycle")
+		}
+		if len(f.PRURLs()) > 0 {
+			f.Status = feature.StatusPublished
+		} else {
+			f.Status = feature.StatusCodeReady
+		}
+		f.CurrentPhase = feature.PhasePublish
+		f.ActiveCycle.Status = feature.RepoCycleRunning
+		f.ActiveCycle.LastError = ""
+		f.SetActiveCycleType(feature.CycleRebase)
+		f.LastError = ""
+		f.FailureType = ""
+		stage = f.RebaseOperation.Stage
+		return nil
+	}); err != nil {
+		return fmt.Errorf("resume feature rebase: %w", err)
+	}
+
+	o.cycleWG.Go(func() {
+		f, err := o.deps.Lifecycle.Get(featureID)
+		if err != nil || f == nil || f.RebaseOperation == nil {
+			return
+		}
+		outcomes := featureRebaseOutcomesFromOperation(o, f)
+		conflicted := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusConflict)
+		switch {
+		case stage == feature.RebaseStageSmartRebase || len(conflicted) > 0:
+			o.startCoordinatedSmartRebase(featureID, outcomes, conflicted, true)
+		case stage == feature.RebaseStageFinalReview:
+			changed := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusChanged)
+			for _, outcome := range conflicted {
+				outcome.Status = feature.RebaseRepoStatusChanged
+				outcome.Changed = true
+				changed = append(changed, outcome)
+			}
+			o.runRebaseFinalReviewAndPublishPolicy(featureID, changed)
+		default:
+			o.runFeatureRebase(featureID)
+		}
+	})
+	return nil
+}
+
+func featureRebaseOutcomesFromOperation(o *Orchestrator, f *feature.Feature) []HarnessRebaseRepoOutcome {
+	if o == nil || f == nil || f.RebaseOperation == nil {
+		return nil
+	}
+	outcomes := make([]HarnessRebaseRepoOutcome, 0, len(f.Repos))
+	for _, repo := range f.Repos {
+		outcome := o.harnessRebaseOutcomeForRepo(f, repo)
+		if progress := f.RebaseOperation.Repos[repo.Name]; progress != nil {
+			outcome.Status = progress.Status
+			outcome.RebaseTarget = progress.RebaseTarget
+			outcome.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
+			outcome.Changed = progress.Changed
+			if progress.LastError != "" {
+				outcome.Err = errors.New(progress.LastError)
+			}
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	return outcomes
+}
+
 func (o *Orchestrator) runFeatureRebase(featureID string) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -128,7 +207,7 @@ func (o *Orchestrator) finishHarnessRebase(featureID string, outcomes []HarnessR
 	}
 
 	if len(conflicted) > 0 {
-		o.startCoordinatedSmartRebase(featureID, outcomes, conflicted)
+		o.startCoordinatedSmartRebase(featureID, outcomes, conflicted, false)
 		return
 	}
 
@@ -198,6 +277,7 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 	featureID string,
 	outcomes []HarnessRebaseRepoOutcome,
 	conflicted []HarnessRebaseRepoOutcome,
+	resumeExistingCycle bool,
 ) {
 	if !o.shouldContinueFeatureRebase(featureID) {
 		return
@@ -219,7 +299,7 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 		return
 	}
 
-	cfg, err := o.rebaseLoopConfigForFeature(f, targets, false)
+	cfg, err := o.rebaseLoopConfigForFeature(f, targets, resumeExistingCycle)
 	if err != nil {
 		o.failChangedRebaseRepos(featureID, conflicted, err)
 		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)

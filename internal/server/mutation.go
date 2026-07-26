@@ -108,6 +108,7 @@ type MutationTarget interface {
 	// feature ends in a startable pre-orchestration state.
 	SetupFeature(featureID string) (FeatureSetupResponse, error)
 	StartFeature(featureID string) (FeatureStartResponse, error)
+	ResumeFeature(featureID string) (FeatureStartResponse, error)
 	StopFeature(featureID string) (FeatureStopResponse, error)
 	RestartFeature(featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error)
 	ReviewDecision(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error)
@@ -772,11 +773,16 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		}
 		defaultActionFields(&resp, featureID, resultSetupStarted)
 		writeActionJSON(w, http.StatusOK, &resp)
-	case actionStart, actionResume:
+	case actionStart:
 		if subaction != "" {
 			return false
 		}
 		h.handleStartFeatureMutationTrusted(w, r, featureID)
+	case actionResume:
+		if subaction != "" {
+			return false
+		}
+		h.handleResumeFeatureMutationTrusted(w, r, featureID)
 	case actionPauseStop:
 		if subaction != "" {
 			return false
@@ -1156,6 +1162,20 @@ func (h *apiHandler) handleStartFeatureMutationTrusted(w http.ResponseWriter, r 
 		return
 	}
 	resp, err := h.mutations.StartFeature(featureID)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	defaultActionFields(&resp, featureID, resultStarted)
+	writeActionJSON(w, http.StatusOK, &resp)
+}
+
+func (h *apiHandler) handleResumeFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
+	var req map[string]any
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	resp, err := h.mutations.ResumeFeature(featureID)
 	if err != nil {
 		writeMutationError(w, err)
 		return

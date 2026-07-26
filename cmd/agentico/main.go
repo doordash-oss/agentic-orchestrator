@@ -1047,6 +1047,34 @@ func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.Fea
 	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
 }
 
+func (t *serverMutationTarget) ResumeFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
+	if t.orch == nil {
+		return serverruntime.FeatureStartResponse{}, errors.New("orchestrator is not available")
+	}
+	if t.store != nil {
+		f, err := t.store.Load(featureID)
+		if err != nil {
+			return serverruntime.FeatureStartResponse{}, err
+		}
+		if f.Status == feature.StatusInterrupted &&
+			f.ActiveCycle != nil &&
+			(f.ActiveCycle.Type == feature.CycleRebase || f.ActiveCycleType() == feature.CycleRebase) &&
+			f.ActiveCycle.Status == feature.RepoCycleInterrupted {
+			if err := t.orch.ResumeFeatureRebase(featureID); err != nil {
+				return serverruntime.FeatureStartResponse{}, err
+			}
+			return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
+		}
+		if f.Status == feature.StatusInterrupted && len(f.RepoCycles) > 0 {
+			if _, err := t.RestartFeature(featureID, serverruntime.RestartFeatureRequest{}); err != nil {
+				return serverruntime.FeatureStartResponse{}, err
+			}
+			return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
+		}
+	}
+	return t.StartFeature(featureID)
+}
+
 func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
 	if err := t.orch.InterruptFeature(featureID); err != nil {
 		return serverruntime.FeatureStopResponse{}, err

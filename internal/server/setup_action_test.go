@@ -24,8 +24,10 @@ import (
 
 type setupActionMutationTarget struct {
 	MutationTarget
-	setupCalls []string
-	setupErr   error
+	setupCalls  []string
+	setupErr    error
+	startCalls  []string
+	resumeCalls []string
 }
 
 func (t *setupActionMutationTarget) SetupFeature(featureID string) (FeatureSetupResponse, error) {
@@ -34,6 +36,16 @@ func (t *setupActionMutationTarget) SetupFeature(featureID string) (FeatureSetup
 		return FeatureSetupResponse{}, t.setupErr
 	}
 	return FeatureSetupResponse{FeatureID: featureID, Result: "setup_started"}, nil
+}
+
+func (t *setupActionMutationTarget) StartFeature(featureID string) (FeatureStartResponse, error) {
+	t.startCalls = append(t.startCalls, featureID)
+	return FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
+}
+
+func (t *setupActionMutationTarget) ResumeFeature(featureID string) (FeatureStartResponse, error) {
+	t.resumeCalls = append(t.resumeCalls, featureID)
+	return FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
 }
 
 func TestFeatureSetupActionDispatchesServerOwnedSetup(t *testing.T) {
@@ -76,6 +88,26 @@ func TestFeatureSetupActionRejectsConflicts(t *testing.T) {
 	}
 	if body := decodeErrorBody(t, w); body.Error.Code != errCodeConflict {
 		t.Fatalf("error code = %q; want %q", body.Error.Code, errCodeConflict)
+	}
+}
+
+func TestFeatureResumeActionUsesDedicatedResumeMutation(t *testing.T) {
+	t.Parallel()
+	target := &setupActionMutationTarget{}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		DisableHostValidation: true,
+	})
+
+	w := postTrustedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/resume", map[string]any{})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	if len(target.resumeCalls) != 1 || target.resumeCalls[0] != fixtureFeatureID {
+		t.Fatalf("resume calls = %v; want one for %s", target.resumeCalls, fixtureFeatureID)
+	}
+	if len(target.startCalls) != 0 {
+		t.Fatalf("start calls = %v; resume must not use the generic start mutation", target.startCalls)
 	}
 }
 

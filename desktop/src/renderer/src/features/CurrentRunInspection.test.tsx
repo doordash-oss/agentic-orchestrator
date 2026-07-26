@@ -130,6 +130,10 @@ describe('CurrentRunInspection', () => {
     );
 
     await waitFor(() => expect(mock.api.listRunSessions).toHaveBeenCalledTimes(1));
+    const activityHeading = screen.getByRole('heading', { name: 'Live agent activity' });
+    expect(activityHeading).toHaveClass('live-preview__title');
+    expect(activityHeading.closest('.live-preview__bar')).not.toBeNull();
+    expect(screen.queryByText('Current cycle')).not.toBeInTheDocument();
     expect(screen.queryByRole('tablist', { name: 'Live agents' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
 

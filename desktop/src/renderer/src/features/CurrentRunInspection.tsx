@@ -320,39 +320,82 @@ export function CurrentRunInspection({
     [featureId, runNumber],
   );
 
+  const livePreviewFrame = (
+    <div className="live-preview__frame">
+      <div className="live-preview__bar">
+        {presentation === 'cycle' ? (
+          <h3 className="live-preview__title">Live agent activity</h3>
+        ) : (
+          <p className="cockpit__eyebrow">Live agent activity</p>
+        )}
+        <div className="live-preview__bar-controls">
+          {presentation === 'cycle' ? (
+            <button
+              type="button"
+              className="live-preview__refresh"
+              onClick={() => {
+                void refresh();
+                live.refresh();
+              }}
+            >
+              Refresh
+            </button>
+          ) : null}
+          <ViewToggle view={view} onChange={setView} />
+          <button
+            type="button"
+            className="live-preview__icon-button"
+            aria-label="Expand live preview to full screen"
+            title="Full screen"
+            onClick={() => setFullscreen(true)}
+          >
+            <MaximizeIcon />
+          </button>
+        </div>
+      </div>
+      {initialLoading ? (
+        <p className="setup-step__empty">Loading current run inspection…</p>
+      ) : verifying && verificationItems !== undefined ? (
+        <VerificationStage items={verificationItems} />
+      ) : (
+        <TranscriptStage
+          stage={stage}
+          view={view}
+          selectedId={live.selectedId}
+          selectSession={live.selectSession}
+          waitReason={waitReason}
+        />
+      )}
+    </div>
+  );
+
   return (
     <section
       className="current-inspection"
       aria-label="Current run inspection"
       data-presentation={presentation}
     >
-      <header className="current-inspection__header">
-        <div>
-          <p className="cockpit__eyebrow">
-            {presentation === 'cycle'
-              ? 'Current cycle'
-              : presentation === 'record'
-                ? 'Sealed run'
-                : 'Mutable current run'}
-          </p>
-          <h3 className="setup-step__title">
-            {presentation === 'cycle'
-              ? 'Live agent activity'
-              : presentation === 'record'
-                ? 'Activity and artifacts'
-                : 'Live preview and files'}
-          </h3>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            void refresh();
-            live.refresh();
-          }}
-        >
-          Refresh
-        </button>
-      </header>
+      {presentation === 'cycle' ? null : (
+        <header className="current-inspection__header">
+          <div>
+            <p className="cockpit__eyebrow">
+              {presentation === 'record' ? 'Sealed run' : 'Mutable current run'}
+            </p>
+            <h3 className="setup-step__title">
+              {presentation === 'record' ? 'Activity and artifacts' : 'Live preview and files'}
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void refresh();
+              live.refresh();
+            }}
+          >
+            Refresh
+          </button>
+        </header>
+      )}
 
       {presentation !== 'cycle' ? (
         <RoadmapGauge
@@ -372,43 +415,14 @@ export function CurrentRunInspection({
         </p>
       ) : null}
 
-      {initialLoading ? (
-        presentation === 'record' ? (
-          <RunRecordSkeleton />
-        ) : (
-          <p className="setup-step__empty">Loading current run inspection…</p>
-        )
+      {initialLoading && presentation === 'record' ? (
+        <RunRecordSkeleton />
+      ) : initialLoading && presentation !== 'cycle' ? (
+        <p className="setup-step__empty">Loading current run inspection…</p>
       ) : (
         <div className="current-inspection__preview">
-          <div className="live-preview__frame">
-            <div className="live-preview__bar">
-              <p className="cockpit__eyebrow">Live agent activity</p>
-              <div className="live-preview__bar-controls">
-                <ViewToggle view={view} onChange={setView} />
-                <button
-                  type="button"
-                  className="live-preview__icon-button"
-                  aria-label="Expand live preview to full screen"
-                  title="Full screen"
-                  onClick={() => setFullscreen(true)}
-                >
-                  <MaximizeIcon />
-                </button>
-              </div>
-            </div>
-            {verifying && verificationItems !== undefined ? (
-              <VerificationStage items={verificationItems} />
-            ) : (
-              <TranscriptStage
-                stage={stage}
-                view={view}
-                selectedId={live.selectedId}
-                selectSession={live.selectSession}
-                waitReason={waitReason}
-              />
-            )}
-          </div>
-          {preview !== null ? (
+          {livePreviewFrame}
+          {!initialLoading && preview !== null ? (
             <>
               {verifying ? null : (
                 <p className="current-inspection__activity">{preview.activity}</p>

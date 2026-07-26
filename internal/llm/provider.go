@@ -89,6 +89,13 @@ type BareAuthChecker interface {
 	CheckBareAuth() bool
 }
 
+// ReviewModelRanker is implemented by providers that define provider-local
+// preference bands for automatic-review models. Lower bands are preferred.
+// Returning false excludes the model from automatic selection.
+type ReviewModelRanker interface {
+	ReviewPreferenceBand(model ModelInfo) (int, bool)
+}
+
 // NativeToollessReviewer is implemented only by providers whose automatic-
 // review launch and protocol have been audited to expose no native tool,
 // question, child-session, customization, or persistence surface. General

@@ -1360,6 +1360,44 @@ func TestAutomaticReviewCompletedNilAndDisabledAreNoOps(t *testing.T) {
 	disabled.AutomaticReviewCompleted(SpanContext{}, AutomaticReviewEventInput{})
 }
 
+func TestAutomaticReviewUnavailableEmitsBoundedOperatorEvent(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	featureID := "automatic_review_unavailable"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	obs := New(true, stateDir, false, "", false, "agentic")
+	sc := SpanContextForFeature(featureID, "trace-automatic-review", "", "").WithRun(2).Child()
+	obs.AutomaticReviewUnavailable(sc, AutomaticReviewUnavailableEventInput{
+		Phase:     "implement",
+		SessionID: "session-1",
+		RepoName:  "repo-a",
+		Iteration: 3,
+		Scope:     "circuit_breaker",
+		Reason:    "reviewer unavailable token=secret-value",
+	})
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.EventType != "automatic_review.unavailable" || event.Status != "unavailable" {
+		t.Fatalf("event = %+v, want automatic_review.unavailable", event)
+	}
+	if event.SessionID != "session-1" || event.RepoName != "repo-a" || event.Phase != "implement" || event.Iteration != 3 || event.RunNumber != 2 {
+		t.Fatalf("event envelope = %+v", event)
+	}
+	if got := event.Data["scope"]; got != "circuit_breaker" {
+		t.Errorf("event.Data[scope] = %#v, want circuit_breaker", got)
+	}
+	if got := event.Data["reason"]; got != "reviewer unavailable token=[redacted]" {
+		t.Errorf("event.Data[reason] = %#v, want bounded redaction", got)
+	}
+}
+
 func TestQuestionAskedEmitsRepoAndIteration(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "q_asked_feat"

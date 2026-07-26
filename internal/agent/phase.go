@@ -1156,21 +1156,62 @@ func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, e
 func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.PermissionHandler, opts *BuildSessionOpts, workDir string, writableRoots []string) (ports.PermissionHandler, ports.AutoReviewSnapshot) {
 	if opts.AutoReview.Enabled != nil {
 		reviewer := autoreview.RestoreReviewer(pr.Registry, opts.AutoReview.ReviewerProvider, opts.AutoReview.ReviewerModel)
-		handler := decorateHandlerWithAutoReview(composed, original, *opts.AutoReview.Enabled, reviewer, workDir, writableRoots)
+		snap := opts.AutoReview
+		if *snap.Enabled && reviewer.Provider == nil && strings.TrimSpace(snap.UnavailableReason) == "" {
+			snap.UnavailableReason = "snapshotted reviewer provider is no longer available"
+		}
+		handler := decorateHandlerWithAutoReview(composed, original, *snap.Enabled, reviewer, workDir, writableRoots)
 		installAutoReviewObserver(handler, pr.Observer)
-		return handler, opts.AutoReview
+		return handler, snap
 	}
 	enabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
 	model := ""
 	if pr != nil && pr.Config != nil {
 		model = pr.Config.Defaults.Models.AutomaticReview
 	}
-	reviewer, _ := autoreview.ResolveReviewer(pr.Registry, model)
+	reviewer, _, unavailableReason := autoreview.ResolveReviewer(pr.Registry, model)
 	provName, revModel := reviewer.Identity()
-	snap := ports.AutoReviewSnapshot{Enabled: &enabled, Model: model, ReviewerProvider: provName, ReviewerModel: revModel}
+	snap := ports.AutoReviewSnapshot{
+		Enabled:           &enabled,
+		Model:             model,
+		ReviewerProvider:  provName,
+		ReviewerModel:     revModel,
+		UnavailableReason: unavailableReason,
+	}
 	handler := decorateHandlerWithAutoReview(composed, original, enabled, reviewer, workDir, writableRoots)
 	installAutoReviewObserver(handler, pr.Observer)
 	return handler, snap
+}
+
+func automaticReviewSessionBuildNotices(observer *observe.Observer, snap ports.AutoReviewSnapshot) []ports.SessionBuildNotice {
+	if snap.Enabled == nil || !*snap.Enabled || snap.ReviewerProvider != "" {
+		return nil
+	}
+	reason := strings.TrimSpace(snap.UnavailableReason)
+	if reason == "" {
+		reason = "reviewer resolution failed"
+	}
+	status := "Automatic review enabled but no reviewer available: " + reason
+	return []ports.SessionBuildNotice{{
+		Status: status,
+		Emit: func(ctx ports.SessionBuildNoticeContext) {
+			if observer == nil {
+				return
+			}
+			sc, ok := observer.ActivePhaseSpanContext(ctx.FeatureID)
+			if !ok {
+				sc = observe.SpanContextForFeature(ctx.FeatureID, "", "", "")
+			}
+			observer.AutomaticReviewUnavailable(sc, observe.AutomaticReviewUnavailableEventInput{
+				Phase:     strings.ToLower(ctx.Phase.String()),
+				SessionID: ctx.SessionID,
+				RepoName:  ctx.RepoName,
+				Iteration: ctx.Iteration,
+				Scope:     "session_build",
+				Reason:    reason,
+			})
+		},
+	}}
 }
 
 func installAutoReviewObserver(handler ports.PermissionHandler, observer *observe.Observer) {
@@ -1502,17 +1543,18 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		// directory the harness already created) can be trusted the same way
 		// AcceptEditsHandler already trusts an equivalent empty Write —
 		// see permission.WrapGeneralPhaseHandlerWithSafeCreate.
-		PermHandler:       permHandler,
-		InitialPrompt:     opts.Prompt,
-		ContextWindow:     contextWindow,
-		RepoName:          opts.RepoName,
-		LogPath:           opts.LogPath,
-		ProviderName:      prov.Name(),
-		Protocol:          protocol,
-		DebugSystemPrompt: opts.SystemPrompt,
-		TurnMode:          opts.TurnMode,
-		Watchdog:          watchdogConfigForProvider(prov),
-		AutoReview:        arSnap,
+		PermHandler:         permHandler,
+		InitialPrompt:       opts.Prompt,
+		ContextWindow:       contextWindow,
+		RepoName:            opts.RepoName,
+		LogPath:             opts.LogPath,
+		ProviderName:        prov.Name(),
+		Protocol:            protocol,
+		DebugSystemPrompt:   opts.SystemPrompt,
+		TurnMode:            opts.TurnMode,
+		Watchdog:            watchdogConfigForProvider(prov),
+		AutoReview:          arSnap,
+		SessionBuildNotices: automaticReviewSessionBuildNotices(pr.Observer, arSnap),
 	}
 	if c, ok := prov.(finishOrViolateNudgeProvider); ok {
 		sessOpts.SupportsFinishOrViolateNudge = c.SupportsFinishOrViolateNudge()

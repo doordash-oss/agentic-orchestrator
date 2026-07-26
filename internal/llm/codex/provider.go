@@ -111,9 +111,6 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 
 	// Interactive: app-server mode. Model/prompt delivered via JSON-RPC.
 	args := []string{p.cliBinary(), "app-server"}
-	if nativeToolless {
-		args = append(args, "--strict-config")
-	}
 	if opts.EffortLevel != "" {
 		args = append(args, "-c", "model_reasoning_effort="+llm.MapStandardEffortLevel(opts.EffortLevel))
 	}
@@ -395,6 +392,30 @@ func (p *Provider) ModelCatalog() []llm.ModelInfo {
 		return p.defaultModelInfos()
 	}
 	return cat
+}
+
+// ReviewPreferenceBand ranks Codex review models without leaking model-family
+// naming into shared automatic-review code.
+func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	if model.Category == "cheap" {
+		return 0, true
+	}
+	if reviewModelMatchesHint(model, "mini") || reviewModelMatchesHint(model, "shrink") {
+		return 1, true
+	}
+	return 0, false
+}
+
+func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
+	if strings.Contains(strings.ToLower(model.ID), hint) {
+		return true
+	}
+	for _, alias := range model.Aliases {
+		if strings.Contains(strings.ToLower(alias), hint) {
+			return true
+		}
+	}
+	return false
 }
 
 // CLIVersion returns the installed Codex CLI version.

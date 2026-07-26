@@ -411,7 +411,7 @@ func TestParseLine_NativeToollessReviewFailsClosedOnUnexpectedACPInteractions(t 
 			line: func(t *testing.T) []byte {
 				return notificationLine(t, "session/update", map[string]any{
 					"sessionId": "ses_x",
-					"update":    map[string]any{"sessionUpdate": "available_commands_update"},
+					"update":    map[string]any{"sessionUpdate": "future_interaction_update"},
 				})
 			},
 		},
@@ -434,6 +434,28 @@ func TestParseLine_NativeToollessReviewFailsClosedOnUnexpectedACPInteractions(t 
 				t.Fatalf("unexpected review interaction escaped as interactive activity: %+v", msgs[0])
 			}
 		})
+	}
+}
+
+func TestParseLine_NativeToollessReviewIgnoresAvailableCommandMetadata(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+	messages := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": UpdateAvailableCommands,
+			"availableCommands": []map[string]any{
+				{"name": "review", "description": "review changes"},
+			},
+		},
+	}))
+	if len(messages) != 0 {
+		t.Fatalf("available-command metadata produced %+v, want no activity", messages)
+	}
+	p.mu.Lock()
+	failed := p.resultEmitted
+	p.mu.Unlock()
+	if failed {
+		t.Fatal("available-command metadata sealed native review")
 	}
 }
 

@@ -169,6 +169,53 @@ func TestCodexProtocol_NativeToollessReviewConfiguresOneEphemeralTurn(t *testing
 	}
 }
 
+func TestCodexProtocol_NativeToollessHandshakeResponsesAreHandledWithoutActivity(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+	p.handshakeDone = make(chan struct{})
+	p.threadReady = make(chan struct{})
+
+	messages, err := p.ParseLine([]byte(`{"id":1,"result":{"userAgent":"codex-cli/0.144.5","codexHome":"/tmp/codex"}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(initialize response) error: %v", err)
+	}
+	if len(messages) != 0 || p.nativeReviewFailed {
+		t.Fatalf("initialize response = %+v, failed=%t; want handled handshake activity", messages, p.nativeReviewFailed)
+	}
+	select {
+	case <-p.handshakeDone:
+	default:
+		t.Fatal("initialize response did not complete handshake")
+	}
+
+	for _, method := range []string{
+		"configWarning",
+		"deprecationNotice",
+		"warning",
+		"remoteControl/status/changed",
+	} {
+		messages, err = p.ParseLine([]byte(`{"method":"` + method + `","params":{}}`))
+		if err != nil {
+			t.Fatalf("ParseLine(%s) error: %v", method, err)
+		}
+		if len(messages) != 0 || p.nativeReviewFailed {
+			t.Fatalf("%s = %+v, failed=%t; want ignored diagnostic notification", method, messages, p.nativeReviewFailed)
+		}
+	}
+
+	messages, err = p.ParseLine([]byte(`{"id":2,"result":{"thread":{"id":"thread-review"},"approvalPolicy":"never"}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(thread response) error: %v", err)
+	}
+	if len(messages) != 0 || p.nativeReviewFailed {
+		t.Fatalf("thread response = %+v, failed=%t; want handled handshake activity", messages, p.nativeReviewFailed)
+	}
+	select {
+	case <-p.threadReady:
+	default:
+		t.Fatal("thread response did not complete thread start")
+	}
+}
+
 func TestCodexProtocol_NativeToollessReviewExactDecisions(t *testing.T) {
 	for _, decision := range []string{"ALLOW", "DEFER"} {
 		t.Run(decision, func(t *testing.T) {

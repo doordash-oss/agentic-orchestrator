@@ -219,6 +219,33 @@ func TestPhaseModelCatalog_AutomaticReviewSelectionQualifiesOnlyAcrossEligiblePr
 	}
 }
 
+func TestPhaseModelCatalog_RegularFieldsFallbackWhenProviderHasNoCategorizedModels(t *testing.T) {
+	t.Parallel()
+
+	cat := PhaseModelCatalog{
+		ProviderOrder: []string{"claude", "gateway"},
+		ProviderModels: map[string][]string{
+			"claude":  {"sonnet"},
+			"gateway": {"vendor/uncategorized"},
+		},
+		PhaseProviderModels: map[string]map[string][]string{
+			"Research": {
+				"claude": {"sonnet"},
+			},
+			automaticReviewField: {
+				"claude": {"sonnet"},
+			},
+		},
+	}
+
+	if got := cat.orderedProviderModelIDsForField("Research", "gateway"); !slices.Equal(got, []string{"vendor/uncategorized"}) {
+		t.Fatalf("regular field gateway models = %v, want full provider fallback", got)
+	}
+	if got := cat.orderedProviderModelIDsForField(automaticReviewField, "gateway"); len(got) != 0 {
+		t.Fatalf("automatic-review gateway models = %v, want strict eligibility", got)
+	}
+}
+
 func TestPhaseModelCatalog_MarksRecommendedEntry(t *testing.T) {
 	t.Parallel()
 	cat := gatewayWinningCatalog()

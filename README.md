@@ -255,15 +255,25 @@ policy, remembered rules, and restricted handlers have deferred. Eligible
 commands receive one low-effort 10-second attempt in native zero-tool mode and
 must return exact `ALLOW` or `DEFER`; all other results use the ordinary human
 prompt. Results are byte-exact, session-only cached and create no durable
-permission rule.
+permission rule. After two consecutive failed attempts, a session circuit
+breaker stops launching the reviewer and immediately returns later requests to
+the human prompt.
+
+The guardrail treats repo-controlled build and test code as trusted-by-design:
+auto-approving commands such as `make test` or `go generate` may execute code
+from Makefiles, `package.json` scripts, `//go:generate` directives, or
+`conftest.py`. Enable automatic review only for repositories whose development
+automation you trust.
 
 Only a fresh leading `ALLOW` adds
 `Auto-approved Bash: <redacted summary>` before execution. Each actual model
 attempt emits one bounded operator event; existing decisions, guardrail
-deferrals, cache hits, coalesced followers, disabled paths, and unavailable
-reviewers emit neither a status nor an operator event. Automatic review does
-not sandbox commands or guarantee their safety; deterministic guardrails and
-human approval remain the safety boundary.
+deferrals, cache hits, and disabled paths emit no per-request status or event.
+When automatic review is enabled but no reviewer resolves, Agentico emits one
+session-build status and operator event. The circuit breaker likewise emits one
+final operator event when it disables a failing reviewer. Automatic review
+does not sandbox commands or guarantee their safety; deterministic guardrails
+and human approval remain the safety boundary.
 
 ### Model Overrides
 

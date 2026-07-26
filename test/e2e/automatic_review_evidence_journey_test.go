@@ -168,7 +168,9 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 }
 
 // TestAutomaticReviewIntentionalSilenceJourneys proves that memoized,
-// coalesced-follower, and guardrail-rejected paths add no status or event.
+// serialized-cache, and guardrail-rejected request paths add no status or
+// event. An unavailable reviewer is the exception at session scope: it emits
+// one build notice, but still produces no per-request review attempt.
 func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 	if testing.Short() {
 		t.Skip("journey launches deterministic provider subprocesses")
@@ -233,12 +235,12 @@ func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 	close(errs)
 	for result := range results {
 		if result.Behavior != permission.DecisionAllow {
-			t.Fatalf("coalesced result = %+v, want allow", result)
+			t.Fatalf("serialized cached result = %+v, want allow", result)
 		}
 	}
 	for err := range errs {
 		if err != nil {
-			t.Fatalf("coalesced error: %v", err)
+			t.Fatalf("serialized cached error: %v", err)
 		}
 	}
 	if statusCalls.Load() != 2 || automaticReviewEventCount(t, stateDir) != 2 {
@@ -250,6 +252,75 @@ func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 	}
 	if statusCalls.Load() != 2 || automaticReviewEventCount(t, stateDir) != 2 {
 		t.Fatalf("guardrail added side effects: statuses=%d events=%d", statusCalls.Load(), automaticReviewEventCount(t, stateDir))
+	}
+
+	assertAutomaticReviewUnavailableSessionNotice(t)
+}
+
+func assertAutomaticReviewUnavailableSessionNotice(t *testing.T) {
+	t.Helper()
+	stateDir := t.TempDir()
+	workDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	if err := os.MkdirAll(filepath.Join(stateDir, automaticReviewJourneyFeatureID), 0o755); err != nil {
+		t.Fatalf("create unavailable-review event directory: %v", err)
+	}
+
+	providerScript := testutil.WriteFakeClaudeScript(t,
+		testutil.FakeClaudeInitLines()+
+			"printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"provider-session\"}'\n",
+	)
+	registry := llm.NewRegistry()
+	registry.Register(oauthFakeClaude{FakeClaudeProvider: testutil.FakeClaudeProvider{Script: providerScript}})
+
+	cfg := config.NewDefault()
+	cfg.Defaults.AutomaticReviewEnabled = true
+	observer := observe.New(true, stateDir, false, "", false, "agentic-test")
+	runner := agent.NewPhaseRunner(nil, store, store.BaseDir)
+	runner.Registry = registry
+	runner.Config = cfg
+	runner.Observer = observer
+	cmd, env, opts, err := runner.BuildSession(agent.BuildSessionOpts{
+		Model:       "haiku",
+		Prompt:      "exercise unavailable automatic review",
+		PermHandler: permission.Guarded(&permission.AcceptEditsHandler{}),
+		WorkDir:     workDir,
+		Phase:       feature.PhaseImplement,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() unavailable reviewer error: %v", err)
+	}
+
+	manager := session.NewManager(nil)
+	t.Cleanup(manager.Shutdown)
+	sess, err := manager.StartSession(
+		automaticReviewJourneySessionID+"-unavailable",
+		automaticReviewJourneyFeatureID,
+		feature.PhaseImplement,
+		cmd,
+		workDir,
+		env,
+		opts,
+	)
+	if err != nil {
+		t.Fatalf("StartSession() unavailable reviewer error: %v", err)
+	}
+	waitForAutomaticReviewSession(t, sess)
+
+	const noticePrefix = "Automatic review enabled but no reviewer available:"
+	notices := 0
+	for _, msg := range sess.MessageLog().Messages() {
+		if msg.Status != nil && strings.HasPrefix(msg.Status.Message, noticePrefix) {
+			notices++
+		}
+	}
+	if notices != 1 {
+		t.Fatalf("unavailable-review session notices = %d, want one", notices)
+	}
+	events := readAutomaticReviewEvents(t, stateDir, automaticReviewJourneyFeatureID)
+	if strings.Count(events, `"event_type":"automatic_review.unavailable"`) != 1 ||
+		strings.Contains(events, `"event_type":"automatic_review.completed"`) {
+		t.Fatalf("unavailable-review events = %s, want one build notice and no request attempt", events)
 	}
 }
 

@@ -128,3 +128,17 @@ func TestMergeRuntimeDefaultsAutomaticReviewModelUnsetWhenAllEmpty(t *testing.T)
 		t.Errorf("Inquiry = %q, want sonnet (preserved)", dst.Models.Inquiry)
 	}
 }
+
+func TestMergeModelConfigPhaseOverridePreservesAutomaticReview(t *testing.T) {
+	base := config.ModelConfig{
+		Inquiry:         "sonnet",
+		AutomaticReview: "claude:haiku[200K]",
+	}
+	got := mergeModelConfig(base, config.ModelConfig{Inquiry: "opus"})
+	if got.Inquiry != "opus" {
+		t.Fatalf("Inquiry = %q, want opus", got.Inquiry)
+	}
+	if got.AutomaticReview != "claude:haiku[200K]" {
+		t.Fatalf("AutomaticReview = %q, want existing reviewer preserved by empty overlay", got.AutomaticReview)
+	}
+}

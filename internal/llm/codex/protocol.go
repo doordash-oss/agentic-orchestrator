@@ -202,8 +202,11 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 		if p.opts.NativeToollessReview && len(env.Error) > 0 && string(env.Error) != "null" {
 			return []llm.SDKMessage{p.nativeToollessViolation("JSON-RPC error response")}, nil
 		}
-		if msg, ok := p.handleResponse(*env.ID, env.Result, env.Error); ok {
-			return []llm.SDKMessage{msg}, nil
+		if msg, emit, handled := p.handleResponse(*env.ID, env.Result, env.Error); handled {
+			if emit {
+				return []llm.SDKMessage{msg}, nil
+			}
+			return nil, nil
 		}
 		if p.opts.NativeToollessReview {
 			return []llm.SDKMessage{p.nativeToollessViolation("malformed or unexpected JSON-RPC response")}, nil
@@ -620,10 +623,10 @@ func (p *Protocol) writeJSON(v interface{}) error {
 
 // --- Read methods ---
 
-func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (llm.SDKMessage, bool) {
+func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg llm.SDKMessage, emit, handled bool) {
 	if len(errData) > 0 && string(errData) != "null" {
 		p.logDebug("[codex] error response for request %d: %s", id, string(errData))
-		return p.errorResultMessage(errData), true
+		return p.errorResultMessage(errData), true, true
 	}
 
 	var initResult InitializeResult
@@ -638,7 +641,7 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (llm.
 			}
 		}
 		p.mu.Unlock()
-		return llm.SDKMessage{}, false
+		return llm.SDKMessage{}, false, true
 	}
 
 	var threadResult ThreadStartResult
@@ -657,7 +660,7 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (llm.
 		}
 		p.mu.Unlock()
 		p.logDebug("[codex] thread started: %s", threadResult.Thread.ID)
-		return llm.SDKMessage{}, false
+		return llm.SDKMessage{}, false, true
 	}
 
 	var turnResult TurnStartResult
@@ -666,11 +669,11 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (llm.
 		p.turnID = turnResult.Turn.ID
 		p.mu.Unlock()
 		p.logDebug("[codex] turn started: %s (status=%s)", turnResult.Turn.ID, turnResult.Turn.Status)
-		return llm.SDKMessage{}, false
+		return llm.SDKMessage{}, false, true
 	}
 
 	p.logDebug("[codex] unhandled response for request %d", id)
-	return llm.SDKMessage{}, false
+	return llm.SDKMessage{}, false, false
 }
 
 // errorResultMessage converts a JSON-RPC error response into a user-visible
@@ -835,6 +838,14 @@ func (p *Protocol) isMainThread(threadID string) bool {
 
 func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm.SDKMessage, bool) {
 	switch method {
+	case "configWarning", "deprecationNotice", "warning", "remoteControl/status/changed":
+		// App-server emits these diagnostic/status notifications during a
+		// successful handshake, including configWarning for unknown
+		// defense-in-depth overrides on older CLIs. They carry no model, tool,
+		// approval, or child-session activity. Server-initiated requests and
+		// all unknown notifications remain fail-closed below.
+		return llm.SDKMessage{}, false
+
 	case "item/agentMessage/delta":
 		var delta AgentMessageDelta
 		if err := json.Unmarshal(params, &delta); err != nil {

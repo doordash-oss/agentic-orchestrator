@@ -127,6 +127,9 @@ func TestGuardrailClassify_ParserBoundary(t *testing.T) {
 		{"carriage_return", "go test ./...\r", false},
 		{"nul_byte", "go test \x00 ./...", false},
 		{"control_byte", "go test \x01 ./...", false},
+		{"empty_quoted_command_word", "'' make test", false},
+		{"unquoted_comment", "make test # ignored by bash", false},
+		{"unquoted_comment_only", "# make test", false},
 
 		// Mixed-fragment word concatenation — Bash concatenates adjacent
 		// quoted and unquoted fragments into one argv element. The tokenizer
@@ -264,6 +267,7 @@ func TestGuardrailClassify_CommandPolicy(t *testing.T) {
 		{"mypy_plugin", "mypy --plugins foo .", false},
 		{"mypy_python_executable_attached", "mypy --python-executable=./evil src/", false},
 		{"mypy_python_executable_separated", "mypy --python-executable ./evil src/", false},
+		{"mypy_pdb", "mypy --pdb src/", false},
 		{"pylint", "pylint src/", true},
 		{"pylint_output_format_custom_short", "pylint -f evil.EvilReporter src/", false},
 		{"pylint_output_format_custom_short_eq", "pylint -f=evil.EvilReporter src/", false},
@@ -273,6 +277,10 @@ func TestGuardrailClassify_CommandPolicy(t *testing.T) {
 		{"pylint_format_alias_custom", "pylint --format=evil.EvilReporter src/", false},
 		{"pylint_output_format_builtin_defer", "pylint --output-format=json src/", false},
 		{"flake8", "flake8 src/", true},
+		{"flake8_config_attached", "flake8 --config=evil.ini src/", false},
+		{"flake8_config_separated", "flake8 --config evil.ini src/", false},
+		{"flake8_append_config", "flake8 --append-config=evil.ini src/", false},
+		{"flake8_require_plugins", "flake8 --require-plugins=evil src/", false},
 		{"isort", "isort .", true},
 		{"isort_profile", "isort --profile black .", false},
 		{"python_script", "python script.py", false},
@@ -462,6 +470,8 @@ func TestGuardrailClassify_CommandPolicy(t *testing.T) {
 		{"clang_tidy_fix_strict", "clang-tidy --fix src/main.cpp", false},
 		{"clang_tidy_safe_checks", "clang-tidy --checks '*' src/main.cpp", true},
 		{"clang_tidy_safe_quiet", "clang-tidy --quiet src/main.cpp", true},
+		{"clang_tidy_compile_database_separated", "clang-tidy -p build src/main.cpp", false},
+		{"clang_tidy_compile_database_attached", "clang-tidy -p=build src/main.cpp", false},
 		{"cppcheck_addon", "cppcheck --addon=./evil.py src/", false},
 		{"cppcheck_library", "cppcheck --library=evil.cfg src/", false},
 		{"cppcheck_safe_enable", "cppcheck --enable=all src/", true},

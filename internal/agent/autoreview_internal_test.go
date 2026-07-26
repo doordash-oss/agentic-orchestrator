@@ -306,7 +306,7 @@ func TestDecoratorStatusOmittedForCacheHitAndFollower(t *testing.T) {
 	close(release)
 	for _, result := range []<-chan ports.PermissionDecision{leader, follower} {
 		if got := <-result; got.Behavior != permission.DecisionAllow {
-			t.Fatalf("coalesced result = %+v, want allow", got)
+			t.Fatalf("serialized cached result = %+v, want allow", got)
 		}
 	}
 	if got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`)); err != nil || got.Behavior != permission.DecisionAllow {
@@ -387,6 +387,111 @@ func TestDecoratorMemoizesDeferButRetriesFailure(t *testing.T) {
 	}
 }
 
+func TestDecoratorDisablesReviewerAfterTwoConsecutiveFailures(t *testing.T) {
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			calls.Add(1)
+			return "", false
+		},
+	}
+
+	for _, command := range []string{"go test ./...", "git status --short", "make test"} {
+		got, err := d.CanUseTool(bashReq(`{"command":"` + command + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Fatalf("failed review for %q = %+v, %v; want human deferral", command, got, err)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want circuit breaker after two failures", got)
+	}
+	state := d.sessionState()
+	state.mu.Lock()
+	unavailable := state.unavailable
+	failures := state.consecutiveFailures
+	state.mu.Unlock()
+	if !unavailable || failures != 2 {
+		t.Fatalf("breaker state = {unavailable:%t failures:%d}, want true/2", unavailable, failures)
+	}
+}
+
+func TestDecoratorCircuitBreakerEmitsOneFinalOperatorEvent(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "feature-reviewer-breaker"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	observer := observe.New(true, stateDir, false, "", false, "agentic")
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		observer: observer,
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			calls.Add(1)
+			return autoreview.Result{Outcome: autoreview.OutcomeProviderError, FailureReason: "provider failed"}
+		},
+	}
+
+	for _, command := range []string{"go test ./...", "git status --short", "make test"} {
+		req := bashReq(`{"command":"` + command + `"}`)
+		req.FeatureID = featureID
+		req.LogicalSessionID = "logical-session"
+		req.Phase = feature.PhaseImplement
+		req.RepoName = "repo-a"
+		req.Iteration = 2
+		if got, err := d.CanUseTool(req); err != nil || got.Behavior != "" {
+			t.Fatalf("CanUseTool(%q) = %+v, %v; want human deferral", command, got, err)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls = %d, want two before breaker", got)
+	}
+	events := readObserveEvents(t, stateDir, featureID)
+	if got := len(filterEventsByType(events, "automatic_review.completed")); got != 2 {
+		t.Fatalf("automatic_review.completed events = %d, want two actual attempts", got)
+	}
+	unavailable := filterEventsByType(events, "automatic_review.unavailable")
+	if len(unavailable) != 1 {
+		t.Fatalf("automatic_review.unavailable events = %d, want one final notice", len(unavailable))
+	}
+	if unavailable[0].Data["scope"] != "circuit_breaker" ||
+		!strings.Contains(unavailable[0].Data["reason"].(string), "2 consecutive failures") {
+		t.Fatalf("unavailable event = %+v", unavailable[0])
+	}
+}
+
+func TestDecoratorSuccessfulDecisionResetsConsecutiveFailures(t *testing.T) {
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classify: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) (autoreview.Decision, bool) {
+			switch calls.Add(1) {
+			case 1, 3:
+				return "", false
+			default:
+				return autoreview.Defer, true
+			}
+		},
+	}
+
+	for _, command := range []string{"go test ./...", "git status --short", "make test", "go test ./internal/..."} {
+		got, err := d.CanUseTool(bashReq(`{"command":"` + command + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Fatalf("review for %q = %+v, %v; want human deferral", command, got, err)
+		}
+	}
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("classification calls = %d, want successes to reset failure streak", got)
+	}
+	if d.sessionState().unavailable {
+		t.Fatal("reviewer unavailable after non-consecutive failures")
+	}
+}
+
 func TestDecoratorCoalescesConcurrentExactCommands(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{})
@@ -429,7 +534,7 @@ func TestDecoratorCoalescesConcurrentExactCommands(t *testing.T) {
 	}
 }
 
-func TestDecoratorCanceledFollowerDetachesWithoutCancelingLeader(t *testing.T) {
+func TestDecoratorCanceledConcurrentRequestDefersAfterLeader(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -452,23 +557,21 @@ func TestDecoratorCanceledFollowerDetachesWithoutCancelingLeader(t *testing.T) {
 	<-started
 
 	followerCtx, cancelFollower := context.WithCancel(context.Background())
-	followerObserved := &observedContext{Context: followerCtx, observed: make(chan struct{}), after: 2}
+	cancelFollower()
 	followerResult := make(chan ports.PermissionDecision, 1)
 	go func() {
 		req := bashReq(`{"command":"go test ./..."}`)
-		req.Ctx = followerObserved
+		req.Ctx = followerCtx
 		got, _ := d.CanUseTool(req)
 		followerResult <- got
 	}()
-	<-followerObserved.observed
-	cancelFollower()
-	if got := <-followerResult; got.Behavior != "" {
-		t.Fatalf("canceled follower = %+v, want human deferral", got)
-	}
 
 	close(release)
 	if got := <-leaderResult; got.Behavior != permission.DecisionAllow {
 		t.Fatalf("leader = %+v, want allow", got)
+	}
+	if got := <-followerResult; got.Behavior != "" {
+		t.Fatalf("canceled concurrent request = %+v, want human deferral", got)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("classification calls = %d, want 1", got)
@@ -514,7 +617,7 @@ func TestAutoReviewCacheHitRechecksCancellation(t *testing.T) {
 	state.mu.Lock()
 	result := make(chan bool, 1)
 	go func() {
-		_, ok := state.review(ctx, "go test ./...", func(context.Context) (autoreview.Decision, bool) {
+		_, ok, _ := state.review(ctx, "go test ./...", func(context.Context) (autoreview.Decision, bool) {
 			t.Error("cached request unexpectedly classified")
 			return autoreview.Allow, true
 		})
@@ -529,7 +632,7 @@ func TestAutoReviewCacheHitRechecksCancellation(t *testing.T) {
 	}
 }
 
-func TestDecoratorDistinctCommandsProceedIndependently(t *testing.T) {
+func TestDecoratorSerializesDistinctConcurrentCommands(t *testing.T) {
 	started := make(chan string, 2)
 	releases := map[string]chan struct{}{
 		"go test ./...":      make(chan struct{}),
@@ -552,12 +655,18 @@ func TestDecoratorDistinctCommandsProceedIndependently(t *testing.T) {
 			results <- got
 		}()
 	}
-	seen := map[string]bool{<-started: true, <-started: true}
-	if !seen["go test ./..."] || !seen["git status --short"] {
-		t.Fatalf("started commands = %v, want both distinct commands before either completes", seen)
+	first := <-started
+	select {
+	case second := <-started:
+		t.Fatalf("second command %q started while first command %q was still in flight", second, first)
+	default:
 	}
-	close(releases["go test ./..."])
-	close(releases["git status --short"])
+	close(releases[first])
+	second := <-started
+	if second == first {
+		t.Fatalf("second command = %q, want other distinct command", second)
+	}
+	close(releases[second])
 	for range 2 {
 		if got := <-results; got.Behavior != permission.DecisionAllow {
 			t.Fatalf("distinct command result = %+v, want allow", got)
@@ -565,7 +674,7 @@ func TestDecoratorDistinctCommandsProceedIndependently(t *testing.T) {
 	}
 }
 
-func TestAutoReviewFollowerReceivesLeaderFailure(t *testing.T) {
+func TestAutoReviewConcurrentRequestRetriesAfterSerializedFailure(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -590,35 +699,30 @@ func TestAutoReviewFollowerReceivesLeaderFailure(t *testing.T) {
 	<-started
 
 	followerResult := make(chan ports.PermissionDecision, 1)
-	followerCtx := &observedContext{Context: context.Background(), observed: make(chan struct{}), after: 2}
 	go func() {
 		req := bashReq(`{"command":"go test ./..."}`)
-		req.Ctx = followerCtx
 		got, _ := d.CanUseTool(req)
 		followerResult <- got
 	}()
-	<-followerCtx.observed
 	close(release)
 
-	for name, result := range map[string]<-chan ports.PermissionDecision{
-		"leader":   leaderResult,
-		"follower": followerResult,
-	} {
-		if got := <-result; got.Behavior != "" {
-			t.Fatalf("%s after leader failure = %+v, want human deferral", name, got)
-		}
+	if got := <-leaderResult; got.Behavior != "" {
+		t.Fatalf("first failed request = %+v, want human deferral", got)
+	}
+	if got := <-followerResult; got.Behavior != permission.DecisionAllow {
+		t.Fatalf("serialized retry = %+v, want fresh allow review", got)
 	}
 
 	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != permission.DecisionAllow {
-		t.Fatalf("retry after leader failure = %+v, %v; want fresh allow review", got, err)
+		t.Fatalf("cache after serialized retry = %+v, %v; want allow", got, err)
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("classification calls = %d, want failed leader plus retry", got)
 	}
 }
 
-func TestDecoratorCanceledLeaderAllowsRetry(t *testing.T) {
+func TestDecoratorCanceledLeaderAllowsSerializedRetry(t *testing.T) {
 	var calls atomic.Int32
 	firstStarted := make(chan struct{})
 	d := &autoReviewPermissionDecorator{
@@ -645,21 +749,18 @@ func TestDecoratorCanceledLeaderAllowsRetry(t *testing.T) {
 	<-firstStarted
 
 	followerResult := make(chan ports.PermissionDecision, 1)
-	followerCtx := &observedContext{Context: context.Background(), observed: make(chan struct{}), after: 2}
 	go func() {
 		req := bashReq(`{"command":"go test ./..."}`)
-		req.Ctx = followerCtx
 		got, _ := d.CanUseTool(req)
 		followerResult <- got
 	}()
-	<-followerCtx.observed
 
 	cancelLeader()
 	if got := <-leaderResult; got.Behavior != "" {
 		t.Fatalf("canceled leader = %+v, want human deferral", got)
 	}
-	if got := <-followerResult; got.Behavior != "" {
-		t.Fatalf("follower after canceled leader = %+v, want human deferral", got)
+	if got := <-followerResult; got.Behavior != permission.DecisionAllow {
+		t.Fatalf("serialized retry after canceled leader = %+v, want allow", got)
 	}
 
 	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
@@ -671,7 +772,7 @@ func TestDecoratorCanceledLeaderAllowsRetry(t *testing.T) {
 	}
 }
 
-func TestDecoratorSessionTeardownReleasesFollowers(t *testing.T) {
+func TestDecoratorSessionTeardownReleasesSerializedRequests(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{})
 	d := &autoReviewPermissionDecorator{
@@ -697,15 +798,13 @@ func TestDecoratorSessionTeardownReleasesFollowers(t *testing.T) {
 	}()
 	<-started
 
-	followerObserved := &observedContext{Context: sessionCtx, observed: make(chan struct{}), after: 2}
 	followerResult := make(chan ports.PermissionDecision, 1)
 	go func() {
 		req := bashReq(`{"command":"go test ./..."}`)
-		req.Ctx = followerObserved
+		req.Ctx = sessionCtx
 		got, _ := d.CanUseTool(req)
 		followerResult <- got
 	}()
-	<-followerObserved.observed
 
 	teardown()
 	for name, result := range map[string]<-chan ports.PermissionDecision{
@@ -766,11 +865,10 @@ func TestDecoratorSessionDisposalClearsCachedDecision(t *testing.T) {
 
 	state.mu.Lock()
 	cachedLen := len(state.cached)
-	inFlightLen := len(state.inFlight)
 	disposed := state.disposed
 	state.mu.Unlock()
-	if !disposed || cachedLen != 0 || inFlightLen != 0 {
-		t.Fatalf("disposed state = {disposed:%t cached:%d inFlight:%d}, want true, 0, 0", disposed, cachedLen, inFlightLen)
+	if !disposed || cachedLen != 0 {
+		t.Fatalf("disposed state = {disposed:%t cached:%d}, want true, 0", disposed, cachedLen)
 	}
 
 	got, err = endedSession.CanUseTool(bashReq(`{"command":"go test ./..."}`))
@@ -934,6 +1032,58 @@ func newFakeRegistryForAutoReview() *llm.Registry {
 	reg := llm.NewRegistry()
 	reg.Register(testutil.FakeClaudeProvider{})
 	return reg
+}
+
+type noBareAuthFakeProvider struct {
+	testutil.FakeClaudeProvider
+}
+
+func (noBareAuthFakeProvider) CheckBareAuth() bool { return false }
+
+func TestBuildSessionSurfacesEnabledWithoutReviewer(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "feature-no-reviewer"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pr := NewPhaseRunner(nil, feature.NewStore(stateDir), stateDir)
+	pr.Config = &config.Config{Defaults: config.DefaultsConfig{AutomaticReviewEnabled: true}}
+	pr.Registry = llm.NewRegistry()
+	pr.Registry.Register(noBareAuthFakeProvider{FakeClaudeProvider: testutil.FakeClaudeProvider{}})
+	pr.Observer = observe.New(true, stateDir, false, "", false, "agentic")
+
+	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:       "haiku[200K]",
+		Phase:       feature.PhaseImplement,
+		RepoName:    "repo-a",
+		WorkDir:     t.TempDir(),
+		PermHandler: permission.Guarded(&permission.AcceptEditsHandler{}),
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error = %v", err)
+	}
+	if len(sessOpts.SessionBuildNotices) != 1 {
+		t.Fatalf("SessionBuildNotices = %d, want one unavailable notice", len(sessOpts.SessionBuildNotices))
+	}
+	notice := sessOpts.SessionBuildNotices[0]
+	if !strings.Contains(notice.Status, "Automatic review enabled but no reviewer available:") ||
+		!strings.Contains(notice.Status, "authentication") {
+		t.Fatalf("notice status = %q", notice.Status)
+	}
+	if notice.Emit == nil {
+		t.Fatal("notice Emit = nil, want operator event callback")
+	}
+	notice.Emit(ports.SessionBuildNoticeContext{
+		SessionID: "session-1",
+		FeatureID: featureID,
+		Phase:     feature.PhaseImplement,
+		RepoName:  "repo-a",
+		Iteration: 2,
+	})
+	events := filterEventsByType(readObserveEvents(t, stateDir, featureID), "automatic_review.unavailable")
+	if len(events) != 1 || events[0].Data["scope"] != "session_build" {
+		t.Fatalf("unavailable events = %+v, want one session-build event", events)
+	}
 }
 
 // TestDecorateWithAutoReviewSnapshot verifies that the snapshot returned by
@@ -1116,7 +1266,7 @@ func TestIntegrationDefaultOffDefersExactCommand(t *testing.T) {
 
 func TestIntegrationEnabledAllowApprovesBothExactCommands(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1132,7 +1282,7 @@ func TestIntegrationEnabledAllowApprovesBothExactCommands(t *testing.T) {
 
 func TestIntegrationEnabledDeferPreservesHumanPrompt(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeDeferScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1146,7 +1296,7 @@ func TestIntegrationEnabledDeferPreservesHumanPrompt(t *testing.T) {
 
 func TestIntegrationCloseVariantsDeferWithoutModelCall(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1381,7 +1531,7 @@ func TestIntegrationCloseVariantsDeferWithoutModelCall(t *testing.T) {
 
 func TestIntegrationCompilerExecutableSelectorsDeferWithoutModelCall(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1401,7 +1551,7 @@ func TestIntegrationCompilerExecutableSelectorsDeferWithoutModelCall(t *testing.
 
 func TestIntegrationCompilerPassThroughOutputsDeferWithoutModelCall(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1421,7 +1571,7 @@ func TestIntegrationCompilerPassThroughOutputsDeferWithoutModelCall(t *testing.T
 
 func TestIntegrationCMakeNativePassThroughDeferWithoutModelCall(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1441,7 +1591,7 @@ func TestIntegrationCMakeNativePassThroughDeferWithoutModelCall(t *testing.T) {
 
 func TestIntegrationCMakePresetsDeferWithoutModelCall(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1460,7 +1610,7 @@ func TestIntegrationCMakePresetsDeferWithoutModelCall(t *testing.T) {
 
 func TestIntegrationPackageScriptPassThroughDefersWithoutModelCall(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1483,7 +1633,7 @@ func TestIntegrationPackageScriptPassThroughDefersWithoutModelCall(t *testing.T)
 
 func TestIntegrationBazelProhibitedLabelsDeferWithoutModelCall(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1526,7 +1676,7 @@ func TestIntegrationSymlinkEscapesDeferWithoutModelCall(t *testing.T) {
 	}
 
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1550,7 +1700,7 @@ func TestIntegrationSymlinkEscapesDeferWithoutModelCall(t *testing.T) {
 
 func TestIntegrationMissingHaikuDefers(t *testing.T) {
 	reg := llm.NewRegistry() // no claude
-	reviewer, _ := autoreview.ResolveReviewer(reg, "")
+	reviewer, _, _ := autoreview.ResolveReviewer(reg, "")
 	composed, original := composedGeneralHandler()
 	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
@@ -1561,7 +1711,7 @@ func TestIntegrationMissingHaikuDefers(t *testing.T) {
 
 func TestIntegrationExplicitNonClaudeModelNotSubstituted(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, _ := autoreview.ResolveReviewer(reg, "sonnet-99")
+	reviewer, _, _ := autoreview.ResolveReviewer(reg, "sonnet-99")
 	if reviewer.Provider != nil {
 		t.Fatalf("unresolvable model should not produce a reviewer")
 	}
@@ -1575,7 +1725,7 @@ func TestIntegrationExplicitNonClaudeModelNotSubstituted(t *testing.T) {
 
 func TestIntegrationTimeoutDefers(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeSleepScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1593,7 +1743,7 @@ func TestIntegrationTimeoutDefers(t *testing.T) {
 
 func TestIntegrationMalformedOutputDefers(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeMalformedScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1607,7 +1757,7 @@ func TestIntegrationMalformedOutputDefers(t *testing.T) {
 
 func TestIntegrationProviderFailureDefers(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeExitScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}
@@ -1623,7 +1773,7 @@ func TestIntegrationExistingAllowRemainsAuthoritative(t *testing.T) {
 	original := permission.Guarded(&permission.AutoApproveHandler{})
 	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
 	reg := agentFakeRegistry(t, testutil.FakeClaudeDeferScriptBody())
-	reviewer, _ := autoreview.ResolveReviewer(reg, "")
+	reviewer, _, _ := autoreview.ResolveReviewer(reg, "")
 	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != "allow" {
@@ -1636,7 +1786,7 @@ func TestIntegrationDirectDenyRemainsAuthoritative(t *testing.T) {
 	original := denyInner
 	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, _ := autoreview.ResolveReviewer(reg, "")
+	reviewer, _, _ := autoreview.ResolveReviewer(reg, "")
 	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != "deny" {
@@ -1647,7 +1797,7 @@ func TestIntegrationDirectDenyRemainsAuthoritative(t *testing.T) {
 func TestIntegrationNonBashRequestUnchanged(t *testing.T) {
 	composed, original := composedGeneralHandler()
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, _ := autoreview.ResolveReviewer(reg, "")
+	reviewer, _, _ := autoreview.ResolveReviewer(reg, "")
 	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
 	got, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: "Read", Input: `{}`})
 	if err != nil || got.Behavior != "allow" {
@@ -1657,7 +1807,7 @@ func TestIntegrationNonBashRequestUnchanged(t *testing.T) {
 
 func TestIntegrationPreservesOriginalCallbackInput(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok := autoreview.ResolveReviewer(reg, "")
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer = false, want true")
 	}

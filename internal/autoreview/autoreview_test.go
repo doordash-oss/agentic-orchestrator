@@ -16,6 +16,7 @@ package autoreview
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,42 @@ type reviewerIncapableProvider struct {
 }
 
 func (reviewerIncapableProvider) SupportsNativeToollessReview() bool { return false }
+
+type authCheckedReviewerProvider struct {
+	reviewerCapableProvider
+	bareAuth bool
+}
+
+func (p authCheckedReviewerProvider) CheckBareAuth() bool { return p.bareAuth }
+
+type rankedReviewerProvider struct {
+	reviewerCapableProvider
+	preferred string
+}
+
+type commandRecordingProvider struct {
+	testutil.FakeClaudeProvider
+	name      string
+	gotOpts   llm.CommandBuildOpts
+	emptyArgs bool
+}
+
+func (p *commandRecordingProvider) Name() string { return p.name }
+
+func (p *commandRecordingProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	p.gotOpts = opts
+	if p.emptyArgs {
+		return nil, nil, nil
+	}
+	return []string{"sh", "-c", "true"}, nil, nil
+}
+
+func (p rankedReviewerProvider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	if model.ID == p.preferred {
+		return 0, true
+	}
+	return 0, false
+}
 
 func newReviewerRegistry(t *testing.T, providers ...llm.LLMProvider) *llm.Registry {
 	t.Helper()
@@ -177,6 +214,44 @@ func TestBuildIsolatedEnvProviderValuesReplaceInheritedValues(t *testing.T) {
 	}
 }
 
+func TestBuildReviewCommandUsesProviderScopedIsolation(t *testing.T) {
+	provider := &commandRecordingProvider{name: "opencode"}
+	_, env, cleanup, err := buildReviewCommand(Reviewer{
+		Provider: provider,
+		Model:    "provider/model",
+	}, ClassifyRequest{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("buildReviewCommand() error: %v", err)
+	}
+	t.Cleanup(cleanup)
+
+	if got := filepath.Base(provider.gotOpts.StateDir); !strings.HasPrefix(got, "autoreview-opencode-") {
+		t.Fatalf("StateDir base = %q, want provider-scoped prefix", got)
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+			t.Fatalf("non-Claude environment contains %q", kv)
+		}
+	}
+}
+
+func TestBuildReviewCommandRejectsEmptyCommandWithoutFormattingArtifact(t *testing.T) {
+	provider := &commandRecordingProvider{name: "empty", emptyArgs: true}
+	_, _, cleanup, err := buildReviewCommand(Reviewer{
+		Provider: provider,
+		Model:    "test",
+	}, ClassifyRequest{WorkDir: t.TempDir()})
+	if cleanup != nil {
+		t.Fatal("buildReviewCommand() cleanup is non-nil after failure")
+	}
+	if err == nil || !strings.Contains(err.Error(), "no command") {
+		t.Fatalf("buildReviewCommand() error = %v, want no-command error", err)
+	}
+	if strings.Contains(err.Error(), "%!") {
+		t.Fatalf("buildReviewCommand() error contains formatting artifact: %v", err)
+	}
+}
+
 // fakeClaudeProvider, writeScript, and newFakeRegistry are consolidated in
 // test/testutil/fakeclaude.go as FakeClaudeProvider, WriteFakeClaudeScript,
 // and NewFakeClaudeRegistry. Script body helpers (AllowScriptBody, etc.) are
@@ -185,7 +260,7 @@ func TestBuildIsolatedEnvProviderValuesReplaceInheritedValues(t *testing.T) {
 func TestResolveReviewerAutomaticHaiku(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	r, ok := ResolveReviewer(reg, "")
+	r, ok, _ := ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatalf("ResolveReviewer(empty) = false, want true")
 	}
@@ -215,7 +290,7 @@ func TestResolveReviewerAutomaticProviderAndModelOrder(t *testing.T) {
 		{claude, codex, opencode},
 	} {
 		registry := newReviewerRegistry(t, providers...)
-		reviewer, ok := ResolveReviewer(registry, "")
+		reviewer, ok, _ := ResolveReviewer(registry, "")
 		if !ok {
 			t.Fatal("ResolveReviewer(empty) = false, want true")
 		}
@@ -241,7 +316,7 @@ func TestResolveReviewerAutomaticSkipsUnavailableAndIncapableProviders(t *testin
 	)
 	registry := newReviewerRegistry(t, claude, opencode, codex)
 
-	reviewer, ok := ResolveReviewer(registry, "")
+	reviewer, ok, _ := ResolveReviewer(registry, "")
 	if !ok {
 		t.Fatal("ResolveReviewer(empty) = false, want Codex fallback")
 	}
@@ -253,68 +328,52 @@ func TestResolveReviewerAutomaticSkipsUnavailableAndIncapableProviders(t *testin
 	}
 
 	registry.RestrictToProviders([]llm.LLMProvider{claude, opencode})
-	if _, ok := ResolveReviewer(registry, ""); ok {
+	if _, ok, _ := ResolveReviewer(registry, ""); ok {
 		t.Error("ResolveReviewer(empty) = true, want false when every active provider misses")
 	}
 }
 
-func TestResolveReviewerAutomaticProviderLocalPreferenceBands(t *testing.T) {
-	tests := []struct {
-		name     string
-		provider string
-		catalog  []llm.ModelInfo
-		want     string
-	}{
-		{
-			name:     "claude haiku before other cheap",
-			provider: "claude",
-			catalog: []llm.ModelInfo{
-				{ID: "cheap-small", Category: "cheap", ContextWindow: 16_000},
-				{ID: "claude-haiku", Category: "cheap", ContextWindow: 200_000},
-			},
-			want: "claude-haiku",
-		},
-		{
-			name:     "opencode haiku before flash before other cheap",
-			provider: "opencode",
-			catalog: []llm.ModelInfo{
-				{ID: "vendor/cheap", Category: "cheap", ContextWindow: 8_000},
-				{ID: "google/gemini-flash", Category: "cheap", ContextWindow: 16_000},
-				{ID: "anthropic/claude-haiku", Category: "cheap", ContextWindow: 200_000},
-			},
-			want: "anthropic/claude-haiku",
-		},
-		{
-			name:     "codex cheap before mini",
-			provider: "codex",
-			catalog: []llm.ModelInfo{
-				{ID: "gpt-shrink", ContextWindow: 8_000},
-				{ID: "gpt-cheap", Category: "cheap", ContextWindow: 200_000},
-			},
-			want: "gpt-cheap",
-		},
-		{
-			name:     "canonical id breaks equal ties",
-			provider: "codex",
-			catalog: []llm.ModelInfo{
-				{ID: "z-cheap", Category: "cheap", ContextWindow: 32_000},
-				{ID: "a-cheap", Category: "cheap", ContextWindow: 32_000},
-			},
-			want: "a-cheap",
-		},
+func TestResolveReviewerRejectsAnyProviderWithUnusableBareAuth(t *testing.T) {
+	opencode := authCheckedReviewerProvider{
+		reviewerCapableProvider: reviewerProvider(t, "opencode",
+			llm.ModelInfo{ID: "vendor/cheap", Category: "cheap"},
+		),
+		bareAuth: false,
 	}
+	if _, ok, _ := ResolveReviewer(newReviewerRegistry(t, opencode), ""); ok {
+		t.Fatal("ResolveReviewer(empty) = true, want any provider with unusable bare auth filtered")
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			provider := reviewerProvider(t, tt.provider, tt.catalog...)
-			reviewer, ok := ResolveReviewer(newReviewerRegistry(t, provider), "")
-			if !ok {
-				t.Fatal("ResolveReviewer(empty) = false, want true")
-			}
-			if got := reviewer.Model; got != tt.want {
-				t.Errorf("ResolveReviewer(empty) model = %q, want %q", got, tt.want)
-			}
-		})
+func TestResolveReviewerUsesProviderOwnedPreferenceRanking(t *testing.T) {
+	provider := rankedReviewerProvider{
+		reviewerCapableProvider: reviewerProvider(t, "codex",
+			llm.ModelInfo{ID: "not-ranked-first", ContextWindow: 8_000},
+			llm.ModelInfo{ID: "provider-preferred", ContextWindow: 200_000},
+		),
+		preferred: "provider-preferred",
+	}
+	reviewer, ok, _ := ResolveReviewer(newReviewerRegistry(t, provider), "")
+	if !ok {
+		t.Fatal("ResolveReviewer(empty) = false, want provider-ranked candidate")
+	}
+	if got := reviewer.Model; got != "provider-preferred" {
+		t.Fatalf("ResolveReviewer(empty) model = %q, want provider-owned ranking", got)
+	}
+}
+
+func TestResolveReviewerAutomaticFallbackUsesCheapCategory(t *testing.T) {
+	provider := reviewerProvider(t, "codex",
+		llm.ModelInfo{ID: "balanced", Category: "balanced", ContextWindow: 8_000},
+		llm.ModelInfo{ID: "z-cheap", Category: "cheap", ContextWindow: 32_000},
+		llm.ModelInfo{ID: "a-cheap", Category: "cheap", ContextWindow: 32_000},
+	)
+	reviewer, ok, _ := ResolveReviewer(newReviewerRegistry(t, provider), "")
+	if !ok {
+		t.Fatal("ResolveReviewer(empty) = false, want cheap fallback candidate")
+	}
+	if got := reviewer.Model; got != "a-cheap" {
+		t.Errorf("ResolveReviewer(empty) model = %q, want deterministic cheap fallback", got)
 	}
 }
 
@@ -327,18 +386,18 @@ func TestResolveReviewerExplicitExactProviderAndUniqueBareSelector(t *testing.T)
 	)
 	registry := newReviewerRegistry(t, opencode, claude)
 
-	reviewer, ok := ResolveReviewer(registry, "opencode:anthropic/claude-sonnet")
+	reviewer, ok, _ := ResolveReviewer(registry, "opencode:anthropic/claude-sonnet")
 	if !ok || reviewer.Provider.Name() != "opencode" || reviewer.Model != "anthropic/claude-sonnet" {
 		t.Errorf("ResolveReviewer(explicit OpenCode) = (%v, %v), want exact OpenCode model", reviewer, ok)
 	}
-	reviewer, ok = ResolveReviewer(registry, "unique-open")
+	reviewer, ok, _ = ResolveReviewer(registry, "unique-open")
 	if !ok || reviewer.Provider.Name() != "opencode" || reviewer.Model != "anthropic/claude-sonnet" {
 		t.Errorf("ResolveReviewer(unique bare) = (%v, %v), want canonical OpenCode model", reviewer, ok)
 	}
-	if _, ok := ResolveReviewer(registry, "shared"); ok {
+	if _, ok, _ := ResolveReviewer(registry, "shared"); ok {
 		t.Error("ResolveReviewer(ambiguous bare) = true, want false")
 	}
-	if _, ok := ResolveReviewer(registry, "claude:removed"); ok {
+	if _, ok, _ := ResolveReviewer(registry, "claude:removed"); ok {
 		t.Error("ResolveReviewer(stale explicit) = true, want false")
 	}
 }
@@ -346,15 +405,25 @@ func TestResolveReviewerExplicitExactProviderAndUniqueBareSelector(t *testing.T)
 func TestResolveReviewerExplicitClaudeModel(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	r, ok := ResolveReviewer(reg, "haiku[200K]")
+	r, ok, _ := ResolveReviewer(reg, "haiku[200K]")
 	if !ok || r.Model != "haiku[200K]" {
 		t.Fatalf("ResolveReviewer(haiku[200K]) = (%v,%v), want (haiku[200K],true)", r, ok)
 	}
 }
 
+func TestResolveReviewerExplicitModelAcceptsContextWindowSuffix(t *testing.T) {
+	provider := reviewerProvider(t, "claude",
+		llm.ModelInfo{ID: "haiku", Category: "cheap", ContextWindow: 200_000},
+	)
+	reviewer, ok, _ := ResolveReviewer(newReviewerRegistry(t, provider), "haiku[200K]")
+	if !ok || reviewer.Model != "haiku" {
+		t.Fatalf("ResolveReviewer(haiku[200K]) = (%v,%v), want canonical haiku", reviewer, ok)
+	}
+}
+
 func TestResolveReviewerNoClaude(t *testing.T) {
 	reg := llm.NewRegistry()
-	if _, ok := ResolveReviewer(reg, ""); ok {
+	if _, ok, _ := ResolveReviewer(reg, ""); ok {
 		t.Fatalf("ResolveReviewer with no claude = true, want false")
 	}
 }
@@ -363,7 +432,7 @@ func TestResolveReviewerNonClaudeModelRejected(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	// A model the (claude-only) registry cannot resolve must not substitute.
-	if _, ok := ResolveReviewer(reg, "sonnet-99"); ok {
+	if _, ok, _ := ResolveReviewer(reg, "sonnet-99"); ok {
 		t.Fatalf("ResolveReviewer(unresolvable) = true, want false (no substitution)")
 	}
 }
@@ -375,7 +444,7 @@ func TestResolveReviewerStaleProviderQualifiedModelRejected(t *testing.T) {
 	// create a reviewer. ResolveModel's explicit branch returns the bare
 	// model even when it is not catalog-resolvable, so ResolveReviewer must
 	// reject it to preserve normal human review.
-	if _, ok := ResolveReviewer(reg, "claude:removed-model"); ok {
+	if _, ok, _ := ResolveReviewer(reg, "claude:removed-model"); ok {
 		t.Fatalf("ResolveReviewer(claude:removed-model) = true, want false (stale model not in catalog)")
 	}
 }
@@ -396,15 +465,40 @@ func TestResolveReviewerRejectsOAuthOnlyAuth(t *testing.T) {
 	// An OAuth-only Claude installation is generally ready but --bare cannot
 	// authenticate, so ResolveReviewer must reject it to avoid selecting a
 	// reviewer that provider-fails on every eligible request.
-	if _, ok := ResolveReviewer(reg, ""); ok {
+	if _, ok, _ := ResolveReviewer(reg, ""); ok {
 		t.Fatalf("ResolveReviewer with OAuth-only auth = true, want false (bare auth unusable)")
+	}
+}
+
+func TestResolveReviewerFailureReasons(t *testing.T) {
+	if _, ok, reason := ResolveReviewer(nil, ""); ok || !strings.Contains(reason, "registry") {
+		t.Fatalf("ResolveReviewer(nil) = ok:%t reason:%q, want registry failure reason", ok, reason)
+	}
+
+	empty := llm.NewRegistry()
+	if _, ok, reason := ResolveReviewer(empty, ""); ok || !strings.Contains(reason, "provider") {
+		t.Fatalf("ResolveReviewer(empty automatic) = ok:%t reason:%q, want empty-cascade reason", ok, reason)
+	}
+
+	provider := reviewerProvider(t, "claude", llm.ModelInfo{ID: "haiku", Category: "cheap"})
+	registry := newReviewerRegistry(t, provider)
+	if _, ok, reason := ResolveReviewer(registry, "claude:unknown"); ok || !strings.Contains(reason, "unknown") {
+		t.Fatalf("ResolveReviewer(unknown explicit) = ok:%t reason:%q, want configured model reason", ok, reason)
+	}
+
+	filtered := authCheckedReviewerProvider{
+		reviewerCapableProvider: provider,
+		bareAuth:                false,
+	}
+	if _, ok, reason := ResolveReviewer(newReviewerRegistry(t, filtered), ""); ok || !strings.Contains(reason, "authentication") {
+		t.Fatalf("ResolveReviewer(auth filtered) = ok:%t reason:%q, want auth reason", ok, reason)
 	}
 }
 
 func TestClassifyAllow(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	got, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()})
 	if !ok || got != Allow {
 		t.Fatalf("Classify = (%q,%v), want (ALLOW,true)", got, ok)
@@ -414,7 +508,7 @@ func TestClassifyAllow(t *testing.T) {
 func TestClassifyDefer(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeDeferScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	got, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "git status --short", WorkDir: t.TempDir()})
 	if !ok || got != Defer {
 		t.Fatalf("Classify = (%q,%v), want (DEFER,true)", got, ok)
@@ -424,7 +518,7 @@ func TestClassifyDefer(t *testing.T) {
 func TestClassifyMalformedFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeMalformedScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
 		t.Fatalf("Classify(prose) = true, want false")
 	}
@@ -436,7 +530,7 @@ func TestClassifyToolUseDeniedFails(t *testing.T) {
 	// the outcome is failure because the control request was terminal.
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeToolUseScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
 		t.Fatalf("Classify(tool use) = true, want false (deny-all boundary)")
 	}
@@ -448,7 +542,7 @@ func TestClassifyControlRequestThenAllowFails(t *testing.T) {
 	// subsequent ALLOW can never be accepted.
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeControlThenAllowScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
 		t.Fatalf("Classify(control+ALLOW) = true, want false (control request is terminal)")
 	}
@@ -459,7 +553,7 @@ func TestClassifyErrorResultFails(t *testing.T) {
 	// assistant text contains ALLOW.
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeErrorResultScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
 		t.Fatalf("Classify(error result) = true, want false (error result is terminal)")
 	}
@@ -470,7 +564,7 @@ func TestClassifyRefusalResultFails(t *testing.T) {
 	// contains ALLOW.
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeRefusalScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
 		t.Fatalf("Classify(refusal) = true, want false (refusal is terminal)")
 	}
@@ -479,7 +573,7 @@ func TestClassifyRefusalResultFails(t *testing.T) {
 func TestClassifyTimeoutFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeSleepScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir(), Timeout: 200 * time.Millisecond}); ok {
 		t.Fatalf("Classify(timeout) = true, want false")
 	}
@@ -488,7 +582,7 @@ func TestClassifyTimeoutFails(t *testing.T) {
 func TestClassifyCancelledContextFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeSleepScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, ok := Classify(ctx, reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
@@ -514,7 +608,7 @@ func TestClassifyDetailedOutcomeTaxonomy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			script := testutil.WriteFakeClaudeScript(t, tt.body)
 			reg := testutil.NewFakeClaudeRegistry(t, script)
-			reviewer, _ := ResolveReviewer(reg, "")
+			reviewer, _, _ := ResolveReviewer(reg, "")
 			got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{
 				ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir(), Timeout: tt.timeout,
 			})
@@ -529,7 +623,7 @@ func TestClassifyDetailedOutcomeTaxonomy(t *testing.T) {
 
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeSleepScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
-	reviewer, _ := ResolveReviewer(reg, "")
+	reviewer, _, _ := ResolveReviewer(reg, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if got := ClassifyDetailed(ctx, reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); got.Outcome != OutcomeCanceled {

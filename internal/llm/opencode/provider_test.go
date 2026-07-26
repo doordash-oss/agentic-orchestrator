@@ -15,9 +15,11 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -447,6 +449,16 @@ func TestBuildCommand_NormalModeAsksForMediatedSurfaces(t *testing.T) {
 
 func TestBuildCommand_NativeToollessReviewIsEphemeralAndDeniesEverySurface(t *testing.T) {
 	stateDir := t.TempDir()
+	realDataHome := t.TempDir()
+	realAuthDir := filepath.Join(realDataHome, "opencode")
+	if err := os.MkdirAll(realAuthDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wantAuth := []byte(`{"anthropic":{"type":"api","key":"test-only"}}`)
+	if err := os.WriteFile(filepath.Join(realAuthDir, "auth.json"), wantAuth, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_DATA_HOME", realDataHome)
 	p := New()
 	args, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "opencode:anthropic/claude-haiku-4-5[200K]",
@@ -500,6 +512,55 @@ func TestBuildCommand_NativeToollessReviewIsEphemeralAndDeniesEverySurface(t *te
 		rel, relErr := filepath.Rel(stateDir, value)
 		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			t.Errorf("%s = %q, want path beneath ephemeral state dir %q", key, value, stateDir)
+		}
+	}
+
+	isolatedDataHome, ok := envValue(env, "XDG_DATA_HOME")
+	if !ok {
+		t.Fatal("review environment missing XDG_DATA_HOME")
+	}
+	authPath := filepath.Join(isolatedDataHome, "opencode", "auth.json")
+	gotAuth, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("reading copied review auth: %v", err)
+	}
+	if !bytes.Equal(gotAuth, wantAuth) {
+		t.Fatalf("copied review auth = %q, want exact credential bytes", gotAuth)
+	}
+	for _, path := range []string{isolatedDataHome, filepath.Dir(authPath)} {
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Fatalf("stat %s: %v", path, statErr)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Errorf("%s mode = %o, want 700", path, got)
+		}
+	}
+	info, err := os.Stat(authPath)
+	if err != nil {
+		t.Fatalf("stat copied review auth: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("copied review auth mode = %o, want 600", got)
+	}
+}
+
+func TestProviderReviewPreferenceBand(t *testing.T) {
+	p := New()
+	tests := []struct {
+		model llm.ModelInfo
+		band  int
+		ok    bool
+	}{
+		{model: llm.ModelInfo{ID: "anthropic/claude-haiku"}, band: 0, ok: true},
+		{model: llm.ModelInfo{ID: "google/gemini-flash"}, band: 1, ok: true},
+		{model: llm.ModelInfo{ID: "vendor/cheap", Category: "cheap"}, band: 2, ok: true},
+		{model: llm.ModelInfo{ID: "vendor/balanced", Category: "balanced"}, ok: false},
+	}
+	for _, tt := range tests {
+		band, ok := p.ReviewPreferenceBand(tt.model)
+		if band != tt.band || ok != tt.ok {
+			t.Errorf("ReviewPreferenceBand(%+v) = (%d,%t), want (%d,%t)", tt.model, band, ok, tt.band, tt.ok)
 		}
 	}
 }

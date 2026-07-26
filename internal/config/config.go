@@ -109,7 +109,7 @@ type DefaultsConfig struct {
 	MaxPhasePlanIterations   int                           `yaml:"max_phase_plan_iterations,omitempty" json:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              Checkpoints                   `yaml:"checkpoints" json:"checkpoints"`
 	// AutomaticReviewEnabled controls the default-off workspace behavior that
-	// lets a hidden Claude reviewer classify a narrow set of Bash commands. An
+	// lets an isolated reviewer classify a narrow set of Bash commands. An
 	// absent or false flag means disabled; it is never seeded by applyDefaults so
 	// legacy configs load as disabled without altering established defaults.
 	AutomaticReviewEnabled bool `yaml:"automatic_review_enabled,omitempty" json:"automatic_review_enabled,omitempty"`
@@ -131,11 +131,11 @@ type ModelConfig struct {
 	Review         string `yaml:"review" json:"review,omitempty"`
 	Utilities      string `yaml:"utilities" json:"utilities,omitempty"`
 	KBBuild        string `yaml:"kb_build" json:"kb_build,omitempty"`
-	// AutomaticReview is the Claude reviewer model for automatic Bash review.
-	// An empty value is meaningful: it means "Automatic" (resolve a
-	// catalog-present Claude Haiku model at review time). It is intentionally
-	// not seeded by applyDefaults or catalog defaulting so no inferred Claude
-	// model is ever written back.
+	// AutomaticReview is the optional reviewer model for automatic Bash review.
+	// An empty value is meaningful: it means "Automatic" (resolve the first
+	// eligible provider's preferred inexpensive model at review time). It is
+	// intentionally not seeded by applyDefaults or catalog defaulting so no
+	// inferred model is ever written back.
 	AutomaticReview string `yaml:"automatic_review,omitempty" json:"automatic_review,omitempty"`
 }
 
@@ -234,14 +234,14 @@ func AllEffortRoles() []string {
 // If both keys are present, "utilities" takes precedence.
 func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	type aux struct {
-		Inquiry        string `yaml:"inquiry"`
-		Research       string `yaml:"research"`
-		Planning       string `yaml:"planning"`
-		Implementation string `yaml:"implementation"`
-		Review         string `yaml:"review"`
-		Utilities      string `yaml:"utilities"`
-		Chat           string `yaml:"chat"`
-		KBBuild        string `yaml:"kb_build"`
+		Inquiry         string `yaml:"inquiry"`
+		Research        string `yaml:"research"`
+		Planning        string `yaml:"planning"`
+		Implementation  string `yaml:"implementation"`
+		Review          string `yaml:"review"`
+		Utilities       string `yaml:"utilities"`
+		Chat            string `yaml:"chat"`
+		KBBuild         string `yaml:"kb_build"`
 		AutomaticReview string `yaml:"automatic_review"`
 	}
 	var a aux

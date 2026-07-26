@@ -2560,6 +2560,49 @@ func TestSessionAppendLocalStatusIsOrderedAndNonTerminal(t *testing.T) {
 	}
 }
 
+func TestManagerPublishesSessionBuildNoticeOnce(t *testing.T) {
+	manager := NewManager(nil)
+	t.Cleanup(manager.Shutdown)
+	emitted := make(chan ports.SessionBuildNoticeContext, 1)
+	const status = "Automatic review enabled but no reviewer available: authentication unavailable"
+	handle, err := manager.StartSession(
+		"notice-session",
+		"feature-1",
+		feature.PhaseImplement,
+		[]string{"sh", "-c", "while IFS= read -r line; do :; done"},
+		t.TempDir(),
+		nil,
+		&SessionOpts{
+			RepoName:  "repo-a",
+			Iteration: 2,
+			SessionBuildNotices: []ports.SessionBuildNotice{{
+				Status: status,
+				Emit: func(ctx ports.SessionBuildNoticeContext) {
+					emitted <- ctx
+				},
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	t.Cleanup(func() { _ = handle.Stop() })
+
+	messages := handle.MessageLog().Messages()
+	if len(messages) != 1 || messages[0].Status == nil || messages[0].Status.Message != status {
+		t.Fatalf("initial messages = %+v, want one local status notice", messages)
+	}
+	select {
+	case got := <-emitted:
+		if got.SessionID != "notice-session" || got.FeatureID != "feature-1" ||
+			got.Phase != feature.PhaseImplement || got.RepoName != "repo-a" || got.Iteration != 2 {
+			t.Fatalf("notice context = %+v", got)
+		}
+	default:
+		t.Fatal("session-build operator notice was not emitted")
+	}
+}
+
 func taskStartedMsg(taskID string) llm.SDKMessage {
 	return llm.SDKMessage{
 		Type: "system", Subtype: "task_started",

@@ -256,7 +256,7 @@ func isUnsupportedUnquoted(c byte) bool {
 	}
 	return c == '$' || c == '`' || c == '(' || c == ')' ||
 		c == '{' || c == '}' || c == '*' || c == '?' ||
-		c == '[' || c == ']' || c == '~' || c == '\\'
+		c == '[' || c == ']' || c == '~' || c == '\\' || c == '#'
 }
 
 // assignment is a prefix KEY=value before the command name.
@@ -331,6 +331,9 @@ func parseTokens(tokens []token) (*parsedCommand, error) {
 				key, value := splitAssignment(tok.text)
 				seg.assignments = append(seg.assignments, assignment{key: key, value: value})
 			} else if seg.name == "" {
+				if tok.text == "" {
+					return nil, errGuardrailMalformed
+				}
 				seg.name = tok.text
 				seg.nameQuoted = tok.quoted
 			} else {

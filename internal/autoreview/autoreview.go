@@ -24,6 +24,7 @@ package autoreview
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -93,14 +94,15 @@ type Reviewer struct {
 // order and deterministic provider-local cheap-model preferences. Explicit
 // selection resolves only the configured provider/model (or a uniquely
 // resolvable bare selector) and never substitutes.
-func ResolveReviewer(registry *llm.Registry, model string) (Reviewer, bool) {
+func ResolveReviewer(registry *llm.Registry, model string) (Reviewer, bool, string) {
 	if registry == nil {
-		return Reviewer{}, false
+		return Reviewer{}, false, "provider registry unavailable"
 	}
 	selector := strings.TrimSpace(model)
 	if selector == "" {
 		return resolveAutomaticReviewer(registry)
 	}
+	selector = llm.StripModelContextWindow(selector)
 	return resolveExplicitReviewer(registry, selector)
 }
 
@@ -111,8 +113,8 @@ type reviewCandidate struct {
 	band  int
 }
 
-func resolveAutomaticReviewer(registry *llm.Registry) (Reviewer, bool) {
-	providers := eligibleReviewerProviders(registry)
+func resolveAutomaticReviewer(registry *llm.Registry) (Reviewer, bool, string) {
+	providers, eligibility := eligibleReviewerProviders(registry)
 	for _, name := range automaticProviderOrder {
 		provider := providers[name]
 		if provider == nil {
@@ -121,7 +123,7 @@ func resolveAutomaticReviewer(registry *llm.Registry) (Reviewer, bool) {
 		catalog := reviewerCatalog(provider)
 		candidates := make([]reviewCandidate, 0, len(catalog))
 		for _, model := range catalog {
-			if band, ok := automaticPreferenceBand(name, model); ok {
+			if band, ok := reviewPreferenceBand(provider, model); ok {
 				candidates = append(candidates, reviewCandidate{model: model, band: band})
 			}
 		}
@@ -142,20 +144,35 @@ func resolveAutomaticReviewer(registry *llm.Registry) (Reviewer, bool) {
 			}
 			return strings.ToLower(a.model.ID) < strings.ToLower(b.model.ID)
 		})
-		return Reviewer{Provider: provider, Model: candidates[0].model.ID}, true
+		return Reviewer{Provider: provider, Model: candidates[0].model.ID}, true, ""
 	}
-	return Reviewer{}, false
+	switch {
+	case eligibility.detected == 0:
+		return Reviewer{}, false, "no supported reviewer provider is available"
+	case len(providers) == 0 && eligibility.authFiltered > 0:
+		return Reviewer{}, false, "reviewer authentication is unavailable in isolated mode"
+	case len(providers) == 0:
+		return Reviewer{}, false, "no detected provider supports isolated tool-less review"
+	default:
+		return Reviewer{}, false, "eligible reviewer catalogs contain no preferred review model"
+	}
 }
 
-func resolveExplicitReviewer(registry *llm.Registry, selector string) (Reviewer, bool) {
-	providers := eligibleReviewerProviders(registry)
+func resolveExplicitReviewer(registry *llm.Registry, selector string) (Reviewer, bool, string) {
+	selector = llm.StripModelContextWindow(strings.TrimSpace(selector))
+	providers, eligibility := eligibleReviewerProviders(registry)
 	if idx := strings.IndexByte(selector, ':'); idx > 0 {
-		if provider := providers[selector[:idx]]; provider != nil {
+		providerName := selector[:idx]
+		if provider := providers[providerName]; provider != nil {
 			if canonical, ok := catalogModel(provider, selector[idx+1:]); ok {
-				return Reviewer{Provider: provider, Model: canonical}, true
+				return Reviewer{Provider: provider, Model: canonical}, true, ""
 			}
-			return Reviewer{}, false
+			return Reviewer{}, false, fmt.Sprintf("configured automatic-review model %q is unknown for provider %q", selector[idx+1:], providerName)
 		}
+		if rejection := eligibility.rejections[providerName]; rejection != "" {
+			return Reviewer{}, false, fmt.Sprintf("automatic-review provider %q unavailable: %s", providerName, rejection)
+		}
+		return Reviewer{}, false, fmt.Sprintf("configured automatic-review provider %q is unavailable", providerName)
 	}
 
 	type match struct {
@@ -170,32 +187,48 @@ func resolveExplicitReviewer(registry *llm.Registry, selector string) (Reviewer,
 		}
 	}
 	if len(matches) != 1 {
-		return Reviewer{}, false
+		if len(matches) == 0 {
+			return Reviewer{}, false, fmt.Sprintf("configured automatic-review model %q is unavailable", selector)
+		}
+		return Reviewer{}, false, fmt.Sprintf("configured automatic-review model %q is ambiguous across providers", selector)
 	}
 	for _, matched := range matches {
-		return Reviewer{Provider: matched.provider, Model: matched.model}, true
+		return Reviewer{Provider: matched.provider, Model: matched.model}, true, ""
 	}
-	return Reviewer{}, false
+	return Reviewer{}, false, fmt.Sprintf("configured automatic-review model %q is unavailable", selector)
 }
 
-func eligibleReviewerProviders(registry *llm.Registry) map[string]llm.LLMProvider {
+type reviewerEligibility struct {
+	detected     int
+	authFiltered int
+	rejections   map[string]string
+}
+
+func eligibleReviewerProviders(registry *llm.Registry) (map[string]llm.LLMProvider, reviewerEligibility) {
 	result := make(map[string]llm.LLMProvider, len(automaticProviderOrder))
+	eligibility := reviewerEligibility{rejections: make(map[string]string)}
 	for _, provider := range registry.DetectedProviders() {
 		if !isBuiltinReviewerProvider(provider.Name()) {
 			continue
 		}
+		eligibility.detected++
 		capability, ok := provider.(llm.NativeToollessReviewer)
-		if !ok || !capability.SupportsNativeToollessReview() || len(reviewerCatalog(provider)) == 0 {
+		if !ok || !capability.SupportsNativeToollessReview() {
+			eligibility.rejections[provider.Name()] = "isolated tool-less review is not supported"
 			continue
 		}
-		if provider.Name() == "claude" {
-			if checker, ok := provider.(llm.BareAuthChecker); ok && !checker.CheckBareAuth() {
-				continue
-			}
+		if len(reviewerCatalog(provider)) == 0 {
+			eligibility.rejections[provider.Name()] = "reviewer model catalog is empty"
+			continue
+		}
+		if checker, ok := provider.(llm.BareAuthChecker); ok && !checker.CheckBareAuth() {
+			eligibility.authFiltered++
+			eligibility.rejections[provider.Name()] = "authentication is unavailable in isolated mode"
+			continue
 		}
 		result[provider.Name()] = provider
 	}
-	return result
+	return result, eligibility
 }
 
 func isBuiltinReviewerProvider(name string) bool {
@@ -233,49 +266,14 @@ func catalogModel(provider llm.LLMProvider, selector string) (string, bool) {
 	return found, found != ""
 }
 
-func automaticPreferenceBand(provider string, model llm.ModelInfo) (int, bool) {
-	haiku := modelMatchesHint(model, "haiku")
-	flash := modelMatchesHint(model, "flash")
-	mini := modelMatchesHint(model, "mini") || modelMatchesHint(model, "shrink")
-	switch provider {
-	case "claude":
-		if haiku {
-			return 0, true
-		}
-		if model.Category == "cheap" {
-			return 1, true
-		}
-	case "opencode":
-		if haiku {
-			return 0, true
-		}
-		if flash {
-			return 1, true
-		}
-		if model.Category == "cheap" {
-			return 2, true
-		}
-	case "codex":
-		if model.Category == "cheap" {
-			return 0, true
-		}
-		if mini {
-			return 1, true
-		}
+func reviewPreferenceBand(provider llm.LLMProvider, model llm.ModelInfo) (int, bool) {
+	if ranker, ok := provider.(llm.ReviewModelRanker); ok {
+		return ranker.ReviewPreferenceBand(model)
+	}
+	if model.Category == "cheap" {
+		return 0, true
 	}
 	return 0, false
-}
-
-func modelMatchesHint(model llm.ModelInfo, hint string) bool {
-	if strings.Contains(strings.ToLower(model.ID), hint) {
-		return true
-	}
-	for _, alias := range model.Aliases {
-		if strings.Contains(strings.ToLower(alias), hint) {
-			return true
-		}
-	}
-	return false
 }
 
 // RestoreReviewer reconstructs a Reviewer from a snapshotted provider name
@@ -545,11 +543,11 @@ func unexpectedReviewActivity(msg llm.SDKMessage) bool {
 
 // buildReviewCommand constructs the native CLI command with zero tools, no
 // session persistence, and no customization injection. Each provider maps
-// those options to its audited boundary. An isolated config directory prevents
-// user-level Claude configuration from loading; OpenCode and Codex provide
-// their own isolated environment entries and cleanup through BuildCommand.
+// those options to its audited boundary. A provider-scoped state directory
+// gives each provider a private location for its isolated configuration and
+// credentials.
 func buildReviewCommand(reviewer Reviewer, req ClassifyRequest) (args []string, env []string, cleanup func(), err error) {
-	configDir, mErr := os.MkdirTemp("", "autoreview-claude-config-*")
+	configDir, mErr := os.MkdirTemp("", "autoreview-"+providerTempKey(reviewer.Provider.Name())+"-*")
 	if mErr != nil {
 		return nil, nil, nil, mErr
 	}
@@ -565,27 +563,49 @@ func buildReviewCommand(reviewer Reviewer, req ClassifyRequest) (args []string, 
 		WorkDir:              req.WorkDir,
 		WritableRoots:        req.WritableRoots,
 	})
-	if bErr != nil || len(cmdArgs) == 0 {
+	if bErr != nil {
 		cleanup()
 		return nil, nil, nil, fmt.Errorf("build command: %w", bErr)
 	}
+	if len(cmdArgs) == 0 {
+		cleanup()
+		return nil, nil, nil, errors.New("build command: provider returned no command")
+	}
 
-	// Build an isolated environment: inherit the parent environment minus
-	// provider-excluded vars, then set CLAUDE_CONFIG_DIR to the temp dir so
-	// the reviewer ignores ~/.claude settings, CLAUDE.md project files, and
-	// user customizations.
+	// Inherit the parent environment minus provider-excluded vars. Claude also
+	// receives its isolated state directory explicitly; OpenCode and Codex add
+	// their provider-specific environment through BuildCommand.
 	env = buildIsolatedEnv(reviewer.Provider, configDir, cmdEnv)
 	return cmdArgs, env, cleanup, nil
 }
 
-// buildIsolatedEnv returns the subprocess environment for the hidden
-// reviewer: the parent environment with provider-excluded prefixes stripped
-// and CLAUDE_CONFIG_DIR redirected to an empty temp directory so no
-// project/user Claude configuration is loaded.
+func providerTempKey(name string) string {
+	var key strings.Builder
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			key.WriteRune(r)
+		default:
+			key.WriteByte('-')
+		}
+	}
+	if key.Len() == 0 {
+		return "provider"
+	}
+	return key.String()
+}
+
+// buildIsolatedEnv returns the subprocess environment for the hidden reviewer:
+// the parent environment with provider-excluded prefixes stripped and
+// provider-specific overrides applied. Claude's config directory is redirected
+// so no project or user Claude customization is loaded.
 func buildIsolatedEnv(provider llm.LLMProvider, configDir string, providerEnv []string) []string {
 	excludePrefixes := provider.EnvVarsToExclude()
 	overrides := make(map[string]struct{}, len(providerEnv)+1)
-	overrides["CLAUDE_CONFIG_DIR"] = struct{}{}
+	isClaude := strings.EqualFold(provider.Name(), "claude")
+	if isClaude {
+		overrides["CLAUDE_CONFIG_DIR"] = struct{}{}
+	}
 	for _, kv := range providerEnv {
 		if key, _, ok := strings.Cut(kv, "="); ok && key != "" {
 			overrides[key] = struct{}{}
@@ -603,7 +623,9 @@ func buildIsolatedEnv(provider llm.LLMProvider, configDir string, providerEnv []
 		}
 		env = append(env, kv)
 	}
-	env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
+	if isClaude {
+		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
+	}
 	env = append(env, providerEnv...)
 	return env
 }

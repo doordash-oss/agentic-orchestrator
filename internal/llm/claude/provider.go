@@ -244,7 +244,8 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 // CheckBareAuth reports whether the cached authentication method is usable in
 // a --bare subprocess launch. --bare skips keychain reads, settings loading,
 // and OAuth, so only ANTHROPIC_API_KEY in the environment (inherited by the
-// subprocess) or an API-key auth method with a non-keychain source can
+// subprocess) or an API-key status explicitly identifying an environment
+// source can
 // authenticate the hidden reviewer. Returns false when CheckReadiness has not
 // run or determined the auth is incompatible.
 func (p *Provider) CheckBareAuth() bool {
@@ -255,21 +256,25 @@ func (p *Provider) CheckBareAuth() bool {
 
 // isBareAuthUsable reports whether the auth status is compatible with a
 // --bare launch. ANTHROPIC_API_KEY in the environment always works because the
-// subprocess inherits it. An API-key auth method also works when the key
-// source is not the keychain (e.g. env or config file read before --bare).
-// OAuth ("claude.ai") and keychain-based methods are never usable with --bare.
+// subprocess inherits it. An API-key auth method also works when its reported
+// source explicitly identifies the environment. OAuth, keychain, helper, and
+// settings-sourced methods are never usable with --bare.
 func isBareAuthUsable(status authStatus) bool {
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
 		return true
 	}
-	if status.AuthMethod == "api_key" {
-		source := strings.ToLower(status.APIKeySource)
-		if !strings.Contains(source, "keychain") &&
-			!strings.Contains(source, "key chain") {
-			return true
-		}
+	if status.AuthMethod != "api_key" {
+		return false
 	}
-	return false
+	source := strings.NewReplacer("-", "_", " ", "_").Replace(
+		strings.ToLower(strings.TrimSpace(status.APIKeySource)),
+	)
+	switch source {
+	case "anthropic_api_key", "env", "environment", "environment_variable":
+		return true
+	default:
+		return false
+	}
 }
 
 func formatReadyAuthDetail(status authStatus) string {
@@ -304,6 +309,30 @@ func (p *Provider) ModelCatalog() []llm.ModelInfo {
 		return p.defaultModelInfos()
 	}
 	return cat
+}
+
+// ReviewPreferenceBand ranks Claude review models without leaking model-family
+// naming into shared automatic-review code.
+func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	if reviewModelMatchesHint(model, "haiku") {
+		return 0, true
+	}
+	if model.Category == "cheap" {
+		return 1, true
+	}
+	return 0, false
+}
+
+func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
+	if strings.Contains(strings.ToLower(model.ID), hint) {
+		return true
+	}
+	for _, alias := range model.Aliases {
+		if strings.Contains(strings.ToLower(alias), hint) {
+			return true
+		}
+	}
+	return false
 }
 
 // CLIVersion returns the installed Claude CLI version.

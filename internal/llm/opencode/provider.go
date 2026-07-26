@@ -427,6 +427,33 @@ func (p *Provider) ModelCatalog() []llm.ModelInfo {
 	return out
 }
 
+// ReviewPreferenceBand ranks OpenCode review models without leaking backend
+// model-family naming into shared automatic-review code.
+func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	switch {
+	case reviewModelMatchesHint(model, "haiku"):
+		return 0, true
+	case reviewModelMatchesHint(model, "flash"):
+		return 1, true
+	case model.Category == "cheap":
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
+	if strings.Contains(strings.ToLower(model.ID), hint) {
+		return true
+	}
+	for _, alias := range model.Aliases {
+		if strings.Contains(strings.ToLower(alias), hint) {
+			return true
+		}
+	}
+	return false
+}
+
 // catalogOrFallback returns the discovered catalog when present, otherwise the
 // curated offline fallback. The discovered catalog is replaced wholesale by
 // SetModelCatalog, so copying the slice header under the read lock and iterating

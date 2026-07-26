@@ -663,8 +663,9 @@ var simpleCommandPolicyTable = map[string]cmdPolicy{
 		allowArgs:      true,
 	},
 	"flake8": {
-		tier:      riskTierBounded,
-		allowArgs: true,
+		tier:           riskTierBounded,
+		hazardousFlags: flake8HazardousFlags,
+		allowArgs:      true,
 	},
 	"isort": {
 		tier:           riskTierBounded,
@@ -729,10 +730,10 @@ var simpleCommandPolicyTable = map[string]cmdPolicy{
 		allowArgs:        true,
 	},
 	"clang-tidy": {
-		tier:       riskTierStrict,
-		safeFlags:  clangTidySafeFlags,
-		valueFlags: clangTidyValueFlags,
-		allowArgs:  true,
+		tier:           riskTierStrict,
+		safeFlags:      clangTidySafeFlags,
+		hazardousFlags: clangTidyHazardousFlags,
+		allowArgs:      true,
 	},
 	"cppcheck": {
 		tier:             riskTierStrict,
@@ -1031,6 +1032,12 @@ var mypyHazardousFlags = map[string]bool{
 	"--config-file": true, "--cache-dir": true,
 	"--plugins": true, "--custom-typeshed-dir": true,
 	"--python-executable": true,
+	"--pdb":               true,
+}
+
+var flake8HazardousFlags = map[string]bool{
+	"--config": true, "--append-config": true,
+	"--enable-extensions": true, "--require-plugins": true,
 }
 
 var isortHazardousFlags = map[string]bool{
@@ -1296,7 +1303,9 @@ var pylintValueFlags = map[string]bool{
 // clangTidySafeFlags lists explicitly safe clang-tidy flags. Plugin loading
 // (--load, --plugin), fix application (--fix*), inline or file-backed
 // configuration (--config, --config-file), and compiler argument pass-through
-// (--extra-arg*) are absent so they defer. Unknown flags also defer (strict mode).
+// (--extra-arg*) are absent so they defer. A compilation database (-p) can
+// inject arbitrary compiler arguments, including dynamic plugin loading, and
+// is explicitly hazardous. Unknown flags also defer (strict mode).
 var clangTidySafeFlags = map[string]bool{
 	"--quiet": true, "--version": true,
 	"--list-checks": true, "--explain-config": true,
@@ -1304,11 +1313,10 @@ var clangTidySafeFlags = map[string]bool{
 	"--checks":             true,
 	"--warnings-as-errors": true,
 	"--header-filter":      true,
-	"-p":                   true,
 	"--":                   true,
 }
 
-var clangTidyValueFlags = map[string]bool{
+var clangTidyHazardousFlags = map[string]bool{
 	"-p": true,
 }
 

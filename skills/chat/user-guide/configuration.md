@@ -90,7 +90,11 @@ stdout/stderr redirection to `/dev/null`, are recognized; input redirection and
 output to any other path defer.
 
 This guardrail is conservative eligibility filtering. Automatic review does
-not sandbox commands and does not guarantee command safety.
+not sandbox commands and does not guarantee command safety. Repo-controlled
+build and test code is trusted-by-design: an approved command such as
+`make test` or `go generate` may execute Makefiles, `package.json` scripts,
+`//go:generate` directives, or `conftest.py`. Use automatic review only when
+you trust the repository's development automation.
 
 ### Reviewer and lifecycle contract
 
@@ -104,10 +108,12 @@ failure, unexpected interaction, and cancellation silently return to the
 ordinary human prompt.
 
 Exact `ALLOW` and `DEFER` decisions use a byte-exact session-only cache.
-Concurrent identical requests coalesce behind one leader; only that leader
-performs status and event side effects. Nothing is reused across sessions, and
-automatic approval creates no durable permission rule, remembered cache entry,
-or permission audit record.
+Requests are serialized within the session, and a cache hit launches no new
+reviewer process or side effect. After two consecutive failed attempts, a
+session circuit breaker marks the reviewer unavailable for the rest of that
+session, so later eligible requests return immediately to the human prompt.
+Nothing is reused across sessions, and automatic approval creates no durable
+permission rule, remembered cache entry, or permission audit record.
 
 ### Transparency and operational evidence
 
@@ -124,10 +130,14 @@ feature/session context, reviewer identity, duration, redacted command
 summary, and an outcome of `allow`, `defer`, `timeout`, `malformed_response`,
 `provider_error`, `unexpected_interaction`, or `canceled`. An allow event also
 records whether status persistence succeeded. Guardrail deferrals, non-Bash
-requests, existing decisions, disabled or unavailable reviewers, session-cache
-hits, and in-flight followers emit neither status nor an automatic-review
-event. Status-delivery and observer failures are best-effort side-effect
-failures: they never change the permission decision or cause a retry.
+requests, existing decisions, disabled paths, and session-cache hits emit
+neither per-request status nor an automatic-review event. If automatic review
+is enabled but no reviewer is available, Agentico emits one session-build
+status and one `automatic_review.unavailable` operator event with the reason.
+When two consecutive attempts fail, the circuit breaker emits one final
+`automatic_review.unavailable` event and then stays silent for later requests.
+Status-delivery and observer failures are best-effort side-effect failures:
+they never change the permission decision or cause a retry.
 
 Model names can use canonical context-window IDs (e.g., `opus[1M]`) or provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`). Bare aliases such as `opus` are still accepted and resolved against the registry, which merges each provider's hardcoded catalog (see `internal/llm/claude`, `internal/llm/codex`, and `internal/llm/opencode`). Configured model names are canonicalized at startup so the on-disk config reflects the registry's canonical spelling.
 

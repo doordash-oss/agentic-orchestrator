@@ -273,6 +273,7 @@ const (
 	UpdateToolCall          = "tool_call"
 	UpdateToolCallUpdate    = "tool_call_update"
 	UpdateUsage             = "usage_update"
+	UpdateAvailableCommands = "available_commands_update"
 )
 
 // UpdateContent is the content block carried by message-chunk updates.

@@ -260,6 +260,13 @@ var guardrailFuzzAdversarialSeeds = []string{
 	"yarn run test -- --verbose",
 	"pnpm run lint-Release",
 	"yarn run build-Deploy",
+	"sudo make test",
+	"env make test",
+	"xargs make test",
+	"timeout 30 make test",
+	"nice make test",
+	"'' make test",
+	"make test # ignored by bash",
 }
 
 // FuzzGuardrailClassify verifies that arbitrary bytes never panic the

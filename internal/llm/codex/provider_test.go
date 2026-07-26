@@ -327,8 +327,11 @@ func TestProviderBuildCommand_NativeToollessReviewIsIsolated(t *testing.T) {
 	if !p.SupportsNativeToollessReview() {
 		t.Fatal("SupportsNativeToollessReview() = false, want audited capability")
 	}
-	if len(cmd) < 3 || cmd[0] != "codex" || cmd[1] != "app-server" || cmd[2] != "--strict-config" {
+	if len(cmd) < 2 || cmd[0] != "codex" || cmd[1] != "app-server" {
 		t.Fatalf("BuildCommand(native tool-less review) command = %v", cmd)
+	}
+	if slices.Contains(cmd, "--strict-config") {
+		t.Fatalf("BuildCommand(native tool-less review) command = %v, want unknown defense-in-depth keys tolerated", cmd)
 	}
 	for _, override := range []string{
 		"model_reasoning_effort=low",
@@ -368,6 +371,25 @@ func TestProviderBuildCommand_NativeToollessReviewIsIsolated(t *testing.T) {
 	for _, unwanted := range []string{"config.toml", "agents"} {
 		if _, err := os.Stat(filepath.Join(isolatedHome, unwanted)); !os.IsNotExist(err) {
 			t.Fatalf("isolated Codex home unexpectedly contains %s: %v", unwanted, err)
+		}
+	}
+}
+
+func TestProviderReviewPreferenceBand(t *testing.T) {
+	p := &Provider{}
+	tests := []struct {
+		model llm.ModelInfo
+		band  int
+		ok    bool
+	}{
+		{model: llm.ModelInfo{ID: "cheap", Category: "cheap"}, band: 0, ok: true},
+		{model: llm.ModelInfo{ID: "gpt-mini", Category: "balanced"}, band: 1, ok: true},
+		{model: llm.ModelInfo{ID: "gpt-large", Category: "balanced"}, ok: false},
+	}
+	for _, tt := range tests {
+		band, ok := p.ReviewPreferenceBand(tt.model)
+		if band != tt.band || ok != tt.ok {
+			t.Errorf("ReviewPreferenceBand(%+v) = (%d,%t), want (%d,%t)", tt.model, band, ok, tt.band, tt.ok)
 		}
 	}
 }

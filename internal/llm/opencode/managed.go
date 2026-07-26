@@ -173,6 +173,9 @@ func buildManagedSession(binary string, opts llm.CommandBuildOpts) (args, env []
 		}
 		env = append(env, configFileEnvVar+"="+cfgPath)
 		if nativeReview {
+			if copyErr := copyNativeReviewAuth(dir); copyErr != nil {
+				return nil, nil, fmt.Errorf("copying OpenCode authentication: %s", sanitizeDiagnostic(copyErr.Error()))
+			}
 			env = append(env,
 				"XDG_CONFIG_HOME="+filepath.Join(dir, "xdg-config"),
 				"XDG_DATA_HOME="+filepath.Join(dir, "xdg-data"),
@@ -196,6 +199,44 @@ func buildManagedSession(binary string, opts llm.CommandBuildOpts) (args, env []
 	env = append(env, isoEnv...)
 
 	return args, env, nil
+}
+
+func copyNativeReviewAuth(dir string) error {
+	dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+	if dataHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolving user data directory: %w", err)
+		}
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	source := filepath.Join(dataHome, "opencode", "auth.json")
+	auth, err := os.ReadFile(source)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading credential store: %w", err)
+	}
+
+	isolatedDataHome := filepath.Join(dir, "xdg-data")
+	targetDir := filepath.Join(isolatedDataHome, "opencode")
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		return fmt.Errorf("creating isolated credential directory: %w", err)
+	}
+	for _, path := range []string{isolatedDataHome, targetDir} {
+		if err := os.Chmod(path, 0o700); err != nil {
+			return fmt.Errorf("securing isolated credential directory: %w", err)
+		}
+	}
+	target := filepath.Join(targetDir, "auth.json")
+	if err := os.WriteFile(target, auth, 0o600); err != nil {
+		return fmt.Errorf("writing isolated credential store: %w", err)
+	}
+	if err := os.Chmod(target, 0o600); err != nil {
+		return fmt.Errorf("securing isolated credential store: %w", err)
+	}
+	return nil
 }
 
 func nativeToollessReviewRequested(opts llm.CommandBuildOpts) (bool, error) {

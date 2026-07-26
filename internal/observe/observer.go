@@ -75,6 +75,18 @@ type AutomaticReviewEventInput struct {
 	StatusFailureReason string
 }
 
+// AutomaticReviewUnavailableEventInput carries one session-scoped reviewer
+// unavailability notice, either from session-build resolution or the runtime
+// failure circuit breaker.
+type AutomaticReviewUnavailableEventInput struct {
+	Phase     string
+	SessionID string
+	RepoName  string
+	Iteration int
+	Scope     string
+	Reason    string
+}
+
 // New creates an Observer. When enabled is false, all methods return immediately.
 func New(enabled bool, stateDir string, otelEnabled bool, otelEndpoint string, otelInsecure bool, otelServiceName string) *Observer {
 	if !enabled {
@@ -686,6 +698,36 @@ func (o *Observer) AutomaticReviewCompleted(sc SpanContext, in AutomaticReviewEv
 		"outcome":  string(in.Outcome),
 	}
 	o.otel.AddSpanEvent(sc.ParentSpanID, "automatic_review.completed", addRunNumber(sc, attrs))
+}
+
+// AutomaticReviewUnavailable emits exactly one bounded operator notice for a
+// session-scoped reviewer outage. Nil and disabled observers are no-ops.
+func (o *Observer) AutomaticReviewUnavailable(sc SpanContext, in AutomaticReviewUnavailableEventInput) {
+	if o == nil || !o.enabled {
+		return
+	}
+	scope := permission.AutomaticReviewBoundReason(in.Scope)
+	reason := permission.AutomaticReviewBoundReason(in.Reason)
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "automatic_review.unavailable",
+		Phase:        in.Phase,
+		Status:       "unavailable",
+		FeatureID:    sc.FeatureID,
+		SessionID:    in.SessionID,
+		RepoName:     in.RepoName,
+		Iteration:    in.Iteration,
+		Data: map[string]any{
+			"scope":  scope,
+			"reason": reason,
+		},
+	})
+	o.otel.AddSpanEvent(sc.ParentSpanID, "automatic_review.unavailable", addRunNumber(sc, map[string]string{
+		"scope": scope,
+	}))
 }
 
 // QuestionAsked emits a question.asked event.

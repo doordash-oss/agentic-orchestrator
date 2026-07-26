@@ -29,14 +29,17 @@ import (
 // autoReviewBashToolName is the canonical Bash tool name the decorator matches.
 const autoReviewBashToolName = "Bash"
 
+const automaticReviewCircuitBreakerReason = "automatic reviewer unavailable after 2 consecutive failures"
+
 // autoReviewPermissionDecorator wraps the fully composed session permission
 // policy. It asks the existing handler first and returns every non-empty
 // decision or existing error unchanged. Only an empty decision for canonical
 // Bash, when the session's snapshotted flag is enabled and reviewer is usable,
 // permits a hidden classification. Successful ALLOW and DEFER classifications
-// are memoized by the byte-exact extracted command for this decorator's
-// session, and concurrent identical classifications share one in-flight
-// attempt. The guardrail classifier determines eligibility: it parses the
+// are memoized by the byte-exact extracted command for this decorator's session.
+// A mutex serializes the permission callback, matching the owning session's
+// single-reader production path while keeping direct concurrent tests race-free.
+// The guardrail classifier determines eligibility: it parses the
 // command structurally and checks it against the curated development-command
 // policy. A successful ALLOW is the only new automatic decision; DEFER and
 // every failure return the same empty human-deferral decision. The decorator
@@ -64,22 +67,16 @@ type autoReviewClassifyDetailedFunc func(context.Context, autoreview.Reviewer, a
 // original provider session. Its exact-command maps never enter the shared
 // permission cache or any durable store.
 type autoReviewSessionState struct {
-	mu       sync.Mutex
-	cached   map[string]autoreview.Decision
-	inFlight map[string]*autoReviewFlight
-	disposed bool
-}
-
-type autoReviewFlight struct {
-	done     chan struct{}
-	decision autoreview.Decision
-	ok       bool
+	mu                  sync.Mutex
+	cached              map[string]autoreview.Decision
+	consecutiveFailures int
+	unavailable         bool
+	disposed            bool
 }
 
 func newAutoReviewSessionState() *autoReviewSessionState {
 	return &autoReviewSessionState{
-		cached:   make(map[string]autoreview.Decision),
-		inFlight: make(map[string]*autoReviewFlight),
+		cached: make(map[string]autoreview.Decision),
 	}
 }
 
@@ -103,65 +100,43 @@ func (s *autoReviewSessionState) dispose() {
 	}
 	s.disposed = true
 	clear(s.cached)
-	for command, flight := range s.inFlight {
-		flight.decision = ""
-		flight.ok = false
-		delete(s.inFlight, command)
-		close(flight.done)
-	}
+	s.unavailable = true
 }
 
-func (s *autoReviewSessionState) review(ctx context.Context, command string, classify func(context.Context) (autoreview.Decision, bool)) (autoreview.Decision, bool) {
+func (s *autoReviewSessionState) review(ctx context.Context, command string, classify func(context.Context) (autoreview.Decision, bool)) (autoreview.Decision, bool, bool) {
 	if ctx.Err() != nil {
-		return "", false
+		return "", false, false
 	}
 	s.mu.Lock()
-	if s.disposed {
-		s.mu.Unlock()
-		return "", false
+	defer s.mu.Unlock()
+	if ctx.Err() != nil {
+		return "", false, false
+	}
+	if s.disposed || s.unavailable {
+		return "", false, false
 	}
 	if decision, ok := s.cached[command]; ok {
-		s.mu.Unlock()
 		if ctx.Err() != nil {
-			return "", false
+			return "", false, false
 		}
-		return decision, true
+		return decision, true, false
 	}
-	if flight, ok := s.inFlight[command]; ok {
-		s.mu.Unlock()
-		if ctx.Err() != nil {
-			return "", false
-		}
-		select {
-		case <-ctx.Done():
-			return "", false
-		case <-flight.done:
-			if ctx.Err() != nil {
-				return "", false
-			}
-			return flight.decision, flight.ok
-		}
-	}
-	flight := &autoReviewFlight{done: make(chan struct{})}
-	s.inFlight[command] = flight
-	s.mu.Unlock()
 
 	decision, ok := classify(ctx)
-
-	s.mu.Lock()
-	if s.disposed || s.inFlight[command] != flight {
-		s.mu.Unlock()
-		return "", false
+	if ctx.Err() != nil {
+		decision, ok = "", false
 	}
-	flight.decision = decision
-	flight.ok = ok
 	if ok && (decision == autoreview.Allow || decision == autoreview.Defer) {
 		s.cached[command] = decision
+		s.consecutiveFailures = 0
+		return decision, true, false
 	}
-	delete(s.inFlight, command)
-	close(flight.done)
-	s.mu.Unlock()
-	return decision, ok
+	s.consecutiveFailures++
+	if s.consecutiveFailures >= 2 {
+		s.unavailable = true
+		return "", false, true
+	}
+	return "", false, false
 }
 
 func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
@@ -183,7 +158,7 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	result, ok := d.sessionState().review(ctx, command, func(classifyCtx context.Context) (autoreview.Decision, bool) {
+	result, ok, breakerTripped := d.sessionState().review(ctx, command, func(classifyCtx context.Context) (autoreview.Decision, bool) {
 		startedAt := time.Now()
 		classifyReq := autoreview.ClassifyRequest{
 			ToolName:      req.ToolName,
@@ -235,10 +210,35 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 		d.emitAutomaticReview(req, detailed, time.Since(startedAt), statusPersisted, statusFailureClass, statusFailureReason)
 		return detailed.Decision, detailed.Outcome == autoreview.OutcomeAllow || detailed.Outcome == autoreview.OutcomeDefer
 	})
+	if breakerTripped {
+		d.emitReviewerUnavailable(req, "circuit_breaker", automaticReviewCircuitBreakerReason)
+	}
 	if !ok || result != autoreview.Allow {
 		return decision, nil
 	}
 	return ports.PermissionDecision{Behavior: permission.DecisionAllow}, nil
+}
+
+func (d *autoReviewPermissionDecorator) emitReviewerUnavailable(req ports.ToolPermissionRequest, scope, reason string) {
+	if d.observer == nil {
+		return
+	}
+	sc, ok := d.observer.ActivePhaseSpanContext(req.FeatureID)
+	if !ok {
+		sc = observe.SpanContextForFeature(req.FeatureID, "", "", "")
+	}
+	sessionID := req.LogicalSessionID
+	if sessionID == "" {
+		sessionID = req.SessionID
+	}
+	d.observer.AutomaticReviewUnavailable(sc, observe.AutomaticReviewUnavailableEventInput{
+		Phase:     strings.ToLower(req.Phase.String()),
+		SessionID: sessionID,
+		RepoName:  req.RepoName,
+		Iteration: req.Iteration,
+		Scope:     scope,
+		Reason:    reason,
+	})
 }
 
 func compatibilityAutoReviewResult(decision autoreview.Decision, ok bool) autoreview.Result {

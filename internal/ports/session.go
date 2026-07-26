@@ -206,6 +206,23 @@ type PermissionHandler interface {
 	CanUseTool(req ToolPermissionRequest) (PermissionDecision, error)
 }
 
+// SessionBuildNotice is a local status line plus an optional operator-event
+// callback published once after the subprocess starts and before handshake.
+type SessionBuildNotice struct {
+	Status string
+	Emit   func(SessionBuildNoticeContext)
+}
+
+// SessionBuildNoticeContext identifies the owning session for an operator
+// event without coupling the session package to a specific observer.
+type SessionBuildNoticeContext struct {
+	SessionID string
+	FeatureID string
+	Phase     feature.Phase
+	RepoName  string
+	Iteration int
+}
+
 // SessionOpts holds optional configuration for a session start. Owned by the
 // ports package so orchestrator / agent code can construct session options
 // without importing internal/session.
@@ -279,6 +296,9 @@ type SessionOpts struct {
 	// BuildSessionOpts.AutoReview so crash-resume reuses the original snapshot
 	// rather than the current workspace config.
 	AutoReview AutoReviewSnapshot
+	// SessionBuildNotices are published once after the process starts and before
+	// provider handshake. They are local status records, not terminal results.
+	SessionBuildNotices []SessionBuildNotice
 }
 
 // AutoReviewSnapshot bundles the automatic-review settings snapshotted when an
@@ -292,10 +312,11 @@ type SessionOpts struct {
 // was resolved. Defined in ports so both the agent package and session adapters
 // can reference it without a circular import.
 type AutoReviewSnapshot struct {
-	Enabled          *bool
-	Model            string
-	ReviewerProvider string
-	ReviewerModel    string
+	Enabled           *bool
+	Model             string
+	ReviewerProvider  string
+	ReviewerModel     string
+	UnavailableReason string
 }
 
 // MessageLog is the interface consumers use to observe a session's SDK

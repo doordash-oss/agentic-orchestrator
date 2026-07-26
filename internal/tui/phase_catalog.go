@@ -165,10 +165,13 @@ func (c PhaseModelCatalog) orderedProviderModelIDsForField(field, provider strin
 	}
 	providerModels, fieldScoped := c.PhaseProviderModels[field]
 	eligible, providerEligible := providerModels[provider]
-	if fieldScoped && !providerEligible {
-		return nil
+	if field == automaticReviewField {
+		if !fieldScoped || !providerEligible || len(eligible) == 0 {
+			return nil
+		}
+		return uniqueNonEmptyModelIDs(eligible)
 	}
-	if !fieldScoped || len(eligible) == 0 {
+	if !fieldScoped || !providerEligible || len(eligible) == 0 {
 		return append([]string(nil), all...)
 	}
 	seen := map[string]bool{}
@@ -186,6 +189,19 @@ func (c PhaseModelCatalog) orderedProviderModelIDsForField(field, provider strin
 		}
 		out = append(out, id)
 		seen[id] = true
+	}
+	return out
+}
+
+func uniqueNonEmptyModelIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
 	}
 	return out
 }

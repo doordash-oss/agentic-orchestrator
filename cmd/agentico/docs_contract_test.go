@@ -323,6 +323,12 @@ func TestUserFacingDocsDescribeAutomaticBashReviewContract(t *testing.T) {
 			"Auto-approved Bash: ",
 			"bounded operator event",
 			"session-only",
+			"two consecutive",
+			"session-build status",
+			"Makefiles",
+			"`package.json` scripts",
+			"`//go:generate`",
+			"`conftest.py`",
 			"does not sandbox commands",
 		},
 		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
@@ -359,9 +365,14 @@ func TestUserFacingDocsDescribeAutomaticBashReviewContract(t *testing.T) {
 			"bounded operator event",
 			"non-Bash requests",
 			"existing decisions",
-			"disabled or unavailable reviewers",
 			"session-cache hits",
-			"in-flight followers",
+			"two consecutive failed attempts",
+			"session-build",
+			"`automatic_review.unavailable`",
+			"Makefiles",
+			"`package.json` scripts",
+			"`//go:generate`",
+			"`conftest.py`",
 			"does not sandbox commands",
 		},
 		filepath.Join("skills", "chat", "user-guide", "permissions.md"): {
@@ -369,6 +380,8 @@ func TestUserFacingDocsDescribeAutomaticBashReviewContract(t *testing.T) {
 			"deterministic guardrail",
 			"ordinary human prompt",
 			"no durable permission rule",
+			"session-scoped status",
+			"session circuit breaker",
 		},
 	}
 	for rel, wants := range requiredByDoc {

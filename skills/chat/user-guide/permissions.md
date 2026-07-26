@@ -182,10 +182,13 @@ When an agent requests a tool, the permission system evaluates in this order:
 
 1. **Session handler** — checks if the tool is in the always-approved category (read-only tools, file edits during implementation)
 2. **Cache check** — looks up the tool pattern in cached rules (global + per-repo), deny-wins
-3. **Automatic Bash review** — when enabled, only an otherwise-unresolved canonical Bash request that passes the deterministic guardrail receives one bounded model attempt; session-cache hits and coalesced followers stay silent
+3. **Automatic Bash review** — when enabled, only an otherwise-unresolved canonical Bash request that passes the deterministic guardrail receives one bounded model attempt; session-cache hits stay silent, and two consecutive failures open a session circuit breaker
 4. **TUI prompt** — if automatic review is disabled, ineligible, unavailable, returns `DEFER`, or fails, the ordinary human prompt appears in the watch view or dashboard
 
 Automatic review never overrides earlier decisions, stores no durable
-permission rule, and is not command sandboxing. See
+permission rule, and is not command sandboxing. If it is enabled but no
+reviewer can be resolved, Agentico shows one session-scoped status and operator
+event; individual permission requests remain silent and use the ordinary human
+prompt. See
 [Configuration — Automatic Bash Review](configuration.md#automatic-bash-review)
 for the guardrail, reviewer, lifecycle, and evidence contract.

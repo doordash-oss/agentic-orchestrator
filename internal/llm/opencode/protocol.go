@@ -714,7 +714,12 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 			return seal(p.terminalError("OpenCode native tool-less review received tool activity"))
 		}
 		switch su.Update.SessionUpdate {
-		case UpdateAgentMessageChunk, UpdateAgentThoughtChunk, UpdateUsage:
+		case UpdateAgentMessageChunk, UpdateAgentThoughtChunk, UpdateUsage, UpdateAvailableCommands:
+			// available_commands_update is ACP client metadata emitted during
+			// session startup. It does not execute a command or expose a model
+			// tool surface; the fixed review prompt cannot invoke a slash
+			// command. Actual tool calls, permission requests, filesystem
+			// requests, and every unknown update remain terminal above/below.
 		default:
 			return seal(p.terminalError(fmt.Sprintf(
 				"OpenCode native tool-less review received unexpected session update %s",

@@ -22,6 +22,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -187,6 +188,23 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 
 	if err := s.Start(command, workdir, env, onMessage); err != nil {
 		return nil, fmt.Errorf("starting session: %w", err)
+	}
+	if len(opts) > 0 && opts[0] != nil {
+		noticeCtx := ports.SessionBuildNoticeContext{
+			SessionID: id,
+			FeatureID: featureID,
+			Phase:     phase,
+			RepoName:  opts[0].RepoName,
+			Iteration: opts[0].Iteration,
+		}
+		for _, notice := range opts[0].SessionBuildNotices {
+			if strings.TrimSpace(notice.Status) != "" {
+				_ = s.appendLocalStatus(notice.Status)
+			}
+			if notice.Emit != nil {
+				notice.Emit(noticeCtx)
+			}
+		}
 	}
 
 	// Give the protocol access to stdin for writing.

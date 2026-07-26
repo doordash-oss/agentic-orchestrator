@@ -309,23 +309,26 @@ func ApplyModelConfigPatch(base config.ModelConfig, patch ModelConfigPatch) conf
 	return base
 }
 
-// ModelConfigToPatch constructs a ModelConfigPatch from a config.ModelConfig,
-// setting every phase-role field and AutomaticReview as a non-nil pointer so
-// the patch carries all values. This is the inverse of ApplyModelConfigPatch
-// for full-config snapshots: every field is applied, matching the semantics
-// of the legacy mergeModelConfig overlay (which always copied AutomaticReview).
+// ModelConfigToPatch constructs a non-empty overlay patch from a ModelConfig.
+// AutomaticReview stays omitted when empty, matching config overlay semantics:
+// a feature-level phase override must not clear the workspace reviewer model.
+// Callers that intentionally clear AutomaticReview must construct an explicit
+// non-nil pointer to the empty string.
 func ModelConfigToPatch(m config.ModelConfig) ModelConfigPatch {
-	ar := m.AutomaticReview
-	return ModelConfigPatch{
-		Inquiry:         m.Inquiry,
-		Research:        m.Research,
-		Planning:        m.Planning,
-		Implementation:  m.Implementation,
-		Review:          m.Review,
-		Utilities:       m.Utilities,
-		KBBuild:         m.KBBuild,
-		AutomaticReview: &ar,
+	patch := ModelConfigPatch{
+		Inquiry:        m.Inquiry,
+		Research:       m.Research,
+		Planning:       m.Planning,
+		Implementation: m.Implementation,
+		Review:         m.Review,
+		Utilities:      m.Utilities,
+		KBBuild:        m.KBBuild,
 	}
+	if m.AutomaticReview != "" {
+		ar := m.AutomaticReview
+		patch.AutomaticReview = &ar
+	}
+	return patch
 }
 
 type PublishFeatureRequest struct {

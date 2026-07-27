@@ -265,11 +265,18 @@ zero-tool mode. Exact `ALLOW` and `DEFER` results are byte-exact, session-only
 cached and create no durable permission rule. After two consecutive failed
 model attempts, a session circuit breaker stops launching the reviewer and
 returns later long-tail requests to the human prompt. It does not disable the
-deterministic fast path. The reviewer policy treats fully read-only local
-inspection as eligible for automatic approval even when it uses compound shell
-syntax or reads outside the working directory. Writable roots constrain writes,
-not reads; mutation, active network effects, intentional secret access, process
-signals, executable consumers, and ambiguous effects defer to a human.
+deterministic fast path. The reviewer follows a risk-based default-allow policy
+modeled on interactive agent auto modes. Ordinary scoped development work is
+eligible for automatic approval, including writes within declared writable
+roots, builds, tests, project dependency installation, routine network access,
+and local development processes. It defers commands with a concrete, plausible
+risk of significant harm, including significant or hard-to-reverse data loss,
+writes outside writable roots, broad or system-level changes, privilege
+escalation or weakened security, credential or private-data exposure, execution
+of untrusted remote or discovered content, consequential external actions, and
+disruption of unrelated processes or services. The reviewer evaluates the
+entire command, including all branches, substitutions, redirects, and pipeline
+stages.
 
 The guardrail treats repo-controlled build and test code as trusted-by-design:
 auto-approving commands such as `make test` or `go generate` may execute code

@@ -101,6 +101,12 @@ func (s *autoReviewSessionState) dispose() {
 	s.unavailable = true
 }
 
+func (s *autoReviewSessionState) isDisposed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.disposed
+}
+
 func (s *autoReviewSessionState) review(ctx context.Context, command string, classify func(context.Context) (autoreview.Decision, bool)) (autoreview.Decision, bool, bool) {
 	if ctx.Err() != nil {
 		return "", false, false
@@ -146,6 +152,9 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 		return decision, nil
 	}
 	if req.ToolName != autoReviewBashToolName {
+		return decision, nil
+	}
+	if d.sessionState().isDisposed() {
 		return decision, nil
 	}
 	command := permission.ExtractBashCommand(req.Input)

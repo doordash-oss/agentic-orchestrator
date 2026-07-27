@@ -227,6 +227,23 @@ func TestDecoratorFastPathApprovesWithoutModelCall(t *testing.T) {
 	}
 }
 
+func TestDecoratorDisposedSessionDefersFastPath(t *testing.T) {
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		appendStatus: func(string) error {
+			t.Fatal("disposed fast path unexpectedly persisted approval status")
+			return nil
+		},
+	}
+	d.Dispose()
+
+	got, err := d.CanUseTool(bashReq(`{"command":"go test ./..."}`))
+	if err != nil || got.Behavior != "" {
+		t.Fatalf("disposed fast path = %+v, %v; want human deferral", got, err)
+	}
+}
+
 func TestDecoratorLongTailModelAllowApproves(t *testing.T) {
 	var calls atomic.Int32
 	d := &autoReviewPermissionDecorator{

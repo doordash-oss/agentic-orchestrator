@@ -341,7 +341,9 @@ func checkFlag(policy *cmdPolicy, arg, workDir string, writableRoots []string) b
 			if !ok {
 				return false
 			}
-			if value == "" {
+			if isAttachedPathPrefix(prefix) {
+				value = arg[len(prefix):]
+			} else if value == "" {
 				value = name[len(prefix):]
 			}
 		}
@@ -385,20 +387,95 @@ func isHazardousFlag(name string, hazardousFlags map[string]bool) bool {
 	return false
 }
 
-// matchSafeFlagPrefix reports whether name is an attached form of a safe
-// flag prefix (e.g., -I./include matches prefix -I). Returns the matched
-// prefix and true on success.
+// matchSafeFlagPrefix reports whether name is a syntactically valid attached
+// form of a safe flag prefix (e.g., -I./include matches prefix -I). Attached
+// paths are subsequently root-bounded by validateOperand.
 func matchSafeFlagPrefix(name string, prefixes map[string]bool) (string, bool) {
 	if prefixes == nil {
 		return "", false
 	}
 	for prefix := range prefixes {
 		if len(name) > len(prefix) && strings.HasPrefix(name, prefix) &&
-			strings.ContainsRune(":/=", rune(name[len(prefix)])) {
+			validateSafeFlagSuffix(prefix, name[len(prefix):]) {
 			return prefix, true
 		}
 	}
 	return "", false
+}
+
+func validateSafeFlagSuffix(prefix, suffix string) bool {
+	if suffix == "" {
+		return false
+	}
+	switch prefix {
+	case "-I", "-L":
+		return true
+	case "-D", "-U":
+		return isCIdentifier(suffix)
+	case "-O":
+		return stringInSet(suffix, "0", "1", "2", "3", "s", "z", "g", "fast")
+	case "-g":
+		return isCompilerDebugSuffix(suffix)
+	case "-l", "-Wno-", "-m", "-g:", "-Xlint:":
+		for _, r := range suffix {
+			if !isASCIILetterOrDigit(r) && !strings.ContainsRune("_-+.,", r) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func isCompilerDebugSuffix(suffix string) bool {
+	if stringInSet(
+		suffix,
+		"0", "1", "2", "3",
+		"gdb", "dwarf", "stabs", "stabs+", "coff", "xcoff", "xcoff+",
+		"vms", "ctf", "btf", "line-tables-only", "line-directives-only",
+	) {
+		return true
+	}
+	for family, versions := range map[string]string{
+		"gdb":   "0123",
+		"dwarf": "2345",
+		"ctf":   "012",
+	} {
+		version, ok := strings.CutPrefix(suffix, family)
+		if ok {
+			version = strings.TrimPrefix(version, "-")
+			return len(version) == 1 && strings.ContainsRune(versions, rune(version[0]))
+		}
+	}
+	return false
+}
+
+func isAttachedPathPrefix(prefix string) bool {
+	return prefix == "-I" || prefix == "-L"
+}
+
+func isCIdentifier(value string) bool {
+	for i, r := range value {
+		if i == 0 {
+			if r != '_' && !isASCIILetter(r) {
+				return false
+			}
+			continue
+		}
+		if r != '_' && !isASCIILetterOrDigit(r) {
+			return false
+		}
+	}
+	return value != ""
+}
+
+func isASCIILetterOrDigit(r rune) bool {
+	return isASCIILetter(r) || r >= '0' && r <= '9'
+}
+
+func isASCIILetter(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
 }
 
 func flagName(arg string) string {
@@ -1232,8 +1309,8 @@ var javacSafeFlags = map[string]bool{
 }
 
 var javacSafeFlagPrefixes = map[string]bool{
-	"-g:":    true, // -g:none, -g:lines, -g:vars
-	"-Xlint": true, // -Xlint:all, -Xlint:unchecked, etc.
+	"-g:":     true, // -g:none, -g:lines, -g:vars
+	"-Xlint:": true, // -Xlint:all, -Xlint:unchecked, etc.
 }
 
 var javacValueFlags = map[string]bool{

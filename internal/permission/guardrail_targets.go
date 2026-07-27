@@ -898,9 +898,6 @@ func classifyGitDiffLogShowFlags(args []string, workDir string, writableRoots []
 					strings.HasPrefix(arg, "--exclude=") {
 					continue
 				}
-				if strings.HasPrefix(arg, "--output=") {
-					return false
-				}
 				return false
 			}
 		} else {

@@ -125,14 +125,16 @@ type permissionOptions struct {
 }
 
 type toolCallState struct {
-	title              string
-	kind               string
-	path               string
-	command            string
-	rawInput           json.RawMessage
-	taskToolUseEmitted bool
-	estimatedInput     bool
-	estimatedOutput    bool
+	title               string
+	kind                string
+	path                string
+	command             string
+	rawInput            json.RawMessage
+	taskToolUseEmitted  bool
+	taskStartedEmitted  bool
+	taskTerminalEmitted bool
+	estimatedInput      bool
+	estimatedOutput     bool
 }
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
@@ -761,6 +763,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		if msg, ok := p.taskToolUseFromUpdate(su.Update); ok {
 			out = append(out, msg)
 		}
+		out = append(out, p.taskLifecycleFromUpdate(su.Update)...)
 		progress := p.toolProgressFromUpdate(su.Update)
 		out = append(out, llm.SDKMessage{
 			Type:         "tool_progress",
@@ -849,6 +852,84 @@ func (p *Protocol) taskToolUseFromUpdate(update SessionUpdate) (llm.SDKMessage, 
 		Name:  "Task",
 		Input: rawInput,
 	}), true
+}
+
+func (p *Protocol) taskLifecycleFromUpdate(update SessionUpdate) []llm.SDKMessage {
+	p.mu.Lock()
+	if p.toolCalls == nil {
+		p.toolCalls = make(map[string]toolCallState)
+	}
+	state := mergeToolCallState(p.toolCalls[update.ToolCallID], update)
+	kind := strings.ToLower(strings.TrimSpace(state.kind))
+	prompt := firstStringField(state.rawInput, "", "prompt")
+	if update.ToolCallID == "" || kind != ToolKindThink || prompt == "" {
+		if update.ToolCallID != "" {
+			p.toolCalls[update.ToolCallID] = state
+		}
+		p.mu.Unlock()
+		return nil
+	}
+
+	description := firstStringField(state.rawInput, "", "description")
+	if description == "" {
+		description = state.title
+	}
+	taskType := firstStringField(state.rawInput, "", "subagent_type")
+	status := strings.ToLower(strings.TrimSpace(update.Status))
+	terminal := status == "completed" || status == "failed" || status == "cancelled"
+	started := state.taskStartedEmitted
+	terminated := state.taskTerminalEmitted
+	if !started {
+		state.taskStartedEmitted = true
+	}
+	if terminal && !terminated {
+		state.taskTerminalEmitted = true
+	}
+	p.toolCalls[update.ToolCallID] = state
+	p.mu.Unlock()
+
+	var out []llm.SDKMessage
+	if !started {
+		out = append(out, llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_started",
+			TaskStarted: &llm.TaskStartedMessage{
+				Type:        "system",
+				Subtype:     "task_started",
+				TaskID:      update.ToolCallID,
+				ToolUseID:   update.ToolCallID,
+				Description: description,
+				TaskType:    taskType,
+				Prompt:      prompt,
+			},
+		})
+	} else if !terminal && !terminated {
+		out = append(out, llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_progress",
+			TaskProgress: &llm.TaskProgressMessage{
+				Type:        "system",
+				Subtype:     "task_progress",
+				TaskID:      update.ToolCallID,
+				ToolUseID:   update.ToolCallID,
+				Description: description,
+			},
+		})
+	}
+	if terminal && !terminated {
+		out = append(out, llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_notification",
+			TaskNotification: &llm.TaskNotificationMessage{
+				Type:      "system",
+				Subtype:   "task_notification",
+				TaskID:    update.ToolCallID,
+				ToolUseID: update.ToolCallID,
+				Status:    status,
+			},
+		})
+	}
+	return out
 }
 
 func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) llm.ToolProgressMessage {

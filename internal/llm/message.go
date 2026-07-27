@@ -41,9 +41,9 @@ type SDKMessage struct {
 	FileReads      []FileReadEvent         `json:"-"`
 	FileChanges    []FileChangeEvent       `json:"-"`
 
-	// Subagent (Task tool) lifecycle messages. Emitted by Claude with
-	// Type="system" and Subtype in {"task_started","task_progress",
-	// "task_notification"}. Codex does not emit these.
+	// Provider-normalized subagent (Task tool) lifecycle messages. Claude
+	// emits the corresponding system subtypes natively; other adapters may
+	// synthesize the same lifecycle from their provider protocol.
 	TaskStarted      *TaskStartedMessage      `json:"-"`
 	TaskProgress     *TaskProgressMessage     `json:"-"`
 	TaskNotification *TaskNotificationMessage `json:"-"`

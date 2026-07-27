@@ -664,8 +664,8 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 			},
 		},
 	}))
-	if len(msgs) != 2 {
-		t.Fatalf("task update produced %+v, want assistant task tool_use plus tool_progress", msgs)
+	if len(msgs) != 3 {
+		t.Fatalf("task update produced %+v, want assistant task tool_use, task start, and tool_progress", msgs)
 	}
 	if msgs[0].Assistant == nil || len(msgs[0].Assistant.Message.Content) != 1 {
 		t.Fatalf("first message = %+v, want assistant task tool_use", msgs[0])
@@ -681,11 +681,18 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 	if input["prompt"] == "" || input["description"] != "Find markdown/link CI checks & hooks" {
 		t.Fatalf("task input = %+v, want preserved description and prompt", input)
 	}
-	if msgs[1].ToolProgress == nil || msgs[1].ToolProgress.ToolName != "Find markdown/link CI checks & hooks" {
-		t.Fatalf("second message = %+v, want task tool_progress", msgs[1])
+	if msgs[1].TaskStarted == nil ||
+		msgs[1].TaskStarted.TaskID != "call_task" ||
+		msgs[1].TaskStarted.ToolUseID != "call_task" ||
+		msgs[1].TaskStarted.Description != "Find markdown/link CI checks & hooks" ||
+		msgs[1].TaskStarted.TaskType != "codebase-locator" {
+		t.Fatalf("second message = %+v, want normalized task start for call_task", msgs[1])
+	}
+	if msgs[2].ToolProgress == nil || msgs[2].ToolProgress.ToolName != "Find markdown/link CI checks & hooks" {
+		t.Fatalf("third message = %+v, want task tool_progress", msgs[2])
 	}
 
-	duplicate := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+	terminal := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
 		"sessionId": "ses_x",
 		"update": map[string]any{
 			"sessionUpdate": "tool_call_update",
@@ -700,8 +707,94 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 			},
 		},
 	}))
-	if len(duplicate) != 1 || duplicate[0].ToolProgress == nil {
-		t.Fatalf("duplicate task update produced %+v, want only tool_progress", duplicate)
+	if len(terminal) != 2 ||
+		terminal[0].TaskNotification == nil ||
+		terminal[0].TaskNotification.TaskID != "call_task" ||
+		terminal[0].TaskNotification.ToolUseID != "call_task" ||
+		terminal[0].TaskNotification.Status != "completed" ||
+		terminal[1].ToolProgress == nil {
+		t.Fatalf("terminal task update produced %+v, want task notification plus tool_progress", terminal)
+	}
+
+	duplicateTerminal := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call_task",
+			"status":        "completed",
+		},
+	}))
+	if len(duplicateTerminal) != 1 || duplicateTerminal[0].ToolProgress == nil {
+		t.Fatalf("duplicate terminal task update produced %+v, want only tool_progress", duplicateTerminal)
+	}
+}
+
+func TestParseLine_OpenCodeTaskLifecycleTerminalStatuses(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "cancelled"} {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+
+			p, _, _ := newPostHandshakeProtocol(t)
+			started := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+				"sessionId": "ses_x",
+				"update": map[string]any{
+					"sessionUpdate": "tool_call_update",
+					"toolCallId":    "call_" + status,
+					"kind":          "think",
+					"title":         "Research " + status,
+					"status":        "in_progress",
+					"rawInput": map[string]any{
+						"description":   "Research " + status,
+						"subagent_type": "researcher",
+						"prompt":        "Inspect the repository.",
+					},
+				},
+			}))
+			if len(started) != 3 || started[1].TaskStarted == nil {
+				t.Fatalf("start update produced %+v, want normalized task start", started)
+			}
+
+			terminal := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+				"sessionId": "ses_x",
+				"update": map[string]any{
+					"sessionUpdate": "tool_call_update",
+					"toolCallId":    "call_" + status,
+					"status":        status,
+				},
+			}))
+			if len(terminal) != 2 ||
+				terminal[0].TaskNotification == nil ||
+				terminal[0].TaskNotification.TaskID != "call_"+status ||
+				terminal[0].TaskNotification.ToolUseID != "call_"+status ||
+				terminal[0].TaskNotification.Status != status ||
+				terminal[1].ToolProgress == nil {
+				t.Fatalf("terminal %q update produced %+v, want normalized task notification plus tool progress", status, terminal)
+			}
+		})
+	}
+}
+
+func TestParseLine_OpenCodeNonTaskToolHasNoTaskLifecycle(t *testing.T) {
+	t.Parallel()
+
+	p, _, _ := newPostHandshakeProtocol(t)
+	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call_read",
+			"kind":          "read",
+			"title":         "Read README",
+			"status":        "in_progress",
+			"rawInput":      map[string]any{"filePath": "README.md"},
+		},
+	}))
+	if len(msgs) != 1 || msgs[0].ToolProgress == nil {
+		t.Fatalf("non-task update produced %+v, want one tool progress message", msgs)
+	}
+	if msgs[0].TaskStarted != nil || msgs[0].TaskProgress != nil || msgs[0].TaskNotification != nil {
+		t.Fatalf("non-task update produced task lifecycle: %+v", msgs[0])
 	}
 }
 

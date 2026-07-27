@@ -7786,13 +7786,15 @@ func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 	return func() tea.Msg {
 		ctx := m.apiCtx()
 		snap := editor.editor.Snapshot()
+		automaticReviewMode := string(feature.NormalizeAutomaticReviewMode(editor.automaticReviewMode))
 		_, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, server.FeatureConfigMutationRequest{
-			Models:             snap.Models,
-			Effort:             snap.Effort,
-			Inquireness:        string(snap.Inquireness),
-			Checkpoints:        snap.Checkpoints,
-			Pipeline:           editor.pipeline,
-			InputNotifications: string(feature.NormalizeInputNotificationsMode(editor.inputAlertsMode)),
+			Models:              snap.Models,
+			Effort:              snap.Effort,
+			Inquireness:         string(snap.Inquireness),
+			Checkpoints:         snap.Checkpoints,
+			Pipeline:            editor.pipeline,
+			InputNotifications:  string(feature.NormalizeInputNotificationsMode(editor.inputAlertsMode)),
+			AutomaticReviewMode: &automaticReviewMode,
 		})
 		return apiMutationResultMsg{
 			kind:      mutationKindFeatureConfigUpdate,
@@ -8233,10 +8235,11 @@ func apiFeatureFromConfig(featureID, featureName string, response server.Feature
 		pipeline = feature.PipelineLarge
 	}
 	return &feature.Feature{
-		ID:          featureID,
-		Name:        featureName,
-		Models:      current.Models,
-		Inquireness: feature.Inquireness(current.Inquireness),
+		ID:                  featureID,
+		Name:                featureName,
+		Models:              current.Models,
+		Inquireness:         feature.Inquireness(current.Inquireness),
+		AutomaticReviewMode: feature.AutomaticReviewMode(current.AutomaticReviewMode),
 		Checkpoints: feature.Checkpoints{
 			InquiryReview:   current.Checkpoints.InquiryReview,
 			ResearchReview:  current.Checkpoints.ResearchReview,

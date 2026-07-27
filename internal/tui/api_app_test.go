@@ -4738,6 +4738,55 @@ func TestAPIAppModelFeatureConfigEditorSavesInputAlertOverride(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelFeatureConfigEditorSavesAutomaticReviewMode(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now()},
+		}},
+		featureConfig: server.FeatureConfigResponse{
+			FeatureID: testFeatureIDActive,
+			Current: server.FeatureConfigDTO{
+				Models:              config.ModelConfig{Research: testModelCodexGPT54},
+				Inquireness:         testInquirenessTargeted,
+				Pipeline:            testPipelineSizeLarge,
+				Checkpoints:         server.CheckpointsDTO{ManualPublish: true},
+				AutomaticReviewMode: server.FeatureConfigAutomaticReviewModeDefault,
+			},
+		},
+		updateFeatureConfigAccepted: apiTestActionResponse{},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd == nil {
+		t.Fatal("Update(e) returned nil command, want feature config fetch command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	editing := model.(APIAppModel)
+	if editing.configEditor == nil {
+		t.Fatal("configEditor is nil after loading feature config")
+	}
+	editing.configEditor.activeTab = tabBehavior
+	editing.configEditor.focus = configFocusBody
+	editing.configEditor.behaviorCursor = len(editing.configEditor.behaviorSettings()) - 1
+
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})             // default -> enabled
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // back to tabs
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want feature config save")
+	}
+	_, _ = model.(APIAppModel).Update(cmd())
+
+	if got := client.updateFeatureConfigRequests; len(got) != 1 ||
+		got[0].AutomaticReviewMode == nil ||
+		*got[0].AutomaticReviewMode != string(feature.AutomaticReviewEnabled) {
+		t.Fatalf("UpdateFeatureConfig requests = %+v, want enabled automatic-review override", got)
+	}
+}
+
 func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	t.Parallel()
 

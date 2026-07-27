@@ -94,15 +94,52 @@ func TestWorkspaceModelsTabAutomaticReviewRowWorkspaceOnly(t *testing.T) {
 	}
 }
 
-func TestFeatureEditorDoesNotShowAutomaticReview(t *testing.T) {
-	f := &feature.Feature{Name: "My Feature", Pipeline: feature.PipelineLarge}
-	m := NewEditConfigModel(f, testCatalog(), true)
-	view := m.View()
-	if strings.Contains(view, "Automatic Review") {
-		t.Errorf("feature-scoped editor must not show Automatic Review:\n%s", view)
+func TestFeatureEditorShowsAutomaticReviewMode(t *testing.T) {
+	f := &feature.Feature{
+		Name:                "My Feature",
+		Pipeline:            feature.PipelineLarge,
+		AutomaticReviewMode: feature.AutomaticReviewDefault,
 	}
-	if strings.Contains(view, "Applies to new sessions") {
-		t.Errorf("feature-scoped editor must not show workspace scope hint:\n%s", view)
+	m := NewEditConfigModel(f, testCatalog(), true)
+	m.activeTab = tabBehavior
+	m.focus = configFocusBody
+	m.behaviorCursor = len(m.behaviorSettings()) - 1
+	view := m.renderBehaviorPane()
+	for _, want := range []string{"Automatic Review", "default", "enabled", "disabled"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("feature Behavior pane missing %q:\n%s", want, view)
+		}
+	}
+	if m.selectedBehaviorSetting() != behaviorSettingAutomaticReview {
+		t.Fatalf("selected behavior setting = %v, want Automatic Review", m.selectedBehaviorSetting())
+	}
+}
+
+func TestFeatureAutomaticReviewModeCyclesAndTracksChanges(t *testing.T) {
+	f := &feature.Feature{
+		Name:                "My Feature",
+		Pipeline:            feature.PipelineLarge,
+		AutomaticReviewMode: feature.AutomaticReviewDefault,
+	}
+	m := NewEditConfigModel(f, testCatalog(), true)
+	m.activeTab = tabBehavior
+	m.focus = configFocusBody
+	m.behaviorCursor = len(m.behaviorSettings()) - 1
+
+	if got := m.automaticReviewMode; got != feature.AutomaticReviewDefault {
+		t.Fatalf("initial automaticReviewMode = %q, want default", got)
+	}
+	m.cycleSelectedBehaviorValue(+1)
+	if got := m.automaticReviewMode; got != feature.AutomaticReviewEnabled {
+		t.Fatalf("automaticReviewMode after first cycle = %q, want enabled", got)
+	}
+	if !m.HasChanges() || !m.behaviorChanged() || !strings.Contains(m.diffSummary(), "Auto review: changed") {
+		t.Fatalf("mode change not reflected: HasChanges=%v behaviorChanged=%v summary=%q",
+			m.HasChanges(), m.behaviorChanged(), m.diffSummary())
+	}
+	m.cycleSelectedBehaviorValue(+1)
+	if got := m.automaticReviewMode; got != feature.AutomaticReviewDisabled {
+		t.Fatalf("automaticReviewMode after second cycle = %q, want disabled", got)
 	}
 }
 

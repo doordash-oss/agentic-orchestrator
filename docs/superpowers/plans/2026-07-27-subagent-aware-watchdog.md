@@ -117,6 +117,10 @@ git commit -m "Expose provider task activity to shared session lifecycle"
 **Files:**
 - Modify: `internal/session/watchdog.go`
 - Modify: `internal/session/session_test.go`
+- Modify: `internal/agent/implement.go`
+- Modify: `internal/agent/implement_test.go`
+- Modify: `internal/agent/bounded_helper.go`
+- Modify: `internal/agent/bounded_helper_test.go`
 
 **Interfaces:**
 - Consumes: normalized `TaskStarted`, `TaskProgress`, `TaskNotification`, and `ToolProgress` SDK messages.
@@ -155,18 +159,32 @@ rearmed rather than immediately stalled.
 The production mutation caught by this test is removal or premature clearing of
 the live-subagent gate.
 
-- [ ] **Step 3: Verify watchdog tests fail**
+- [ ] **Step 3: Write failing post-turn indefinite-wait tests**
+
+Replace the main-waiter and bounded-helper tests that currently expect a
+`backgroundTaskStallTimeout` failure. Keep a provider-declared task live beyond
+the old test-specific backstop and assert the waiter remains active, sends no
+user message, and does not stop the session. Then emit the terminal task
+notification and let the existing quiet-grace continuation behavior complete
+the test.
+
+The production mutation caught by these tests is reintroducing any elapsed-time
+kill path while normalized tasks remain live.
+
+- [ ] **Step 4: Verify watchdog and waiter tests fail**
 
 Run:
 
 ```bash
 go test ./internal/session -run 'Watchdog.*Concurrent|Watchdog.*Subagent' -count=1
+go test ./internal/agent -run 'BackgroundTask.*Live|Bounded.*Background' -count=1
 ```
 
 Expected: FAIL because `sessionWatchdog` stores one tool and ignores normalized
-task lifecycle.
+task lifecycle, while the phase and bounded-helper waiters still enforce a
+10-minute silent-task backstop.
 
-- [ ] **Step 4: Implement the ledgers and watchdog decision order**
+- [ ] **Step 5: Implement the ledgers and watchdog decision order**
 
 Replace:
 
@@ -196,27 +214,39 @@ In `toolStall`, after permission/question/help parking and terminal session
 checks, return no stall whenever `len(liveSubagents) > 0`. On the final terminal
 task event set `lastActivityAt = time.Now()` before releasing the watchdog lock.
 
-- [ ] **Step 5: Preserve boundary-race protection**
+- [ ] **Step 6: Remove elapsed-time failure for post-turn live tasks**
+
+Delete `backgroundTaskStallTimeout` and both branches that stop a session when
+the live task count remains positive beyond that duration. Keep
+`backgroundTaskPollInterval` for observing terminal transitions and
+`backgroundTaskQuietGrace` for the safe case where every task is terminal but
+the parent did not resume itself.
+
+This change applies identically to `waitForStatusDetailed` and
+`runBoundedHelperSession`.
+
+- [ ] **Step 7: Preserve boundary-race protection**
 
 Update `failTool` to compare the current selected state/ledger generation under
 the watchdog mutex before failing. Any Result, task lifecycle transition, tool
 transition, or provider stdout newer than the snapshot wins the race.
 
-- [ ] **Step 6: Verify session watchdog tests pass**
+- [ ] **Step 8: Verify session watchdog and waiter tests pass**
 
 Run:
 
 ```bash
 go test ./internal/session -run 'Watchdog|PendingTool' -count=1
+go test ./internal/agent -run 'BackgroundTask|Bounded.*Background' -count=1
 ```
 
 Expected: PASS, including all pre-existing permission and post-tool stall
 regressions.
 
-- [ ] **Step 7: Commit concurrent lifecycle support**
+- [ ] **Step 9: Commit concurrent lifecycle support**
 
 ```bash
-git add internal/session/watchdog.go internal/session/session_test.go
+git add internal/session/watchdog.go internal/session/session_test.go internal/agent/implement.go internal/agent/implement_test.go internal/agent/bounded_helper.go internal/agent/bounded_helper_test.go
 git commit -m "Keep live provider subagents outside idle failure windows"
 ```
 

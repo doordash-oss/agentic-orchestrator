@@ -79,6 +79,21 @@ type commandRecordingProvider struct {
 	emptyArgs bool
 }
 
+type sequencedCommandProvider struct {
+	testutil.FakeClaudeProvider
+	scripts []string
+	next    int
+}
+
+func (p *sequencedCommandProvider) BuildCommand(llm.CommandBuildOpts) ([]string, []string, error) {
+	index := p.next
+	p.next++
+	if index >= len(p.scripts) {
+		index = len(p.scripts) - 1
+	}
+	return []string{"sh", p.scripts[index]}, nil, nil
+}
+
 func (p *commandRecordingProvider) Name() string { return p.name }
 
 func (p *commandRecordingProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
@@ -601,6 +616,109 @@ func TestClassifyErrorResultFails(t *testing.T) {
 	reviewer, _, _ := ResolveReviewer(reg, "")
 	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
 		t.Fatalf("Classify(error result) = true, want false (error result is terminal)")
+	}
+}
+
+func TestClassifyDetailedRetriesTransientProviderEOFOnce(t *testing.T) {
+	provider := &sequencedCommandProvider{scripts: []string{
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeExitScriptBody()),
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody()),
+	}}
+	got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+		ToolName: "Bash",
+		Command:  "date '+%Y-%m-%dT%H:%M:%S%z'",
+		WorkDir:  t.TempDir(),
+	})
+	if got.Outcome != OutcomeAllow || got.Decision != Allow {
+		t.Fatalf("ClassifyDetailed(transient EOF then allow) = %+v, want ALLOW after one retry", got)
+	}
+}
+
+func TestClassifyDetailedRetriesTransientProviderErrorAtMostOnce(t *testing.T) {
+	provider := &sequencedCommandProvider{scripts: []string{
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeExitScriptBody()),
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeExitScriptBody()),
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody()),
+	}}
+	got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+		ToolName: "Bash",
+		Command:  "date '+%Y-%m-%dT%H:%M:%S%z'",
+		WorkDir:  t.TempDir(),
+	})
+	if got.Outcome != OutcomeProviderError {
+		t.Fatalf("ClassifyDetailed(two EOFs then allow) = %+v, want provider error after one exhausted retry", got)
+	}
+}
+
+func TestClassifyDetailedRetriesRetryableProviderResult(t *testing.T) {
+	retryable := testutil.FakeClaudeInitLines() +
+		"printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"HTTP 503 service unavailable\"}'\n"
+	provider := &sequencedCommandProvider{scripts: []string{
+		testutil.WriteFakeClaudeScript(t, retryable),
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody()),
+	}}
+	got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+		ToolName: "Bash",
+		Command:  "go test ./...",
+		WorkDir:  t.TempDir(),
+	})
+	if got.Outcome != OutcomeAllow || got.Decision != Allow {
+		t.Fatalf("ClassifyDetailed(503 then allow) = %+v, want ALLOW after one retry", got)
+	}
+}
+
+func TestClassifyDetailedDoesNotRetryNonRetryableProviderResult(t *testing.T) {
+	nonRetryable := testutil.FakeClaudeInitLines() +
+		"printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"401 authentication failed\"}'\n"
+	provider := &sequencedCommandProvider{scripts: []string{
+		testutil.WriteFakeClaudeScript(t, nonRetryable),
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody()),
+	}}
+	got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+		ToolName: "Bash",
+		Command:  "go test ./...",
+		WorkDir:  t.TempDir(),
+	})
+	if got.Outcome != OutcomeProviderError {
+		t.Fatalf("ClassifyDetailed(auth failure then allow) = %+v, want terminal provider error without retry", got)
+	}
+}
+
+func TestClassifyDetailedDoesNotTreatEmbeddedStatusDigitsAsServerFailure(t *testing.T) {
+	nonRetryable := testutil.FakeClaudeInitLines() +
+		"printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"maximum context is 15000 tokens\"}'\n"
+	provider := &sequencedCommandProvider{scripts: []string{
+		testutil.WriteFakeClaudeScript(t, nonRetryable),
+		testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody()),
+	}}
+	got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+		ToolName: "Bash",
+		Command:  "go test ./...",
+		WorkDir:  t.TempDir(),
+	})
+	if got.Outcome != OutcomeProviderError {
+		t.Fatalf("ClassifyDetailed(embedded 500 digits then allow) = %+v, want terminal provider error without retry", got)
+	}
+}
+
+func TestClassifyDetailedRetriesShareOverallTimeout(t *testing.T) {
+	first := "head -n 2 >/dev/null\nsleep 0.1\nexit 1\n"
+	second := testutil.FakeClaudeInitLines() +
+		"sleep 0.4\n" +
+		"printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ALLOW\"}]}}'\n" +
+		"printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\"}'\n"
+	provider := &sequencedCommandProvider{scripts: []string{
+		testutil.WriteFakeClaudeScript(t, first),
+		testutil.WriteFakeClaudeScript(t, second),
+	}}
+	got := ClassifyDetailed(context.Background(), Reviewer{Provider: provider, Model: "haiku[200K]"}, ClassifyRequest{
+		ToolName: "Bash",
+		Command:  "go test ./...",
+		WorkDir:  t.TempDir(),
+		Timeout:  650 * time.Millisecond,
+	})
+	if got.Outcome != OutcomeTimeout {
+		t.Fatalf("ClassifyDetailed(shared retry budget) = %+v, want timeout within one overall budget", got)
 	}
 }
 

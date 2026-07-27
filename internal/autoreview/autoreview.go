@@ -92,6 +92,8 @@ type Timing struct {
 // independent and no mutable package-global state is needed.
 const defaultTimeout = 30 * time.Second
 
+const maxProviderAttempts = 2
+
 // gracePeriod is the SIGTERM-to-SIGKILL escalation window. It is part of the
 // overall timeout budget, not additional to it: when the deadline context
 // expires the escalation skips straight to SIGKILL.
@@ -336,9 +338,15 @@ type ClassifyRequest struct {
 type readResult struct {
 	outcome     Outcome
 	reason      string
+	retryClass  string
 	text        string
 	firstOutput time.Duration
 	successful  bool
+}
+
+type attemptResult struct {
+	result    Result
+	retryable bool
 }
 
 // Classify runs one isolated, tool-less, fully ephemeral hidden classification.
@@ -346,7 +354,9 @@ type readResult struct {
 // manager), wires a throwaway native protocol, sends the static review policy
 // plus the minimal execution context, and reads exactly one low-effort turn.
 //
-// The whole attempt is bounded by the request timeout (or defaultTimeout).
+// One transient launch, handshake, transport, rate-limit, or server failure is
+// retried after a short jitter. Both attempts share the request timeout (or
+// defaultTimeout), so retry never extends the human-facing wait bound.
 // Every control_request (tool permission, hook, question, or any other
 // interaction) is denied through the defensive deny-all boundary and fails
 // the review immediately. The handshake error and any non-success result
@@ -383,12 +393,37 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 	deadlineCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	for attempt := 1; attempt <= maxProviderAttempts; attempt++ {
+		attempted := classifyAttempt(ctx, deadlineCtx, reviewer, req, prompt, startedAt)
+		mergeTiming(&timing, attempted.result.Timing)
+		result = attempted.result
+		if !attempted.retryable || attempt == maxProviderAttempts {
+			return result
+		}
+		if !waitForProviderRetry(deadlineCtx) {
+			if err := ctx.Err(); err != nil {
+				return contextFailureResult(err)
+			}
+			return failedResult(OutcomeTimeout, "review attempt timed out")
+		}
+	}
+	return result
+}
+
+func classifyAttempt(
+	parentCtx context.Context,
+	deadlineCtx context.Context,
+	reviewer Reviewer,
+	req ClassifyRequest,
+	prompt string,
+	startedAt time.Time,
+) attemptResult {
 	args, env, cleanup, err := buildReviewCommand(reviewer, req)
 	if err != nil || len(args) == 0 {
 		if cleanup != nil {
 			cleanup()
 		}
-		return failedResult(OutcomeProviderError, "provider command build failed")
+		return attemptResult{result: failedResult(OutcomeProviderError, "provider command build failed")}
 	}
 	defer cleanup()
 
@@ -398,16 +433,19 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return failedResult(OutcomeProviderError, "provider stdin setup failed")
+		return attemptResult{result: failedResult(OutcomeProviderError, "provider stdin setup failed")}
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return failedResult(OutcomeProviderError, "provider stdout setup failed")
+		return attemptResult{result: failedResult(OutcomeProviderError, "provider stdout setup failed")}
 	}
 	if err := cmd.Start(); err != nil {
-		return failedResult(OutcomeProviderError, "provider launch failed")
+		return attemptResult{
+			result:    failedResult(OutcomeProviderError, "provider launch failed"),
+			retryable: retryableLaunchError(err),
+		}
 	}
-	timing.Launch = time.Since(startedAt)
+	timing := Timing{Launch: time.Since(startedAt)}
 
 	proto := reviewer.Provider.NewProtocol(llm.ProtocolOpts{
 		Model:                reviewer.Model,
@@ -469,7 +507,12 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 						result.successful = true
 						result.reason = ""
 					} else {
-						result.reason = "provider returned an unsuccessful review result"
+						result.retryClass = retryableProviderFailureClass(msg.Result.Result)
+						if result.retryClass != "" {
+							result.reason = "provider returned a retryable " + result.retryClass + " failure"
+						} else {
+							result.reason = "provider returned an unsuccessful review result"
+						}
 					}
 					return
 				}
@@ -503,26 +546,49 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 	timing.FirstOutput = rr.firstOutput
 
 	// A handshake error takes precedence over any reader result.
-	if err := ctx.Err(); err != nil {
-		return contextFailureResult(err)
+	if err := parentCtx.Err(); err != nil {
+		return attemptResult{result: contextFailureResult(err)}
 	}
 	if timedOut || deadlineCtx.Err() == context.DeadlineExceeded {
-		return failedResult(OutcomeTimeout, "review attempt timed out")
+		return attemptResult{result: Result{
+			Outcome:       OutcomeTimeout,
+			FailureReason: "review attempt timed out",
+			Timing:        timing,
+		}}
 	}
 	if handshakeErr != nil {
-		return failedResult(OutcomeProviderError, "provider handshake failed")
+		return attemptResult{
+			result: Result{
+				Outcome:       OutcomeProviderError,
+				FailureReason: "provider handshake failed",
+				Timing:        timing,
+			},
+			retryable: retryableHandshakeError(handshakeErr),
+		}
 	}
 	if !rr.successful {
-		return failedResult(rr.outcome, rr.reason)
+		return attemptResult{
+			result: Result{
+				Outcome:       rr.outcome,
+				FailureReason: rr.reason,
+				Timing:        timing,
+			},
+			retryable: rr.outcome == OutcomeProviderError &&
+				(rr.retryClass != "" || rr.reason == "provider ended without a successful result"),
+		}
 	}
 	decision, ok := parseDecision(rr.text)
 	if !ok {
-		return failedResult(OutcomeMalformedResponse, "reviewer response was not an exact decision token")
+		return attemptResult{result: Result{
+			Outcome:       OutcomeMalformedResponse,
+			FailureReason: "reviewer response was not an exact decision token",
+			Timing:        timing,
+		}}
 	}
 	if decision == Allow {
-		return Result{Decision: decision, Outcome: OutcomeAllow}
+		return attemptResult{result: Result{Decision: decision, Outcome: OutcomeAllow, Timing: timing}}
 	}
-	return Result{Decision: decision, Outcome: OutcomeDefer}
+	return attemptResult{result: Result{Decision: decision, Outcome: OutcomeDefer, Timing: timing}}
 }
 
 // Classify preserves the original decision/bool API for callers that do not
@@ -530,6 +596,157 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Decision, bool) {
 	result := ClassifyDetailed(ctx, reviewer, req)
 	return result.Decision, result.Outcome == OutcomeAllow || result.Outcome == OutcomeDefer
+}
+
+func mergeTiming(dst *Timing, src Timing) {
+	if dst.Launch == 0 && src.Launch > 0 {
+		dst.Launch = src.Launch
+	}
+	if dst.FirstOutput == 0 && src.FirstOutput > 0 {
+		dst.FirstOutput = src.FirstOutput
+	}
+}
+
+func waitForProviderRetry(ctx context.Context) bool {
+	timer := time.NewTimer(providerRetryDelay())
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func providerRetryDelay() time.Duration {
+	const (
+		minDelay = 250 * time.Millisecond
+		jitter   = 100 * time.Millisecond
+	)
+	var sample [1]byte
+	if _, err := cryptorand.Read(sample[:]); err != nil {
+		return minDelay + jitter/2
+	}
+	return minDelay + time.Duration(sample[0])*jitter/255
+}
+
+func retryableLaunchError(err error) bool {
+	return err != nil &&
+		!errors.Is(err, os.ErrNotExist) &&
+		!errors.Is(err, os.ErrPermission) &&
+		!errors.Is(err, syscall.ENOEXEC) &&
+		!errors.Is(err, syscall.ENOTDIR)
+}
+
+func retryableHandshakeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"authentication",
+		"credential",
+		"unauthorized",
+		"forbidden",
+		"login",
+		"approval policy",
+		"configuration",
+		"config",
+		"invalid params",
+		"invalid request",
+		"protocol version",
+		"not supported",
+		"unsupported",
+	} {
+		if strings.Contains(text, marker) {
+			return false
+		}
+	}
+	// Handshakes primarily perform local pipe writes and wait for the provider
+	// to become ready. Unknown failures get one bounded retry; deterministic
+	// auth, configuration, policy, and protocol errors are filtered above.
+	return true
+}
+
+func retryableProviderFailureClass(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return ""
+	}
+	if containsStatusCode(lower, "401", "403") {
+		return ""
+	}
+	for _, marker := range []string{
+		"authentication",
+		"credential",
+		"unauthorized",
+		"forbidden",
+		"login",
+		"quota exhausted",
+		"approval policy",
+		"configuration",
+		"invalid config",
+		"invalid model",
+		"model not found",
+		"invalid params",
+		"invalid request",
+		"not supported",
+		"unsupported",
+	} {
+		if strings.Contains(lower, marker) {
+			return ""
+		}
+	}
+	if containsStatusCode(lower, "429") {
+		return "rate-limit"
+	}
+	for _, marker := range []string{"rate limit", "too many requests"} {
+		if strings.Contains(lower, marker) {
+			return "rate-limit"
+		}
+	}
+	if containsStatusCode(lower, "500", "502", "503", "504", "529") {
+		return "server"
+	}
+	for _, marker := range []string{
+		"internal server error",
+		"service unavailable",
+		"server error",
+		"overloaded",
+		"temporarily unavailable",
+	} {
+		if strings.Contains(lower, marker) {
+			return "server"
+		}
+	}
+	for _, marker := range []string{
+		"connection",
+		"transport",
+		"network",
+		"broken pipe",
+		"reset by peer",
+		"unexpected eof",
+		"timed out",
+		"timeout",
+	} {
+		if strings.Contains(lower, marker) {
+			return "transport"
+		}
+	}
+	return ""
+}
+
+func containsStatusCode(text string, codes ...string) bool {
+	for _, field := range strings.FieldsFunc(text, func(r rune) bool {
+		return r < '0' || r > '9'
+	}) {
+		for _, code := range codes {
+			if field == code {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func failedResult(outcome Outcome, reason string) Result {

@@ -48,7 +48,15 @@ func TestDecoratorEmitsOneAutomaticReviewEventWithStatusFailure(t *testing.T) {
 		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
 		observer: observer,
 		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
-			return autoreview.Result{Decision: autoreview.Allow, Outcome: autoreview.OutcomeAllow}
+			return autoreview.Result{
+				Decision: autoreview.Allow,
+				Outcome:  autoreview.OutcomeAllow,
+				Timing: autoreview.Timing{
+					Launch:      125 * time.Millisecond,
+					FirstOutput: 450 * time.Millisecond,
+					Completion:  900 * time.Millisecond,
+				},
+			}
 		},
 	}
 	req := bashReq(`{"command":"curl https://example.com"}`)
@@ -74,6 +82,15 @@ func TestDecoratorEmitsOneAutomaticReviewEventWithStatusFailure(t *testing.T) {
 	}
 	if event.Data["outcome"] != "allow" || event.Data["status_persisted"] != false || event.Data["status_failure_class"] != "append_error" {
 		t.Fatalf("event data = %+v", event.Data)
+	}
+	for key, want := range map[string]any{
+		"review_launch_ms":       float64(125),
+		"review_first_output_ms": float64(450),
+		"review_completion_ms":   float64(900),
+	} {
+		if got := event.Data[key]; got != want {
+			t.Errorf("event.Data[%q] = %#v, want %#v", key, got, want)
+		}
 	}
 	if reason, _ := event.Data["status_failure_reason"].(string); strings.Contains(reason, "secret-value") || !strings.Contains(reason, "[redacted]") {
 		t.Fatalf("status failure reason = %q, want bounded redaction", reason)
@@ -103,7 +120,15 @@ func TestDecoratorCancellationBeforeSideEffectsEmitsCanceledWithoutStatus(t *tes
 		observer: observer,
 		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
 			cancel()
-			return autoreview.Result{Decision: autoreview.Allow, Outcome: autoreview.OutcomeAllow}
+			return autoreview.Result{
+				Decision: autoreview.Allow,
+				Outcome:  autoreview.OutcomeAllow,
+				Timing: autoreview.Timing{
+					Launch:      100 * time.Millisecond,
+					FirstOutput: 200 * time.Millisecond,
+					Completion:  300 * time.Millisecond,
+				},
+			}
 		},
 		appendStatus: func(string) error {
 			statusCalls.Add(1)
@@ -127,6 +152,15 @@ func TestDecoratorCancellationBeforeSideEffectsEmitsCanceledWithoutStatus(t *tes
 	}
 	if _, ok := events[0].Data["status_persisted"]; ok {
 		t.Fatalf("canceled event unexpectedly includes status_persisted: %+v", events[0].Data)
+	}
+	for key, want := range map[string]any{
+		"review_launch_ms":       float64(100),
+		"review_first_output_ms": float64(200),
+		"review_completion_ms":   float64(300),
+	} {
+		if got := events[0].Data[key]; got != want {
+			t.Errorf("canceled event.Data[%q] = %#v, want %#v", key, got, want)
+		}
 	}
 }
 
@@ -633,6 +667,108 @@ func TestDecoratorDisablesReviewerAfterTwoConsecutiveFailures(t *testing.T) {
 	}
 }
 
+func TestDecoratorTimeoutBreakerCoolsDownThenRetriesHalfOpen(t *testing.T) {
+	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		now:      func() time.Time { return now },
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			if calls.Add(1) <= 2 {
+				return autoreview.Result{Outcome: autoreview.OutcomeTimeout, FailureReason: "review attempt timed out"}
+			}
+			return autoreview.Result{Decision: autoreview.Allow, Outcome: autoreview.OutcomeAllow}
+		},
+	}
+
+	for _, command := range []string{"curl https://example.com/a", "curl https://example.com/b"} {
+		got, err := d.CanUseTool(bashReq(`{"command":"` + command + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Fatalf("timed-out review for %q = %+v, %v; want human deferral", command, got, err)
+		}
+	}
+
+	now = now.Add(29 * time.Second)
+	got, err := d.CanUseTool(bashReq(`{"command":"curl https://example.com/during-cooldown"}`))
+	if err != nil || got.Behavior != "" {
+		t.Fatalf("review during cooldown = %+v, %v; want human deferral", got, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("classification calls during cooldown = %d, want 2", got)
+	}
+
+	now = now.Add(time.Second)
+	got, err = d.CanUseTool(bashReq(`{"command":"curl https://example.com/half-open"}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("half-open review = %+v, %v; want allow", got, err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("classification calls after cooldown = %d, want 3", got)
+	}
+}
+
+func TestDecoratorFailedHalfOpenReviewReentersCooldown(t *testing.T) {
+	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		now:      func() time.Time { return now },
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			calls.Add(1)
+			return autoreview.Result{Outcome: autoreview.OutcomeTimeout, FailureReason: "review attempt timed out"}
+		},
+	}
+
+	for _, command := range []string{"curl https://example.com/a", "curl https://example.com/b"} {
+		if got, err := d.CanUseTool(bashReq(`{"command":"` + command + `"}`)); err != nil || got.Behavior != "" {
+			t.Fatalf("timed-out review for %q = %+v, %v; want human deferral", command, got, err)
+		}
+	}
+
+	now = now.Add(automaticReviewTimeoutCooldown)
+	if got, err := d.CanUseTool(bashReq(`{"command":"curl https://example.com/half-open"}`)); err != nil || got.Behavior != "" {
+		t.Fatalf("failed half-open review = %+v, %v; want human deferral", got, err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("classification calls after half-open failure = %d, want 3", got)
+	}
+
+	if got, err := d.CanUseTool(bashReq(`{"command":"curl https://example.com/cooldown-again"}`)); err != nil || got.Behavior != "" {
+		t.Fatalf("review after failed half-open = %+v, %v; want human deferral", got, err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("classification calls during renewed cooldown = %d, want 3", got)
+	}
+}
+
+func TestDecoratorCancellationDoesNotOpenCircuitBreaker(t *testing.T) {
+	var calls atomic.Int32
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			calls.Add(1)
+			return autoreview.Result{Outcome: autoreview.OutcomeCanceled, FailureReason: "review attempt canceled"}
+		},
+	}
+
+	for _, command := range []string{
+		"curl https://example.com/a",
+		"curl https://example.com/b",
+		"curl https://example.com/c",
+	} {
+		got, err := d.CanUseTool(bashReq(`{"command":"` + command + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Fatalf("canceled review for %q = %+v, %v; want human deferral", command, got, err)
+		}
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("classification calls after cancellations = %d, want 3", got)
+	}
+}
+
 func TestDecoratorCircuitBreakerEmitsOneFinalOperatorEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feature-reviewer-breaker"
@@ -674,7 +810,7 @@ func TestDecoratorCircuitBreakerEmitsOneFinalOperatorEvent(t *testing.T) {
 		t.Fatalf("automatic_review.unavailable events = %d, want one final notice", len(unavailable))
 	}
 	if unavailable[0].Data["scope"] != "circuit_breaker" ||
-		!strings.Contains(unavailable[0].Data["reason"].(string), "2 consecutive failures") {
+		!strings.Contains(unavailable[0].Data["reason"].(string), "2 consecutive provider or protocol failures") {
 		t.Fatalf("unavailable event = %+v", unavailable[0])
 	}
 }
@@ -833,9 +969,9 @@ func TestAutoReviewCacheHitRechecksCancellation(t *testing.T) {
 	state.mu.Lock()
 	result := make(chan bool, 1)
 	go func() {
-		_, ok, _ := state.review(ctx, "go test ./...", func(context.Context) (autoreview.Decision, bool) {
+		_, ok, _ := state.review(ctx, "go test ./...", time.Now(), func(context.Context) (autoreview.Decision, bool, autoreview.Outcome) {
 			t.Error("cached request unexpectedly classified")
-			return autoreview.Allow, true
+			return autoreview.Allow, true, autoreview.OutcomeAllow
 		})
 		result <- ok
 	}()

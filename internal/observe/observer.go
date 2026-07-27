@@ -68,6 +68,7 @@ type AutomaticReviewEventInput struct {
 	Model               string
 	Outcome             autoreview.Outcome
 	Duration            time.Duration
+	ReviewTiming        autoreview.Timing
 	CommandSummary      string
 	FailureReason       string
 	StatusPersisted     *bool
@@ -670,6 +671,15 @@ func (o *Observer) AutomaticReviewCompleted(sc SpanContext, in AutomaticReviewEv
 	if in.FailureReason != "" {
 		data["failure_reason"] = permission.AutomaticReviewBoundReason(in.FailureReason)
 	}
+	if duration := nonNegativeDuration(in.ReviewTiming.Launch); duration > 0 {
+		data["review_launch_ms"] = duration.Milliseconds()
+	}
+	if duration := nonNegativeDuration(in.ReviewTiming.FirstOutput); duration > 0 {
+		data["review_first_output_ms"] = duration.Milliseconds()
+	}
+	if duration := nonNegativeDuration(in.ReviewTiming.Completion); duration > 0 {
+		data["review_completion_ms"] = duration.Milliseconds()
+	}
 	if in.StatusPersisted != nil {
 		data["status_persisted"] = *in.StatusPersisted
 		if !*in.StatusPersisted {
@@ -698,6 +708,13 @@ func (o *Observer) AutomaticReviewCompleted(sc SpanContext, in AutomaticReviewEv
 		"outcome":  string(in.Outcome),
 	}
 	o.otel.AddSpanEvent(sc.ParentSpanID, "automatic_review.completed", addRunNumber(sc, attrs))
+}
+
+func nonNegativeDuration(duration time.Duration) time.Duration {
+	if duration < 0 {
+		return 0
+	}
+	return duration
 }
 
 // AutomaticReviewUnavailable emits exactly one bounded operator notice for a

@@ -624,6 +624,37 @@ func TestClassifyTimeoutFails(t *testing.T) {
 	}
 }
 
+func TestDefaultClassifyTimeoutAllowsThirtySeconds(t *testing.T) {
+	if got, want := defaultTimeout, 30*time.Second; got != want {
+		t.Fatalf("defaultTimeout = %s, want %s", got, want)
+	}
+}
+
+func TestClassifyDetailedReportsStageTiming(t *testing.T) {
+	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
+	reg := testutil.NewFakeClaudeRegistry(t, script)
+	reviewer, _, _ := ResolveReviewer(reg, "")
+
+	got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{
+		ToolName: "Bash",
+		Command:  "curl https://example.com",
+		WorkDir:  t.TempDir(),
+	})
+
+	if got.Outcome != OutcomeAllow {
+		t.Fatalf("ClassifyDetailed().Outcome = %q, want %q", got.Outcome, OutcomeAllow)
+	}
+	if got.Timing.Launch <= 0 {
+		t.Fatalf("ClassifyDetailed().Timing.Launch = %s, want positive duration", got.Timing.Launch)
+	}
+	if got.Timing.FirstOutput < got.Timing.Launch {
+		t.Fatalf("ClassifyDetailed().Timing.FirstOutput = %s, want >= launch %s", got.Timing.FirstOutput, got.Timing.Launch)
+	}
+	if got.Timing.Completion < got.Timing.FirstOutput {
+		t.Fatalf("ClassifyDetailed().Timing.Completion = %s, want >= first output %s", got.Timing.Completion, got.Timing.FirstOutput)
+	}
+}
+
 func TestClassifyCancelledContextFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeSleepScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)

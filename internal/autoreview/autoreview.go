@@ -75,13 +75,22 @@ type Result struct {
 	Decision      Decision
 	Outcome       Outcome
 	FailureReason string
+	Timing        Timing
+}
+
+// Timing records cumulative, provider-neutral milestones for one review
+// attempt. Zero means the attempt did not reach that milestone.
+type Timing struct {
+	Launch      time.Duration
+	FirstOutput time.Duration
+	Completion  time.Duration
 }
 
 // defaultTimeout bounds the whole hidden attempt — launch, handshake,
 // response, cancellation, and cleanup — to one low-effort turn. Tests inject
 // a shorter value via ClassifyRequest.Timeout so concurrent sessions stay
 // independent and no mutable package-global state is needed.
-const defaultTimeout = 10 * time.Second
+const defaultTimeout = 30 * time.Second
 
 // gracePeriod is the SIGTERM-to-SIGKILL escalation window. It is part of the
 // overall timeout budget, not additional to it: when the deadline context
@@ -325,10 +334,11 @@ type ClassifyRequest struct {
 // the reader never blocks, and the caller selects on that channel or the
 // deadline — no shared mutable state crosses the goroutine boundary.
 type readResult struct {
-	outcome    Outcome
-	reason     string
-	text       string
-	successful bool
+	outcome     Outcome
+	reason      string
+	text        string
+	firstOutput time.Duration
+	successful  bool
 }
 
 // Classify runs one isolated, tool-less, fully ephemeral hidden classification.
@@ -347,7 +357,14 @@ type readResult struct {
 // output all fail. Raw reviewer output is discarded after parsing. On any
 // termination path the subprocess is reaped synchronously. Returns ok=false
 // for every failure; the caller converts that to ordinary human deferral.
-func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyRequest) Result {
+func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (result Result) {
+	startedAt := time.Now()
+	var timing Timing
+	defer func() {
+		timing.Completion = time.Since(startedAt)
+		result.Timing = timing
+	}()
+
 	if reviewer.Provider == nil || reviewer.Model == "" {
 		return failedResult(OutcomeProviderError, "reviewer unavailable")
 	}
@@ -390,6 +407,7 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 	if err := cmd.Start(); err != nil {
 		return failedResult(OutcomeProviderError, "provider launch failed")
 	}
+	timing.Launch = time.Since(startedAt)
 
 	proto := reviewer.Provider.NewProtocol(llm.ProtocolOpts{
 		Model:                reviewer.Model,
@@ -417,6 +435,9 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 		for scanner.Scan() {
+			if result.firstOutput == 0 {
+				result.firstOutput = time.Since(startedAt)
+			}
 			msgs, perr := proto.ParseLine(scanner.Bytes())
 			if perr != nil {
 				result.outcome = OutcomeMalformedResponse
@@ -476,6 +497,10 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 
 	_ = stdin.Close()
 	terminateAndWait(deadlineCtx, cmd, readDone)
+	if timedOut {
+		rr = <-readCh
+	}
+	timing.FirstOutput = rr.firstOutput
 
 	// A handshake error takes precedence over any reader result.
 	if err := ctx.Err(); err != nil {

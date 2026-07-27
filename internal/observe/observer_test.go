@@ -1311,14 +1311,19 @@ func TestAutomaticReviewCompletedEmitsTypedBoundedEvent(t *testing.T) {
 	sc := SpanContextForFeature(featureID, "trace-automatic-review", "", "").WithRun(4).Child()
 	persisted := false
 	obs.AutomaticReviewCompleted(sc, AutomaticReviewEventInput{
-		Phase:               "implement",
-		SessionID:           "session-1",
-		RepoName:            "repo-a",
-		Iteration:           2,
-		Provider:            "claude",
-		Model:               "haiku",
-		Outcome:             autoreview.OutcomeAllow,
-		Duration:            1250 * time.Millisecond,
+		Phase:     "implement",
+		SessionID: "session-1",
+		RepoName:  "repo-a",
+		Iteration: 2,
+		Provider:  "claude",
+		Model:     "haiku",
+		Outcome:   autoreview.OutcomeAllow,
+		Duration:  1250 * time.Millisecond,
+		ReviewTiming: autoreview.Timing{
+			Launch:      125 * time.Millisecond,
+			FirstOutput: 450 * time.Millisecond,
+			Completion:  900 * time.Millisecond,
+		},
 		CommandSummary:      "go\t test ./... token=secret-value \x1b]52;c;clipboard\a",
 		StatusPersisted:     &persisted,
 		StatusFailureClass:  "append_error",
@@ -1337,13 +1342,16 @@ func TestAutomaticReviewCompletedEmitsTypedBoundedEvent(t *testing.T) {
 		t.Fatalf("event envelope = %+v", event)
 	}
 	for key, want := range map[string]any{
-		"provider":              "claude",
-		"model":                 "haiku",
-		"outcome":               "allow",
-		"command_summary":       "go test ./... token=[redacted]",
-		"status_persisted":      false,
-		"status_failure_class":  "append_error",
-		"status_failure_reason": "sink unavailable token=[redacted]",
+		"provider":               "claude",
+		"model":                  "haiku",
+		"outcome":                "allow",
+		"command_summary":        "go test ./... token=[redacted]",
+		"review_launch_ms":       float64(125),
+		"review_first_output_ms": float64(450),
+		"review_completion_ms":   float64(900),
+		"status_persisted":       false,
+		"status_failure_class":   "append_error",
+		"status_failure_reason":  "sink unavailable token=[redacted]",
 	} {
 		if got := event.Data[key]; got != want {
 			t.Errorf("event.Data[%q] = %#v, want %#v", key, got, want)

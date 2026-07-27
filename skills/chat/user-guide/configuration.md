@@ -108,7 +108,7 @@ directory, and declared writable roots. Interpolated prompt fields are
 control-sanitized and enclosed as nonce-delimited untrusted data; the original
 byte-exact command remains unchanged for caching and execution. The reviewer
 runs through the selected provider's native zero-tool mode, with no session
-persistence or user/project customization, at low effort, for one 10-second
+persistence or user/project customization, at low effort, for one 30-second
 attempt. The response must be the exact case-sensitive `ALLOW` or `DEFER`
 token. There are no retries and no provider cascade after an attempt.
 `DEFER`, timeout, malformed output, provider failure, unexpected interaction,
@@ -117,12 +117,15 @@ and cancellation silently return to the ordinary human prompt.
 Exact `ALLOW` and `DEFER` decisions use a byte-exact session-only cache.
 Long-tail requests are serialized within the session, and a model cache hit
 launches no new reviewer process or side effect. Deterministic fast paths skip
-this mutex and cache entirely. After two consecutive failed attempts, a
-session circuit breaker marks only the reviewer unavailable for the rest of
-that session, so later long-tail requests return immediately to the human
-prompt while build/test fast paths remain available. Nothing is reused across
-sessions, and automatic approval creates no durable permission rule,
-remembered cache entry, or permission audit record.
+this mutex and cache entirely. Two consecutive timeouts start a 30-second
+cooldown; after it expires, one half-open attempt either restores review or
+starts another cooldown. Cancellation does not count against reviewer health.
+Two consecutive provider, protocol, malformed-response, or
+unexpected-interaction failures mark only the reviewer unavailable for the
+rest of that session. During either breaker state, long-tail requests return
+immediately to the human prompt while build/test fast paths remain available.
+Nothing is reused across sessions, and automatic approval creates no durable
+permission rule, remembered cache entry, or permission audit record.
 
 ### Transparency and operational evidence
 
@@ -138,19 +141,21 @@ same text and message-log position.
 Every deterministic approval emits one bounded operator event with outcome
 `fast_path`, zero duration, and empty provider/model fields. Every actual model
 attempt emits one bounded operator event with original feature/session
-context, reviewer identity, duration, redacted command summary, and an outcome
-of `allow`, `defer`, `timeout`, `malformed_response`, `provider_error`,
+context, reviewer identity, total duration, cumulative process-launch,
+first-output, and review-completion timings, redacted command summary, and an
+outcome of `allow`, `defer`, `timeout`, `malformed_response`, `provider_error`,
 `unexpected_interaction`, or `canceled`. Approval events also record whether
 status persistence succeeded. Unreviewable commands, non-Bash requests,
 existing decisions, disabled paths, and model session-cache hits emit neither
 per-request status nor an automatic-review event. If automatic review is
 enabled but no reviewer is available, Agentico emits one session-build status
 and one `automatic_review.unavailable` operator event with the reason;
-fast-path approvals continue. When two consecutive attempts fail, the circuit
-breaker emits one final `automatic_review.unavailable` event and then stays
-silent for later model requests. Status-delivery and observer failures are
-best-effort side-effect failures: they never change the permission decision or
-cause a retry.
+fast-path approvals continue. A timeout cooldown emits an
+`automatic_review.unavailable` event each time it begins; a permanent
+session-level breaker emits one final event and then stays silent for later
+model requests. Status-delivery and observer failures are best-effort
+side-effect failures: they never change the permission decision or cause a
+retry.
 
 Model names can use canonical context-window IDs (e.g., `opus[1M]`) or provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`). Bare aliases such as `opus` are still accepted and resolved against the registry, which merges each provider's hardcoded catalog (see `internal/llm/claude`, `internal/llm/codex`, and `internal/llm/opencode`). Configured model names are canonicalized at startup so the on-disk config reflects the registry's canonical spelling.
 

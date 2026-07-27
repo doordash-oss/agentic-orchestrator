@@ -369,7 +369,6 @@ func TestFrontendImplementationRequiresFrontendDesignAndKeepsVisualReferences(t 
 	}
 
 	t.Logf("frontend implement prompt:\n%s", (*captured)[0].Prompt)
-	t.Logf("frontend review prompt:\n%s", (*captured)[1].Prompt)
 
 	implementSystemPrompt := (*captured)[0].SystemPrompt
 	for _, want := range []string{
@@ -383,23 +382,34 @@ func TestFrontendImplementationRequiresFrontendDesignAndKeepsVisualReferences(t 
 		}
 	}
 
-	for _, got := range []struct {
+	capturedPrompts := []struct {
 		name   string
 		prompt string
 	}{
 		{name: "implement", prompt: (*captured)[0].Prompt},
-		{name: "review", prompt: (*captured)[1].Prompt},
-	} {
+	}
+	for i, opts := range (*captured)[1:] {
+		capturedPrompts = append(capturedPrompts, struct {
+			name   string
+			prompt string
+		}{
+			name:   fmt.Sprintf("review %d", i+1),
+			prompt: opts.Prompt,
+		})
+	}
+
+	for _, got := range capturedPrompts {
 		if !strings.Contains(got.prompt, "## Visual References") {
 			t.Errorf("%s prompt missing visual references:\n%s", got.name, got.prompt)
 		}
 		if !strings.Contains(got.prompt, "/tmp/mockup.png") {
 			t.Errorf("%s prompt missing attached image path:\n%s", got.name, got.prompt)
 		}
-		if strings.Contains(got.prompt, "## Visual Evidence") {
+		linePaddedPrompt := "\n" + got.prompt + "\n"
+		if strings.Contains(linePaddedPrompt, "\n## Visual Evidence\n") {
 			t.Errorf("%s prompt unexpectedly contains visual evidence guidance:\n%s", got.name, got.prompt)
 		}
-		if strings.Contains(got.prompt, "## Behavioral Evidence") {
+		if strings.Contains(linePaddedPrompt, "\n## Behavioral Evidence\n") {
 			t.Errorf("%s prompt unexpectedly contains behavioral evidence guidance:\n%s", got.name, got.prompt)
 		}
 	}

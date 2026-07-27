@@ -202,6 +202,7 @@ func (pr *PhaseRunner) buildSessionForFeature(f *feature.Feature) BuildSessionFu
 	return func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 		if f != nil {
 			opts.FeatureID = f.ID
+			opts.AutomaticReviewMode = feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)
 		}
 		return pr.BuildSession(opts)
 	}
@@ -267,6 +268,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		FeatureID:                      f.ID,
+		AutomaticReviewMode:            feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
 		Model:                          phaseModel,
 		Prompt:                         cfg.Prompt,
 		SystemPrompt:                   systemPrompt,
@@ -535,10 +537,11 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		kbEffortLevel = kbEffectiveEffort
 	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		FeatureID:    f.ID,
-		Model:        kbModel,
-		Prompt:       prompt,
-		SystemPrompt: systemPrompt,
+		FeatureID:           f.ID,
+		AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
+		Model:               kbModel,
+		Prompt:              prompt,
+		SystemPrompt:        systemPrompt,
 		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), so it
 		// must be mounted explicitly. The global feature-state root is not KB
 		// context and must not be exposed to this agent.
@@ -1434,14 +1437,13 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	}
 
 	if opts.AutoReview.Enabled == nil && opts.FeatureID != "" {
-		if pr.FeatureStore == nil {
-			return nil, nil, nil, fmt.Errorf("loading feature %q for automatic review: feature store is unavailable", opts.FeatureID)
+		if pr.FeatureStore != nil {
+			f, loadErr := pr.FeatureStore.Load(opts.FeatureID)
+			if loadErr != nil {
+				return nil, nil, nil, fmt.Errorf("loading feature %q for automatic review: %w", opts.FeatureID, loadErr)
+			}
+			opts.AutomaticReviewMode = feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)
 		}
-		f, loadErr := pr.FeatureStore.Load(opts.FeatureID)
-		if loadErr != nil {
-			return nil, nil, nil, fmt.Errorf("loading feature %q for automatic review: %w", opts.FeatureID, loadErr)
-		}
-		opts.AutomaticReviewMode = feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)
 	}
 
 	// Production path — registry-based routing.

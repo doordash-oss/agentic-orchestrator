@@ -198,6 +198,15 @@ func NewPhaseRunner(sm ports.SessionManager, store ports.FeatureStore, stateDir 
 	return &PhaseRunner{SessionManager: sm, FeatureStore: store, StateDir: stateDir, CommandRunner: &execCommandRunner{}}
 }
 
+func (pr *PhaseRunner) buildSessionForFeature(f *feature.Feature) BuildSessionFunc {
+	return func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		if f != nil {
+			opts.FeatureID = f.ID
+		}
+		return pr.BuildSession(opts)
+	}
+}
+
 // resolvePhaseArtifactDir returns the artifact directory for a pipeline phase,
 // accounting for active refactor cycles. Paths route through the active run
 // directory so sealed runs are not overwritten.
@@ -257,6 +266,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		effortLevel = effectiveEffort
 	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		FeatureID:                      f.ID,
 		Model:                          phaseModel,
 		Prompt:                         cfg.Prompt,
 		SystemPrompt:                   systemPrompt,
@@ -525,6 +535,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		kbEffortLevel = kbEffectiveEffort
 	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		FeatureID:    f.ID,
 		Model:        kbModel,
 		Prompt:       prompt,
 		SystemPrompt: systemPrompt,
@@ -662,7 +673,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		DangerouslySkipPermissions:   pr.DangerouslySkipPermissions,
 		PermissionCache:              pr.PermissionCache,
 		RepoName:                     repoName,
-		BuildSession:                 pr.BuildSession,
+		BuildSession:                 pr.buildSessionForFeature(f),
 		AskingClause:                 pr.askingQuestionsClauseForModel(planningModel),
 		EffortLevel:                  f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:              planEffort,
@@ -733,7 +744,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			DangerouslySkipPermissions:   pr.DangerouslySkipPermissions,
 			PermissionCache:              pr.PermissionCache,
 			RepoName:                     planRepoName,
-			BuildSession:                 pr.BuildSession,
+			BuildSession:                 pr.buildSessionForFeature(f),
 			AskingClause:                 pr.askingQuestionsClauseForModel(phasePlanModel),
 			EffortLevel:                  f.EffectivePipeline().EffortLevel(),
 			EffectiveEffort:              phasePlanEffort,
@@ -824,7 +835,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.BuildSession,
+		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                pipelineEffort,
 		EffectiveEffort:            effectiveEffort,
@@ -887,7 +898,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.BuildSession,
+		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            cycleReviewEffort,
@@ -958,7 +969,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.BuildSession,
+		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            implEffort,
@@ -1020,7 +1031,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.BuildSession,
+		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            reviewEffort,
@@ -1164,7 +1175,8 @@ func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.Permissio
 		installAutoReviewObserver(handler, pr.Observer)
 		return handler, snap
 	}
-	enabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
+	globalEnabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
+	enabled, _ := feature.ResolveAutomaticReview(opts.AutomaticReviewMode, globalEnabled)
 	model := ""
 	if pr != nil && pr.Config != nil {
 		model = pr.Config.Defaults.Models.AutomaticReview
@@ -1277,6 +1289,7 @@ func resolveUnifiedWorkDir(f *feature.Feature, stateDir string) (workDir string,
 
 // BuildSessionOpts holds parameters for BuildSession.
 type BuildSessionOpts struct {
+	FeatureID       string
 	Model           string
 	Prompt          string
 	SystemPrompt    string
@@ -1325,6 +1338,9 @@ type BuildSessionOpts struct {
 	// BuildSessionOpts → SessionOpts → BuildSessionOpts crash-resume boundary
 	// so future reviewer-selection fields cannot be copied inconsistently.
 	AutoReview ports.AutoReviewSnapshot
+	// AutomaticReviewMode is resolved from FeatureID for fresh sessions. It is
+	// ignored when AutoReview already contains a crash-resume snapshot.
+	AutomaticReviewMode feature.AutomaticReviewMode
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1415,6 +1431,17 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	// Test injection path
 	if pr.BuildSessionFn != nil {
 		return pr.BuildSessionFn(opts)
+	}
+
+	if opts.AutoReview.Enabled == nil && opts.FeatureID != "" {
+		if pr.FeatureStore == nil {
+			return nil, nil, nil, fmt.Errorf("loading feature %q for automatic review: feature store is unavailable", opts.FeatureID)
+		}
+		f, loadErr := pr.FeatureStore.Load(opts.FeatureID)
+		if loadErr != nil {
+			return nil, nil, nil, fmt.Errorf("loading feature %q for automatic review: %w", opts.FeatureID, loadErr)
+		}
+		opts.AutomaticReviewMode = feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)
 	}
 
 	// Production path — registry-based routing.

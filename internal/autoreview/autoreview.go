@@ -90,7 +90,7 @@ type Timing struct {
 // response, cancellation, and cleanup — to one low-effort turn. Tests inject
 // a shorter value via ClassifyRequest.Timeout so concurrent sessions stay
 // independent and no mutable package-global state is needed.
-const defaultTimeout = 30 * time.Second
+const defaultTimeout = time.Minute
 
 const maxProviderAttempts = 2
 

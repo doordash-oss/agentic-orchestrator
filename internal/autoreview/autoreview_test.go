@@ -742,8 +742,8 @@ func TestClassifyTimeoutFails(t *testing.T) {
 	}
 }
 
-func TestDefaultClassifyTimeoutAllowsThirtySeconds(t *testing.T) {
-	if got, want := defaultTimeout, 30*time.Second; got != want {
+func TestDefaultClassifyTimeoutAllowsOneMinute(t *testing.T) {
+	if got, want := defaultTimeout, time.Minute; got != want {
 		t.Fatalf("defaultTimeout = %s, want %s", got, want)
 	}
 }

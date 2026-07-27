@@ -185,7 +185,7 @@ When an agent requests a tool, the permission system evaluates in this order:
 1. **Session handler** — checks if the tool is in the always-approved category (read-only tools, file edits during implementation)
 2. **Cache check** — looks up the tool pattern in cached rules (global + per-repo), deny-wins
 3. **Deterministic Bash fast path** — when automatic review is enabled, an otherwise-unresolved canonical Bash request matching the curated guardrail auto-approves immediately; it needs no reviewer and remains available after the session circuit breaker opens
-4. **Automatic Bash model review** — every other valid, non-blank command up to 4096 bytes receives one bounded 30-second model attempt when a reviewer is available; model session-cache hits stay silent, two consecutive timeouts start a 30-second cooldown with a half-open retry, and two consecutive provider/protocol failures disable the model path for the session
+4. **Automatic Bash model review** — every other valid, non-blank command up to 4096 bytes receives up to two bounded model attempts sharing one overall one-minute timeout when a reviewer is available; only transient launch, handshake, transport, rate-limit, and server failures receive the single retry, model session-cache hits stay silent, two consecutive timeouts start a 30-second cooldown with a half-open retry, and two consecutive provider/protocol failures disable the model path for the session
 5. **TUI prompt** — if automatic review is disabled, the command is unreviewable, no reviewer is available, or the model returns `DEFER` or fails, the ordinary human prompt appears in the watch view or dashboard
 
 Automatic review never overrides earlier decisions, stores no durable

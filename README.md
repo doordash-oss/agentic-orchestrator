@@ -260,12 +260,14 @@ the reviewer, including dangerous commands such as `rm -rf`, `sudo`, and
 `curl | sh`; an exact model `ALLOW` auto-approves them, while `DEFER` and every
 failure use the ordinary human prompt.
 
-Long-tail model decisions receive one low-effort 30-second attempt in native
-zero-tool mode. Exact `ALLOW` and `DEFER` results are byte-exact, session-only
-cached and create no durable permission rule. Two consecutive timeouts start a
-30-second cooldown; one half-open attempt runs after the cooldown and either
-restores review or starts another cooldown. Cancellation does not count as a
-reviewer failure. Two consecutive provider, protocol, malformed-response, or
+Long-tail model decisions receive up to two low-effort attempts in native
+zero-tool mode, sharing one overall one-minute timeout. Only transient launch,
+handshake, transport, rate-limit, and server failures receive the single retry.
+Exact `ALLOW` and `DEFER` results are byte-exact, session-only cached and create
+no durable permission rule. Two consecutive timeouts start a 30-second
+cooldown; one half-open attempt runs after the cooldown and either restores
+review or starts another cooldown. Cancellation does not count as a reviewer
+failure. Two consecutive provider, protocol, malformed-response, or
 unexpected-interaction failures disable the reviewer for the session. Neither
 breaker state disables the deterministic fast path. The reviewer follows a
 risk-based default-allow policy modeled on interactive agent auto modes.

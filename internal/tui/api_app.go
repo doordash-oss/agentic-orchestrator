@@ -1964,6 +1964,16 @@ func applyAPIFeatureDetail(f *feature.Feature, detail server.FeatureDetailDTO) {
 	f.Description = detail.Description
 	f.Summary = detail.Summary
 	f.Pipeline = feature.PipelineProfile(detail.Pipeline)
+	f.AutomaticReviewMode = feature.NormalizeAutomaticReviewMode(feature.AutomaticReviewMode(detail.AutomaticReview.Mode))
+	f.AutomaticReviewEnabled = detail.AutomaticReview.Enabled
+	switch feature.AutomaticReviewSource(detail.AutomaticReview.Source) {
+	case feature.AutomaticReviewSourceFeature:
+		f.AutomaticReviewSource = feature.AutomaticReviewSourceFeature
+	case feature.AutomaticReviewSourceGlobal:
+		f.AutomaticReviewSource = feature.AutomaticReviewSourceGlobal
+	default:
+		f.AutomaticReviewSource = ""
+	}
 	f.PhaseTimings = apiPhaseTimings(detail.Timing.ByPhase)
 	f.PhaseCosts = apiPhaseCosts(detail.Cost.ByPhase, detail.Cost.TotalUSD, f.CurrentPhase)
 	f.ReviewingGate = detail.ReviewGate.ReviewingGate

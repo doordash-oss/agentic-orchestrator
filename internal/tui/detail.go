@@ -484,6 +484,10 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 	}
 	b.WriteString(LabelStyle.Render("Models"))
 	b.WriteString("  " + MutedStyle.Render(compactModelSummary(f.Models, " ")) + "\n")
+	if source := automaticReviewSourceLabel(f.AutomaticReviewEnabled, f.AutomaticReviewSource); source != "" {
+		b.WriteString(LabelStyle.Render("Auto mode"))
+		b.WriteString("  " + SuccessStyle.Render("On ("+source+")") + "\n")
+	}
 	if f.RiskLevel != "" {
 		b.WriteString(LabelStyle.Render("Risk"))
 		b.WriteString("  " + formatRiskBadge(f.RiskLevel) + " " + string(f.RiskLevel) + "\n")
@@ -506,6 +510,20 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 		b.WriteString("    " + MutedStyle.Render(formatCost(totalCost)) + "\n")
 	}
 	return b.String()
+}
+
+func automaticReviewSourceLabel(enabled bool, source feature.AutomaticReviewSource) string {
+	if !enabled {
+		return ""
+	}
+	switch source {
+	case feature.AutomaticReviewSourceFeature:
+		return "Feature"
+	case feature.AutomaticReviewSourceGlobal:
+		return "Global"
+	default:
+		return ""
+	}
 }
 
 func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {

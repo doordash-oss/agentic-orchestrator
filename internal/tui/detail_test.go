@@ -1386,6 +1386,43 @@ func TestRenderMetadataCompact_WorkDir_ParentDirForMultiRepo(t *testing.T) {
 	}
 }
 
+func TestRenderMetadataCompact_AutomaticReviewVisibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		enabled bool
+		source  feature.AutomaticReviewSource
+		want    string
+		notWant string
+	}{
+		{"feature enabled", true, feature.AutomaticReviewSourceFeature, "Auto mode     On (Feature)", ""},
+		{"global enabled", true, feature.AutomaticReviewSourceGlobal, "Auto mode     On (Global)", ""},
+		{"disabled", false, feature.AutomaticReviewSourceFeature, "", "Auto mode"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := &feature.Feature{
+				ID:                     "feat-auto-mode",
+				Status:                 feature.StatusImplementing,
+				Models:                 config.ModelConfig{Implementation: "model-a"},
+				AutomaticReviewEnabled: tt.enabled,
+				AutomaticReviewSource:  tt.source,
+			}
+			got := stripANSI(NewDetailModel(f, "").renderMetadataCompact(f))
+			if tt.want != "" && !strings.Contains(got, tt.want) {
+				t.Errorf("renderMetadataCompact() missing %q:\n%s", tt.want, got)
+			}
+			if tt.notWant != "" && strings.Contains(got, tt.notWant) {
+				t.Errorf("renderMetadataCompact() contains %q:\n%s", tt.notWant, got)
+			}
+		})
+	}
+}
+
 func TestRenderMetadata_UsesShortModelNames(t *testing.T) {
 	t.Parallel()
 	const routedModel = "gateway:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"

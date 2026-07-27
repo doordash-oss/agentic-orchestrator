@@ -4787,6 +4787,28 @@ func TestAPIAppModelFeatureConfigEditorSavesAutomaticReviewMode(t *testing.T) {
 	}
 }
 
+func TestApplyAPIFeatureDetailAutomaticReview(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{}
+	applyAPIFeatureDetail(f, server.FeatureDetailDTO{
+		AutomaticReview: server.AutomaticReviewState{
+			Mode:    server.AutomaticReviewStateModeEnabled,
+			Enabled: true,
+			Source:  server.AutomaticReviewStateSource("feature"),
+		},
+	})
+	if got := feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode); got != feature.AutomaticReviewEnabled {
+		t.Errorf("AutomaticReviewMode = %q, want enabled", got)
+	}
+	if !f.AutomaticReviewEnabled {
+		t.Error("AutomaticReviewEnabled = false, want true")
+	}
+	if f.AutomaticReviewSource != feature.AutomaticReviewSourceFeature {
+		t.Errorf("AutomaticReviewSource = %q, want feature", f.AutomaticReviewSource)
+	}
+}
+
 func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	t.Parallel()
 

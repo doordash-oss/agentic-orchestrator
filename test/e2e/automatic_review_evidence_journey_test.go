@@ -41,7 +41,7 @@ import (
 const (
 	automaticReviewJourneyFeatureID = "a11aa11aa11aa11a"
 	automaticReviewJourneySessionID = "session-automatic-review"
-	automaticReviewJourneyCommand   = "go test ./internal/permission"
+	automaticReviewJourneyCommand   = "curl https://example.com/artifact"
 )
 
 // TestAutomaticReviewFreshAllowOwningSessionJourney proves that the owning
@@ -168,9 +168,9 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 }
 
 // TestAutomaticReviewIntentionalSilenceJourneys proves that memoized,
-// serialized-cache, and guardrail-rejected request paths add no status or
-// event. An unavailable reviewer is the exception at session scope: it emits
-// one build notice, but still produces no per-request review attempt.
+// serialized-cache, and unreviewable request paths add no status or event. An
+// unavailable reviewer is the exception at session scope: it emits one build
+// notice, but still produces no per-request review attempt.
 func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 	if testing.Short() {
 		t.Skip("journey launches deterministic provider subprocesses")
@@ -205,10 +205,10 @@ func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 		}
 	}
 
-	if got, err := handler.CanUseTool(request("go test ./internal/agent")); err != nil || got.Behavior != permission.DecisionAllow {
+	if got, err := handler.CanUseTool(request("curl https://example.com/agent")); err != nil || got.Behavior != permission.DecisionAllow {
 		t.Fatalf("fresh cache leader = %+v, %v; want allow", got, err)
 	}
-	if got, err := handler.CanUseTool(request("go test ./internal/agent")); err != nil || got.Behavior != permission.DecisionAllow {
+	if got, err := handler.CanUseTool(request("curl https://example.com/agent")); err != nil || got.Behavior != permission.DecisionAllow {
 		t.Fatalf("cache hit = %+v, %v; want allow", got, err)
 	}
 	if statusCalls.Load() != 1 || automaticReviewEventCount(t, stateDir) != 1 {
@@ -224,7 +224,7 @@ func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 		go func() {
 			defer callers.Done()
 			<-start
-			got, err := handler.CanUseTool(request("go test ./internal/server"))
+			got, err := handler.CanUseTool(request("curl https://example.com/server"))
 			results <- got
 			errs <- err
 		}()
@@ -247,11 +247,12 @@ func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 		t.Fatalf("follower added side effects: statuses=%d events=%d", statusCalls.Load(), automaticReviewEventCount(t, stateDir))
 	}
 
-	if got, err := handler.CanUseTool(request("curl https://example.com")); err != nil || got.Behavior != "" {
-		t.Fatalf("guardrail result = %+v, %v; want human deferral", got, err)
+	overLength := strings.Repeat("x", permission.GuardrailMaxCommandLen+1)
+	if got, err := handler.CanUseTool(request(overLength)); err != nil || got.Behavior != "" {
+		t.Fatalf("unreviewable result = %+v, %v; want human deferral", got, err)
 	}
 	if statusCalls.Load() != 2 || automaticReviewEventCount(t, stateDir) != 2 {
-		t.Fatalf("guardrail added side effects: statuses=%d events=%d", statusCalls.Load(), automaticReviewEventCount(t, stateDir))
+		t.Fatalf("unreviewable request added side effects: statuses=%d events=%d", statusCalls.Load(), automaticReviewEventCount(t, stateDir))
 	}
 
 	assertAutomaticReviewUnavailableSessionNotice(t)
@@ -383,7 +384,7 @@ func TestAutomaticReviewSideEffectFailureJourney(t *testing.T) {
 	got, err := failingHandler.CanUseTool(ports.ToolPermissionRequest{
 		Ctx:          context.Background(),
 		ToolName:     "Bash",
-		Input:        `{"command":"go test ./internal/permission"}`,
+		Input:        `{"command":"curl https://example.com/artifact"}`,
 		AppendStatus: func(string) error { return errors.New("status sink unavailable") },
 	})
 	if err != nil || got.Behavior != "" {
@@ -445,10 +446,10 @@ head -n 2 >/dev/null
 while [ ! -f "$1" ]; do sleep 0.01; done
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"provider-session","model":"haiku[200K]"}'
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking the command."}]}}'
-printf '%s\n' '{"type":"control_request","request_id":"permission-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"go test ./internal/permission"}}}'
+printf '%s\n' '{"type":"control_request","request_id":"permission-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"curl https://example.com/artifact"}}}'
 IFS= read -r response
 printf '%s\n' "$response" >"$2"
-printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-approved","name":"Bash","input":{"command":"go test ./internal/permission"}}]}}'
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-approved","name":"Bash","input":{"command":"curl https://example.com/artifact"}}]}}'
 printf '%s\n' '{"type":"result","subtype":"success","session_id":"provider-session"}'
 `
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {

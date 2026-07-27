@@ -16,7 +16,6 @@ package permission
 
 import (
 	"testing"
-	"unicode/utf8"
 )
 
 var guardrailFuzzEligibleSeeds = []string{
@@ -28,7 +27,7 @@ var guardrailFuzzEligibleSeeds = []string{
 	"make test-unit",
 	"bazel build //target",
 	"bazel query 'deps(//target)'",
-	"git --no-pager diff --no-textconv --stat",
+	"git --no-pager diff --no-textconv --no-ext-diff --stat",
 	"GOTRACEBACK=2 go test -race -short ./...",
 	"go test \"./internal/...\"",
 	"go test ./... 2>/dev/null",
@@ -125,6 +124,22 @@ var guardrailFuzzAdversarialSeeds = []string{
 	"gcc -B ./toolchain main.c",
 	"GOFLAGS=-toolexec=./runner go test ./...",
 	"git --no-pager diff",
+	"git --no-pager diff --no-textconv",
+	"cd --",
+	"cd -",
+	"cd -P",
+	"cd -- && go test ./...",
+	"cd - && make test",
+	"make test ; cd -",
+	"cd ./nonexistent && go test ./...",
+	"go build -modfile=evil.mod ./...",
+	"go test -overlay evil.json ./...",
+	"./mvnw -pl ../../evil test",
+	"git rev-parse ../../etc/passwd",
+	"git describe ../../etc/passwd",
+	"git symbolic-ref ../../etc/passwd",
+	"gcc -gcc-toolchain=./runner -c main.c",
+	"git --no-pager diff --no-textconv --no-ext-diff -output",
 	"prettier --write .''env",
 	"go test -e''xec ./runner ./...",
 	"gcc -B./toolchain main.c",
@@ -269,12 +284,12 @@ var guardrailFuzzAdversarialSeeds = []string{
 	"make test # ignored by bash",
 }
 
-// FuzzGuardrailClassify verifies that arbitrary bytes never panic the
-// classifier, that invalid UTF-8 is never eligible, and that over-limit
-// input is never eligible. The adversarial seed corpus is also exercised
+// FuzzGuardrailFastPath verifies that arbitrary bytes never panic the fast
+// path and that every fast-path command is reviewable. The adversarial seed
+// corpus is also exercised
 // by TestFuzzSeeds_AdversarialDefers, which explicitly asserts each
 // unsupported or dangerous seed returns false.
-func FuzzGuardrailClassify(f *testing.F) {
+func FuzzGuardrailFastPath(f *testing.F) {
 	// Seed corpus: valid commands, adversarial syntax, invalid UTF-8,
 	// and multibyte text at bounding cutoffs.
 	for _, corpus := range [][]string{guardrailFuzzEligibleSeeds, guardrailFuzzAdversarialSeeds} {
@@ -284,17 +299,11 @@ func FuzzGuardrailClassify(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, command string) {
-		// The classifier must never panic on arbitrary input.
-		got := GuardrailClassify(command, "/project", []string{"/project"})
+		// The fast path must never panic on arbitrary input.
+		got := GuardrailFastPath(command, "/project", []string{"/project"})
 
-		// If the input is invalid UTF-8, it must never be eligible.
-		if !utf8.ValidString(command) && got {
-			t.Errorf("GuardrailClassify returned true for invalid UTF-8 input")
-		}
-
-		// If the input exceeds the length limit, it must never be eligible.
-		if len(command) > GuardrailMaxCommandLen && got {
-			t.Errorf("GuardrailClassify returned true for over-limit input (len %d)", len(command))
+		if got && !ReviewableBashCommand(command) {
+			t.Errorf("GuardrailFastPath returned true for an unreviewable command")
 		}
 	})
 }
@@ -304,7 +313,7 @@ func FuzzGuardrailClassify(f *testing.F) {
 // expected-false regression for the fail-closed property.
 func TestFuzzSeeds_AdversarialDefers(t *testing.T) {
 	for _, cmd := range guardrailFuzzAdversarialSeeds {
-		got := GuardrailClassify(cmd, "/project", []string{"/project"})
+		got := GuardrailFastPath(cmd, "/project", []string{"/project"})
 		if got {
 			t.Errorf("adversarial seed %q should defer, got eligible", cmd)
 		}
@@ -315,7 +324,7 @@ func TestFuzzSeeds_AdversarialDefers(t *testing.T) {
 // corpus is classified as eligible.
 func TestFuzzSeeds_EligibleApproves(t *testing.T) {
 	for _, cmd := range guardrailFuzzEligibleSeeds {
-		got := GuardrailClassify(cmd, "/project", []string{"/project"})
+		got := GuardrailFastPath(cmd, "/project", []string{"/project"})
 		if !got {
 			t.Errorf("eligible seed %q should be eligible, got defer", cmd)
 		}

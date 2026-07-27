@@ -58,7 +58,7 @@ type ContextFileReadMeta struct {
 	ExitCode       *int
 }
 
-// AutomaticReviewEventInput carries one bounded actual-review outcome.
+// AutomaticReviewEventInput carries one bounded automatic-review outcome.
 type AutomaticReviewEventInput struct {
 	Phase               string
 	SessionID           string
@@ -651,8 +651,8 @@ func (o *Observer) PermissionResolved(sc SpanContext, sessionID string, repoName
 	}))
 }
 
-// AutomaticReviewCompleted emits exactly one best-effort event for an actual
-// automatic-review attempt. Nil and disabled observers are no-ops.
+// AutomaticReviewCompleted emits exactly one best-effort event for an
+// automatic-review decision. Nil and disabled observers are no-ops.
 func (o *Observer) AutomaticReviewCompleted(sc SpanContext, in AutomaticReviewEventInput) {
 	if o == nil || !o.enabled {
 		return

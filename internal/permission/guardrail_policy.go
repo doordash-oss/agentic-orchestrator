@@ -393,7 +393,8 @@ func matchSafeFlagPrefix(name string, prefixes map[string]bool) (string, bool) {
 		return "", false
 	}
 	for prefix := range prefixes {
-		if len(name) > len(prefix) && strings.HasPrefix(name, prefix) {
+		if len(name) > len(prefix) && strings.HasPrefix(name, prefix) &&
+			strings.ContainsRune(":/=", rune(name[len(prefix)])) {
 			return prefix, true
 		}
 	}
@@ -802,7 +803,7 @@ var goTestSafeFlags = map[string]bool{
 	"-bench": true, "-benchmem": true, "-benchtime": true,
 	"-cpuprofile": true, "-memprofile": true, "-mutexprofile": true,
 	"-trace": true, "-json": true, "-p": true, "-shuffle": true,
-	"-tags": true, "-mod": true, "-modfile": true, "-overlay": true,
+	"-tags": true, "-mod": true,
 	"-cpu": true, "-list": true, "-msan": true, "-asan": true,
 	"-trimpath":      true,
 	"-installsuffix": true, "-linkshared": true, "-pkgdir": true,
@@ -815,7 +816,7 @@ var goTestSafeFlags = map[string]bool{
 var goBuildSafeFlags = map[string]bool{
 	"-v": true, "-o": true, "-tags": true, "-race": true,
 	"-msan": true, "-asan": true,
-	"-mod": true, "-modfile": true, "-overlay": true,
+	"-mod":    true,
 	"-pkgdir": true, "-trimpath": true, "-buildvcs": true, "-buildmode": true,
 	"-n": true, "-p": true, "-work": true, "-x": true,
 	"-installsuffix": true, "-linkshared": true, "--": true,

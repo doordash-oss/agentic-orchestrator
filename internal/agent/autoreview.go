@@ -34,19 +34,17 @@ const automaticReviewCircuitBreakerReason = "automatic reviewer unavailable afte
 // autoReviewPermissionDecorator wraps the fully composed session permission
 // policy. It asks the existing handler first and returns every non-empty
 // decision or existing error unchanged. Only an empty decision for canonical
-// Bash, when the session's snapshotted flag is enabled and reviewer is usable,
-// permits a hidden classification. Successful ALLOW and DEFER classifications
-// are memoized by the byte-exact extracted command for this decorator's session.
-// A mutex serializes the permission callback, matching the owning session's
-// single-reader production path while keeping direct concurrent tests race-free.
-// The guardrail classifier determines eligibility: it parses the
-// command structurally and checks it against the curated development-command
-// policy. A successful ALLOW is the only new automatic decision; DEFER and
-// every failure return the same empty human-deferral decision. The decorator
-// sits outside the CachingHandler, so its allow bypasses the cache and creates
-// no remembered rule, cache entry, or audit event. The hidden reviewer is
-// launched via autoreview.Classify (not BuildSession), so it is never decorated
-// and cannot recurse.
+// Bash first checks the deterministic guardrail fast path. Fast-path approvals
+// need no reviewer, mutex, cache, or circuit-breaker state. Every other
+// reviewable command reaches the hidden reviewer when one is available.
+// Successful model ALLOW and DEFER classifications are memoized by the
+// byte-exact extracted command for this decorator's session. A mutex serializes
+// model review while leaving deterministic approvals lock-free. A successful
+// ALLOW is the only new model decision; DEFER and every failure return the same
+// empty human-deferral decision. The decorator never denies and sits outside
+// the CachingHandler, so its allows create no remembered permission rule. The
+// hidden reviewer is launched via autoreview.Classify (not BuildSession), so it
+// is never decorated and cannot recurse.
 type autoReviewPermissionDecorator struct {
 	inner            ports.PermissionHandler
 	reviewer         autoreview.Reviewer
@@ -147,11 +145,18 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 	if decision.Behavior != "" {
 		return decision, nil
 	}
-	if d.reviewer.Provider == nil || req.ToolName != autoReviewBashToolName {
+	if req.ToolName != autoReviewBashToolName {
 		return decision, nil
 	}
 	command := permission.ExtractBashCommand(req.Input)
-	if !permission.GuardrailClassify(command, d.workDir, d.writableRoots) {
+	if permission.GuardrailFastPath(command, d.workDir, d.writableRoots) {
+		d.recordFastPathAllow(req, command)
+		return ports.PermissionDecision{Behavior: permission.DecisionAllow}, nil
+	}
+	if d.reviewer.Provider == nil {
+		return decision, nil
+	}
+	if !permission.ReviewableBashCommand(command) {
 		return decision, nil
 	}
 	ctx := req.Ctx
@@ -185,27 +190,12 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 		}
 
 		var statusPersisted *bool
-		statusFailureClass := ""
-		statusFailureReason := ""
+		statusFailureClass, statusFailureReason := "", ""
 		if detailed.Outcome == autoreview.OutcomeAllow && classifyCtx.Err() == nil {
-			persisted := false
-			statusPersisted = &persisted
-			appendStatus := d.appendStatus
-			if appendStatus == nil {
-				appendStatus = req.AppendStatus
-			}
-			switch {
-			case appendStatus == nil:
-				statusFailureClass = "unavailable"
-				statusFailureReason = "session status sink unavailable"
-			default:
-				if err := appendStatus(permission.AutomaticReviewStatusLine(command)); err != nil {
-					statusFailureClass = "append_error"
-					statusFailureReason = permission.AutomaticReviewBoundReason(err.Error())
-				} else {
-					persisted = true
-				}
-			}
+			statusPersisted, statusFailureClass, statusFailureReason = d.persistAutomaticReviewStatus(
+				req,
+				permission.AutomaticReviewStatusLine(command),
+			)
 		}
 		d.emitAutomaticReview(req, detailed, time.Since(startedAt), statusPersisted, statusFailureClass, statusFailureReason)
 		return detailed.Decision, detailed.Outcome == autoreview.OutcomeAllow || detailed.Outcome == autoreview.OutcomeDefer
@@ -217,6 +207,42 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 		return decision, nil
 	}
 	return ports.PermissionDecision{Behavior: permission.DecisionAllow}, nil
+}
+
+func (d *autoReviewPermissionDecorator) recordFastPathAllow(req ports.ToolPermissionRequest, command string) {
+	statusPersisted, statusFailureClass, statusFailureReason := d.persistAutomaticReviewStatus(
+		req,
+		permission.AutomaticReviewFastPathStatusLine(command),
+	)
+	d.emitAutomaticReviewEvent(
+		req,
+		autoreview.Result{Outcome: autoreview.OutcomeFastPath},
+		0,
+		statusPersisted,
+		statusFailureClass,
+		statusFailureReason,
+		"",
+		"",
+	)
+}
+
+func (d *autoReviewPermissionDecorator) persistAutomaticReviewStatus(
+	req ports.ToolPermissionRequest,
+	status string,
+) (*bool, string, string) {
+	persisted := false
+	appendStatus := d.appendStatus
+	if appendStatus == nil {
+		appendStatus = req.AppendStatus
+	}
+	if appendStatus == nil {
+		return &persisted, "unavailable", "session status sink unavailable"
+	}
+	if err := appendStatus(status); err != nil {
+		return &persisted, "append_error", permission.AutomaticReviewBoundReason(err.Error())
+	}
+	persisted = true
+	return &persisted, "", ""
 }
 
 func (d *autoReviewPermissionDecorator) emitReviewerUnavailable(req ports.ToolPermissionRequest, scope, reason string) {
@@ -259,6 +285,29 @@ func (d *autoReviewPermissionDecorator) emitAutomaticReview(
 	statusFailureClass string,
 	statusFailureReason string,
 ) {
+	provider, model := d.reviewer.Identity()
+	d.emitAutomaticReviewEvent(
+		req,
+		result,
+		duration,
+		statusPersisted,
+		statusFailureClass,
+		statusFailureReason,
+		provider,
+		model,
+	)
+}
+
+func (d *autoReviewPermissionDecorator) emitAutomaticReviewEvent(
+	req ports.ToolPermissionRequest,
+	result autoreview.Result,
+	duration time.Duration,
+	statusPersisted *bool,
+	statusFailureClass string,
+	statusFailureReason string,
+	provider string,
+	model string,
+) {
 	if d.observer == nil {
 		return
 	}
@@ -266,7 +315,6 @@ func (d *autoReviewPermissionDecorator) emitAutomaticReview(
 	if !ok {
 		sc = observe.SpanContextForFeature(req.FeatureID, "", "", "")
 	}
-	provider, model := d.reviewer.Identity()
 	sessionID := req.LogicalSessionID
 	if sessionID == "" {
 		sessionID = req.SessionID

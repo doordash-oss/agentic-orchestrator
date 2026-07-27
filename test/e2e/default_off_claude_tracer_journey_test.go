@@ -243,7 +243,7 @@ func TestDefaultOffClaudeTracerJourney(t *testing.T) {
 		// The decorator was created (enabled=true from snapshot) with the
 		// restored reviewer. The restored reviewer's script exits, so
 		// classification fails and defers to the human prompt.
-		got, err := sessOpts2.PermHandler.CanUseTool(bashReq("go test ./..."))
+		got, err := sessOpts2.PermHandler.CanUseTool(bashReq("curl https://example.com"))
 		if err != nil || got.Behavior != "" {
 			t.Fatalf("crash-resume with changed auth should defer: got %+v err %v", got, err)
 		}
@@ -261,7 +261,7 @@ func TestAutomaticReviewTransparencyJourney(t *testing.T) {
 	const (
 		featureID = "a11aa11aa11aa11a"
 		sessionID = "session-transparent"
-		command   = "go test ./internal/permission"
+		command   = "curl https://example.com/artifact"
 	)
 	stateDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
@@ -322,7 +322,7 @@ func TestAutomaticReviewTransparencyJourney(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"outcome":"allow"`,
-		`"command_summary":"go test ./internal/permission"`,
+		`"command_summary":"curl https://example.com/artifact"`,
 		`"status_persisted":true`,
 		`"session_id":"session-transparent"`,
 	} {

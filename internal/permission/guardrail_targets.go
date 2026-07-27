@@ -24,17 +24,17 @@ import (
 func classifyProjectTarget(name string, seg *parsedSegment, workDir string, writableRoots []string) bool {
 	switch name {
 	case "make", "gmake":
-		return classifyTargetCommand(seg, &makeTargetPolicy)
+		return classifyTargetCommand(seg, &makeTargetPolicy, workDir, writableRoots)
 	case "just":
-		return classifyTargetCommand(seg, &justTargetPolicy)
+		return classifyTargetCommand(seg, &justTargetPolicy, workDir, writableRoots)
 	case "task":
-		return classifyTargetCommand(seg, &taskRunnerTargetPolicy)
+		return classifyTargetCommand(seg, &taskRunnerTargetPolicy, workDir, writableRoots)
 	case "bazel", "bazelisk":
 		return classifyBazelTarget(seg)
 	case "gradlew":
-		return classifyTargetCommand(seg, &gradlewTargetPolicy)
+		return classifyTargetCommand(seg, &gradlewTargetPolicy, workDir, writableRoots)
 	case "mvnw":
-		return classifyTargetCommand(seg, &mvnwTargetPolicy)
+		return classifyTargetCommand(seg, &mvnwTargetPolicy, workDir, writableRoots)
 	case "npm", "pnpm", "yarn":
 		return classifyPackageScript(seg)
 	case "git":
@@ -69,7 +69,7 @@ type targetPolicy struct {
 // Flags are matched by name (with =value stripped) against the safe set;
 // combined short flags (e.g., -j4) are recognized when the short prefix is a
 // value flag. Unknown flags defer.
-func classifyTargetCommand(seg *parsedSegment, policy *targetPolicy) bool {
+func classifyTargetCommand(seg *parsedSegment, policy *targetPolicy, workDir string, writableRoots []string) bool {
 	if len(seg.args) == 0 {
 		return false
 	}
@@ -94,15 +94,17 @@ func classifyTargetCommand(seg *parsedSegment, policy *targetPolicy) bool {
 			if !policy.safeFlags[name] {
 				return false
 			}
-			if value != "" && isRunnerOverrideOperand(value) {
-				return false
+			if value != "" {
+				if isRunnerOverrideOperand(value) || !validateOperand(value, workDir, writableRoots) {
+					return false
+				}
 			}
 			if value == "" && policy.valueFlags[name] {
 				i++
 				if i >= len(seg.args) {
 					return false
 				}
-				if isRunnerOverrideOperand(seg.args[i]) {
+				if isRunnerOverrideOperand(seg.args[i]) || !validateOperand(seg.args[i], workDir, writableRoots) {
 					return false
 				}
 			}
@@ -643,11 +645,11 @@ func classifyGit(seg *parsedSegment, workDir string, writableRoots []string) boo
 	case "ls-files":
 		return classifyGitLsFilesFlags(subArgs, workDir, writableRoots)
 	case "rev-parse":
-		return classifyGitRevParseFlags(subArgs)
+		return classifyGitRevParseFlags(subArgs, workDir, writableRoots)
 	case "symbolic-ref":
-		return classifyGitSymbolicRefFlags(subArgs)
+		return classifyGitSymbolicRefFlags(subArgs, workDir, writableRoots)
 	case "describe", "name-rev", "show-ref", "for-each-ref":
-		return classifyGitInspectionFlags(subArgs)
+		return classifyGitInspectionFlags(subArgs, workDir, writableRoots)
 	case "diff", "log", "show":
 		if !hasNoPager {
 			return false
@@ -656,6 +658,9 @@ func classifyGit(seg *parsedSegment, workDir string, writableRoots []string) boo
 			return false
 		}
 		if !hasGitTextConvDisabled(subArgs) {
+			return false
+		}
+		if subcommand == "diff" && !hasGitExternalDiffDisabled(subArgs) {
 			return false
 		}
 		return classifyGitDiffLogShowFlags(subArgs, workDir, writableRoots)
@@ -715,7 +720,7 @@ func classifyGitLsFilesFlags(args []string, workDir string, writableRoots []stri
 	return true
 }
 
-func classifyGitRevParseFlags(args []string) bool {
+func classifyGitRevParseFlags(args []string, workDir string, writableRoots []string) bool {
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") {
 			switch arg {
@@ -733,11 +738,14 @@ func classifyGitRevParseFlags(args []string) bool {
 				return false
 			}
 		}
+		if !validateGitPathspec(arg, workDir, writableRoots) {
+			return false
+		}
 	}
 	return true
 }
 
-func classifyGitInspectionFlags(args []string) bool {
+func classifyGitInspectionFlags(args []string, workDir string, writableRoots []string) bool {
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") {
 			switch arg {
@@ -756,6 +764,9 @@ func classifyGitInspectionFlags(args []string) bool {
 				return false
 			}
 		}
+		if !validateGitPathspec(arg, workDir, writableRoots) {
+			return false
+		}
 	}
 	return true
 }
@@ -763,7 +774,7 @@ func classifyGitInspectionFlags(args []string) bool {
 // classifyGitSymbolicRefFlags validates a git symbolic-ref invocation.
 // Only the read-only form (zero or one operand) is eligible; the two-operand
 // set form and the -d/--delete form mutate repository state and defer.
-func classifyGitSymbolicRefFlags(args []string) bool {
+func classifyGitSymbolicRefFlags(args []string, workDir string, writableRoots []string) bool {
 	nonFlagCount := 0
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") {
@@ -778,6 +789,9 @@ func classifyGitSymbolicRefFlags(args []string) bool {
 		if nonFlagCount > 1 {
 			return false
 		}
+		if !validateGitPathspec(arg, workDir, writableRoots) {
+			return false
+		}
 	}
 	return true
 }
@@ -785,7 +799,7 @@ func classifyGitSymbolicRefFlags(args []string) bool {
 // hasGitExternalHelpers reports whether the args enable external diff or
 // text-conversion helpers. Only enabling forms (--ext-diff, --textconv)
 // are rejected; disabling forms (--no-textconv, --no-ext-diff) are accepted
-// and handled separately by hasGitTextConvDisabled.
+// and required separately where Git enables the corresponding helper.
 func hasGitExternalHelpers(args []string) bool {
 	for _, arg := range args {
 		name := flagName(arg)
@@ -804,6 +818,18 @@ func hasGitExternalHelpers(args []string) bool {
 func hasGitTextConvDisabled(args []string) bool {
 	for _, arg := range args {
 		if flagName(arg) == "--no-textconv" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasGitExternalDiffDisabled reports whether the args include --no-ext-diff,
+// which prevents repository attributes and config from invoking external diff
+// drivers. Unlike log and show, diff enables external drivers by default.
+func hasGitExternalDiffDisabled(args []string) bool {
+	for _, arg := range args {
+		if flagName(arg) == "--no-ext-diff" {
 			return true
 		}
 	}
@@ -869,13 +895,11 @@ func classifyGitDiffLogShowFlags(args []string, workDir string, writableRoots []
 					strings.HasPrefix(arg, "--author=") ||
 					strings.HasPrefix(arg, "--grep=") ||
 					strings.HasPrefix(arg, "--glob=") ||
-					strings.HasPrefix(arg, "--exclude=") ||
-					strings.HasPrefix(arg, "--output=") ||
-					strings.HasPrefix(arg, "-o") {
-					if strings.HasPrefix(arg, "--output=") || arg == "-o" {
-						return false
-					}
+					strings.HasPrefix(arg, "--exclude=") {
 					continue
+				}
+				if strings.HasPrefix(arg, "--output=") {
+					return false
 				}
 				return false
 			}

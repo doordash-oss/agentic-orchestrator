@@ -251,13 +251,21 @@ provider cascade. The workspace model remains editable while the feature is
 disabled, and changes apply only to new sessions.
 
 This feature considers only unresolved Bash permission requests after existing
-policy, remembered rules, and restricted handlers have deferred. Eligible
-commands receive one low-effort 10-second attempt in native zero-tool mode and
-must return exact `ALLOW` or `DEFER`; all other results use the ordinary human
-prompt. Results are byte-exact, session-only cached and create no durable
-permission rule. After two consecutive failed attempts, a session circuit
-breaker stops launching the reviewer and immediately returns later requests to
-the human prompt.
+policy, remembered rules, and restricted handlers have deferred. A
+deterministic guardrail is the zero-latency fast path: curated commands such as
+`go test ./...` and `make test` are approved immediately without a model,
+session lock, or cache lookup. If no reviewer resolves, these commands still
+fast-path. Every other valid, non-blank Bash command up to 4096 bytes reaches
+the reviewer, including dangerous commands such as `rm -rf`, `sudo`, and
+`curl | sh`; an exact model `ALLOW` auto-approves them, while `DEFER` and every
+failure use the ordinary human prompt.
+
+Long-tail model decisions receive one low-effort 10-second attempt in native
+zero-tool mode. Exact `ALLOW` and `DEFER` results are byte-exact, session-only
+cached and create no durable permission rule. After two consecutive failed
+model attempts, a session circuit breaker stops launching the reviewer and
+returns later long-tail requests to the human prompt. It does not disable the
+deterministic fast path.
 
 The guardrail treats repo-controlled build and test code as trusted-by-design:
 auto-approving commands such as `make test` or `go generate` may execute code
@@ -265,15 +273,22 @@ from Makefiles, `package.json` scripts, `//go:generate` directives, or
 `conftest.py`. Enable automatic review only for repositories whose development
 automation you trust.
 
-Only a fresh leading `ALLOW` adds
-`Auto-approved Bash: <redacted summary>` before execution. Each actual model
-attempt emits one bounded operator event; existing decisions, guardrail
-deferrals, cache hits, and disabled paths emit no per-request status or event.
-When automatic review is enabled but no reviewer resolves, Agentico emits one
-session-build status and operator event. The circuit breaker likewise emits one
-final operator event when it disables a failing reviewer. Automatic review
-does not sandbox commands or guarantee their safety; deterministic guardrails
-and human approval remain the safety boundary.
+A deterministic approval adds
+`Auto-approved Bash (fast path): <redacted summary>` and emits a bounded
+`fast_path` operator event with empty provider/model fields. A fresh model
+`ALLOW` adds `Auto-approved Bash: <redacted summary>` and each actual model
+attempt emits one bounded operator event. Existing decisions, unreviewable
+commands, model cache hits, and disabled paths emit no per-request status or
+event. When automatic review is enabled but no reviewer resolves, Agentico
+emits one session-build status and operator event while deterministic commands
+continue to fast-path. The circuit breaker likewise emits one final operator
+event when it disables the model path.
+
+Automatic review does not sandbox commands or guarantee their safety. The
+deterministic layer is only a velocity optimization; for everything outside
+that fast path, the reviewer model's judgment is the boundary before the human.
+That reviewer is a fallible, promptable component, and its `ALLOW` is trusted
+to execute the command automatically.
 
 ### Model Overrides
 

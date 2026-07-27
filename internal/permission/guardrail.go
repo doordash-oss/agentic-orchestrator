@@ -28,18 +28,17 @@ import (
 const GuardrailMaxCommandLen = 4096
 
 const (
-	automaticReviewStatusPrefix = "Auto-approved Bash: "
-	automaticReviewStatusLimit  = 200
+	automaticReviewStatusPrefix         = "Auto-approved Bash: "
+	automaticReviewFastPathStatusPrefix = "Auto-approved Bash (fast path): "
+	automaticReviewStatusLimit          = 200
 )
 
-// GuardrailClassify determines whether a Bash command is eligible for
-// automatic review by the hidden reviewer. The command must be valid UTF-8,
-// within the length limit, structurally parseable by the supported shell
-// subset, and policy-eligible (every segment matches the curated command
-// policy). When eligible, the byte-exact command may be sent to the hidden
-// reviewer; when not eligible, the command defers to the ordinary human
-// prompt without invoking the reviewer.
-func GuardrailClassify(command, workDir string, writableRoots []string) bool {
+// ReviewableBashCommand reports whether a command is well-formed enough to put
+// in a reviewer prompt: valid UTF-8, non-blank, and within
+// GuardrailMaxCommandLen. It makes no safety claim. The length limit is a
+// practical prompt-cost ceiling; over-length commands defer to a human rather
+// than being judged from a truncated prefix.
+func ReviewableBashCommand(command string) bool {
 	if !utf8.ValidString(command) {
 		return false
 	}
@@ -47,6 +46,17 @@ func GuardrailClassify(command, workDir string, writableRoots []string) bool {
 		return false
 	}
 	if strings.TrimSpace(command) == "" {
+		return false
+	}
+	return true
+}
+
+// GuardrailFastPath determines whether a Bash command is safe to approve
+// automatically without a model or human opinion. The command must be
+// reviewable, structurally parseable by the supported shell subset, and every
+// segment must match the curated development-command policy.
+func GuardrailFastPath(command, workDir string, writableRoots []string) bool {
+	if !ReviewableBashCommand(command) {
 		return false
 	}
 	parsed, err := parseCommand(command)
@@ -70,7 +80,11 @@ func GuardrailBoundSummary(command string) string {
 // AutomaticReviewCommandSummary returns the provider-neutral command summary
 // shared by automatic-review status and observation records.
 func AutomaticReviewCommandSummary(command string) string {
-	command = stripUnsafeControlContent(command)
+	return automaticReviewCommandSummary(command, automaticReviewStatusPrefix)
+}
+
+func automaticReviewCommandSummary(command, prefix string) string {
+	command = StripUnsafeControlContent(command)
 	command = strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.Cf, r) {
 			return -1
@@ -84,7 +98,7 @@ func AutomaticReviewCommandSummary(command string) string {
 		return -1
 	}, command)
 	summary := sanitizeAuditField(strings.Join(strings.Fields(command), " "))
-	return boundAuditText(summary, automaticReviewStatusLimit-len(automaticReviewStatusPrefix))
+	return boundAuditText(summary, automaticReviewStatusLimit-len(prefix))
 }
 
 // AutomaticReviewStatusLine returns the complete durable approval status,
@@ -93,10 +107,17 @@ func AutomaticReviewStatusLine(command string) string {
 	return automaticReviewStatusPrefix + AutomaticReviewCommandSummary(command)
 }
 
+// AutomaticReviewFastPathStatusLine returns the complete durable status for a
+// deterministic approval that ran without a model opinion, bounded to 200
+// bytes with a distinct prefix.
+func AutomaticReviewFastPathStatusLine(command string) string {
+	return automaticReviewFastPathStatusPrefix + automaticReviewCommandSummary(command, automaticReviewFastPathStatusPrefix)
+}
+
 // AutomaticReviewBoundReason sanitizes a best-effort failure reason with the
 // same secret/control vocabulary and 200-byte UTF-8-safe bound as the status.
 func AutomaticReviewBoundReason(reason string) string {
-	reason = stripUnsafeControlContent(reason)
+	reason = StripUnsafeControlContent(reason)
 	reason = strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.Cf, r) {
 			return -1
@@ -112,10 +133,10 @@ func AutomaticReviewBoundReason(reason string) string {
 	return boundAuditText(sanitizeAuditField(strings.Join(strings.Fields(reason), " ")), automaticReviewStatusLimit)
 }
 
-// stripUnsafeControlContent removes complete terminal control strings rather
+// StripUnsafeControlContent removes complete terminal control strings rather
 // than leaving their payload visible after deleting only the introducer and
 // terminator. It recognizes both seven-bit ESC forms and their C1 equivalents.
-func stripUnsafeControlContent(text string) string {
+func StripUnsafeControlContent(text string) string {
 	const (
 		controlNormal = iota
 		controlEscape
@@ -416,21 +437,33 @@ func classifyCD(seg *parsedSegment, workDir string, writableRoots []string) bool
 	if len(seg.args) != 1 {
 		return false
 	}
-	if seg.args[0] == "/dev/null" {
+	if strings.HasPrefix(seg.args[0], "-") || seg.args[0] == "/dev/null" {
 		return false
 	}
-	return validatePathOperand(seg.args[0], workDir, writableRoots)
+	if !validatePathOperand(seg.args[0], workDir, writableRoots) {
+		return false
+	}
+	_, ok := cdTargetWorkDir(seg, workDir)
+	return ok
 }
 
 func cdTargetWorkDir(seg *parsedSegment, workDir string) (string, bool) {
-	if len(seg.args) != 1 || seg.args[0] == "/dev/null" {
+	if len(seg.args) != 1 || strings.HasPrefix(seg.args[0], "-") || seg.args[0] == "/dev/null" {
 		return "", false
 	}
 	abs, ok := guardrailOperandAbs(seg.args[0], workDir)
 	if !ok {
 		return "", false
 	}
-	return resolveGuardrailPath(abs)
+	resolved, ok := resolveGuardrailPath(abs)
+	if !ok {
+		return "", false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return resolved, true
 }
 
 // isDirectScript reports whether the command name is a direct script

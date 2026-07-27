@@ -85,50 +85,6 @@ func TestClaudeProvider_CheckReadinessAPIKey(t *testing.T) {
 	}
 }
 
-func TestClaudeProvider_CheckBareAuthOAuthRejected(t *testing.T) {
-	p := &Provider{
-		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
-			return []byte(`{"loggedIn":true,"authMethod":"claude.ai","email":"user@example.com"}`), nil
-		},
-	}
-	p.CheckReadiness(context.Background())
-	if p.CheckBareAuth() {
-		t.Fatal("CheckBareAuth() = true for OAuth, want false (--bare skips OAuth)")
-	}
-}
-
-func TestClaudeProvider_CheckBareAuthAPIKeyAccepted(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	p := &Provider{
-		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
-			return []byte(`{"loggedIn":true,"authMethod":"api_key","apiKeySource":"ANTHROPIC_API_KEY"}`), nil
-		},
-	}
-	p.CheckReadiness(context.Background())
-	if !p.CheckBareAuth() {
-		t.Fatal("CheckBareAuth() = false for API key explicitly sourced from ANTHROPIC_API_KEY, want true")
-	}
-}
-
-func TestClaudeProvider_CheckBareAuthRejectsSourcesUnavailableToBareMode(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	for _, source := range []string{"macOS Keychain", "apiKeyHelper", "settings", ""} {
-		t.Run(source, func(t *testing.T) {
-			status := authStatus{LoggedIn: true, AuthMethod: "api_key", APIKeySource: source}
-			if isBareAuthUsable(status) {
-				t.Fatalf("isBareAuthUsable(%q) = true, want false because --bare cannot load that source", source)
-			}
-		})
-	}
-}
-
-func TestClaudeProvider_CheckBareAuthAcceptsInheritedEnvironment(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-only")
-	if !isBareAuthUsable(authStatus{LoggedIn: true, AuthMethod: "claude.ai"}) {
-		t.Fatal("isBareAuthUsable() = false with ANTHROPIC_API_KEY set, want inherited environment accepted")
-	}
-}
-
 func TestClaudeProvider_ReviewPreferenceBand(t *testing.T) {
 	p := &Provider{}
 	tests := []struct {
@@ -701,7 +657,7 @@ func TestBuildInteractiveCommand_PermissionMode_CoexistsWithDSP(t *testing.T) {
 // TestBuildInteractiveCommand_IsolationFlags is a table-driven test covering
 // the hidden reviewer's launch-option isolation contract: ZeroTools emits
 // --tools "" (and suppresses --disallowedTools), NoSessionPersistence emits
-// --no-session-persistence, NoCustomization emits --bare, and all three can
+// --no-session-persistence, NoCustomization emits --safe-mode, and all three can
 // coexist on the same invocation.
 func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 	cases := []struct {
@@ -725,7 +681,7 @@ func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 		{
 			name:      "no_customization",
 			opts:      llm.CommandBuildOpts{Model: "haiku", NoCustomization: true},
-			wantFlags: []string{"--bare"},
+			wantFlags: []string{"--safe-mode"},
 		},
 		{
 			name:           "zero_tools_and_no_session_persistence",
@@ -736,7 +692,7 @@ func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 		{
 			name:           "full_isolation",
 			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true, NoCustomization: true},
-			wantFlags:      []string{"--no-session-persistence", "--bare"},
+			wantFlags:      []string{"--no-session-persistence", "--safe-mode"},
 			wantEmptyTools: true,
 		},
 	}
@@ -747,6 +703,9 @@ func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 				if !slices.Contains(args, flag) {
 					t.Errorf("missing %s: %v", flag, args)
 				}
+			}
+			if tc.opts.NoCustomization && slices.Contains(args, "--bare") {
+				t.Errorf("NoCustomization must retain normal authentication, got --bare: %v", args)
 			}
 			if tc.wantEmptyTools {
 				hasEmptyTools := false

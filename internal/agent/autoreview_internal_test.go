@@ -1214,21 +1214,20 @@ func fakeMalformedProvider(t *testing.T) llm.LLMProvider {
 	return testutil.FakeClaudeProvider{Script: testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeMalformedScriptBody())}
 }
 
-// newFakeRegistryForAutoReview creates a registry with a FakeClaudeProvider
-// whose CheckBareAuth returns true (unlike the real claude.Provider, which
-// requires CheckReadiness to cache bareAuthOK). The script is unused because
-// these tests verify snapshot/restore behavior, not classification.
+// newFakeRegistryForAutoReview creates a registry with a FakeClaudeProvider.
+// The script is unused because these tests verify snapshot/restore behavior,
+// not classification.
 func newFakeRegistryForAutoReview() *llm.Registry {
 	reg := llm.NewRegistry()
 	reg.Register(testutil.FakeClaudeProvider{})
 	return reg
 }
 
-type noBareAuthFakeProvider struct {
+type noIsolatedReviewFakeProvider struct {
 	testutil.FakeClaudeProvider
 }
 
-func (noBareAuthFakeProvider) CheckBareAuth() bool { return false }
+func (noIsolatedReviewFakeProvider) SupportsNativeToollessReview() bool { return false }
 
 func TestBuildSessionSurfacesEnabledWithoutReviewer(t *testing.T) {
 	stateDir := t.TempDir()
@@ -1239,7 +1238,7 @@ func TestBuildSessionSurfacesEnabledWithoutReviewer(t *testing.T) {
 	pr := NewPhaseRunner(nil, feature.NewStore(stateDir), stateDir)
 	pr.Config = &config.Config{Defaults: config.DefaultsConfig{AutomaticReviewEnabled: true}}
 	pr.Registry = llm.NewRegistry()
-	pr.Registry.Register(noBareAuthFakeProvider{FakeClaudeProvider: testutil.FakeClaudeProvider{}})
+	pr.Registry.Register(noIsolatedReviewFakeProvider{FakeClaudeProvider: testutil.FakeClaudeProvider{}})
 	pr.Observer = observe.New(true, stateDir, false, "", false, "agentic")
 
 	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
@@ -1257,7 +1256,7 @@ func TestBuildSessionSurfacesEnabledWithoutReviewer(t *testing.T) {
 	}
 	notice := sessOpts.SessionBuildNotices[0]
 	if !strings.Contains(notice.Status, "Automatic review enabled but no reviewer available:") ||
-		!strings.Contains(notice.Status, "authentication") {
+		!strings.Contains(notice.Status, "isolated tool-less review") {
 		t.Fatalf("notice status = %q", notice.Status)
 	}
 	if notice.Emit == nil {
@@ -1455,6 +1454,29 @@ func TestIntegrationDefaultOffDefersExactCommand(t *testing.T) {
 	got, err := handler.CanUseTool(bashReq(`{"command":"go test ./..."}`))
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("default-off should defer to human: got %+v err %v", got, err)
+	}
+}
+
+func TestIntegrationEnabledAskChatRoutesBashThroughAutomaticReview(t *testing.T) {
+	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
+	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
+	if !ok {
+		t.Fatal("ResolveReviewer = false, want true")
+	}
+	original := &permission.AMAHandler{}
+	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
+	handler := decorateHandlerWithAutoReview(composed, original, true, reviewer, "", nil)
+
+	for name, input := range map[string]string{
+		"fast path":  `{"command":"git status --short"}`,
+		"model path": `{"command":"ps -p 16846 -o pid,stat,etime,command 2>/dev/null; echo \"---exit:$?\""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := handler.CanUseTool(bashReq(input))
+			if err != nil || got.Behavior != permission.DecisionAllow {
+				t.Fatalf("enabled Ask chat %s = %+v err %v, want allow", name, got, err)
+			}
+		})
 	}
 }
 

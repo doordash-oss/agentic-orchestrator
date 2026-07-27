@@ -79,16 +79,6 @@ type ReadinessChecker interface {
 	CheckReadiness(ctx context.Context) ProviderReadiness
 }
 
-// BareAuthChecker is implemented by providers that can report whether their
-// authentication is usable in a no-customization subprocess launch (e.g.
-// Claude's --bare mode, which skips keychain reads, settings loading, and
-// OAuth). The automatic-review reviewer launches with NoCustomization=true,
-// so ResolveReviewer uses this to reject providers whose general readiness
-// passes but whose auth cannot survive the isolated launch.
-type BareAuthChecker interface {
-	CheckBareAuth() bool
-}
-
 // ReviewModelRanker is implemented by providers that define provider-local
 // preference bands for automatic-review models. Lower bands are preferred.
 // Returning false excludes the model from automatic selection.
@@ -281,7 +271,7 @@ type CommandBuildOpts struct {
 	// NoCustomization, when true, asks the provider to skip all project/user
 	// customization — CLAUDE.md auto-discovery, hooks, LSP, plugin sync,
 	// settings, rules, skills, and local configuration (e.g. Claude's
-	// --bare). This ensures the hidden reviewer's context contains only the
+	// --safe-mode). This ensures the hidden reviewer's context contains only the
 	// static review policy and the declared execution-context fields, with
 	// no project-injected instructions that could alter the classification.
 	NoCustomization bool

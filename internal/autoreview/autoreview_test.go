@@ -67,13 +67,6 @@ type reviewerIncapableProvider struct {
 
 func (reviewerIncapableProvider) SupportsNativeToollessReview() bool { return false }
 
-type authCheckedReviewerProvider struct {
-	reviewerCapableProvider
-	bareAuth bool
-}
-
-func (p authCheckedReviewerProvider) CheckBareAuth() bool { return p.bareAuth }
-
 type rankedReviewerProvider struct {
 	reviewerCapableProvider
 	preferred string
@@ -235,14 +228,15 @@ func TestReviewPromptUsesPerRequestNonce(t *testing.T) {
 }
 
 func TestBuildIsolatedEnvProviderValuesReplaceInheritedValues(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/user/claude")
 	t.Setenv("CODEX_HOME", "/user/codex")
 	t.Setenv("OPENCODE_CONFIG", "/user/opencode.json")
-	env := buildIsolatedEnv(testutil.FakeClaudeProvider{}, "/tmp/review", []string{
+	env := buildIsolatedEnv(testutil.FakeClaudeProvider{}, []string{
 		"CODEX_HOME=/tmp/review/codex",
 		"OPENCODE_CONFIG=/tmp/review/opencode.json",
 	})
 	for key, want := range map[string]string{
-		"CLAUDE_CONFIG_DIR": "/tmp/review",
+		"CLAUDE_CONFIG_DIR": "/user/claude",
 		"CODEX_HOME":        "/tmp/review/codex",
 		"OPENCODE_CONFIG":   "/tmp/review/opencode.json",
 	} {
@@ -377,18 +371,6 @@ func TestResolveReviewerAutomaticSkipsUnavailableAndIncapableProviders(t *testin
 	}
 }
 
-func TestResolveReviewerRejectsAnyProviderWithUnusableBareAuth(t *testing.T) {
-	opencode := authCheckedReviewerProvider{
-		reviewerCapableProvider: reviewerProvider(t, "opencode",
-			llm.ModelInfo{ID: "vendor/cheap", Category: "cheap"},
-		),
-		bareAuth: false,
-	}
-	if _, ok, _ := ResolveReviewer(newReviewerRegistry(t, opencode), ""); ok {
-		t.Fatal("ResolveReviewer(empty) = true, want any provider with unusable bare auth filtered")
-	}
-}
-
 func TestResolveReviewerUsesProviderOwnedPreferenceRanking(t *testing.T) {
 	provider := rankedReviewerProvider{
 		reviewerCapableProvider: reviewerProvider(t, "codex",
@@ -494,23 +476,22 @@ func TestResolveReviewerStaleProviderQualifiedModelRejected(t *testing.T) {
 }
 
 // oauthFakeClaudeProvider wraps FakeClaudeProvider but reports bare auth as
-// unusable, simulating an OAuth-only Claude installation whose general
-// readiness passes but whose auth cannot survive a --bare launch.
+// unusable, simulating an OAuth-only Claude installation. Isolated review uses
+// safe mode rather than bare mode, so normal provider readiness is sufficient.
 type oauthFakeClaudeProvider struct {
 	testutil.FakeClaudeProvider
 }
 
 func (oauthFakeClaudeProvider) CheckBareAuth() bool { return false }
 
-func TestResolveReviewerRejectsOAuthOnlyAuth(t *testing.T) {
+func TestResolveReviewerAcceptsOAuthOnlyAuth(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
 	reg := llm.NewRegistry()
-	reg.Register(oauthFakeClaudeProvider{FakeClaudeProvider: testutil.FakeClaudeProvider{Script: script}})
-	// An OAuth-only Claude installation is generally ready but --bare cannot
-	// authenticate, so ResolveReviewer must reject it to avoid selecting a
-	// reviewer that provider-fails on every eligible request.
-	if _, ok, _ := ResolveReviewer(reg, ""); ok {
-		t.Fatalf("ResolveReviewer with OAuth-only auth = true, want false (bare auth unusable)")
+	provider := oauthFakeClaudeProvider{FakeClaudeProvider: testutil.FakeClaudeProvider{Script: script}}
+	reg.Register(provider)
+	reviewer, ok, reason := ResolveReviewer(reg, "")
+	if !ok || reviewer.Provider == nil || reviewer.Provider.Name() != "claude" {
+		t.Fatalf("ResolveReviewer with OAuth-only auth = (%+v, %t, %q), want Claude reviewer", reviewer, ok, reason)
 	}
 }
 
@@ -530,13 +511,6 @@ func TestResolveReviewerFailureReasons(t *testing.T) {
 		t.Fatalf("ResolveReviewer(unknown explicit) = ok:%t reason:%q, want configured model reason", ok, reason)
 	}
 
-	filtered := authCheckedReviewerProvider{
-		reviewerCapableProvider: provider,
-		bareAuth:                false,
-	}
-	if _, ok, reason := ResolveReviewer(newReviewerRegistry(t, filtered), ""); ok || !strings.Contains(reason, "authentication") {
-		t.Fatalf("ResolveReviewer(auth filtered) = ok:%t reason:%q, want auth reason", ok, reason)
-	}
 }
 
 func TestClassifyAllow(t *testing.T) {

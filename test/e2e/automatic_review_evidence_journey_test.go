@@ -272,7 +272,7 @@ func assertAutomaticReviewUnavailableSessionNotice(t *testing.T) {
 			"printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"provider-session\"}'\n",
 	)
 	registry := llm.NewRegistry()
-	registry.Register(oauthFakeClaude{FakeClaudeProvider: testutil.FakeClaudeProvider{Script: providerScript}})
+	registry.Register(unavailableReviewFakeClaude{FakeClaudeProvider: testutil.FakeClaudeProvider{Script: providerScript}})
 
 	cfg := config.NewDefault()
 	cfg.Defaults.AutomaticReviewEnabled = true

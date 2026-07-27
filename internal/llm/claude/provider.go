@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -38,12 +37,6 @@ type Provider struct {
 	runner  clirun.CommandRunner
 	// binary overrides the CLI executable name; empty means defaultBinary.
 	binary string
-	// bareAuthOK is cached by CheckReadiness and reports whether the
-	// authentication method is usable in a --bare subprocess launch (which
-	// skips keychain, settings, and OAuth). CheckBareAuth returns it so
-	// ResolveReviewer can reject an OAuth-only Claude installation whose
-	// general readiness would otherwise pass.
-	bareAuthOK bool
 }
 
 func (p *Provider) Name() string { return "claude" }
@@ -206,17 +199,11 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 	var status authStatus
 	if parseErr := json.Unmarshal(out, &status); parseErr == nil {
 		if status.LoggedIn {
-			p.mu.Lock()
-			p.bareAuthOK = isBareAuthUsable(status)
-			p.mu.Unlock()
 			return llm.ProviderReadiness{
 				Ready:  true,
 				Detail: formatReadyAuthDetail(status),
 			}
 		}
-		p.mu.Lock()
-		p.bareAuthOK = false
-		p.mu.Unlock()
 		return llm.ProviderReadiness{
 			Ready:  false,
 			Detail: "not authenticated",
@@ -224,9 +211,6 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 		}
 	}
 
-	p.mu.Lock()
-	p.bareAuthOK = false
-	p.mu.Unlock()
 	if err != nil {
 		return llm.ProviderReadiness{
 			Ready:  false,
@@ -238,42 +222,6 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 		Ready:  false,
 		Detail: fmt.Sprintf("could not parse 'claude auth status --json' output: %q", strings.TrimSpace(string(out))),
 		Remedy: "Run 'claude auth login'",
-	}
-}
-
-// CheckBareAuth reports whether the cached authentication method is usable in
-// a --bare subprocess launch. --bare skips keychain reads, settings loading,
-// and OAuth, so only ANTHROPIC_API_KEY in the environment (inherited by the
-// subprocess) or an API-key status explicitly identifying an environment
-// source can
-// authenticate the hidden reviewer. Returns false when CheckReadiness has not
-// run or determined the auth is incompatible.
-func (p *Provider) CheckBareAuth() bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.bareAuthOK
-}
-
-// isBareAuthUsable reports whether the auth status is compatible with a
-// --bare launch. ANTHROPIC_API_KEY in the environment always works because the
-// subprocess inherits it. An API-key auth method also works when its reported
-// source explicitly identifies the environment. OAuth, keychain, helper, and
-// settings-sourced methods are never usable with --bare.
-func isBareAuthUsable(status authStatus) bool {
-	if os.Getenv("ANTHROPIC_API_KEY") != "" {
-		return true
-	}
-	if status.AuthMethod != "api_key" {
-		return false
-	}
-	source := strings.NewReplacer("-", "_", " ", "_").Replace(
-		strings.ToLower(strings.TrimSpace(status.APIKeySource)),
-	)
-	switch source {
-	case "anthropic_api_key", "env", "environment", "environment_variable":
-		return true
-	default:
-		return false
 	}
 }
 
@@ -467,13 +415,12 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	args = append(args, "--include-partial-messages")
 	args = applyStreamingOpts(args, opts)
 
-	// --bare skips hooks, LSP, plugin sync, attribution, auto-memory,
-	// background prefetches, keychain reads, and CLAUDE.md auto-discovery.
-	// It ensures the hidden reviewer's context contains only the static
-	// review policy and the declared execution-context fields, with no
-	// project-injected instructions that could alter the classification.
+	// --safe-mode disables CLAUDE.md, skills, plugins, hooks, MCP servers,
+	// agents, and other customizations while retaining normal authentication.
+	// It ensures the hidden reviewer's context contains only the static review
+	// policy and declared execution-context fields.
 	if opts.NoCustomization {
-		args = InsertAfterBinary(args, "--bare")
+		args = InsertAfterBinary(args, "--safe-mode")
 	}
 
 	if opts.DangerouslySkipPerms {

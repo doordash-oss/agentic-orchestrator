@@ -272,6 +272,23 @@ func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
 	}
 }
 
+// IsAutomaticReviewHandler reports whether h uses a permission policy whose
+// undecided Bash requests may be sent through automatic review. In addition to
+// the general phase handlers, Ask Me Anything chat deliberately defers Bash to
+// the same user-facing permission UI and therefore participates in review.
+//
+// Keep this separate from IsGeneralPhaseHandler: AMA chat must not inherit
+// unrelated general-phase exceptions such as safe-create approval.
+func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
+	if guard, ok := h.(*SizeGuardHandler); ok {
+		h = guard.Inner
+	}
+	if _, ok := h.(*AMAHandler); ok {
+		return true
+	}
+	return IsGeneralPhaseHandler(h)
+}
+
 // ReadOnlyHandler auto-approves read-only tools and Agent spawning, but
 // hard-denies all file modification tools.
 type ReadOnlyHandler struct{}

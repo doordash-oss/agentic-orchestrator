@@ -170,16 +170,11 @@ func TestDefaultOffClaudeTracerJourney(t *testing.T) {
 
 	t.Run("vertical_journey_crash_resume_retains_reviewer", func(t *testing.T) {
 		// Build a session with auto-review enabled and a fake Claude that
-		// allows. Snapshot the resolved reviewer identity. Simulate
-		// crash-resume with a provider whose bare-auth is no longer
-		// usable (e.g. switched from API key to OAuth). ResolveReviewer
-		// would reject this provider, but crash-resume uses RestoreReviewer
-		// which ignores bare-auth and restores the reviewer from the
-		// snapshot. The session model still resolves (ResolveModel does
-		// not check bare-auth), and the decorator is created. The restored
-		// reviewer's script exits immediately, so classification fails and
-		// defers to the human prompt — but the reviewer identity is
-		// retained from the original session, not re-resolved.
+		// allows. Snapshot the resolved reviewer identity, then simulate
+		// crash-resume after the provider process behavior changes. The
+		// restored reviewer's script exits immediately, so classification
+		// fails and defers to the human prompt — but the reviewer identity
+		// is retained from the original session, not re-resolved.
 		cfg := config.NewDefault()
 		cfg.Defaults.AutomaticReviewEnabled = true
 		reg := fakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
@@ -206,17 +201,13 @@ func TestDefaultOffClaudeTracerJourney(t *testing.T) {
 			t.Fatalf("expected non-empty ReviewerModel in snapshot")
 		}
 
-		// Simulate crash-resume: the provider's bare-auth changed (e.g.
-		// from API key to OAuth). The session model still resolves, but
-		// ResolveReviewer would reject this provider. The snapshot's
-		// reviewer identity is restored instead.
-		oauthReg := llm.NewRegistry()
-		oauthReg.Register(oauthFakeClaude{
-			FakeClaudeProvider: testutil.FakeClaudeProvider{
-				Script: testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeExitScriptBody()),
-			},
+		// The snapshot's reviewer identity is restored instead of selecting a
+		// different reviewer from current workspace defaults.
+		changedReg := llm.NewRegistry()
+		changedReg.Register(testutil.FakeClaudeProvider{
+			Script: testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeExitScriptBody()),
 		})
-		pr.Registry = oauthReg
+		pr.Registry = changedReg
 		_, _, sessOpts2, err := pr.BuildSession(agent.BuildSessionOpts{
 			Model:       "haiku",
 			Prompt:      "test",
@@ -332,14 +323,13 @@ func TestAutomaticReviewTransparencyJourney(t *testing.T) {
 	}
 }
 
-// oauthFakeClaude wraps FakeClaudeProvider but reports bare auth as
-// unusable, simulating a Claude installation that switched from API key
-// to OAuth between the original session and crash-resume.
-type oauthFakeClaude struct {
+// unavailableReviewFakeClaude wraps FakeClaudeProvider but does not attest to
+// isolated tool-less review support.
+type unavailableReviewFakeClaude struct {
 	testutil.FakeClaudeProvider
 }
 
-func (oauthFakeClaude) CheckBareAuth() bool { return false }
+func (unavailableReviewFakeClaude) SupportsNativeToollessReview() bool { return false }
 
 // fakeRegistry creates a Registry with a single FakeClaudeProvider running a
 // script built from the given body.

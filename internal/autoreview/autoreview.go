@@ -155,8 +155,6 @@ func resolveAutomaticReviewer(registry *llm.Registry) (Reviewer, bool, string) {
 	switch {
 	case eligibility.detected == 0:
 		return Reviewer{}, false, "no supported reviewer provider is available"
-	case len(providers) == 0 && eligibility.authFiltered > 0:
-		return Reviewer{}, false, "reviewer authentication is unavailable in isolated mode"
 	case len(providers) == 0:
 		return Reviewer{}, false, "no detected provider supports isolated tool-less review"
 	default:
@@ -205,9 +203,8 @@ func resolveExplicitReviewer(registry *llm.Registry, selector string) (Reviewer,
 }
 
 type reviewerEligibility struct {
-	detected     int
-	authFiltered int
-	rejections   map[string]string
+	detected   int
+	rejections map[string]string
 }
 
 func eligibleReviewerProviders(registry *llm.Registry) (map[string]llm.LLMProvider, reviewerEligibility) {
@@ -225,11 +222,6 @@ func eligibleReviewerProviders(registry *llm.Registry) (map[string]llm.LLMProvid
 		}
 		if len(reviewerCatalog(provider)) == 0 {
 			eligibility.rejections[provider.Name()] = "reviewer model catalog is empty"
-			continue
-		}
-		if checker, ok := provider.(llm.BareAuthChecker); ok && !checker.CheckBareAuth() {
-			eligibility.authFiltered++
-			eligibility.rejections[provider.Name()] = "authentication is unavailable in isolated mode"
 			continue
 		}
 		result[provider.Name()] = provider
@@ -582,10 +574,10 @@ func buildReviewCommand(reviewer Reviewer, req ClassifyRequest) (args []string, 
 		return nil, nil, nil, errors.New("build command: provider returned no command")
 	}
 
-	// Inherit the parent environment minus provider-excluded vars. Claude also
-	// receives its isolated state directory explicitly; OpenCode and Codex add
-	// their provider-specific environment through BuildCommand.
-	env = buildIsolatedEnv(reviewer.Provider, configDir, cmdEnv)
+	// Inherit the parent environment minus provider-excluded vars. OpenCode and
+	// Codex add their provider-specific isolated state through BuildCommand;
+	// Claude safe mode isolates customization while retaining its auth state.
+	env = buildIsolatedEnv(reviewer.Provider, cmdEnv)
 	return cmdArgs, env, cleanup, nil
 }
 
@@ -607,22 +599,18 @@ func providerTempKey(name string) string {
 
 // buildIsolatedEnv returns the subprocess environment for the hidden reviewer:
 // the parent environment with provider-excluded prefixes stripped and
-// provider-specific overrides applied. Claude's config directory is redirected
-// so no project or user Claude customization is loaded.
-func buildIsolatedEnv(provider llm.LLMProvider, configDir string, providerEnv []string) []string {
+// provider-specific overrides applied. Provider launch flags enforce the
+// no-customization boundary without replacing authentication state.
+func buildIsolatedEnv(provider llm.LLMProvider, providerEnv []string) []string {
 	excludePrefixes := provider.EnvVarsToExclude()
-	overrides := make(map[string]struct{}, len(providerEnv)+1)
-	isClaude := strings.EqualFold(provider.Name(), "claude")
-	if isClaude {
-		overrides["CLAUDE_CONFIG_DIR"] = struct{}{}
-	}
+	overrides := make(map[string]struct{}, len(providerEnv))
 	for _, kv := range providerEnv {
 		if key, _, ok := strings.Cut(kv, "="); ok && key != "" {
 			overrides[key] = struct{}{}
 		}
 	}
 	base := os.Environ()
-	env := make([]string, 0, len(base)+len(providerEnv)+1)
+	env := make([]string, 0, len(base)+len(providerEnv))
 	for _, kv := range base {
 		if hasExcludedPrefix(kv, excludePrefixes) {
 			continue
@@ -632,9 +620,6 @@ func buildIsolatedEnv(provider llm.LLMProvider, configDir string, providerEnv []
 			continue
 		}
 		env = append(env, kv)
-	}
-	if isClaude {
-		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
 	}
 	env = append(env, providerEnv...)
 	return env

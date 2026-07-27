@@ -1133,7 +1133,7 @@ func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, e
 	if !enabled {
 		return composed
 	}
-	if !permission.IsGeneralPhaseHandler(original) {
+	if !permission.IsAutomaticReviewHandler(original) {
 		return composed
 	}
 	return &autoReviewPermissionDecorator{

@@ -167,10 +167,10 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 	}
 }
 
-// TestAutomaticReviewIntentionalSilenceJourneys proves that memoized,
-// serialized-cache, and unreviewable request paths add no status or event. An
-// unavailable reviewer is the exception at session scope: it emits one build
-// notice, but still produces no per-request review attempt.
+// TestAutomaticReviewIntentionalSilenceJourneys proves that memoized ALLOW,
+// serialized-ALLOW-cache, and unreviewable request paths add no status or
+// event. An unavailable reviewer emits one build notice; reviewable requests
+// also explain the human fallback, while unreviewable requests remain silent.
 func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 	if testing.Short() {
 		t.Skip("journey launches deterministic provider subprocesses")

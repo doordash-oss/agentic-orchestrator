@@ -492,12 +492,62 @@ func TestDecoratorDeferReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestDecoratorDeferExplainsHumanPrompt(t *testing.T) {
+	var statuses []string
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeDeferProvider(t), Model: "haiku[200K]"},
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			return autoreview.Result{Decision: autoreview.Defer, Outcome: autoreview.OutcomeDefer}
+		},
+		appendStatus: func(status string) error {
+			statuses = append(statuses, status)
+			return nil
+		},
+	}
+
+	for range 2 {
+		got, err := d.CanUseTool(bashReq(`{"command":"curl https://example.com"}`))
+		if err != nil || got.Behavior != "" {
+			t.Fatalf("DEFER should preserve human decision: got %+v err %v", got, err)
+		}
+	}
+	want := "Auto-review deferred Bash to you: curl https://example.com"
+	if len(statuses) != 2 || statuses[0] != want || statuses[1] != want {
+		t.Fatalf("defer statuses = %q, want one explanation per human prompt", statuses)
+	}
+}
+
 func TestDecoratorReviewerFailureDefers(t *testing.T) {
 	inner := &stubHandler{}
 	d := &autoReviewPermissionDecorator{inner: inner, reviewer: autoreview.Reviewer{Provider: fakeMalformedProvider(t), Model: "haiku[200K]"}}
 	got, err := d.CanUseTool(bashReq(`{"command":"curl https://example.com"}`))
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("reviewer failure should defer: got %+v err %v", got, err)
+	}
+}
+
+func TestDecoratorReviewerFailureExplainsHumanPrompt(t *testing.T) {
+	var statuses []string
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			return autoreview.Result{Outcome: autoreview.OutcomeTimeout, FailureReason: "review attempt timed out"}
+		},
+		appendStatus: func(status string) error {
+			statuses = append(statuses, status)
+			return nil
+		},
+	}
+
+	got, err := d.CanUseTool(bashReq(`{"command":"curl https://example.com"}`))
+	if err != nil || got.Behavior != "" {
+		t.Fatalf("reviewer failure should defer: got %+v err %v", got, err)
+	}
+	want := "Auto-review failed (timeout); asking you about Bash: curl https://example.com"
+	if len(statuses) != 1 || statuses[0] != want {
+		t.Fatalf("failure statuses = %q, want %q", statuses, want)
 	}
 }
 
@@ -1138,6 +1188,79 @@ func TestDecoratorNoReviewerDefersLongTail(t *testing.T) {
 	got, err := d.CanUseTool(bashReq(`{"command":"curl https://example.com"}`))
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("no reviewer long tail = %+v, %v; want human deferral", got, err)
+	}
+}
+
+func TestDecoratorUnavailableReviewerExplainsHumanPrompt(t *testing.T) {
+	var statuses []string
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{},
+		appendStatus: func(status string) error {
+			statuses = append(statuses, status)
+			return nil
+		},
+	}
+	got, err := d.CanUseTool(bashReq(`{"command":"curl https://example.com"}`))
+	if err != nil || got.Behavior != "" {
+		t.Fatalf("no reviewer long tail = %+v, %v; want human deferral", got, err)
+	}
+	want := "Auto-review failed (unavailable); asking you about Bash: curl https://example.com"
+	if len(statuses) != 1 || statuses[0] != want {
+		t.Fatalf("unavailable statuses = %q, want %q", statuses, want)
+	}
+}
+
+func TestDecoratorUnavailableReviewerKeepsUnreviewableCommandsSilent(t *testing.T) {
+	var statuses []string
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{},
+		appendStatus: func(status string) error {
+			statuses = append(statuses, status)
+			return nil
+		},
+	}
+
+	for _, command := range []string{
+		strings.Repeat("x", permission.GuardrailMaxCommandLen+1),
+		"go test \xff",
+	} {
+		got, err := d.CanUseTool(bashReq(command))
+		if err != nil || got.Behavior != "" {
+			t.Fatalf("unreviewable command = %+v, %v; want human deferral", got, err)
+		}
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("unreviewable commands added statuses: %q", statuses)
+	}
+}
+
+func TestDecoratorOpenCircuitExplainsEveryHumanPrompt(t *testing.T) {
+	var statuses []string
+	d := &autoReviewPermissionDecorator{
+		inner:    deferHandler{},
+		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
+		classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+			return autoreview.Result{Outcome: autoreview.OutcomeProviderError, FailureReason: "provider failed"}
+		},
+		appendStatus: func(status string) error {
+			statuses = append(statuses, status)
+			return nil
+		},
+	}
+	for _, command := range []string{
+		"curl https://example.com/a",
+		"curl https://example.com/b",
+		"curl https://example.com/c",
+	} {
+		got, err := d.CanUseTool(bashReq(`{"command":"` + command + `"}`))
+		if err != nil || got.Behavior != "" {
+			t.Fatalf("command %q = %+v, %v; want human deferral", command, got, err)
+		}
+	}
+	if len(statuses) != 3 || !strings.Contains(statuses[2], "failed (unavailable)") {
+		t.Fatalf("circuit-breaker statuses = %q, want explanation for all three prompts", statuses)
 	}
 }
 

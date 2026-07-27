@@ -265,7 +265,11 @@ zero-tool mode. Exact `ALLOW` and `DEFER` results are byte-exact, session-only
 cached and create no durable permission rule. After two consecutive failed
 model attempts, a session circuit breaker stops launching the reviewer and
 returns later long-tail requests to the human prompt. It does not disable the
-deterministic fast path.
+deterministic fast path. The reviewer policy treats fully read-only local
+inspection as eligible for automatic approval even when it uses compound shell
+syntax or reads outside the working directory. Writable roots constrain writes,
+not reads; mutation, active network effects, intentional secret access, process
+signals, executable consumers, and ambiguous effects defer to a human.
 
 The guardrail treats repo-controlled build and test code as trusted-by-design:
 auto-approving commands such as `make test` or `go generate` may execute code
@@ -277,12 +281,15 @@ A deterministic approval adds
 `Auto-approved Bash (fast path): <redacted summary>` and emits a bounded
 `fast_path` operator event with empty provider/model fields. A fresh model
 `ALLOW` adds `Auto-approved Bash: <redacted summary>` and each actual model
-attempt emits one bounded operator event. Existing decisions, unreviewable
-commands, model cache hits, and disabled paths emit no per-request status or
-event. When automatic review is enabled but no reviewer resolves, Agentico
-emits one session-build status and operator event while deterministic commands
-continue to fast-path. The circuit breaker likewise emits one final operator
-event when it disables the model path.
+attempt emits one bounded operator event. A fresh or cached model `DEFER`
+explains that the Bash request was returned to the user; reviewer failures,
+including an unavailable reviewer or open circuit, likewise explain why human
+approval is needed. Existing decisions, unreviewable commands, model `ALLOW`
+cache hits, and disabled paths emit no per-request status or event. When
+automatic review is enabled but no reviewer resolves, Agentico also emits one
+session-build status and operator event while deterministic commands continue
+to fast-path. The circuit breaker likewise emits one final operator event when
+it disables the model path.
 
 Automatic review does not sandbox commands or guarantee their safety. The
 deterministic layer is only a velocity optimization; for everything outside

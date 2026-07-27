@@ -162,17 +162,20 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 		d.recordFastPathAllow(req, command)
 		return ports.PermissionDecision{Behavior: permission.DecisionAllow}, nil
 	}
-	if d.reviewer.Provider == nil {
+	if !permission.ReviewableBashCommand(command) {
 		return decision, nil
 	}
-	if !permission.ReviewableBashCommand(command) {
+	if d.reviewer.Provider == nil {
+		d.persistAutomaticReviewStatus(req, permission.AutomaticReviewFailureStatusLine(command, "unavailable"))
 		return decision, nil
 	}
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	classificationRan := false
 	result, ok, breakerTripped := d.sessionState().review(ctx, command, func(classifyCtx context.Context) (autoreview.Decision, bool) {
+		classificationRan = true
 		startedAt := time.Now()
 		classifyReq := autoreview.ClassifyRequest{
 			ToolName:      req.ToolName,
@@ -200,17 +203,33 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 
 		var statusPersisted *bool
 		statusFailureClass, statusFailureReason := "", ""
-		if detailed.Outcome == autoreview.OutcomeAllow && classifyCtx.Err() == nil {
-			statusPersisted, statusFailureClass, statusFailureReason = d.persistAutomaticReviewStatus(
-				req,
-				permission.AutomaticReviewStatusLine(command),
-			)
+		if classifyCtx.Err() == nil {
+			var status string
+			switch detailed.Outcome {
+			case autoreview.OutcomeAllow:
+				status = permission.AutomaticReviewStatusLine(command)
+			case autoreview.OutcomeDefer:
+				status = permission.AutomaticReviewDeferStatusLine(command)
+			default:
+				status = permission.AutomaticReviewFailureStatusLine(command, string(detailed.Outcome))
+			}
+			statusPersisted, statusFailureClass, statusFailureReason = d.persistAutomaticReviewStatus(req, status)
 		}
 		d.emitAutomaticReview(req, detailed, time.Since(startedAt), statusPersisted, statusFailureClass, statusFailureReason)
 		return detailed.Decision, detailed.Outcome == autoreview.OutcomeAllow || detailed.Outcome == autoreview.OutcomeDefer
 	})
 	if breakerTripped {
 		d.emitReviewerUnavailable(req, "circuit_breaker", automaticReviewCircuitBreakerReason)
+	}
+	if ok && result == autoreview.Defer {
+		// Fresh classifications already append this status inside the callback.
+		// Cached DEFER decisions still need one explanation for each human prompt.
+		if !classificationRan {
+			d.persistAutomaticReviewStatus(req, permission.AutomaticReviewDeferStatusLine(command))
+		}
+	}
+	if !ok && !classificationRan && ctx.Err() == nil {
+		d.persistAutomaticReviewStatus(req, permission.AutomaticReviewFailureStatusLine(command, "unavailable"))
 	}
 	if !ok || result != autoreview.Allow {
 		return decision, nil

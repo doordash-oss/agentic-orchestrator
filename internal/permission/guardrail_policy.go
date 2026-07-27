@@ -15,6 +15,7 @@
 package permission
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -79,6 +80,174 @@ func classifyByPolicy(name string, seg *parsedSegment, workDir string, writableR
 		return applyPolicy(&policy, seg.args, workDir, writableRoots), true
 	}
 	return false, false
+}
+
+// classifyProcessDiagnostic recognizes a deliberately small read-only shell
+// grammar for inspecting one literal process ID. The first command must be ps
+// or lsof; optional pipeline consumers are stdin-only grep and head filters.
+// General process listing, environment output, filesystem operands, repeat
+// modes, and arbitrary pipeline consumers all remain outside the fast path.
+func classifyProcessDiagnostic(parsed *parsedCommand) bool {
+	if parsed == nil || len(parsed.segments) == 0 {
+		return false
+	}
+	first := &parsed.segments[0]
+	if first.name != "ps" && first.name != "lsof" {
+		return false
+	}
+	if len(parsed.connectors) != len(parsed.segments)-1 {
+		return false
+	}
+	for _, connector := range parsed.connectors {
+		if connector != tokPipe {
+			return false
+		}
+	}
+	for i := range parsed.segments {
+		seg := &parsed.segments[i]
+		if seg.nameQuoted || len(seg.assignments) != 0 || !validateRedirects(seg.redirects) {
+			return false
+		}
+		switch {
+		case i == 0 && seg.name == "ps":
+			if !classifySpecificPIDPS(seg.args) {
+				return false
+			}
+		case i == 0 && seg.name == "lsof":
+			if !classifySpecificPIDLSOF(seg.args) {
+				return false
+			}
+		case i > 0 && seg.name == "grep":
+			if !classifyStdinGrep(seg.args) {
+				return false
+			}
+		case i > 0 && seg.name == "head":
+			if !classifyStdinHead(seg.args) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func classifySpecificPIDPS(args []string) bool {
+	pidSeen := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-p":
+			if pidSeen || i+1 >= len(args) || !isPositivePID(args[i+1]) {
+				return false
+			}
+			pidSeen = true
+			i++
+		case strings.HasPrefix(arg, "-p") && len(arg) > 2:
+			if pidSeen || !isPositivePID(arg[2:]) {
+				return false
+			}
+			pidSeen = true
+		case arg == "-o":
+			if i+1 >= len(args) || !safePSOutputFields(args[i+1]) {
+				return false
+			}
+			i++
+		case strings.HasPrefix(arg, "-o") && len(arg) > 2:
+			if !safePSOutputFields(arg[2:]) {
+				return false
+			}
+		case arg == "-w" || arg == "-ww":
+		default:
+			return false
+		}
+	}
+	return pidSeen
+}
+
+func classifySpecificPIDLSOF(args []string) bool {
+	pidSeen := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-p":
+			if pidSeen || i+1 >= len(args) || !isPositivePID(args[i+1]) {
+				return false
+			}
+			pidSeen = true
+			i++
+		case strings.HasPrefix(arg, "-p") && len(arg) > 2:
+			if pidSeen || !isPositivePID(arg[2:]) {
+				return false
+			}
+			pidSeen = true
+		case arg == "-n" || arg == "-P" || arg == "-a":
+		default:
+			return false
+		}
+	}
+	return pidSeen
+}
+
+func isPositivePID(value string) bool {
+	pid, err := strconv.ParseUint(value, 10, 31)
+	return err == nil && pid > 0
+}
+
+func safePSOutputFields(value string) bool {
+	if value == "" {
+		return false
+	}
+	safe := map[string]bool{
+		"pid": true, "ppid": true, "pgid": true, "sid": true,
+		"uid": true, "user": true, "stat": true, "state": true,
+		"etime": true, "time": true, "comm": true, "command": true, "args": true,
+	}
+	for _, field := range strings.Split(value, ",") {
+		field = strings.TrimSuffix(strings.TrimSpace(field), "=")
+		if !safe[field] {
+			return false
+		}
+	}
+	return true
+}
+
+func classifyStdinGrep(args []string) bool {
+	patterns := 0
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-i", "--ignore-case", "-E", "--extended-regexp", "-F", "--fixed-strings", "-v", "--invert-match":
+		case "-e", "--regexp":
+			if i+1 >= len(args) {
+				return false
+			}
+			patterns++
+			i++
+		default:
+			if strings.HasPrefix(args[i], "-") || patterns != 0 {
+				return false
+			}
+			patterns++
+		}
+	}
+	return patterns == 1
+}
+
+func classifyStdinHead(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	if len(args) == 1 && strings.HasPrefix(args[0], "-") && isPositiveLineCount(args[0][1:]) {
+		return true
+	}
+	return len(args) == 2 &&
+		(args[0] == "-n" || args[0] == "--lines") &&
+		isPositiveLineCount(args[1])
+}
+
+func isPositiveLineCount(value string) bool {
+	count, err := strconv.ParseUint(value, 10, 31)
+	return err == nil && count > 0
 }
 
 // applyPolicy checks a command's arguments against its policy. Flags are

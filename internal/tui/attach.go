@@ -3781,7 +3781,7 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 				continue
 			}
 			statusStyle := MutedStyle
-			if strings.HasPrefix(msg.Status.Message, "Auto-approved Bash: ") {
+			if isAutomaticReviewStatus(msg.Status.Message) {
 				statusStyle = automaticReviewStatusStyle
 			}
 			b.WriteString(statusStyle.Render(fmt.Sprintf("  [status] %s", msg.Status.Message)))

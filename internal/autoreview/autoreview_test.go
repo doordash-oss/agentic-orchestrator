@@ -183,6 +183,29 @@ func TestReviewPromptContainsOnlyMinimalContext(t *testing.T) {
 	}
 }
 
+func TestReviewPromptCalibratesReadOnlyInspectionAndWritableRoots(t *testing.T) {
+	prompt := reviewPromptWithNonce(ClassifyRequest{
+		ToolName: "Bash",
+		Command:  "find /tmp/runtime -type f | head -20",
+		WorkDir:  "/tmp/work",
+	}, "0123456789abcdef")
+
+	for _, want := range []string{
+		"ALLOW read-only local inspection",
+		"every execution path and pipeline segment is read-only",
+		"Reading paths outside the working directory is allowed",
+		"Writable roots constrain writes only",
+		"DEFER if any execution path can write, delete, rename",
+		"access credentials or secrets intentionally",
+		"execute discovered content",
+		"Writable roots: none (writes are not authorized; reads are not limited by this field)",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("reviewPrompt missing safety policy %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestReviewPromptTreatsInjectedCommandAsSanitizedUntrustedData(t *testing.T) {
 	const nonce = "0123456789abcdef"
 	prompt := reviewPromptWithNonce(ClassifyRequest{

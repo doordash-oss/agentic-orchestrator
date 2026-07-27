@@ -1000,6 +1000,22 @@ func TestLivePreviewTranscriptRowsIncludeAutomaticApprovalStatusInOrder(t *testi
 	}
 }
 
+func TestLivePreviewTranscriptRowsIncludeAutomaticHumanReviewStatus(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{
+		"Auto-review deferred Bash to you: curl https://example.com",
+		"Auto-review failed (timeout); asking you about Bash: curl https://example.com",
+	} {
+		rows := livePreviewTranscriptRows([]llm.SDKMessage{{
+			Type: "status", Status: &llm.StatusMessage{Message: status},
+		}}, false)
+		if len(rows) != 1 || rows[0].kind != livePreviewTranscriptApproval || rows[0].text != status {
+			t.Errorf("status %q produced rows %+v, want one visible automatic-review row", status, rows)
+		}
+	}
+}
+
 func TestLivePreviewToolResultsTruncateToSingleLine(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}

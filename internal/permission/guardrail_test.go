@@ -167,6 +167,45 @@ func TestGuardrailFastPath_ParserBoundary(t *testing.T) {
 	}
 }
 
+func TestGuardrailFastPath_ProcessDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{"ps_specific_pid", "ps -p 12715", true},
+		{"ps_specific_pid_fields", "ps -p 12715 -o pid,stat,etime,command", true},
+		{"ps_specific_pid_equals_headers", "ps -p12715 -o pid=,ppid=,stat=,etime=,command=", true},
+		{"lsof_specific_pid", "lsof -p 12715", true},
+		{"lsof_specific_pid_no_resolution", "lsof -n -P -p12715", true},
+		{"lsof_filtered_and_bounded", "lsof -p 12715 2>/dev/null | grep -i -E 'log|txt|jsonl|kb|knowledge' | head -30", true},
+		{"lsof_bounded_long_form", "lsof -p12715 | head -n 30", true},
+		{"ps_all_processes", "ps aux", false},
+		{"ps_environment", "ps -p 12715 -o env", false},
+		{"ps_non_literal_pid", "ps -p $$ -o pid,command", false},
+		{"ps_zero_pid", "ps -p 0 -o pid,command", false},
+		{"lsof_without_pid", "lsof", false},
+		{"lsof_network_scan", "lsof -i", false},
+		{"lsof_repeat", "lsof -p 12715 -r 1", false},
+		{"lsof_path_operand", "lsof -p 12715 /etc/passwd", false},
+		{"grep_reads_file", "lsof -p 12715 | grep root /etc/passwd", false},
+		{"head_reads_file", "lsof -p 12715 | head -30 /etc/passwd", false},
+		{"unsafe_pipeline_consumer", "lsof -p 12715 | xargs rm", false},
+		{"unsafe_followup", "lsof -p 12715 ; rm -rf /", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := permission.GuardrailFastPath(tt.command, t.TempDir(), nil)
+			if got != tt.want {
+				t.Errorf("GuardrailFastPath(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGuardrailFastPath_CommandPolicy(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1123,6 +1162,38 @@ func TestAutomaticReviewFastPathStatusLineIsDistinctAndBounded(t *testing.T) {
 	}
 	if !utf8.ValidString(got) || !strings.HasSuffix(got, "...") {
 		t.Fatalf("AutomaticReviewFastPathStatusLine() = %q, want valid bounded truncation", got)
+	}
+}
+
+func TestAutomaticReviewHumanPromptStatusLinesAreDistinctAndBounded(t *testing.T) {
+	t.Parallel()
+
+	command := strings.Repeat("界", 100)
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{
+			name: "defer",
+			got:  permission.AutomaticReviewDeferStatusLine(command),
+			want: "Auto-review deferred Bash to you: ",
+		},
+		{
+			name: "failure",
+			got:  permission.AutomaticReviewFailureStatusLine(command, "timeout"),
+			want: "Auto-review failed (timeout); asking you about Bash: ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.HasPrefix(tt.got, tt.want) {
+				t.Fatalf("status = %q, want prefix %q", tt.got, tt.want)
+			}
+			if len(tt.got) > 200 || !utf8.ValidString(tt.got) || !strings.Contains(tt.got, "...") {
+				t.Fatalf("status = %q, want bounded valid UTF-8 with truncation", tt.got)
+			}
+		})
 	}
 }
 

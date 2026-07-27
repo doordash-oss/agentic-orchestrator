@@ -30,6 +30,7 @@ const GuardrailMaxCommandLen = 4096
 const (
 	automaticReviewStatusPrefix         = "Auto-approved Bash: "
 	automaticReviewFastPathStatusPrefix = "Auto-approved Bash (fast path): "
+	automaticReviewDeferStatusPrefix    = "Auto-review deferred Bash to you: "
 	automaticReviewStatusLimit          = 200
 )
 
@@ -65,6 +66,9 @@ func GuardrailFastPath(command, workDir string, writableRoots []string) bool {
 	}
 	if len(parsed.segments) == 0 {
 		return false
+	}
+	if classifyProcessDiagnostic(parsed) {
+		return true
 	}
 	return classifyParsedCommand(parsed, workDir, writableRoots)
 }
@@ -112,6 +116,24 @@ func AutomaticReviewStatusLine(command string) string {
 // bytes with a distinct prefix.
 func AutomaticReviewFastPathStatusLine(command string) string {
 	return automaticReviewFastPathStatusPrefix + automaticReviewCommandSummary(command, automaticReviewFastPathStatusPrefix)
+}
+
+// AutomaticReviewDeferStatusLine returns the durable status shown immediately
+// before a model-reviewed Bash command is handed to the human permission UI.
+func AutomaticReviewDeferStatusLine(command string) string {
+	return automaticReviewDeferStatusPrefix + automaticReviewCommandSummary(command, automaticReviewDeferStatusPrefix)
+}
+
+// AutomaticReviewFailureStatusLine returns the durable status shown when an
+// operational reviewer outcome falls back to the human permission UI.
+func AutomaticReviewFailureStatusLine(command, outcome string) string {
+	outcome = AutomaticReviewBoundReason(outcome)
+	if outcome == "" {
+		outcome = "unknown"
+	}
+	outcome = boundAuditText(outcome, 32)
+	prefix := "Auto-review failed (" + outcome + "); asking you about Bash: "
+	return prefix + automaticReviewCommandSummary(command, prefix)
 }
 
 // AutomaticReviewBoundReason sanitizes a best-effort failure reason with the

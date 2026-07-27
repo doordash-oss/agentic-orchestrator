@@ -1051,17 +1051,29 @@ func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntim
 }
 
 func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
-	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
-		Models:             req.Models,
-		Effort:             req.Effort,
-		Inquireness:        feature.Inquireness(req.Inquireness),
-		Checkpoints:        req.Checkpoints,
-		InputNotifications: feature.InputNotificationsMode(req.InputNotifications),
-	}); err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
-	}
 	if t.store == nil {
 		return serverruntime.FeatureConfigUpdateResponse{}, errors.New("feature store is not available")
+	}
+	current, err := t.store.Load(featureID)
+	if err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
+	}
+	automaticReviewMode := feature.NormalizeAutomaticReviewMode(current.AutomaticReviewMode)
+	if req.AutomaticReviewMode != nil {
+		automaticReviewMode, err = feature.ParseAutomaticReviewMode(*req.AutomaticReviewMode)
+		if err != nil {
+			return serverruntime.FeatureConfigUpdateResponse{}, err
+		}
+	}
+	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
+		Models:              req.Models,
+		Effort:              req.Effort,
+		Inquireness:         feature.Inquireness(req.Inquireness),
+		Checkpoints:         req.Checkpoints,
+		InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
+		AutomaticReviewMode: automaticReviewMode,
+	}); err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
 	}
 	f, err := t.store.Load(featureID)
 	if err != nil {

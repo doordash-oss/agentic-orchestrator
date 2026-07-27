@@ -1712,6 +1712,21 @@ components:
         input_notifications:
           type: string
           enum: [default, enabled, muted]
+        automatic_review_mode:
+          type: string
+          enum: [default, enabled, disabled]
+    AutomaticReviewState:
+      type: object
+      required: [mode, enabled, source]
+      properties:
+        mode:
+          type: string
+          enum: [default, enabled, disabled]
+        enabled:
+          type: boolean
+        source:
+          type: string
+          enum: [global, feature]
     EffortConfig:
       x-go-type: config.EffortConfig
       x-go-type-import:
@@ -2330,6 +2345,7 @@ components:
         - type: object
           required:
             - models
+            - automatic_review
             - historical_runs
             - repo_status
             - timing
@@ -2347,6 +2363,8 @@ components:
               type: string
             models:
               $ref: "#/components/schemas/ModelDefaults"
+            automatic_review:
+              $ref: "#/components/schemas/AutomaticReviewState"
             active_run_detail:
               $ref: "#/components/schemas/RunSummary"
               x-go-type-skip-optional-pointer: false

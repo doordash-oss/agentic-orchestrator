@@ -129,6 +129,57 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	}
 }
 
+func TestFeatureAutomaticReviewReadModels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		mode        feature.AutomaticReviewMode
+		global      bool
+		wantEnabled bool
+		wantSource  string
+	}{
+		{"default global off", feature.AutomaticReviewDefault, false, false, "global"},
+		{"default global on", feature.AutomaticReviewDefault, true, true, "global"},
+		{"feature enabled", feature.AutomaticReviewEnabled, false, true, "feature"},
+		{"feature disabled", feature.AutomaticReviewDisabled, true, false, "feature"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store, f := seedReadFeature(t)
+			f.AutomaticReviewMode = feature.PersistAutomaticReviewMode(tt.mode)
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			opts := baseReadHandlerOptions(store)
+			opts.Config = &config.Config{Defaults: config.DefaultsConfig{AutomaticReviewEnabled: tt.global}}
+			handler := NewHandler(opts)
+
+			configBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/config")
+			current := configBody["current"].(map[string]any)
+			if got := current["automatic_review_mode"]; got != string(tt.mode) {
+				t.Errorf("config automatic_review_mode = %v, want %q", got, tt.mode)
+			}
+
+			detailBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+			detail := detailBody[entityFeature].(map[string]any)
+			state := detail["automatic_review"].(map[string]any)
+			if got := state["mode"]; got != string(tt.mode) {
+				t.Errorf("detail automatic_review.mode = %v, want %q", got, tt.mode)
+			}
+			if got := state["enabled"]; got != tt.wantEnabled {
+				t.Errorf("detail automatic_review.enabled = %v, want %v", got, tt.wantEnabled)
+			}
+			if got := state["source"]; got != tt.wantSource {
+				t.Errorf("detail automatic_review.source = %v, want %q", got, tt.wantSource)
+			}
+		})
+	}
+}
+
 func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	t.Parallel()
 	store := feature.NewStore(t.TempDir())

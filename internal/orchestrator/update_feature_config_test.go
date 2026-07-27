@@ -26,11 +26,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-// TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes verifies that calling
-// UpdateFeatureConfig on a quiescent feature overwrites Models, Inquireness,
-// and Checkpoints; fires the OnFeatureConfigChanged hook with the before/after
-// snapshots; and emits a ports.FeatureConfigChanged event on o.Events().
-func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
+// TestUpdateFeatureConfig_QuiescentWritesAllAxes verifies that calling
+// UpdateFeatureConfig on a quiescent feature overwrites every editable feature
+// configuration axis; fires the OnFeatureConfigChanged hook with the
+// before/after snapshots; and emits a ports.FeatureConfigChanged event.
+func TestUpdateFeatureConfig_QuiescentWritesAllAxes(t *testing.T) {
 	cases := []struct {
 		name   string
 		status feature.Status
@@ -46,8 +46,9 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &feature.Feature{
-				ID:     "feat-1",
-				Status: tc.status,
+				ID:                  "feat-1",
+				Status:              tc.status,
+				AutomaticReviewMode: feature.AutomaticReviewDisabled,
 				Models: config.ModelConfig{
 					Research: "old-research",
 				},
@@ -69,9 +70,10 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, hooks)
 
 			newInput := orchestrator.UpdateFeatureConfigInput{
-				Models:      config.ModelConfig{Research: "new-research", Planning: "new-planning"},
-				Inquireness: feature.InquirenessHigh,
-				Checkpoints: feature.Checkpoints{InquiryReview: true, ManualPublish: true},
+				Models:              config.ModelConfig{Research: "new-research", Planning: "new-planning"},
+				Inquireness:         feature.InquirenessHigh,
+				Checkpoints:         feature.Checkpoints{InquiryReview: true, ManualPublish: true},
+				AutomaticReviewMode: feature.AutomaticReviewEnabled,
 			}
 			if err := o.UpdateFeatureConfig("feat-1", newInput); err != nil {
 				t.Fatalf("UpdateFeatureConfig: %v", err)
@@ -89,6 +91,9 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 			if f.Checkpoints.RoadmapReview || f.Checkpoints.PhasePlanReview {
 				t.Errorf("Checkpoints overwritten to zero-valued planning gates — RoadmapReview/PhasePlanReview should now be false, got %+v", f.Checkpoints)
 			}
+			if got := feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode); got != feature.AutomaticReviewEnabled {
+				t.Errorf("AutomaticReviewMode = %q, want enabled", got)
+			}
 
 			if hookCount != 1 {
 				t.Errorf("hook fired %d times, want 1", hookCount)
@@ -104,6 +109,12 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 			}
 			if gotAfter.Models.Research != "new-research" {
 				t.Errorf("after.Models.Research = %q, want new-research", gotAfter.Models.Research)
+			}
+			if gotBefore.AutomaticReviewMode != feature.AutomaticReviewDisabled {
+				t.Errorf("before.AutomaticReviewMode = %q, want disabled", gotBefore.AutomaticReviewMode)
+			}
+			if gotAfter.AutomaticReviewMode != feature.AutomaticReviewEnabled {
+				t.Errorf("after.AutomaticReviewMode = %q, want enabled", gotAfter.AutomaticReviewMode)
 			}
 
 			events := drainEvents(o)
@@ -129,6 +140,9 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 				}
 				if gotBefore.Checkpoints == gotAfter.Checkpoints {
 					t.Errorf("before.Checkpoints == after.Checkpoints: %+v", gotBefore.Checkpoints)
+				}
+				if gotBefore.AutomaticReviewMode == gotAfter.AutomaticReviewMode {
+					t.Errorf("before.AutomaticReviewMode == after.AutomaticReviewMode: %q", gotBefore.AutomaticReviewMode)
 				}
 			}
 		})

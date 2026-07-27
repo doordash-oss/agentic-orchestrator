@@ -182,12 +182,13 @@ type ReviewDecisionRequest struct {
 }
 
 type FeatureConfigMutationRequest struct {
-	Models             config.ModelConfig      `json:"models,omitempty"`
-	Effort             config.EffortConfig     `json:"effort,omitempty"`
-	Inquireness        string                  `json:"inquireness,omitempty"`
-	Checkpoints        feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Pipeline           feature.PipelineProfile `json:"pipeline,omitempty"`
-	InputNotifications string                  `json:"input_notifications,omitempty"`
+	Models              config.ModelConfig      `json:"models,omitempty"`
+	Effort              config.EffortConfig     `json:"effort,omitempty"`
+	Inquireness         string                  `json:"inquireness,omitempty"`
+	Checkpoints         feature.Checkpoints     `json:"checkpoints,omitempty"`
+	Pipeline            feature.PipelineProfile `json:"pipeline,omitempty"`
+	InputNotifications  string                  `json:"input_notifications,omitempty"`
+	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`
 }
 
 type NeedUserInputDecisionRequest struct {
@@ -611,6 +612,9 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		return true
 	}
 	if !validatePipelineProfile(w, req.Pipeline) {
+		return true
+	}
+	if !validateAutomaticReviewMode(w, req.AutomaticReviewMode) {
 		return true
 	}
 	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
@@ -1121,6 +1125,17 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "risk_level must be low, medium, or high", nil)
 		return false
 	}
+}
+
+func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {
+	if raw == nil {
+		return true
+	}
+	if _, err := feature.ParseAutomaticReviewMode(*raw); err == nil {
+		return true
+	}
+	writeAPIError(w, http.StatusBadRequest, "bad_request", "automatic_review_mode must be default, enabled, or disabled", nil)
+	return false
 }
 
 func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, models config.ModelConfig, reg *llm.Registry) bool {

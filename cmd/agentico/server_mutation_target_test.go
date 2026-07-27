@@ -1161,6 +1161,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 		configPath: configPath,
 		store:      store,
 	}
+	automaticReviewMode := string(feature.AutomaticReviewEnabled)
 
 	result, err := target.UpdateFeatureConfig(f.ID, serverruntime.FeatureConfigMutationRequest{
 		Models: config.ModelConfig{
@@ -1176,7 +1177,8 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 			PhasePlanReview: true,
 			ManualPublish:   false,
 		},
-		InputNotifications: string(feature.InputNotificationsMuted),
+		InputNotifications:  string(feature.InputNotificationsMuted),
+		AutomaticReviewMode: &automaticReviewMode,
 	})
 	if err != nil {
 		t.Fatalf("UpdateFeatureConfig() error = %v", err)
@@ -1198,6 +1200,27 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	}
 	if updated.InputNotifications != feature.InputNotificationsMuted {
 		t.Fatalf("updated InputNotifications = %q, want muted override", updated.InputNotifications)
+	}
+	if got := feature.NormalizeAutomaticReviewMode(updated.AutomaticReviewMode); got != feature.AutomaticReviewEnabled {
+		t.Fatalf("updated AutomaticReviewMode = %q, want enabled", got)
+	}
+
+	if _, err := target.UpdateFeatureConfig(f.ID, serverruntime.FeatureConfigMutationRequest{
+		Models:             updated.Models,
+		Effort:             updated.Effort,
+		Inquireness:        string(updated.Inquireness),
+		Pipeline:           updated.Pipeline,
+		Checkpoints:        updated.Checkpoints,
+		InputNotifications: string(updated.InputNotifications),
+	}); err != nil {
+		t.Fatalf("UpdateFeatureConfig() preserving omitted automatic review mode: %v", err)
+	}
+	preserved, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load preserved feature: %v", err)
+	}
+	if got := feature.NormalizeAutomaticReviewMode(preserved.AutomaticReviewMode); got != feature.AutomaticReviewEnabled {
+		t.Fatalf("AutomaticReviewMode after omitted update = %q, want enabled", got)
 	}
 
 	loaded, err := config.Load(configPath)

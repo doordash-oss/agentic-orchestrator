@@ -112,7 +112,9 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 		policy = "on-request"
 	}
 	if opts.NativeToollessReview {
-		policy = "never"
+		// Managed installations may disallow "never". The reviewer still
+		// exposes no tools, and any unexpected approval request fails closed.
+		policy = "on-request"
 	}
 	return &Protocol{
 		opts:             opts,
@@ -404,7 +406,7 @@ func (p *Protocol) startThread() error {
 		req.Params = ThreadStartParams{
 			Model:                   model,
 			Cwd:                     p.opts.WorkDir,
-			ApprovalPolicy:          "never",
+			ApprovalPolicy:          p.approvalPolicy,
 			Sandbox:                 ptrSandboxMode(SandboxModeReadOnly),
 			Ephemeral:               true,
 			Config:                  nativeToollessThreadConfig(),
@@ -442,7 +444,7 @@ func (p *Protocol) startTurn(userPrompt string) error {
 				},
 				Model:          model,
 				Effort:         "low",
-				ApprovalPolicy: "never",
+				ApprovalPolicy: p.approvalPolicy,
 				SandboxPolicy: &SandboxPolicy{
 					Type:          "readOnly",
 					NetworkAccess: false,

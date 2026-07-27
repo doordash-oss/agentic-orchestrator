@@ -121,6 +121,9 @@ func TestCodexProtocol_NativeToollessReviewConfiguresOneEphemeralTurn(t *testing
 	if threadReq.Params.Sandbox == nil || *threadReq.Params.Sandbox != SandboxModeReadOnly {
 		t.Errorf("thread sandbox = %v, want read-only", threadReq.Params.Sandbox)
 	}
+	if threadReq.Params.ApprovalPolicy != "on-request" {
+		t.Errorf("thread approvalPolicy = %q, want on-request", threadReq.Params.ApprovalPolicy)
+	}
 	if threadReq.Params.Environments == nil || len(*threadReq.Params.Environments) != 0 {
 		t.Errorf("thread environments = %v, want explicit empty list", threadReq.Params.Environments)
 	}
@@ -149,8 +152,8 @@ func TestCodexProtocol_NativeToollessReviewConfiguresOneEphemeralTurn(t *testing
 	if turnReq.Params.Model != "gpt-5.4-mini" || turnReq.Params.Effort != "low" {
 		t.Errorf("turn model/effort = %q/%q, want gpt-5.4-mini/low", turnReq.Params.Model, turnReq.Params.Effort)
 	}
-	if turnReq.Params.ApprovalPolicy != "never" {
-		t.Errorf("turn approvalPolicy = %q, want never", turnReq.Params.ApprovalPolicy)
+	if turnReq.Params.ApprovalPolicy != "on-request" {
+		t.Errorf("turn approvalPolicy = %q, want on-request", turnReq.Params.ApprovalPolicy)
 	}
 	if turnReq.Params.SandboxPolicy == nil || turnReq.Params.SandboxPolicy.Type != "readOnly" ||
 		turnReq.Params.SandboxPolicy.NetworkAccess {

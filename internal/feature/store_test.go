@@ -122,6 +122,64 @@ func TestStoreSaveAndLoadInputNotifications(t *testing.T) {
 	}
 }
 
+func TestStoreSaveAndLoadAutomaticReviewMode(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStore(dir)
+	f := &Feature{
+		ID:                  "test-automatic-review-mode",
+		Name:                "Test Automatic Review Mode",
+		Slug:                "test-automatic-review-mode",
+		Status:              StatusCreated,
+		SchemaVersion:       SchemaVersionCurrent,
+		AutomaticReviewMode: AutomaticReviewEnabled,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := NormalizeAutomaticReviewMode(loaded.AutomaticReviewMode); got != AutomaticReviewEnabled {
+		t.Errorf("loaded AutomaticReviewMode = %q, want %q", got, AutomaticReviewEnabled)
+	}
+}
+
+func TestStoreAbsentAutomaticReviewModeInheritsGlobal(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStore(dir)
+	f := &Feature{
+		ID:            "test-automatic-review-absent",
+		Name:          "Test Automatic Review Absent",
+		Slug:          "test-automatic-review-absent",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, f.ID, "feature.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(raw), "automatic_review_mode") {
+		t.Fatalf("feature.yaml contains automatic_review_mode for default mode:\n%s", raw)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := NormalizeAutomaticReviewMode(loaded.AutomaticReviewMode); got != AutomaticReviewDefault {
+		t.Errorf("loaded AutomaticReviewMode = %q, want %q", got, AutomaticReviewDefault)
+	}
+}
+
 func TestStoreList(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

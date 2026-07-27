@@ -524,11 +524,12 @@ func (c Checkpoints) AutoPublish() bool { return !c.ManualPublish }
 // audit-diff and hook transport. Passed by value; fields mirror the
 // feature-level fields on Feature.
 type ConfigSnapshot struct {
-	Models             config.ModelConfig
-	Effort             config.EffortConfig
-	Inquireness        Inquireness
-	Checkpoints        Checkpoints
-	InputNotifications InputNotificationsMode
+	Models              config.ModelConfig
+	Effort              config.EffortConfig
+	Inquireness         Inquireness
+	Checkpoints         Checkpoints
+	InputNotifications  InputNotificationsMode
+	AutomaticReviewMode AutomaticReviewMode
 }
 
 type InputNotificationsMode string
@@ -561,6 +562,62 @@ func InputNotificationsModeForMuted(muted bool) InputNotificationsMode {
 		return InputNotificationsMuted
 	}
 	return InputNotificationsEnabled
+}
+
+type AutomaticReviewMode string
+
+const (
+	AutomaticReviewDefault  AutomaticReviewMode = "default"
+	AutomaticReviewEnabled  AutomaticReviewMode = "enabled"
+	AutomaticReviewDisabled AutomaticReviewMode = "disabled"
+)
+
+type AutomaticReviewSource string
+
+const (
+	AutomaticReviewSourceGlobal  AutomaticReviewSource = "global"
+	AutomaticReviewSourceFeature AutomaticReviewSource = "feature"
+)
+
+func NormalizeAutomaticReviewMode(mode AutomaticReviewMode) AutomaticReviewMode {
+	switch mode {
+	case AutomaticReviewEnabled, AutomaticReviewDisabled:
+		return mode
+	default:
+		return AutomaticReviewDefault
+	}
+}
+
+func ParseAutomaticReviewMode(raw string) (AutomaticReviewMode, error) {
+	mode := AutomaticReviewMode(strings.TrimSpace(raw))
+	if mode == "" {
+		return AutomaticReviewDefault, nil
+	}
+	switch mode {
+	case AutomaticReviewDefault, AutomaticReviewEnabled, AutomaticReviewDisabled:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid automatic review mode %q", raw)
+	}
+}
+
+func PersistAutomaticReviewMode(mode AutomaticReviewMode) AutomaticReviewMode {
+	normalized := NormalizeAutomaticReviewMode(mode)
+	if normalized == AutomaticReviewDefault {
+		return ""
+	}
+	return normalized
+}
+
+func ResolveAutomaticReview(mode AutomaticReviewMode, globalEnabled bool) (bool, AutomaticReviewSource) {
+	switch NormalizeAutomaticReviewMode(mode) {
+	case AutomaticReviewEnabled:
+		return true, AutomaticReviewSourceFeature
+	case AutomaticReviewDisabled:
+		return false, AutomaticReviewSourceFeature
+	default:
+		return globalEnabled, AutomaticReviewSourceGlobal
+	}
 }
 
 type PermissionRequest struct {
@@ -622,6 +679,14 @@ type Feature struct {
 	// InputNotifications overrides global notification behavior for this
 	// feature's "waiting for input" alerts. Empty means "use global default".
 	InputNotifications InputNotificationsMode `yaml:"input_notifications,omitempty"`
+	// AutomaticReviewMode overrides the workspace Automatic Review setting for
+	// fresh sessions. Empty/default inherits the current workspace setting.
+	AutomaticReviewMode AutomaticReviewMode `yaml:"automatic_review_mode,omitempty"`
+	// AutomaticReviewEnabled and AutomaticReviewSource are read-model fields
+	// populated for display. They are derived from AutomaticReviewMode plus the
+	// current workspace setting and are never persisted.
+	AutomaticReviewEnabled bool                  `yaml:"-"`
+	AutomaticReviewSource  AutomaticReviewSource `yaml:"-"`
 
 	TraceID       string `yaml:"trace_id,omitempty"`        // observability correlation; derived from ID if absent
 	FeatureSpanID string `yaml:"feature_span_id,omitempty"` // persisted feature-level span ID so all phases share a common parent

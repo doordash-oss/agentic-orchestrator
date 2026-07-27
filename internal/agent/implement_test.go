@@ -4054,34 +4054,51 @@ func TestWaitForStatus_BackgroundTasks(t *testing.T) {
 		}
 	})
 
-	t.Run("wedged session with live tasks hits stall backstop", func(t *testing.T) {
+	t.Run("silent live tasks wait indefinitely until terminal", func(t *testing.T) {
 		withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-		prev := backgroundTaskStallTimeout
-		backgroundTaskStallTimeout = 30 * time.Millisecond
-		t.Cleanup(func() { backgroundTaskStallTimeout = prev })
 
 		sess := newBgTaskSession()
 		sess.result = newEndedAfterTextResult()
 		sess.liveTasks.Store(1)
-		sess.lastStdoutNs.Store(time.Now().UnixNano())
+		sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
 
+		var ready atomic.Bool
 		done := make(chan string, 1)
 		go func() {
-			done <- waitForStatus(sess, nil, "", func() bool { return false })
+			done <- waitForStatus(sess, nil, "", func() bool { return ready.Load() })
 		}()
 
 		sess.statusCh <- agentStatusSuccess
 
 		select {
 		case got := <-done:
-			if got != agentStatusMissingMarker {
-				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
+			t.Fatalf("waitForStatus() returned %q while provider still declared a live task", got)
+		case msg := <-sess.userMessages:
+			t.Fatalf("unexpected user message %q while provider still declared a live task", msg)
+		case <-time.After(100 * time.Millisecond):
+		}
+		if sess.stopped.Load() {
+			t.Fatal("session was stopped while provider still declared a live task")
+		}
+
+		sess.liveTasks.Store(0)
+		select {
+		case msg := <-sess.userMessages:
+			if !strings.Contains(msg, "Continue where you left off") {
+				t.Fatalf("SendUserMessage() = %q, want auto-resume after terminal task", msg)
 			}
 		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for stall backstop")
+			t.Fatal("timed out waiting for auto-resume after terminal task")
 		}
-		if !sess.stopped.Load() {
-			t.Fatal("session was not stopped by the stall backstop")
+		ready.Store(true)
+		sess.statusCh <- agentStatusSuccess
+		select {
+		case got := <-done:
+			if got != agentStatusSuccess {
+				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for final SUCCESS")
 		}
 	})
 

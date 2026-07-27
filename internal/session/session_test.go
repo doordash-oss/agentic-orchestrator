@@ -406,6 +406,102 @@ func TestWatchdogToolProgressTransitions(t *testing.T) {
 	}
 }
 
+func TestWatchdogConcurrentToolsRemainIndependent(t *testing.T) {
+	t.Parallel()
+
+	sess := NewSession("watchdog-concurrent-tools", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-a",
+		ToolName:  "Write",
+		Data:      "in_progress",
+	}})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-b",
+		ToolName:  "Read",
+		Data:      "in_progress",
+	}})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-b",
+		ToolName:  "Read",
+		Data:      "completed",
+	}})
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+
+	tool, _, stalled := watchdog.toolStall()
+	if !stalled || tool.phase != watchdogToolRunning || tool.id != "tool-a" {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want remaining running tool-a", tool, stalled)
+	}
+
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-a",
+		ToolName:  "Write",
+		Data:      "completed",
+	}})
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	tool, _, stalled = watchdog.toolStall()
+	if !stalled || tool.phase != watchdogToolAwaitingTurnResult || tool.id != "tool-a" {
+		t.Fatalf("toolStall() after final completion = (%+v, stalled=%v), want awaiting turn after tool-a", tool, stalled)
+	}
+}
+
+func TestWatchdogLiveSubagentsSuppressIdleFailureUntilEveryTaskTerminates(t *testing.T) {
+	t.Parallel()
+
+	sess := NewSession("watchdog-live-subagents", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	for _, taskID := range []string{"task-a", "task-b"} {
+		watchdog.Observe(taskStartedMsg(taskID))
+		watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+			ToolUseID: taskID,
+			ToolName:  "Task",
+			Data:      "in_progress",
+		}})
+	}
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+
+	if tool, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatalf("toolStall() with two live subagents = (%+v, true), want parked watchdog", tool)
+	}
+
+	watchdog.Observe(taskNotificationMsg("task-a"))
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	if tool, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatalf("toolStall() with one live subagent = (%+v, true), want parked watchdog", tool)
+	}
+
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "task-a",
+		ToolName:  "Task",
+		Data:      "completed",
+	}})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "task-b",
+		ToolName:  "Task",
+		Data:      "completed",
+	}})
+	watchdog.Observe(taskNotificationMsg("task-b"))
+	if tool, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatalf("toolStall() immediately after final task terminal = (%+v, true), want freshly rearmed timer", tool)
+	}
+}
+
 func TestWatchdogControlWaitPausesAndRefreshesTurnTimer(t *testing.T) {
 	sess := NewSession("watchdog-control-wait", "feat-1", feature.PhaseImplement)
 	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{

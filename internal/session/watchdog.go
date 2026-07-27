@@ -32,7 +32,11 @@ type sessionWatchdog struct {
 	pollInterval              time.Duration
 
 	mu                    sync.Mutex
-	tool                  watchdogTool
+	tools                 map[string]watchdogTool
+	awaitingTurn          watchdogTool
+	liveSubagents         map[string]struct{}
+	subagentWaitSince     time.Time
+	nextToolGeneration    uint64
 	pendingControlRequest map[string]struct{}
 	lastActivityAt        time.Time
 
@@ -48,10 +52,14 @@ const (
 )
 
 type watchdogTool struct {
-	phase watchdogToolPhase
-	id    string
-	name  string
+	phase       watchdogToolPhase
+	id          string
+	name        string
+	generation  uint64
+	activeCount int
 }
+
+const anonymousWatchdogToolKey = "\x00anonymous-tool"
 
 func newSessionWatchdog(sess *Session, cfg *ports.SessionWatchdogConfig) *sessionWatchdog {
 	if sess == nil || cfg == nil || (cfg.PendingToolIdleTimeout <= 0 && cfg.TurnCompletionIdleTimeout <= 0) {
@@ -108,7 +116,10 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 	w.lastActivityAt = now
 	switch {
 	case msg.Result != nil:
-		w.tool = watchdogTool{}
+		w.tools = nil
+		w.awaitingTurn = watchdogTool{}
+		w.liveSubagents = nil
+		w.subagentWaitSince = time.Time{}
 		w.pendingControlRequest = nil
 	case msg.ControlRequest != nil:
 		if watchdogShouldParkForControlRequest(msg.ControlRequest) {
@@ -117,8 +128,10 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 			}
 			w.pendingControlRequest[msg.ControlRequest.RequestID] = struct{}{}
 		}
+	case msg.TaskStarted != nil || msg.TaskProgress != nil || msg.TaskNotification != nil:
+		w.observeTaskLifecycleLocked(msg, now)
 	case msg.ToolProgress != nil:
-		w.tool = observeWatchdogToolProgress(w.tool, *msg.ToolProgress)
+		w.observeToolProgressLocked(*msg.ToolProgress)
 	}
 	w.mu.Unlock()
 }
@@ -183,6 +196,70 @@ func observeWatchdogToolProgress(current watchdogTool, progress llm.ToolProgress
 	}
 }
 
+func (w *sessionWatchdog) observeToolProgressLocked(progress llm.ToolProgressMessage) {
+	key := strings.TrimSpace(progress.ToolUseID)
+	if key == "" {
+		key = anonymousWatchdogToolKey
+	}
+	current := w.tools[key]
+	next := observeWatchdogToolProgress(current, progress)
+	switch next.phase {
+	case watchdogToolRunning:
+		if w.tools == nil {
+			w.tools = make(map[string]watchdogTool)
+		}
+		w.nextToolGeneration++
+		next.generation = w.nextToolGeneration
+		w.tools[key] = next
+		w.awaitingTurn = watchdogTool{}
+	case watchdogToolAwaitingTurnResult:
+		if current.phase == watchdogToolRunning {
+			delete(w.tools, key)
+		} else if len(w.tools) > 0 {
+			return
+		}
+		if len(w.tools) == 0 {
+			w.nextToolGeneration++
+			next.generation = w.nextToolGeneration
+			w.awaitingTurn = next
+		}
+	}
+}
+
+func (w *sessionWatchdog) observeTaskLifecycleLocked(msg llm.SDKMessage, now time.Time) {
+	key := ""
+	live := false
+	switch {
+	case msg.TaskStarted != nil:
+		key, live = backgroundTaskKey(msg.TaskStarted.TaskID, msg.TaskStarted.ToolUseID), true
+	case msg.TaskProgress != nil:
+		key, live = backgroundTaskKey(msg.TaskProgress.TaskID, msg.TaskProgress.ToolUseID), true
+	case msg.TaskNotification != nil:
+		key = backgroundTaskKey(msg.TaskNotification.TaskID, msg.TaskNotification.ToolUseID)
+	default:
+		return
+	}
+	if key == "" {
+		return
+	}
+	if live {
+		if w.liveSubagents == nil {
+			w.liveSubagents = make(map[string]struct{})
+		}
+		if len(w.liveSubagents) == 0 {
+			w.subagentWaitSince = now
+		}
+		w.liveSubagents[key] = struct{}{}
+		return
+	}
+	delete(w.liveSubagents, key)
+	if len(w.liveSubagents) == 0 {
+		w.liveSubagents = nil
+		w.subagentWaitSince = time.Time{}
+		w.lastActivityAt = now
+	}
+}
+
 func isWatchdogPendingToolData(data string) bool {
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.ToLower(strings.TrimSpace(line))
@@ -240,12 +317,16 @@ func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, bool) {
 	}
 
 	w.mu.Lock()
-	tool := w.tool
 	hasPendingControlRequest := len(w.pendingControlRequest) > 0
+	hasLiveSubagents := len(w.liveSubagents) > 0
+	tool := w.currentToolLocked()
 	lastActivityAt := w.lastActivityAt
 	w.mu.Unlock()
 	if hasPendingControlRequest {
 		w.refreshActivity()
+		return watchdogTool{}, 0, false
+	}
+	if hasLiveSubagents {
 		return watchdogTool{}, 0, false
 	}
 	timeout := w.timeoutFor(tool.phase)
@@ -257,6 +338,21 @@ func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, bool) {
 	}
 	idleFor := time.Since(lastActivityAt)
 	return tool, timeout, idleFor >= timeout
+}
+
+func (w *sessionWatchdog) currentToolLocked() watchdogTool {
+	if len(w.tools) == 0 {
+		return w.awaitingTurn
+	}
+	key := ""
+	for candidate := range w.tools {
+		if key == "" || candidate < key {
+			key = candidate
+		}
+	}
+	tool := w.tools[key]
+	tool.activeCount = len(w.tools)
+	return tool
 }
 
 func (w *sessionWatchdog) refreshActivity() {
@@ -280,10 +376,10 @@ func (w *sessionWatchdog) failTool(tool watchdogTool, timeout time.Duration) boo
 	// Observe and the poller race at the timeout boundary. Linearize the
 	// decision under the watchdog lock: if a Result or any stdout arrived after
 	// the poll snapshot, that activity wins and the watchdog keeps waiting.
-	// Clearing w.tool here also guarantees a single fire: the only caller is
-	// run(), which returns as soon as this reports true.
+	// Clearing the selected state here also guarantees a single fire: the only
+	// caller is run(), which returns as soon as this reports true.
 	w.mu.Lock()
-	if w.tool != tool {
+	if len(w.liveSubagents) > 0 || w.currentToolLocked() != tool {
 		w.mu.Unlock()
 		return false
 	}
@@ -296,12 +392,15 @@ func (w *sessionWatchdog) failTool(tool watchdogTool, timeout time.Duration) boo
 		w.mu.Unlock()
 		return false
 	}
-	w.tool = watchdogTool{}
+	w.tools = nil
+	w.awaitingTurn = watchdogTool{}
 	w.mu.Unlock()
 
 	var reason string
 	if tool.phase == watchdogToolAwaitingTurnResult {
 		reason = fmt.Sprintf("provider watchdog stalled awaiting turn completion after tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
+	} else if tool.activeCount > 1 {
+		reason = fmt.Sprintf("provider watchdog stalled with %d pending tools (including %s) for %s (idle %s)", tool.activeCount, tool.displayName(), timeout, idleFor.Round(time.Millisecond))
 	} else {
 		reason = fmt.Sprintf("provider watchdog stalled with pending tool %s for %s (idle %s)", tool.displayName(), timeout, idleFor.Round(time.Millisecond))
 	}

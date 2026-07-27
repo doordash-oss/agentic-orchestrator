@@ -931,6 +931,9 @@ const (
 	// RestartDispatchRepoCycles returns repository and refactor descriptors for
 	// the caller to relaunch.
 	RestartDispatchRepoCycles
+
+	// RestartDispatchRebase resumes a retained feature-level rebase operation.
+	RestartDispatchRebase
 )
 
 // RestartOutcome describes the follow-up required after RestartPhase applies
@@ -980,6 +983,14 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// Stop any active sessions before mutating state so orphaned agents do not
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
+
+	if f.RebaseOperation != nil && f.ActiveCycle != nil &&
+		featureRebaseActiveCycleType(f) == feature.CycleRebase {
+		switch f.ActiveCycle.Status {
+		case feature.RepoCycleFailed, feature.RepoCycleInterrupted:
+			return RestartOutcome{Action: RestartDispatchRebase}, nil
+		}
+	}
 
 	// Clear failure context on restart; extend iteration caps if exhausted.
 	// ExtendFailedPhaseBudget is a no-op on non-Failed features so this is

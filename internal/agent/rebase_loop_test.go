@@ -654,6 +654,9 @@ func TestRunRebaseLoop_FlatArtifactDirLayout(t *testing.T) {
 		t.Fatalf("captured = %d, want 1", len(*captured))
 	}
 	gotDir := (*captured)[0].ArtifactDir
+	if got := (*captured)[0].SessionIDPrefix; got != "rebase-1" {
+		t.Fatalf("SessionIDPrefix = %q, want rebase-1", got)
+	}
 	loaded, _ := store.Load(f.ID)
 	wantDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-1")
 	if gotDir != wantDir {
@@ -735,10 +738,8 @@ func TestRunRebaseLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 	stateDir := t.TempDir()
 	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-recover", []string{testRepoNameAPI})
 
-	// Bump RebaseCount to 1 so the new invocation should advance to 2 —
-	// this is the realistic crash case (ActiveCycle.Count=1 from prior
-	// crashed run) where the next rebase invocation increments the
-	// counter again.
+	// The feature manager owns the cycle count before dispatch. A loop that
+	// receives that active cycle must adopt it instead of incrementing again.
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.SetRebaseCount(1)
 		ff.SetActiveCycleType(feature.CycleRebase)
@@ -753,11 +754,8 @@ func TestRunRebaseLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 	}
 	loaded, _ := store.Load(f.ID)
 
-	// Pre-create iteration-01 under the NEXT rebase dir (rebase-2) so we
-	// can verify the loop's inner artifact dir resolves to it. This
-	// simulates a crash mid-iteration where some prior run already wrote
-	// iteration-01.
-	priorDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-2", "iteration-01")
+	// Pre-create iteration-01 under the manager-owned rebase dir.
+	priorDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-1", "iteration-01")
 	if err := os.MkdirAll(priorDir, 0o755); err != nil {
 		t.Fatalf("seed iteration-01: %v", err)
 	}
@@ -784,9 +782,9 @@ func TestRunRebaseLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 	}
 	gotDir := (*captured)[0].ArtifactDir
 	loaded, _ = store.Load(f.ID)
-	wantDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-2")
+	wantDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-1")
 	if gotDir != wantDir {
-		t.Errorf("recovered ArtifactDir = %q, want %q (re-uses rebase-2 from prior crash)", gotDir, wantDir)
+		t.Errorf("recovered ArtifactDir = %q, want %q (adopts manager-owned cycle count)", gotDir, wantDir)
 	}
 	// The prior iteration-01 must still be present so
 	// ArtifactManager.LatestIteration sees it during recovery.
@@ -934,6 +932,8 @@ func TestRebasePlanMultiRepoFormatting(t *testing.T) {
 		"## Repo: `web`",
 		"`api` — base `main`",
 		"`web` — base `master`",
+		"[repo: api] No conflict markers remain",
+		"[repo: web] No conflict markers remain",
 		"internal/api/handler.go",
 		"internal/api/router.go",
 		"rebase already in progress",

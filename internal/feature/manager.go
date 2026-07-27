@@ -812,18 +812,22 @@ func (m *Manager) StartFeatureRebaseOperation(featureID string) error {
 		if hasActiveNonRebaseCycle(f) {
 			return fmt.Errorf("cannot start rebase operation while %s cycle is active", activeNonRebaseCycleType(f))
 		}
-		if hasActiveRebaseOperation(f) {
+		if hasLiveFeatureRebaseCycle(f) {
 			return fmt.Errorf("rebase operation already active")
 		}
+		f.accumulateActiveTime()
+		f.SetRebaseCount(f.RebaseCount() + 1)
 		now := time.Now()
 		f.SetActiveCycleType(CycleRebase)
-		f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount() + 1}
+		f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount()}
 		f.RebaseOperation = &RebaseOperationState{
 			Stage:     RebaseStageHarness,
 			StartedAt: now,
 			UpdatedAt: now,
 			Repos:     map[string]*RebaseRepoProgress{},
 		}
+		f.ActiveTimingKey = fmt.Sprintf("rebase-%d", f.RebaseCount())
+		f.ActivePhaseStart = &now
 		return nil
 	})
 }
@@ -847,8 +851,11 @@ func (m *Manager) MarkFeatureRebaseStage(featureID string, stage RebaseStage) er
 		} else {
 			f.ActiveCycle.Type = CycleRebase
 		}
-		if stage == RebaseStageFinalReview {
+		switch stage {
+		case RebaseStageFinalReview:
 			f.ActiveCycle.Status = RepoCycleReviewing
+		case RebaseStagePublish:
+			f.ActiveCycle.Status = RepoCycleRunning
 		}
 		f.SetActiveCycleType(CycleRebase)
 		return nil
@@ -876,6 +883,7 @@ func (m *Manager) UpdateFeatureRebaseRepo(featureID, repoName string, status Reb
 
 func (m *Manager) ClearFeatureRebaseOperation(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
+		f.accumulateActiveTime()
 		f.RebaseOperation = nil
 		if f.ActiveCycle != nil && f.ActiveCycle.Type == CycleRebase {
 			f.ActiveCycle = nil
@@ -883,6 +891,39 @@ func (m *Manager) ClearFeatureRebaseOperation(featureID string) error {
 		if f.ActiveCycleType() == CycleRebase {
 			f.SetActiveCycleType("")
 		}
+		return nil
+	})
+}
+
+// FailFeatureRebaseCycle records a terminal rebase failure without changing
+// the feature's regular lifecycle status or discarding retry diagnostics.
+func (m *Manager) FailFeatureRebaseCycle(featureID, errMsg string) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if f.ActiveCycle == nil || featureRebaseCycleType(f) != CycleRebase || f.RebaseOperation == nil {
+			return fmt.Errorf("no active rebase operation")
+		}
+		f.accumulateActiveTime()
+		f.ActiveCycle.Status = RepoCycleFailed
+		f.ActiveCycle.LastError = errMsg
+		f.ActiveCycle.PendingNeedUserInputPath = ""
+		f.SetActiveCycleType(CycleRebase)
+		return nil
+	})
+}
+
+// MarkFeatureRebaseNeedUserInput pauses the smart-rebase stage on a durable
+// feature-level gate. The operation detail remains intact for resume.
+func (m *Manager) MarkFeatureRebaseNeedUserInput(featureID, gatePath string, iteration int, summary string) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if f.ActiveCycle == nil || featureRebaseCycleType(f) != CycleRebase || f.RebaseOperation == nil {
+			return fmt.Errorf("no active rebase operation")
+		}
+		f.accumulateActiveTime()
+		f.ActiveCycle.Status = RepoCycleNeedUserInput
+		f.ActiveCycle.Iteration = iteration
+		f.ActiveCycle.LastError = summary
+		f.ActiveCycle.PendingNeedUserInputPath = gatePath
+		f.SetActiveCycleType(CycleRebase)
 		return nil
 	})
 }
@@ -903,6 +944,28 @@ func hasActiveRebaseOperation(f *Feature) bool {
 		return true
 	}
 	return f.ActiveCycleType() == CycleRebase
+}
+
+func hasLiveFeatureRebaseCycle(f *Feature) bool {
+	if f == nil || f.ActiveCycle == nil || featureRebaseCycleType(f) != CycleRebase {
+		return false
+	}
+	switch f.ActiveCycle.Status {
+	case RepoCycleRunning, RepoCycleReviewing, RepoCycleNeedUserInput, RepoCycleInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+func featureRebaseCycleType(f *Feature) RepoCycleType {
+	if f == nil || f.ActiveCycle == nil {
+		return ""
+	}
+	if f.ActiveCycle.Type != "" {
+		return f.ActiveCycle.Type
+	}
+	return f.ActiveCycleType()
 }
 
 func activeNonRebaseCycleType(f *Feature) RepoCycleType {
@@ -1021,6 +1084,17 @@ func (m *Manager) HasActiveRepoCycles(featureID string) (bool, error) {
 func (m *Manager) ClearRepoCycles(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		f.RepoCycles = nil
+		if f.ActiveCycle != nil && featureRebaseCycleType(f) == CycleRebase {
+			switch f.ActiveCycle.Status {
+			case RepoCycleFailed, RepoCycleInterrupted:
+				f.accumulateActiveTime()
+				f.ActiveCycle = nil
+				f.RebaseOperation = nil
+				if f.ActiveCycleType() == CycleRebase {
+					f.SetActiveCycleType("")
+				}
+			}
+		}
 		return nil
 	})
 }

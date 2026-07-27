@@ -1,14 +1,12 @@
-import type { ReactNode } from 'react';
 import type { FeatureSnapshot, RunDetailView } from '../../../shared/ipc';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
 import { FeatureFactsRail } from './FeatureFactsRail';
-import type { CyclePresentation } from './postImplementationModel';
+import { cycleFailureDetail, type CyclePresentation } from './postImplementationModel';
 
 export interface CycleWorkspaceProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
   presentation: CyclePresentation;
-  attentionFooter?: ReactNode;
   onRunMetrics(metrics: RunMetrics | null): void;
   onStop(): void;
   onResume(): void;
@@ -22,7 +20,6 @@ export function CycleWorkspace({
   snapshot,
   run,
   presentation,
-  attentionFooter,
   onRunMetrics,
   onStop,
   onResume,
@@ -37,10 +34,13 @@ export function CycleWorkspace({
     !failed && snapshot.actions.some((action) => action.id === 'pause-stop' && action.enabled);
   const resumable =
     interrupted && snapshot.actions.some((action) => action.id === 'resume' && action.enabled);
+  const retryAction = snapshot.actions.find((action) => action.id === 'retry');
+  const failedRepos = snapshot.repoStatus?.filter((repo) => repo.lastError !== undefined) ?? [];
 
   return (
     <section
       className="post-workspace cycle-workspace"
+      data-failed={failed || undefined}
       aria-label={`${cycleLabel(presentation.id)} cycle`}
     >
       <main className="cycle-workspace__main">
@@ -56,7 +56,17 @@ export function CycleWorkspace({
           </div>
           {failed ? (
             <div className="cycle-workspace__failed-actions">
-              <button type="button" className="cycle-workspace__primary" onClick={onRetry}>
+              <button
+                type="button"
+                className="cycle-workspace__primary"
+                disabled={retryAction?.enabled !== true}
+                title={
+                  retryAction?.enabled === true
+                    ? undefined
+                    : retryAction?.disabledReasons[0]?.message
+                }
+                onClick={onRetry}
+              >
                 Retry cycle
               </button>
               <button type="button" onClick={onReturnToAftercare}>
@@ -64,9 +74,14 @@ export function CycleWorkspace({
               </button>
             </div>
           ) : resumable ? (
-            <button type="button" className="cycle-workspace__primary" onClick={onResume}>
-              Resume cycle
-            </button>
+            <div className="cycle-workspace__failed-actions">
+              <button type="button" className="cycle-workspace__primary" onClick={onResume}>
+                Resume cycle
+              </button>
+              <button type="button" onClick={onReturnToAftercare}>
+                Return to Aftercare
+              </button>
+            </div>
           ) : stoppable ? (
             <button type="button" className="cycle-workspace__stop" onClick={onStop}>
               Stop cycle
@@ -104,9 +119,19 @@ export function CycleWorkspace({
 
         {failed ? (
           <section className="cycle-workspace__failure" role="alert">
-            <p className="post-workspace__eyebrow">Cycle interrupted</p>
+            <p className="post-workspace__eyebrow">Cycle failed</p>
             <h3>The agent could not finish this cycle.</h3>
-            <p>{failureMessage(snapshot)}</p>
+            <p>{cycleFailureDetail(snapshot)}</p>
+            {failedRepos.length <= 1 ? null : (
+              <ul className="cycle-workspace__repo-failures">
+                {failedRepos.map((repo) => (
+                  <li key={repo.name}>
+                    <code>{repo.name}</code>
+                    <span>{repo.lastError}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         ) : null}
         <CurrentRunInspection
@@ -123,7 +148,8 @@ export function CycleWorkspace({
           waitReason={snapshot.waitReason}
           shouldStream={!failed && !interrupted}
           presentation="cycle"
-          attentionFooter={failed ? undefined : attentionFooter}
+          cycle={snapshot.cycle}
+          repoStatus={snapshot.repoStatus}
           onRunMetrics={onRunMetrics}
         />
       </main>
@@ -141,12 +167,4 @@ function cycleLabel(id: CyclePresentation['id']): string {
     case 'refactor':
       return 'Refactor';
   }
-}
-
-function failureMessage(snapshot: FeatureSnapshot): string {
-  if (snapshot.failure?.message !== undefined) return snapshot.failure.message;
-  const repositoryError = snapshot.repoStatus?.find(
-    (repository) => repository.lastError,
-  )?.lastError;
-  return repositoryError ?? 'The runtime stopped before the cycle reached its next checkpoint.';
 }

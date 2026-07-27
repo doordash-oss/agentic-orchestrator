@@ -49,6 +49,12 @@ export function RebaseModal({
       ...(repo.blocker === undefined || repo.blocker === '' ? [] : [repo.blocker]),
       ...(repo.conflictFiles ?? []).map((file) => `Conflict: ${file}`),
     ]) ?? [];
+  const blockedRepoCount =
+    preflight?.repos.filter(
+      (repo) =>
+        (repo.blocker !== undefined && repo.blocker !== '') ||
+        (repo.conflictFiles?.length ?? 0) > 0,
+    ).length ?? 0;
 
   const start = useCallback(async () => {
     if (preflight === null || blockers.length > 0) return;
@@ -135,7 +141,20 @@ export function RebaseModal({
           </div>
         ) : null}
         {blockers.length > 0 ? (
-          <p className="cycle-modal__blockers">Start is blocked: {blockers[0]}</p>
+          <>
+            <p className="cycle-modal__blockers">
+              Start is blocked by {blockers.length} issue{blockers.length === 1 ? '' : 's'} across{' '}
+              {blockedRepoCount} repositor{blockedRepoCount === 1 ? 'y' : 'ies'}.
+            </p>
+            {snapshot.cycle !== undefined &&
+            ['running', 'reviewing', 'need_user_input', 'interrupted'].includes(
+              snapshot.cycle.status ?? '',
+            ) ? (
+              <p className="cycle-journey__preflight-note">
+                The cycle workspace owns resume and retry for this rebase.
+              </p>
+            ) : null}
+          </>
         ) : null}
       </div>
       <CycleFooter

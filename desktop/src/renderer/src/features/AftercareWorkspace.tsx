@@ -10,6 +10,8 @@ export interface AftercareWorkspaceProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
   receipt?: CycleReceipt;
+  onRetry(): void;
+  onReopenCycle(): void;
   onAction(action: AftercareAction): void;
   onOpenRunRecord(): void;
   onOpenChanges(): void;
@@ -20,6 +22,8 @@ export function AftercareWorkspace({
   snapshot,
   run,
   receipt,
+  onRetry,
+  onReopenCycle,
   onAction,
   onOpenRunRecord,
   onOpenChanges,
@@ -38,11 +42,35 @@ export function AftercareWorkspace({
         </header>
 
         {receipt === undefined ? null : (
-          <section className="aftercare-workspace__receipt" role="status">
-            <span aria-hidden="true">✓</span>
+          <section
+            className="aftercare-workspace__receipt"
+            data-outcome={receipt.outcome}
+            role={receipt.outcome === 'failed' ? 'alert' : 'status'}
+          >
+            <span aria-hidden="true">
+              {receipt.outcome === 'failed' ? '✕' : receipt.outcome === 'stopped' ? '■' : '✓'}
+            </span>
             <div>
               <strong>{receipt.message}</strong>
-              <small>The feature is back at rest.</small>
+              {receipt.detail === undefined ? null : <small>{receipt.detail}</small>}
+              {receipt.outcome === 'failed' ? (
+                <div className="aftercare-workspace__receipt-actions">
+                  <button
+                    type="button"
+                    disabled={
+                      snapshot.actions.find((action) => action.id === 'retry')?.enabled !== true
+                    }
+                    onClick={onRetry}
+                  >
+                    Retry cycle
+                  </button>
+                  <button type="button" onClick={onReopenCycle}>
+                    Reopen cycle
+                  </button>
+                </div>
+              ) : (
+                <small>The feature is back at rest.</small>
+              )}
             </div>
           </section>
         )}

@@ -22,6 +22,7 @@ const (
 	RebaseStageHarness     RebaseStage = "harness"
 	RebaseStageSmartRebase RebaseStage = "smart_rebase"
 	RebaseStageFinalReview RebaseStage = "final_review"
+	RebaseStagePublish     RebaseStage = "publish"
 )
 
 type RebaseRepoStatus string

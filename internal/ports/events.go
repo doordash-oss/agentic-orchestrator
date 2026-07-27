@@ -60,6 +60,9 @@ const (
 	// feature detail while no agent session is active to provide refresh
 	// signals of its own.
 	VerificationProgress
+	// CycleProgress fires after a feature-level post-implementation cycle
+	// changes durable stage, repository progress, or terminal status.
+	CycleProgress
 	// RuntimeShutdownStarted fires when the orchestrator/runtime has begun a
 	// graceful shutdown. SSE consumers use it as a metadata-only signal to
 	// refresh authoritative REST snapshots during reconnect.

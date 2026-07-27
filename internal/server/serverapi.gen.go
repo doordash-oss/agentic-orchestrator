@@ -1142,11 +1142,13 @@ type Cursor struct {
 
 // Cycle defines model for Cycle.
 type Cycle struct {
-	Count     int    `json:"count,omitempty"`
-	Iteration int    `json:"iteration,omitempty"`
-	Phase     string `json:"phase,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Type      string `json:"type,omitempty"`
+	Count     int        `json:"count,omitempty"`
+	Iteration int        `json:"iteration,omitempty"`
+	LastError string     `json:"last_error,omitempty"`
+	Phase     string     `json:"phase,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	Status    string     `json:"status,omitempty"`
+	Type      string     `json:"type,omitempty"`
 }
 
 // DeleteFeatureResponse defines model for DeleteFeatureResponse.
@@ -1678,7 +1680,6 @@ type RebaseStartResponse struct {
 	FeatureID  string       `json:"feature_id"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
-	SessionID  string       `json:"session_id,omitempty"`
 }
 
 // RecoveryActionResponse defines model for RecoveryActionResponse.

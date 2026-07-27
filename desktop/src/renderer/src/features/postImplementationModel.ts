@@ -1,4 +1,4 @@
-import type { FeatureSnapshot } from '../../../shared/ipc';
+import type { CycleView, FeatureSnapshot } from '../../../shared/ipc';
 import type { AftercareCycleId } from './aftercareModel';
 
 export type PostImplementationMode =
@@ -34,11 +34,13 @@ export interface CyclePresentation {
 
 export interface CycleReceipt {
   id: AftercareCycleId;
+  outcome: 'completed' | 'failed' | 'stopped';
   message: string;
+  detail?: string;
 }
 
 const AFTERCARE_STATUSES = new Set(['CodeReady', 'Published', 'Done']);
-const OWNING_CYCLE_STATUSES = new Set([
+export const OWNING_CYCLE_STATUSES = new Set([
   'running',
   'reviewing',
   'need_user_input',
@@ -49,19 +51,68 @@ const ACTION_ORDER: AftercareActionId[] = ['publish', 'rebase', 'review-comments
 
 export function resolvePostImplementationMode(
   snapshot: FeatureSnapshot,
-  dismissedFailureId?: string,
+  dismissedCycleId?: string,
 ): PostImplementationMode {
   const cycle = cyclePresentation(snapshot);
   const status = snapshot.cycle?.status;
+  const dismissedTerminalCycle =
+    (status === 'failed' || status === 'interrupted') &&
+    cycleIdentity(snapshot) === dismissedCycleId;
   if (
     cycle !== null &&
     status !== undefined &&
     OWNING_CYCLE_STATUSES.has(status) &&
-    !(status === 'failed' && cycleIdentity(snapshot) === dismissedFailureId)
+    !dismissedTerminalCycle
   ) {
     return { kind: 'cycle', cycle, failed: status === 'failed' };
   }
+  if (dismissedTerminalCycle) return { kind: 'aftercare' };
   return AFTERCARE_STATUSES.has(snapshot.status) ? { kind: 'aftercare' } : { kind: 'regular' };
+}
+
+export function ownsPostImplementationStage(cycle?: CycleView): boolean {
+  return (
+    cycle?.type !== undefined &&
+    cycle.status !== undefined &&
+    OWNING_CYCLE_STATUSES.has(cycle.status)
+  );
+}
+
+export function cycleFailureDetail(snapshot: FeatureSnapshot): string {
+  return (
+    snapshot.cycle?.lastError ??
+    snapshot.failure?.message ??
+    snapshot.repoStatus?.find((repository) => repository.lastError !== undefined)?.lastError ??
+    'The runtime stopped before the cycle reached its next checkpoint.'
+  );
+}
+
+export function receiptForCycleEnd(
+  previousCycle: CycleView | undefined,
+  snapshot: FeatureSnapshot,
+): CycleReceipt | undefined {
+  const id = isAftercareCycleId(previousCycle?.type) ? previousCycle.type : undefined;
+  if (id === undefined) return undefined;
+  if (previousCycle?.status === 'failed') {
+    return {
+      id,
+      outcome: 'failed',
+      message: `${cycleName(id)} cycle needs attention.`,
+      detail: previousCycle.lastError ?? cycleFailureDetail(snapshot),
+    };
+  }
+  if (previousCycle?.status === 'interrupted') {
+    return {
+      id,
+      outcome: 'stopped',
+      message: 'Cycle stopped · No completion action was dispatched.',
+    };
+  }
+  return {
+    id,
+    outcome: 'completed',
+    message: `${cycleName(id)} cycle complete.`,
+  };
 }
 
 export function cycleIdentity(snapshot: FeatureSnapshot): string | null {

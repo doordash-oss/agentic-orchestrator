@@ -215,16 +215,13 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		return nil, fmt.Errorf("rebase loop: workspace setup: %w", err)
 	}
 
-	// Increment RebaseCount and set ActiveCycle = {Type: rebase, Status:
-	// running} at loop entry. NEED_USER_INPUT resume reuses the existing
-	// ActiveCycle.Count so the next iteration lands in the same rebase-N
-	// artifact directory and can read prior answered gates.
+	// The feature manager normally owns RebaseCount before dispatch. Adopt an
+	// existing active rebase count so the harness and agent stages share one
+	// rebase-N directory. Direct loop callers without a stamped cycle retain
+	// the legacy entry behavior and allocate the next count here.
 	rebaseCount := 0
 	if err := cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-		if cfg.ResumeExistingCycle {
-			if f.ActiveCycle == nil || f.ActiveCycle.Type != feature.CycleRebase || f.ActiveCycle.Count <= 0 {
-				return fmt.Errorf("resume requested without an active rebase cycle")
-			}
+		if f.ActiveCycle != nil && f.ActiveCycle.Type == feature.CycleRebase && f.ActiveCycle.Count > 0 {
 			rebaseCount = f.ActiveCycle.Count
 			f.ActiveCycle.Status = feature.RepoCycleRunning
 			if f.RebaseCount() < rebaseCount {
@@ -232,6 +229,9 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 			}
 			f.SetActiveCycleType(feature.CycleRebase)
 			return nil
+		}
+		if cfg.ResumeExistingCycle {
+			return fmt.Errorf("resume requested without an active rebase cycle")
 		}
 
 		f.SetRebaseCount(f.RebaseCount() + 1)
@@ -301,6 +301,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		Model:                      cfg.Model,
 		ReviewModel:                cfg.ReviewModel,
 		ArtifactDir:                artifactDir,
+		SessionIDPrefix:            fmt.Sprintf("rebase-%d", rebaseCount),
 		StateDir:                   stateDir,
 		RunDir:                     runDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
@@ -557,6 +558,12 @@ func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 		// Strip the duplicate top-level title so the inlined section
 		// reads as a sub-heading under the per-repo section.
 		section = stripFirstHeading(section)
+		section = strings.Replace(
+			section,
+			"- [ ] No conflict markers remain:",
+			fmt.Sprintf("- [ ] [repo: %s] No conflict markers remain:", r.RepoName),
+			1,
+		)
 		out += section
 		out += "\n"
 	}

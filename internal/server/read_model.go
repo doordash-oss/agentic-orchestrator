@@ -182,13 +182,19 @@ func activeCycleDTO(f *feature.Feature) *CycleDTO {
 		return nil
 	}
 	if f.ActiveCycle != nil {
-		return &CycleDTO{
+		dto := &CycleDTO{
 			Type:      string(f.ActiveCycle.Type),
 			Status:    f.ActiveCycle.Status,
 			Count:     f.ActiveCycle.Count,
 			Iteration: f.ActiveCycle.Iteration,
 			Phase:     activeCyclePhase(f, f.ActiveCycle.Type),
+			LastError: SafeDisplayText(f.ActiveCycle.LastError, 240),
 		}
+		if f.RebaseOperation != nil && !f.RebaseOperation.StartedAt.IsZero() {
+			startedAt := f.RebaseOperation.StartedAt
+			dto.StartedAt = &startedAt
+		}
+		return dto
 	}
 	for _, repo := range f.Repos {
 		if dto := activeRepoCycleDTO(f, f.RepoCycles[repo.Name]); dto != nil {
@@ -233,6 +239,8 @@ func activeCyclePhase(f *feature.Feature, cycleType feature.RepoCycleType) strin
 				return "resolve_conflicts"
 			case feature.RebaseStageFinalReview:
 				return "final_review"
+			case feature.RebaseStagePublish:
+				return "publish"
 			}
 		}
 		return "inspect_rebase"
@@ -291,7 +299,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	}
 	status := f.Status
 	running := status.IsRunning()
-	cyclePresent := f.HasActiveRepoCycles() || f.ActiveCycleType() != ""
+	cyclePresent := hasOwningCycle(f)
 	stoppableCycle := f.HasActiveRepoCycles() || hasActiveFeatureCycle(f)
 	publishedOrManualReady := status == feature.StatusPublished ||
 		(status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
@@ -336,7 +344,8 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
 	canPostPublishCycle := publishedOrManualReady && !cyclePresent
 	canRefactor := publishedOrManualReady && !cyclePresent
-	canRetry := status == feature.StatusFailed
+	canRetry := status == feature.StatusFailed ||
+		(f.ActiveCycle != nil && f.ActiveCycle.Status == feature.RepoCycleFailed)
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
 	canDelete := !running
@@ -383,6 +392,27 @@ func hasActiveFeatureCycle(f *feature.Feature) bool {
 	default:
 		return false
 	}
+}
+
+func hasOwningCycle(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	if hasActiveFeatureCycle(f) ||
+		(f.ActiveCycle != nil && f.ActiveCycle.Status == feature.RepoCycleInterrupted) {
+		return true
+	}
+	for _, cycle := range f.RepoCycles {
+		if cycle == nil {
+			continue
+		}
+		switch cycle.Status {
+		case feature.RepoCycleRunning, feature.RepoCycleReviewing,
+			feature.RepoCycleNeedUserInput, feature.RepoCycleInterrupted:
+			return true
+		}
+	}
+	return false
 }
 
 // setupActionEligible reports whether the setup action applies: either the

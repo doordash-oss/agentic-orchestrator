@@ -1141,6 +1141,9 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 			resp.SessionIDs = sessionIDs
 		}
 		return nil
+	case orchestrator.RestartDispatchRebase:
+		resp.Dispatch = "rebase"
+		return t.orch.RetryFeatureRebase(featureID)
 	default:
 		return fmt.Errorf("unknown restart action %d", outcome.Action)
 	}

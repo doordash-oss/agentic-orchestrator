@@ -384,6 +384,43 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 	}
 }
 
+func TestFeatureDetailProjectsFailedRebasePublishContext(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	startedAt := time.Date(2026, time.July, 26, 12, 34, 56, 0, time.UTC)
+	f.ID = "feat-rebase-failed"
+	f.Status = feature.StatusPublished
+	f.ActiveCycle = &feature.CycleState{
+		Type:      feature.CycleRebase,
+		Status:    feature.RepoCycleFailed,
+		Count:     3,
+		LastError: "force push rejected by the remote",
+	}
+	f.SetActiveCycleType(feature.CycleRebase)
+	f.RebaseOperation = &feature.RebaseOperationState{
+		Stage:     feature.RebaseStagePublish,
+		StartedAt: startedAt,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	featureBody := body[entityFeature].(map[string]any)
+	cycle := featureBody["cycle"].(map[string]any)
+	if cycle["phase"] != "publish" {
+		t.Fatalf("cycle phase = %v, want publish", cycle["phase"])
+	}
+	if cycle["last_error"] != "force push rejected by the remote" {
+		t.Fatalf("cycle last_error = %v", cycle["last_error"])
+	}
+	if cycle["started_at"] != startedAt.Format(time.RFC3339) {
+		t.Fatalf("cycle started_at = %v, want %s", cycle["started_at"], startedAt.Format(time.RFC3339))
+	}
+}
+
 func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 	t.Parallel()
 
@@ -1114,6 +1151,26 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			}{
 				actionPauseStop: {enabled: true},
 				actionRebase:    {disabledCode: disabledCycleActive},
+			},
+		},
+		{
+			name: "published failed feature rebase",
+			f: func() *feature.Feature {
+				f := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil)
+				f.SetActiveCycleType(feature.CycleRebase)
+				f.ActiveCycle = &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleFailed}
+				f.RebaseOperation = &feature.RebaseOperationState{Stage: feature.RebaseStageFinalReview}
+				return f
+			}(),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				actionPauseStop:      {disabledCode: "not_running"},
+				actionRebase:         {enabled: true},
+				actionReviewComments: {enabled: true},
+				actionRefactor:       {enabled: true},
+				actionRetry:          {enabled: true},
 			},
 		},
 		{

@@ -126,6 +126,12 @@ describe('CurrentRunInspection', () => {
         currentPhase="Implement"
         reviewGate={REVIEW_GATE}
         presentation="cycle"
+        cycle={{
+          type: 'rebase',
+          status: 'running',
+          phase: 'resolve_conflicts',
+          startedAt: '2026-07-21T00:00:00Z',
+        }}
       />,
     );
 
@@ -141,6 +147,101 @@ describe('CurrentRunInspection', () => {
     expect(screen.queryByRole('tablist', { name: 'Live agents' })).not.toBeInTheDocument();
     expect(screen.queryByText('Implement #1')).not.toBeInTheDocument();
     expect(screen.queryByText('Structural')).not.toBeInTheDocument();
+  });
+
+  it('never presents a pre-cycle terminal session as live activity', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Old activity',
+      contextPercentage: 100,
+      totalSeconds: 10,
+      totalUsd: 0.01,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 8,
+      sessions: [
+        validator({
+          id: 'old-session',
+          label: 'Old session',
+          status: 'completed',
+          startedAt: '2026-07-22T00:00:00Z',
+        }),
+      ],
+    });
+    mock.api.getSessionTranscript.mockResolvedValue({
+      sessionId: 'old-session',
+      cursor: { total: 1, start: 0, end: 1 },
+      messages: [{ index: 0, role: 'assistant', type: 'text', text: 'Historical session.' }],
+    });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="FinalReview"
+        reviewGate={REVIEW_GATE}
+        presentation="cycle"
+        cycle={{
+          type: 'rebase',
+          status: 'reviewing',
+          phase: 'final_review',
+          startedAt: '2026-07-23T00:00:00Z',
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('Starting the final review agent session…')).toBeVisible();
+    expect(screen.queryByText('Historical session.')).not.toBeInTheDocument();
+  });
+
+  it('renders harness repository operations when no cycle session exists', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Inspecting repositories',
+      contextPercentage: 0,
+      totalSeconds: 3,
+      totalUsd: 0,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Publish"
+        reviewGate={REVIEW_GATE}
+        presentation="cycle"
+        cycle={{
+          type: 'rebase',
+          status: 'running',
+          phase: 'inspect_rebase',
+          startedAt: '2026-07-23T00:00:00Z',
+        }}
+        repoStatus={[
+          {
+            name: 'api',
+            publishable: true,
+            rebaseStatus: 'conflict',
+            rebaseTarget: 'origin/main',
+            conflictFiles: ['internal/api.go'],
+            lastError: 'manual resolution required',
+          },
+        ]}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Harness activity' })).toBeVisible();
+    expect(screen.getByLabelText('Rebase operations')).toHaveTextContent('api');
+    expect(screen.getByText('→ origin/main')).toBeVisible();
+    expect(screen.getByText('internal/api.go')).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('manual resolution required');
+    expect(screen.queryByLabelText('Live agent transcript')).not.toBeInTheDocument();
   });
 
   it('reserves a stable two-pane record desk while the archive loads', () => {

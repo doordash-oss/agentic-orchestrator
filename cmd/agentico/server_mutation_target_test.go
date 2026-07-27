@@ -457,9 +457,6 @@ func TestServerMutationTargetStartRebaseStartsFeatureRebasePromptly(t *testing.T
 	if resp.FeatureID != "feat-rebase" || resp.Result != resultStarted || resp.CycleType != string(feature.CycleRebase) {
 		t.Fatalf("StartRebase response = %+v, want started feature rebase", resp)
 	}
-	if resp.SessionID != "" {
-		t.Fatalf("StartRebase response leaked session field: %+v", resp)
-	}
 	if got := strings.Join(starter.featureIDs, ","); got != "feat-rebase" {
 		t.Fatalf("StartFeatureRebase calls = %q, want feat-rebase", got)
 	}

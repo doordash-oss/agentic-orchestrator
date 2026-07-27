@@ -2416,8 +2416,6 @@ components:
           properties:
             cycle_type:
               type: string
-            session_id:
-              type: string
     ReviewComment:
       type: object
       required: [id]
@@ -3173,6 +3171,12 @@ components:
           type: integer
         phase:
           type: string
+        last_error:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
     Checkpoints:
       type: object
       required:

@@ -66,13 +66,15 @@ type MockFeatureLifecycle struct {
 	AllKBsCompletedFn     func(featureID string) (bool, error)
 
 	// Plan / review hooks.
-	NeedsPlanReviewFn             func(featureID string) error
-	StartAddressingReviewsFn      func(featureID string) error
-	ClearAddressingReviewsFn      func(featureID string) error
-	StartFeatureRebaseOperationFn func(featureID string) error
-	MarkFeatureRebaseStageFn      func(featureID string, stage feature.RebaseStage) error
-	UpdateFeatureRebaseRepoFn     func(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error
-	ClearFeatureRebaseOperationFn func(featureID string) error
+	NeedsPlanReviewFn                func(featureID string) error
+	StartAddressingReviewsFn         func(featureID string) error
+	ClearAddressingReviewsFn         func(featureID string) error
+	StartFeatureRebaseOperationFn    func(featureID string) error
+	MarkFeatureRebaseStageFn         func(featureID string, stage feature.RebaseStage) error
+	UpdateFeatureRebaseRepoFn        func(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error
+	FailFeatureRebaseCycleFn         func(featureID, errMsg string) error
+	MarkFeatureRebaseNeedUserInputFn func(featureID, gatePath string, iteration int, summary string) error
+	ClearFeatureRebaseOperationFn    func(featureID string) error
 
 	// Roadmap hooks.
 	AdvanceRoadmapPhaseFn             func(featureID string) error
@@ -441,6 +443,22 @@ func (m *MockFeatureLifecycle) UpdateFeatureRebaseRepo(featureID, repoName strin
 	m.record("UpdateFeatureRebaseRepo", featureID, repoName, status, progress)
 	if m.UpdateFeatureRebaseRepoFn != nil {
 		return m.UpdateFeatureRebaseRepoFn(featureID, repoName, status, progress)
+	}
+	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) FailFeatureRebaseCycle(featureID, errMsg string) error {
+	m.record("FailFeatureRebaseCycle", featureID, errMsg)
+	if m.FailFeatureRebaseCycleFn != nil {
+		return m.FailFeatureRebaseCycleFn(featureID, errMsg)
+	}
+	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) MarkFeatureRebaseNeedUserInput(featureID, gatePath string, iteration int, summary string) error {
+	m.record("MarkFeatureRebaseNeedUserInput", featureID, gatePath, iteration, summary)
+	if m.MarkFeatureRebaseNeedUserInputFn != nil {
+		return m.MarkFeatureRebaseNeedUserInputFn(featureID, gatePath, iteration, summary)
 	}
 	return m.DefaultError
 }

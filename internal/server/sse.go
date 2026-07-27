@@ -516,6 +516,8 @@ func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
 		resourceType = resourceTypeSession
 	case ports.RepoStatusChanged:
 		kind = sseEventLifecycleUpdated
+	case ports.CycleProgress:
+		kind = sseEventLifecycleUpdated
 	case ports.FeatureFailed:
 		kind = sseEventLifecycleUpdated
 	}
@@ -578,6 +580,8 @@ func safeEventSummary(ev ports.Event) string {
 		return "user input required"
 	case ports.FeatureConfigChanged:
 		return "config changed"
+	case ports.CycleProgress:
+		return "cycle progress"
 	default:
 		return ""
 	}

@@ -403,6 +403,8 @@ export const ServerCycleSchema = z.object({
   count: z.number().int().nonnegative().optional(),
   iteration: z.number().int().nonnegative().optional(),
   phase: z.string().optional(),
+  last_error: z.string().optional(),
+  started_at: z.string().datetime({ offset: true }).optional(),
 });
 export type ServerCycle = z.output<typeof ServerCycleSchema>;
 
@@ -875,7 +877,6 @@ export const RebaseStartResponseSchema = z.object({
   feature_id: z.string(),
   cycle_type: z.string(),
   result: z.string(),
-  session_id: z.string().optional(),
 });
 export type RebaseStartResponse = z.output<typeof RebaseStartResponseSchema>;
 

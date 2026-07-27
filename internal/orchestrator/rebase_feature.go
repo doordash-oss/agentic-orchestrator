@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -41,6 +42,7 @@ func (o *Orchestrator) StartFeatureRebase(featureID string) error {
 	if err := o.deps.Lifecycle.StartFeatureRebaseOperation(featureID); err != nil {
 		return fmt.Errorf("start feature rebase operation: %w", err)
 	}
+	o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
 	o.cycleWG.Go(func() {
 		o.runFeatureRebase(featureID)
 	})
@@ -74,12 +76,21 @@ func (o *Orchestrator) ResumeFeatureRebase(featureID string) error {
 		f.SetActiveCycleType(feature.CycleRebase)
 		f.LastError = ""
 		f.FailureType = ""
+		now := time.Now()
+		f.ActiveTimingKey = fmt.Sprintf("rebase-%d", f.ActiveCycle.Count)
+		f.ActivePhaseStart = &now
 		stage = f.RebaseOperation.Stage
 		return nil
 	}); err != nil {
 		return fmt.Errorf("resume feature rebase: %w", err)
 	}
 
+	o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
+	o.resumeRebaseFromOperation(featureID, stage)
+	return nil
+}
+
+func (o *Orchestrator) resumeRebaseFromOperation(featureID string, stage feature.RebaseStage) {
 	o.cycleWG.Go(func() {
 		f, err := o.deps.Lifecycle.Get(featureID)
 		if err != nil || f == nil || f.RebaseOperation == nil {
@@ -87,21 +98,85 @@ func (o *Orchestrator) ResumeFeatureRebase(featureID string) error {
 		}
 		outcomes := featureRebaseOutcomesFromOperation(o, f)
 		conflicted := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusConflict)
+		changed := rebaseChangedOutcomes(outcomes, conflicted)
 		switch {
-		case stage == feature.RebaseStageSmartRebase || len(conflicted) > 0:
+		case stage == feature.RebaseStageSmartRebase:
 			o.startCoordinatedSmartRebase(featureID, outcomes, conflicted, true)
 		case stage == feature.RebaseStageFinalReview:
-			changed := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusChanged)
-			for _, outcome := range conflicted {
-				outcome.Status = feature.RebaseRepoStatusChanged
-				outcome.Changed = true
-				changed = append(changed, outcome)
-			}
 			o.runRebaseFinalReviewAndPublishPolicy(featureID, changed)
+		case stage == feature.RebaseStagePublish:
+			o.runRebasePublishPolicy(featureID, changed, f.Status)
 		default:
 			o.runFeatureRebase(featureID)
 		}
 	})
+}
+
+func rebaseChangedOutcomes(
+	outcomes []HarnessRebaseRepoOutcome,
+	conflicted []HarnessRebaseRepoOutcome,
+) []HarnessRebaseRepoOutcome {
+	changed := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusChanged)
+	for _, outcome := range conflicted {
+		outcome.Status = feature.RebaseRepoStatusChanged
+		outcome.Changed = true
+		changed = append(changed, outcome)
+	}
+	return changed
+}
+
+// RetryFeatureRebase restarts a retained failed/interrupted operation from its
+// durable stage without allocating a new cycle count.
+func (o *Orchestrator) RetryFeatureRebase(featureID string) error {
+	if o.deps.Lifecycle == nil || o.deps.Store == nil {
+		return errors.New("feature lifecycle not configured")
+	}
+	o.clearFeatureRebaseStopRequest(featureID)
+	var stage feature.RebaseStage
+	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if f.ActiveCycle == nil || featureRebaseActiveCycleType(f) != feature.CycleRebase ||
+			f.RebaseOperation == nil {
+			return errors.New("feature has no retained rebase cycle")
+		}
+		switch f.ActiveCycle.Status {
+		case feature.RepoCycleFailed, feature.RepoCycleInterrupted:
+		default:
+			return fmt.Errorf("rebase cycle is not retryable (status=%s)", f.ActiveCycle.Status)
+		}
+		if len(f.PRURLs()) > 0 {
+			f.Status = feature.StatusPublished
+		} else {
+			f.Status = feature.StatusCodeReady
+		}
+		f.CurrentPhase = feature.PhasePublish
+		f.ActiveCycle.Status = feature.RepoCycleRunning
+		f.ActiveCycle.LastError = ""
+		f.ActiveCycle.PendingNeedUserInputPath = ""
+		f.LastError = ""
+		f.FailureType = ""
+		f.SetActiveCycleType(feature.CycleRebase)
+		stage = f.RebaseOperation.Stage
+		for repoName, progress := range f.RebaseOperation.Repos {
+			if progress == nil || progress.Status != feature.RebaseRepoStatusFailed {
+				continue
+			}
+			if stage == feature.RebaseStageHarness {
+				delete(f.RebaseOperation.Repos, repoName)
+				continue
+			}
+			progress.Status = feature.RebaseRepoStatusChanged
+			progress.LastError = ""
+			progress.Changed = true
+		}
+		now := time.Now()
+		f.ActiveTimingKey = fmt.Sprintf("rebase-%d", f.ActiveCycle.Count)
+		f.ActivePhaseStart = &now
+		return nil
+	}); err != nil {
+		return fmt.Errorf("retry feature rebase: %w", err)
+	}
+	o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
+	o.resumeRebaseFromOperation(featureID, stage)
 	return nil
 }
 
@@ -129,12 +204,25 @@ func featureRebaseOutcomesFromOperation(o *Orchestrator, f *feature.Feature) []H
 func (o *Orchestrator) runFeatureRebase(featureID string) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, fmt.Errorf("load feature: %w", err))
+		return
+	}
+	if f.RebaseOperation == nil {
 		return
 	}
 
 	outcomes := make([]HarnessRebaseRepoOutcome, 0, len(f.Repos))
 	for _, repo := range f.Repos {
+		if progress := f.RebaseOperation.Repos[repo.Name]; progress != nil &&
+			reusableHarnessRebaseProgress(progress.Status) {
+			outcome := o.harnessRebaseOutcomeForRepo(f, repo)
+			outcome.Status = progress.Status
+			outcome.RebaseTarget = progress.RebaseTarget
+			outcome.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
+			outcome.Changed = progress.Changed
+			outcomes = append(outcomes, outcome)
+			continue
+		}
 		if ok, _ := o.updateFeatureRebaseRepoIfContinuing(
 			featureID,
 			repo.Name,
@@ -179,6 +267,17 @@ func (o *Orchestrator) runFeatureRebase(featureID string) {
 	o.finishHarnessRebase(featureID, outcomes)
 }
 
+func reusableHarnessRebaseProgress(status feature.RebaseRepoStatus) bool {
+	switch status {
+	case feature.RebaseRepoStatusUpToDate,
+		feature.RebaseRepoStatusChanged,
+		feature.RebaseRepoStatusConflict:
+		return true
+	default:
+		return false
+	}
+}
+
 func (o *Orchestrator) finishHarnessRebase(featureID string, outcomes []HarnessRebaseRepoOutcome) {
 	if !o.shouldContinueFeatureRebase(featureID) {
 		return
@@ -187,22 +286,25 @@ func (o *Orchestrator) finishHarnessRebase(featureID string, outcomes []HarnessR
 	failed := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusFailed)
 	conflicted := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusConflict)
 	if len(failed) > 0 {
+		causes := make([]error, 0, len(failed))
 		if err := o.runFeatureRebaseStateMutation(featureID, func() error {
 			for _, outcome := range failed {
 				cause := outcome.Err
 				if cause == nil {
 					cause = fmt.Errorf("rebase harness failed for repo %s", outcome.RepoName)
 				}
+				causes = append(causes, fmt.Errorf("%s: %w", outcome.RepoName, cause))
 				_ = o.RecordRebasePreflightFailure(featureID, outcome.RepoName, cause)
 			}
 			return nil
 		}); errors.Is(err, errFeatureRebaseStopped) {
 			return
 		}
-		if len(conflicted) > 0 {
-			return
+		cause := errors.Join(causes...)
+		if cause == nil {
+			cause = errors.New("rebase harness failed")
 		}
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return
 	}
 
@@ -217,7 +319,9 @@ func (o *Orchestrator) finishHarnessRebase(featureID string, outcomes []HarnessR
 		return
 	}
 
-	_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+	if err := o.clearFeatureRebaseOperationIfContinuing(featureID); err == nil {
+		o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
+	}
 }
 
 func harnessRebaseOutcomesWithStatus(outcomes []HarnessRebaseRepoOutcome, status feature.RebaseRepoStatus) []HarnessRebaseRepoOutcome {
@@ -258,6 +362,7 @@ func (o *Orchestrator) updateFeatureRebaseRepoIfContinuing(
 		}
 		return true, err
 	}
+	o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID, RepoName: repoName})
 	return true, nil
 }
 
@@ -270,6 +375,7 @@ func (o *Orchestrator) markFeatureRebaseStageIfContinuing(featureID string, stag
 		}
 		return true, err
 	}
+	o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
 	return true, nil
 }
 
@@ -284,8 +390,9 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		o.failChangedRebaseRepos(featureID, conflicted, fmt.Errorf("load feature: %w", err))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		cause := fmt.Errorf("load feature: %w", err)
+		o.failChangedRebaseRepos(featureID, conflicted, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return
 	}
 
@@ -294,15 +401,16 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 	if ok, err := o.markFeatureRebaseStageIfContinuing(featureID, feature.RebaseStageSmartRebase); !ok {
 		return
 	} else if err != nil {
-		o.failChangedRebaseRepos(featureID, conflicted, fmt.Errorf("mark smart rebase stage: %w", err))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		cause := fmt.Errorf("mark smart rebase stage: %w", err)
+		o.failChangedRebaseRepos(featureID, conflicted, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return
 	}
 
 	cfg, err := o.rebaseLoopConfigForFeature(f, targets, resumeExistingCycle)
 	if err != nil {
 		o.failChangedRebaseRepos(featureID, conflicted, err)
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, err)
 		return
 	}
 	beforeFingerprints := o.featureRebaseWorktreeFingerprints(f)
@@ -322,9 +430,41 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 	if !o.shouldContinueFeatureRebase(featureID) {
 		return
 	}
+	if result != nil && result.FinalStatus == finalStatusNeedUserInput {
+		summary := strings.TrimSpace(result.LastError)
+		if summary == "" {
+			summary = "smart rebase iteration emitted NEED_USER_INPUT without a description"
+		}
+		if err := o.runFeatureRebaseStateMutation(featureID, func() error {
+			return o.deps.Lifecycle.MarkFeatureRebaseNeedUserInput(
+				featureID,
+				result.NeedUserInputPath,
+				result.Iterations,
+				summary,
+			)
+		}); err != nil {
+			if !errors.Is(err, errFeatureRebaseStopped) {
+				o.failChangedRebaseRepos(featureID, conflicted, err)
+				_ = o.failFeatureRebaseCycleIfContinuing(featureID, err)
+			}
+			return
+		}
+		o.emitEventBlocking(ports.Event{
+			Type:      ports.NeedUserInputRequired,
+			FeatureID: featureID,
+			Phase:     feature.PhaseImplement,
+			Message:   summary,
+		})
+		o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
+		return
+	}
+	if result != nil && result.FinalStatus == finalStatusInterrupted {
+		return
+	}
 	if loopErr != nil || result == nil || result.FinalStatus != reviewStatusPassed {
-		o.failChangedRebaseRepos(featureID, conflicted, smartRebaseFailureCause(result, loopErr))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		cause := smartRebaseFailureCause(result, loopErr)
+		o.failChangedRebaseRepos(featureID, conflicted, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return
 	}
 
@@ -349,8 +489,9 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 			return
 		}
 		if err != nil {
-			o.failChangedRebaseRepos(featureID, []HarnessRebaseRepoOutcome{outcome}, fmt.Errorf("mark context repo changed: %w", err))
-			_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+			cause := fmt.Errorf("mark context repo changed: %w", err)
+			o.failChangedRebaseRepos(featureID, []HarnessRebaseRepoOutcome{outcome}, cause)
+			_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 			return
 		}
 		changed = append(changed, outcome)
@@ -595,76 +736,122 @@ func (o *Orchestrator) runRebaseFinalReviewAndPublishPolicy(
 		if !o.shouldContinueFeatureRebase(featureID) {
 			return
 		}
-		o.failChangedRebaseRepos(featureID, changed, fmt.Errorf("mark rebase final review stage: %w", err))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		cause := fmt.Errorf("mark rebase final review stage: %w", err)
+		o.failChangedRebaseRepos(featureID, changed, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return
 	}
 
-	originalStatus, err := o.prepareRebaseFinalReview(featureID)
+	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		if errors.Is(err, errFeatureRebaseStopped) {
-			return
-		}
-		o.failChangedRebaseRepos(featureID, changed, fmt.Errorf("prepare rebase final review: %w", err))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		cause := fmt.Errorf("load feature for rebase final review: %w", err)
+		o.failChangedRebaseRepos(featureID, changed, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return
 	}
+	originalStatus := f.Status
 
-	if err := o.runDeferredFinalReviewForRebase(featureID); err != nil {
-		if errors.Is(err, errFeatureRebaseStopped) || errors.Is(err, errFinalReviewInterrupted) {
-			return
+	var resultCh chan *agent.FeatureFinalReviewResult
+	err = o.runFeatureRebaseExternalStep(featureID, func() error {
+		runFinalReview := o.runFeatureCycleFinalReviewFn
+		if runFinalReview == nil {
+			return errors.New("feature cycle final review not configured")
 		}
-		o.failChangedRebaseRepos(featureID, changed, fmt.Errorf("rebase final review failed: %w", err))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		var dispatchErr error
+		resultCh, dispatchErr = runFinalReview(f)
+		if dispatchErr != nil {
+			return dispatchErr
+		}
+		return nil
+	})
+	if errors.Is(err, errFeatureRebaseStopped) {
 		return
 	}
-
+	var result *agent.FeatureFinalReviewResult
+	if err == nil {
+		var ok bool
+		result, ok = <-resultCh
+		if !ok {
+			err = errors.New("feature cycle final review closed without a result")
+		}
+	}
 	if !o.shouldContinueFeatureRebase(featureID) {
 		return
 	}
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		o.failChangedRebaseRepos(featureID, changed, fmt.Errorf("reload after rebase final review: %w", err))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+	if err != nil || result == nil || result.FinalStatus != reviewStatusPassed {
+		cause := err
+		if cause == nil {
+			switch {
+			case result == nil:
+				cause = errors.New("rebase final review returned no result")
+			case result.LastError != "":
+				cause = errors.New(result.LastError)
+			default:
+				cause = fmt.Errorf("rebase final review finished with status %s", result.FinalStatus)
+			}
+		}
+		cause = fmt.Errorf("rebase final review failed: %w", cause)
+		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, cause)
+		o.failChangedRebaseRepos(featureID, changed, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return
 	}
-	if !featureRebaseCanContinue(f) {
+	o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
+
+	if ok, stageErr := o.markFeatureRebaseStageIfContinuing(featureID, feature.RebaseStagePublish); !ok {
+		return
+	} else if stageErr != nil {
+		cause := fmt.Errorf("mark rebase publish stage: %w", stageErr)
+		o.failChangedRebaseRepos(featureID, changed, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return
 	}
 
-	autoPush := originalStatus == feature.StatusPublished && f.Checkpoints.AutoPublish()
+	o.runRebasePublishPolicy(featureID, changed, originalStatus)
+}
+
+func (o *Orchestrator) runRebasePublishPolicy(
+	featureID string,
+	changed []HarnessRebaseRepoOutcome,
+	originalStatus feature.Status,
+) {
+	current, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		cause := fmt.Errorf("load rebase publish policy: %w", err)
+		o.failChangedRebaseRepos(featureID, changed, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
+		return
+	}
+	autoPush := originalStatus == feature.StatusPublished && current.Checkpoints.AutoPublish()
 	if autoPush && o.runRebaseAutoPushForcePush(featureID, changed) {
 		return
 	}
-
-	if err := o.runFeatureRebaseStateMutation(featureID, func() error {
-		return o.deps.Lifecycle.MarkCodeReady(featureID)
-	}); errors.Is(err, errFeatureRebaseStopped) {
-		return
-	} else if err != nil {
-		o.failChangedRebaseRepos(featureID, changed, fmt.Errorf("mark code ready after rebase final review: %w", err))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
-		return
-	}
-	if autoPush {
-		if err := o.runFeatureRebaseStateMutation(featureID, func() error {
-			return o.deps.Lifecycle.ReturnToPublished(featureID)
+	if !autoPush {
+		if err = o.runFeatureRebaseStateMutation(featureID, func() error {
+			return o.deps.Store.Modify(featureID, func(current *feature.Feature) error {
+				current.Status = feature.StatusCodeReady
+				current.CurrentPhase = feature.PhasePublish
+				return nil
+			})
 		}); errors.Is(err, errFeatureRebaseStopped) {
 			return
 		} else if err != nil {
-			o.failChangedRebaseRepos(featureID, changed, fmt.Errorf("return to published after rebase push: %w", err))
-			_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+			cause := fmt.Errorf("mark code ready after rebase final review: %w", err)
+			o.failChangedRebaseRepos(featureID, changed, cause)
+			_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 			return
 		}
 	}
-	if err := o.runFeatureRebaseStateMutation(featureID, func() error {
+	if err = o.runFeatureRebaseStateMutation(featureID, func() error {
 		return o.clearRebaseSuccessState(featureID, changed)
 	}); errors.Is(err, errFeatureRebaseStopped) {
 		return
 	} else if err != nil {
 		o.failChangedRebaseRepos(featureID, changed, err)
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, err)
+		return
 	}
+	o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
 }
 
 // runRebaseAutoPushForcePush force-pushes each publishable rebased repo when
@@ -672,13 +859,15 @@ func (o *Orchestrator) runRebaseFinalReviewAndPublishPolicy(
 // should return immediately when stop is true.
 func (o *Orchestrator) runRebaseAutoPushForcePush(featureID string, changed []HarnessRebaseRepoOutcome) (stop bool) {
 	if o.deps.Rebaser == nil {
-		o.failChangedRebaseRepos(featureID, changed, errors.New("rebase operator not configured for force push"))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		cause := errors.New("rebase operator not configured for force push")
+		o.failChangedRebaseRepos(featureID, changed, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return true
 	}
 	if o.deps.Publisher == nil {
-		o.failChangedRebaseRepos(featureID, changed, errors.New("publisher not configured for committing rebased repos"))
-		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		cause := errors.New("publisher not configured for committing rebased repos")
+		o.failChangedRebaseRepos(featureID, changed, cause)
+		_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 		return true
 	}
 	for _, outcome := range changed {
@@ -695,9 +884,9 @@ func (o *Orchestrator) runRebaseAutoPushForcePush(featureID string, changed []Ha
 		case errors.Is(err, errFeatureRebaseStopped):
 			return true
 		case err != nil:
-			o.failChangedRebaseRepos(featureID, []HarnessRebaseRepoOutcome{outcome},
-				fmt.Errorf("force push rebased repo %s: %w", outcome.RepoName, err))
-			_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+			cause := fmt.Errorf("force push rebased repo %s: %w", outcome.RepoName, err)
+			o.failChangedRebaseRepos(featureID, []HarnessRebaseRepoOutcome{outcome}, cause)
+			_ = o.failFeatureRebaseCycleIfContinuing(featureID, cause)
 			return true
 		}
 	}
@@ -716,26 +905,6 @@ func (o *Orchestrator) commitRebaseOutcomeIfDirty(outcome HarnessRebaseRepoOutco
 		return fmt.Errorf("commit rebased repo %s: %w", outcome.RepoName, err)
 	}
 	return nil
-}
-
-func (o *Orchestrator) runDeferredFinalReviewForRebase(featureID string) error {
-	var (
-		resultCh chan *agent.OrchestratorResult
-		err      error
-	)
-
-	err = o.runFeatureRebaseStateMutation(featureID, func() error {
-		resultCh, err = o.startDeferredFinalReview(featureID)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-
-	res, ok := <-resultCh
-	return o.runFeatureRebaseStateMutation(featureID, func() error {
-		return o.finishDeferredFinalReviewResult(featureID, res, ok)
-	})
 }
 
 func (o *Orchestrator) shouldContinueFeatureRebase(featureID string) bool {
@@ -767,6 +936,23 @@ func (o *Orchestrator) clearFeatureRebaseOperationIfContinuing(featureID string)
 	return o.runFeatureRebaseStateMutation(featureID, func() error {
 		return o.deps.Lifecycle.ClearFeatureRebaseOperation(featureID)
 	})
+}
+
+func (o *Orchestrator) failFeatureRebaseCycleIfContinuing(featureID string, cause error) error {
+	if cause == nil {
+		cause = errors.New("rebase failed")
+	}
+	err := o.runFeatureRebaseStateMutation(featureID, func() error {
+		return o.deps.Lifecycle.FailFeatureRebaseCycle(featureID, cause.Error())
+	})
+	if err == nil {
+		o.emitEvent(ports.Event{
+			Type:      ports.CycleProgress,
+			FeatureID: featureID,
+			Error:     cause,
+		})
+	}
+	return err
 }
 
 func (o *Orchestrator) runFeatureRebaseStateMutation(featureID string, fn func() error) error {
@@ -828,36 +1014,6 @@ func featureRebaseActiveCycleType(f *feature.Feature) feature.RepoCycleType {
 		return f.ActiveCycle.Type
 	}
 	return f.ActiveCycleType()
-}
-
-func markInterruptedRebaseActiveCycle(f *feature.Feature) {
-	if f == nil || f.ActiveCycle == nil || featureRebaseActiveCycleType(f) != feature.CycleRebase {
-		return
-	}
-	f.ActiveCycle.Status = feature.RepoCycleInterrupted
-	f.ActiveCycle.LastError = ""
-}
-
-func (o *Orchestrator) prepareRebaseFinalReview(featureID string) (feature.Status, error) {
-	if o.deps.Store == nil {
-		return feature.StatusCreated, errors.New("feature store not configured")
-	}
-	var originalStatus feature.Status
-	if err := o.runFeatureRebaseStateMutation(featureID, func() error {
-		return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-			if !featureRebaseCanContinue(f) {
-				markInterruptedRebaseActiveCycle(f)
-				return errFeatureRebaseStopped
-			}
-			originalStatus = f.Status
-			f.Status = feature.StatusReviewPassed
-			f.CurrentPhase = feature.PhaseImplement
-			return nil
-		})
-	}); err != nil {
-		return feature.StatusCreated, err
-	}
-	return originalStatus, nil
 }
 
 func (o *Orchestrator) failChangedRebaseRepos(

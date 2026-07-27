@@ -39,6 +39,8 @@ import { CycleWorkspace } from './CycleWorkspace';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
 import {
   cycleIdentity,
+  ownsPostImplementationStage,
+  receiptForCycleEnd,
   resolvePostImplementationMode,
   type AftercareAction,
   type CycleReceipt,
@@ -126,28 +128,6 @@ const TASK_STATUS_ICON: Record<SetupTaskView['status'], string> = {
 
 const MAX_ITERATIONS_RESTART_DELTA = 10;
 const MAX_PLAN_ITERATIONS_RESTART_DELTA = 2;
-
-function ownsPostImplementationStage(cycle?: CycleView): boolean {
-  return (
-    cycle?.type !== undefined &&
-    ['running', 'reviewing', 'need_user_input', 'failed'].includes(cycle.status ?? '')
-  );
-}
-
-function asAftercareCycleId(value?: string): AftercareCycleId | null {
-  return value === 'rebase' || value === 'review-comments' || value === 'refactor' ? value : null;
-}
-
-function cycleReceiptLabel(id: AftercareCycleId): string {
-  switch (id) {
-    case 'rebase':
-      return 'Rebase';
-    case 'review-comments':
-      return 'Review comments';
-    case 'refactor':
-      return 'Refactor';
-  }
-}
 
 function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch: string | null }) {
   return (
@@ -923,7 +903,7 @@ export function FeatureCockpit({
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
-  const [dismissedFailureId, setDismissedFailureId] = useState<string | undefined>();
+  const [dismissedCycleId, setDismissedCycleId] = useState<string | undefined>();
   const [cycleReceipt, setCycleReceipt] = useState<CycleReceipt | undefined>();
   const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
   const [configOpen, setConfigOpen] = useState(false);
@@ -1047,10 +1027,7 @@ export function FeatureCockpit({
         : undefined;
     const current = state.snapshot.cycle;
     if (ownsPostImplementationStage(previous) && !ownsPostImplementationStage(current)) {
-      const id = asAftercareCycleId(previous?.type);
-      if (id !== null) {
-        setCycleReceipt({ id, message: `${cycleReceiptLabel(id)} cycle complete.` });
-      }
+      setCycleReceipt(receiptForCycleEnd(previous, state.snapshot));
     }
     previousCycleRef.current = {
       featureId,
@@ -1602,10 +1579,14 @@ export function FeatureCockpit({
     completion.preflight !== null
       ? completionBarModel(completion.preflight, completionCandidates)
       : [];
+  const openCompletionModal = (verb: CompletionVerb): void => {
+    setCompletionModal(null);
+    void completion.refresh().then(() => setCompletionModal(verb));
+  };
   const completionControls =
     completionEnabled && barVerbs.length > 0 ? (
       isNarrow ? (
-        <CompletionWrapUpMenu verbs={barVerbs} onSelect={(v) => setCompletionModal(v)} />
+        <CompletionWrapUpMenu verbs={barVerbs} onSelect={openCompletionModal} />
       ) : (
         <>
           {barVerbs.map((v) =>
@@ -1614,7 +1595,7 @@ export function FeatureCockpit({
                 key={v.verb}
                 type="button"
                 className="cockpit__completion-chip"
-                onClick={() => setCompletionModal(v.verb)}
+                onClick={() => openCompletionModal(v.verb)}
                 aria-label={`${v.label} — reopen`}
               >
                 {v.label} ✓
@@ -1628,7 +1609,7 @@ export function FeatureCockpit({
                 }
                 disabled={v.state === 'blocked'}
                 title={v.state === 'blocked' ? v.blocker : undefined}
-                onClick={() => setCompletionModal(v.verb)}
+                onClick={() => openCompletionModal(v.verb)}
               >
                 {v.label}
               </button>
@@ -1638,14 +1619,14 @@ export function FeatureCockpit({
       )
     ) : null;
 
-  const postImplementationMode = resolvePostImplementationMode(snapshot, dismissedFailureId);
+  const postImplementationMode = resolvePostImplementationMode(snapshot, dismissedCycleId);
   const postMenuActions = menuActions.filter(
     (action) =>
       !['start', 'stop', 'setup', 'rebase', 'review-comments', 'refactor'].includes(action.key),
   );
   const openAftercareAction = (action: AftercareAction): void => {
     if (action.id === 'publish') {
-      setCompletionModal('publish');
+      openCompletionModal('publish');
       return;
     }
     setCycleModal(action.id);
@@ -1672,6 +1653,8 @@ export function FeatureCockpit({
               snapshot={snapshot}
               run={aftercareRun}
               receipt={cycleReceipt}
+              onRetry={retry}
+              onReopenCycle={() => setDismissedCycleId(undefined)}
               onAction={openAftercareAction}
               onOpenRunRecord={() => setRunRecordOpen(true)}
               onOpenChanges={() => setChangesOpen(true)}
@@ -1689,7 +1672,10 @@ export function FeatureCockpit({
             onStop={() => void openStopDialog()}
             onResume={resume}
             onRetry={retry}
-            onReturnToAftercare={() => setDismissedFailureId(cycleIdentity(snapshot) ?? undefined)}
+            onReturnToAftercare={() => {
+              setCycleReceipt(receiptForCycleEnd(snapshot.cycle, snapshot));
+              setDismissedCycleId(cycleIdentity(snapshot) ?? undefined);
+            }}
             onOpenRunRecord={() => setRunRecordOpen(true)}
             onOpenPullRequest={(url) => {
               void window.agentico.openExternal({ url });
@@ -1895,6 +1881,15 @@ export function FeatureCockpit({
             dispatchAction={dispatchCompletion}
             onClose={() => setCompletionModal(null)}
             onDispatched={onCompletionDispatched}
+          />
+        ) : null}
+
+        {deleteDialog ? (
+          <DeleteConfirmDialog
+            snapshot={snapshot}
+            busy={busy}
+            onClose={() => setDeleteDialog(false)}
+            onConfirm={confirmDelete}
           />
         ) : null}
       </section>

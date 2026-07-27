@@ -1265,7 +1265,6 @@ export interface components {
         RetryFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RebaseStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             cycle_type: string;
-            session_id?: string;
         };
         ReviewComment: {
             id: number;
@@ -1617,6 +1616,9 @@ export interface components {
             count?: number;
             iteration?: number;
             phase?: string;
+            last_error?: string;
+            /** Format: date-time */
+            started_at?: string;
         };
         Checkpoints: {
             inquiry_review: boolean;

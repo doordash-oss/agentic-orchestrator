@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -156,16 +157,16 @@ func countRebaseMockCalls(calls []mocks.MockCall, method string) int {
 	return count
 }
 
-func rebaseFinalReviewResult(result *agent.OrchestratorResult) chan *agent.OrchestratorResult {
-	ch := make(chan *agent.OrchestratorResult, 1)
+func rebaseFinalReviewResult(result *agent.FeatureFinalReviewResult) chan *agent.FeatureFinalReviewResult {
+	ch := make(chan *agent.FeatureFinalReviewResult, 1)
 	ch <- result
 	return ch
 }
 
-func (f *featureRebaseHarnessFixture) setFinalReviewResult(result *agent.OrchestratorResult, before func()) *int {
+func (f *featureRebaseHarnessFixture) setFinalReviewResult(result *agent.FeatureFinalReviewResult, before func()) *int {
 	f.t.Helper()
 	calls := 0
-	f.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	f.orch.SetRunFeatureCycleFinalReviewFn(func(*feature.Feature) (chan *agent.FeatureFinalReviewResult, error) {
 		calls++
 		if before != nil {
 			before()
@@ -177,7 +178,7 @@ func (f *featureRebaseHarnessFixture) setFinalReviewResult(result *agent.Orchest
 
 func (f *featureRebaseHarnessFixture) setFinalReviewPassed(before func()) *int {
 	f.t.Helper()
-	return f.setFinalReviewResult(&agent.OrchestratorResult{FinalStatus: finalStatusAllPassed}, before)
+	return f.setFinalReviewResult(&agent.FeatureFinalReviewResult{FinalStatus: reviewStatusPassed}, before)
 }
 
 func forcePushCalls(calls []mocks.MockCall) []mocks.MockCall {
@@ -198,6 +199,20 @@ func publisherCalls(calls []mocks.MockCall, method string) []mocks.MockCall {
 		}
 	}
 	return out
+}
+
+func drainCycleProgressEvents(orch *Orchestrator) []ports.Event {
+	var events []ports.Event
+	for {
+		select {
+		case event := <-orch.Events():
+			if event.Type == ports.CycleProgress {
+				events = append(events, event)
+			}
+		default:
+			return events
+		}
+	}
 }
 
 func TestFeatureRebaseSessionStartFuncBlocksInterruptUntilStartReturns(t *testing.T) {
@@ -273,7 +288,7 @@ func TestStartFeatureRebaseHarnessNoOpClearsOperationWithoutSmartAgentOrFinalRev
 		t.Fatal("smart rebase agent should not start for no-op harness")
 		return nil, nil
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	fixture.orch.SetRunFeatureCycleFinalReviewFn(func(*feature.Feature) (chan *agent.FeatureFinalReviewResult, error) {
 		t.Fatal("Final Review should not start for no-op harness")
 		return nil, nil
 	})
@@ -293,6 +308,17 @@ func TestStartFeatureRebaseHarnessNoOpClearsOperationWithoutSmartAgentOrFinalRev
 	if got := countRebaseMockCalls(fixture.rebaser.Calls, "ForcePush"); got != 0 {
 		t.Fatalf("ForcePush calls = %d, want 0", got)
 	}
+	events := drainCycleProgressEvents(fixture.orch)
+	if len(events) < 8 {
+		t.Fatalf("CycleProgress events = %d, want start + three updates per repo + success", len(events))
+	}
+	repoEvents := map[string]int{}
+	for _, event := range events {
+		repoEvents[event.RepoName]++
+	}
+	if repoEvents[apiRepoName] < 3 || repoEvents[webRepoName] < 3 {
+		t.Fatalf("per-repo CycleProgress events = %+v, want at least three for api and web", repoEvents)
+	}
 }
 
 func TestStartFeatureRebaseHarnessFailurePersistsRepoErrorAndSkipsSmartAgent(t *testing.T) {
@@ -308,7 +334,7 @@ func TestStartFeatureRebaseHarnessFailurePersistsRepoErrorAndSkipsSmartAgent(t *
 		t.Fatal("smart rebase agent should not start after harness failure")
 		return nil, nil
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	fixture.orch.SetRunFeatureCycleFinalReviewFn(func(*feature.Feature) (chan *agent.FeatureFinalReviewResult, error) {
 		t.Fatal("Final Review should not start after harness failure")
 		return nil, nil
 	})
@@ -322,14 +348,24 @@ func TestStartFeatureRebaseHarnessFailurePersistsRepoErrorAndSkipsSmartAgent(t *
 	if got := loaded.RepoStates[apiRepoName].LastError; !strings.Contains(got, "fetch denied") {
 		t.Fatalf("RepoStates[api].LastError = %q, want fetch denied", got)
 	}
-	if loaded.ActiveCycle != nil {
-		t.Fatalf("ActiveCycle = %+v, want nil", loaded.ActiveCycle)
+	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleFailed ||
+		!strings.Contains(loaded.ActiveCycle.LastError, "fetch denied") {
+		t.Fatalf("ActiveCycle = %+v, want retained fetch failure", loaded.ActiveCycle)
 	}
-	if loaded.RebaseOperation != nil {
-		t.Fatalf("RebaseOperation = %+v, want nil", loaded.RebaseOperation)
+	if loaded.RebaseOperation == nil || loaded.RebaseOperation.Stage != feature.RebaseStageHarness {
+		t.Fatalf("RebaseOperation = %+v, want retained harness operation", loaded.RebaseOperation)
 	}
 	if got := countRebaseMockCalls(fixture.rebaser.Calls, "ForcePush"); got != 0 {
 		t.Fatalf("ForcePush calls = %d, want 0", got)
+	}
+	var sawFailureEvent bool
+	for _, event := range drainCycleProgressEvents(fixture.orch) {
+		if event.Error != nil && strings.Contains(event.Error.Error(), "fetch denied") {
+			sawFailureEvent = true
+		}
+	}
+	if !sawFailureEvent {
+		t.Fatal("CycleProgress did not expose the retained harness failure")
 	}
 }
 
@@ -360,7 +396,7 @@ func TestStartFeatureRebaseHarnessMixedConflictAndFailurePreservesOperation(t *t
 		t.Fatal("smart rebase agent should not start for mixed harness conflict and failure")
 		return nil, nil
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	fixture.orch.SetRunFeatureCycleFinalReviewFn(func(*feature.Feature) (chan *agent.FeatureFinalReviewResult, error) {
 		t.Fatal("Final Review should not start for mixed harness conflict and failure")
 		return nil, nil
 	})
@@ -373,6 +409,10 @@ func TestStartFeatureRebaseHarnessMixedConflictAndFailurePreservesOperation(t *t
 	loaded := fixture.load()
 	if loaded.ActiveCycle == nil {
 		t.Fatal("ActiveCycle = nil, want preserved rebase cycle")
+	}
+	if loaded.ActiveCycle.Status != feature.RepoCycleFailed ||
+		!strings.Contains(loaded.ActiveCycle.LastError, "fetch denied") {
+		t.Fatalf("ActiveCycle = %+v, want terminal mixed harness failure", loaded.ActiveCycle)
 	}
 	if loaded.RebaseOperation == nil {
 		t.Fatal("RebaseOperation = nil, want preserved mixed harness outcomes")
@@ -509,7 +549,7 @@ func TestStartFeatureRebaseManualPublishLeavesCodeReadyWithLocalChanges(t *testi
 	}
 }
 
-func TestStartFeatureRebaseUnsupportedFinalReviewPlanRevisionClearsTransientRebaseState(t *testing.T) {
+func TestStartFeatureRebaseUnsupportedFinalReviewPlanRevisionRetainsFailedCycle(t *testing.T) {
 	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName})
 	fixture.feature.Pipeline = feature.PipelineMedium
 	fixture.saveFeature()
@@ -520,7 +560,7 @@ func TestStartFeatureRebaseUnsupportedFinalReviewPlanRevisionClearsTransientReba
 		}
 		return ports.RebaseResult{Outcome: ports.RebaseSuccess}
 	}
-	fixture.setFinalReviewResult(&agent.OrchestratorResult{
+	fixture.setFinalReviewResult(&agent.FeatureFinalReviewResult{
 		FinalStatus:          finalStatusPlanRevisionRequired,
 		PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT behavioral: Cover the clean rebase plan revision path.",
 	}, nil)
@@ -531,23 +571,18 @@ func TestStartFeatureRebaseUnsupportedFinalReviewPlanRevisionClearsTransientReba
 	fixture.wait()
 
 	loaded := fixture.load()
-	if loaded.Status != feature.StatusFailed {
-		t.Fatalf("Status = %q, want %q", loaded.Status, feature.StatusFailed)
+	if loaded.Status != feature.StatusPublished {
+		t.Fatalf("Status = %q, want %q", loaded.Status, feature.StatusPublished)
 	}
-	if !strings.Contains(loaded.LastError, "final review requested unsupported phase-plan revision") {
-		t.Fatalf("LastError = %q, want unsupported final review plan revision", loaded.LastError)
+	if loaded.LastError != "" || loaded.FailureType != "" {
+		t.Fatalf("feature failure fields = %q/%q, want untouched", loaded.LastError, loaded.FailureType)
 	}
-	if loaded.FailureType != feature.FailureInfrastructure {
-		t.Fatalf("FailureType = %q, want %q", loaded.FailureType, feature.FailureInfrastructure)
+	if loaded.RebaseOperation == nil || loaded.RebaseOperation.Stage != feature.RebaseStageFinalReview {
+		t.Fatalf("RebaseOperation = %+v, want retained final review operation", loaded.RebaseOperation)
 	}
-	if loaded.RebaseOperation != nil {
-		t.Fatalf("RebaseOperation = %+v, want nil after final review failure", loaded.RebaseOperation)
-	}
-	if loaded.ActiveCycle != nil {
-		t.Fatalf("ActiveCycle = %+v, want nil after final review failure", loaded.ActiveCycle)
-	}
-	if loaded.ActiveCycleType() == feature.CycleRebase {
-		t.Fatalf("ActiveCycleType = %q, want non-rebase after final review failure", loaded.ActiveCycleType())
+	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleFailed ||
+		!strings.Contains(loaded.ActiveCycle.LastError, "plan_revision_required") {
+		t.Fatalf("ActiveCycle = %+v, want retained failed final review", loaded.ActiveCycle)
 	}
 	if got := loaded.RepoStates[apiRepoName].LastError; !strings.Contains(got, "rebase final review failed") {
 		t.Fatalf("RepoStates[api].LastError = %q, want rebase final review failure", got)
@@ -581,9 +616,9 @@ func TestStartFeatureRebaseInterruptedInFlightHarnessDoesNotRunFinalReviewOrPush
 		}
 		return ports.RebaseResult{Outcome: ports.RebaseSuccess}
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	fixture.orch.SetRunFeatureCycleFinalReviewFn(func(*feature.Feature) (chan *agent.FeatureFinalReviewResult, error) {
 		finalReviewCalled <- struct{}{}
-		return rebaseFinalReviewResult(&agent.OrchestratorResult{FinalStatus: finalStatusAllPassed}), nil
+		return rebaseFinalReviewResult(&agent.FeatureFinalReviewResult{FinalStatus: reviewStatusPassed}), nil
 	})
 
 	if err := fixture.orch.StartFeatureRebase(fixture.featureID); err != nil {
@@ -649,6 +684,12 @@ func TestStartFeatureRebaseInterruptedInFlightHarnessDoesNotRunFinalReviewOrPush
 		case feature.RepoCycleRunning, feature.RepoCycleReviewing:
 			t.Fatalf("ActiveCycle revived after interrupt: %+v", loaded.ActiveCycle)
 		}
+	}
+	if loaded.ActivePhaseStart != nil {
+		t.Fatal("ActivePhaseStart is still running after rebase interrupt")
+	}
+	if loaded.PhaseTimings["rebase-1"] <= 0 {
+		t.Fatalf("PhaseTimings[rebase-1] = %s, want banked active time", loaded.PhaseTimings["rebase-1"])
 	}
 }
 
@@ -722,6 +763,278 @@ func TestResumeFeatureRebaseRestoresInterruptedSmartCycle(t *testing.T) {
 	}
 	if loaded.RebaseOperation != nil {
 		t.Fatalf("RebaseOperation = %+v, want nil after resumed cycle completes", loaded.RebaseOperation)
+	}
+}
+
+func TestHandleNeedUserInputDecisionResumesFeatureRebaseCycle(t *testing.T) {
+	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName})
+	fixture.orch.deps.PhaseRunner = &agent.PhaseRunner{StateDir: fixture.store.BaseDir}
+	if err := fixture.manager.StartFeatureRebaseOperation(fixture.featureID); err != nil {
+		t.Fatalf("StartFeatureRebaseOperation: %v", err)
+	}
+	if err := fixture.manager.UpdateFeatureRebaseRepo(
+		fixture.featureID,
+		apiRepoName,
+		feature.RebaseRepoStatusConflict,
+		feature.RebaseRepoProgress{
+			RebaseTarget:  mainBranch,
+			ConflictFiles: []string{"internal/api/conflicted.go"},
+		},
+	); err != nil {
+		t.Fatalf("UpdateFeatureRebaseRepo: %v", err)
+	}
+	if err := fixture.manager.MarkFeatureRebaseStage(fixture.featureID, feature.RebaseStageSmartRebase); err != nil {
+		t.Fatalf("MarkFeatureRebaseStage: %v", err)
+	}
+	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   "Choose the conflict resolution.",
+		Iteration: 2,
+		Questions: []agent.NeedUserInputQuestion{{
+			Index:  1,
+			Prompt: "Keep the API compatibility shim?",
+			Answer: "Yes",
+		}},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord: %v", err)
+	}
+	if err := fixture.manager.MarkFeatureRebaseNeedUserInput(
+		fixture.featureID,
+		gatePath,
+		2,
+		"Choose the conflict resolution.",
+	); err != nil {
+		t.Fatalf("MarkFeatureRebaseNeedUserInput: %v", err)
+	}
+
+	var smartCalls int
+	fixture.orch.runRebaseLoopFn = func(cfg agent.RebaseLoopConfig, _ ports.SessionManager) (*agent.RebaseLoopResult, error) {
+		smartCalls++
+		if !cfg.ResumeExistingCycle {
+			t.Fatal("ResumeExistingCycle = false, want existing smart-rebase loop")
+		}
+		return &agent.RebaseLoopResult{FinalStatus: reviewStatusPassed, Repos: []string{apiRepoName}}, nil
+	}
+	fixture.setFinalReviewPassed(nil)
+
+	if err := fixture.orch.HandleNeedUserInputDecision(fixture.featureID, NeedUserInputDecision{
+		Decision: "resume",
+	}); err != nil {
+		t.Fatalf("HandleNeedUserInputDecision: %v", err)
+	}
+	fixture.wait()
+
+	if smartCalls != 1 {
+		t.Fatalf("smart rebase calls = %d, want 1", smartCalls)
+	}
+	loaded := fixture.load()
+	if loaded.Status != feature.StatusPublished {
+		t.Fatalf("Status = %q, want Published", loaded.Status)
+	}
+	if loaded.ActiveCycle != nil || loaded.RebaseOperation != nil {
+		t.Fatalf("rebase state = cycle %+v operation %+v, want cleared success", loaded.ActiveCycle, loaded.RebaseOperation)
+	}
+}
+
+func TestHandleNeedUserInputDecisionAbortsFeatureRebaseCycle(t *testing.T) {
+	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName})
+	if err := fixture.manager.StartFeatureRebaseOperation(fixture.featureID); err != nil {
+		t.Fatalf("StartFeatureRebaseOperation: %v", err)
+	}
+	if err := fixture.manager.MarkFeatureRebaseStage(fixture.featureID, feature.RebaseStageSmartRebase); err != nil {
+		t.Fatalf("MarkFeatureRebaseStage: %v", err)
+	}
+	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   "User declined the required resolution.",
+		Iteration: 1,
+		Questions: []agent.NeedUserInputQuestion{{
+			Index:  1,
+			Prompt: "Continue?",
+		}},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord: %v", err)
+	}
+	if err := fixture.manager.MarkFeatureRebaseNeedUserInput(
+		fixture.featureID,
+		gatePath,
+		1,
+		"User declined the required resolution.",
+	); err != nil {
+		t.Fatalf("MarkFeatureRebaseNeedUserInput: %v", err)
+	}
+
+	if err := fixture.orch.HandleNeedUserInputDecision(fixture.featureID, NeedUserInputDecision{
+		Decision: "abort",
+	}); err != nil {
+		t.Fatalf("HandleNeedUserInputDecision: %v", err)
+	}
+
+	loaded := fixture.load()
+	if loaded.Status != feature.StatusPublished {
+		t.Fatalf("Status = %q, want Published", loaded.Status)
+	}
+	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleFailed {
+		t.Fatalf("ActiveCycle = %+v, want retained failed rebase", loaded.ActiveCycle)
+	}
+	if loaded.ActiveCycle.PendingNeedUserInputPath != "" {
+		t.Fatalf("PendingNeedUserInputPath = %q, want cleared", loaded.ActiveCycle.PendingNeedUserInputPath)
+	}
+	if loaded.RebaseOperation == nil || loaded.RebaseOperation.Stage != feature.RebaseStageSmartRebase {
+		t.Fatalf("RebaseOperation = %+v, want retained smart-rebase operation", loaded.RebaseOperation)
+	}
+}
+
+func TestHandleNeedUserInputDecisionKeepsRebaseGateWhenRelaunchCannotDispatch(t *testing.T) {
+	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName})
+	if err := fixture.manager.StartFeatureRebaseOperation(fixture.featureID); err != nil {
+		t.Fatalf("StartFeatureRebaseOperation: %v", err)
+	}
+	if err := fixture.manager.MarkFeatureRebaseStage(fixture.featureID, feature.RebaseStageSmartRebase); err != nil {
+		t.Fatalf("MarkFeatureRebaseStage: %v", err)
+	}
+	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   "Choose the conflict resolution.",
+		Iteration: 2,
+		Questions: []agent.NeedUserInputQuestion{{
+			Index:  1,
+			Prompt: "Continue?",
+			Answer: "Yes",
+		}},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord: %v", err)
+	}
+	if err := fixture.manager.MarkFeatureRebaseNeedUserInput(
+		fixture.featureID,
+		gatePath,
+		2,
+		"Choose the conflict resolution.",
+	); err != nil {
+		t.Fatalf("MarkFeatureRebaseNeedUserInput: %v", err)
+	}
+
+	err := fixture.orch.HandleNeedUserInputDecision(fixture.featureID, NeedUserInputDecision{
+		Decision: "resume",
+	})
+	if err == nil || !strings.Contains(err.Error(), "phase runner not configured") {
+		t.Fatalf("HandleNeedUserInputDecision error = %v, want dispatch configuration failure", err)
+	}
+	loaded := fixture.load()
+	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleNeedUserInput {
+		t.Fatalf("ActiveCycle = %+v, want input gate retained", loaded.ActiveCycle)
+	}
+	if loaded.ActiveCycle.PendingNeedUserInputPath != gatePath {
+		t.Fatalf("PendingNeedUserInputPath = %q, want %q", loaded.ActiveCycle.PendingNeedUserInputPath, gatePath)
+	}
+}
+
+func TestRetryFeatureRebaseFromPublishSkipsFinalReview(t *testing.T) {
+	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName})
+	api := fixture.feature.Repos[0]
+	if err := fixture.manager.StartFeatureRebaseOperation(fixture.featureID); err != nil {
+		t.Fatalf("StartFeatureRebaseOperation: %v", err)
+	}
+	if err := fixture.manager.UpdateFeatureRebaseRepo(
+		fixture.featureID,
+		apiRepoName,
+		feature.RebaseRepoStatusChanged,
+		feature.RebaseRepoProgress{
+			RebaseTarget: originMainBranch,
+			Changed:      true,
+		},
+	); err != nil {
+		t.Fatalf("UpdateFeatureRebaseRepo: %v", err)
+	}
+	if err := fixture.manager.MarkFeatureRebaseStage(fixture.featureID, feature.RebaseStagePublish); err != nil {
+		t.Fatalf("MarkFeatureRebaseStage: %v", err)
+	}
+	if err := fixture.manager.FailFeatureRebaseCycle(fixture.featureID, "transient push failure"); err != nil {
+		t.Fatalf("FailFeatureRebaseCycle: %v", err)
+	}
+	fixture.orch.SetRunFeatureCycleFinalReviewFn(func(*feature.Feature) (chan *agent.FeatureFinalReviewResult, error) {
+		t.Fatal("Final Review must not repeat when retrying the publish stage")
+		return nil, nil
+	})
+
+	if err := fixture.orch.RetryFeatureRebase(fixture.featureID); err != nil {
+		t.Fatalf("RetryFeatureRebase: %v", err)
+	}
+	fixture.wait()
+
+	pushes := forcePushCalls(fixture.rebaser.Calls)
+	if len(pushes) != 1 || pushes[0].Args[0] != api.WorktreePath {
+		t.Fatalf("ForcePush calls = %+v, want one publish retry for %q", pushes, api.WorktreePath)
+	}
+	loaded := fixture.load()
+	if loaded.Status != feature.StatusPublished {
+		t.Fatalf("Status = %q, want Published", loaded.Status)
+	}
+	if loaded.ActiveCycle != nil || loaded.RebaseOperation != nil {
+		t.Fatalf("rebase state = cycle %+v operation %+v, want cleared success", loaded.ActiveCycle, loaded.RebaseOperation)
+	}
+}
+
+func TestRetryFeatureRebaseHarnessPreservesConflictAndRechecksFailedRepo(t *testing.T) {
+	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName, webRepoName})
+	fixture.orch.deps.PhaseRunner = &agent.PhaseRunner{StateDir: fixture.store.BaseDir}
+	apiPath := fixture.feature.Repos[0].WorktreePath
+	webPath := fixture.feature.Repos[1].WorktreePath
+	if err := fixture.manager.StartFeatureRebaseOperation(fixture.featureID); err != nil {
+		t.Fatalf("StartFeatureRebaseOperation: %v", err)
+	}
+	if err := fixture.manager.UpdateFeatureRebaseRepo(
+		fixture.featureID,
+		apiRepoName,
+		feature.RebaseRepoStatusConflict,
+		feature.RebaseRepoProgress{
+			RebaseTarget:  mainBranch,
+			ConflictFiles: []string{"api/conflicted.go"},
+		},
+	); err != nil {
+		t.Fatalf("UpdateFeatureRebaseRepo(api): %v", err)
+	}
+	if err := fixture.manager.UpdateFeatureRebaseRepo(
+		fixture.featureID,
+		webRepoName,
+		feature.RebaseRepoStatusFailed,
+		feature.RebaseRepoProgress{LastError: "temporary fetch failure"},
+	); err != nil {
+		t.Fatalf("UpdateFeatureRebaseRepo(web): %v", err)
+	}
+	if err := fixture.manager.FailFeatureRebaseCycle(fixture.featureID, "web: temporary fetch failure"); err != nil {
+		t.Fatalf("FailFeatureRebaseCycle: %v", err)
+	}
+
+	var fetched []string
+	fixture.rebaser.FetchFn = func(worktreePath string) error {
+		fetched = append(fetched, worktreePath)
+		return nil
+	}
+	fixture.orch.runRebaseLoopFn = func(cfg agent.RebaseLoopConfig, _ ports.SessionManager) (*agent.RebaseLoopResult, error) {
+		if got, want := cfg.BehindRepos, []agent.RebaseRepoTarget{{
+			RepoName:      apiRepoName,
+			RebaseTarget:  mainBranch,
+			ConflictFiles: []string{"api/conflicted.go"},
+			PRURL:         "https://github.example/api/pull/1",
+		}}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("BehindRepos = %#v, want %#v", got, want)
+		}
+		return &agent.RebaseLoopResult{FinalStatus: reviewStatusPassed, Repos: []string{apiRepoName}}, nil
+	}
+	fixture.setFinalReviewPassed(nil)
+
+	if err := fixture.orch.RetryFeatureRebase(fixture.featureID); err != nil {
+		t.Fatalf("RetryFeatureRebase: %v", err)
+	}
+	fixture.wait()
+
+	if got, want := fetched, []string{webPath}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Fetch worktrees = %v, want only failed repo %v (api=%q)", got, want, apiPath)
+	}
+	loaded := fixture.load()
+	if loaded.ActiveCycle != nil || loaded.RebaseOperation != nil {
+		t.Fatalf("rebase state = cycle %+v operation %+v, want cleared success", loaded.ActiveCycle, loaded.RebaseOperation)
 	}
 }
 

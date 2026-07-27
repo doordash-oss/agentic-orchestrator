@@ -79,69 +79,61 @@ test('lifecycle cycles: resume, retry, restart, rebase, review-comments, refacto
     });
     transcript.step('relaunched against seeded Published state');
 
-    transcript.section('Open feature cockpit and cycles drawer');
+    transcript.section('Open feature cockpit and aftercare cycle actions');
     const featureTab = handle.page.getByRole('tab', { name: featureName });
     await featureTab.click();
     const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(seededCockpit).toBeVisible({ timeout: 30_000 });
 
-    const cyclesButton = seededCockpit.getByRole('button', { name: 'Cycles' });
-    await expect(cyclesButton).toBeVisible({ timeout: 15_000 });
-    await cyclesButton.click();
-    const cyclesDrawer = handle.page.locator('.cockpit__cycles-drawer');
-    await expect(cyclesDrawer).toBeVisible({ timeout: 10_000 });
-    transcript.step('cycles drawer opened showing rebase, review-comments, and refactor journeys');
+    const aftercare = seededCockpit.getByRole('region', { name: 'Feature aftercare' });
+    await expect(aftercare).toBeVisible({ timeout: 15_000 });
 
-    const rebaseJourney = cyclesDrawer.locator('.cycle-journey--rebase');
-    if (await rebaseJourney.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      const preflight = rebaseJourney.locator('.cycle-journey__preflight');
-      if (await preflight.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        transcript.step('rebase preflight lists affected repositories, targets, and freshness');
-      } else {
-        transcript.step('rebase journey visible (preflight not shown — action may be disabled)');
-      }
-    } else {
-      transcript.step('rebase journey not visible — server does not enable rebase for this state');
-    }
+    const prepareRebase = aftercare.getByRole('button', { name: /Prepare rebase/ });
+    await expect(prepareRebase).toBeVisible();
+    await prepareRebase.click();
+    const rebaseModal = handle.page.getByRole('dialog', { name: 'Rebase' });
+    await expect(rebaseModal.getByLabel('Rebase preflight')).toBeVisible({ timeout: 15_000 });
+    transcript.step('rebase modal lists affected repositories, targets, and freshness');
+    await rebaseModal.getByRole('button', { name: 'Close' }).click();
 
-    const reviewJourney = cyclesDrawer.locator('.cycle-journey--review-comments');
-    if (await reviewJourney.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      const repoSelect = reviewJourney.locator('select').first();
+    const checkComments = aftercare.getByRole('button', { name: /Check comments/ });
+    if (await checkComments.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await checkComments.click();
+      const reviewModal = handle.page.getByRole('dialog', { name: 'Review comments' });
+      const repoSelect = reviewModal.getByLabel('Repository');
       await repoSelect.selectOption('alpha');
-      await reviewJourney.getByRole('button', { name: 'Fetch comments' }).click();
-      const commentsPreview = reviewJourney.locator('.cycle-journey__comments-preview');
+      await reviewModal.getByRole('button', { name: 'Fetch comments' }).click();
+      const commentsPreview = reviewModal.locator('.cycle-journey__comments-preview');
       const hasComments = await commentsPreview.isVisible({ timeout: 10_000 }).catch(() => false);
       if (hasComments) {
         transcript.step('review-comments fetched and previewed for alpha repository');
       } else {
         transcript.step('review-comments fetch completed — no comments or fetch not supported');
       }
+      await reviewModal.getByRole('button', { name: 'Close' }).click();
     } else {
       transcript.step(
-        'review-comments journey not visible — server does not enable it for this state',
+        'review-comments action not visible — server does not enable it for this state',
       );
     }
 
-    const refactorJourney = cyclesDrawer.locator('.cycle-journey--refactor');
-    if (await refactorJourney.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      const scopeRadios = refactorJourney.locator('input[name="refactor-scope"]');
-      const radioCount = await scopeRadios.count();
-      if (radioCount >= 2) {
-        await scopeRadios.nth(1).check();
-        const resolvedRepos = refactorJourney.locator('.cycle-journey__resolved-repos');
-        await expect(resolvedRepos).toBeVisible({ timeout: 5_000 });
-        transcript.step('refactor all-repositories scope resolves to named repositories');
-      } else {
-        transcript.step('refactor journey visible but scope controls absent');
-      }
+    const planRefactor = aftercare.getByRole('button', { name: /Plan refactor/ });
+    if (await planRefactor.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await planRefactor.click();
+      const refactorModal = handle.page.getByRole('dialog', { name: 'Refactor' });
+      await refactorModal
+        .getByRole('textbox', { name: 'Refactor prompt' })
+        .fill('Consolidate the lifecycle fixture.');
+      await refactorModal.getByRole('radio', { name: 'All repositories' }).check();
+      await expect(refactorModal.getByText(/^Applies to: .*alpha.*beta$/)).toBeVisible({
+        timeout: 15_000,
+      });
+      transcript.step('refactor all-repositories scope resolves to named repositories');
+      await refactorModal.getByRole('button', { name: 'Close' }).click();
     } else {
-      transcript.step('refactor journey not visible — server does not enable it for this state');
+      transcript.step('refactor action not visible — server does not enable it for this state');
     }
-
-    const closeButton = cyclesDrawer.getByRole('button', { name: 'Close' });
-    await closeButton.click();
-    await expect(cyclesDrawer).not.toBeVisible({ timeout: 5_000 });
-    transcript.step('cycles drawer closed');
+    transcript.step('aftercare cycle actions opened their focused modals');
 
     transcript.section('Restart confirmation');
     const restartButton = seededCockpit.getByRole('button', { name: 'Restart', exact: true });

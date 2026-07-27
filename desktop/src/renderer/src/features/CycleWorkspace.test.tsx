@@ -52,6 +52,13 @@ describe('CycleWorkspace', () => {
       status: 'Published',
       cycle: { type: 'refactor', status: 'failed', count: 1, phase: 'implement_validate' },
       failure: { type: 'agent', message: 'Validation could not complete.' },
+      actions: [
+        {
+          id: 'retry',
+          enabled: false,
+          disabledReasons: [{ code: 'busy', message: 'Wait for the current session.' }],
+        },
+      ],
     });
     const presentation = cyclePresentation(snapshot);
     if (presentation === null) throw new Error('expected cycle presentation');
@@ -70,7 +77,38 @@ describe('CycleWorkspace', () => {
       />,
     );
     expect(screen.getByRole('alert')).toHaveTextContent('Validation could not complete.');
-    expect(screen.getByRole('button', { name: 'Retry cycle' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retry cycle' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Retry cycle' })).toHaveAttribute(
+      'title',
+      'Wait for the current session.',
+    );
     expect(screen.getByRole('button', { name: 'Return to Aftercare' })).toBeVisible();
+  });
+
+  it('offers resume and a stopped return path for interrupted cycles', () => {
+    const snapshot = featureSnapshot({
+      status: 'Interrupted',
+      cycle: { type: 'rebase', status: 'interrupted', count: 3, phase: 'publish' },
+      actions: [{ id: 'resume', enabled: true, disabledReasons: [] }],
+    });
+    const presentation = cyclePresentation(snapshot);
+    if (presentation === null) throw new Error('expected cycle presentation');
+    render(
+      <CycleWorkspace
+        snapshot={snapshot}
+        run={null}
+        presentation={presentation}
+        onRunMetrics={vi.fn()}
+        onStop={vi.fn()}
+        onResume={vi.fn()}
+        onRetry={vi.fn()}
+        onReturnToAftercare={vi.fn()}
+        onOpenRunRecord={vi.fn()}
+        onOpenPullRequest={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Resume cycle' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Return to Aftercare' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Stop cycle' })).not.toBeInTheDocument();
   });
 });

@@ -21,7 +21,11 @@ const CYCLE_STATUS_LABELS: Record<string, string> = {
   completed: 'Completed',
 };
 
-const REBASE_STATUS_LABELS: Record<string, string> = {
+export const REBASE_STATUS_LABELS: Record<string, string> = {
+  checking: 'Checking',
+  rebasing: 'Rebasing',
+  up_to_date: 'Up to date',
+  changed: 'Changed',
   pending: 'Pending',
   running: 'Running',
   conflict: 'Conflict',

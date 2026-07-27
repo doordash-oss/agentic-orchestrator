@@ -41,11 +41,13 @@ func TestBuildRebasePlan_UsesOnlyConcreteVerificationCommands(t *testing.T) {
 					t.Errorf("plan contains guessed command %q", forbidden)
 				}
 			}
-			if !strings.Contains(plan, "! grep -rln") || !strings.Contains(plan, "<<<<<<<") {
-				t.Errorf("expected plan to preserve the negated conflict-marker grep check, got %q", plan)
+			if !strings.Contains(plan, "git grep -n") || !strings.Contains(plan, "test $? -eq 1") {
+				t.Errorf("expected plan to use the portable git conflict-marker check, got %q", plan)
 			}
-			if strings.Contains(plan, "| head") {
-				t.Errorf("conflict-marker check must not pipe into head: the pipeline exit code would always be 0, got %q", plan)
+			for _, forbidden := range []string{"grep -rln", "--include", "| head"} {
+				if strings.Contains(plan, forbidden) {
+					t.Errorf("conflict-marker check contains non-portable fragment %q: %q", forbidden, plan)
+				}
 			}
 		})
 	}

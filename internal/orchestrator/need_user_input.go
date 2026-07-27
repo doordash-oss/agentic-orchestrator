@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -79,6 +80,12 @@ func (o *Orchestrator) onSingleRepoNeedUserInput(featureID string, result *agent
 // path (feature-scoped) or FailRepoCycle (cycle-scoped); the parent feature
 // stays Published when a cycle is aborted.
 func (o *Orchestrator) HandleNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
+	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && f != nil &&
+		f.ActiveCycle != nil &&
+		featureRebaseActiveCycleType(f) == feature.CycleRebase &&
+		f.ActiveCycle.Status == feature.RepoCycleNeedUserInput {
+		return o.handleRebaseCycleNeedUserInputDecision(featureID, d)
+	}
 	if d.RepoName != "" {
 		f, err := o.deps.Lifecycle.Get(featureID)
 		if err == nil && f != nil {
@@ -89,6 +96,101 @@ func (o *Orchestrator) HandleNeedUserInputDecision(featureID string, d NeedUserI
 		}
 	}
 	return o.handleFeatureNeedUserInputDecision(featureID, d)
+}
+
+func (o *Orchestrator) handleRebaseCycleNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return fmt.Errorf("load feature: %w", err)
+	}
+	if f.ActiveCycle == nil || featureRebaseActiveCycleType(f) != feature.CycleRebase ||
+		f.ActiveCycle.Status != feature.RepoCycleNeedUserInput || f.RebaseOperation == nil {
+		return fmt.Errorf("feature %s has no paused rebase cycle", featureID)
+	}
+	gatePath := f.ActiveCycle.PendingNeedUserInputPath
+	if gatePath == "" {
+		return errors.New("no pending need-user-input gate path on rebase cycle")
+	}
+
+	switch d.Decision {
+	case "resume":
+		rec, err := agent.ReadNeedUserInputRecord(gatePath)
+		if err != nil {
+			return fmt.Errorf("read gate artifact: %w", err)
+		}
+		if !rec.AllAnswered() {
+			return errors.New("cannot resume: every question must have a non-empty answer before resume")
+		}
+		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+			return err
+		}
+		outcomes := featureRebaseOutcomesFromOperation(o, f)
+		conflicted := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusConflict)
+		targets := rebaseTargetsFromHarnessOutcomes(f.PRURLs(), conflicted)
+		if _, err := o.rebaseLoopConfigForFeature(f, targets, true); err != nil {
+			return fmt.Errorf("relaunch rebase cycle: %w", err)
+		}
+		now := time.Now()
+		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+			if ff.ActiveCycle == nil || featureRebaseActiveCycleType(ff) != feature.CycleRebase {
+				return errors.New("rebase cycle vanished during resume")
+			}
+			ff.ActiveCycle.Status = feature.RepoCycleRunning
+			ff.ActiveCycle.PendingNeedUserInputPath = ""
+			ff.ActiveCycle.LastError = ""
+			ff.ActiveTimingKey = fmt.Sprintf("rebase-%d", ff.ActiveCycle.Count)
+			ff.ActivePhaseStart = &now
+			return nil
+		}); err != nil {
+			return fmt.Errorf("clear rebase gate: %w", err)
+		}
+		o.clearFeatureRebaseStopRequest(featureID)
+		o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
+		o.cycleWG.Go(func() {
+			current, loadErr := o.deps.Lifecycle.Get(featureID)
+			if loadErr != nil || current == nil || current.RebaseOperation == nil {
+				_ = o.restoreRebaseNeedUserInputGate(featureID, gatePath, f.ActiveCycle.Iteration, f.ActiveCycle.LastError)
+				return
+			}
+			currentOutcomes := featureRebaseOutcomesFromOperation(o, current)
+			currentConflicted := harnessRebaseOutcomesWithStatus(currentOutcomes, feature.RebaseRepoStatusConflict)
+			o.startCoordinatedSmartRebase(featureID, currentOutcomes, currentConflicted, true)
+		})
+		return nil
+	case "abort":
+		summary := ""
+		if rec, err := agent.ReadNeedUserInputRecord(gatePath); err == nil {
+			summary = rec.Summary
+		}
+		if summary == "" {
+			summary = "user aborted at need-user-input gate for rebase cycle"
+		}
+		if err := o.deps.Lifecycle.FailFeatureRebaseCycle(featureID, summary); err != nil {
+			return err
+		}
+		o.emitEvent(ports.Event{
+			Type:      ports.CycleProgress,
+			FeatureID: featureID,
+			Error:     errors.New(summary),
+		})
+		return nil
+	default:
+		return fmt.Errorf("unknown need-user-input decision %q (want resume|abort)", d.Decision)
+	}
+}
+
+func (o *Orchestrator) restoreRebaseNeedUserInputGate(featureID, gatePath string, iteration int, summary string) error {
+	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if f.ActiveCycle == nil || featureRebaseActiveCycleType(f) != feature.CycleRebase {
+			return errors.New("rebase cycle vanished during gate rollback")
+		}
+		f.ActiveCycle.Status = feature.RepoCycleNeedUserInput
+		f.ActiveCycle.PendingNeedUserInputPath = gatePath
+		f.ActiveCycle.Iteration = iteration
+		f.ActiveCycle.LastError = summary
+		f.ActivePhaseStart = nil
+		return nil
+	})
 }
 
 // onRepoCycleNeedUserInput converts a cycle implementation loop result with

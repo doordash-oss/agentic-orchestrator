@@ -25,7 +25,8 @@ import (
 // rebase from scratch.
 func BuildRebasePlan(baseBranch, prURL string, conflictFiles []string) string {
 	var b strings.Builder
-	conflictMarkerPattern := "<<<<<" + "<< "
+	conflictStartPattern := "<<<<<" + "<< "
+	conflictEndPattern := ">>>>>" + ">> "
 
 	fmt.Fprintf(&b, "# Rebase Conflict Resolution Plan\n\n")
 
@@ -73,7 +74,7 @@ func BuildRebasePlan(baseBranch, prURL string, conflictFiles []string) string {
 	b.WriteString("### Verify\n\n")
 	b.WriteString("After the rebase is fully complete:\n\n")
 	b.WriteString("#### Automated Verification:\n")
-	fmt.Fprintf(&b, "- [ ] No conflict markers remain: `! grep -rln %q . --include=\"*.go\" --include=\"*.ts\" --include=\"*.js\" --include=\"*.py\"`\n", conflictMarkerPattern)
+	fmt.Fprintf(&b, "- [ ] No conflict markers remain: `git grep -n -e %q -e \"=======\" -e %q -- .; test $? -eq 1`\n", conflictStartPattern, conflictEndPattern)
 	b.WriteString("\n")
 
 	b.WriteString("## Success Criteria\n\n")

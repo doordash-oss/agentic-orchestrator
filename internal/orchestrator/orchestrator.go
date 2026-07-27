@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -285,6 +286,13 @@ type Orchestrator struct {
 		kbInfos ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error)
 
+	// runFeatureCycleFinalReviewFn is the cycle-scoped Final Review seam.
+	// Unlike the engine Final Review, this preserves regular feature/repo
+	// state and writes artifacts below the active cycle prefix.
+	runFeatureCycleFinalReviewFn func(
+		f *feature.Feature,
+	) (chan *agent.FeatureFinalReviewResult, error)
+
 	// runImplementationFn is a test seam over PhaseRunner.RunImplementation
 	// (single-repo implementation loop). Tests override this via
 	// SetRunImplementationFn to inject fake channel-returning engines.
@@ -357,6 +365,14 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		}
 		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f, kbInfos...)
 	}
+	o.runFeatureCycleFinalReviewFn = func(
+		f *feature.Feature,
+	) (chan *agent.FeatureFinalReviewResult, error) {
+		if o.deps.PhaseRunner == nil {
+			return nil, errors.New("phase runner not configured")
+		}
+		return o.deps.PhaseRunner.RunFeatureCycleFinalReview(f)
+	}
 	o.runRebaseLoopFn = agent.RunRebaseLoop
 	o.worktreeFingerprintFn = gitWorktreeFingerprint
 	return o
@@ -425,6 +441,14 @@ func (o *Orchestrator) SetRunMultiRepoFinalReviewFn(fn func(
 	kbInfos ...agent.KBInfo,
 ) (chan *agent.OrchestratorResult, error)) {
 	o.runMultiRepoFinalReviewFn = fn
+}
+
+// SetRunFeatureCycleFinalReviewFn installs the feature-cycle Final Review
+// seam used by post-implementation cycle tests.
+func (o *Orchestrator) SetRunFeatureCycleFinalReviewFn(fn func(
+	f *feature.Feature,
+) (chan *agent.FeatureFinalReviewResult, error)) {
+	o.runFeatureCycleFinalReviewFn = fn
 }
 
 // CreateFeature delegates to FeatureLifecycle.Create, fires the
@@ -1268,7 +1292,8 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 	f, getErr := o.deps.Lifecycle.Get(featureID)
 	switch {
 	case getErr == nil &&
-		(f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) &&
+		((f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) ||
+			f.RebaseOperation != nil) &&
 		hasActiveRepoCycles(f):
 		interruptFeature := hasInterruptibleRepoCycles(f)
 		if err := o.interruptActiveRepoCycles(featureID, interruptFeature); err != nil {
@@ -1470,6 +1495,7 @@ func isActiveRepoCycleStatus(status string) bool {
 
 func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeature bool) error {
 	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		bankActiveFeatureRebaseTiming(ff)
 		for _, rc := range ff.RepoCycles {
 			if rc == nil {
 				continue
@@ -1501,6 +1527,21 @@ func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeat
 		}
 		return nil
 	})
+}
+
+func bankActiveFeatureRebaseTiming(f *feature.Feature) {
+	if f == nil || f.ActiveCycle == nil ||
+		featureRebaseActiveCycleType(f) != feature.CycleRebase ||
+		f.ActivePhaseStart == nil ||
+		!strings.HasPrefix(f.ActiveTimingKey, "rebase-") {
+		return
+	}
+	elapsed := time.Since(*f.ActivePhaseStart)
+	if f.PhaseTimings == nil {
+		f.PhaseTimings = make(map[string]time.Duration)
+	}
+	f.PhaseTimings[f.ActiveTimingKey] += elapsed
+	f.ActivePhaseStart = nil
 }
 
 // HandlePhaseCompletion dispatches a phase-completion result to the

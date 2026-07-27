@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { featureSnapshot } from '../test/agenticoMock';
 import {
   aftercareActions,
+  cycleFailureDetail,
   cyclePresentation,
+  ownsPostImplementationStage,
+  receiptForCycleEnd,
   resolvePostImplementationMode,
 } from './postImplementationModel';
 
@@ -39,11 +42,69 @@ describe('postImplementationModel', () => {
     });
 
     expect(resolvePostImplementationMode(snapshot).kind).toBe('cycle');
+    expect(resolvePostImplementationMode(snapshot, 'rebase:1:interrupted').kind).toBe('aftercare');
     expect(cyclePresentation(snapshot)).toMatchObject({
       headline: 'Rebase cycle paused',
       current: 'Resolve conflicts',
       next: 'Final review',
     });
+  });
+
+  it('uses one ownership predicate for every durable cycle status', () => {
+    for (const status of ['running', 'reviewing', 'need_user_input', 'failed', 'interrupted']) {
+      expect(ownsPostImplementationStage({ type: 'rebase', status })).toBe(true);
+    }
+    expect(ownsPostImplementationStage(undefined)).toBe(false);
+    expect(ownsPostImplementationStage({ type: 'rebase', status: 'completed' })).toBe(false);
+  });
+
+  it('builds completed, failed, and stopped receipts from the prior cycle outcome', () => {
+    const atRest = featureSnapshot({ status: 'Published' });
+    expect(
+      receiptForCycleEnd({ type: 'rebase', status: 'running', count: 2 }, atRest),
+    ).toMatchObject({ id: 'rebase', outcome: 'completed', message: 'Rebase cycle complete.' });
+    expect(
+      receiptForCycleEnd(
+        { type: 'rebase', status: 'failed', count: 2, lastError: 'push rejected' },
+        atRest,
+      ),
+    ).toMatchObject({ id: 'rebase', outcome: 'failed', detail: 'push rejected' });
+    expect(
+      receiptForCycleEnd({ type: 'rebase', status: 'interrupted', count: 2 }, atRest),
+    ).toMatchObject({
+      id: 'rebase',
+      outcome: 'stopped',
+      message: 'Cycle stopped · No completion action was dispatched.',
+    });
+  });
+
+  it('prefers cycle, feature, then repository failure detail', () => {
+    expect(
+      cycleFailureDetail(
+        featureSnapshot({
+          cycle: { type: 'rebase', status: 'failed', lastError: 'cycle failed' },
+          failure: { type: 'infrastructure', message: 'feature failed' },
+          repoStatus: [{ name: 'api', publishable: true, lastError: 'repo failed' }],
+        }),
+      ),
+    ).toBe('cycle failed');
+    expect(
+      cycleFailureDetail(
+        featureSnapshot({
+          cycle: { type: 'rebase', status: 'failed' },
+          failure: { type: 'infrastructure', message: 'feature failed' },
+          repoStatus: [{ name: 'api', publishable: true, lastError: 'repo failed' }],
+        }),
+      ),
+    ).toBe('feature failed');
+    expect(
+      cycleFailureDetail(
+        featureSnapshot({
+          cycle: { type: 'rebase', status: 'failed' },
+          repoStatus: [{ name: 'api', publishable: true, lastError: 'repo failed' }],
+        }),
+      ),
+    ).toBe('repo failed');
   });
 
   it('orders publish before available cycle actions', () => {

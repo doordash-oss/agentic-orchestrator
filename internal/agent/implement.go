@@ -48,6 +48,9 @@ type ImplementConfig struct {
 	ArtifactDir         string // base dir for iteration artifacts
 	StateDir            string // feature state directory for PID files
 	RunDir              string // active run directory granted to the agent; empty derives from Feature.ActiveRun
+	// SessionIDPrefix namespaces cycle sessions beneath the feature ID. For
+	// example "rebase-2" yields "<featureID>-rebase-2-impl-01".
+	SessionIDPrefix string
 
 	// AdditionalDirs are extra directories to pass as --add-dir flags to the
 	// claude CLI, giving the agent file-system access beyond WorkDir and StateDir.
@@ -483,7 +486,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			sessOpts.StderrPath = filepath.Join(iterDir, "stderr.log")
 
 			// Start session in interactive mode
-			if cfg.Feature.CurrentRoadmapPhase > 0 {
+			if cfg.SessionIDPrefix != "" {
+				sessionID = fmt.Sprintf("%s-%s-impl", cfg.Feature.ID, cfg.SessionIDPrefix)
+			} else if cfg.Feature.CurrentRoadmapPhase > 0 {
 				sessionID = fmt.Sprintf("%s-phase-%02d-impl", cfg.Feature.ID, cfg.Feature.CurrentRoadmapPhase)
 			} else {
 				sessionID = cfg.Feature.ID + "-impl"
@@ -1445,7 +1450,8 @@ func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) strin
 }
 
 func compileImplementationTestingContract(cfg ImplementConfig, planContent string) TestingContract {
-	if cfg.Feature != nil && cfg.Feature.CurrentRoadmapPhase > 0 && cfg.RepoName == "" {
+	if cfg.Feature != nil && cfg.RepoName == "" &&
+		(cfg.Feature.CurrentRoadmapPhase > 0 || resolveCycleTypeForRepo(cfg.Feature, "") != "") {
 		repos := phaseReposForImplementationContract(cfg.Feature, cfg.PlanPath)
 		return CompileTestingContractMultiRepo(MultiRepoContractInput{
 			Repos:     repos,

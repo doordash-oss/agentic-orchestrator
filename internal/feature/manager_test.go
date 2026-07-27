@@ -3700,6 +3700,12 @@ func TestManagerFeatureRebaseOperationLifecycle(t *testing.T) {
 	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleRebase || got.ActiveCycle.Status != feature.RepoCycleRunning {
 		t.Fatalf("ActiveCycle = %+v, want running rebase", got.ActiveCycle)
 	}
+	if got.RebaseCount() != 1 || got.ActiveCycle.Count != 1 {
+		t.Fatalf("rebase counts = feature %d cycle %d, want 1/1", got.RebaseCount(), got.ActiveCycle.Count)
+	}
+	if got.ActiveTimingKey != "rebase-1" || got.ActivePhaseStart == nil {
+		t.Fatalf("timing = key %q start %v, want active rebase-1 timing", got.ActiveTimingKey, got.ActivePhaseStart)
+	}
 	if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
 		t.Fatalf("RebaseOperation = %+v, want harness stage", got.RebaseOperation)
 	}
@@ -3716,6 +3722,108 @@ func TestManagerFeatureRebaseOperationLifecycle(t *testing.T) {
 	}
 	if got.ActiveCycle != nil || got.ActiveCycleType() != "" || got.RebaseOperation != nil {
 		t.Fatalf("cycle not cleared: ActiveCycle=%+v ActiveCycleType=%q RebaseOperation=%+v", got.ActiveCycle, got.ActiveCycleType(), got.RebaseOperation)
+	}
+}
+
+func TestManagerFeatureRebaseFailureIsRetainedAndCanBeSuperseded(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	m := feature.NewManager(store, config.NewDefault())
+	f := &feature.Feature{
+		ID:            "feat-rebase-retained-failure",
+		Name:          "Retained Rebase Failure",
+		Slug:          "retained-rebase-failure",
+		Status:        feature.StatusPublished,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
+		t.Fatalf("start rebase: %v", err)
+	}
+	if err := m.FailFeatureRebaseCycle(f.ID, "force push rejected"); err != nil {
+		t.Fatalf("fail rebase: %v", err)
+	}
+	failed, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get failed feature: %v", err)
+	}
+	if failed.Status != feature.StatusPublished {
+		t.Fatalf("feature status = %q, want published", failed.Status)
+	}
+	if failed.ActiveCycle == nil || failed.ActiveCycle.Status != feature.RepoCycleFailed ||
+		failed.ActiveCycle.LastError != "force push rejected" || failed.RebaseOperation == nil {
+		t.Fatalf("retained failure = cycle %+v operation %+v", failed.ActiveCycle, failed.RebaseOperation)
+	}
+	if failed.ActivePhaseStart != nil {
+		t.Fatalf("failed cycle timing still active at %v", failed.ActivePhaseStart)
+	}
+
+	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
+		t.Fatalf("restart over failed rebase: %v", err)
+	}
+	restarted, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get restarted feature: %v", err)
+	}
+	if restarted.RebaseCount() != 2 || restarted.ActiveCycle == nil || restarted.ActiveCycle.Count != 2 ||
+		restarted.ActiveCycle.Status != feature.RepoCycleRunning {
+		t.Fatalf("restarted cycle = count %d cycle %+v", restarted.RebaseCount(), restarted.ActiveCycle)
+	}
+	if restarted.RebaseOperation == nil || restarted.RebaseOperation.Stage != feature.RebaseStageHarness ||
+		len(restarted.RebaseOperation.Repos) != 0 {
+		t.Fatalf("restarted operation = %+v, want fresh harness", restarted.RebaseOperation)
+	}
+}
+
+func TestManagerFeatureRebaseNeedUserInputAndExplicitCycleCleanup(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	m := feature.NewManager(store, config.NewDefault())
+	f := &feature.Feature{
+		ID:            "feat-rebase-gate",
+		Name:          "Rebase Gate",
+		Slug:          "rebase-gate",
+		Status:        feature.StatusPublished,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
+		t.Fatalf("start rebase: %v", err)
+	}
+	if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageSmartRebase); err != nil {
+		t.Fatalf("mark smart rebase: %v", err)
+	}
+	if err := m.MarkFeatureRebaseNeedUserInput(f.ID, "/tmp/gate.yaml", 3, "choose a merge strategy"); err != nil {
+		t.Fatalf("mark gate: %v", err)
+	}
+	got, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get gated feature: %v", err)
+	}
+	if got.ActiveCycle == nil || got.ActiveCycle.Status != feature.RepoCycleNeedUserInput ||
+		got.ActiveCycle.Iteration != 3 || got.ActiveCycle.PendingNeedUserInputPath != "/tmp/gate.yaml" ||
+		got.ActiveCycle.LastError != "choose a merge strategy" {
+		t.Fatalf("gate cycle = %+v", got.ActiveCycle)
+	}
+	if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageSmartRebase {
+		t.Fatalf("gate operation = %+v, want smart_rebase", got.RebaseOperation)
+	}
+
+	if err := m.FailFeatureRebaseCycle(f.ID, "aborted by user"); err != nil {
+		t.Fatalf("fail gated cycle: %v", err)
+	}
+	if err := m.ClearRepoCycles(f.ID); err != nil {
+		t.Fatalf("clear cycles: %v", err)
+	}
+	cleared, err := m.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get cleared feature: %v", err)
+	}
+	if cleared.ActiveCycle != nil || cleared.RebaseOperation != nil || cleared.ActiveCycleType() != "" {
+		t.Fatalf("explicit cleanup retained cycle state: cycle=%+v operation=%+v type=%q",
+			cleared.ActiveCycle, cleared.RebaseOperation, cleared.ActiveCycleType())
 	}
 }
 

@@ -279,9 +279,6 @@ export class FeatureService {
       featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
       cycleType: response.cycle_type,
       result: response.result,
-      ...(response.session_id === undefined || response.session_id === ''
-        ? {}
-        : { sessionId: response.session_id }),
     };
   }
 
@@ -562,6 +559,12 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
               ? {}
               : { iteration: feature.cycle.iteration }),
             ...(feature.cycle.phase === undefined ? {} : { phase: feature.cycle.phase }),
+            ...(feature.cycle.last_error === undefined || feature.cycle.last_error === ''
+              ? {}
+              : { lastError: redactText(feature.cycle.last_error) }),
+            ...(feature.cycle.started_at === undefined
+              ? {}
+              : { startedAt: feature.cycle.started_at }),
           },
         }),
     reviewGate: {

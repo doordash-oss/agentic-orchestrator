@@ -106,6 +106,8 @@ type FeatureLifecycle interface {
 	StartFeatureRebaseOperation(featureID string) error
 	MarkFeatureRebaseStage(featureID string, stage feature.RebaseStage) error
 	UpdateFeatureRebaseRepo(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error
+	FailFeatureRebaseCycle(featureID, errMsg string) error
+	MarkFeatureRebaseNeedUserInput(featureID, gatePath string, iteration int, summary string) error
 	ClearFeatureRebaseOperation(featureID string) error
 
 	// Per-repo cycles

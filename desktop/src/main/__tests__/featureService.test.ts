@@ -497,6 +497,7 @@ describe('FeatureService.getFeature', () => {
           count: 2,
           iteration: 1,
           phase: 'resolve_conflicts',
+          started_at: '2026-07-26T16:16:00.123456789-07:00',
         },
       }),
     }));
@@ -508,6 +509,7 @@ describe('FeatureService.getFeature', () => {
         count: 2,
         iteration: 1,
         phase: 'resolve_conflicts',
+        startedAt: '2026-07-26T16:16:00.123456789-07:00',
       },
     });
   });

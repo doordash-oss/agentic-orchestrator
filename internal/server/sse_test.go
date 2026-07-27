@@ -60,6 +60,28 @@ func TestVerificationProgressEventInvalidatesFeatureSnapshot(t *testing.T) {
 	}
 }
 
+func TestCycleProgressEventInvalidatesFeatureSnapshot(t *testing.T) {
+	t.Parallel()
+
+	event := eventDTOFromDomain(ports.Event{
+		Type:      ports.CycleProgress,
+		FeatureID: testFeatureID,
+		RepoName:  "api",
+	})
+	if event.Kind != sseEventLifecycleUpdated {
+		t.Errorf("event kind = %q, want %q", event.Kind, sseEventLifecycleUpdated)
+	}
+	if event.Resource.Type != entityFeature || event.Resource.FeatureID != testFeatureID {
+		t.Errorf("event resource = %+v, want feature %s", event.Resource, testFeatureID)
+	}
+	if !event.SnapshotRequired {
+		t.Error("cycle progress must require a feature snapshot refresh")
+	}
+	if event.Summary != "cycle progress" {
+		t.Errorf("event summary = %q, want cycle progress", event.Summary)
+	}
+}
+
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	t.Parallel()
 

@@ -1335,6 +1335,7 @@ var sessionWatchdogConfig = ports.SessionWatchdogConfig{
 	PendingToolIdleTimeout:    5 * time.Minute,
 	TurnCompletionIdleTimeout: 5 * time.Minute,
 	PollInterval:              time.Second,
+	SubagentHeartbeatInterval: 5 * time.Minute,
 }
 
 type sessionWatchdogProvider interface {

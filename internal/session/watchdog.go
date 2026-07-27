@@ -30,12 +30,14 @@ type sessionWatchdog struct {
 	pendingToolIdleTimeout    time.Duration
 	turnCompletionIdleTimeout time.Duration
 	pollInterval              time.Duration
+	subagentHeartbeatInterval time.Duration
 
 	mu                    sync.Mutex
 	tools                 map[string]watchdogTool
 	awaitingTurn          watchdogTool
 	liveSubagents         map[string]struct{}
 	subagentWaitSince     time.Time
+	nextSubagentHeartbeat time.Time
 	nextToolGeneration    uint64
 	pendingControlRequest map[string]struct{}
 	lastActivityAt        time.Time
@@ -81,6 +83,7 @@ func newSessionWatchdog(sess *Session, cfg *ports.SessionWatchdogConfig) *sessio
 		pendingToolIdleTimeout:    cfg.PendingToolIdleTimeout,
 		turnCompletionIdleTimeout: cfg.TurnCompletionIdleTimeout,
 		pollInterval:              interval,
+		subagentHeartbeatInterval: cfg.SubagentHeartbeatInterval,
 		lastActivityAt:            time.Now(),
 	}
 }
@@ -120,6 +123,7 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 		w.awaitingTurn = watchdogTool{}
 		w.liveSubagents = nil
 		w.subagentWaitSince = time.Time{}
+		w.nextSubagentHeartbeat = time.Time{}
 		w.pendingControlRequest = nil
 	case msg.ControlRequest != nil:
 		if watchdogShouldParkForControlRequest(msg.ControlRequest) {
@@ -132,6 +136,9 @@ func (w *sessionWatchdog) Observe(msg llm.SDKMessage) {
 		w.observeTaskLifecycleLocked(msg, now)
 	case msg.ToolProgress != nil:
 		w.observeToolProgressLocked(*msg.ToolProgress)
+	}
+	if len(w.liveSubagents) > 0 && w.subagentHeartbeatInterval > 0 {
+		w.nextSubagentHeartbeat = now.Add(w.subagentHeartbeatInterval)
 	}
 	w.mu.Unlock()
 }
@@ -256,6 +263,7 @@ func (w *sessionWatchdog) observeTaskLifecycleLocked(msg llm.SDKMessage, now tim
 	if len(w.liveSubagents) == 0 {
 		w.liveSubagents = nil
 		w.subagentWaitSince = time.Time{}
+		w.nextSubagentHeartbeat = time.Time{}
 		w.lastActivityAt = now
 	}
 }
@@ -294,12 +302,41 @@ func (w *sessionWatchdog) run() {
 		case <-ticker.C:
 		}
 
+		if status, ok := w.subagentHeartbeatStatus(time.Now()); ok {
+			_ = w.session.appendLocalStatus(status)
+		}
 		if tool, timeout, ok := w.toolStall(); ok {
 			if w.failTool(tool, timeout) {
 				return
 			}
 		}
 	}
+}
+
+func (w *sessionWatchdog) subagentHeartbeatStatus(now time.Time) (string, bool) {
+	w.mu.Lock()
+	if len(w.liveSubagents) == 0 ||
+		w.subagentHeartbeatInterval <= 0 ||
+		w.subagentWaitSince.IsZero() ||
+		w.nextSubagentHeartbeat.IsZero() ||
+		now.Before(w.nextSubagentHeartbeat) {
+		w.mu.Unlock()
+		return "", false
+	}
+	count := len(w.liveSubagents)
+	waitSince := w.subagentWaitSince
+	w.nextSubagentHeartbeat = now.Add(w.subagentHeartbeatInterval)
+	w.mu.Unlock()
+
+	minutes := int(now.Sub(waitSince) / time.Minute)
+	if minutes < 1 {
+		minutes = 1
+	}
+	noun := "subagents"
+	if count == 1 {
+		noun = "subagent"
+	}
+	return fmt.Sprintf("Waiting for %d %s (%dm)", count, noun, minutes), true
 }
 
 func (w *sessionWatchdog) toolStall() (watchdogTool, time.Duration, bool) {

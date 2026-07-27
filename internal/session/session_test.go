@@ -502,6 +502,51 @@ func TestWatchdogLiveSubagentsSuppressIdleFailureUntilEveryTaskTerminates(t *tes
 	}
 }
 
+func TestWatchdogLiveSubagentHeartbeatIsLocalAndStopsAtTerminal(t *testing.T) {
+	sess := NewSession("watchdog-subagent-heartbeat", "feat-1", feature.PhaseImplement)
+	statuses := make(chan llm.SDKMessage, 4)
+	sess.onMessage = func(msg llm.SDKMessage) {
+		if msg.Status != nil {
+			statuses <- msg
+		}
+	}
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    time.Second,
+		TurnCompletionIdleTimeout: time.Second,
+		PollInterval:              5 * time.Millisecond,
+		SubagentHeartbeatInterval: 20 * time.Millisecond,
+	})
+	watchdog.Observe(taskStartedMsg("task-a"))
+	watchdog.mu.Lock()
+	providerActivityAt := watchdog.lastActivityAt
+	watchdog.mu.Unlock()
+	watchdog.Start()
+	t.Cleanup(func() { close(sess.done) })
+
+	select {
+	case msg := <-statuses:
+		if msg.Status == nil || !strings.Contains(msg.Status.Message, "Waiting for 1 subagent (") {
+			t.Fatalf("heartbeat status = %+v, want one-subagent wait status", msg)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for live-subagent heartbeat")
+	}
+
+	watchdog.mu.Lock()
+	afterHeartbeat := watchdog.lastActivityAt
+	watchdog.mu.Unlock()
+	if !afterHeartbeat.Equal(providerActivityAt) {
+		t.Fatalf("heartbeat changed provider activity from %s to %s", providerActivityAt, afterHeartbeat)
+	}
+
+	watchdog.Observe(taskNotificationMsg("task-a"))
+	select {
+	case msg := <-statuses:
+		t.Fatalf("heartbeat continued after terminal task notification: %+v", msg)
+	case <-time.After(60 * time.Millisecond):
+	}
+}
+
 func TestWatchdogControlWaitPausesAndRefreshesTurnTimer(t *testing.T) {
 	sess := NewSession("watchdog-control-wait", "feat-1", feature.PhaseImplement)
 	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{

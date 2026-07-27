@@ -168,6 +168,7 @@ type SessionWatchdogConfig struct {
 	PendingToolIdleTimeout    time.Duration
 	TurnCompletionIdleTimeout time.Duration
 	PollInterval              time.Duration
+	SubagentHeartbeatInterval time.Duration
 }
 
 // ToolPermissionRequest describes a pending tool-use permission check.

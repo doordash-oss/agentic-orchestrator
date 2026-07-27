@@ -1051,17 +1051,29 @@ func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntim
 }
 
 func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
-	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
-		Models:             req.Models,
-		Effort:             req.Effort,
-		Inquireness:        feature.Inquireness(req.Inquireness),
-		Checkpoints:        req.Checkpoints,
-		InputNotifications: feature.InputNotificationsMode(req.InputNotifications),
-	}); err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
-	}
 	if t.store == nil {
 		return serverruntime.FeatureConfigUpdateResponse{}, errors.New("feature store is not available")
+	}
+	current, err := t.store.Load(featureID)
+	if err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
+	}
+	automaticReviewMode := feature.NormalizeAutomaticReviewMode(current.AutomaticReviewMode)
+	if req.AutomaticReviewMode != nil {
+		automaticReviewMode, err = feature.ParseAutomaticReviewMode(*req.AutomaticReviewMode)
+		if err != nil {
+			return serverruntime.FeatureConfigUpdateResponse{}, err
+		}
+	}
+	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
+		Models:              req.Models,
+		Effort:              req.Effort,
+		Inquireness:         feature.Inquireness(req.Inquireness),
+		Checkpoints:         req.Checkpoints,
+		InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
+		AutomaticReviewMode: automaticReviewMode,
+	}); err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
 	}
 	f, err := t.store.Load(featureID)
 	if err != nil {
@@ -2016,8 +2028,8 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntim
 		return false
 	}
 	changed := false
-	if hasAnyModelConfig(patch.Models) {
-		next := mergeModelConfig(dst.Models, patch.Models)
+	if patch.Models != nil {
+		next := serverruntime.ApplyModelConfigPatch(dst.Models, *patch.Models)
 		if next != dst.Models {
 			dst.Models = next
 			changed = true
@@ -2056,6 +2068,9 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntim
 	}
 	if len(patch.PipelinePreferences) > 0 {
 		dst.PipelinePreferences = patch.PipelinePreferences
+		changed = true
+	}
+	if patch.AutomaticReviewEnabled != nil && setIfChanged(&dst.AutomaticReviewEnabled, *patch.AutomaticReviewEnabled) {
 		changed = true
 	}
 	return changed
@@ -3195,7 +3210,8 @@ func hasAnyModelConfig(m config.ModelConfig) bool {
 		m.Implementation != "" ||
 		m.Review != "" ||
 		m.Utilities != "" ||
-		m.KBBuild != ""
+		m.KBBuild != "" ||
+		m.AutomaticReview != ""
 }
 
 func hasAnyEffortConfig(e config.EffortConfig) bool {
@@ -3209,28 +3225,7 @@ func hasAnyEffortConfig(e config.EffortConfig) bool {
 }
 
 func mergeModelConfig(base, overlay config.ModelConfig) config.ModelConfig {
-	if overlay.Inquiry != "" {
-		base.Inquiry = overlay.Inquiry
-	}
-	if overlay.Research != "" {
-		base.Research = overlay.Research
-	}
-	if overlay.Planning != "" {
-		base.Planning = overlay.Planning
-	}
-	if overlay.Implementation != "" {
-		base.Implementation = overlay.Implementation
-	}
-	if overlay.Review != "" {
-		base.Review = overlay.Review
-	}
-	if overlay.Utilities != "" {
-		base.Utilities = overlay.Utilities
-	}
-	if overlay.KBBuild != "" {
-		base.KBBuild = overlay.KBBuild
-	}
-	return base
+	return serverruntime.ApplyModelConfigPatch(base, serverruntime.ModelConfigToPatch(overlay))
 }
 
 func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {

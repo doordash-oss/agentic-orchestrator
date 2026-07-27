@@ -1456,8 +1456,8 @@ func TestWatchdogConfigForProviderCapability(t *testing.T) {
 	}
 	if got := watchdogConfigForProvider(&captureProvider{name: "watchdog", watchdog: true}); got == nil {
 		t.Fatal("watchdogConfigForProvider(enabled) = nil, want config")
-	} else if got.PendingToolIdleTimeout <= 0 || got.TurnCompletionIdleTimeout <= 0 {
-		t.Fatalf("watchdogConfigForProvider(enabled) = %#v, want both tool and turn-completion timeouts", got)
+	} else if got.PendingToolIdleTimeout <= 0 || got.TurnCompletionIdleTimeout <= 0 || got.SubagentHeartbeatInterval <= 0 {
+		t.Fatalf("watchdogConfigForProvider(enabled) = %#v, want tool, turn-completion, and subagent-heartbeat intervals", got)
 	}
 }
 
@@ -2909,5 +2909,130 @@ func TestResolveImplementArtifactDir_CyclePrefix(t *testing.T) {
 				t.Errorf("resolveImplementArtifactDir() = %q, want %q", got, tt.wantDir)
 			}
 		})
+	}
+}
+
+func TestBuildSessionResolvesFeatureAutomaticReviewMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		mode    feature.AutomaticReviewMode
+		global  bool
+		enabled bool
+	}{
+		{"default global off", feature.AutomaticReviewDefault, false, false},
+		{"default global on", feature.AutomaticReviewDefault, true, true},
+		{"feature enabled", feature.AutomaticReviewEnabled, false, true},
+		{"feature disabled", feature.AutomaticReviewDisabled, true, false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			store := feature.NewStore(dir)
+			f := &feature.Feature{
+				ID:                  "feature-auto-mode",
+				Name:                "Feature Auto Mode",
+				Slug:                "feature-auto-mode",
+				Status:              feature.StatusCreated,
+				SchemaVersion:       feature.SchemaVersionCurrent,
+				AutomaticReviewMode: feature.PersistAutomaticReviewMode(tt.mode),
+			}
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+
+			provider := &captureProvider{name: "capture", model: "model-a", contextWindow: 200_000}
+			pr := NewPhaseRunner(nil, store, dir)
+			pr.Registry = newRegistryWithCaptureProvider(provider)
+			pr.Config = &config.Config{Defaults: config.DefaultsConfig{AutomaticReviewEnabled: tt.global}}
+			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+				FeatureID:   f.ID,
+				Model:       "model-a",
+				WorkDir:     t.TempDir(),
+				PermHandler: permission.Guarded(&permission.AcceptEditsHandler{}),
+			})
+			if err != nil {
+				t.Fatalf("BuildSession: %v", err)
+			}
+			if sessOpts.AutoReview.Enabled == nil || *sessOpts.AutoReview.Enabled != tt.enabled {
+				t.Fatalf("AutoReview.Enabled = %v, want %v", sessOpts.AutoReview.Enabled, tt.enabled)
+			}
+		})
+	}
+}
+
+func TestBuildSessionReadsLatestFeatureAutomaticReviewMode(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	f := &feature.Feature{
+		ID:            "feature-auto-mode-latest",
+		Name:          "Feature Auto Mode Latest",
+		Slug:          "feature-auto-mode-latest",
+		Status:        feature.StatusCreated,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	provider := &captureProvider{name: "capture", model: "model-a", contextWindow: 200_000}
+	pr := NewPhaseRunner(nil, store, dir)
+	pr.Registry = newRegistryWithCaptureProvider(provider)
+	pr.Config = &config.Config{}
+	build := func() *ports.SessionOpts {
+		t.Helper()
+		_, _, opts, err := pr.BuildSession(BuildSessionOpts{
+			FeatureID:   f.ID,
+			Model:       "model-a",
+			WorkDir:     t.TempDir(),
+			PermHandler: permission.Guarded(&permission.AcceptEditsHandler{}),
+		})
+		if err != nil {
+			t.Fatalf("BuildSession: %v", err)
+		}
+		return opts
+	}
+
+	if got := build().AutoReview.Enabled; got == nil || *got {
+		t.Fatalf("initial AutoReview.Enabled = %v, want false", got)
+	}
+	if err := store.Modify(f.ID, func(current *feature.Feature) error {
+		current.AutomaticReviewMode = feature.AutomaticReviewEnabled
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if got := build().AutoReview.Enabled; got == nil || !*got {
+		t.Fatalf("updated AutoReview.Enabled = %v, want true", got)
+	}
+}
+
+func TestBuildSessionCrashResumeSnapshotPrecedesFeatureMode(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	provider := &captureProvider{name: "capture", model: "model-a", contextWindow: 200_000}
+	pr := NewPhaseRunner(nil, feature.NewStore(dir), dir)
+	pr.Registry = newRegistryWithCaptureProvider(provider)
+	enabled := true
+	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		FeatureID: "feature-that-does-not-exist",
+		Model:     "model-a",
+		WorkDir:   t.TempDir(),
+		AutoReview: ports.AutoReviewSnapshot{
+			Enabled: &enabled,
+		},
+		PermHandler: permission.Guarded(&permission.AcceptEditsHandler{}),
+	})
+	if err != nil {
+		t.Fatalf("BuildSession: %v", err)
+	}
+	if sessOpts.AutoReview.Enabled == nil || !*sessOpts.AutoReview.Enabled {
+		t.Fatalf("AutoReview.Enabled = %v, want snapshotted true", sessOpts.AutoReview.Enabled)
 	}
 }

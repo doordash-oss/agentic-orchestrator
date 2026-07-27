@@ -369,7 +369,6 @@ func TestFrontendImplementationRequiresFrontendDesignAndKeepsVisualReferences(t 
 	}
 
 	t.Logf("frontend implement prompt:\n%s", (*captured)[0].Prompt)
-	t.Logf("frontend review prompt:\n%s", (*captured)[1].Prompt)
 
 	implementSystemPrompt := (*captured)[0].SystemPrompt
 	for _, want := range []string{
@@ -383,23 +382,34 @@ func TestFrontendImplementationRequiresFrontendDesignAndKeepsVisualReferences(t 
 		}
 	}
 
-	for _, got := range []struct {
+	capturedPrompts := []struct {
 		name   string
 		prompt string
 	}{
 		{name: "implement", prompt: (*captured)[0].Prompt},
-		{name: "review", prompt: (*captured)[1].Prompt},
-	} {
+	}
+	for i, opts := range (*captured)[1:] {
+		capturedPrompts = append(capturedPrompts, struct {
+			name   string
+			prompt string
+		}{
+			name:   fmt.Sprintf("review %d", i+1),
+			prompt: opts.Prompt,
+		})
+	}
+
+	for _, got := range capturedPrompts {
 		if !strings.Contains(got.prompt, "## Visual References") {
 			t.Errorf("%s prompt missing visual references:\n%s", got.name, got.prompt)
 		}
 		if !strings.Contains(got.prompt, "/tmp/mockup.png") {
 			t.Errorf("%s prompt missing attached image path:\n%s", got.name, got.prompt)
 		}
-		if strings.Contains(got.prompt, "## Visual Evidence") {
+		linePaddedPrompt := "\n" + got.prompt + "\n"
+		if strings.Contains(linePaddedPrompt, "\n## Visual Evidence\n") {
 			t.Errorf("%s prompt unexpectedly contains visual evidence guidance:\n%s", got.name, got.prompt)
 		}
-		if strings.Contains(got.prompt, "## Behavioral Evidence") {
+		if strings.Contains(linePaddedPrompt, "\n## Behavioral Evidence\n") {
 			t.Errorf("%s prompt unexpectedly contains behavioral evidence guidance:\n%s", got.name, got.prompt)
 		}
 	}
@@ -4054,34 +4064,51 @@ func TestWaitForStatus_BackgroundTasks(t *testing.T) {
 		}
 	})
 
-	t.Run("wedged session with live tasks hits stall backstop", func(t *testing.T) {
+	t.Run("silent live tasks wait indefinitely until terminal", func(t *testing.T) {
 		withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-		prev := backgroundTaskStallTimeout
-		backgroundTaskStallTimeout = 30 * time.Millisecond
-		t.Cleanup(func() { backgroundTaskStallTimeout = prev })
 
 		sess := newBgTaskSession()
 		sess.result = newEndedAfterTextResult()
 		sess.liveTasks.Store(1)
-		sess.lastStdoutNs.Store(time.Now().UnixNano())
+		sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
 
+		var ready atomic.Bool
 		done := make(chan string, 1)
 		go func() {
-			done <- waitForStatus(sess, nil, "", func() bool { return false })
+			done <- waitForStatus(sess, nil, "", func() bool { return ready.Load() })
 		}()
 
 		sess.statusCh <- agentStatusSuccess
 
 		select {
 		case got := <-done:
-			if got != agentStatusMissingMarker {
-				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
+			t.Fatalf("waitForStatus() returned %q while provider still declared a live task", got)
+		case msg := <-sess.userMessages:
+			t.Fatalf("unexpected user message %q while provider still declared a live task", msg)
+		case <-time.After(100 * time.Millisecond):
+		}
+		if sess.stopped.Load() {
+			t.Fatal("session was stopped while provider still declared a live task")
+		}
+
+		sess.liveTasks.Store(0)
+		select {
+		case msg := <-sess.userMessages:
+			if !strings.Contains(msg, "Continue where you left off") {
+				t.Fatalf("SendUserMessage() = %q, want auto-resume after terminal task", msg)
 			}
 		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for stall backstop")
+			t.Fatal("timed out waiting for auto-resume after terminal task")
 		}
-		if !sess.stopped.Load() {
-			t.Fatal("session was not stopped by the stall backstop")
+		ready.Store(true)
+		sess.statusCh <- agentStatusSuccess
+		select {
+		case got := <-done:
+			if got != agentStatusSuccess {
+				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for final SUCCESS")
 		}
 	})
 

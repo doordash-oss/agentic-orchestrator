@@ -976,6 +976,46 @@ func TestLivePreviewTranscriptRowsWrapToContentWidth(t *testing.T) {
 	}
 }
 
+func TestLivePreviewTranscriptRowsIncludeAutomaticApprovalStatusInOrder(t *testing.T) {
+	t.Parallel()
+
+	rows := livePreviewTranscriptRows([]llm.SDKMessage{
+		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Content: []llm.ContentBlock{{Type: "text", Text: "Checking the command."}},
+		}}},
+		{Type: "status", Status: &llm.StatusMessage{Message: "Auto-approved Bash: go test ./..."}},
+		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Content: []llm.ContentBlock{{Type: "tool_use", Name: "Bash"}},
+		}}},
+	}, false)
+
+	if len(rows) != 3 {
+		t.Fatalf("livePreviewTranscriptRows() returned %d rows, want 3: %+v", len(rows), rows)
+	}
+	if rows[1].kind != livePreviewTranscriptApproval || rows[1].text != "Auto-approved Bash: go test ./..." {
+		t.Fatalf("status row = %+v, want automatic approval between assistant and Bash", rows[1])
+	}
+	if got := livePreviewTranscriptStyle(rows[1].kind).Render(rows[1].text); !strings.Contains(got, extractFgEscape(colorSubtext)) {
+		t.Fatalf("automatic approval style = %q, want accessible secondary text color", got)
+	}
+}
+
+func TestLivePreviewTranscriptRowsIncludeAutomaticHumanReviewStatus(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{
+		"Auto-review deferred Bash to you: curl https://example.com",
+		"Auto-review failed (timeout); asking you about Bash: curl https://example.com",
+	} {
+		rows := livePreviewTranscriptRows([]llm.SDKMessage{{
+			Type: "status", Status: &llm.StatusMessage{Message: status},
+		}}, false)
+		if len(rows) != 1 || rows[0].kind != livePreviewTranscriptApproval || rows[0].text != status {
+			t.Errorf("status %q produced rows %+v, want one visible automatic-review row", status, rows)
+		}
+	}
+}
+
 func TestLivePreviewToolResultsTruncateToSingleLine(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}

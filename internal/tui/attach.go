@@ -3780,7 +3780,11 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 			if filter == filterTextOnly {
 				continue
 			}
-			b.WriteString(MutedStyle.Render(fmt.Sprintf("  [status] %s", msg.Status.Message)))
+			statusStyle := MutedStyle
+			if isAutomaticReviewStatus(msg.Status.Message) {
+				statusStyle = automaticReviewStatusStyle
+			}
+			b.WriteString(statusStyle.Render(fmt.Sprintf("  [status] %s", msg.Status.Message)))
 			b.WriteByte('\n')
 
 		case msg.TaskStarted != nil:

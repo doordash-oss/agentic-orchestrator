@@ -226,6 +226,7 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t
 	for name, inner := range map[string]ports.PermissionHandler{
 		"BoundedHelperArtifactHandler":        &BoundedHelperArtifactHandler{AllowedPaths: []string{marker}},
 		"BoundedHelperArtifactHandlerGuarded": Guarded(&BoundedHelperArtifactHandler{AllowedPaths: []string{marker}}),
+		"AMAHandler":                          &AMAHandler{},
 		"ReadOnlyHandler":                     &ReadOnlyHandler{},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -234,6 +235,27 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t
 				t.Fatalf("WrapGeneralPhaseHandlerWithSafeCreate(%s, roots) returned a new handler, want the original passed through unchanged", name)
 			}
 		})
+	}
+}
+
+func TestIsAutomaticReviewHandler_IncludesAMAWithoutBroadeningGeneralPolicy(t *testing.T) {
+	for name, handler := range map[string]ports.PermissionHandler{
+		"AMAHandler":         &AMAHandler{},
+		"AMAHandlerGuarded":  Guarded(&AMAHandler{}),
+		"AcceptEditsHandler": &AcceptEditsHandler{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !IsAutomaticReviewHandler(handler) {
+				t.Fatalf("IsAutomaticReviewHandler(%s) = false, want true", name)
+			}
+		})
+	}
+
+	if IsGeneralPhaseHandler(&AMAHandler{}) {
+		t.Fatal("IsGeneralPhaseHandler(AMAHandler) = true, want false")
+	}
+	if IsAutomaticReviewHandler(&ReadOnlyHandler{}) {
+		t.Fatal("IsAutomaticReviewHandler(ReadOnlyHandler) = true, want false")
 	}
 }
 

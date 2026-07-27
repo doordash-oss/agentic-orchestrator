@@ -118,6 +118,15 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 	detail.Summary = safeDisplayText(f.Summary, 500)
 	detail.Pipeline = string(f.Pipeline)
 	detail.Models = f.Models
+	autoReviewEnabled, autoReviewSource := feature.ResolveAutomaticReview(
+		f.AutomaticReviewMode,
+		h.configOrDefault().Defaults.AutomaticReviewEnabled,
+	)
+	detail.AutomaticReview = AutomaticReviewState{
+		Mode:    AutomaticReviewStateMode(feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)),
+		Enabled: autoReviewEnabled,
+		Source:  AutomaticReviewStateSource(autoReviewSource),
+	}
 	detail.ActiveRunDetail = &active
 	detail.HistoricalRuns = history
 	detail.RepoStatus = h.repoStatusDTOs(f)
@@ -641,7 +650,7 @@ func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 		}
-		for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat, llm.PhaseKBBuild} {
+		for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat, llm.PhaseKBBuild, llm.PhaseAutomaticReview} {
 			resp.PhaseProviderModels[string(role)] = h.registry.EligibleModelsForPhase(role)
 		}
 	}
@@ -736,12 +745,13 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaultsDTO {
 		}
 	}
 	return FeatureDefaultsDTO{
-		Models:              defaults.Models,
-		Effort:              defaults.Effort,
-		PipelinePreferences: prefs,
-		Inquireness:         defaults.Inquireness,
-		Pipeline:            defaults.Pipeline,
-		Checkpoints:         defaults.Checkpoints,
+		Models:                 defaults.Models,
+		Effort:                 defaults.Effort,
+		PipelinePreferences:    prefs,
+		Inquireness:            defaults.Inquireness,
+		Pipeline:               defaults.Pipeline,
+		Checkpoints:            defaults.Checkpoints,
+		AutomaticReviewEnabled: defaults.AutomaticReviewEnabled,
 	}
 }
 
@@ -1035,12 +1045,13 @@ func beforeByKnownTime(a, b time.Time) bool {
 func featureConfigDTO(f *feature.Feature) FeatureConfigDTO {
 	pipeline := f.Pipeline
 	return FeatureConfigDTO{
-		Models:             f.Models,
-		Effort:             f.Effort,
-		Inquireness:        string(f.Inquireness),
-		Checkpoints:        checkpointsDTO(pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())),
-		Pipeline:           string(pipeline),
-		InputNotifications: FeatureConfigInputNotifications(feature.NormalizeInputNotificationsMode(f.InputNotifications)),
+		Models:              f.Models,
+		Effort:              f.Effort,
+		Inquireness:         string(f.Inquireness),
+		Checkpoints:         checkpointsDTO(pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())),
+		Pipeline:            string(pipeline),
+		InputNotifications:  FeatureConfigInputNotifications(feature.NormalizeInputNotificationsMode(f.InputNotifications)),
+		AutomaticReviewMode: FeatureConfigAutomaticReviewMode(feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)),
 	}
 }
 

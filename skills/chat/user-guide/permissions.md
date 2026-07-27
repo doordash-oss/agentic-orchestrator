@@ -15,7 +15,14 @@ The following tool categories are approved automatically and never prompt:
 
 ### Requires Approval
 
-Any Bash command not covered by the default or cached rules requires user approval. Common examples:
+Any Bash command not covered by the default or cached rules normally requires
+user approval. When the optional Automatic Bash review feature is enabled, an
+unresolved canonical Bash request first checks a deterministic fast path.
+Curated build/test commands auto-approve without a model. Every other
+reviewable command reaches one model review—including dangerous commands such
+as `rm -rf`, `sudo`, and `curl | sh`—and an exact `ALLOW` continues
+automatically. `DEFER` or any failure reaches the ordinary human prompt. This
+creates no durable permission rule.
 
 - Build commands (`go build`, `npm run build`, `make`)
 - Test commands (`go test`, `npm test`, `pytest`)
@@ -177,4 +184,17 @@ When an agent requests a tool, the permission system evaluates in this order:
 
 1. **Session handler** — checks if the tool is in the always-approved category (read-only tools, file edits during implementation)
 2. **Cache check** — looks up the tool pattern in cached rules (global + per-repo), deny-wins
-3. **TUI prompt** — if no cached rule matches, surfaces the permission request to the user in the watch view or dashboard
+3. **Deterministic Bash fast path** — when automatic review is enabled, an otherwise-unresolved canonical Bash request matching the curated guardrail auto-approves immediately; it needs no reviewer and remains available after the session circuit breaker opens
+4. **Automatic Bash model review** — every other valid, non-blank command up to 4096 bytes receives up to two bounded model attempts sharing one overall one-minute timeout when a reviewer is available; only transient launch, handshake, transport, rate-limit, and server failures receive the single retry, model session-cache hits stay silent, two consecutive timeouts start a 30-second cooldown with a half-open retry, and two consecutive provider/protocol failures disable the model path for the session
+5. **TUI prompt** — if automatic review is disabled, the command is unreviewable, no reviewer is available, or the model returns `DEFER` or fails, the ordinary human prompt appears in the watch view or dashboard
+
+Automatic review never overrides earlier decisions, stores no durable
+permission rule, and is not command sandboxing. If it is enabled but no
+reviewer can be resolved, Agentico shows one session-scoped status and operator
+event; deterministic approvals still fast-path while other individual
+permission requests remain silent and use the ordinary human prompt. The
+guardrail is only a velocity optimization. For everything outside it, the
+fallible, promptable reviewer model is the trust boundary before the human.
+See
+[Configuration — Automatic Bash Review](configuration.md#automatic-bash-review)
+for the guardrail, reviewer, lifecycle, and evidence contract.

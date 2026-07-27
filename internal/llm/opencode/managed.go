@@ -84,6 +84,7 @@ type managedConfig struct {
 	Schema       string                  `json:"$schema,omitempty"`
 	Model        string                  `json:"model"`
 	Instructions []string                `json:"instructions,omitempty"`
+	Tools        map[string]bool         `json:"tools,omitempty"`
 	Permission   map[string]any          `json:"permission"`
 	Agent        map[string]managedAgent `json:"agent,omitempty"`
 	Provider     map[string]any          `json:"provider,omitempty"`
@@ -117,6 +118,10 @@ func buildManagedSession(binary string, opts llm.CommandBuildOpts) (args, env []
 	if err := validateBackendModel(backend); err != nil {
 		return nil, nil, err
 	}
+	nativeReview, err := nativeToollessReviewRequested(opts)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	cfg := managedConfig{
 		Schema:     openCodeConfigSchema,
@@ -126,20 +131,28 @@ func buildManagedSession(binary string, opts llm.CommandBuildOpts) (args, env []
 		Autoupdate: boolPtr(false),
 	}
 
-	agents, err := convertAgents(opts.AgentsJSON, opts.DangerouslySkipPerms, opts.WorkDir, opts.WritableRoots)
-	if err != nil {
-		// The agent JSON is Agentico-internal; name the operation without echoing
-		// its contents so a malformed definition cannot leak into diagnostics.
-		return nil, nil, fmt.Errorf("converting OpenCode managed agents: %s", sanitizeDiagnostic(err.Error()))
-	}
-	if len(agents) > 0 {
-		cfg.Agent = agents
+	if nativeReview {
+		cfg.Tools = nativeToollessTools()
+		cfg.Permission = nativeToollessPermissionConfig()
+	} else {
+		agents, convertErr := convertAgents(opts.AgentsJSON, opts.DangerouslySkipPerms, opts.WorkDir, opts.WritableRoots)
+		if convertErr != nil {
+			// The agent JSON is Agentico-internal; name the operation without echoing
+			// its contents so a malformed definition cannot leak into diagnostics.
+			return nil, nil, fmt.Errorf("converting OpenCode managed agents: %s", sanitizeDiagnostic(convertErr.Error()))
+		}
+		if len(agents) > 0 {
+			cfg.Agent = agents
+		}
 	}
 	applyEffort(&cfg, backend, opts.EffortLevel)
 
 	args = []string{binary, "acp"}
 
 	systemPrompt := opts.SystemPrompt
+	if nativeReview {
+		systemPrompt = ""
+	}
 	dir := managedSessionDir(opts.StateDir, sessionFingerprint(opts, backend))
 
 	if dir != "" {
@@ -159,6 +172,16 @@ func buildManagedSession(binary string, opts llm.CommandBuildOpts) (args, env []
 			return nil, nil, fmt.Errorf("writing OpenCode managed config: %s", sanitizeDiagnostic(werr.Error()))
 		}
 		env = append(env, configFileEnvVar+"="+cfgPath)
+		if nativeReview {
+			if copyErr := copyNativeReviewAuth(dir); copyErr != nil {
+				return nil, nil, fmt.Errorf("copying OpenCode authentication: %s", sanitizeDiagnostic(copyErr.Error()))
+			}
+			env = append(env,
+				"XDG_CONFIG_HOME="+filepath.Join(dir, "xdg-config"),
+				"XDG_DATA_HOME="+filepath.Join(dir, "xdg-data"),
+				"XDG_CACHE_HOME="+filepath.Join(dir, "xdg-cache"),
+			)
+		}
 	} else if strings.TrimSpace(systemPrompt) != "" {
 		// Role instructions can only be delivered to OpenCode through a managed
 		// instructions file, which requires a provider-managed state directory.
@@ -176,6 +199,63 @@ func buildManagedSession(binary string, opts llm.CommandBuildOpts) (args, env []
 	env = append(env, isoEnv...)
 
 	return args, env, nil
+}
+
+func copyNativeReviewAuth(dir string) error {
+	dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+	if dataHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolving user data directory: %w", err)
+		}
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	source := filepath.Join(dataHome, "opencode", "auth.json")
+	auth, err := os.ReadFile(source)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading credential store: %w", err)
+	}
+
+	isolatedDataHome := filepath.Join(dir, "xdg-data")
+	targetDir := filepath.Join(isolatedDataHome, "opencode")
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		return fmt.Errorf("creating isolated credential directory: %w", err)
+	}
+	for _, path := range []string{isolatedDataHome, targetDir} {
+		if err := os.Chmod(path, 0o700); err != nil {
+			return fmt.Errorf("securing isolated credential directory: %w", err)
+		}
+	}
+	target := filepath.Join(targetDir, "auth.json")
+	if err := os.WriteFile(target, auth, 0o600); err != nil {
+		return fmt.Errorf("writing isolated credential store: %w", err)
+	}
+	if err := os.Chmod(target, 0o600); err != nil {
+		return fmt.Errorf("securing isolated credential store: %w", err)
+	}
+	return nil
+}
+
+func nativeToollessReviewRequested(opts llm.CommandBuildOpts) (bool, error) {
+	requested := 0
+	for _, enabled := range []bool{opts.ZeroTools, opts.NoSessionPersistence, opts.NoCustomization} {
+		if enabled {
+			requested++
+		}
+	}
+	if requested == 0 {
+		return false, nil
+	}
+	if requested != 3 {
+		return false, fmt.Errorf("OpenCode native tool-less review requires zero tools, no session persistence, and no customization")
+	}
+	if strings.TrimSpace(opts.StateDir) == "" {
+		return false, fmt.Errorf("OpenCode native tool-less review requires an ephemeral provider state directory")
+	}
+	return true, nil
 }
 
 // marshalManagedConfig renders the managed config deterministically. Go marshals

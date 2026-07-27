@@ -79,6 +79,22 @@ type ReadinessChecker interface {
 	CheckReadiness(ctx context.Context) ProviderReadiness
 }
 
+// ReviewModelRanker is implemented by providers that define provider-local
+// preference bands for automatic-review models. Lower bands are preferred.
+// Returning false excludes the model from automatic selection.
+type ReviewModelRanker interface {
+	ReviewPreferenceBand(model ModelInfo) (int, bool)
+}
+
+// NativeToollessReviewer is implemented only by providers whose automatic-
+// review launch and protocol have been audited to expose no native tool,
+// question, child-session, customization, or persistence surface. General
+// provider support is deliberately insufficient: automatic review requires an
+// explicit positive attestation of the complete isolation contract.
+type NativeToollessReviewer interface {
+	SupportsNativeToollessReview() bool
+}
+
 // VersionEnforcer is implemented by providers whose installed CLI must meet
 // MinVersion() to be usable at startup. When EnforcesMinVersion reports true and
 // the installed CLI is older than MinVersion(), the provider is excluded from
@@ -241,6 +257,24 @@ type CommandBuildOpts struct {
 	// Code's "auto" mode because it injects a "work without stopping for
 	// clarifying questions" system-reminder that overrides [grill-me].
 	PermissionMode string
+	// ZeroTools, when true, asks the provider to expose zero tools (e.g.
+	// Claude's --tools ""). This is stronger than DisallowedTools because it
+	// removes the entire native and MCP tool surface rather than denylisting
+	// known tool names. Providers that do not support it leave their behavior
+	// unchanged.
+	ZeroTools bool
+	// NoSessionPersistence, when true, asks the provider to disable native
+	// session persistence (e.g. Claude's --no-session-persistence) so no
+	// provider transcript or session identity is created. Providers that do
+	// not support it leave their behavior unchanged.
+	NoSessionPersistence bool
+	// NoCustomization, when true, asks the provider to skip all project/user
+	// customization — CLAUDE.md auto-discovery, hooks, LSP, plugin sync,
+	// settings, rules, skills, and local configuration (e.g. Claude's
+	// --safe-mode). This ensures the hidden reviewer's context contains only the
+	// static review policy and the declared execution-context fields, with
+	// no project-injected instructions that could alter the classification.
+	NoCustomization bool
 }
 
 // ProtocolOpts contains all parameters needed to create a Protocol instance.
@@ -255,6 +289,11 @@ type ProtocolOpts struct {
 	DSP            bool
 	StateDir       string
 	MarkerPath     string
+	// NativeToollessReview selects the provider's audited one-turn reviewer
+	// protocol boundary. Providers that attest NativeToollessReviewer use this
+	// to omit every tool, question, child-session, continuation, and persistent
+	// session surface while leaving ordinary sessions unchanged.
+	NativeToollessReview bool
 	// ResumeSessionID, when non-empty, asks the protocol to resume a prior
 	// provider session identity rather than start a fresh one. Empty means a
 	// normal new session, so providers that do not resume leave their behavior
@@ -386,13 +425,14 @@ var ErrNotSupported = fmt.Errorf("operation not supported by this provider")
 type PhaseRole string
 
 const (
-	PhaseInquiry        PhaseRole = "inquiry"
-	PhaseResearch       PhaseRole = "research"
-	PhasePlanning       PhaseRole = "planning"
-	PhaseImplementation PhaseRole = "implementation"
-	PhaseReview         PhaseRole = "review"
-	PhaseChat           PhaseRole = "chat"
-	PhaseKBBuild        PhaseRole = "kb_build"
+	PhaseInquiry         PhaseRole = "inquiry"
+	PhaseResearch        PhaseRole = "research"
+	PhasePlanning        PhaseRole = "planning"
+	PhaseImplementation  PhaseRole = "implementation"
+	PhaseReview          PhaseRole = "review"
+	PhaseChat            PhaseRole = "chat"
+	PhaseKBBuild         PhaseRole = "kb_build"
+	PhaseAutomaticReview PhaseRole = "automatic_review"
 )
 
 // ConfigFieldForRole maps a PhaseRole to the corresponding field name on

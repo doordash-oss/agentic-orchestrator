@@ -216,6 +216,53 @@ func TestHandshake_HappyPath(t *testing.T) {
 	}
 }
 
+func TestHandshake_NativeToollessReviewDeclaresNoClientToolSurface(t *testing.T) {
+	h := newHandshakeHarness(t, llm.ProtocolOpts{
+		Model:                "opencode:anthropic/claude-haiku-4-5",
+		WorkDir:              "/work/dir",
+		InitialPrompt:        "Classify one command.",
+		NativeToollessReview: true,
+	})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.p.Handshake(context.Background()) }()
+
+	initReq := h.nextRequest(t)
+	var initParams InitializeParams
+	if err := json.Unmarshal(initReq.Params, &initParams); err != nil {
+		t.Fatalf("unmarshal initialize params: %v", err)
+	}
+	if initParams.ClientCapabilities.FS.ReadTextFile || initParams.ClientCapabilities.FS.WriteTextFile {
+		t.Fatalf("review initialize FS capability = %+v, want no client filesystem", initParams.ClientCapabilities.FS)
+	}
+	if initParams.ClientCapabilities.Terminal {
+		t.Fatal("review initialize declared terminal capability")
+	}
+	h.feed(t, responseLine(t, mustID(t, initReq.ID), map[string]any{"protocolVersion": 1}))
+
+	sessionReq := h.nextRequest(t)
+	var sessionParams SessionNewParams
+	if err := json.Unmarshal(sessionReq.Params, &sessionParams); err != nil {
+		t.Fatalf("unmarshal session/new params: %v", err)
+	}
+	if len(sessionParams.MCPServers) != 0 {
+		t.Fatalf("review session/new MCP servers = %v, want none", sessionParams.MCPServers)
+	}
+	h.feed(t, responseLine(t, mustID(t, sessionReq.ID), map[string]any{"sessionId": "hidden-review"}))
+
+	promptReq := h.nextRequest(t)
+	var promptParams PromptParams
+	if err := json.Unmarshal(promptReq.Params, &promptParams); err != nil {
+		t.Fatalf("unmarshal session/prompt params: %v", err)
+	}
+	if len(promptParams.Prompt) != 1 || promptParams.Prompt[0].Text != "Classify one command." {
+		t.Fatalf("review prompt = %+v, want exact minimal prompt", promptParams.Prompt)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Handshake() error: %v", err)
+	}
+}
+
 func TestHandshake_RejectsIncompatibleProtocolVersion(t *testing.T) {
 	h := newHandshakeHarness(t, llm.ProtocolOpts{WorkDir: "/w", InitialPrompt: "p"})
 	errCh := make(chan error, 1)
@@ -293,6 +340,168 @@ func TestParseLine_AssistantTextAccumulatesWithoutLoss(t *testing.T) {
 	// Chunks accumulate; the partial carries the full text so far, never just
 	// the latest delta and never a duplicate.
 	assertAssistantText(t, msgs, "Hello world")
+}
+
+func TestParseLine_NativeToollessReviewFailsClosedOnUnexpectedACPInteractions(t *testing.T) {
+	tests := []struct {
+		name string
+		line func(*testing.T) []byte
+	}{
+		{
+			name: "permission request",
+			line: func(t *testing.T) []byte {
+				return serverRequestLine(t, 201, requestPermissionMethod, map[string]any{
+					"sessionId": "ses_x",
+					"toolCall":  map[string]any{"kind": ToolKindExecute, "title": "run command"},
+					"options":   []any{},
+				})
+			},
+		},
+		{
+			name: "question request",
+			line: func(t *testing.T) []byte {
+				return serverRequestLine(t, 202, requestPermissionMethod, map[string]any{
+					"sessionId": "ses_x",
+					"toolCall":  map[string]any{"kind": ToolKindQuestion, "title": "Proceed?"},
+					"options":   []any{},
+				})
+			},
+		},
+		{
+			name: "client filesystem request",
+			line: func(t *testing.T) []byte {
+				return serverRequestLine(t, 203, readTextFileMethod, map[string]any{"path": "/secret"})
+			},
+		},
+		{
+			name: "tool call notification",
+			line: func(t *testing.T) []byte {
+				return notificationLine(t, "session/update", map[string]any{
+					"sessionId": "ses_x",
+					"update": map[string]any{
+						"sessionUpdate": UpdateToolCall,
+						"toolCallId":    "call_1",
+						"kind":          ToolKindThink,
+						"title":         "spawn child",
+					},
+				})
+			},
+		},
+		{
+			name: "child session activity",
+			line: func(t *testing.T) []byte {
+				return notificationLine(t, "session/update", map[string]any{
+					"sessionId": "ses_child",
+					"update": map[string]any{
+						"sessionUpdate": UpdateAgentMessageChunk,
+						"messageId":     "child_message",
+						"content":       map[string]any{"type": "text", "text": "child output"},
+					},
+				})
+			},
+		},
+		{
+			name: "malformed session update",
+			line: func(t *testing.T) []byte {
+				return notificationLine(t, "session/update", "not an update object")
+			},
+		},
+		{
+			name: "unknown session update",
+			line: func(t *testing.T) []byte {
+				return notificationLine(t, "session/update", map[string]any{
+					"sessionId": "ses_x",
+					"update":    map[string]any{"sessionUpdate": "future_interaction_update"},
+				})
+			},
+		},
+		{
+			name: "unexpected response",
+			line: func(t *testing.T) []byte {
+				return responseLine(t, 999, map[string]any{})
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _, _ := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+			msgs := mustParse(t, p, tc.line(t))
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+				t.Fatalf("unexpected review interaction produced %+v, want one terminal error", msgs)
+			}
+			if msgs[0].ControlRequest != nil || msgs[0].ToolProgress != nil {
+				t.Fatalf("unexpected review interaction escaped as interactive activity: %+v", msgs[0])
+			}
+		})
+	}
+}
+
+func TestParseLine_NativeToollessReviewIgnoresAvailableCommandMetadata(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+	messages := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": UpdateAvailableCommands,
+			"availableCommands": []map[string]any{
+				{"name": "review", "description": "review changes"},
+			},
+		},
+	}))
+	if len(messages) != 0 {
+		t.Fatalf("available-command metadata produced %+v, want no activity", messages)
+	}
+	p.mu.Lock()
+	failed := p.resultEmitted
+	p.mu.Unlock()
+	if failed {
+		t.Fatal("available-command metadata sealed native review")
+	}
+}
+
+func TestNativeToollessReviewRejectsQuestionAndAdditionalTurn(t *testing.T) {
+	p, buf, promptID := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+	mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": UpdateAgentMessageChunk,
+			"messageId":     "msg_question",
+			"content":       map[string]any{"type": "text", "text": "Should this command be allowed?"},
+		},
+	}))
+
+	msgs := mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": StopReasonEndTurn}))
+	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
+		t.Fatalf("question-shaped review response produced %+v, want terminal error", msgs)
+	}
+	if got := strings.Count(buf.String(), `"method":"session/prompt"`); got != 0 {
+		t.Fatalf("question-shaped review response sent %d continuation prompts, want none: %s", got, buf.String())
+	}
+	if err := p.SendUserMessage("second turn"); err == nil {
+		t.Fatal("SendUserMessage() in native tool-less review succeeded, want rejection")
+	}
+}
+
+func TestNativeToollessReviewPreservesExactDecisionAndCompletesOneTurn(t *testing.T) {
+	for _, decision := range []string{"ALLOW", "DEFER"} {
+		t.Run(decision, func(t *testing.T) {
+			p, _, promptID := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+			msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+				"sessionId": "ses_x",
+				"update": map[string]any{
+					"sessionUpdate": UpdateAgentMessageChunk,
+					"messageId":     "decision",
+					"content":       map[string]any{"type": "text", "text": decision},
+				},
+			}))
+			assertAssistantText(t, msgs, decision)
+
+			msgs = mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": StopReasonEndTurn}))
+			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+				t.Fatalf("%s review completion produced %+v, want one success result", decision, msgs)
+			}
+		})
+	}
 }
 
 func TestParseLine_AssistantTextResetsOnNewMessageID(t *testing.T) {
@@ -455,8 +664,8 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 			},
 		},
 	}))
-	if len(msgs) != 2 {
-		t.Fatalf("task update produced %+v, want assistant task tool_use plus tool_progress", msgs)
+	if len(msgs) != 3 {
+		t.Fatalf("task update produced %+v, want assistant task tool_use, task start, and tool_progress", msgs)
 	}
 	if msgs[0].Assistant == nil || len(msgs[0].Assistant.Message.Content) != 1 {
 		t.Fatalf("first message = %+v, want assistant task tool_use", msgs[0])
@@ -472,11 +681,18 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 	if input["prompt"] == "" || input["description"] != "Find markdown/link CI checks & hooks" {
 		t.Fatalf("task input = %+v, want preserved description and prompt", input)
 	}
-	if msgs[1].ToolProgress == nil || msgs[1].ToolProgress.ToolName != "Find markdown/link CI checks & hooks" {
-		t.Fatalf("second message = %+v, want task tool_progress", msgs[1])
+	if msgs[1].TaskStarted == nil ||
+		msgs[1].TaskStarted.TaskID != "call_task" ||
+		msgs[1].TaskStarted.ToolUseID != "call_task" ||
+		msgs[1].TaskStarted.Description != "Find markdown/link CI checks & hooks" ||
+		msgs[1].TaskStarted.TaskType != "codebase-locator" {
+		t.Fatalf("second message = %+v, want normalized task start for call_task", msgs[1])
+	}
+	if msgs[2].ToolProgress == nil || msgs[2].ToolProgress.ToolName != "Find markdown/link CI checks & hooks" {
+		t.Fatalf("third message = %+v, want task tool_progress", msgs[2])
 	}
 
-	duplicate := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+	terminal := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
 		"sessionId": "ses_x",
 		"update": map[string]any{
 			"sessionUpdate": "tool_call_update",
@@ -491,8 +707,94 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 			},
 		},
 	}))
-	if len(duplicate) != 1 || duplicate[0].ToolProgress == nil {
-		t.Fatalf("duplicate task update produced %+v, want only tool_progress", duplicate)
+	if len(terminal) != 2 ||
+		terminal[0].TaskNotification == nil ||
+		terminal[0].TaskNotification.TaskID != "call_task" ||
+		terminal[0].TaskNotification.ToolUseID != "call_task" ||
+		terminal[0].TaskNotification.Status != "completed" ||
+		terminal[1].ToolProgress == nil {
+		t.Fatalf("terminal task update produced %+v, want task notification plus tool_progress", terminal)
+	}
+
+	duplicateTerminal := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call_task",
+			"status":        "completed",
+		},
+	}))
+	if len(duplicateTerminal) != 1 || duplicateTerminal[0].ToolProgress == nil {
+		t.Fatalf("duplicate terminal task update produced %+v, want only tool_progress", duplicateTerminal)
+	}
+}
+
+func TestParseLine_OpenCodeTaskLifecycleTerminalStatuses(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "cancelled"} {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+
+			p, _, _ := newPostHandshakeProtocol(t)
+			started := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+				"sessionId": "ses_x",
+				"update": map[string]any{
+					"sessionUpdate": "tool_call_update",
+					"toolCallId":    "call_" + status,
+					"kind":          "think",
+					"title":         "Research " + status,
+					"status":        "in_progress",
+					"rawInput": map[string]any{
+						"description":   "Research " + status,
+						"subagent_type": "researcher",
+						"prompt":        "Inspect the repository.",
+					},
+				},
+			}))
+			if len(started) != 3 || started[1].TaskStarted == nil {
+				t.Fatalf("start update produced %+v, want normalized task start", started)
+			}
+
+			terminal := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+				"sessionId": "ses_x",
+				"update": map[string]any{
+					"sessionUpdate": "tool_call_update",
+					"toolCallId":    "call_" + status,
+					"status":        status,
+				},
+			}))
+			if len(terminal) != 2 ||
+				terminal[0].TaskNotification == nil ||
+				terminal[0].TaskNotification.TaskID != "call_"+status ||
+				terminal[0].TaskNotification.ToolUseID != "call_"+status ||
+				terminal[0].TaskNotification.Status != status ||
+				terminal[1].ToolProgress == nil {
+				t.Fatalf("terminal %q update produced %+v, want normalized task notification plus tool progress", status, terminal)
+			}
+		})
+	}
+}
+
+func TestParseLine_OpenCodeNonTaskToolHasNoTaskLifecycle(t *testing.T) {
+	t.Parallel()
+
+	p, _, _ := newPostHandshakeProtocol(t)
+	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call_read",
+			"kind":          "read",
+			"title":         "Read README",
+			"status":        "in_progress",
+			"rawInput":      map[string]any{"filePath": "README.md"},
+		},
+	}))
+	if len(msgs) != 1 || msgs[0].ToolProgress == nil {
+		t.Fatalf("non-task update produced %+v, want one tool progress message", msgs)
+	}
+	if msgs[0].TaskStarted != nil || msgs[0].TaskProgress != nil || msgs[0].TaskNotification != nil {
+		t.Fatalf("non-task update produced task lifecycle: %+v", msgs[0])
 	}
 }
 

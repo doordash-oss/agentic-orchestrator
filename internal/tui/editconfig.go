@@ -42,6 +42,7 @@ type behaviorSetting int
 const (
 	behaviorSettingInquireness behaviorSetting = iota
 	behaviorSettingInputAlerts
+	behaviorSettingAutomaticReview
 )
 
 type configFocusZone int
@@ -94,6 +95,12 @@ type EditConfigModel struct {
 	behaviorCursor          int
 	inputAlertsMode         feature.InputNotificationsMode
 	originalInputAlertsMode feature.InputNotificationsMode
+	// automaticReviewEnabled is the workspace-level "Automatic Review" toggle.
+	// Feature editors use the tri-state mode fields below.
+	automaticReviewEnabled         bool
+	originalAutomaticReviewEnabled bool
+	automaticReviewMode            feature.AutomaticReviewMode
+	originalAutomaticReviewMode    feature.AutomaticReviewMode
 	// discardConfirm is true after esc-with-changes and before y/n resolution.
 	discardConfirm bool
 	// isWorkspace is true when this overlay edits config.Defaults (built via
@@ -122,18 +129,21 @@ func NewEditConfigModel(f *feature.Feature, cat PhaseModelCatalog, provisionalPu
 		repos = append(repos, repo.Name)
 	}
 	inputAlertsMode := feature.NormalizeInputNotificationsMode(f.InputNotifications)
+	automaticReviewMode := feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)
 	return EditConfigModel{
-		featureID:               f.ID,
-		featureName:             f.Name,
-		repos:                   repos,
-		pipeline:                f.Pipeline,
-		publishable:             provisionalPublishable,
-		deferredEffectWarning:   featureConfigChangesDeferred(f),
-		editor:                  NewConfigEditorModel(f, cat, provisionalPublishable),
-		activeTab:               tabModels,
-		focus:                   configFocusTabs,
-		inputAlertsMode:         inputAlertsMode,
-		originalInputAlertsMode: inputAlertsMode,
+		featureID:                   f.ID,
+		featureName:                 f.Name,
+		repos:                       repos,
+		pipeline:                    f.Pipeline,
+		publishable:                 provisionalPublishable,
+		deferredEffectWarning:       featureConfigChangesDeferred(f),
+		editor:                      NewConfigEditorModel(f, cat, provisionalPublishable),
+		activeTab:                   tabModels,
+		focus:                       configFocusTabs,
+		inputAlertsMode:             inputAlertsMode,
+		originalInputAlertsMode:     inputAlertsMode,
+		automaticReviewMode:         automaticReviewMode,
+		originalAutomaticReviewMode: automaticReviewMode,
 	}
 }
 
@@ -152,6 +162,8 @@ func NewWorkspaceEditConfigModel(cfg *config.Config, cat PhaseModelCatalog) Edit
 		mode := feature.InputNotificationsModeForMuted(cfg.Notifications.MuteFeatureInput)
 		model.inputAlertsMode = mode
 		model.originalInputAlertsMode = mode
+		model.automaticReviewEnabled = cfg.Defaults.AutomaticReviewEnabled
+		model.originalAutomaticReviewEnabled = cfg.Defaults.AutomaticReviewEnabled
 	}
 	return model
 }
@@ -303,6 +315,12 @@ func (m EditConfigModel) View() string {
 		b.WriteString(warningStyle.Render("Running feature: new config will be picked up on the next restart or next phase."))
 		b.WriteString("\n")
 	}
+	if m.isWorkspace {
+		scopeHintStyle := lipgloss.NewStyle().Foreground(colorSubtext)
+		b.WriteString("\n")
+		b.WriteString(scopeHintStyle.Render("Applies to new sessions"))
+		b.WriteString("\n")
+	}
 	b.WriteString("\n")
 
 	b.WriteString(m.renderTabStrip())
@@ -381,7 +399,16 @@ func (m EditConfigModel) renderModelsWorkspace() string {
 			contentWidth = 0
 		}
 	}
-	return m.editor.renderModelsWorkspaceWithFocusWidth(m.focus, contentWidth)
+	view := m.editor.renderModelsWorkspaceWithFocusWidth(m.focus, contentWidth)
+	if !m.isWorkspace {
+		return view
+	}
+	state := "off"
+	if m.automaticReviewEnabled {
+		state = "on"
+	}
+	status := MutedStyle.Render("Automatic review: " + state + " · reviewer choice remains editable")
+	return status + "\n\n" + view
 }
 
 func truncatePhaseLabelForWidth(label string, panelWidth int) string {
@@ -498,8 +525,11 @@ func (m EditConfigModel) renderBehaviorSettingPanel() string {
 }
 
 func (m EditConfigModel) renderBehaviorValuesPanel() string {
-	if m.selectedBehaviorSetting() == behaviorSettingInputAlerts {
+	switch m.selectedBehaviorSetting() {
+	case behaviorSettingInputAlerts:
 		return m.renderInputAlertsValuesPanel()
+	case behaviorSettingAutomaticReview:
+		return m.renderAutomaticReviewValuesPanel()
 	}
 	pills := []feature.Inquireness{
 		feature.InquirenessNone,
@@ -546,7 +576,104 @@ func (m EditConfigModel) renderInputAlertsValuesPanel() string {
 	return titledConfigBox("Values", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, m.focus == configFocusBody)
 }
 
+func (m EditConfigModel) renderAutomaticReviewValuesPanel() string {
+	if !m.isWorkspace {
+		choices := []feature.AutomaticReviewMode{
+			feature.AutomaticReviewDefault,
+			feature.AutomaticReviewEnabled,
+			feature.AutomaticReviewDisabled,
+		}
+		lines := make([]string, 0, len(choices))
+		for _, choice := range choices {
+			label := string(choice)
+			prefix := "  "
+			selected := choice == feature.NormalizeAutomaticReviewMode(m.automaticReviewMode)
+			focused := selected && m.focus == configFocusBody
+			switch {
+			case focused:
+				prefix = SelectedRowStyle.Render("▸ ")
+				label = SelectedRowStyle.Render(label)
+			case selected && m.focus != configFocusTabs:
+				prefix = MutedStyle.Render("✓ ")
+				label = SummarySelectedValueStyle.Render(label)
+			}
+			lines = append(lines, prefix+label)
+		}
+		return titledConfigBox("Values", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, m.focus == configFocusBody)
+	}
+
+	choices := []struct {
+		label string
+		value bool
+	}{
+		{"on", true},
+		{"off", false},
+	}
+	lines := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		label := choice.label
+		prefix := "  "
+		selected := choice.value == m.automaticReviewEnabled
+		focused := selected && m.focus == configFocusBody
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		case selected && m.focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("Values", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, m.focus == configFocusBody)
+}
+
 func (m EditConfigModel) renderBehaviorDetailsPanel() string {
+	if m.selectedBehaviorSetting() == behaviorSettingAutomaticReview {
+		if !m.isWorkspace {
+			mode := feature.NormalizeAutomaticReviewMode(m.automaticReviewMode)
+			effect := "Uses the workspace Automatic Review setting"
+			switch mode {
+			case feature.AutomaticReviewEnabled:
+				effect = "Enables Automatic Review for new sessions in this feature"
+			case feature.AutomaticReviewDisabled:
+				effect = "Disables Automatic Review for new sessions in this feature"
+			}
+			effectStyle := lipgloss.NewStyle().Foreground(colorSubtext)
+			lines := []string{
+				MutedStyle.Render("Selected"),
+				"  " + SummarySelectedValueStyle.Render(string(mode)),
+				"",
+				MutedStyle.Render("Effect"),
+				"  " + effectStyle.Render(effect),
+				"",
+				MutedStyle.Render("Scope"),
+				"  " + effectStyle.Render("Applies to new sessions in this feature"),
+			}
+			return titledConfigBox("Details", strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, false)
+		}
+
+		selected := "off"
+		if m.automaticReviewEnabled {
+			selected = "on"
+		}
+		effect := "Lets one isolated reviewer auto-approve eligible Bash commands for new sessions"
+		if !m.automaticReviewEnabled {
+			effect = "Bash commands not covered by existing permission rules use manual review"
+		}
+		effectStyle := lipgloss.NewStyle().Foreground(colorSubtext)
+		lines := []string{
+			MutedStyle.Render("Selected"),
+			"  " + SummarySelectedValueStyle.Render(selected),
+			"",
+			MutedStyle.Render("Effect"),
+			"  " + effectStyle.Render(effect),
+			"",
+			MutedStyle.Render("Scope"),
+			"  " + effectStyle.Render("Applies to new sessions"),
+		}
+		return titledConfigBox("Details", strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, false)
+	}
 	if m.selectedBehaviorSetting() == behaviorSettingInputAlerts {
 		mode := feature.NormalizeInputNotificationsMode(m.inputAlertsMode)
 		selected := string(mode)
@@ -565,15 +692,16 @@ func (m EditConfigModel) renderBehaviorDetailsPanel() string {
 		if m.isWorkspace {
 			scope = "Applies to this workspace"
 		}
+		effectStyle := lipgloss.NewStyle().Foreground(colorSubtext)
 		lines := []string{
 			MutedStyle.Render("Selected"),
 			"  " + SummarySelectedValueStyle.Render(selected),
 			"",
 			MutedStyle.Render("Effect"),
-			"  " + MutedStyle.Render(effect),
+			"  " + effectStyle.Render(effect),
 			"",
 			MutedStyle.Render("Scope"),
-			"  " + MutedStyle.Render(scope),
+			"  " + effectStyle.Render(scope),
 		}
 		return titledConfigBox("Details", strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, false)
 	}
@@ -582,20 +710,25 @@ func (m EditConfigModel) renderBehaviorDetailsPanel() string {
 		"  " + SummarySelectedValueStyle.Render(string(m.editor.inquireness)),
 	}
 	if desc := inquirenessDescription(m.editor.inquireness); desc != "" {
+		effectStyle := lipgloss.NewStyle().Foreground(colorSubtext)
 		lines = append(lines,
 			"",
 			MutedStyle.Render("Effect"),
-			"  "+MutedStyle.Render(desc),
+			"  "+effectStyle.Render(desc),
 			"",
 			MutedStyle.Render("Scope"),
-			"  "+MutedStyle.Render("Applies to future planning questions"),
+			"  "+effectStyle.Render("Applies to future planning questions"),
 		)
 	}
 	return titledConfigBox("Details", strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, false)
 }
 
 func (m EditConfigModel) behaviorSettings() []behaviorSetting {
-	return []behaviorSetting{behaviorSettingInquireness, behaviorSettingInputAlerts}
+	return []behaviorSetting{
+		behaviorSettingInquireness,
+		behaviorSettingInputAlerts,
+		behaviorSettingAutomaticReview,
+	}
 }
 
 func (m EditConfigModel) selectedBehaviorSetting() behaviorSetting {
@@ -611,6 +744,8 @@ func behaviorSettingLabel(setting behaviorSetting) string {
 	switch setting {
 	case behaviorSettingInputAlerts:
 		return "Input Alerts"
+	case behaviorSettingAutomaticReview:
+		return "Automatic Review"
 	default:
 		return "Inquireness"
 	}
@@ -633,13 +768,36 @@ func (m *EditConfigModel) cycleSelectedBehaviorValue(delta int) {
 		}
 		next := (idx + delta%len(choices) + len(choices)) % len(choices)
 		m.inputAlertsMode = choices[next]
+	case behaviorSettingAutomaticReview:
+		if m.isWorkspace {
+			m.automaticReviewEnabled = !m.automaticReviewEnabled
+			return
+		}
+		choices := []feature.AutomaticReviewMode{
+			feature.AutomaticReviewDefault,
+			feature.AutomaticReviewEnabled,
+			feature.AutomaticReviewDisabled,
+		}
+		current := feature.NormalizeAutomaticReviewMode(m.automaticReviewMode)
+		idx := 0
+		for i, choice := range choices {
+			if choice == current {
+				idx = i
+				break
+			}
+		}
+		next := (idx + delta%len(choices) + len(choices)) % len(choices)
+		m.automaticReviewMode = choices[next]
 	default:
 		m.editor.inquireness = cycleInquireness(m.editor.inquireness, delta)
 	}
 }
 
 func (m *EditConfigModel) toggleSelectedBehaviorValue() {
-	if m.selectedBehaviorSetting() == behaviorSettingInputAlerts {
+	switch m.selectedBehaviorSetting() {
+	case behaviorSettingInputAlerts:
+		m.cycleSelectedBehaviorValue(+1)
+	case behaviorSettingAutomaticReview:
 		m.cycleSelectedBehaviorValue(+1)
 	}
 }
@@ -783,17 +941,23 @@ func (m EditConfigModel) renderHintBar() string {
 	var keys string
 	switch m.activeTab {
 	case tabModels:
+		providerLabel := "agent"
+		providersLabel := "agents"
+		if m.editor.currentModelField() == automaticReviewField {
+			providerLabel = "provider"
+			providersLabel = "providers"
+		}
 		switch m.focus {
 		case configFocusPhaseList:
-			keys = "↑↓ phase   → agents   enter save   esc cancel"
+			keys = "↑↓ phase   → " + providersLabel + "   enter save   esc cancel"
 		case configFocusAgentList:
-			keys = "↑↓ agent   → models   enter phase   esc cancel"
+			keys = "↑↓ " + providerLabel + "   → models   enter phase   esc cancel"
 		case configFocusModelList:
 			keys = "↑↓ model   → effort   / search   enter phase   esc cancel"
 		case configFocusEffortList:
 			keys = "↑↓ effort   ← models   enter phase   esc cancel"
 		default:
-			keys = "↑↓ phase   → agents   / search   enter save   esc cancel"
+			keys = "↑↓ phase   → " + providersLabel + "   / search   enter save   esc cancel"
 		}
 	case tabBehavior:
 		keys = "↑↓ setting   ←→ value   space toggle   enter tabs   esc cancel"
@@ -828,8 +992,12 @@ func (m EditConfigModel) diffSummary() string {
 	if m.inputAlertsChanged() {
 		alerts = "changed"
 	}
-	return fmt.Sprintf("Models: %s · Gates: %s · Inquiry: %s · Input alerts: %s",
-		pluralChanges(models), pluralChanges(gates), inq, alerts)
+	autoReview := "unchanged"
+	if m.automaticReviewChanged() {
+		autoReview = "changed"
+	}
+	return fmt.Sprintf("Models: %s · Gates: %s · Inquiry: %s · Input alerts: %s · Auto review: %s",
+		pluralChanges(models), pluralChanges(gates), inq, alerts, autoReview)
 }
 
 func pluralChanges(n int) string {
@@ -1027,15 +1195,23 @@ func (m EditConfigModel) EnterIsLocal() bool {
 }
 
 func (m EditConfigModel) HasChanges() bool {
-	return m.editor.HasChanges() || m.inputAlertsChanged()
+	return m.editor.HasChanges() || m.inputAlertsChanged() || m.automaticReviewChanged()
 }
 
 func (m EditConfigModel) behaviorChanged() bool {
-	return m.editor.InquirenessChanged() || m.inputAlertsChanged()
+	return m.editor.InquirenessChanged() || m.inputAlertsChanged() || m.automaticReviewChanged()
 }
 
 func (m EditConfigModel) inputAlertsChanged() bool {
 	return feature.NormalizeInputNotificationsMode(m.inputAlertsMode) != feature.NormalizeInputNotificationsMode(m.originalInputAlertsMode)
+}
+
+func (m EditConfigModel) automaticReviewChanged() bool {
+	if !m.isWorkspace {
+		return feature.NormalizeAutomaticReviewMode(m.automaticReviewMode) !=
+			feature.NormalizeAutomaticReviewMode(m.originalAutomaticReviewMode)
+	}
+	return m.automaticReviewEnabled != m.originalAutomaticReviewEnabled
 }
 
 // tabRowRange returns the inclusive [lo, hi] row-cursor range that maps

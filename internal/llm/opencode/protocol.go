@@ -125,14 +125,16 @@ type permissionOptions struct {
 }
 
 type toolCallState struct {
-	title              string
-	kind               string
-	path               string
-	command            string
-	rawInput           json.RawMessage
-	taskToolUseEmitted bool
-	estimatedInput     bool
-	estimatedOutput    bool
+	title               string
+	kind                string
+	path                string
+	command             string
+	rawInput            json.RawMessage
+	taskToolUseEmitted  bool
+	taskStartedEmitted  bool
+	taskTerminalEmitted bool
+	estimatedInput      bool
+	estimatedOutput     bool
 }
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
@@ -256,6 +258,10 @@ func (p *Protocol) sendInitialize() error {
 	p.initID = id
 	p.mu.Unlock()
 
+	fsCapability := FSCapability{ReadTextFile: true, WriteTextFile: true}
+	if p.opts.NativeToollessReview {
+		fsCapability = FSCapability{}
+	}
 	req := Request{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -267,7 +273,7 @@ func (p *Protocol) sendInitialize() error {
 				Version: "0.1.0",
 			},
 			ClientCapabilities: ClientCapabilities{
-				FS:       FSCapability{ReadTextFile: true, WriteTextFile: true},
+				FS:       fsCapability,
 				Terminal: false,
 			},
 		},
@@ -413,6 +419,12 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	// closed. The JSON-RPC reply is always written so OpenCode can unblock, and
 	// only the first terminal result reaches the session.
 	if hasID && env.Method != "" {
+		if p.opts.NativeToollessReview {
+			if msg, ok := p.failNativeToollessReviewInteraction(env.ID, env.Method); ok {
+				return []llm.SDKMessage{msg}, nil
+			}
+			return nil, nil
+		}
 		switch env.Method {
 		case requestPermissionMethod:
 			if msg, ok := p.handleRequestPermission(env.ID, env.Params); ok {
@@ -542,6 +554,9 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 		return p.handlePromptResponse(env, hasErr)
 
 	default:
+		if p.opts.NativeToollessReview {
+			return seal(p.terminalError(fmt.Sprintf("OpenCode native tool-less review received unexpected response id %d", id)))
+		}
 		p.logDebug("[opencode] unhandled response for id %d", id)
 		return nil
 	}
@@ -609,6 +624,9 @@ func (p *Protocol) handlePromptResponse(env inboundEnvelope, hasErr bool) []llm.
 		p.mu.Lock()
 		lastText := p.assistantBuf.String()
 		p.mu.Unlock()
+		if p.opts.NativeToollessReview && (textLooksLikeQuestion(lastText) || textCarriesQuestionContract(lastText)) {
+			return append(usageMsgs, seal(p.terminalError("OpenCode native tool-less review returned a question-shaped interaction"))...)
+		}
 		if msg, emit, done := p.maybeSynthesizeQuestion(lastText); done {
 			if emit {
 				return append(usageMsgs, msg)
@@ -673,13 +691,43 @@ func (p *Protocol) foldResultUsage(u *PromptUsage) []llm.SDKMessage {
 // result is a slice.
 func (p *Protocol) parseNotification(method string, params json.RawMessage) []llm.SDKMessage {
 	if method != "session/update" {
+		if p.opts.NativeToollessReview {
+			return seal(p.terminalError(fmt.Sprintf("OpenCode native tool-less review received unexpected ACP notification %s", method)))
+		}
 		p.logDebug("[opencode] ignoring notification %s", method)
 		return nil
 	}
 	var su SessionUpdateParams
 	if err := json.Unmarshal(params, &su); err != nil {
+		if p.opts.NativeToollessReview {
+			return seal(p.terminalError("OpenCode native tool-less review received malformed session/update"))
+		}
 		p.logDebug("[opencode] failed to parse session/update: %v", err)
 		return nil
+	}
+	if p.opts.NativeToollessReview {
+		p.mu.Lock()
+		sessionID := p.acpSessionID
+		p.mu.Unlock()
+		if su.SessionID != "" && su.SessionID != sessionID {
+			return seal(p.terminalError("OpenCode native tool-less review received child-session activity"))
+		}
+		if su.Update.SessionUpdate == UpdateToolCall || su.Update.SessionUpdate == UpdateToolCallUpdate {
+			return seal(p.terminalError("OpenCode native tool-less review received tool activity"))
+		}
+		switch su.Update.SessionUpdate {
+		case UpdateAgentMessageChunk, UpdateAgentThoughtChunk, UpdateUsage, UpdateAvailableCommands:
+			// available_commands_update is ACP client metadata emitted during
+			// session startup. It does not execute a command or expose a model
+			// tool surface; the fixed review prompt cannot invoke a slash
+			// command. Actual tool calls, permission requests, filesystem
+			// requests, and every unknown update remain terminal above/below.
+		default:
+			return seal(p.terminalError(fmt.Sprintf(
+				"OpenCode native tool-less review received unexpected session update %s",
+				su.Update.SessionUpdate,
+			)))
+		}
 	}
 
 	var out []llm.SDKMessage
@@ -715,6 +763,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		if msg, ok := p.taskToolUseFromUpdate(su.Update); ok {
 			out = append(out, msg)
 		}
+		out = append(out, p.taskLifecycleFromUpdate(su.Update)...)
 		progress := p.toolProgressFromUpdate(su.Update)
 		out = append(out, llm.SDKMessage{
 			Type:         "tool_progress",
@@ -803,6 +852,84 @@ func (p *Protocol) taskToolUseFromUpdate(update SessionUpdate) (llm.SDKMessage, 
 		Name:  "Task",
 		Input: rawInput,
 	}), true
+}
+
+func (p *Protocol) taskLifecycleFromUpdate(update SessionUpdate) []llm.SDKMessage {
+	p.mu.Lock()
+	if p.toolCalls == nil {
+		p.toolCalls = make(map[string]toolCallState)
+	}
+	state := mergeToolCallState(p.toolCalls[update.ToolCallID], update)
+	kind := strings.ToLower(strings.TrimSpace(state.kind))
+	prompt := firstStringField(state.rawInput, "", "prompt")
+	if update.ToolCallID == "" || kind != ToolKindThink || prompt == "" {
+		if update.ToolCallID != "" {
+			p.toolCalls[update.ToolCallID] = state
+		}
+		p.mu.Unlock()
+		return nil
+	}
+
+	description := firstStringField(state.rawInput, "", "description")
+	if description == "" {
+		description = state.title
+	}
+	taskType := firstStringField(state.rawInput, "", "subagent_type")
+	status := strings.ToLower(strings.TrimSpace(update.Status))
+	terminal := status == "completed" || status == "failed" || status == "cancelled"
+	started := state.taskStartedEmitted
+	terminated := state.taskTerminalEmitted
+	if !started {
+		state.taskStartedEmitted = true
+	}
+	if terminal && !terminated {
+		state.taskTerminalEmitted = true
+	}
+	p.toolCalls[update.ToolCallID] = state
+	p.mu.Unlock()
+
+	var out []llm.SDKMessage
+	if !started {
+		out = append(out, llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_started",
+			TaskStarted: &llm.TaskStartedMessage{
+				Type:        "system",
+				Subtype:     "task_started",
+				TaskID:      update.ToolCallID,
+				ToolUseID:   update.ToolCallID,
+				Description: description,
+				TaskType:    taskType,
+				Prompt:      prompt,
+			},
+		})
+	} else if !terminal && !terminated {
+		out = append(out, llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_progress",
+			TaskProgress: &llm.TaskProgressMessage{
+				Type:        "system",
+				Subtype:     "task_progress",
+				TaskID:      update.ToolCallID,
+				ToolUseID:   update.ToolCallID,
+				Description: description,
+			},
+		})
+	}
+	if terminal && !terminated {
+		out = append(out, llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_notification",
+			TaskNotification: &llm.TaskNotificationMessage{
+				Type:      "system",
+				Subtype:   "task_notification",
+				TaskID:    update.ToolCallID,
+				ToolUseID: update.ToolCallID,
+				Status:    status,
+			},
+		})
+	}
+	return out
 }
 
 func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) llm.ToolProgressMessage {
@@ -951,6 +1078,18 @@ func (p *Protocol) failClosed(rawID json.RawMessage, method string) (llm.SDKMess
 		},
 	})
 	return p.terminalError(unsupportedSurfaceDiagnostic(method))
+}
+
+func (p *Protocol) failNativeToollessReviewInteraction(rawID json.RawMessage, method string) (llm.SDKMessage, bool) {
+	_ = p.writeJSON(ErrorResponse{
+		JSONRPC: "2.0",
+		ID:      rawID,
+		Error: RPCError{
+			Code:    jsonRPCMethodNotSupported,
+			Message: fmt.Sprintf("%s is unavailable during native tool-less review", method),
+		},
+	})
+	return p.terminalError(fmt.Sprintf("OpenCode native tool-less review received unexpected ACP request %s", method))
 }
 
 // unsupportedSurfaceDiagnostic returns the user-facing explanation for a
@@ -1288,6 +1427,9 @@ func parseID(raw json.RawMessage) (int, error) {
 
 // SendUserMessage delivers a follow-up user turn as a new session/prompt.
 func (p *Protocol) SendUserMessage(text string) error {
+	if p.opts.NativeToollessReview {
+		return fmt.Errorf("OpenCode native tool-less review permits exactly one prompt")
+	}
 	return p.sendPrompt(text)
 }
 

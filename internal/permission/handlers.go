@@ -249,15 +249,18 @@ func pathWithinRoots(path string, roots []string) bool {
 // specifically to restrict writes below the general writable-root policy and
 // must not be loosened by this exception.
 func WrapGeneralPhaseHandlerWithSafeCreate(h ports.PermissionHandler, roots []string) ports.PermissionHandler {
-	if len(roots) == 0 || !isGeneralPhaseHandler(h) {
+	if len(roots) == 0 || !IsGeneralPhaseHandler(h) {
 		return h
 	}
 	return &CreateWithinRootsHandler{Inner: h, Roots: roots}
 }
 
-// isGeneralPhaseHandler reports whether h is, optionally through a
-// SizeGuardHandler, one of the handler types permHandlerFor builds.
-func isGeneralPhaseHandler(h ports.PermissionHandler) bool {
+// IsGeneralPhaseHandler reports whether h is, optionally through a
+// SizeGuardHandler, one of the handler types permHandlerFor builds. Callers
+// outside the permission package use it to scope behavior that must only
+// attach to the general-phase permission policy (e.g. the automatic Bash-
+// review decorator), never to review-helper or restricted handlers.
+func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
 	if guard, ok := h.(*SizeGuardHandler); ok {
 		h = guard.Inner
 	}
@@ -267,6 +270,23 @@ func isGeneralPhaseHandler(h ports.PermissionHandler) bool {
 	default:
 		return false
 	}
+}
+
+// IsAutomaticReviewHandler reports whether h uses a permission policy whose
+// undecided Bash requests may be sent through automatic review. In addition to
+// the general phase handlers, Ask Me Anything chat deliberately defers Bash to
+// the same user-facing permission UI and therefore participates in review.
+//
+// Keep this separate from IsGeneralPhaseHandler: AMA chat must not inherit
+// unrelated general-phase exceptions such as safe-create approval.
+func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
+	if guard, ok := h.(*SizeGuardHandler); ok {
+		h = guard.Inner
+	}
+	if _, ok := h.(*AMAHandler); ok {
+		return true
+	}
+	return IsGeneralPhaseHandler(h)
 }
 
 // ReadOnlyHandler auto-approves read-only tools and Agent spawning, but

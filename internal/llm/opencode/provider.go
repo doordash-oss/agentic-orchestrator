@@ -136,6 +136,12 @@ func (p *Provider) SupportsFinishOrViolateNudge() bool { return true }
 // which callers treat as "resume unavailable" and fall back.
 func (p *Provider) SupportsSessionResume() bool { return true }
 
+// SupportsNativeToollessReview attests that the provider's isolated managed
+// configuration and ACP protocol implement Agentico's complete hidden-review
+// contract. BuildCommand activates that boundary only when all three native
+// isolation options are requested; ordinary OpenCode sessions are unchanged.
+func (p *Provider) SupportsNativeToollessReview() bool { return true }
+
 // MatchesModel reports whether this provider handles the given model string.
 //
 // An explicit "opencode:" routing prefix always matches when a backend model
@@ -419,6 +425,33 @@ func (p *Provider) ModelCatalog() []llm.ModelInfo {
 	out := make([]llm.ModelInfo, len(cat))
 	copy(out, cat)
 	return out
+}
+
+// ReviewPreferenceBand ranks OpenCode review models without leaking backend
+// model-family naming into shared automatic-review code.
+func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	switch {
+	case reviewModelMatchesHint(model, "haiku"):
+		return 0, true
+	case reviewModelMatchesHint(model, "flash"):
+		return 1, true
+	case model.Category == "cheap":
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
+	if strings.Contains(strings.ToLower(model.ID), hint) {
+		return true
+	}
+	for _, alias := range model.Aliases {
+		if strings.Contains(strings.ToLower(alias), hint) {
+			return true
+		}
+	}
+	return false
 }
 
 // catalogOrFallback returns the discovered catalog when present, otherwise the

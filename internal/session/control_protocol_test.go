@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -342,6 +343,87 @@ func TestAcceptEditsHandler_BashDeferredToTUI_Session(t *testing.T) {
 
 	if handled := s.tryHandleControlRequest(msg); handled {
 		t.Fatal("tryHandleControlRequest Bash with AcceptEditsHandler = true, want false so TUI decides it")
+	}
+}
+
+type lifecycleBlockingPermissionHandler struct {
+	started chan struct{}
+}
+
+func (h lifecycleBlockingPermissionHandler) CanUseTool(req ToolPermissionRequest) (PermissionDecision, error) {
+	close(h.started)
+	<-req.Ctx.Done()
+	return PermissionDecision{}, nil
+}
+
+type trackingDisposablePermissionHandler struct {
+	disposeCalls atomic.Int32
+}
+
+func (*trackingDisposablePermissionHandler) CanUseTool(ToolPermissionRequest) (PermissionDecision, error) {
+	return PermissionDecision{}, nil
+}
+
+func (h *trackingDisposablePermissionHandler) Dispose() {
+	h.disposeCalls.Add(1)
+}
+
+func TestSessionDisposesPermissionHandlerOnTermination(t *testing.T) {
+	t.Run("stop", func(t *testing.T) {
+		s := NewSession("review-stop", "feat-1", feature.PhaseImplement)
+		handler := &trackingDisposablePermissionHandler{}
+		s.permHandler = handler
+
+		if err := s.Stop(); err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+		if got := handler.disposeCalls.Load(); got != 1 {
+			t.Fatalf("Dispose() calls = %d, want 1", got)
+		}
+	})
+
+	t.Run("natural exit", func(t *testing.T) {
+		s := NewSession("review-exit", "feat-1", feature.PhaseImplement)
+		handler := &trackingDisposablePermissionHandler{}
+		s.permHandler = handler
+
+		runSessionWithStdoutLines(t, s, nil, func(llm.SDKMessage) {})
+		if got := handler.disposeCalls.Load(); got != 1 {
+			t.Fatalf("Dispose() calls = %d, want 1", got)
+		}
+
+		if err := s.Stop(); err != nil {
+			t.Fatalf("Stop() after natural exit error = %v", err)
+		}
+		if got := handler.disposeCalls.Load(); got != 1 {
+			t.Fatalf("Dispose() calls after Stop = %d, want lifecycle disposal exactly once", got)
+		}
+	})
+}
+
+func TestSessionStopCancelsInFlightPermissionReview(t *testing.T) {
+	s := NewSession("review-teardown", "feat-1", feature.PhaseImplement)
+	started := make(chan struct{})
+	s.permHandler = lifecycleBlockingPermissionHandler{started: started}
+
+	handled := make(chan bool, 1)
+	go func() {
+		handled <- s.tryHandleControlRequest(llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
+			RequestID: "review-1",
+			Request: llm.ControlRequest{
+				Subtype:  "can_use_tool",
+				ToolName: "Bash",
+				Input:    json.RawMessage(`{"command":"go test ./..."}`),
+			},
+		}})
+	}()
+	<-started
+
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if got := <-handled; got {
+		t.Fatal("tryHandleControlRequest() = true, want human deferral after teardown")
 	}
 }
 

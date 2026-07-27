@@ -406,6 +406,147 @@ func TestWatchdogToolProgressTransitions(t *testing.T) {
 	}
 }
 
+func TestWatchdogConcurrentToolsRemainIndependent(t *testing.T) {
+	t.Parallel()
+
+	sess := NewSession("watchdog-concurrent-tools", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-a",
+		ToolName:  "Write",
+		Data:      "in_progress",
+	}})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-b",
+		ToolName:  "Read",
+		Data:      "in_progress",
+	}})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-b",
+		ToolName:  "Read",
+		Data:      "completed",
+	}})
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+
+	tool, _, stalled := watchdog.toolStall()
+	if !stalled || tool.phase != watchdogToolRunning || tool.id != "tool-a" {
+		t.Fatalf("toolStall() = (%+v, stalled=%v), want remaining running tool-a", tool, stalled)
+	}
+
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "tool-a",
+		ToolName:  "Write",
+		Data:      "completed",
+	}})
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	tool, _, stalled = watchdog.toolStall()
+	if !stalled || tool.phase != watchdogToolAwaitingTurnResult || tool.id != "tool-a" {
+		t.Fatalf("toolStall() after final completion = (%+v, stalled=%v), want awaiting turn after tool-a", tool, stalled)
+	}
+}
+
+func TestWatchdogLiveSubagentsSuppressIdleFailureUntilEveryTaskTerminates(t *testing.T) {
+	t.Parallel()
+
+	sess := NewSession("watchdog-live-subagents", "feat-1", feature.PhaseImplement)
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    20 * time.Millisecond,
+		TurnCompletionIdleTimeout: 20 * time.Millisecond,
+		PollInterval:              5 * time.Millisecond,
+	})
+	for _, taskID := range []string{"task-a", "task-b"} {
+		watchdog.Observe(taskStartedMsg(taskID))
+		watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+			ToolUseID: taskID,
+			ToolName:  "Task",
+			Data:      "in_progress",
+		}})
+	}
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+
+	if tool, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatalf("toolStall() with two live subagents = (%+v, true), want parked watchdog", tool)
+	}
+
+	watchdog.Observe(taskNotificationMsg("task-a"))
+	watchdog.mu.Lock()
+	watchdog.lastActivityAt = time.Now().Add(-time.Second)
+	watchdog.mu.Unlock()
+	if tool, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatalf("toolStall() with one live subagent = (%+v, true), want parked watchdog", tool)
+	}
+
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "task-a",
+		ToolName:  "Task",
+		Data:      "completed",
+	}})
+	watchdog.Observe(llm.SDKMessage{ToolProgress: &llm.ToolProgressMessage{
+		ToolUseID: "task-b",
+		ToolName:  "Task",
+		Data:      "completed",
+	}})
+	watchdog.Observe(taskNotificationMsg("task-b"))
+	if tool, _, stalled := watchdog.toolStall(); stalled {
+		t.Fatalf("toolStall() immediately after final task terminal = (%+v, true), want freshly rearmed timer", tool)
+	}
+}
+
+func TestWatchdogLiveSubagentHeartbeatIsLocalAndStopsAtTerminal(t *testing.T) {
+	sess := NewSession("watchdog-subagent-heartbeat", "feat-1", feature.PhaseImplement)
+	statuses := make(chan llm.SDKMessage, 4)
+	sess.onMessage = func(msg llm.SDKMessage) {
+		if msg.Status != nil {
+			statuses <- msg
+		}
+	}
+	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
+		PendingToolIdleTimeout:    time.Second,
+		TurnCompletionIdleTimeout: time.Second,
+		PollInterval:              5 * time.Millisecond,
+		SubagentHeartbeatInterval: 20 * time.Millisecond,
+	})
+	watchdog.Observe(taskStartedMsg("task-a"))
+	watchdog.mu.Lock()
+	providerActivityAt := watchdog.lastActivityAt
+	watchdog.mu.Unlock()
+	watchdog.Start()
+	t.Cleanup(func() { close(sess.done) })
+
+	select {
+	case msg := <-statuses:
+		if msg.Status == nil || !strings.Contains(msg.Status.Message, "Waiting for 1 subagent (") {
+			t.Fatalf("heartbeat status = %+v, want one-subagent wait status", msg)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for live-subagent heartbeat")
+	}
+
+	watchdog.mu.Lock()
+	afterHeartbeat := watchdog.lastActivityAt
+	watchdog.mu.Unlock()
+	if !afterHeartbeat.Equal(providerActivityAt) {
+		t.Fatalf("heartbeat changed provider activity from %s to %s", providerActivityAt, afterHeartbeat)
+	}
+
+	watchdog.Observe(taskNotificationMsg("task-a"))
+	select {
+	case msg := <-statuses:
+		t.Fatalf("heartbeat continued after terminal task notification: %+v", msg)
+	case <-time.After(60 * time.Millisecond):
+	}
+}
+
 func TestWatchdogControlWaitPausesAndRefreshesTurnTimer(t *testing.T) {
 	sess := NewSession("watchdog-control-wait", "feat-1", feature.PhaseImplement)
 	watchdog := newSessionWatchdog(sess, &ports.SessionWatchdogConfig{
@@ -2520,6 +2661,87 @@ func TestSession_StatusChSignalAfterResultCallback(t *testing.T) {
 	}
 
 	<-done
+}
+
+func TestSessionAppendLocalStatusIsOrderedAndNonTerminal(t *testing.T) {
+	t.Parallel()
+
+	s := NewSession("status-session", "feature-1", feature.PhaseImplement)
+	s.messageLog.Append(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
+		Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "before"}}},
+	}})
+	var callbackRecordCount int
+	s.onMessage = func(msg llm.SDKMessage) {
+		if msg.Status == nil || msg.Status.Message != "Auto-approved Bash: go test ./..." {
+			t.Errorf("status callback message = %+v", msg)
+		}
+		callbackRecordCount = s.messageLog.Len()
+	}
+
+	if err := s.appendLocalStatus("Auto-approved Bash: go test ./..."); err != nil {
+		t.Fatalf("appendLocalStatus() error = %v", err)
+	}
+	messages := s.messageLog.Messages()
+	if len(messages) != 2 || messages[1].Status == nil || messages[1].Status.Message != "Auto-approved Bash: go test ./..." {
+		t.Fatalf("message log = %+v, want ordered status after assistant", messages)
+	}
+	if callbackRecordCount != 2 {
+		t.Fatalf("callback record count = %d, want post-append count 2", callbackRecordCount)
+	}
+	if s.Status() != SessionRunning || s.messageLog.LastResultMessage() != nil {
+		t.Fatalf("status append changed terminal state: status=%s result=%+v", s.Status(), s.messageLog.LastResultMessage())
+	}
+	select {
+	case attached := <-s.attachCh:
+		if attached.Status == nil || attached.Status.Message != "Auto-approved Bash: go test ./..." {
+			t.Fatalf("attach message = %+v", attached)
+		}
+	default:
+		t.Fatal("status was not delivered to attach channel")
+	}
+}
+
+func TestManagerPublishesSessionBuildNoticeOnce(t *testing.T) {
+	manager := NewManager(nil)
+	t.Cleanup(manager.Shutdown)
+	emitted := make(chan ports.SessionBuildNoticeContext, 1)
+	const status = "Automatic review enabled but no reviewer available: authentication unavailable"
+	handle, err := manager.StartSession(
+		"notice-session",
+		"feature-1",
+		feature.PhaseImplement,
+		[]string{"sh", "-c", "while IFS= read -r line; do :; done"},
+		t.TempDir(),
+		nil,
+		&SessionOpts{
+			RepoName:  "repo-a",
+			Iteration: 2,
+			SessionBuildNotices: []ports.SessionBuildNotice{{
+				Status: status,
+				Emit: func(ctx ports.SessionBuildNoticeContext) {
+					emitted <- ctx
+				},
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	t.Cleanup(func() { _ = handle.Stop() })
+
+	messages := handle.MessageLog().Messages()
+	if len(messages) != 1 || messages[0].Status == nil || messages[0].Status.Message != status {
+		t.Fatalf("initial messages = %+v, want one local status notice", messages)
+	}
+	select {
+	case got := <-emitted:
+		if got.SessionID != "notice-session" || got.FeatureID != "feature-1" ||
+			got.Phase != feature.PhaseImplement || got.RepoName != "repo-a" || got.Iteration != 2 {
+			t.Fatalf("notice context = %+v", got)
+		}
+	default:
+		t.Fatal("session-build operator notice was not emitted")
+	}
 }
 
 func taskStartedMsg(taskID string) llm.SDKMessage {

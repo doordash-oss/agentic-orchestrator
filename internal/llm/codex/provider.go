@@ -45,6 +45,11 @@ type Provider struct {
 
 func (p *Provider) Name() string { return "codex" }
 
+// SupportsNativeToollessReview attests that Codex's isolated app-server launch
+// and explicit zero-environment thread implement the complete hidden-review
+// contract. Ordinary Codex sessions do not activate this boundary.
+func (p *Provider) SupportsNativeToollessReview() bool { return true }
+
 // SupportsSessionResume reports that a persisted thread can be resumed via
 // ProtocolOpts.ResumeSessionID (the thread/resume handshake).
 func (p *Provider) SupportsSessionResume() bool { return true }
@@ -99,6 +104,11 @@ func (p *Provider) AvailableModels() []string {
 }
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	nativeToolless, err := nativeToollessReviewRequested(opts)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Interactive: app-server mode. Model/prompt delivered via JSON-RPC.
 	args := []string{p.cliBinary(), "app-server"}
 	if opts.EffortLevel != "" {
@@ -107,6 +117,16 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 	if window := p.contextWindowOverrideForModel(opts.Model); window > 0 {
 		args = append(args, "-c", fmt.Sprintf("model_context_window=%d", window))
 	}
+	if nativeToolless {
+		for _, override := range nativeToollessConfigOverrides {
+			args = append(args, "-c", override)
+		}
+		env, err := p.prepareNativeToollessHome(opts.StateDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		return args, env, nil
+	}
 	// Enable live web search so agents can fetch current web pages.
 	args = append(args, "-c", "web_search=live")
 
@@ -114,6 +134,83 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 		return nil, nil, fmt.Errorf("preparing codex home: %w", err)
 	}
 	return args, nil, nil
+}
+
+var nativeToollessConfigOverrides = []string{
+	"web_search=disabled",
+	"mcp_servers={}",
+	"plugins={}",
+	"features.shell_tool=false",
+	"features.multi_agent=false",
+	"features.apps=false",
+	"features.plugins=false",
+	"features.connectors=false",
+	"features.web_search=false",
+	"features.standalone_web_search=false",
+	"features.web_search_request=false",
+	"features.search_tool=false",
+	"features.tool_search=false",
+	"features.tool_suggest=false",
+	"features.request_permissions_tool=false",
+	"features.memory_tool=false",
+	"features.goals=false",
+	"features.image_generation=false",
+	"features.computer_use=false",
+	"features.browser_use=false",
+	"features.in_app_browser=false",
+	"features.js_repl=false",
+	"features.code_mode=false",
+	"tools.update_plan.enabled=false",
+	"tools.experimental_request_user_input.enabled=false",
+	"skills.bundled.enabled=false",
+	"skills.include_instructions=false",
+	"agents={}",
+	"include_apps_instructions=false",
+	"include_environment_context=false",
+	"include_permissions_instructions=false",
+	"include_collaboration_mode_instructions=false",
+}
+
+func nativeToollessReviewRequested(opts llm.CommandBuildOpts) (bool, error) {
+	requested := opts.ZeroTools || opts.NoSessionPersistence || opts.NoCustomization
+	if !requested {
+		return false, nil
+	}
+	if !opts.ZeroTools || !opts.NoSessionPersistence || !opts.NoCustomization {
+		return false, fmt.Errorf("Codex native tool-less review requires zero tools, no session persistence, and no customization")
+	}
+	if strings.TrimSpace(opts.StateDir) == "" {
+		return false, fmt.Errorf("Codex native tool-less review requires an ephemeral provider state directory")
+	}
+	return true, nil
+}
+
+func (p *Provider) prepareNativeToollessHome(stateDir string) ([]string, error) {
+	realHome, err := p.resolveCodexHome()
+	if err != nil {
+		return nil, fmt.Errorf("resolving Codex auth home: %w", err)
+	}
+	isolatedHome := filepath.Join(stateDir, "codex-home")
+	if err := os.MkdirAll(isolatedHome, 0o700); err != nil {
+		return nil, fmt.Errorf("creating isolated Codex home: %w", err)
+	}
+	for _, name := range []string{"auth.json", ".credentials.json"} {
+		source := filepath.Join(realHome, name)
+		data, readErr := os.ReadFile(source)
+		if os.IsNotExist(readErr) {
+			continue
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("reading Codex authentication %s: %w", name, readErr)
+		}
+		if err := os.WriteFile(filepath.Join(isolatedHome, name), data, 0o600); err != nil {
+			return nil, fmt.Errorf("copying Codex authentication %s: %w", name, err)
+		}
+	}
+	return []string{
+		"CODEX_HOME=" + isolatedHome,
+		"CODEX_SQLITE_HOME=" + isolatedHome,
+	}, nil
 }
 
 func (p *Provider) AskingQuestionsClause() string {
@@ -295,6 +392,30 @@ func (p *Provider) ModelCatalog() []llm.ModelInfo {
 		return p.defaultModelInfos()
 	}
 	return cat
+}
+
+// ReviewPreferenceBand ranks Codex review models without leaking model-family
+// naming into shared automatic-review code.
+func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	if model.Category == "cheap" {
+		return 0, true
+	}
+	if reviewModelMatchesHint(model, "mini") || reviewModelMatchesHint(model, "shrink") {
+		return 1, true
+	}
+	return 0, false
+}
+
+func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
+	if strings.Contains(strings.ToLower(model.ID), hint) {
+		return true
+	}
+	for _, alias := range model.Aliases {
+		if strings.Contains(strings.ToLower(alias), hint) {
+			return true
+		}
+	}
+	return false
 }
 
 // CLIVersion returns the installed Codex CLI version.

@@ -190,6 +190,62 @@ func TestPhaseModelCatalog_SelectionValue(t *testing.T) {
 	}
 }
 
+func TestPhaseModelCatalog_AutomaticReviewSelectionQualifiesOnlyAcrossEligibleProviders(t *testing.T) {
+	t.Parallel()
+
+	cat := PhaseModelCatalog{
+		ProviderOrder: []string{"claude", "opencode", "codex"},
+		ProviderModels: map[string][]string{
+			"claude":   {"haiku"},
+			"opencode": {"anthropic/haiku"},
+			"codex":    {"gpt-5.4"},
+		},
+		PhaseProviderModels: map[string]map[string][]string{
+			automaticReviewField: {
+				"claude": {"haiku"},
+				"codex":  {"gpt-5.4"},
+			},
+		},
+	}
+
+	claude := cat.EntriesForFieldAndAgent(automaticReviewField, "claude")[0]
+	if got := cat.SelectionValueForField(automaticReviewField, claude); got != "claude:haiku" {
+		t.Fatalf("multi-provider automatic-review value = %q, want claude:haiku", got)
+	}
+
+	cat.PhaseProviderModels[automaticReviewField] = map[string][]string{"claude": {"haiku"}}
+	if got := cat.SelectionValueForField(automaticReviewField, claude); got != "haiku" {
+		t.Fatalf("single eligible provider value = %q, want haiku", got)
+	}
+}
+
+func TestPhaseModelCatalog_RegularFieldsFallbackWhenProviderHasNoCategorizedModels(t *testing.T) {
+	t.Parallel()
+
+	cat := PhaseModelCatalog{
+		ProviderOrder: []string{"claude", "gateway"},
+		ProviderModels: map[string][]string{
+			"claude":  {"sonnet"},
+			"gateway": {"vendor/uncategorized"},
+		},
+		PhaseProviderModels: map[string]map[string][]string{
+			"Research": {
+				"claude": {"sonnet"},
+			},
+			automaticReviewField: {
+				"claude": {"sonnet"},
+			},
+		},
+	}
+
+	if got := cat.orderedProviderModelIDsForField("Research", "gateway"); !slices.Equal(got, []string{"vendor/uncategorized"}) {
+		t.Fatalf("regular field gateway models = %v, want full provider fallback", got)
+	}
+	if got := cat.orderedProviderModelIDsForField(automaticReviewField, "gateway"); len(got) != 0 {
+		t.Fatalf("automatic-review gateway models = %v, want strict eligibility", got)
+	}
+}
+
 func TestPhaseModelCatalog_MarksRecommendedEntry(t *testing.T) {
 	t.Parallel()
 	cat := gatewayWinningCatalog()

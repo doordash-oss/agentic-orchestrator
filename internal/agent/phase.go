@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/guidelinedef"
@@ -197,6 +198,16 @@ func NewPhaseRunner(sm ports.SessionManager, store ports.FeatureStore, stateDir 
 	return &PhaseRunner{SessionManager: sm, FeatureStore: store, StateDir: stateDir, CommandRunner: &execCommandRunner{}}
 }
 
+func (pr *PhaseRunner) buildSessionForFeature(f *feature.Feature) BuildSessionFunc {
+	return func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		if f != nil {
+			opts.FeatureID = f.ID
+			opts.AutomaticReviewMode = feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)
+		}
+		return pr.BuildSession(opts)
+	}
+}
+
 // resolvePhaseArtifactDir returns the artifact directory for a pipeline phase,
 // accounting for active refactor cycles. Paths route through the active run
 // directory so sealed runs are not overwritten.
@@ -256,6 +267,8 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		effortLevel = effectiveEffort
 	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		FeatureID:                      f.ID,
+		AutomaticReviewMode:            feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
 		Model:                          phaseModel,
 		Prompt:                         cfg.Prompt,
 		SystemPrompt:                   systemPrompt,
@@ -524,9 +537,11 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		kbEffortLevel = kbEffectiveEffort
 	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:        kbModel,
-		Prompt:       prompt,
-		SystemPrompt: systemPrompt,
+		FeatureID:           f.ID,
+		AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
+		Model:               kbModel,
+		Prompt:              prompt,
+		SystemPrompt:        systemPrompt,
 		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), so it
 		// must be mounted explicitly. The global feature-state root is not KB
 		// context and must not be exposed to this agent.
@@ -661,7 +676,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		DangerouslySkipPermissions:   pr.DangerouslySkipPermissions,
 		PermissionCache:              pr.PermissionCache,
 		RepoName:                     repoName,
-		BuildSession:                 pr.BuildSession,
+		BuildSession:                 pr.buildSessionForFeature(f),
 		AskingClause:                 pr.askingQuestionsClauseForModel(planningModel),
 		EffortLevel:                  f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:              planEffort,
@@ -732,7 +747,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			DangerouslySkipPermissions:   pr.DangerouslySkipPermissions,
 			PermissionCache:              pr.PermissionCache,
 			RepoName:                     planRepoName,
-			BuildSession:                 pr.BuildSession,
+			BuildSession:                 pr.buildSessionForFeature(f),
 			AskingClause:                 pr.askingQuestionsClauseForModel(phasePlanModel),
 			EffortLevel:                  f.EffectivePipeline().EffortLevel(),
 			EffectiveEffort:              phasePlanEffort,
@@ -823,7 +838,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.BuildSession,
+		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                pipelineEffort,
 		EffectiveEffort:            effectiveEffort,
@@ -886,7 +901,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.BuildSession,
+		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            cycleReviewEffort,
@@ -957,7 +972,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.BuildSession,
+		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            implEffort,
@@ -1019,7 +1034,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		BuildSession:               pr.BuildSession,
+		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		EffectiveEffort:            reviewEffort,
@@ -1121,6 +1136,105 @@ func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.P
 	return permission.Guarded(inner)
 }
 
+// decorateHandlerWithAutoReview wraps the fully composed permission handler
+// with the automatic Bash-review decorator when enabled and the handler is the
+// general-phase policy. Disabled sessions get the composed handler unchanged
+// (byte-identical to the pre-feature path). The reviewer is already resolved
+// by the caller, so the enabled flag and reviewer identity are snapshotted as
+// values and a running session is unaffected by later workspace edits or
+// provider/catalog changes.
+func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, enabled bool, reviewer autoreview.Reviewer, workDir string, writableRoots []string) ports.PermissionHandler {
+	if !enabled {
+		return composed
+	}
+	if !permission.IsAutomaticReviewHandler(original) {
+		return composed
+	}
+	return &autoReviewPermissionDecorator{
+		inner:         composed,
+		reviewer:      reviewer,
+		workDir:       workDir,
+		writableRoots: append([]string(nil), writableRoots...),
+	}
+}
+
+// decorateWithAutoReview snapshots the workspace automatic-review defaults,
+// resolves the reviewer, and delegates to decorateHandlerWithAutoReview. When
+// opts.AutoReview.Enabled is non-nil (crash-resume), the reviewer is restored
+// from the snapshotted identity instead of re-resolved, so the resumed session
+// retains the original session's reviewer even if the provider/catalog state
+// changed. Otherwise the current workspace defaults are read, the reviewer is
+// resolved, and the full snapshot is returned for the caller to store. The
+// hidden reviewer itself is launched via autoreview.Classify (never
+// BuildSession), so it is never decorated and cannot recurse.
+func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.PermissionHandler, opts *BuildSessionOpts, workDir string, writableRoots []string) (ports.PermissionHandler, ports.AutoReviewSnapshot) {
+	if opts.AutoReview.Enabled != nil {
+		reviewer := autoreview.RestoreReviewer(pr.Registry, opts.AutoReview.ReviewerProvider, opts.AutoReview.ReviewerModel)
+		snap := opts.AutoReview
+		if *snap.Enabled && reviewer.Provider == nil && strings.TrimSpace(snap.UnavailableReason) == "" {
+			snap.UnavailableReason = "snapshotted reviewer provider is no longer available"
+		}
+		handler := decorateHandlerWithAutoReview(composed, original, *snap.Enabled, reviewer, workDir, writableRoots)
+		installAutoReviewObserver(handler, pr.Observer)
+		return handler, snap
+	}
+	globalEnabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
+	enabled, _ := feature.ResolveAutomaticReview(opts.AutomaticReviewMode, globalEnabled)
+	model := ""
+	if pr != nil && pr.Config != nil {
+		model = pr.Config.Defaults.Models.AutomaticReview
+	}
+	reviewer, _, unavailableReason := autoreview.ResolveReviewer(pr.Registry, model)
+	provName, revModel := reviewer.Identity()
+	snap := ports.AutoReviewSnapshot{
+		Enabled:           &enabled,
+		Model:             model,
+		ReviewerProvider:  provName,
+		ReviewerModel:     revModel,
+		UnavailableReason: unavailableReason,
+	}
+	handler := decorateHandlerWithAutoReview(composed, original, enabled, reviewer, workDir, writableRoots)
+	installAutoReviewObserver(handler, pr.Observer)
+	return handler, snap
+}
+
+func automaticReviewSessionBuildNotices(observer *observe.Observer, snap ports.AutoReviewSnapshot) []ports.SessionBuildNotice {
+	if snap.Enabled == nil || !*snap.Enabled || snap.ReviewerProvider != "" {
+		return nil
+	}
+	reason := strings.TrimSpace(snap.UnavailableReason)
+	if reason == "" {
+		reason = "reviewer resolution failed"
+	}
+	status := "Automatic review enabled but no reviewer available: " + reason
+	return []ports.SessionBuildNotice{{
+		Status: status,
+		Emit: func(ctx ports.SessionBuildNoticeContext) {
+			if observer == nil {
+				return
+			}
+			sc, ok := observer.ActivePhaseSpanContext(ctx.FeatureID)
+			if !ok {
+				sc = observe.SpanContextForFeature(ctx.FeatureID, "", "", "")
+			}
+			observer.AutomaticReviewUnavailable(sc, observe.AutomaticReviewUnavailableEventInput{
+				Phase:     strings.ToLower(ctx.Phase.String()),
+				SessionID: ctx.SessionID,
+				RepoName:  ctx.RepoName,
+				Iteration: ctx.Iteration,
+				Scope:     "session_build",
+				Reason:    reason,
+			})
+		},
+	}}
+}
+
+func installAutoReviewObserver(handler ports.PermissionHandler, observer *observe.Observer) {
+	if decorator, ok := handler.(*autoReviewPermissionDecorator); ok {
+		decorator.observer = observer
+	}
+}
+
 // resolveImplementArtifactDir returns the artifact directory for implementation
 // within the feature's active run. When in a roadmap phase, uses phase-scoped
 // directories. Includes refactor prefix when an active refactor cycle is in
@@ -1178,6 +1292,7 @@ func resolveUnifiedWorkDir(f *feature.Feature, stateDir string) (workDir string,
 
 // BuildSessionOpts holds parameters for BuildSession.
 type BuildSessionOpts struct {
+	FeatureID       string
 	Model           string
 	Prompt          string
 	SystemPrompt    string
@@ -1219,6 +1334,16 @@ type BuildSessionOpts struct {
 	// see its doc comment for why this changes text-parsed AskUserQuestion
 	// providers' behavior.
 	Interactive bool
+	// AutoReview carries the snapshotted automatic-review settings for this
+	// session. When AutoReview.Enabled is non-nil (crash-resume), the
+	// snapshotted values are used; otherwise BuildSession reads the current
+	// workspace defaults. The snapshot is copied as a single value across the
+	// BuildSessionOpts → SessionOpts → BuildSessionOpts crash-resume boundary
+	// so future reviewer-selection fields cannot be copied inconsistently.
+	AutoReview ports.AutoReviewSnapshot
+	// AutomaticReviewMode is resolved from FeatureID for fresh sessions. It is
+	// ignored when AutoReview already contains a crash-resume snapshot.
+	AutomaticReviewMode feature.AutomaticReviewMode
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1229,6 +1354,7 @@ var sessionWatchdogConfig = ports.SessionWatchdogConfig{
 	PendingToolIdleTimeout:    5 * time.Minute,
 	TurnCompletionIdleTimeout: 5 * time.Minute,
 	PollInterval:              time.Second,
+	SubagentHeartbeatInterval: 5 * time.Minute,
 }
 
 type sessionWatchdogProvider interface {
@@ -1308,6 +1434,16 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	// Test injection path
 	if pr.BuildSessionFn != nil {
 		return pr.BuildSessionFn(opts)
+	}
+
+	if opts.AutoReview.Enabled == nil && opts.FeatureID != "" {
+		if pr.FeatureStore != nil {
+			f, loadErr := pr.FeatureStore.Load(opts.FeatureID)
+			if loadErr != nil {
+				return nil, nil, nil, fmt.Errorf("loading feature %q for automatic review: %w", opts.FeatureID, loadErr)
+			}
+			opts.AutomaticReviewMode = feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)
+		}
 	}
 
 	// Production path — registry-based routing.
@@ -1418,6 +1554,17 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		Interactive:     opts.Interactive,
 	})
 
+	// Snapshot the automatic-review settings and decorate the permission
+	// handler. The snapshot is returned so it can be stored in sessOpts for
+	// the implement loop to copy back into BuildSessionOpts on crash-resume.
+	permHandler, arSnap := pr.decorateWithAutoReview(
+		permission.WrapGeneralPhaseHandlerWithSafeCreate(opts.PermHandler, commandWritableRoots),
+		opts.PermHandler,
+		&opts,
+		opts.WorkDir,
+		commandWritableRoots,
+	)
+
 	sessOpts = &ports.SessionOpts{
 		PIDDir: opts.PIDDir,
 		// commandWritableRoots is the same boundary just computed for the
@@ -1426,16 +1573,18 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		// directory the harness already created) can be trusted the same way
 		// AcceptEditsHandler already trusts an equivalent empty Write —
 		// see permission.WrapGeneralPhaseHandlerWithSafeCreate.
-		PermHandler:       permission.WrapGeneralPhaseHandlerWithSafeCreate(opts.PermHandler, commandWritableRoots),
-		InitialPrompt:     opts.Prompt,
-		ContextWindow:     contextWindow,
-		RepoName:          opts.RepoName,
-		LogPath:           opts.LogPath,
-		ProviderName:      prov.Name(),
-		Protocol:          protocol,
-		DebugSystemPrompt: opts.SystemPrompt,
-		TurnMode:          opts.TurnMode,
-		Watchdog:          watchdogConfigForProvider(prov),
+		PermHandler:         permHandler,
+		InitialPrompt:       opts.Prompt,
+		ContextWindow:       contextWindow,
+		RepoName:            opts.RepoName,
+		LogPath:             opts.LogPath,
+		ProviderName:        prov.Name(),
+		Protocol:            protocol,
+		DebugSystemPrompt:   opts.SystemPrompt,
+		TurnMode:            opts.TurnMode,
+		Watchdog:            watchdogConfigForProvider(prov),
+		AutoReview:          arSnap,
+		SessionBuildNotices: automaticReviewSessionBuildNotices(pr.Observer, arSnap),
 	}
 	if c, ok := prov.(finishOrViolateNudgeProvider); ok {
 		sessOpts.SupportsFinishOrViolateNudge = c.SupportsFinishOrViolateNudge()

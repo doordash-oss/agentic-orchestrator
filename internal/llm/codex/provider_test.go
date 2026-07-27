@@ -297,6 +297,131 @@ func TestProviderBuildCommand_ReturnsNilEnvAndInteractiveEffortOverride(t *testi
 	}
 }
 
+func TestProviderBuildCommand_NativeToollessReviewIsIsolated(t *testing.T) {
+	realHome := filepath.Join(t.TempDir(), "real-codex-home")
+	if err := os.MkdirAll(realHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	auth := []byte(`{"tokens":{"access_token":"test"}}`)
+	if err := os.WriteFile(filepath.Join(realHome, "auth.json"), auth, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realHome, "config.toml"), []byte("web_search = \"live\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", realHome)
+
+	stateDir := t.TempDir()
+	p := &Provider{}
+	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:                "gpt-5.4-mini[400K]",
+		StateDir:             stateDir,
+		EffortLevel:          llm.EffortLow,
+		ZeroTools:            true,
+		NoSessionPersistence: true,
+		NoCustomization:      true,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand(native tool-less review) error: %v", err)
+	}
+	if !p.SupportsNativeToollessReview() {
+		t.Fatal("SupportsNativeToollessReview() = false, want audited capability")
+	}
+	if len(cmd) < 2 || cmd[0] != "codex" || cmd[1] != "app-server" {
+		t.Fatalf("BuildCommand(native tool-less review) command = %v", cmd)
+	}
+	if slices.Contains(cmd, "--strict-config") {
+		t.Fatalf("BuildCommand(native tool-less review) command = %v, want unknown defense-in-depth keys tolerated", cmd)
+	}
+	for _, override := range []string{
+		"model_reasoning_effort=low",
+		"model_context_window=400000",
+		"web_search=disabled",
+		"mcp_servers={}",
+		"plugins={}",
+		"features.shell_tool=false",
+		"features.multi_agent=false",
+		"features.apps=false",
+		"features.plugins=false",
+		"features.web_search=false",
+		"tools.update_plan.enabled=false",
+		"tools.experimental_request_user_input.enabled=false",
+		"skills.bundled.enabled=false",
+		"skills.include_instructions=false",
+		"agents={}",
+		"include_apps_instructions=false",
+		"include_environment_context=false",
+		"include_permissions_instructions=false",
+		"include_collaboration_mode_instructions=false",
+	} {
+		assertConfigOverride(t, cmd, override)
+	}
+
+	isolatedHome := filepath.Join(stateDir, "codex-home")
+	if !slices.Contains(env, "CODEX_HOME="+isolatedHome) {
+		t.Fatalf("BuildCommand(native tool-less review) env = %v, want isolated CODEX_HOME", env)
+	}
+	gotAuth, err := os.ReadFile(filepath.Join(isolatedHome, "auth.json"))
+	if err != nil {
+		t.Fatalf("reading isolated auth: %v", err)
+	}
+	if !bytes.Equal(gotAuth, auth) {
+		t.Fatalf("isolated auth = %q, want %q", gotAuth, auth)
+	}
+	for _, unwanted := range []string{"config.toml", "agents"} {
+		if _, err := os.Stat(filepath.Join(isolatedHome, unwanted)); !os.IsNotExist(err) {
+			t.Fatalf("isolated Codex home unexpectedly contains %s: %v", unwanted, err)
+		}
+	}
+}
+
+func TestProviderReviewPreferenceBand(t *testing.T) {
+	p := &Provider{}
+	tests := []struct {
+		model llm.ModelInfo
+		band  int
+		ok    bool
+	}{
+		{model: llm.ModelInfo{ID: "cheap", Category: "cheap"}, band: 0, ok: true},
+		{model: llm.ModelInfo{ID: "gpt-mini", Category: "balanced"}, band: 1, ok: true},
+		{model: llm.ModelInfo{ID: "gpt-large", Category: "balanced"}, ok: false},
+	}
+	for _, tt := range tests {
+		band, ok := p.ReviewPreferenceBand(tt.model)
+		if band != tt.band || ok != tt.ok {
+			t.Errorf("ReviewPreferenceBand(%+v) = (%d,%t), want (%d,%t)", tt.model, band, ok, tt.band, tt.ok)
+		}
+	}
+}
+
+func TestProviderBuildCommand_RejectsPartialToollessReview(t *testing.T) {
+	tests := []struct {
+		name string
+		opts llm.CommandBuildOpts
+	}{
+		{
+			name: "missing zero tools",
+			opts: llm.CommandBuildOpts{NoSessionPersistence: true, NoCustomization: true},
+		},
+		{
+			name: "missing no persistence",
+			opts: llm.CommandBuildOpts{ZeroTools: true, NoCustomization: true},
+		},
+		{
+			name: "missing no customization",
+			opts: llm.CommandBuildOpts{ZeroTools: true, NoSessionPersistence: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.opts.StateDir = t.TempDir()
+			if _, _, err := (&Provider{}).BuildCommand(tt.opts); err == nil {
+				t.Fatal("BuildCommand(partial tool-less review) error = nil")
+			}
+		})
+	}
+}
+
 func TestProviderReconcileAgenticAgents_Idempotent(t *testing.T) {
 	p := &Provider{}
 	codexHome := filepath.Join(t.TempDir(), "codex-home")

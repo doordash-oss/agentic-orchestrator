@@ -129,6 +129,57 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	}
 }
 
+func TestFeatureAutomaticReviewReadModels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		mode        feature.AutomaticReviewMode
+		global      bool
+		wantEnabled bool
+		wantSource  string
+	}{
+		{"default global off", feature.AutomaticReviewDefault, false, false, "global"},
+		{"default global on", feature.AutomaticReviewDefault, true, true, "global"},
+		{"feature enabled", feature.AutomaticReviewEnabled, false, true, "feature"},
+		{"feature disabled", feature.AutomaticReviewDisabled, true, false, "feature"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store, f := seedReadFeature(t)
+			f.AutomaticReviewMode = feature.PersistAutomaticReviewMode(tt.mode)
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			opts := baseReadHandlerOptions(store)
+			opts.Config = &config.Config{Defaults: config.DefaultsConfig{AutomaticReviewEnabled: tt.global}}
+			handler := NewHandler(opts)
+
+			configBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/config")
+			current := configBody["current"].(map[string]any)
+			if got := current["automatic_review_mode"]; got != string(tt.mode) {
+				t.Errorf("config automatic_review_mode = %v, want %q", got, tt.mode)
+			}
+
+			detailBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+			detail := detailBody[entityFeature].(map[string]any)
+			state := detail["automatic_review"].(map[string]any)
+			if got := state["mode"]; got != string(tt.mode) {
+				t.Errorf("detail automatic_review.mode = %v, want %q", got, tt.mode)
+			}
+			if got := state["enabled"]; got != tt.wantEnabled {
+				t.Errorf("detail automatic_review.enabled = %v, want %v", got, tt.wantEnabled)
+			}
+			if got := state["source"]; got != tt.wantSource {
+				t.Errorf("detail automatic_review.source = %v, want %q", got, tt.wantSource)
+			}
+		})
+	}
+}
+
 func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	t.Parallel()
 	store := feature.NewStore(t.TempDir())
@@ -304,6 +355,28 @@ func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 	}
 	if rows[0].Text != "first section" || rows[1].Text != "second section" {
 		t.Fatalf("transcript rows lost text order: %+v", rows)
+	}
+}
+
+func TestTranscriptDTOsExposeStatusTextInPlace(t *testing.T) {
+	t.Parallel()
+
+	rows := transcriptDTOs([]llm.SDKMessage{
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "before"}},
+		}}},
+		{Type: "status", Status: &llm.StatusMessage{Type: "status", Message: "Auto-approved Bash: go test ./..."}},
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeToolUse, Name: toolNameBash}},
+		}}},
+	}, 4)
+
+	if len(rows) != 3 {
+		t.Fatalf("transcriptDTOs() returned %d rows, want 3: %+v", len(rows), rows)
+	}
+	status := rows[1]
+	if status.Index != 5 || status.Role != roleSystem || status.Type != "status" || status.Text != "Auto-approved Bash: go test ./..." || status.Redacted {
+		t.Fatalf("status row = %+v, want textual system status at index 5", status)
 	}
 }
 
@@ -2303,9 +2376,10 @@ func writeFile(t *testing.T, path, data string) {
 }
 
 type fakeProvider struct {
-	name    string
-	models  []string
-	catalog []llm.ModelInfo
+	name     string
+	models   []string
+	catalog  []llm.ModelInfo
+	toolLess bool
 }
 
 func (p fakeProvider) Name() string { return p.name }
@@ -2346,6 +2420,8 @@ func (p fakeProvider) VersionInfo() (string, error) { return "test", nil }
 func (p fakeProvider) MinVersion() [3]int { return [3]int{} }
 
 func (p fakeProvider) EnvVarsToExclude() []string { return nil }
+
+func (p fakeProvider) SupportsNativeToollessReview() bool { return p.toolLess }
 
 func (p fakeProvider) ModelCatalog() []llm.ModelInfo {
 	if len(p.catalog) > 0 {

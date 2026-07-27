@@ -85,6 +85,25 @@ func TestClaudeProvider_CheckReadinessAPIKey(t *testing.T) {
 	}
 }
 
+func TestClaudeProvider_ReviewPreferenceBand(t *testing.T) {
+	p := &Provider{}
+	tests := []struct {
+		model llm.ModelInfo
+		band  int
+		ok    bool
+	}{
+		{model: llm.ModelInfo{ID: "claude-haiku"}, band: 0, ok: true},
+		{model: llm.ModelInfo{ID: "other", Category: "cheap"}, band: 1, ok: true},
+		{model: llm.ModelInfo{ID: "other", Category: "balanced"}, ok: false},
+	}
+	for _, tt := range tests {
+		band, ok := p.ReviewPreferenceBand(tt.model)
+		if band != tt.band || ok != tt.ok {
+			t.Errorf("ReviewPreferenceBand(%+v) = (%d,%t), want (%d,%t)", tt.model, band, ok, tt.band, tt.ok)
+		}
+	}
+}
+
 func assertCommand(t *testing.T, gotName string, gotArgs []string, wantName string, wantArgs []string) {
 	t.Helper()
 	if gotName != wantName {
@@ -632,6 +651,79 @@ func TestBuildInteractiveCommand_PermissionMode_CoexistsWithDSP(t *testing.T) {
 	}
 	if !slices.Contains(args, "--permission-mode") {
 		t.Errorf("missing --permission-mode:\n%v", args)
+	}
+}
+
+// TestBuildInteractiveCommand_IsolationFlags is a table-driven test covering
+// the hidden reviewer's launch-option isolation contract: ZeroTools emits
+// --tools "" (and suppresses --disallowedTools), NoSessionPersistence emits
+// --no-session-persistence, NoCustomization emits --safe-mode, and all three can
+// coexist on the same invocation.
+func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
+	cases := []struct {
+		name             string
+		opts             llm.CommandBuildOpts
+		wantFlags        []string
+		wantEmptyTools   bool
+		wantNoDisallowed bool
+	}{
+		{
+			name:             "zero_tools",
+			opts:             llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, DisallowedTools: []string{"Bash", "Read"}},
+			wantEmptyTools:   true,
+			wantNoDisallowed: true,
+		},
+		{
+			name:      "no_session_persistence",
+			opts:      llm.CommandBuildOpts{Model: "haiku", NoSessionPersistence: true},
+			wantFlags: []string{"--no-session-persistence"},
+		},
+		{
+			name:      "no_customization",
+			opts:      llm.CommandBuildOpts{Model: "haiku", NoCustomization: true},
+			wantFlags: []string{"--safe-mode"},
+		},
+		{
+			name:           "zero_tools_and_no_session_persistence",
+			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true},
+			wantFlags:      []string{"--no-session-persistence"},
+			wantEmptyTools: true,
+		},
+		{
+			name:           "full_isolation",
+			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true, NoCustomization: true},
+			wantFlags:      []string{"--no-session-persistence", "--safe-mode"},
+			wantEmptyTools: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := buildInteractiveCommand(defaultBinary, tc.opts)
+			for _, flag := range tc.wantFlags {
+				if !slices.Contains(args, flag) {
+					t.Errorf("missing %s: %v", flag, args)
+				}
+			}
+			if tc.opts.NoCustomization && slices.Contains(args, "--bare") {
+				t.Errorf("NoCustomization must retain normal authentication, got --bare: %v", args)
+			}
+			if tc.wantEmptyTools {
+				hasEmptyTools := false
+				for i, a := range args {
+					if a == "--tools" && i+1 < len(args) && args[i+1] == "" {
+						hasEmptyTools = true
+					}
+				}
+				if !hasEmptyTools {
+					t.Errorf("missing --tools \"\": %v", args)
+				}
+			}
+			if tc.wantNoDisallowed {
+				if slices.Contains(args, "--disallowedTools") {
+					t.Errorf("must not emit --disallowedTools when ZeroTools=true: %v", args)
+				}
+			}
+		})
 	}
 }
 

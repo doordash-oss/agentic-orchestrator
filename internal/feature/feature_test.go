@@ -2150,3 +2150,57 @@ func TestPRURLs_NoLegacyFallback(t *testing.T) {
 		t.Errorf("PRURLs() = %v, want empty (no legacy fallback)", got)
 	}
 }
+
+func TestResolveAutomaticReview(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		mode       AutomaticReviewMode
+		global     bool
+		wantEnable bool
+		wantSource AutomaticReviewSource
+	}{
+		{"empty inherits disabled global", "", false, false, AutomaticReviewSourceGlobal},
+		{"default inherits enabled global", "default", true, true, AutomaticReviewSourceGlobal},
+		{"enabled overrides disabled global", "enabled", false, true, AutomaticReviewSourceFeature},
+		{"enabled overrides enabled global", "enabled", true, true, AutomaticReviewSourceFeature},
+		{"disabled overrides enabled global", "disabled", true, false, AutomaticReviewSourceFeature},
+		{"invalid inherits enabled global", "bogus", true, true, AutomaticReviewSourceGlobal},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotEnabled, gotSource := ResolveAutomaticReview(tt.mode, tt.global)
+			if gotEnabled != tt.wantEnable || gotSource != tt.wantSource {
+				t.Errorf("ResolveAutomaticReview(%q, %v) = (%v, %q), want (%v, %q)",
+					tt.mode, tt.global, gotEnabled, gotSource, tt.wantEnable, tt.wantSource)
+			}
+		})
+	}
+}
+
+func TestParseAutomaticReviewMode(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{"", "default", "enabled", "disabled"} {
+		input := input
+		t.Run("accepts "+input, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseAutomaticReviewMode(input)
+			if err != nil {
+				t.Fatalf("ParseAutomaticReviewMode(%q) error = %v", input, err)
+			}
+			if got != NormalizeAutomaticReviewMode(AutomaticReviewMode(input)) {
+				t.Errorf("ParseAutomaticReviewMode(%q) = %q, want %q",
+					input, got, NormalizeAutomaticReviewMode(AutomaticReviewMode(input)))
+			}
+		})
+	}
+
+	if got, err := ParseAutomaticReviewMode("bogus"); err == nil {
+		t.Fatalf("ParseAutomaticReviewMode(bogus) = %q, nil; want error", got)
+	}
+}

@@ -273,6 +273,7 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 
 func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 	retained := map[string]bool{
+		"autoreview_user":                                      true,
 		"design_system_rolespec":                               true,
 		"design_user_multi_repo":                               true,
 		"final_fix_user_with_manual":                           true,

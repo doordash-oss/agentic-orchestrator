@@ -179,6 +179,8 @@ func (p *Provider) MinVersion() [3]int { return [3]int{2, 1, 81} }
 
 func (p *Provider) EnvVarsToExclude() []string { return []string{"CLAUDECODE"} }
 
+func (p *Provider) SupportsNativeToollessReview() bool { return true }
+
 type authStatus struct {
 	LoggedIn     bool   `json:"loggedIn"`
 	AuthMethod   string `json:"authMethod"`
@@ -255,6 +257,30 @@ func (p *Provider) ModelCatalog() []llm.ModelInfo {
 		return p.defaultModelInfos()
 	}
 	return cat
+}
+
+// ReviewPreferenceBand ranks Claude review models without leaking model-family
+// naming into shared automatic-review code.
+func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	if reviewModelMatchesHint(model, "haiku") {
+		return 0, true
+	}
+	if model.Category == "cheap" {
+		return 1, true
+	}
+	return 0, false
+}
+
+func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
+	if strings.Contains(strings.ToLower(model.ID), hint) {
+		return true
+	}
+	for _, alias := range model.Aliases {
+		if strings.Contains(strings.ToLower(alias), hint) {
+			return true
+		}
+	}
+	return false
 }
 
 // CLIVersion returns the installed Claude CLI version.
@@ -389,6 +415,14 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	args = append(args, "--include-partial-messages")
 	args = applyStreamingOpts(args, opts)
 
+	// --safe-mode disables CLAUDE.md, skills, plugins, hooks, MCP servers,
+	// agents, and other customizations while retaining normal authentication.
+	// It ensures the hidden reviewer's context contains only the static review
+	// policy and declared execution-context fields.
+	if opts.NoCustomization {
+		args = InsertAfterBinary(args, "--safe-mode")
+	}
+
 	if opts.DangerouslySkipPerms {
 		args = InsertAfterBinary(args, "--dangerously-skip-permissions")
 	}
@@ -461,11 +495,16 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if len(opts.DisallowedTools) > 0 {
+	if opts.ZeroTools {
+		args = append(args, "--tools", "")
+	} else if len(opts.DisallowedTools) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
 	}
 	if len(opts.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
+	}
+	if opts.NoSessionPersistence {
+		args = append(args, "--no-session-persistence")
 	}
 	if opts.ResumeSessionID != "" {
 		args = append(args, "--resume", opts.ResumeSessionID)

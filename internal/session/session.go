@@ -122,7 +122,8 @@ type Session struct {
 	cleanupFuncs []func() // functions to call on session exit
 
 	// Permission handling.
-	permHandler PermissionHandler
+	permHandler                  PermissionHandler
+	permissionHandlerDisposeOnce sync.Once
 	// pendingControlRequests holds every control_request that has been
 	// surfaced to the TUI but not yet responded to, in arrival order.
 	// Multiple AskUserQuestion calls can be in flight concurrently when
@@ -160,6 +161,10 @@ type Session struct {
 	// subagent heartbeats to events.jsonl while the main agent is blocked
 	// in a Task() call. Codex does not emit these messages.
 	onSubagentEvent func(msg llm.SDKMessage)
+
+	// onMessage forwards locally appended records through the same manager
+	// event path as provider-originated messages.
+	onMessage func(msg llm.SDKMessage)
 
 	// For attach mode: subscribers receive copies of messages
 	attachCh                  chan llm.SDKMessage
@@ -252,6 +257,14 @@ type Session struct {
 	// re-invoke it when they complete. Keyed by task_id (tool_use_id
 	// fallback). Guarded by mu.
 	liveBackgroundTasks map[string]struct{}
+
+	// lifecycleCtxVal and lifecycleCancel are created once with the session
+	// and reused by every permission request. The context is cancelled when
+	// the session shuts down, so long-running permission handlers like the
+	// automatic-review classifier can abort promptly. One goroutine-free
+	// pair avoids per-request goroutine accumulation.
+	lifecycleCtxVal context.Context
+	lifecycleCancel context.CancelFunc
 
 	// askUserAutoPick optionally answers confidence-qualified AskUserQuestion
 	// bundles before they enter pending TUI routing.
@@ -572,6 +585,7 @@ func (s *Session) SetAttachDropReporter(r AttachDropReporter) {
 }
 
 func NewSession(id, featureID string, phase feature.Phase) *Session {
+	lctx, lcancel := context.WithCancel(context.Background())
 	return &Session{
 		id:                        id,
 		featureID:                 featureID,
@@ -589,6 +603,8 @@ func NewSession(id, featureID string, phase feature.Phase) *Session {
 		closing:                   make(chan struct{}),
 		done:                      make(chan struct{}),
 		resultShutdownGrace:       resultShutdownGrace,
+		lifecycleCtxVal:           lctx,
+		lifecycleCancel:           lcancel,
 	}
 }
 
@@ -737,6 +753,15 @@ func (s *Session) drainAttachStream() {
 	}
 }
 
+// lifecycleCtx returns the session-scoped context that is cancelled when
+// the session shuts down. It lets long-running permission handlers like the
+// automatic-review classifier abort promptly when the parent session is
+// closing. The context is created once in NewSession and reused by every
+// request, so no per-request goroutine is needed.
+func (s *Session) lifecycleCtx() context.Context {
+	return s.lifecycleCtxVal
+}
+
 // Start launches the subprocess and begins reading JSONL from stdout.
 func (s *Session) Start(command []string, workdir string, env []string, onMessage func(llm.SDKMessage)) error {
 	s.mu.Lock()
@@ -744,6 +769,7 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 
 	s.workDir = workdir
 	s.startedAt = time.Now()
+	s.onMessage = onMessage
 
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = workdir
@@ -843,6 +869,8 @@ func terminateStartedCommand(cmd *exec.Cmd) {
 // readMessages is the main goroutine that reads JSONL from stdout and dispatches messages.
 func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 	defer func() {
+		s.lifecycleCancel()
+		s.disposePermissionHandler()
 		s.mu.Lock()
 		if s.logFile != nil {
 			_ = s.logFile.Close()
@@ -1294,12 +1322,18 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		sessionID = s.protocol.SessionID()
 	}
 	permReq := ToolPermissionRequest{
-		RequestID:    req.RequestID,
-		ToolName:     req.Request.ToolName,
-		Input:        string(req.Request.Input),
-		SessionID:    sessionID,
-		FeatureID:    s.featureID,
-		ProviderName: s.providerName,
+		RequestID:        req.RequestID,
+		ToolName:         req.Request.ToolName,
+		Input:            string(req.Request.Input),
+		SessionID:        sessionID,
+		LogicalSessionID: s.id,
+		FeatureID:        s.featureID,
+		Phase:            s.phase,
+		RepoName:         s.repoName,
+		Iteration:        s.iteration,
+		ProviderName:     s.providerName,
+		Ctx:              s.lifecycleCtx(),
+		AppendStatus:     s.appendLocalStatus,
 	}
 
 	decision, err := handler.CanUseTool(permReq)
@@ -1327,6 +1361,36 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		}
 		return true
 	}
+}
+
+func (s *Session) appendLocalStatus(text string) error {
+	if s == nil || s.messageLog == nil {
+		return errors.New("session message log unavailable")
+	}
+	sessionID := ""
+	if s.protocol != nil {
+		sessionID = s.protocol.SessionID()
+	}
+	msg := llm.SDKMessage{
+		Type: "status",
+		Status: &llm.StatusMessage{
+			Type:      "status",
+			SessionID: sessionID,
+			Message:   text,
+		},
+	}
+	s.messageLog.Append(msg)
+	select {
+	case s.attachCh <- msg:
+	default:
+	}
+	s.mu.Lock()
+	onMessage := s.onMessage
+	s.mu.Unlock()
+	if onMessage != nil {
+		onMessage(msg)
+	}
+	return nil
 }
 
 func (s *Session) tryAutoPickAskUser(req *llm.ControlRequestMessage) bool {
@@ -1769,6 +1833,9 @@ func (s *Session) Interrupt() error {
 
 // Stop gracefully stops the session: close stdin → SIGTERM → SIGKILL.
 func (s *Session) Stop() error {
+	s.lifecycleCancel()
+	s.disposePermissionHandler()
+
 	s.mu.Lock()
 	proc := s.process
 	w := s.stdin
@@ -1811,6 +1878,21 @@ func (s *Session) Stop() error {
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	<-s.done
 	return nil
+}
+
+type disposablePermissionHandler interface {
+	Dispose()
+}
+
+func (s *Session) disposePermissionHandler() {
+	s.permissionHandlerDisposeOnce.Do(func() {
+		s.mu.Lock()
+		handler := s.permHandler
+		s.mu.Unlock()
+		if disposable, ok := handler.(disposablePermissionHandler); ok {
+			disposable.Dispose()
+		}
+	})
 }
 
 func (s *Session) Wait() {

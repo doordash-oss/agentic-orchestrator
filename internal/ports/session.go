@@ -15,6 +15,7 @@
 package ports
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -167,16 +168,30 @@ type SessionWatchdogConfig struct {
 	PendingToolIdleTimeout    time.Duration
 	TurnCompletionIdleTimeout time.Duration
 	PollInterval              time.Duration
+	SubagentHeartbeatInterval time.Duration
 }
 
 // ToolPermissionRequest describes a pending tool-use permission check.
 type ToolPermissionRequest struct {
-	RequestID    string
-	ToolName     string
-	Input        string
-	SessionID    string
-	FeatureID    string
-	ProviderName string // "claude", "codex", etc. — used by provider-specific guards
+	RequestID        string
+	ToolName         string
+	Input            string
+	SessionID        string
+	LogicalSessionID string
+	FeatureID        string
+	Phase            feature.Phase
+	RepoName         string
+	Iteration        int
+	ProviderName     string // "claude", "codex", etc. — used by provider-specific guards
+	// Ctx carries the session's lifecycle context so long-running permission
+	// handlers (e.g. the automatic-review classifier) can be cancelled when
+	// the session shuts down. Nil means no cancellation is possible; handlers
+	// should fall back to context.Background().
+	Ctx context.Context
+	// AppendStatus synchronously appends a sanitized, provider-neutral status
+	// to the owning session before a permission decision returns. It is
+	// optional and best-effort; callers must not change the decision on error.
+	AppendStatus func(string) error
 }
 
 // PermissionDecision is the outcome of a permission check.
@@ -190,6 +205,23 @@ type PermissionDecision struct {
 // session package into every consumer.
 type PermissionHandler interface {
 	CanUseTool(req ToolPermissionRequest) (PermissionDecision, error)
+}
+
+// SessionBuildNotice is a local status line plus an optional operator-event
+// callback published once after the subprocess starts and before handshake.
+type SessionBuildNotice struct {
+	Status string
+	Emit   func(SessionBuildNoticeContext)
+}
+
+// SessionBuildNoticeContext identifies the owning session for an operator
+// event without coupling the session package to a specific observer.
+type SessionBuildNoticeContext struct {
+	SessionID string
+	FeatureID string
+	Phase     feature.Phase
+	RepoName  string
+	Iteration int
 }
 
 // SessionOpts holds optional configuration for a session start. Owned by the
@@ -260,6 +292,32 @@ type SessionOpts struct {
 	// EffortSource records whether EffectiveEffort was derived from the
 	// pipeline (auto) or an explicit user configuration (explicit).
 	EffortSource llm.EffortSource
+	// AutoReview carries the automatic-review snapshot that was captured when
+	// this session was built. The implement loop copies it back into
+	// BuildSessionOpts.AutoReview so crash-resume reuses the original snapshot
+	// rather than the current workspace config.
+	AutoReview AutoReviewSnapshot
+	// SessionBuildNotices are published once after the process starts and before
+	// provider handshake. They are local status records, not terminal results.
+	SessionBuildNotices []SessionBuildNotice
+}
+
+// AutoReviewSnapshot bundles the automatic-review settings snapshotted when an
+// original session is built. Enabled is *bool so false stays distinguishable
+// from omitted (nil means read workspace defaults). Model is the reviewer
+// model selector; empty means "Automatic" (resolve one deterministic eligible
+// provider/model before session creation). ReviewerProvider and ReviewerModel capture the
+// resolved reviewer's identity (provider name and bare model id) so crash-resume
+// can reconstruct the same reviewer without re-resolving against the current
+// (possibly changed) provider/catalog state. Both are empty when no reviewer
+// was resolved. Defined in ports so both the agent package and session adapters
+// can reference it without a circular import.
+type AutoReviewSnapshot struct {
+	Enabled           *bool
+	Model             string
+	ReviewerProvider  string
+	ReviewerModel     string
+	UnavailableReason string
 }
 
 // MessageLog is the interface consumers use to observe a session's SDK

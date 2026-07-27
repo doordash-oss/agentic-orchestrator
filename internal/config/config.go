@@ -108,6 +108,11 @@ type DefaultsConfig struct {
 	MaxConsecutiveNoProgress int                           `yaml:"max_consecutive_no_progress" json:"max_consecutive_no_progress,omitempty"`
 	MaxPhasePlanIterations   int                           `yaml:"max_phase_plan_iterations,omitempty" json:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              Checkpoints                   `yaml:"checkpoints" json:"checkpoints"`
+	// AutomaticReviewEnabled controls the default-off workspace behavior that
+	// lets an isolated reviewer classify a narrow set of Bash commands. An
+	// absent or false flag means disabled; it is never seeded by applyDefaults so
+	// legacy configs load as disabled without altering established defaults.
+	AutomaticReviewEnabled bool `yaml:"automatic_review_enabled,omitempty" json:"automatic_review_enabled,omitempty"`
 }
 
 // PipelinePreference stores the last-used feature-creation settings for a
@@ -126,6 +131,12 @@ type ModelConfig struct {
 	Review         string `yaml:"review" json:"review,omitempty"`
 	Utilities      string `yaml:"utilities" json:"utilities,omitempty"`
 	KBBuild        string `yaml:"kb_build" json:"kb_build,omitempty"`
+	// AutomaticReview is the optional reviewer model for automatic Bash review.
+	// An empty value is meaningful: it means "Automatic" (resolve the first
+	// eligible provider's preferred inexpensive model at review time). It is
+	// intentionally not seeded by applyDefaults or catalog defaulting so no
+	// inferred model is ever written back.
+	AutomaticReview string `yaml:"automatic_review,omitempty" json:"automatic_review,omitempty"`
 }
 
 // EffortConfig holds per-role reasoning-effort configuration alongside
@@ -223,14 +234,15 @@ func AllEffortRoles() []string {
 // If both keys are present, "utilities" takes precedence.
 func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	type aux struct {
-		Inquiry        string `yaml:"inquiry"`
-		Research       string `yaml:"research"`
-		Planning       string `yaml:"planning"`
-		Implementation string `yaml:"implementation"`
-		Review         string `yaml:"review"`
-		Utilities      string `yaml:"utilities"`
-		Chat           string `yaml:"chat"`
-		KBBuild        string `yaml:"kb_build"`
+		Inquiry         string `yaml:"inquiry"`
+		Research        string `yaml:"research"`
+		Planning        string `yaml:"planning"`
+		Implementation  string `yaml:"implementation"`
+		Review          string `yaml:"review"`
+		Utilities       string `yaml:"utilities"`
+		Chat            string `yaml:"chat"`
+		KBBuild         string `yaml:"kb_build"`
+		AutomaticReview string `yaml:"automatic_review"`
 	}
 	var a aux
 	if err := value.Decode(&a); err != nil {
@@ -243,6 +255,7 @@ func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	m.Review = a.Review
 	m.Utilities = a.Utilities
 	m.KBBuild = a.KBBuild
+	m.AutomaticReview = a.AutomaticReview
 	if m.Utilities == "" && a.Chat != "" {
 		m.Utilities = a.Chat
 	}
@@ -587,6 +600,9 @@ func overlayModelConfig(base, override ModelConfig) ModelConfig {
 	}
 	if override.KBBuild != "" {
 		base.KBBuild = override.KBBuild
+	}
+	if override.AutomaticReview != "" {
+		base.AutomaticReview = override.AutomaticReview
 	}
 	return base
 }

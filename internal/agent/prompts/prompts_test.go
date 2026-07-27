@@ -537,6 +537,18 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			name: "autoreview_user",
+			render: func() string {
+				return AutoReviewUserPrompt(AutoReviewUserInput{
+					Nonce:                "0123456789abcdef",
+					ToolName:             "Bash",
+					Command:              "find /tmp/runtime -type f 2>/dev/null | head -20",
+					WorkDir:              "/tmp/work",
+					WritableRootsSummary: "none (writes are not authorized; reads are not limited by this field)",
+				})
+			},
+		},
+		{
 			name: "implementation_review_axis_user",
 			render: func() string {
 				return ImplementationReviewAxisUserPrompt(ReviewUserInput{

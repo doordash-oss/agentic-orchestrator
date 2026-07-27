@@ -20,7 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 )
 
 // Observer is the central observability facade. It coordinates JSONL event
@@ -54,6 +56,36 @@ type ContextFileReadMeta struct {
 	Source         string
 	ProviderItemID string
 	ExitCode       *int
+}
+
+// AutomaticReviewEventInput carries one bounded automatic-review outcome.
+type AutomaticReviewEventInput struct {
+	Phase               string
+	SessionID           string
+	RepoName            string
+	Iteration           int
+	Provider            string
+	Model               string
+	Outcome             autoreview.Outcome
+	Duration            time.Duration
+	ReviewTiming        autoreview.Timing
+	CommandSummary      string
+	FailureReason       string
+	StatusPersisted     *bool
+	StatusFailureClass  string
+	StatusFailureReason string
+}
+
+// AutomaticReviewUnavailableEventInput carries one session-scoped reviewer
+// unavailability notice, either from session-build resolution or the runtime
+// failure circuit breaker.
+type AutomaticReviewUnavailableEventInput struct {
+	Phase     string
+	SessionID string
+	RepoName  string
+	Iteration int
+	Scope     string
+	Reason    string
 }
 
 // New creates an Observer. When enabled is false, all methods return immediately.
@@ -617,6 +649,101 @@ func (o *Observer) PermissionResolved(sc SpanContext, sessionID string, repoName
 	o.otel.AddSpanEvent(sc.ParentSpanID, "permission.resolved", addRunNumber(sc, map[string]string{
 		"tool_name": toolName,
 		"decision":  decision,
+	}))
+}
+
+// AutomaticReviewCompleted emits exactly one best-effort event for an
+// automatic-review decision. Nil and disabled observers are no-ops.
+func (o *Observer) AutomaticReviewCompleted(sc SpanContext, in AutomaticReviewEventInput) {
+	if o == nil || !o.enabled {
+		return
+	}
+	duration := in.Duration
+	if duration < 0 {
+		duration = 0
+	}
+	data := map[string]any{
+		"provider":        in.Provider,
+		"model":           in.Model,
+		"outcome":         string(in.Outcome),
+		"command_summary": permission.AutomaticReviewCommandSummary(in.CommandSummary),
+	}
+	if in.FailureReason != "" {
+		data["failure_reason"] = permission.AutomaticReviewBoundReason(in.FailureReason)
+	}
+	if duration := nonNegativeDuration(in.ReviewTiming.Launch); duration > 0 {
+		data["review_launch_ms"] = duration.Milliseconds()
+	}
+	if duration := nonNegativeDuration(in.ReviewTiming.FirstOutput); duration > 0 {
+		data["review_first_output_ms"] = duration.Milliseconds()
+	}
+	if duration := nonNegativeDuration(in.ReviewTiming.Completion); duration > 0 {
+		data["review_completion_ms"] = duration.Milliseconds()
+	}
+	if in.StatusPersisted != nil {
+		data["status_persisted"] = *in.StatusPersisted
+		if !*in.StatusPersisted {
+			data["status_failure_class"] = permission.AutomaticReviewBoundReason(in.StatusFailureClass)
+			data["status_failure_reason"] = permission.AutomaticReviewBoundReason(in.StatusFailureReason)
+		}
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "automatic_review.completed",
+		Phase:        in.Phase,
+		Status:       string(in.Outcome),
+		FeatureID:    sc.FeatureID,
+		SessionID:    in.SessionID,
+		RepoName:     in.RepoName,
+		Iteration:    in.Iteration,
+		DurationMs:   duration.Milliseconds(),
+		Data:         data,
+	})
+	attrs := map[string]string{
+		"provider": in.Provider,
+		"model":    in.Model,
+		"outcome":  string(in.Outcome),
+	}
+	o.otel.AddSpanEvent(sc.ParentSpanID, "automatic_review.completed", addRunNumber(sc, attrs))
+}
+
+func nonNegativeDuration(duration time.Duration) time.Duration {
+	if duration < 0 {
+		return 0
+	}
+	return duration
+}
+
+// AutomaticReviewUnavailable emits exactly one bounded operator notice for a
+// session-scoped reviewer outage. Nil and disabled observers are no-ops.
+func (o *Observer) AutomaticReviewUnavailable(sc SpanContext, in AutomaticReviewUnavailableEventInput) {
+	if o == nil || !o.enabled {
+		return
+	}
+	scope := permission.AutomaticReviewBoundReason(in.Scope)
+	reason := permission.AutomaticReviewBoundReason(in.Reason)
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "automatic_review.unavailable",
+		Phase:        in.Phase,
+		Status:       "unavailable",
+		FeatureID:    sc.FeatureID,
+		SessionID:    in.SessionID,
+		RepoName:     in.RepoName,
+		Iteration:    in.Iteration,
+		Data: map[string]any{
+			"scope":  scope,
+			"reason": reason,
+		},
+	})
+	o.otel.AddSpanEvent(sc.ParentSpanID, "automatic_review.unavailable", addRunNumber(sc, map[string]string{
+		"scope": scope,
 	}))
 }
 

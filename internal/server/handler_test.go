@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -495,6 +496,44 @@ func TestModelCatalogIncludesChatUtilityEligibility(t *testing.T) {
 	chatModels := body.PhaseProviderModels[string(llm.PhaseChat)][providerCodex]
 	if len(chatModels) != 1 || chatModels[0] != modelGPT54Mini {
 		t.Fatalf("chat utility models = %+v, want discovered balanced utility model", chatModels)
+	}
+}
+
+func TestModelCatalogIncludesDedicatedAutomaticReviewEligibility(t *testing.T) {
+	t.Parallel()
+
+	reg := llm.NewRegistry()
+	reg.Register(fakeProvider{
+		name:     "claude",
+		toolLess: true,
+		catalog: []llm.ModelInfo{
+			{ID: "haiku", Category: "cheap"},
+			{ID: "opus", Category: "capable"},
+		},
+	})
+	reg.Register(fakeProvider{
+		name:     "opencode",
+		toolLess: false,
+		catalog:  []llm.ModelInfo{{ID: "anthropic/haiku", Category: "cheap"}},
+	})
+	handler := NewHandler(HandlerOptions{Registry: reg, DisableHostValidation: true})
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/catalog/models", nil))
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Result().StatusCode)
+	}
+	var body ModelCatalogResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	groups := body.PhaseProviderModels[string(llm.PhaseAutomaticReview)]
+	if got, want := groups["claude"], []string{"haiku", "opus"}; !slices.Equal(got, want) {
+		t.Fatalf("automatic-review Claude models = %v, want %v", got, want)
+	}
+	if _, ok := groups["opencode"]; ok {
+		t.Fatalf("automatic-review catalog includes non-tool-less provider: %v", groups)
 	}
 }
 

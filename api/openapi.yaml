@@ -1675,6 +1675,8 @@ components:
           x-go-type-import:
             path: github.com/doordash-oss/agentic-orchestrator/internal/config
             name: config
+        automatic_review_enabled:
+          type: boolean
     NotificationConfig:
       type: object
       required: [mute_feature_input]
@@ -1710,6 +1712,21 @@ components:
         input_notifications:
           type: string
           enum: [default, enabled, muted]
+        automatic_review_mode:
+          type: string
+          enum: [default, enabled, disabled]
+    AutomaticReviewState:
+      type: object
+      required: [mode, enabled, source]
+      properties:
+        mode:
+          type: string
+          enum: [default, enabled, disabled]
+        enabled:
+          type: boolean
+        source:
+          type: string
+          enum: [global, feature]
     EffortConfig:
       x-go-type: config.EffortConfig
       x-go-type-import:
@@ -2113,6 +2130,8 @@ components:
           type: string
         kb_build:
           type: string
+        automatic_review:
+          type: string
     Timing:
       type: object
       required: [total_seconds, by_phase]
@@ -2326,6 +2345,7 @@ components:
         - type: object
           required:
             - models
+            - automatic_review
             - historical_runs
             - repo_status
             - timing
@@ -2343,6 +2363,8 @@ components:
               type: string
             models:
               $ref: "#/components/schemas/ModelDefaults"
+            automatic_review:
+              $ref: "#/components/schemas/AutomaticReviewState"
             active_run_detail:
               $ref: "#/components/schemas/RunSummary"
               x-go-type-skip-optional-pointer: false

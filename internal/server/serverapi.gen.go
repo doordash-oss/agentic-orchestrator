@@ -28,6 +28,66 @@ const (
 	SseAccessTokenScopes sSEAccessTokenContextKey = "sseAccessToken.Scopes"
 )
 
+// Defines values for AutomaticReviewStateMode.
+const (
+	AutomaticReviewStateModeDefault  AutomaticReviewStateMode = "default"
+	AutomaticReviewStateModeDisabled AutomaticReviewStateMode = "disabled"
+	AutomaticReviewStateModeEnabled  AutomaticReviewStateMode = "enabled"
+)
+
+// Valid indicates whether the value is a known member of the AutomaticReviewStateMode enum.
+func (e AutomaticReviewStateMode) Valid() bool {
+	switch e {
+	case AutomaticReviewStateModeDefault:
+		return true
+	case AutomaticReviewStateModeDisabled:
+		return true
+	case AutomaticReviewStateModeEnabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AutomaticReviewStateSource.
+const (
+	Feature AutomaticReviewStateSource = "feature"
+	Global  AutomaticReviewStateSource = "global"
+)
+
+// Valid indicates whether the value is a known member of the AutomaticReviewStateSource enum.
+func (e AutomaticReviewStateSource) Valid() bool {
+	switch e {
+	case Feature:
+		return true
+	case Global:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FeatureConfigAutomaticReviewMode.
+const (
+	FeatureConfigAutomaticReviewModeDefault  FeatureConfigAutomaticReviewMode = "default"
+	FeatureConfigAutomaticReviewModeDisabled FeatureConfigAutomaticReviewMode = "disabled"
+	FeatureConfigAutomaticReviewModeEnabled  FeatureConfigAutomaticReviewMode = "enabled"
+)
+
+// Valid indicates whether the value is a known member of the FeatureConfigAutomaticReviewMode enum.
+func (e FeatureConfigAutomaticReviewMode) Valid() bool {
+	switch e {
+	case FeatureConfigAutomaticReviewModeDefault:
+		return true
+	case FeatureConfigAutomaticReviewModeDisabled:
+		return true
+	case FeatureConfigAutomaticReviewModeEnabled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureConfigInputNotifications.
 const (
 	Default FeatureConfigInputNotifications = "default"
@@ -665,6 +725,19 @@ type AskUserQuestion struct {
 	Question    string          `json:"question,omitempty"`
 }
 
+// AutomaticReviewState defines model for AutomaticReviewState.
+type AutomaticReviewState struct {
+	Enabled bool                       `json:"enabled"`
+	Mode    AutomaticReviewStateMode   `json:"mode"`
+	Source  AutomaticReviewStateSource `json:"source"`
+}
+
+// AutomaticReviewStateMode defines model for AutomaticReviewState.Mode.
+type AutomaticReviewStateMode string
+
+// AutomaticReviewStateSource defines model for AutomaticReviewState.Source.
+type AutomaticReviewStateSource string
+
 // ChatStartResponse defines model for ChatStartResponse.
 type ChatStartResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -787,13 +860,17 @@ type FeatureActionResult struct {
 
 // FeatureConfig defines model for FeatureConfig.
 type FeatureConfig struct {
-	Checkpoints        Checkpoints                     `json:"checkpoints"`
-	Effort             EffortConfig                    `json:"effort,omitempty"`
-	InputNotifications FeatureConfigInputNotifications `json:"input_notifications,omitempty"`
-	Inquireness        string                          `json:"inquireness"`
-	Models             ModelDefaults                   `json:"models"`
-	Pipeline           string                          `json:"pipeline,omitempty"`
+	AutomaticReviewMode FeatureConfigAutomaticReviewMode `json:"automatic_review_mode,omitempty"`
+	Checkpoints         Checkpoints                      `json:"checkpoints"`
+	Effort              EffortConfig                     `json:"effort,omitempty"`
+	InputNotifications  FeatureConfigInputNotifications  `json:"input_notifications,omitempty"`
+	Inquireness         string                           `json:"inquireness"`
+	Models              ModelDefaults                    `json:"models"`
+	Pipeline            string                           `json:"pipeline,omitempty"`
 }
+
+// FeatureConfigAutomaticReviewMode defines model for FeatureConfig.AutomaticReviewMode.
+type FeatureConfigAutomaticReviewMode string
 
 // FeatureConfigInputNotifications defines model for FeatureConfig.InputNotifications.
 type FeatureConfigInputNotifications string
@@ -819,45 +896,47 @@ type FeatureConfigUpdateResponse struct {
 
 // FeatureDefaults defines model for FeatureDefaults.
 type FeatureDefaults struct {
-	Checkpoints         config.Checkpoints                   `json:"checkpoints"`
-	Effort              EffortConfig                         `json:"effort,omitempty"`
-	Inquireness         string                               `json:"inquireness,omitempty"`
-	Models              ModelDefaults                        `json:"models"`
-	Pipeline            string                               `json:"pipeline,omitempty"`
-	PipelinePreferences map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
+	AutomaticReviewEnabled bool                                 `json:"automatic_review_enabled,omitempty"`
+	Checkpoints            config.Checkpoints                   `json:"checkpoints"`
+	Effort                 EffortConfig                         `json:"effort,omitempty"`
+	Inquireness            string                               `json:"inquireness,omitempty"`
+	Models                 ModelDefaults                        `json:"models"`
+	Pipeline               string                               `json:"pipeline,omitempty"`
+	PipelinePreferences    map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
 }
 
 // FeatureDetail defines model for FeatureDetail.
 type FeatureDetail struct {
-	Actions           []Action           `json:"actions"`
-	ActiveRun         int                `json:"active_run"`
-	ActiveRunDetail   *RunSummary        `json:"active_run_detail,omitempty"`
-	CacheRevalidate   string             `json:"cache_revalidate"`
-	Checkpoints       Checkpoints        `json:"checkpoints"`
-	Cost              Cost               `json:"cost"`
-	CreatedAt         time.Time          `json:"created_at"`
-	CurrentPhase      string             `json:"current_phase"`
-	Cycle             *Cycle             `json:"cycle,omitempty"`
-	Description       string             `json:"description,omitempty"`
-	Failure           *Failure           `json:"failure,omitempty"`
-	HistoricalRuns    []RunSummary       `json:"historical_runs"`
-	ID                string             `json:"id"`
-	Models            ModelDefaults      `json:"models"`
-	Name              string             `json:"name"`
-	NeedUserInput     *NeedUserInputGate `json:"need_user_input,omitempty"`
-	Pipeline          string             `json:"pipeline,omitempty"`
-	Progress          FeatureProgress    `json:"progress"`
-	RepoStatus        []RepoStatus       `json:"repo_status"`
-	Repos             []string           `json:"repos"`
-	ReviewGate        ReviewGate         `json:"review_gate"`
-	Revision          string             `json:"revision"`
-	RunCount          int                `json:"run_count"`
-	Slug              string             `json:"slug"`
-	Status            string             `json:"status"`
-	Summary           string             `json:"summary,omitempty"`
-	Timing            Timing             `json:"timing"`
-	VerificationItems []VerificationItem `json:"verification_items,omitempty"`
-	Warnings          []Warning          `json:"warnings,omitempty"`
+	Actions           []Action             `json:"actions"`
+	ActiveRun         int                  `json:"active_run"`
+	ActiveRunDetail   *RunSummary          `json:"active_run_detail,omitempty"`
+	AutomaticReview   AutomaticReviewState `json:"automatic_review"`
+	CacheRevalidate   string               `json:"cache_revalidate"`
+	Checkpoints       Checkpoints          `json:"checkpoints"`
+	Cost              Cost                 `json:"cost"`
+	CreatedAt         time.Time            `json:"created_at"`
+	CurrentPhase      string               `json:"current_phase"`
+	Cycle             *Cycle               `json:"cycle,omitempty"`
+	Description       string               `json:"description,omitempty"`
+	Failure           *Failure             `json:"failure,omitempty"`
+	HistoricalRuns    []RunSummary         `json:"historical_runs"`
+	ID                string               `json:"id"`
+	Models            ModelDefaults        `json:"models"`
+	Name              string               `json:"name"`
+	NeedUserInput     *NeedUserInputGate   `json:"need_user_input,omitempty"`
+	Pipeline          string               `json:"pipeline,omitempty"`
+	Progress          FeatureProgress      `json:"progress"`
+	RepoStatus        []RepoStatus         `json:"repo_status"`
+	Repos             []string             `json:"repos"`
+	ReviewGate        ReviewGate           `json:"review_gate"`
+	Revision          string               `json:"revision"`
+	RunCount          int                  `json:"run_count"`
+	Slug              string               `json:"slug"`
+	Status            string               `json:"status"`
+	Summary           string               `json:"summary,omitempty"`
+	Timing            Timing               `json:"timing"`
+	VerificationItems []VerificationItem   `json:"verification_items,omitempty"`
+	Warnings          []Warning            `json:"warnings,omitempty"`
 }
 
 // FeatureDetailResponse defines model for FeatureDetailResponse.

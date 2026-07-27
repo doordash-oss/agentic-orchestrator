@@ -575,11 +575,12 @@ func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 // plus their edits, so a zero-value field is a real "set this to empty"
 // operation, not "leave alone".
 type UpdateFeatureConfigInput struct {
-	Models             config.ModelConfig
-	Effort             config.EffortConfig
-	Inquireness        feature.Inquireness
-	Checkpoints        feature.Checkpoints
-	InputNotifications feature.InputNotificationsMode
+	Models              config.ModelConfig
+	Effort              config.EffortConfig
+	Inquireness         feature.Inquireness
+	Checkpoints         feature.Checkpoints
+	InputNotifications  feature.InputNotificationsMode
+	AutomaticReviewMode feature.AutomaticReviewMode
 }
 
 // ErrFeatureNotQuiescent is kept for compatibility with older callers that
@@ -606,23 +607,26 @@ func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeature
 	var before, after feature.ConfigSnapshot
 	err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		before = feature.ConfigSnapshot{
-			Models:             f.Models,
-			Effort:             f.Effort,
-			Inquireness:        f.Inquireness,
-			Checkpoints:        f.Checkpoints,
-			InputNotifications: feature.NormalizeInputNotificationsMode(f.InputNotifications),
+			Models:              f.Models,
+			Effort:              f.Effort,
+			Inquireness:         f.Inquireness,
+			Checkpoints:         f.Checkpoints,
+			InputNotifications:  feature.NormalizeInputNotificationsMode(f.InputNotifications),
+			AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
 		}
 		f.Models = input.Models
 		f.Effort = input.Effort
 		f.Inquireness = input.Inquireness
 		f.Checkpoints = f.Pipeline.NormalizeCheckpoints(input.Checkpoints, f.IsPublishable())
 		f.InputNotifications = feature.PersistInputNotificationsMode(input.InputNotifications)
+		f.AutomaticReviewMode = feature.PersistAutomaticReviewMode(input.AutomaticReviewMode)
 		after = feature.ConfigSnapshot{
-			Models:             f.Models,
-			Effort:             f.Effort,
-			Inquireness:        f.Inquireness,
-			Checkpoints:        f.Checkpoints,
-			InputNotifications: feature.NormalizeInputNotificationsMode(f.InputNotifications),
+			Models:              f.Models,
+			Effort:              f.Effort,
+			Inquireness:         f.Inquireness,
+			Checkpoints:         f.Checkpoints,
+			InputNotifications:  feature.NormalizeInputNotificationsMode(f.InputNotifications),
+			AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
 		}
 		return nil
 	})

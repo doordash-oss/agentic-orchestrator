@@ -314,17 +314,10 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			if !awaitingBackgroundTasks {
 				continue
 			}
-			quiet := time.Since(sess.LastStdoutAt())
 			if liveBackgroundTasks(sess) > 0 {
-				// Running subagents emit periodic task_progress lines; a
-				// stream this quiet means the CLI wedged. Give up rather
-				// than wait forever.
-				if quiet >= backgroundTaskStallTimeout {
-					result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
-					return finish(result, err)
-				}
 				continue
 			}
+			quiet := time.Since(sess.LastStdoutAt())
 			// All tasks finished but no new result arrived: the CLI did not
 			// re-invoke the agent on its own. Resume it explicitly, bounded so
 			// a session that keeps yielding without finishing still converges.

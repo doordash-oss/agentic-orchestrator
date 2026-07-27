@@ -60,6 +60,10 @@ var (
 	ReviewStyle   = lipgloss.NewStyle().Foreground(colorBrand)
 	BadgeStyle    = lipgloss.NewStyle().Bold(true).Foreground(colorPeach)
 	MutedStyle    = lipgloss.NewStyle().Foreground(colorOverlay)
+	// automaticReviewStatusStyle keeps approval provenance quieter than Bash
+	// activity without assigning required user-facing information to muted
+	// chrome's lower-contrast color.
+	automaticReviewStatusStyle = lipgloss.NewStyle().Foreground(colorSubtext)
 
 	// chatUserTagStyle marks a "[you]" turn tag in the AMA/attach transcripts.
 	chatUserTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorBrand)

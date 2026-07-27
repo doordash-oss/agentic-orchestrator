@@ -1964,6 +1964,16 @@ func applyAPIFeatureDetail(f *feature.Feature, detail server.FeatureDetailDTO) {
 	f.Description = detail.Description
 	f.Summary = detail.Summary
 	f.Pipeline = feature.PipelineProfile(detail.Pipeline)
+	f.AutomaticReviewMode = feature.NormalizeAutomaticReviewMode(feature.AutomaticReviewMode(detail.AutomaticReview.Mode))
+	f.AutomaticReviewEnabled = detail.AutomaticReview.Enabled
+	switch feature.AutomaticReviewSource(detail.AutomaticReview.Source) {
+	case feature.AutomaticReviewSourceFeature:
+		f.AutomaticReviewSource = feature.AutomaticReviewSourceFeature
+	case feature.AutomaticReviewSourceGlobal:
+		f.AutomaticReviewSource = feature.AutomaticReviewSourceGlobal
+	default:
+		f.AutomaticReviewSource = ""
+	}
 	f.PhaseTimings = apiPhaseTimings(detail.Timing.ByPhase)
 	f.PhaseCosts = apiPhaseCosts(detail.Cost.ByPhase, detail.Cost.TotalUSD, f.CurrentPhase)
 	f.ReviewingGate = detail.ReviewGate.ReviewingGate
@@ -4786,11 +4796,12 @@ func (m APIAppModel) persistRuntimeUICmd(ui config.UIConfig) tea.Cmd {
 
 func apiWizardDefaults(runtime server.RuntimeConfigResponse) config.DefaultsConfig {
 	defaults := config.DefaultsConfig{
-		Models:              runtime.FeatureDefaults.Models,
-		PipelinePreferences: runtime.FeatureDefaults.PipelinePreferences,
-		Inquireness:         runtime.FeatureDefaults.Inquireness,
-		Pipeline:            runtime.FeatureDefaults.Pipeline,
-		Checkpoints:         runtime.FeatureDefaults.Checkpoints,
+		Models:                 runtime.FeatureDefaults.Models,
+		PipelinePreferences:    runtime.FeatureDefaults.PipelinePreferences,
+		Inquireness:            runtime.FeatureDefaults.Inquireness,
+		Pipeline:               runtime.FeatureDefaults.Pipeline,
+		Checkpoints:            runtime.FeatureDefaults.Checkpoints,
+		AutomaticReviewEnabled: runtime.FeatureDefaults.AutomaticReviewEnabled,
 	}
 	if defaults.Models == (config.ModelConfig{}) {
 		defaults.Models = runtime.Defaults
@@ -7785,13 +7796,15 @@ func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 	return func() tea.Msg {
 		ctx := m.apiCtx()
 		snap := editor.editor.Snapshot()
+		automaticReviewMode := string(feature.NormalizeAutomaticReviewMode(editor.automaticReviewMode))
 		_, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, server.FeatureConfigMutationRequest{
-			Models:             snap.Models,
-			Effort:             snap.Effort,
-			Inquireness:        string(snap.Inquireness),
-			Checkpoints:        snap.Checkpoints,
-			Pipeline:           editor.pipeline,
-			InputNotifications: string(feature.NormalizeInputNotificationsMode(editor.inputAlertsMode)),
+			Models:              snap.Models,
+			Effort:              snap.Effort,
+			Inquireness:         string(snap.Inquireness),
+			Checkpoints:         snap.Checkpoints,
+			Pipeline:            editor.pipeline,
+			InputNotifications:  string(feature.NormalizeInputNotificationsMode(editor.inputAlertsMode)),
+			AutomaticReviewMode: &automaticReviewMode,
 		})
 		return apiMutationResultMsg{
 			kind:      mutationKindFeatureConfigUpdate,
@@ -7806,13 +7819,16 @@ func (m APIAppModel) saveWorkspaceConfigCmd(editor EditConfigModel) tea.Cmd {
 		ctx := m.apiCtx()
 		snap := editor.editor.Snapshot()
 		checkpoints := feature.FeatureCheckpointsToConfig(snap.Checkpoints)
+		automaticReviewEnabled := editor.automaticReviewEnabled
+		modelsPatch := server.ModelConfigToPatch(snap.Models)
 		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
 			Defaults: server.RuntimeDefaultsMutation{
-				Models:      snap.Models,
-				Effort:      snap.Effort,
-				Inquireness: string(snap.Inquireness),
-				Checkpoints: &checkpoints,
-				Pipeline:    string(editor.pipeline),
+				Models:                 &modelsPatch,
+				Effort:                 snap.Effort,
+				Inquireness:            string(snap.Inquireness),
+				Checkpoints:            &checkpoints,
+				Pipeline:               string(editor.pipeline),
+				AutomaticReviewEnabled: &automaticReviewEnabled,
 			},
 			Notifications: &server.NotificationConfigDTO{
 				MuteFeatureInput: feature.NormalizeInputNotificationsMode(editor.inputAlertsMode) == feature.InputNotificationsMuted,
@@ -8229,10 +8245,11 @@ func apiFeatureFromConfig(featureID, featureName string, response server.Feature
 		pipeline = feature.PipelineLarge
 	}
 	return &feature.Feature{
-		ID:          featureID,
-		Name:        featureName,
-		Models:      current.Models,
-		Inquireness: feature.Inquireness(current.Inquireness),
+		ID:                  featureID,
+		Name:                featureName,
+		Models:              current.Models,
+		Inquireness:         feature.Inquireness(current.Inquireness),
+		AutomaticReviewMode: feature.AutomaticReviewMode(current.AutomaticReviewMode),
 		Checkpoints: feature.Checkpoints{
 			InquiryReview:   current.Checkpoints.InquiryReview,
 			ResearchReview:  current.Checkpoints.ResearchReview,

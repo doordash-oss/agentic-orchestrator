@@ -38,6 +38,125 @@ defaults:
 | `utilities` | `sonnet[200K]` | Chat (AMA), utility skills |
 | `kb_build` | `sonnet[200K]` | Knowledge base construction |
 
+## Automatic Bash Review
+
+Automatic Bash review uses two workspace keys:
+
+```yaml
+defaults:
+  automatic_review_enabled: false
+  models:
+    automatic_review: ""
+```
+
+The full names are `defaults.automatic_review_enabled` and
+`defaults.models.automatic_review`. The feature is disabled by default. When
+the enabled key is absent, as in a legacy config, it remains disabled; a
+missing reviewer-model key has the same empty **Automatic** value as a fresh
+config. The workspace Models row remains editable while automatic review is
+disabled; saved changes apply only to new sessions because each session
+snapshots the enabled flag and resolved reviewer.
+
+Automatic selection uses the fixed provider order Claude → OpenCode → Codex
+and chooses the first eligible provider's preferred cheap model. A
+provider-qualified explicit selection uses only the named provider and
+canonical model; a bare selection must resolve uniquely. Neither form
+substitutes another model or cascades to another provider. If the selection is
+unavailable, deterministic fast-path commands can still run automatically
+while all other commands use the normal human permission flow.
+
+### Policy and guardrail boundary
+
+Automatic review runs only for an unresolved canonical Bash request after the
+existing permission policy genuinely defers. It never overrides an existing
+allow, deny, or error, a remembered permission rule, skip-permissions
+behavior, a safe-create decision, or a specialized restricted policy.
+
+The deterministic guardrail is a fast path, not reviewer eligibility
+filtering. It parses every visible chain and pipeline segment and approves the
+command immediately only when every segment matches the curated policy.
+Curated direct development families include test, lint/check, build/compile,
+format, generation, documentation, benchmark, and static-analysis commands,
+with command-specific flag and path rules. Project runners such as Make, Just,
+Task, Bazel, Gradle, Maven, and package scripts require an explicit
+conventional development target. Target names are split on `-`, `_`, and `:`;
+a prohibited target component such as `install`, `deploy`, `clean`, `watch`,
+`run`, or `push` prevents deterministic approval.
+
+Strictly read-only source-control commands may fast-path. Descriptor-only
+routing such as `2>&1` or `1>&2`, and stdout/stderr redirection to `/dev/null`,
+are recognized. Ambiguous shell syntax, nested execution or substitution,
+sensitive paths, direct networking, package mutation, non-read-only source
+control, direct scripts or interpreters, unrecognized writes, prohibited task
+targets, and other guardrail misses are not hard-denied: when reviewable, they
+reach the model. This explicitly includes dangerous commands such as `rm -rf`,
+`sudo`, and `curl | sh`; an exact model `ALLOW` auto-approves execution.
+
+Automatic review does not sandbox commands and does not guarantee command
+safety. The deterministic layer is only a velocity optimization. For
+everything else, the reviewer model's judgment is the boundary before the
+human, and that reviewer is a fallible, promptable component. Repo-controlled
+build and test code is trusted-by-design: a fast-pathed command such as
+`make test` or `go generate` may execute Makefiles, `package.json` scripts,
+`//go:generate` directives, or `conftest.py`. Enable automatic review only
+when that tradeoff is acceptable.
+
+### Reviewer and lifecycle contract
+
+The reviewer receives only the canonical tool name, command, working
+directory, and declared writable roots. Interpolated prompt fields are
+control-sanitized and enclosed as nonce-delimited untrusted data; the original
+byte-exact command remains unchanged for caching and execution. The reviewer
+runs through the selected provider's native zero-tool mode, with no session
+persistence or user/project customization, at low effort, for one 30-second
+attempt. The response must be the exact case-sensitive `ALLOW` or `DEFER`
+token. There are no retries and no provider cascade after an attempt.
+`DEFER`, timeout, malformed output, provider failure, unexpected interaction,
+and cancellation silently return to the ordinary human prompt.
+
+Exact `ALLOW` and `DEFER` decisions use a byte-exact session-only cache.
+Long-tail requests are serialized within the session, and a model cache hit
+launches no new reviewer process or side effect. Deterministic fast paths skip
+this mutex and cache entirely. Two consecutive timeouts start a 30-second
+cooldown; after it expires, one half-open attempt either restores review or
+starts another cooldown. Cancellation does not count against reviewer health.
+Two consecutive provider, protocol, malformed-response, or
+unexpected-interaction failures mark only the reviewer unavailable for the
+rest of that session. During either breaker state, long-tail requests return
+immediately to the human prompt while build/test fast paths remain available.
+Nothing is reused across sessions, and automatic approval creates no durable
+permission rule, remembered cache entry, or permission audit record.
+
+### Transparency and operational evidence
+
+Every deterministic approval appends
+`Auto-approved Bash (fast path): <summary>`. Only a fresh leading model
+`ALLOW` appends `Auto-approved Bash: <summary>`. Both summaries collapse
+whitespace, strip unsafe controls, apply the permission-audit secret redaction
+vocabulary, stay valid UTF-8, and keep the complete line at most 200 bytes
+including `...` when truncated. Live preview, active attach, completed-session
+attach history, transcript reads, and session-output streaming preserve the
+same text and message-log position.
+
+Every deterministic approval emits one bounded operator event with outcome
+`fast_path`, zero duration, and empty provider/model fields. Every actual model
+attempt emits one bounded operator event with original feature/session
+context, reviewer identity, total duration, cumulative process-launch,
+first-output, and review-completion timings, redacted command summary, and an
+outcome of `allow`, `defer`, `timeout`, `malformed_response`, `provider_error`,
+`unexpected_interaction`, or `canceled`. Approval events also record whether
+status persistence succeeded. Unreviewable commands, non-Bash requests,
+existing decisions, disabled paths, and model session-cache hits emit neither
+per-request status nor an automatic-review event. If automatic review is
+enabled but no reviewer is available, Agentico emits one session-build status
+and one `automatic_review.unavailable` operator event with the reason;
+fast-path approvals continue. A timeout cooldown emits an
+`automatic_review.unavailable` event each time it begins; a permanent
+session-level breaker emits one final event and then stays silent for later
+model requests. Status-delivery and observer failures are best-effort
+side-effect failures: they never change the permission decision or cause a
+retry.
+
 Model names can use canonical context-window IDs (e.g., `opus[1M]`) or provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`). Bare aliases such as `opus` are still accepted and resolved against the registry, which merges each provider's hardcoded catalog (see `internal/llm/claude`, `internal/llm/codex`, and `internal/llm/opencode`). Configured model names are canonicalized at startup so the on-disk config reflects the registry's canonical spelling.
 
 ### OpenCode model IDs

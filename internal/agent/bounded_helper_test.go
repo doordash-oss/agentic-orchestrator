@@ -963,18 +963,15 @@ func TestRunBoundedHelper_TruncatedTurnResumeCapThenFails(t *testing.T) {
 	}
 }
 
-// TestRunBoundedHelper_BackgroundTaskStallFinalizesViolation proves the stall
-// backstop: a wedged stream with perpetually-"live" tasks is bounded, and the
-// run finalizes as a protocol violation instead of waiting forever.
-func TestRunBoundedHelper_BackgroundTaskStallFinalizesViolation(t *testing.T) {
+// TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal proves provider task
+// lifecycle is authoritative even when the parent stream remains silent.
+func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
 	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-	prev := backgroundTaskStallTimeout
-	backgroundTaskStallTimeout = 30 * time.Millisecond
-	t.Cleanup(func() { backgroundTaskStallTimeout = prev })
 
 	phaseDir := t.TempDir()
 	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 	sess.liveTasks.Store(1)
+	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
@@ -996,22 +993,36 @@ func TestRunBoundedHelper_BackgroundTaskStallFinalizesViolation(t *testing.T) {
 
 	sess.statusC <- agentStatusSuccess
 
-	// The waiter must defer first (not finalize on the spot) …
 	select {
 	case result := <-resultCh:
-		t.Fatalf("runBoundedHelperSession() finalized %q immediately; want deferral before the stall backstop", result.Status)
-	case <-time.After(15 * time.Millisecond):
+		t.Fatalf("runBoundedHelperSession() finalized %q while provider still declared a live task", result.Status)
+	case msg := <-sess.nudges:
+		t.Fatalf("unexpected user message %q while provider still declared a live task", msg)
+	case <-time.After(100 * time.Millisecond):
 	}
 
-	// … then the silent wedged stream trips the backstop.
-	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
+	sess.liveTasks.Store(0)
 	select {
-	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusProtocolViolation {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusProtocolViolation)
+	case msg := <-sess.nudges:
+		if !strings.Contains(msg, "Continue where you left off") {
+			t.Fatalf("SendUserMessage() = %q, want auto-resume after terminal task", msg)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for stall backstop")
+		t.Fatal("timed out waiting for auto-resume after terminal task")
+	}
+
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	sess.statusC <- agentStatusSuccess
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper completion")
 	}
 }
 

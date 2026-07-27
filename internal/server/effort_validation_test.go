@@ -118,3 +118,39 @@ func TestValidateEffortConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateAutomaticReviewMode(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{"", "default", "enabled", "disabled"}
+	for _, mode := range valid {
+		mode := mode
+		t.Run("accepts "+mode, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			if ok := validateAutomaticReviewMode(rec, &mode); !ok {
+				t.Fatalf("validateAutomaticReviewMode(%q) = false; status=%d body=%q", mode, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	t.Run("accepts omitted", func(t *testing.T) {
+		t.Parallel()
+		rec := httptest.NewRecorder()
+		if ok := validateAutomaticReviewMode(rec, nil); !ok {
+			t.Fatalf("validateAutomaticReviewMode(nil) = false; status=%d body=%q", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("rejects invalid", func(t *testing.T) {
+		t.Parallel()
+		mode := "bogus"
+		rec := httptest.NewRecorder()
+		if ok := validateAutomaticReviewMode(rec, &mode); ok {
+			t.Fatal("validateAutomaticReviewMode(bogus) = true, want false")
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d, body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
+		}
+	})
+}

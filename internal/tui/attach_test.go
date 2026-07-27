@@ -818,6 +818,32 @@ func TestRenderAttachMessages(t *testing.T) {
 	}
 }
 
+func TestRenderAttachMessagesUsesAccessibleAutomaticApprovalStyle(t *testing.T) {
+	output := renderAttachMessages([]llm.SDKMessage{{
+		Type:   "status",
+		Status: &llm.StatusMessage{Message: "Auto-approved Bash: go test ./..."},
+	}}, filterAll, 120, nil)
+
+	if !strings.Contains(output, extractFgEscape(colorSubtext)) {
+		t.Fatalf("automatic approval output = %q, want accessible secondary text color", output)
+	}
+}
+
+func TestRenderAttachMessagesUsesAccessibleAutomaticHumanReviewStyle(t *testing.T) {
+	for _, status := range []string{
+		"Auto-review deferred Bash to you: curl https://example.com",
+		"Auto-review failed (timeout); asking you about Bash: curl https://example.com",
+	} {
+		output := renderAttachMessages([]llm.SDKMessage{{
+			Type:   "status",
+			Status: &llm.StatusMessage{Message: status},
+		}}, filterAll, 120, nil)
+		if !strings.Contains(output, extractFgEscape(colorSubtext)) {
+			t.Errorf("automatic-review output = %q, want accessible secondary text color", output)
+		}
+	}
+}
+
 func TestRenderAttachMessages_ControlRequestCanUseToolRendersAsToolUse(t *testing.T) {
 	msgs := []llm.SDKMessage{
 		{

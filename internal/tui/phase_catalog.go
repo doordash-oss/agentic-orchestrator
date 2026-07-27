@@ -27,17 +27,24 @@ var phaseCatalogFields = []string{"Clarify", "Research", "Planning", "Implementa
 // globalModelFields is phaseCatalogFields plus Utilities: the model used for
 // AMA chat and other workspace-wide utility calls. No single feature owns
 // that role, so it is intentionally absent from phaseCatalogFields.
-var globalModelFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
+// Automatic Review is a workspace-only model row; it is never exposed in
+// feature-scoped editing.
+var globalModelFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build", "Automatic Review"}
+
+// automaticReviewField is the workspace-only Models-tab field name for the
+// automatic Bash-review reviewer model. An empty value means "Automatic".
+const automaticReviewField = "Automatic Review"
 
 // globalCatalogRoleToField maps API phase roles to catalog field names.
 var globalCatalogRoleToField = map[llm.PhaseRole]string{
-	llm.PhaseInquiry:        "Clarify",
-	llm.PhaseResearch:       "Research",
-	llm.PhasePlanning:       "Planning",
-	llm.PhaseImplementation: "Implementation",
-	llm.PhaseReview:         "Review",
-	llm.PhaseChat:           "Utilities",
-	llm.PhaseKBBuild:        "KB Build",
+	llm.PhaseInquiry:         "Clarify",
+	llm.PhaseResearch:        "Research",
+	llm.PhasePlanning:        "Planning",
+	llm.PhaseImplementation:  "Implementation",
+	llm.PhaseReview:          "Review",
+	llm.PhaseChat:            "Utilities",
+	llm.PhaseKBBuild:         "KB Build",
+	llm.PhaseAutomaticReview: automaticReviewField,
 }
 
 type PhaseModelEntry struct {
@@ -156,8 +163,15 @@ func (c PhaseModelCatalog) orderedProviderModelIDsForField(field, provider strin
 	if len(all) == 0 {
 		return nil
 	}
-	eligible := c.PhaseProviderModels[field][provider]
-	if len(eligible) == 0 {
+	providerModels, fieldScoped := c.PhaseProviderModels[field]
+	eligible, providerEligible := providerModels[provider]
+	if field == automaticReviewField {
+		if !fieldScoped || !providerEligible || len(eligible) == 0 {
+			return nil
+		}
+		return uniqueNonEmptyModelIDs(eligible)
+	}
+	if !fieldScoped || !providerEligible || len(eligible) == 0 {
 		return append([]string(nil), all...)
 	}
 	seen := map[string]bool{}
@@ -175,6 +189,19 @@ func (c PhaseModelCatalog) orderedProviderModelIDsForField(field, provider strin
 		}
 		out = append(out, id)
 		seen[id] = true
+	}
+	return out
+}
+
+func uniqueNonEmptyModelIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
 	}
 	return out
 }
@@ -209,6 +236,32 @@ func (c PhaseModelCatalog) SelectionValue(entry PhaseModelEntry) string {
 		return ""
 	}
 	if len(c.ProviderOrder) <= 1 || entry.Agent == "" || entry.Agent == "default" || entry.Agent == "Available" {
+		return entry.ModelID
+	}
+	return entry.Agent + ":" + entry.ModelID
+}
+
+// SelectionValueForField returns the persisted value for an entry while
+// considering only the providers eligible for that field. The automatic-review
+// role may exclude ready providers that cannot prove native tool-less
+// execution, so qualifying based on the workspace-wide provider count would
+// create unnecessarily prefixed values in a single-eligible-provider catalog.
+func (c PhaseModelCatalog) SelectionValueForField(field string, entry PhaseModelEntry) string {
+	if entry.ModelID == "" {
+		return ""
+	}
+	providerCount := 0
+	if providerModels, ok := c.PhaseProviderModels[field]; ok {
+		for _, provider := range c.ProviderOrder {
+			if len(providerModels[provider]) > 0 {
+				providerCount++
+			}
+		}
+	}
+	if providerCount == 0 {
+		return c.SelectionValue(entry)
+	}
+	if providerCount == 1 || entry.Agent == "" || entry.Agent == "default" || entry.Agent == "Available" {
 		return entry.ModelID
 	}
 	return entry.Agent + ":" + entry.ModelID

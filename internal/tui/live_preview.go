@@ -680,6 +680,7 @@ const (
 	livePreviewTranscriptWarning
 	livePreviewTranscriptQuestion
 	livePreviewTranscriptTask
+	livePreviewTranscriptApproval
 	livePreviewTranscriptMuted
 )
 
@@ -805,6 +806,8 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool)
 			appendRow(livePreviewResultRow(msg.Result))
 		case msg.ControlRequest != nil:
 			appendRow(livePreviewControlRequestRow(msg.ControlRequest))
+		case msg.Status != nil && isAutomaticReviewStatus(msg.Status.Message):
+			appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptApproval, text: msg.Status.Message})
 		case msg.TaskStarted != nil:
 			appendRow(livePreviewTaskStartedRow(msg.TaskStarted))
 		case msg.TaskProgress != nil:
@@ -820,6 +823,12 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool)
 		}
 	}
 	return rows
+}
+
+func isAutomaticReviewStatus(status string) bool {
+	return strings.HasPrefix(status, "Auto-approved Bash: ") ||
+		strings.HasPrefix(status, "Auto-approved Bash (fast path): ") ||
+		strings.HasPrefix(status, "Auto-review ")
 }
 
 func normalizeLivePreviewTranscriptRowText(row livePreviewTranscriptRow) string {
@@ -1031,6 +1040,8 @@ func livePreviewTranscriptStyle(kind livePreviewTranscriptKind) lipgloss.Style {
 		return ReviewStyle
 	case livePreviewTranscriptTask:
 		return chatThinkingStyle
+	case livePreviewTranscriptApproval:
+		return automaticReviewStatusStyle
 	default:
 		return MutedStyle
 	}

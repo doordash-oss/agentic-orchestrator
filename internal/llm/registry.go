@@ -566,6 +566,10 @@ const maxModelsPerProvider = 3
 // category are included — models with empty categories (undiscovered) are
 // excluded to keep the list clean.
 func (r *Registry) EligibleModelsForPhase(role PhaseRole) map[string][]string {
+	if role == PhaseAutomaticReview {
+		return r.eligibleAutomaticReviewModels()
+	}
+
 	eligible := eligibleCategoriesForRole[role]
 	result := make(map[string][]string)
 
@@ -590,6 +594,37 @@ func (r *Registry) EligibleModelsForPhase(role PhaseRole) map[string][]string {
 		}
 		if len(ids) > 0 {
 			result[name] = ids
+		}
+	}
+	return result
+}
+
+func (r *Registry) eligibleAutomaticReviewModels() map[string][]string {
+	result := make(map[string][]string)
+	for _, p := range r.DetectedProviders() {
+		reviewer, ok := p.(NativeToollessReviewer)
+		if !ok || !reviewer.SupportsNativeToollessReview() {
+			continue
+		}
+		catalogProvider, ok := p.(CatalogProvider)
+		if !ok {
+			continue
+		}
+		catalog := catalogProvider.ModelCatalog()
+		if len(catalog) == 0 {
+			continue
+		}
+		seen := make(map[string]bool, len(catalog))
+		ids := make([]string, 0, len(catalog))
+		for _, model := range catalog {
+			if model.ID == "" || seen[model.ID] {
+				continue
+			}
+			seen[model.ID] = true
+			ids = append(ids, model.ID)
+		}
+		if len(ids) > 0 {
+			result[p.Name()] = ids
 		}
 	}
 	return result

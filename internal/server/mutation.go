@@ -182,12 +182,13 @@ type ReviewDecisionRequest struct {
 }
 
 type FeatureConfigMutationRequest struct {
-	Models             config.ModelConfig      `json:"models,omitempty"`
-	Effort             config.EffortConfig     `json:"effort,omitempty"`
-	Inquireness        string                  `json:"inquireness,omitempty"`
-	Checkpoints        feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Pipeline           feature.PipelineProfile `json:"pipeline,omitempty"`
-	InputNotifications string                  `json:"input_notifications,omitempty"`
+	Models              config.ModelConfig      `json:"models,omitempty"`
+	Effort              config.EffortConfig     `json:"effort,omitempty"`
+	Inquireness         string                  `json:"inquireness,omitempty"`
+	Checkpoints         feature.Checkpoints     `json:"checkpoints,omitempty"`
+	Pipeline            feature.PipelineProfile `json:"pipeline,omitempty"`
+	InputNotifications  string                  `json:"input_notifications,omitempty"`
+	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`
 }
 
 type NeedUserInputDecisionRequest struct {
@@ -235,10 +236,16 @@ type RuntimeConfigMutationRequest struct {
 
 // RuntimeDefaultsMutation is the patch representation of DefaultsConfig.
 // Checkpoints is a pointer because its all-false value is a valid update and
-// must remain distinguishable from an omitted field.
+// must remain distinguishable from an omitted field. AutomaticReviewEnabled is
+// a pointer for the same reason: false is a meaningful value that must remain
+// distinguishable from an omitted toggle. Models is a pointer to
+// ModelConfigPatch because an all-empty patch is a valid update (e.g. clearing
+// an explicit AutomaticReview model back to the meaningful empty "Automatic"
+// value). ModelConfigPatch.AutomaticReview is itself a *string so an omitted
+// nested property stays distinguishable from an explicit empty value.
 type RuntimeDefaultsMutation struct {
-	Models                   config.ModelConfig                   `json:"models,omitempty"`
 	Effort                   config.EffortConfig                  `json:"effort,omitempty"`
+	Models                   *ModelConfigPatch                    `json:"models,omitempty"`
 	PipelinePreferences      map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
 	ExitCriteria             string                               `json:"exit_criteria,omitempty"`
 	Inquireness              string                               `json:"inquireness,omitempty"`
@@ -248,6 +255,81 @@ type RuntimeDefaultsMutation struct {
 	MaxConsecutiveNoProgress int                                  `json:"max_consecutive_no_progress,omitempty"`
 	MaxPhasePlanIterations   int                                  `json:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              *config.Checkpoints                  `json:"checkpoints,omitempty"`
+	AutomaticReviewEnabled   *bool                                `json:"automatic_review_enabled,omitempty"`
+}
+
+// ModelConfigPatch is the patch representation of config.ModelConfig for
+// runtime mutations. Phase-role model fields (Inquiry, Research, etc.) use
+// plain strings with empty-meaning-omitted semantics, matching the existing
+// mergeModelConfig behavior. AutomaticReview is *string because its empty
+// value is meaningful ("Automatic"): nil preserves the existing value while a
+// non-nil pointer (including one to "") sets it explicitly.
+type ModelConfigPatch struct {
+	Inquiry         string  `json:"inquiry,omitempty"`
+	Research        string  `json:"research,omitempty"`
+	Planning        string  `json:"planning,omitempty"`
+	Implementation  string  `json:"implementation,omitempty"`
+	Review          string  `json:"review,omitempty"`
+	Utilities       string  `json:"utilities,omitempty"`
+	KBBuild         string  `json:"kb_build,omitempty"`
+	AutomaticReview *string `json:"automatic_review,omitempty"`
+}
+
+// ApplyModelConfigPatch applies a ModelConfigPatch to a persisted
+// config.ModelConfig. Phase-role model fields use empty-meaning-omitted
+// semantics: a non-empty overlay value overwrites the base, an empty value
+// preserves the base. AutomaticReview uses *string presence: nil preserves
+// the existing value while a non-nil pointer (including one to "") sets it
+// explicitly, so a caller that sends only a phase-model change no longer
+// silently resets an explicit automatic-review model to "Automatic".
+func ApplyModelConfigPatch(base config.ModelConfig, patch ModelConfigPatch) config.ModelConfig {
+	if patch.Inquiry != "" {
+		base.Inquiry = patch.Inquiry
+	}
+	if patch.Research != "" {
+		base.Research = patch.Research
+	}
+	if patch.Planning != "" {
+		base.Planning = patch.Planning
+	}
+	if patch.Implementation != "" {
+		base.Implementation = patch.Implementation
+	}
+	if patch.Review != "" {
+		base.Review = patch.Review
+	}
+	if patch.Utilities != "" {
+		base.Utilities = patch.Utilities
+	}
+	if patch.KBBuild != "" {
+		base.KBBuild = patch.KBBuild
+	}
+	if patch.AutomaticReview != nil {
+		base.AutomaticReview = *patch.AutomaticReview
+	}
+	return base
+}
+
+// ModelConfigToPatch constructs a non-empty overlay patch from a ModelConfig.
+// AutomaticReview stays omitted when empty, matching config overlay semantics:
+// a feature-level phase override must not clear the workspace reviewer model.
+// Callers that intentionally clear AutomaticReview must construct an explicit
+// non-nil pointer to the empty string.
+func ModelConfigToPatch(m config.ModelConfig) ModelConfigPatch {
+	patch := ModelConfigPatch{
+		Inquiry:        m.Inquiry,
+		Research:       m.Research,
+		Planning:       m.Planning,
+		Implementation: m.Implementation,
+		Review:         m.Review,
+		Utilities:      m.Utilities,
+		KBBuild:        m.KBBuild,
+	}
+	if m.AutomaticReview != "" {
+		ar := m.AutomaticReview
+		patch.AutomaticReview = &ar
+	}
+	return patch
 }
 
 type PublishFeatureRequest struct {
@@ -532,6 +614,9 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 	if !validatePipelineProfile(w, req.Pipeline) {
 		return true
 	}
+	if !validateAutomaticReviewMode(w, req.AutomaticReviewMode) {
+		return true
+	}
 	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
 		return true
 	}
@@ -762,7 +847,11 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) {
 			return
 		}
-		if !validateEffortConfig(w, req.Defaults.Effort, req.Defaults.Models, h.registry) {
+		models := h.configOrDefault().Defaults.Models
+		if req.Defaults.Models != nil {
+			models = ApplyModelConfigPatch(models, *req.Defaults.Models)
+		}
+		if !validateEffortConfig(w, req.Defaults.Effort, models, h.registry) {
 			return
 		}
 		resp, err := h.mutations.RuntimeConfig(req)
@@ -1036,6 +1125,17 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "risk_level must be low, medium, or high", nil)
 		return false
 	}
+}
+
+func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {
+	if raw == nil {
+		return true
+	}
+	if _, err := feature.ParseAutomaticReviewMode(*raw); err == nil {
+		return true
+	}
+	writeAPIError(w, http.StatusBadRequest, "bad_request", "automatic_review_mode must be default, enabled, or disabled", nil)
+	return false
 }
 
 func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, models config.ModelConfig, reg *llm.Registry) bool {

@@ -403,6 +403,7 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 
 	t.Run("update_posts_typed_request_and_returns_action_result", func(t *testing.T) {
 		var sawTrustedHeader bool
+		automaticReviewMode := string(feature.AutomaticReviewEnabled)
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost || r.URL.Path != testFeatureConfigPath {
 				t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
@@ -418,6 +419,9 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 			if req.Inquireness != inquirenessAlways || req.Pipeline != feature.PipelineLarge {
 				t.Fatalf("update request = %+v, want inquireness always pipeline large", req)
 			}
+			if req.AutomaticReviewMode == nil || *req.AutomaticReviewMode != automaticReviewMode {
+				t.Fatalf("automatic review mode = %v, want %q", req.AutomaticReviewMode, automaticReviewMode)
+			}
 			writeJSON(w, http.StatusOK, FeatureConfigUpdateResponse{
 				APIVersion: APIVersion, FeatureID: fixtureFeatureID,
 				Result: resultUpdated,
@@ -430,8 +434,9 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 			t.Fatalf("NewClient() error = %v", err)
 		}
 		updated, err := client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{
-			Inquireness: inquirenessAlways,
-			Pipeline:    feature.PipelineLarge,
+			Inquireness:         inquirenessAlways,
+			Pipeline:            feature.PipelineLarge,
+			AutomaticReviewMode: &automaticReviewMode,
 		})
 		if err != nil {
 			t.Fatalf("UpdateFeatureConfig() error = %v", err)

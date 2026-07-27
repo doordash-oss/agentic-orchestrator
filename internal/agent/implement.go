@@ -459,6 +459,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
+			// Copy the auto-review snapshot from sessOpts into implBuildOpts
+			// so crash-resume reuses the original values rather than reading
+			// the current (possibly edited) workspace config.
+			if sessOpts != nil && sessOpts.AutoReview.Enabled != nil {
+				implBuildOpts.AutoReview = sessOpts.AutoReview
+			}
 
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
 			if cfg.EffectiveEffort != "" {
@@ -1528,12 +1534,6 @@ var backgroundTaskPollInterval = 2 * time.Second
 // continuation.
 var backgroundTaskQuietGrace = 15 * time.Second
 
-// backgroundTaskStallTimeout bounds how long the waiter defers to
-// still-"live" background tasks with zero stdout activity. Running subagents
-// emit periodic task_progress lines, so a totally silent stream this long
-// means the CLI wedged; give up instead of waiting forever.
-var backgroundTaskStallTimeout = 10 * time.Minute
-
 // liveBackgroundTaskCounter is the optional session capability that reports
 // running background subagents. Provider sessions that do not track them
 // (or test doubles that predate the capability) simply never defer.
@@ -1757,8 +1757,7 @@ func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot) *Cont
 //     were still running) defers without sending anything: the CLI
 //     re-invokes the agent when its tasks complete. If the tasks finish and
 //     no re-invocation arrives, the waiter falls back to the auto-resume
-//     continuation; a fully wedged stream is bounded by
-//     backgroundTaskStallTimeout.
+//     continuation.
 //   - Anything else (EndedAfterText, Refused, Errored), or an exhausted
 //     truncation retry budget, returns MISSING_PHASE_COMPLETE so the caller
 //     can count the turn as a protocol violation.
@@ -1930,17 +1929,10 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 			if !awaitingBackgroundTasks {
 				continue
 			}
-			quiet := time.Since(sess.LastStdoutAt())
 			if liveBackgroundTasks(sess) > 0 {
-				// Running subagents emit periodic task_progress lines; a
-				// stream this quiet means the CLI wedged. Give up rather
-				// than wait forever.
-				if quiet >= backgroundTaskStallTimeout {
-					_ = sess.Stop()
-					return waitForStatusResult{Status: agentStatusMissingMarker, Handoff: handoff}
-				}
 				continue
 			}
+			quiet := time.Since(sess.LastStdoutAt())
 			// All tasks finished but no new result arrived: the CLI did not
 			// re-invoke the agent on its own. Resume it explicitly, reusing
 			// the truncation budget so a session that keeps yielding without

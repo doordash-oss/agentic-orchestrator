@@ -48,6 +48,11 @@ func ChatSystemPrompt(in ChatSystemInput) string {
 	return MustRender("chat.system", in)
 }
 
+// AutoReviewUserPrompt renders the hidden automatic Bash safety-review prompt.
+func AutoReviewUserPrompt(in AutoReviewUserInput) string {
+	return MustRender("autoreview.user", in)
+}
+
 // VisualReferences renders the visual_references partial. Returns "" when
 // Images is empty so callers can drop the result into a prompt
 // unconditionally.

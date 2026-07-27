@@ -98,6 +98,17 @@ type ChatSystemInput struct {
 	CurrentFeatures string
 }
 
+// AutoReviewUserInput is the sanitized command context passed to the hidden
+// automatic Bash safety reviewer. Nonce fences the untrusted request fields;
+// WritableRootsSummary carries the caller's explicit read/write semantics.
+type AutoReviewUserInput struct {
+	Nonce                string
+	ToolName             string
+	Command              string
+	WorkDir              string
+	WritableRootsSummary string
+}
+
 // PreflightInput is the data passed to the RoleSpec system template's
 // "Useful Resources" section. It lists every orientation surface
 // (knowledge bases, language guidelines, additional skills) the agent has

@@ -42,9 +42,15 @@ Read the research findings at: {{ .ResearchPath }}
 
 Use the research to verify that the plan respects discovered constraints, existing patterns, and integration requirements.
 
+{{ end }}{{ if .MockupManifestPath }}## Mockup Bundle
+
+Read the mockup manifest and every referenced prototype and rendered state at: {{ .MockupManifestPath }}
+
 {{ end }}{{ if .AutomatedVerificationOnly }}Note: this feature verifies through automated tests only. The plan's Manual Verification, Visual Evidence, and Behavioral Evidence sections are required to be `None required:` markers; do not request evidence matrices, screenshots, or manual observation steps.
 
-{{ end }}## Plan to Evaluate
+{{ end }}{{ if .IsDesignKind }}## Design to Evaluate
+{{ else }}## Plan to Evaluate
+{{ end }}
 
 Read the plan at: {{ .PlanPath }}
 {{ end -}}

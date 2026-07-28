@@ -45,6 +45,7 @@ func NewDefault() *Config {
 			Inquireness:              "high",
 			Pipeline:                 "large",
 			MaxIterations:            10,
+			MaxDesignIterations:      defaultMaxDesignIterations,
 			MaxConsecutiveFailures:   3,
 			MaxConsecutiveNoProgress: 3,
 		},

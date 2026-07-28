@@ -412,6 +412,64 @@ func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFi
 	})
 }
 
+// RunDesignWithValidation starts the iterative Design author/critic loop.
+func (pr *PhaseRunner) RunDesignWithValidation(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (chan *DesignLoopResult, error) {
+	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
+	var repoName string
+	if len(f.Repos) > 0 {
+		repoName = f.Repos[0].Name
+	}
+
+	designModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
+	designEffort, designEffortSource := pr.resolveEffortForRole(f, llm.PhasePlanning, designModel)
+	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
+	validatorEffort, validatorEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
+
+	maxAttempts := f.MaxDesignIterations
+	if maxAttempts <= 0 && pr.Config != nil {
+		maxAttempts = pr.Config.Defaults.MaxDesignIterations
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = DefaultMaxDesignAttempts
+	}
+	cfg := DesignLoopConfig{PlanLoopConfig: PlanLoopConfig{
+		Feature:                    f,
+		FeatureStore:               pr.FeatureStore,
+		StateDir:                   pr.StateDir,
+		ResearchArtifactPath:       researchOutput,
+		QAFilePaths:                qaFilePaths,
+		KBInfos:                    kbInfos,
+		WorkDir:                    workDir,
+		AdditionalDirs:             additionalDirs,
+		MaxAttempts:                maxAttempts,
+		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
+		PermissionCache:            pr.PermissionCache,
+		RepoName:                   repoName,
+		BuildSession:               pr.buildSessionForFeature(f),
+		AskingClause:               pr.askingQuestionsClauseForModel(designModel),
+		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		EffectiveEffort:            designEffort,
+		EffortSource:               designEffortSource,
+		ValidatorEffectiveEffort:   validatorEffort,
+		ValidatorEffortSource:      validatorEffortSource,
+		SkillsDir:                  pr.SkillsDir,
+		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(designModel),
+		Observer:                   pr.Observer,
+	}}
+
+	resultCh := make(chan *DesignLoopResult, 1)
+	go func() {
+		result, err := RunDesignValidationLoop(cfg, pr.SessionManager)
+		if err != nil {
+			resultCh <- &DesignLoopResult{FinalStatus: "failed", LastError: err.Error()}
+			return
+		}
+		resultCh <- result
+	}()
+	return resultCh, nil
+}
+
 // RunCodebaseIndex builds structural codebase indexes for all repos in a feature.
 // This is pure Go (no LLM) and runs quickly. It checks freshness first and
 // skips repos whose indexes are already up-to-date with HEAD.

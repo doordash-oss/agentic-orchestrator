@@ -253,6 +253,7 @@ type RuntimeDefaultsMutation struct {
 	MaxIterations            int                                  `json:"max_iterations,omitempty"`
 	MaxConsecutiveFailures   int                                  `json:"max_consecutive_failures,omitempty"`
 	MaxConsecutiveNoProgress int                                  `json:"max_consecutive_no_progress,omitempty"`
+	MaxDesignIterations      int                                  `json:"max_design_iterations,omitempty"`
 	MaxPhasePlanIterations   int                                  `json:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              *config.Checkpoints                  `json:"checkpoints,omitempty"`
 	AutomaticReviewEnabled   *bool                                `json:"automatic_review_enabled,omitempty"`

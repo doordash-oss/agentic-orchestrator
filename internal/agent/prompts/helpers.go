@@ -54,10 +54,10 @@ func AutoReviewUserPrompt(in AutoReviewUserInput) string {
 }
 
 // VisualReferences renders the visual_references partial. Returns "" when
-// Images is empty so callers can drop the result into a prompt
-// unconditionally.
+// both Images and Mockups are empty so callers can drop the result into a
+// prompt unconditionally.
 func VisualReferences(in VisualReferencesInput) string {
-	if len(in.Images) == 0 {
+	if len(in.Images) == 0 && len(in.Mockups) == 0 {
 		return ""
 	}
 	if in.Label == "" {
@@ -108,6 +108,12 @@ func KBBuildUserPrompt(in any) string {
 // (design.user.tmpl).
 func DesignUserPrompt(in any) string {
 	return MustRender("design.user", in)
+}
+
+// DesignRevisionUserPrompt renders the Design revision user prompt
+// (design_revision.user.tmpl).
+func DesignRevisionUserPrompt(in any) string {
+	return MustRender("design_revision.user", in)
 }
 
 // RefactorPlanUserPrompt renders the refactor-plan step user prompt

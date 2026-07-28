@@ -5,7 +5,7 @@
   preserving budget for the reasoning step.
 */ -}}
 {{- define "review.user" -}}
-Iteration under review: {{ .Iteration }}
+{{ template "visual_references" .VisualReferences }}Iteration under review: {{ .Iteration }}
 Iteration artifacts directory: {{ .IterDir }}
 
 {{ if .RoadmapPath }}## Approved Roadmap

@@ -274,6 +274,7 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 	retained := map[string]bool{
 		"autoreview_user":                                      true,
+		"design_revision_user":                                 true,
 		"design_system_rolespec":                               true,
 		"design_user_multi_repo":                               true,
 		"final_fix_user_with_manual":                           true,
@@ -294,6 +295,8 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"roadmap_user_multi_repo":                              true,
 		"scout_user":                                           true,
 		"summary_user":                                         true,
+		"validate_design_integrity_user":                       true,
+		"validate_design_visual_user":                          true,
 		"validate_specialized_grounding":                       true,
 		"validate_specialized_automated_verification_only":     true,
 	}

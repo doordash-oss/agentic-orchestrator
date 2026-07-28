@@ -1,0 +1,25 @@
+{{- /*
+  design_revision.user: Design revision after automated critic feedback.
+  Revisions are autonomous and preserve the final-decision-only artifact.
+*/ -}}
+{{- define "design_revision.user" -}}
+# Design Revision
+
+This is revision attempt {{ .Attempt }}.
+
+## Design to Revise
+
+Read and update the design at: {{ .PreviousDesignPath }}
+
+{{ if .MockupManifestPath }}## Existing Mockup Bundle
+
+Read the mockup manifest at: {{ .MockupManifestPath }}
+
+Update the manifest, prototype, and rendered states when the feedback changes a binding UI decision.
+
+{{ end }}## Critic Feedback
+
+{{ .CriticFeedback }}
+
+{{ template "autonomous_inquireness" .Inquireness }}
+{{ end -}}

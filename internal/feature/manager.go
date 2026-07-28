@@ -472,7 +472,14 @@ func (m *Manager) StartDesign(featureID string) error {
 
 // CompleteDesign transitions a feature to PlanReady.
 func (m *Manager) CompleteDesign(featureID string) error {
-	return m.Transition(featureID, StatusPlanReady)
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if err := f.Transition(StatusPlanReady); err != nil {
+			return err
+		}
+		f.ValidatingDesign = false
+		f.ValidatorStatuses = nil
+		return nil
+	})
 }
 
 // StartResearch transitions a feature to Researching status and sets CurrentPhase.
@@ -583,6 +590,7 @@ func (m *Manager) StartPlanning(featureID string) error {
 		}
 		f.CurrentPhase = PhasePlan
 		f.ValidatingPlan = false
+		f.ValidatingDesign = false
 		f.ValidatorStatuses = nil
 		// Accumulate any in-flight time under the old key before switching.
 		// Without this, an interrupt → restart cycle for a roadmap-phase plan

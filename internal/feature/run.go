@@ -91,6 +91,7 @@ type Run struct {
 	// Iteration counters (moved from Feature).
 	CurrentIteration int `yaml:"current_iteration,omitempty"`
 	PlanIteration    int `yaml:"plan_iteration,omitempty"`
+	DesignIteration  int `yaml:"design_iteration,omitempty"`
 	ReviewIteration  int `yaml:"review_iteration,omitempty"`
 	RebaseCount      int `yaml:"rebase_count,omitempty"`
 	RefactorCount    int `yaml:"refactor_count,omitempty"`
@@ -150,6 +151,7 @@ type Run struct {
 
 	// Plan validation + gate state (moved from Feature).
 	ValidatingPlan    bool              `yaml:"validating_plan,omitempty"`
+	ValidatingDesign  bool              `yaml:"validating_design,omitempty"`
 	ValidatorStatuses map[string]string `yaml:"validator_statuses,omitempty"`
 	// VerificationItems is the ordered live progress of harness-executed
 	// testing-contract commands while CurrentPhaseStatus is "verifying".
@@ -169,7 +171,8 @@ type Run struct {
 	// MaxPlanIterations is a per-run ceiling. The feature-level
 	// MaxPlanIterations is a user-set config ceiling; this per-run counter
 	// tracks the reset-on-phase-boundary limit that the plan loop consults.
-	MaxPlanIterations int `yaml:"max_plan_iterations,omitempty"`
+	MaxPlanIterations   int `yaml:"max_plan_iterations,omitempty"`
+	MaxDesignIterations int `yaml:"max_design_iterations,omitempty"`
 
 	// Error state (moved from Feature).
 	LastError   string `yaml:"last_error,omitempty"`

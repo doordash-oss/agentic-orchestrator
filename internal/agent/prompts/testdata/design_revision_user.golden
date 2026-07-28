@@ -1,0 +1,20 @@
+# Design Revision
+
+This is revision attempt 2.
+
+## Design to Revise
+
+Read and update the design at: /state/feat-x/run-1/design/design.md
+
+## Existing Mockup Bundle
+
+Read the mockup manifest at: /state/feat-x/run-1/design/mockups/manifest.yaml
+
+Update the manifest, prototype, and rendered states when the feedback changes a binding UI decision.
+
+## Critic Feedback
+
+Clarify callback errors and refresh the mobile error state.
+
+## Ambiguity Resolution [none]
+Resolve all ambiguity autonomously. Do NOT ask the user any questions or request clarification. Make your best judgment on all decisions and proceed.

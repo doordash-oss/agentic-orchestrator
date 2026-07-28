@@ -154,6 +154,7 @@ type capturingPhaseRunner struct {
 	stateDir     string
 	mu           sync.Mutex
 	capturedOpts []agent.BuildSessionOpts
+	startCalls   []mocks.MockStartSessionCall
 }
 
 func newCapturingPhaseRunner(t *testing.T) *capturingPhaseRunner {
@@ -198,6 +199,14 @@ func newCapturingPhaseRunner(t *testing.T) *capturingPhaseRunner {
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase,
 		command []string, workdir string, env []string,
 		opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		cpr.mu.Lock()
+		cpr.startCalls = append(cpr.startCalls, mocks.MockStartSessionCall{
+			ID:        id,
+			FeatureID: featureID,
+			Phase:     phase,
+			Command:   append([]string(nil), command...),
+		})
+		cpr.mu.Unlock()
 		repoName := ""
 		if len(opts) > 0 && opts[0] != nil {
 			repoName = opts[0].RepoName
@@ -226,8 +235,10 @@ func (c *capturingPhaseRunner) capturedByPhase(want feature.Phase) []agent.Build
 // startSessionsByPhase returns MockStartSessionCall entries whose Phase
 // matches want.
 func (c *capturingPhaseRunner) startSessionsByPhase(want feature.Phase) []mocks.MockStartSessionCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var out []mocks.MockStartSessionCall
-	for _, call := range c.sm.StartSessionCalls {
+	for _, call := range c.startCalls {
 		if call.Phase == want {
 			out = append(out, call)
 		}
@@ -514,6 +525,13 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 			tt.setup(t, f, cpr.stateDir)
 
 			lc := lifecycleForFeature(f)
+			if tt.phase == feature.PhaseDesign {
+				lc.StartDesignFn = func(id string) error {
+					f.Status = feature.StatusDesigning
+					f.CurrentPhase = feature.PhaseDesign
+					return nil
+				}
+			}
 			fs := newFeatureStore(f)
 			cpr.pr.FeatureStore = fs
 			o := orchestrator.New(orchestrator.Deps{
@@ -533,6 +551,9 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 			}
 
 			captured := cpr.capturedByPhase(tt.phase)
+			if tt.phase == feature.PhaseDesign {
+				captured = waitForCapturedPhase(t, cpr, tt.phase, 3*time.Second)
+			}
 			if len(captured) == 0 {
 				t.Fatalf("BuildSession was not called with Phase=%v; all captures: %v",
 					tt.phase, cpr.capturedOpts)

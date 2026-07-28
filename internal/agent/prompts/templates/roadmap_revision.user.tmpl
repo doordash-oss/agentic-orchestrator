@@ -4,7 +4,7 @@
   never re-open the human-decision loop).
 */ -}}
 {{- define "roadmap_revision.user" -}}
-{{ if .RoadmapFormatPath }}The methodology references the roadmap output format at: {{ .RoadmapFormatPath }} — read this file in addition to the SKILL.md before producing the revised roadmap.
+{{ template "visual_references" .VisualReferences }}{{ if .RoadmapFormatPath }}The methodology references the roadmap output format at: {{ .RoadmapFormatPath }} — read this file in addition to the SKILL.md before producing the revised roadmap.
 
 {{ end }}# Revision Context
 

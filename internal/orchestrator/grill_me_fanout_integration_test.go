@@ -176,18 +176,14 @@ func TestRunPhasePlanning_HighInquireness_GrillMePromptInvariant(t *testing.T) {
 }
 
 // TestGrillMeFanout_PrimaryBuilders_EndToEnd is the table-driven fan-out
-// integration test for the three primary grill-me builders. For each row:
+// integration test for the iterative planning builders. For each row:
 //
 //	(i) the test pre-writes a stale qa-answers.md at the canonical phase
 //	    directory;
 //	(ii) drives HandlePhaseCompletion with the input shape the production
-//	    code uses for that phase (SessionID-based for Design, PlanResult-
-//	    based for Roadmap and Phase-Plan);
-//	(iii) asserts Design is replaced from the session Q&A log, while
-//	    Roadmap and Phase-Plan preserve transcripts already written by their
-//	    planner loops;
-//	(iv) for Design and Roadmap (which have downstream consumers of
-//	    collectQAFilePaths), asserts the path is surfaced to the next phase.
+//	    code uses for Roadmap and Phase-Plan;
+//	(iii) asserts transcripts already written by their planner loops survive;
+//	(iv) for Roadmap, asserts the path is surfaced to the next phase.
 //
 // Phase-Plan deliberately does not propagate qa-answers.md downstream
 // (see plan §`What We're NOT Doing`), so the phase-plan row asserts
@@ -202,43 +198,6 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 		assertCollectQA  bool
 		expectedQAPathFn func(stateDir string, f *feature.Feature) string
 	}{
-		{
-			name: "design",
-			phaseDirRel: func(stateDir string, f *feature.Feature) string {
-				return filepath.Join(agent.ActiveRunDir(stateDir, f), "design")
-			},
-			setupFeature: func() *feature.Feature {
-				return &feature.Feature{
-					ID:           "feat-fanout-design",
-					ActiveRun:    1,
-					RunCount:     1,
-					Status:       feature.StatusDesigning,
-					CurrentPhase: feature.PhaseDesign,
-					Pipeline:     feature.PipelineLarge,
-					Checkpoints: feature.Checkpoints{
-						InquiryReview:   true,
-						ResearchReview:  true,
-						DesignReview:    true,
-						RoadmapReview:   true,
-						PhasePlanReview: true,
-					},
-				}
-			},
-			invoke: func(t *testing.T, o *Orchestrator, featureID string) {
-				if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-					Phase:     feature.PhaseDesign,
-					SessionID: "sess-1",
-					Success:   true,
-				}); err != nil {
-					t.Fatalf("HandlePhaseCompletion design: %v", err)
-				}
-			},
-			wantQAFile:      sampleHarnessOwnedQA,
-			assertCollectQA: true,
-			expectedQAPathFn: func(stateDir string, f *feature.Feature) string {
-				return filepath.Join(agent.ActiveRunDir(stateDir, f), "design", "qa-answers.md")
-			},
-		},
 		{
 			name: "roadmap",
 			phaseDirRel: func(stateDir string, f *feature.Feature) string {
@@ -405,61 +364,6 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 		mustContain          []string
 		mustNotContain       []string
 	}{
-		{
-			name: "design",
-			setupFeature: func(stateDir string) *feature.Feature {
-				return &feature.Feature{
-					ID:           "feat-entry-design",
-					ActiveRun:    1,
-					RunCount:     1,
-					Status:       feature.StatusDesignReady,
-					CurrentPhase: feature.PhaseDesign,
-					Pipeline:     feature.PipelineLarge,
-					Inquireness:  feature.InquirenessMedium,
-					Repos: []feature.FeatureRepo{
-						{Name: "repo1", Path: stateDir},
-					},
-				}
-			},
-			seedUpstreamArtifact: func(t *testing.T, stateDir string, f *feature.Feature) {
-				researchDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "research")
-				if err := os.MkdirAll(researchDir, 0o755); err != nil {
-					t.Fatalf("mkdir research: %v", err)
-				}
-				researchPath := filepath.Join(researchDir, "research.md")
-				if err := os.WriteFile(researchPath, []byte("# research\n"), 0o644); err != nil {
-					t.Fatalf("write research: %v", err)
-				}
-				if f.Artifacts == nil {
-					f.Artifacts = map[string]string{}
-				}
-				f.Artifacts["research"] = researchPath
-			},
-			invoke: func(t *testing.T, o *Orchestrator, f *feature.Feature) {
-				if _, err := o.startDesign(f.ID); err == nil {
-					// startDesign fans through PhaseRunner.RunDesign,
-					// which returns the BuildSessionFn error. A nil error
-					// means the capture path was not exercised.
-					t.Fatalf("expected startDesign to surface BuildSession ErrShuttingDown")
-				}
-			},
-			expectDispatchFail: false,
-			mustContain: []string{
-				"## Ambiguity Resolution [grill-me]",
-			},
-			mustNotContain: []string{
-				"strictly greater than",
-				"auto-pick",
-				"auto-resolve",
-				"silent",
-				"qa-answers.md",
-				"threshold",
-				"strictly greater than 0.5",
-				"Do not auto-pick any answer",
-				"## Ambiguity Resolution: [autonomous]",
-				"## Ambiguity Resolution [autonomous]",
-			},
-		},
 		{
 			name: "roadmap",
 			setupFeature: func(stateDir string) *feature.Feature {

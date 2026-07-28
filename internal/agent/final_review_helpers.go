@@ -41,6 +41,7 @@ type FinalFixPromptOpts struct {
 	Publishable        bool
 	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
 	Images             []string // user-attached visual references, re-injected per iteration
+	VisualReferences   prompts.VisualReferencesInput
 }
 
 // BuildFinalFixPrompt constructs the prompt for the fix agent session.
@@ -49,11 +50,15 @@ type FinalFixPromptOpts struct {
 // The prose lives in internal/agent/prompts/templates/final_fix.user.tmpl
 // (with the manual-verification-outcomes partial branched on a flag).
 func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
-	return roles.BuildFinalFixPrompt(roles.FinalFixUserInput{
-		VisualReferences: prompts.VisualReferencesInput{
+	references := opts.VisualReferences
+	if len(references.Images) == 0 && len(references.Mockups) == 0 {
+		references = prompts.VisualReferencesInput{
 			Images: opts.Images,
 			Label:  "applying this fix",
-		},
+		}
+	}
+	return roles.BuildFinalFixPrompt(roles.FinalFixUserInput{
+		VisualReferences:                  references,
 		Iteration:                         opts.Iteration,
 		ExitCriteria:                      opts.ExitCriteria,
 		Feedback:                          opts.Feedback,

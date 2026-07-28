@@ -124,10 +124,7 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir
 		Repos:                repos,
 		DesignArtifactPath:   designArtifactPath,
 		ResearchArtifactPath: researchArtifactPath,
-		VisualReferences: prompts.VisualReferencesInput{
-			Images: append([]string(nil), f.Images...),
-			Label:  "producing the roadmap",
-		},
+		VisualReferences:     visualReferencesForFeature(f, designArtifactPath, "producing the roadmap"),
 		QAFiles: prompts.QAFilesInput{
 			Paths:         append([]string(nil), qaFilePaths...),
 			Lead:          "Read these Q&A files for important context about their intent and preferences — do not re-ask questions that have already been answered:",
@@ -150,16 +147,17 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir
 // The prose lives in
 // internal/agent/prompts/templates/roadmap_revision.user.tmpl.
 //
-// f is currently unused by the template; retained on the signature for
-// caller stability. roadmapPath is similarly unused (the path is implicit
-// via previousRoadmapPath).
+// roadmapPath is retained for caller stability; the path to revise is supplied
+// separately as previousRoadmapPath.
 func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, previousRoadmapPath, criticFeedback, designArtifactPath string, attempt int, approvals []AxisApproval) string {
-	_ = f
 	_ = roadmapPath
-	_ = designArtifactPath
+	if designArtifactPath == "" {
+		designArtifactPath = f.DesignArtifactPath()
+	}
 	return roles.BuildRoadmapRevisionPrompt(roles.RoadmapRevisionUserInput{
-		Attempt:        attempt,
-		CriticFeedback: criticFeedback,
+		Attempt:          attempt,
+		VisualReferences: visualReferencesForFeature(f, designArtifactPath, "revising the roadmap"),
+		CriticFeedback:   criticFeedback,
 		PriorAxisApprovals: prompts.PriorAxisApprovalsInput{
 			ArtifactName: "roadmap",
 			Approvals:    axisApprovalViews(approvals),
@@ -178,8 +176,8 @@ func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, prev
 // (inquire/research/design/roadmap qa-answers.md) collected by
 // the orchestrator. Phase-Plan re-injects them under a "User Decisions"
 // section so the planner reads the user's prior answers verbatim and
-// does not re-litigate them. Visual references are intentionally
-// omitted — the approved roadmap already incorporates them. Phase-Plan's
+// does not re-litigate them. Approved generated mockups are re-injected
+// because they carry pixel-level contracts the roadmap cannot preserve. Phase-Plan's
 // own qa-answers.md is NOT propagated to Implement (Implement reads
 // the phase-plan markdown artifact, which already encodes all decisions).
 //
@@ -197,6 +195,7 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesD
 	_ = guidelinesDir
 	_ = kbInfos
 	return roles.BuildPhasePlanPrompt(roles.PhasePlanUserInput{
+		VisualReferences: visualReferencesForFeature(f, f.DesignArtifactPath(), "planning this phase"),
 		Phase: roles.PhasePlanView{
 			Number:        phase.Number,
 			Name:          phase.Name,
@@ -228,9 +227,12 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesD
 // The prose lives in
 // internal/agent/prompts/templates/phase_plan_revision.user.tmpl.
 func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback, designArtifactPath string, phase RoadmapPhase, attempt int, approvals []AxisApproval) string {
-	_ = designArtifactPath
+	if designArtifactPath == "" {
+		designArtifactPath = f.DesignArtifactPath()
+	}
 	return roles.BuildPhasePlanRevisionPrompt(roles.PhasePlanRevisionUserInput{
-		Attempt: attempt,
+		Attempt:          attempt,
+		VisualReferences: visualReferencesForFeature(f, designArtifactPath, "revising this phase plan"),
 		Phase: roles.PhasePlanView{
 			Number: phase.Number,
 			Name:   phase.Name,

@@ -1,0 +1,20 @@
+## Feature Under Review
+
+**Name**: OAuth login
+
+**Description**:
+> Sign in with Google.
+
+**Exit Criteria**:
+> PKCE succeeds and errors are actionable.
+
+## Research Findings
+
+Read the research findings at: /state/feat-x/run-1/research/research.md
+
+Use the research to verify that the plan respects discovered constraints, existing patterns, and integration requirements.
+
+## Design to Evaluate
+
+
+Read the plan at: /state/feat-x/run-1/design/design.md

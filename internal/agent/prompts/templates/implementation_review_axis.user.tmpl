@@ -4,7 +4,7 @@
   selected axis label.
 */ -}}
 {{- define "implementation_review_axis.user" -}}
-Axis under review: {{ .AxisLabel }}
+{{ template "visual_references" .VisualReferences }}Axis under review: {{ .AxisLabel }}
 {{ if .GateLabel }}Gate under review: {{ .GateLabel }}
 {{ end -}}
 Review feedback output: {{ .FeedbackPath }}

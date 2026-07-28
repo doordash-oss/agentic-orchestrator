@@ -52,11 +52,12 @@ echo "PASS: version flag works"
 # TUI/orchestrator tests and the launch-contract fixture.
 echo "PASS: feature management is TUI-only"
 
-# 6. Roadmap skill definitions exist (migrated from commands/ to skills/)
+# 6. Iterative planning and Design skill definitions exist.
 for tmpl in create-roadmap plan-phase revise-roadmap revise-phase-plan \
             validate-roadmap-architecture validate-roadmap-scope \
             validate-phase-plan-structural validate-phase-plan-grounding validate-phase-plan-scope \
-            validate-plan-security validate-plan-performance validate-plan-testing; do
+            validate-plan-security validate-plan-performance validate-plan-testing \
+            design-mockups revise-design validate-design-integrity validate-design-visual; do
     [ -f "skills/${tmpl}/SKILL.md" ]
     echo "PASS: skills/${tmpl}/SKILL.md exists"
 done

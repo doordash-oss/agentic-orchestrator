@@ -604,6 +604,92 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 }
 
 // ---------------------------------------------------------------------------
+// Design loop completion
+// ---------------------------------------------------------------------------
+
+func (o *Orchestrator) onDesignLoopDone(featureID string, result *agent.DesignLoopResult) error {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return fmt.Errorf("load feature: %w", err)
+	}
+	if isTerminalForCompletion(f) {
+		return nil
+	}
+	if result == nil {
+		errMsg := "Design loop returned no result"
+		o.emitPhaseCompleted(featureID, feature.PhaseDesign, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+
+	designDir := o.artifactReadOnlyGuardDir(f, feature.PhaseDesign.DirName())
+	violations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, feature.PhaseDesign, designDir)
+	if err != nil {
+		return fmt.Errorf("enforce Design read-only repo guard: %w", err)
+	}
+	if len(violations) > 0 {
+		errMsg := formatSingleShotProtocolViolationError(agent.RoleDesigner, designDir, violations)
+		o.emitPhaseCompleted(featureID, feature.PhaseDesign, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+	}
+
+	clearProgress := func() {
+		_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+			ff.ValidatingDesign = false
+			ff.ValidatorStatuses = nil
+			return nil
+		})
+	}
+	switch result.FinalStatus {
+	case "approved":
+		clearProgress()
+		if err := o.deps.Lifecycle.CompleteDesign(featureID); err != nil {
+			return fmt.Errorf("complete Design: %w", err)
+		}
+		o.emitPhaseCompleted(featureID, feature.PhaseDesign, nil)
+		return o.advanceToNextPhase(featureID, feature.PhaseDesign)
+	case "needs_human_review":
+		clearProgress()
+		if err := o.EnterReviewGate(featureID, feature.PhasePlan); err != nil {
+			return fmt.Errorf("enter Design review gate: %w", err)
+		}
+		o.emitPhaseCompleted(featureID, feature.PhaseDesign, nil)
+		o.emitEventBlocking(ports.Event{
+			Type:      ports.ReviewRequired,
+			FeatureID: featureID,
+			Phase:     feature.PhaseDesign,
+		})
+		if o.hooks.OnReviewRequired != nil {
+			o.hooks.OnReviewRequired(featureID, feature.PhaseDesign)
+		}
+		return nil
+	case "failed":
+		clearProgress()
+		errMsg := result.LastError
+		if errMsg == "" {
+			errMsg = "Design loop failed"
+		}
+		o.emitPhaseCompleted(featureID, feature.PhaseDesign, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	case agent.BoundedHelperStatusProtocolViolation:
+		clearProgress()
+		errMsg := result.LastError
+		if errMsg == "" {
+			errMsg = "Design loop protocol violation"
+		}
+		o.emitPhaseCompleted(featureID, feature.PhaseDesign, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+	case finalStatusInterrupted:
+		clearProgress()
+		return nil
+	default:
+		clearProgress()
+		errMsg := fmt.Sprintf("unknown Design FinalStatus %q", result.FinalStatus)
+		o.emitPhaseCompleted(featureID, feature.PhaseDesign, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Plan loop completion
 // ---------------------------------------------------------------------------
 

@@ -59,7 +59,8 @@ type PhasePlanUserInput struct {
 	RoadmapPath          string
 	ResearchArtifactPath string
 
-	QAFiles prompts.QAFilesInput
+	VisualReferences prompts.VisualReferencesInput
+	QAFiles          prompts.QAFilesInput
 
 	Inquireness prompts.GrillMeInquirenessInput
 

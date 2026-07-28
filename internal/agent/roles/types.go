@@ -53,6 +53,8 @@ const (
 	ValidatorPlanAttemptMeta           ArtifactValidator = "plan_attempt_meta"
 	ValidatorKnowledgeBaseIndex        ArtifactValidator = "knowledge_base_index"
 	ValidatorPhaseMarkdown             ArtifactValidator = "phase_markdown"
+	ValidatorDesignMarkdown            ArtifactValidator = "design_markdown"
+	ValidatorDesignMockupManifest      ArtifactValidator = "design_mockup_manifest"
 	ValidatorRefactorPlanMarkdown      ArtifactValidator = "refactor_plan_markdown"
 	ValidatorReviewFeedback            ArtifactValidator = "review_feedback"
 	ValidatorPlanValidatorAxisApproval ArtifactValidator = "plan_validator_axis_approval"
@@ -261,6 +263,31 @@ func roadmapMarkdownRoleArtifact() RoleArtifactSpec {
 		Description:  "roadmap markdown matching the create-roadmap format contract",
 		ResolvePath:  resolvePlanMarkdownRoleArtifact("roadmap.md"),
 		Validate:     ValidatorRoadmap,
+	}
+}
+
+func designMarkdownRoleArtifact() RoleArtifactSpec {
+	return RoleArtifactSpec{
+		Name:         "design_markdown",
+		DisplayPath:  "design markdown",
+		RootName:     "artifact_dir",
+		RelativePath: "design.md",
+		Presence:     ArtifactRequired,
+		Description:  "final-decision design markdown matching the Design skill contract",
+		Validate:     ValidatorDesignMarkdown,
+	}
+}
+
+func designMockupManifestRoleArtifact() RoleArtifactSpec {
+	return RoleArtifactSpec{
+		Name:         "design_mockup_manifest",
+		DisplayPath:  "mockup manifest",
+		RootName:     "artifact_dir",
+		RelativePath: "mockups/manifest.yaml",
+		Presence:     ArtifactOptional,
+		Condition:    "required for material UI changes",
+		Description:  "versioned manifest for self-contained HTML and rendered PNG mockups",
+		Validate:     ValidatorDesignMockupManifest,
 	}
 }
 

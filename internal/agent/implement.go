@@ -385,7 +385,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// iteration. They communicate intent that text-only phase
 			// plans can't carry; without this they die at Design.
 			if cfg.Feature != nil {
-				if block := visualReferencesSection(cfg.Feature.Images, "implementing this iteration"); block != "" {
+				if block := visualReferencesSectionForFeature(cfg.Feature, cfg.Feature.DesignArtifactPath(), "implementing this iteration"); block != "" {
 					prompt = block + prompt
 				}
 			}

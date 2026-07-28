@@ -301,6 +301,88 @@ func TestOrchestrator_HandleReviewDecision_Iterate_BumpsIterations(t *testing.T)
 	}
 }
 
+func TestOrchestrator_HandleReviewDecision_IterateDesignExtendsDesignBudget(t *testing.T) {
+	researchPath := filepath.Join(t.TempDir(), "research.md")
+	if err := os.WriteFile(researchPath, []byte("# Research\n"), 0o644); err != nil {
+		t.Fatalf("write research artifact: %v", err)
+	}
+	planGate := feature.PhasePlan
+	f := &feature.Feature{
+		ID:                  "feat-rd-design-iter",
+		Status:              feature.StatusDesignNeedsReview,
+		CurrentPhase:        feature.PhaseDesign,
+		Pipeline:            feature.PipelineLarge,
+		PendingReviewPhase:  &planGate,
+		MaxDesignIterations: 0,
+		Artifacts:           map[string]string{feature.ResearchArtifactKey: researchPath},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	if err := o.HandleReviewDecision(f.ID, orchestrator.ReviewDecision{
+		Decision: "iterate",
+		Comment:  "Clarify the event contract.",
+	}); err != nil {
+		t.Fatalf("HandleReviewDecision(): %v", err)
+	}
+
+	if f.MaxDesignIterations != agent.DefaultMaxDesignAttempts+2 {
+		t.Fatalf("MaxDesignIterations = %d, want %d", f.MaxDesignIterations, agent.DefaultMaxDesignAttempts+2)
+	}
+	if f.Status != feature.StatusDesigning || f.CurrentPhase != feature.PhaseDesign {
+		t.Fatalf("Design iteration state = (%s, %s), want Designing/Design", f.Status, f.CurrentPhase)
+	}
+	if f.PendingReviewPhase != nil {
+		t.Fatalf("PendingReviewPhase = %v, want nil", f.PendingReviewPhase)
+	}
+}
+
+func TestOrchestrator_HandleReviewDecision_ProceedDesignCompletesBeforePlanning(t *testing.T) {
+	planGate := feature.PhasePlan
+	f := &feature.Feature{
+		ID:                 "feat-rd-design-proceed",
+		Status:             feature.StatusDesignNeedsReview,
+		CurrentPhase:       feature.PhaseDesign,
+		Pipeline:           feature.PipelineLarge,
+		PendingReviewPhase: &planGate,
+	}
+	lc := lifecycleForFeature(f)
+	lc.CompleteDesignFn = func(string) error {
+		f.Status = feature.StatusPlanReady
+		return nil
+	}
+	lc.StartPlanningFn = func(string) error {
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	_ = o.HandleReviewDecision(f.ID, orchestrator.ReviewDecision{
+		Decision:    "proceed",
+		TargetPhase: feature.PhasePlan,
+	})
+
+	assertLifecycleCall(t, lc, "CompleteDesign")
+	assertLifecycleCall(t, lc, "StartPlanning")
+	completeIndex, startIndex := -1, -1
+	for i, call := range lc.Calls {
+		switch call.Method {
+		case "CompleteDesign":
+			completeIndex = i
+		case "StartPlanning":
+			startIndex = i
+		}
+	}
+	if completeIndex < 0 || startIndex < 0 || completeIndex >= startIndex {
+		t.Fatalf("lifecycle call order = %v; want CompleteDesign before StartPlanning", lifecycleCallNames(lc))
+	}
+	if f.PendingReviewPhase != nil {
+		t.Fatalf("PendingReviewPhase = %v, want nil", f.PendingReviewPhase)
+	}
+}
+
 // Iterate with MaxPlanIterations==0 (the default for fresh features): the
 // effective planning budget at runtime is agent.DefaultMaxPlanAttempts, so
 // "iterate" must promote 0 → DefaultMaxPlanAttempts before adding 3.

@@ -268,7 +268,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		FeedbackPath:           feedbackPath,
 	})
 	if cfg.Feature != nil {
-		if block := visualReferencesSection(cfg.Feature.Images, "reviewing this iteration"); block != "" {
+		if block := visualReferencesSectionForFeature(cfg.Feature, cfg.Feature.DesignArtifactPath(), "reviewing this iteration"); block != "" {
 			reviewPrompt = block + reviewPrompt
 		}
 	}

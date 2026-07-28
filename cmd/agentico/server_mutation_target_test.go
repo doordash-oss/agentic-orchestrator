@@ -678,9 +678,10 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 				Research:       testResearchModelNew,
 				Implementation: testImplementationModelNew,
 			},
-			Inquireness:   testInquirenessHigh,
-			MaxIterations: 8,
-			Checkpoints:   &checkpoints,
+			Inquireness:         testInquirenessHigh,
+			MaxIterations:       8,
+			MaxDesignIterations: 6,
+			Checkpoints:         &checkpoints,
 		},
 	})
 	if err != nil {
@@ -693,7 +694,7 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	if cfg.Defaults.Models.Implementation != testImplementationModelNew {
 		t.Fatalf("in-memory implementation model = %q, want new-implementation", cfg.Defaults.Models.Implementation)
 	}
-	if cfg.Defaults.MaxIterations != 8 || cfg.Defaults.Inquireness != testInquirenessHigh || !cfg.Defaults.Checkpoints.RoadmapReview || !cfg.Defaults.Checkpoints.PhasePlanReview {
+	if cfg.Defaults.MaxIterations != 8 || cfg.Defaults.MaxDesignIterations != 6 || cfg.Defaults.Inquireness != testInquirenessHigh || !cfg.Defaults.Checkpoints.RoadmapReview || !cfg.Defaults.Checkpoints.PhasePlanReview {
 		t.Fatalf("in-memory defaults = %+v, want requested changes", cfg.Defaults)
 	}
 
@@ -704,6 +705,7 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	if loaded.Defaults.Models.Research != testResearchModelNew ||
 		loaded.Defaults.Models.Implementation != testImplementationModelNew ||
 		loaded.Defaults.MaxIterations != 8 ||
+		loaded.Defaults.MaxDesignIterations != 6 ||
 		loaded.Defaults.Inquireness != testInquirenessHigh ||
 		!loaded.Defaults.Checkpoints.RoadmapReview ||
 		!loaded.Defaults.Checkpoints.PhasePlanReview {

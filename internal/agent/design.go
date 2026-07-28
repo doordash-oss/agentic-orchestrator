@@ -45,3 +45,15 @@ func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArt
 		Inquireness: prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
 	})
 }
+
+// BuildDesignRevisionPrompt constructs the autonomous revision prompt used
+// after one or both Design critics request changes.
+func BuildDesignRevisionPrompt(previousDesignPath, mockupManifestPath, criticFeedback string, attempt int) string {
+	return roles.BuildDesignRevisionPrompt(roles.DesignRevisionUserInput{
+		Attempt:            attempt,
+		CriticFeedback:     criticFeedback,
+		PreviousDesignPath: previousDesignPath,
+		MockupManifestPath: mockupManifestPath,
+		Inquireness:        prompts.AutonomousInquirenessInput{},
+	})
+}

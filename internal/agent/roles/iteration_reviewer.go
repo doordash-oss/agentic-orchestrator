@@ -24,6 +24,8 @@ type VerificationItemView struct {
 
 // ReviewUserInput is the data passed to review.user.tmpl.
 type ReviewUserInput struct {
+	VisualReferences prompts.VisualReferencesInput
+
 	Iteration int
 	IterDir   string
 

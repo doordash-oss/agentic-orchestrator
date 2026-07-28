@@ -30,7 +30,7 @@ Explores the problem space by analyzing the codebase and gathering context. The 
 Deep dives into the codebase to understand relevant code paths, existing patterns, and technical constraints. Produces research artifacts that inform planning.
 
 ### Design
-Generates and evaluates implementation approaches. Considers trade-offs, risks, and alternatives before committing to a design direction. (Older docs and persisted state may refer to this phase as "Design" — it is the same phase under its legacy name and continues to load without migration.)
+Produces a final-decision implementation contract from the feature request, Q&A, and research. The author resolves consequential ambiguity with the user, spells out architecture and changed schemas/APIs/events, and separates binding decisions from implementation latitude. An Integrity critic always reviews the artifact; when the design requires UI mockups, the author also produces a self-contained HTML prototype, rendered PNG states, and a manifest, and a Visual critic reviews that bundle. Critic feedback drives bounded revision attempts before approval or human escalation.
 
 ### Plan
 Creates a detailed implementation plan. Uses **two-tier planning**:

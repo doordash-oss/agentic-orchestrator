@@ -25,6 +25,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const defaultMaxDesignIterations = 5
+
 // validKeyboardLayouts defines the set of accepted keyboard_layout values.
 // An empty string means "use default (US) behaviour".
 var validKeyboardLayouts = map[string]bool{
@@ -106,6 +108,7 @@ type DefaultsConfig struct {
 	MaxIterations            int                           `yaml:"max_iterations" json:"max_iterations,omitempty"`
 	MaxConsecutiveFailures   int                           `yaml:"max_consecutive_failures" json:"max_consecutive_failures,omitempty"`
 	MaxConsecutiveNoProgress int                           `yaml:"max_consecutive_no_progress" json:"max_consecutive_no_progress,omitempty"`
+	MaxDesignIterations      int                           `yaml:"max_design_iterations,omitempty" json:"max_design_iterations,omitempty"`
 	MaxPhasePlanIterations   int                           `yaml:"max_phase_plan_iterations,omitempty" json:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              Checkpoints                   `yaml:"checkpoints" json:"checkpoints"`
 	// AutomaticReviewEnabled controls the default-off workspace behavior that
@@ -403,6 +406,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Defaults.MaxConsecutiveNoProgress == 0 {
 		cfg.Defaults.MaxConsecutiveNoProgress = d.Defaults.MaxConsecutiveNoProgress
+	}
+	if cfg.Defaults.MaxDesignIterations == 0 {
+		cfg.Defaults.MaxDesignIterations = defaultMaxDesignIterations
 	}
 	if cfg.Defaults.MaxPhasePlanIterations == 0 {
 		cfg.Defaults.MaxPhasePlanIterations = 10

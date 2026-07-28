@@ -634,10 +634,6 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 	}{
 		{"inquire", feature.PhaseInquire, RoleInquirer, "2026-05-07-inquire.md"},
 		{"research", feature.PhaseResearch, RoleResearcher, "2026-05-07-research.md"},
-		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md"},
-		// Legacy Design role still resolves and validates the same
-		// markdown artifact behavior so older runs continue to complete.
-		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md"},
 	}
 
 	for _, tt := range tests {
@@ -680,8 +676,6 @@ func TestContractRegistryArtifactPhaseRolesReportMissingMarkdown(t *testing.T) {
 	}{
 		{feature.PhaseInquire, RoleInquirer},
 		{feature.PhaseResearch, RoleResearcher},
-		{feature.PhaseDesign, RoleDesigner},
-		{feature.PhaseDesign, RoleDesigner},
 	}
 
 	for _, tt := range tests {
@@ -719,10 +713,14 @@ func TestContractRegistryArtifactPhaseRolesIgnoreExcludedMarkdown(t *testing.T) 
 	}
 }
 
-func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
-	dir := t.TempDir()
-	oldPath := filepath.Join(dir, "old.md")
-	newPath := filepath.Join(dir, "new.md")
+func TestContractRegistryDesignRoleUsesCanonicalMarkdown(t *testing.T) {
+	artifactDir := t.TempDir()
+	attemptDir := filepath.Join(artifactDir, "attempt-01")
+	if err := os.MkdirAll(attemptDir, 0o755); err != nil {
+		t.Fatalf("mkdir attempt dir: %v", err)
+	}
+	oldPath := filepath.Join(artifactDir, "old.md")
+	newPath := filepath.Join(artifactDir, "design.md")
 	if err := os.WriteFile(oldPath, []byte("# old\n"), 0o644); err != nil {
 		t.Fatalf("write old artifact: %v", err)
 	}
@@ -733,8 +731,15 @@ func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
 	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
 		t.Fatalf("chtimes old artifact: %v", err)
 	}
+	if err := WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+		Attempt:      1,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: "VALIDATION_PENDING",
+	}); err != nil {
+		t.Fatalf("WritePlanAttemptMeta(): %v", err)
+	}
 
-	out, violations, err := Validate(feature.PhaseDesign, RoleDesigner, dir)
+	out, violations, err := Validate(feature.PhaseDesign, RoleDesigner, attemptDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -743,6 +748,40 @@ func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
 	}
 	if out.PhaseArtifactPath != newPath {
 		t.Fatalf("PhaseArtifactPath = %q, want %q", out.PhaseArtifactPath, newPath)
+	}
+}
+
+func TestContractRegistryDesignRolesUseSharedArtifactAndAttemptMetadata(t *testing.T) {
+	for _, role := range []Role{RoleDesigner, RoleDesignReviser} {
+		t.Run(string(role), func(t *testing.T) {
+			artifactDir := t.TempDir()
+			attemptDir := filepath.Join(artifactDir, "attempt-01")
+			if err := os.MkdirAll(attemptDir, 0o755); err != nil {
+				t.Fatalf("mkdir attempt dir: %v", err)
+			}
+			designPath := filepath.Join(artifactDir, "design.md")
+			if err := os.WriteFile(designPath, []byte("# Design\n"), 0o644); err != nil {
+				t.Fatalf("write design: %v", err)
+			}
+			if err := WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+				Attempt:      1,
+				AgentStatus:  agentStatusSuccess,
+				ReviewStatus: "VALIDATION_PENDING",
+			}); err != nil {
+				t.Fatalf("WritePlanAttemptMeta(): %v", err)
+			}
+
+			out, violations, err := Validate(feature.PhaseDesign, role, attemptDir)
+			if err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if !out.OK || len(violations) != 0 {
+				t.Fatalf("Validate() = (%+v, %v), want OK", out, violations)
+			}
+			if out.PhaseArtifactPath != designPath {
+				t.Fatalf("PhaseArtifactPath = %q, want %q", out.PhaseArtifactPath, designPath)
+			}
+		})
 	}
 }
 

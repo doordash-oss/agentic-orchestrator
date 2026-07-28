@@ -209,6 +209,22 @@ func (s *phaseSupervisor) supervisePlanLoop(featureID string, resultCh <-chan *a
 	}()
 }
 
+func (s *phaseSupervisor) superviseDesignLoop(featureID string, resultCh <-chan *agent.DesignLoopResult) {
+	if s == nil || resultCh == nil {
+		return
+	}
+	go func() {
+		result, ok := <-resultCh
+		if !ok {
+			return
+		}
+		s.complete(featureID, PhaseCompletionInput{
+			Phase:        feature.PhaseDesign,
+			DesignResult: result,
+		})
+	}()
+}
+
 func (s *phaseSupervisor) superviseImplementationLoop(featureID string, resultCh <-chan *agent.OrchestratorResult) {
 	if s == nil || resultCh == nil {
 		return

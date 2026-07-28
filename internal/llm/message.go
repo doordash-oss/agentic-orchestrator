@@ -238,6 +238,10 @@ type Usage struct {
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	ContextWindow            int `json:"context_window,omitempty"`
+	// CostUSD is the provider's latest cumulative cost snapshot for a running
+	// session. Providers without live cost telemetry leave it zero; their final
+	// ResultMessage remains authoritative.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 
 	// ContextInputTokens is the current context fill (post-compaction)
 	// expressed as input tokens only. Kept for informational purposes;

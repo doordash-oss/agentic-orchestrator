@@ -1033,8 +1033,7 @@ function PreviewMetrics({
   verifying?: boolean;
 }): React.ReactElement {
   const phaseSeconds = phaseMetric(runDetail?.timing?.byPhase, currentPhase, currentRoadmapPhase);
-  const recordedPhaseUsd = phaseMetric(runDetail?.cost?.byPhase, currentPhase, currentRoadmapPhase);
-  const phaseUsd = recordedPhaseUsd ?? (phaseSeconds === undefined ? undefined : 0);
+  const phaseUsd = phaseMetric(runDetail?.cost?.byPhase, currentPhase, currentRoadmapPhase);
   const contextPercentage =
     preview.contextPercentage >= 0
       ? preview.contextPercentage

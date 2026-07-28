@@ -2045,6 +2045,30 @@ func TestLivePreviewIncludesActivePhaseTiming(t *testing.T) {
 	}
 }
 
+func TestLivePreviewSessionIncludesRunningCost(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		id:        "sess-running-cost",
+		featureID: f.ID,
+		runNumber: 1,
+		phase:     feature.PhaseResearch,
+		kind:      ports.KindPhase,
+		status:    ports.SessionRunning,
+		usage:     &llm.Usage{InputTokens: 100, OutputTokens: 20, CostUSD: 0.42},
+	}}}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
+	session := body["session"].(map[string]any)
+	usage := session["usage"].(map[string]any)
+	if got := usage["cost_usd"].(float64); got != 0.42 {
+		t.Fatalf("live session cost_usd = %v; want 0.42", got)
+	}
+}
+
 func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -2948,6 +2972,7 @@ type fakeSessionView struct {
 	pending        []*llm.ControlRequestMessage
 	permCacheScope string
 	contextPct     *int
+	usage          *llm.Usage
 }
 
 func (s *fakeSessionView) ID() string                  { return s.id }
@@ -2984,6 +3009,9 @@ func (s *fakeSessionView) MessageLog() ports.MessageLog {
 func (s *fakeSessionView) Cost() *llm.ResultMessage { return nil }
 func (s *fakeSessionView) LatestUsage() *llm.Usage  { return nil }
 func (s *fakeSessionView) AccumulatedUsage() llm.Usage {
+	if s.usage != nil {
+		return *s.usage
+	}
 	return llm.Usage{InputTokens: 10, OutputTokens: 5}
 }
 func (s *fakeSessionView) LastControlRequest() *llm.ControlRequestMessage {

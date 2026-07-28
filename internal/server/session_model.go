@@ -284,22 +284,19 @@ func (h *apiHandler) getSession(sessionID string) ports.SessionView {
 }
 
 func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
-	usage := sess.AccumulatedUsage()
+	accumulatedUsage := sess.AccumulatedUsage()
+	usage := accumulatedUsage
 	if latest := sess.LatestUsage(); latest != nil {
 		usage = *latest
 	}
-	cost := 0.0
+	cost := accumulatedUsage.CostUSD
 	if result := sess.Cost(); result != nil {
 		cost = result.TotalCostUSD
-	}
-	runNumber := 0
-	if runSession, ok := sess.(interface{ RunNumber() int }); ok {
-		runNumber = runSession.RunNumber()
 	}
 	return SessionSummaryDTO{
 		ID:           sess.ID(),
 		FeatureID:    sess.FeatureID(),
-		RunNumber:    runNumber,
+		RunNumber:    sessionRunNumber(sess),
 		Phase:        sess.Phase().String(),
 		Repo:         sess.RepoName(),
 		Kind:         sess.Kind().String(),
@@ -319,6 +316,13 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 			CostUSD:      cost,
 		},
 	}
+}
+
+func sessionRunNumber(sess ports.SessionView) int {
+	if runSession, ok := sess.(interface{ RunNumber() int }); ok {
+		return runSession.RunNumber()
+	}
+	return 0
 }
 
 func sessionDetailFromSummary(summary SessionSummaryDTO) SessionDetailDTO {

@@ -105,6 +105,9 @@ func TestUsageUpdateCarriesContextAndCost(t *testing.T) {
 	if u.ContextBaseline != 0 {
 		t.Fatalf("context baseline = %d, want 0 (OpenCode has no fixed overhead)", u.ContextBaseline)
 	}
+	if u.CostUSD != 0.0425 {
+		t.Fatalf("running cost = %v, want 0.0425", u.CostUSD)
+	}
 
 	// The cost rides through to the terminal result's TotalCostUSD.
 	r := terminalResult(t, mustParse(t, p, promptResultLine(t, promptID, "end_turn", nil)))

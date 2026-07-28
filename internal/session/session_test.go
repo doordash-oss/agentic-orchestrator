@@ -2203,6 +2203,7 @@ type usageUpdateLine struct {
 	ContextTotalTokens int     `json:"context_total_tokens,omitempty"`
 	ContextBaseline    int     `json:"context_baseline,omitempty"`
 	ContextWindow      int     `json:"context_window,omitempty"`
+	CostUSD            float64 `json:"cost_usd,omitempty"`
 	Subtype            string  `json:"subtype,omitempty"`
 	SessionID          string  `json:"session_id,omitempty"`
 	TotalCostUSD       float64 `json:"total_cost_usd,omitempty"`
@@ -2239,6 +2240,7 @@ func (p *usageUpdateProtocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 				ContextTotalTokens: raw.ContextTotalTokens,
 				ContextBaseline:    raw.ContextBaseline,
 				ContextWindow:      raw.ContextWindow,
+				CostUSD:            raw.CostUSD,
 			},
 		}}, nil
 	case "result":
@@ -2262,9 +2264,9 @@ func TestAccumulatedUsageCodexSETSemantics(t *testing.T) {
 	s := NewSession("codex-usage-test", "feat-1", feature.PhaseImplement)
 	s.protocol = &usageUpdateProtocol{sid: "codex-test"}
 	runSessionWithStdoutLines(t, s, []string{
-		`{"type":"usage_update","input_tokens":100,"output_tokens":50}`,
-		`{"type":"usage_update","input_tokens":250,"output_tokens":120}`,
-		`{"type":"usage_update","input_tokens":400,"output_tokens":200}`,
+		`{"type":"usage_update","input_tokens":100,"output_tokens":50,"cost_usd":0.01}`,
+		`{"type":"usage_update","input_tokens":250,"output_tokens":120,"cost_usd":0.03}`,
+		`{"type":"usage_update","input_tokens":400,"output_tokens":200,"cost_usd":0.05}`,
 		`{"type":"result","subtype":"success","session_id":"codex-test","total_cost_usd":0.05}`,
 	}, nil)
 
@@ -2276,6 +2278,9 @@ func TestAccumulatedUsageCodexSETSemantics(t *testing.T) {
 	}
 	if got.OutputTokens != 200 {
 		t.Errorf("AccumulatedUsage().OutputTokens = %d, want 200 (SET semantics, not sum 370)", got.OutputTokens)
+	}
+	if got.CostUSD != 0.05 {
+		t.Errorf("AccumulatedUsage().CostUSD = %v, want 0.05 (latest cumulative snapshot)", got.CostUSD)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
@@ -110,6 +111,7 @@ func (h *apiHandler) handleRunDetail(w http.ResponseWriter, r *http.Request, fea
 		return
 	}
 	detail := runDetailFromRun(run)
+	detail.Cost = h.runCostWithActiveSessions(featureID, run)
 	revision := revisionForAny(detail)
 	h.writeRevisionedJSON(w, r, revision, RunDetailResponse{
 		APIVersion: APIVersion,
@@ -278,6 +280,35 @@ func runCostDTO(run *feature.Run) CostDTO {
 		total += cost
 	}
 	return CostDTO{TotalUSD: total, ByPhase: byPhase}
+}
+
+// runCostWithActiveSessions overlays provider-reported cumulative cost for
+// sessions that are still active in this run. Completed session costs are
+// already in Run.PhaseCosts, so excluding them prevents double counting.
+func (h *apiHandler) runCostWithActiveSessions(featureID string, run *feature.Run) CostDTO {
+	cost := runCostDTO(run)
+	if h.sessions == nil || run == nil {
+		return cost
+	}
+	phaseKey := strings.TrimSpace(run.ActiveTimingKey)
+	if phaseKey == "" {
+		return cost
+	}
+	for _, sess := range h.sessions.ActiveSessions() {
+		if sess == nil || sess.FeatureID() != featureID || sessionRunNumber(sess) != run.RunNumber {
+			continue
+		}
+		runningCost := sess.AccumulatedUsage().CostUSD
+		if result := sess.Cost(); result != nil && result.TotalCostUSD > runningCost {
+			runningCost = result.TotalCostUSD
+		}
+		if runningCost <= 0 {
+			continue
+		}
+		cost.ByPhase[phaseKey] += runningCost
+		cost.TotalUSD += runningCost
+	}
+	return cost
 }
 
 func parseIntQuery(r *http.Request, name string, fallback int) (int, bool) {

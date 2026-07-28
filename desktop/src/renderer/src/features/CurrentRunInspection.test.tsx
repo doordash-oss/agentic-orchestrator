@@ -564,7 +564,7 @@ describe('CurrentRunInspection', () => {
     );
   });
 
-  it('shows zero accumulated cost when an active phase has not finalized a session', async () => {
+  it('keeps phase cost unavailable until the server reports persisted or running cost', async () => {
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
@@ -594,7 +594,9 @@ describe('CurrentRunInspection', () => {
     );
 
     expect(await screen.findByText('15s')).toBeVisible();
-    expect(screen.getByText('$0.00')).toBeVisible();
+    const metrics = screen.getByText('Phase cost').closest('div');
+    expect(metrics).toHaveTextContent('—');
+    expect(metrics).not.toHaveTextContent('$0.00');
   });
 
   it('refreshes run metrics when the active phase changes', async () => {

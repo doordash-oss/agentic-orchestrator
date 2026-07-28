@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -230,6 +231,43 @@ func TestRunDetailIsRunAuthenticWithProvenance(t *testing.T) {
 	cost := run["cost"].(map[string]any)
 	if got := cost["total_usd"].(float64); got != 1.5 {
 		t.Fatalf("cost total_usd = %v; want 1.5", got)
+	}
+}
+
+func TestActiveRunDetailIncludesRunningSessionCostWithoutCountingCompletedSessions(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t)
+	if err := store.Modify(f.ID, func(current *feature.Feature) error {
+		current.PhaseCosts = map[string]float64{"research": 1.5}
+		current.ActiveTimingKey = "research"
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify() error = %v", err)
+	}
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id: "sess-running-cost", featureID: f.ID, runNumber: 1,
+			phase: feature.PhaseResearch, kind: ports.KindPhase, status: ports.SessionRunning,
+			usage: &llm.Usage{CostUSD: 0.42},
+		},
+		&fakeSessionView{
+			id: "sess-completed-cost", featureID: f.ID, runNumber: 1,
+			phase: feature.PhaseResearch, kind: ports.KindPhase, status: ports.SessionDone,
+			usage: &llm.Usage{CostUSD: 1.5},
+		},
+	}}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1")
+	cost := body["run"].(map[string]any)["cost"].(map[string]any)
+	if got := cost["total_usd"].(float64); got != 1.92 {
+		t.Fatalf("cost total_usd = %v; want 1.92", got)
+	}
+	byPhase := cost["by_phase"].(map[string]any)
+	if got := byPhase["research"].(float64); got != 1.92 {
+		t.Fatalf("research cost = %v; want 1.92", got)
 	}
 }
 

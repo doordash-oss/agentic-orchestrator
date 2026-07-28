@@ -1262,6 +1262,7 @@ func (p *Protocol) usageLocked() llm.Usage {
 		ContextTotalTokens:       contextFill,
 		ContextWindow:            p.contextWindow,
 		ContextBaseline:          0,
+		CostUSD:                  p.costUSD,
 	}
 }
 

@@ -1060,6 +1060,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				s.mu.Lock()
 				s.accumulatedUsage.InputTokens = msg.UsageUpdate.InputTokens
 				s.accumulatedUsage.OutputTokens = msg.UsageUpdate.OutputTokens
+				s.accumulatedUsage.CostUSD = msg.UsageUpdate.CostUSD
 				if msg.UsageUpdate.CacheReadInputTokens > 0 {
 					s.accumulatedUsage.CacheReadInputTokens = msg.UsageUpdate.CacheReadInputTokens
 				}

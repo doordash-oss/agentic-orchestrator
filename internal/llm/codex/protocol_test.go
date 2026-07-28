@@ -1339,8 +1339,16 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := p.parseNotification("thread/tokenUsage/updated", params); !ok {
+	usageMsg, ok := p.parseNotification("thread/tokenUsage/updated", params)
+	if !ok {
 		t.Fatal("token usage notification ok = false, want true")
+	}
+	const want = 10.90 // Long context: 600K at $10/M + 400K cached at $1/M + 100K output at $45/M
+	if usageMsg.UsageUpdate == nil {
+		t.Fatal("usage notification UsageUpdate = nil")
+	}
+	if diff := usageMsg.UsageUpdate.CostUSD - want; diff < -0.001 || diff > 0.001 {
+		t.Fatalf("running CostUSD = %.6f, want %.2f", usageMsg.UsageUpdate.CostUSD, want)
 	}
 
 	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
@@ -1350,7 +1358,6 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	if msg.Result == nil {
 		t.Fatal("Result = nil")
 	}
-	const want = 10.90 // Long context: 600K at $10/M + 400K cached at $1/M + 100K output at $45/M
 	if diff := msg.Result.TotalCostUSD - want; diff < -0.001 || diff > 0.001 {
 		t.Fatalf("TotalCostUSD = %.6f, want %.2f", msg.Result.TotalCostUSD, want)
 	}

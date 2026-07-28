@@ -1148,6 +1148,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.modelContextWindow = *usage.TokenUsage.ModelContextWindow
 		}
 		ctxWindow := p.modelContextWindow
+		costUSD := p.totalCostUSD
 		p.mu.Unlock()
 
 		// Surface as synthetic SDKMessage so session layer can accumulate.
@@ -1167,6 +1168,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				ContextTotalTokens:   usage.TokenUsage.Last.TotalTokens,
 				ContextBaseline:      codexContextBaselineTokens,
 				ContextWindow:        ctxWindow,
+				CostUSD:              costUSD,
 			},
 		}, true
 

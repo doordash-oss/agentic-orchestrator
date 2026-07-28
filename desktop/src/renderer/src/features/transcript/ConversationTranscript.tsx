@@ -257,6 +257,11 @@ export function ConversationTranscript({
           >
             <p>{item.text}</p>
           </article>
+        ) : item.kind === 'status' ? (
+          <article key={item.key} className="conversation__status" role="status">
+            <span aria-hidden="true">✓</span>
+            <p>{item.text}</p>
+          </article>
         ) : item.kind === 'file-change' ? (
           <FileChangeCard key={item.key} change={item.change} />
         ) : item.kind === 'subagents' ? (

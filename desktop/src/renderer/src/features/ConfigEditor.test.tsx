@@ -44,6 +44,7 @@ const SNAPSHOT: FeatureConfigSnapshot = {
     },
     pipeline: 'large',
     inputNotifications: 'default',
+    automaticReviewMode: 'default',
   },
   defaults: {
     models: { implementation: 'claude:sonnet' },
@@ -60,6 +61,7 @@ const SNAPSHOT: FeatureConfigSnapshot = {
     },
     pipeline: 'large',
     inputNotifications: 'default',
+    automaticReviewMode: 'default',
   },
   manualPublishAvailable: true,
 };
@@ -137,6 +139,26 @@ describe('FeatureConfigPanel', () => {
       },
     });
     await screen.findByText(/Saved\./);
+  });
+
+  it('edits the feature automatic-review override', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);
+    mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
+    mock.api.updateFeatureConfig.mockResolvedValue(SNAPSHOT);
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+
+    const picker = await screen.findByLabelText('Automatic review');
+    expect(picker).toHaveValue('default');
+    await user.selectOptions(picker, 'enabled');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mock.api.updateFeatureConfig).toHaveBeenCalledTimes(1));
+    expect(mock.api.updateFeatureConfig).toHaveBeenCalledWith({
+      featureId: 'feat-1',
+      config: expect.objectContaining({ automaticReviewMode: 'enabled' }),
+    });
   });
 
   it('pairs each model with capability-aware effort and resets incompatible choices', async () => {
@@ -261,9 +283,39 @@ const DEFAULTS: WorkspaceDefaults = {
   checkpoints: SNAPSHOT.current.checkpoints,
   pipeline: 'large',
   muteFeatureInput: false,
+  automaticReviewEnabled: false,
 };
 
 describe('WorkspaceDefaultsPanel', () => {
+  it('configures the automatic-review toggle and reviewer model independently', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getWorkspaceDefaults.mockResolvedValue(DEFAULTS);
+    mock.api.getModelCatalogue.mockResolvedValue({
+      ...CATALOGUE,
+      phaseProviderModels: {
+        ...CATALOGUE.phaseProviderModels,
+        automatic_review: { claude: ['sonnet'], codex: ['gpt-a'] },
+      },
+    });
+    mock.api.updateWorkspaceDefaults.mockResolvedValue(DEFAULTS);
+    render(<WorkspaceDefaultsPanel />);
+    const user = userEvent.setup();
+
+    const reviewer = await screen.findByLabelText('Automatic review model');
+    expect(within(reviewer).getByRole('option', { name: /Automatic/ })).toBeVisible();
+    await user.selectOptions(reviewer, 'claude:sonnet');
+    await user.selectOptions(screen.getByLabelText('Automatic review'), 'enabled');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mock.api.updateWorkspaceDefaults).toHaveBeenCalledTimes(1));
+    expect(mock.api.updateWorkspaceDefaults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        automaticReviewEnabled: true,
+        models: expect.objectContaining({ automaticReview: 'claude:sonnet' }),
+      }),
+    );
+  });
+
   it('isolates its inquireness radio group from other config editors', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);

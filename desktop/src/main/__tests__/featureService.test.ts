@@ -60,6 +60,7 @@ function detailBody(overrides: Record<string, unknown> = {}): Record<string, unk
       checkpoints: {},
       progress: {},
       models: {},
+      automatic_review: { mode: 'default', enabled: true, source: 'global' },
       historical_runs: [],
       repo_status: [],
       timing: { total_seconds: 0, by_phase: {} },
@@ -452,6 +453,11 @@ describe('FeatureService.getFeature', () => {
       reviewFixing: false,
       validatingPlan: false,
       validatorStatuses: {},
+    });
+    expect(Reflect.get(snapshot, 'automaticReview')).toEqual({
+      mode: 'default',
+      enabled: true,
+      source: 'global',
     });
     expect(snapshot.actions).toEqual([
       {

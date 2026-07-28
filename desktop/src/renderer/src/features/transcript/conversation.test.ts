@@ -62,6 +62,35 @@ describe('activityLabel', () => {
 });
 
 describe('buildConversation', () => {
+  it('keeps automatic-review status records visible in transcript order', () => {
+    const items = buildConversation([
+      row({ index: 0, type: 'text', text: 'Running the focused test.' }),
+      row({
+        index: 1,
+        role: 'system',
+        type: 'status',
+        text: 'Auto-approved Bash: go test ./internal/permission',
+        locallyAppended: true,
+      }),
+      row({ index: 2, type: 'tool_use', tool: 'Bash' }),
+    ]);
+
+    expect(items).toEqual([
+      {
+        kind: 'message',
+        key: 'message-0:0',
+        role: 'assistant',
+        text: 'Running the focused test.',
+      },
+      {
+        kind: 'status',
+        key: 'status-1:0',
+        text: 'Auto-approved Bash: go test ./internal/permission',
+      },
+      { kind: 'activity', key: 'activity-2:0', labels: ['Using bash'] },
+    ]);
+  });
+
   it('renders assistant text and hides system/usage rows', () => {
     const items = buildConversation([
       row({ index: 0, type: 'usage_update' }),

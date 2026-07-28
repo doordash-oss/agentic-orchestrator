@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import type {
+  AutomaticReviewMode,
   Checkpoints,
   EffortLevel,
   FeatureConfig,
@@ -27,13 +28,26 @@ import { parseIpcError } from '../wizard/ipcError';
 
 export type PhaseKey = keyof PhaseModels;
 
+type PhaseField =
+  | {
+      key: keyof PhaseEffort;
+      label: string;
+      role: string;
+      hint: string;
+      workspaceOnly?: boolean;
+      supportsEffort?: true;
+    }
+  | {
+      key: 'automaticReview';
+      label: string;
+      role: string;
+      hint: string;
+      workspaceOnly: true;
+      supportsEffort: false;
+    };
+
 /** Display order and catalogue-role mapping for the per-phase model rows. */
-export const PHASE_FIELDS: ReadonlyArray<{
-  key: PhaseKey;
-  label: string;
-  role: string;
-  hint: string;
-}> = [
+export const PHASE_FIELDS: ReadonlyArray<PhaseField> = [
   { key: 'inquiry', label: 'Clarify', role: 'inquiry', hint: 'Planning questions and intake' },
   { key: 'research', label: 'Research', role: 'research', hint: 'Codebase and context research' },
   { key: 'planning', label: 'Planning', role: 'planning', hint: 'Roadmaps and phase plans' },
@@ -46,6 +60,14 @@ export const PHASE_FIELDS: ReadonlyArray<{
   { key: 'review', label: 'Review', role: 'review', hint: 'Reviewing implementation output' },
   { key: 'utilities', label: 'Utilities', role: 'chat', hint: 'Chat and workspace utilities' },
   { key: 'kbBuild', label: 'KB Build', role: 'kb_build', hint: 'Knowledge base construction' },
+  {
+    key: 'automaticReview',
+    label: 'Automatic review',
+    role: 'automatic_review',
+    hint: 'Reviewer for unresolved Bash permission requests',
+    workspaceOnly: true,
+    supportsEffort: false,
+  },
 ];
 
 const INQUIRENESS_OPTIONS: ReadonlyArray<{
@@ -155,6 +177,7 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
   const canonicalValues = new Set(
     groups.flatMap((g) => g.ids.map((id) => selectionValue(catalogue, g.provider, id))),
   );
+  const automaticReviewer = field.key === 'automaticReview';
   const effectiveDefault = defaultModel === '' ? 'server default' : defaultModel;
   const defaultUnavailable =
     catalogue !== null &&
@@ -176,8 +199,14 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
         onChange={(event) => onChange(event.target.value)}
       >
         <option value="">
-          Default — {effectiveDefault}
-          {defaultUnavailable ? ' (unavailable)' : ''}
+          {automaticReviewer ? (
+            <>Automatic — Claude → OpenCode → Codex</>
+          ) : (
+            <>
+              Default — {effectiveDefault}
+              {defaultUnavailable ? ' (unavailable)' : ''}
+            </>
+          )}
         </option>
         {value !== '' && !canonicalValues.has(value) ? (
           <option value={value}>
@@ -351,8 +380,14 @@ interface ConfigFormProps {
   showUtilities: boolean;
   manualPublishAvailable: boolean;
   inputAlerts: { value: string; options: ReadonlyArray<{ value: string; label: string }> };
+  automaticReview: {
+    value: string;
+    hint: string;
+    options: ReadonlyArray<{ value: string; label: string }>;
+  };
   onChange(next: ConfigFormValue): void;
   onInputAlertsChange(value: string): void;
+  onAutomaticReviewChange(value: string): void;
 }
 
 function ConfigForm({
@@ -363,11 +398,14 @@ function ConfigForm({
   showUtilities,
   manualPublishAvailable,
   inputAlerts,
+  automaticReview,
   onChange,
   onInputAlertsChange,
+  onAutomaticReviewChange,
 }: ConfigFormProps) {
   const inquirenessName = useId();
   const phaseFields = PHASE_FIELDS.filter((field) => {
+    if (field.workspaceOnly === true) return showUtilities;
     if (pipeline === 'medium') {
       return field.key === 'planning' || field.key === 'implementation' || field.key === 'review';
     }
@@ -392,33 +430,49 @@ function ConfigForm({
         <p className="config-editor__group-desc">
           Choose the model for each phase. Default uses the workspace model for that phase.
         </p>
-        {phaseFields.map((field) => (
-          <ModelEffortRow
-            key={field.key}
-            field={field}
-            modelValue={value.models[field.key] ?? ''}
-            defaultModel={defaults[field.key] ?? ''}
-            effortValue={value.effort[field.key]}
-            catalogue={catalogue}
-            pipeline={pipeline}
-            onModelChange={(model, resetEffort) =>
-              onChange({
-                ...value,
-                models: { ...value.models, [field.key]: model === '' ? undefined : model },
-                effort:
-                  resetEffort === undefined
-                    ? value.effort
-                    : { ...value.effort, [field.key]: resetEffort },
-              })
-            }
-            onEffortChange={(effort) =>
-              onChange({
-                ...value,
-                effort: { ...value.effort, [field.key]: effort },
-              })
-            }
-          />
-        ))}
+        {phaseFields.map((field) =>
+          field.supportsEffort === false ? (
+            <ModelPicker
+              key={field.key}
+              field={field}
+              value={value.models[field.key] ?? ''}
+              defaultModel={defaults[field.key] ?? ''}
+              catalogue={catalogue}
+              onChange={(model) =>
+                onChange({
+                  ...value,
+                  models: { ...value.models, [field.key]: model === '' ? undefined : model },
+                })
+              }
+            />
+          ) : (
+            <ModelEffortRow
+              key={field.key}
+              field={field}
+              modelValue={value.models[field.key] ?? ''}
+              defaultModel={defaults[field.key] ?? ''}
+              effortValue={value.effort[field.key]}
+              catalogue={catalogue}
+              pipeline={pipeline}
+              onModelChange={(model, resetEffort) =>
+                onChange({
+                  ...value,
+                  models: { ...value.models, [field.key]: model === '' ? undefined : model },
+                  effort:
+                    resetEffort === undefined
+                      ? value.effort
+                      : { ...value.effort, [field.key]: resetEffort },
+                })
+              }
+              onEffortChange={(effort) =>
+                onChange({
+                  ...value,
+                  effort: { ...value.effort, [field.key]: effort },
+                })
+              }
+            />
+          ),
+        )}
       </fieldset>
 
       <fieldset className="config-editor__group">
@@ -459,6 +513,22 @@ function ConfigForm({
             onChange={(event) => onInputAlertsChange(event.target.value)}
           >
             {inputAlerts.options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="config-editor__row">
+          <span className="config-editor__row-label">Automatic review</span>
+          <span className="config-editor__row-hint">{automaticReview.hint}</span>
+          <select
+            className="config-editor__select"
+            aria-label="Automatic review"
+            value={automaticReview.value}
+            onChange={(event) => onAutomaticReviewChange(event.target.value)}
+          >
+            {automaticReview.options.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -562,6 +632,12 @@ const FEATURE_ALERT_OPTIONS = [
   { value: 'default', label: 'Workspace default' },
   { value: 'enabled', label: 'Enabled' },
   { value: 'muted', label: 'Muted' },
+] as const;
+
+const FEATURE_AUTOMATIC_REVIEW_OPTIONS = [
+  { value: 'default', label: 'Workspace default' },
+  { value: 'enabled', label: 'Enabled' },
+  { value: 'disabled', label: 'Disabled' },
 ] as const;
 
 export function FeatureConfigPanel({ featureId }: { featureId: string }) {
@@ -668,9 +744,17 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
         showUtilities={false}
         manualPublishAvailable={manualPublishAvailable}
         inputAlerts={{ value: draft.inputNotifications, options: FEATURE_ALERT_OPTIONS }}
+        automaticReview={{
+          value: draft.automaticReviewMode,
+          hint: 'Override the workspace default for new sessions in this feature',
+          options: FEATURE_AUTOMATIC_REVIEW_OPTIONS,
+        }}
         onChange={(next) => setDraft({ ...draft, ...next })}
         onInputAlertsChange={(mode) =>
           setDraft({ ...draft, inputNotifications: mode as InputNotificationsMode })
+        }
+        onAutomaticReviewChange={(mode) =>
+          setDraft({ ...draft, automaticReviewMode: mode as AutomaticReviewMode })
         }
       />
       <SaveBar
@@ -689,6 +773,11 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
 const WORKSPACE_ALERT_OPTIONS = [
   { value: 'enabled', label: 'Enabled' },
   { value: 'muted', label: 'Muted' },
+] as const;
+
+const WORKSPACE_AUTOMATIC_REVIEW_OPTIONS = [
+  { value: 'disabled', label: 'Disabled' },
+  { value: 'enabled', label: 'Enabled' },
 ] as const;
 
 export function WorkspaceDefaultsPanel() {
@@ -776,8 +865,16 @@ export function WorkspaceDefaultsPanel() {
           value: draft.muteFeatureInput ? 'muted' : 'enabled',
           options: WORKSPACE_ALERT_OPTIONS,
         }}
+        automaticReview={{
+          value: draft.automaticReviewEnabled ? 'enabled' : 'disabled',
+          hint: 'Automatically review unresolved Bash requests for new sessions',
+          options: WORKSPACE_AUTOMATIC_REVIEW_OPTIONS,
+        }}
         onChange={(next) => setDraft({ ...draft, ...next })}
         onInputAlertsChange={(mode) => setDraft({ ...draft, muteFeatureInput: mode === 'muted' })}
+        onAutomaticReviewChange={(mode) =>
+          setDraft({ ...draft, automaticReviewEnabled: mode === 'enabled' })
+        }
       />
       <SaveBar
         dirty={dirty}

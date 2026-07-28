@@ -442,6 +442,11 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     })
     .optional(),
   actions: z.array(ServerActionSchema),
+  automatic_review: z.object({
+    mode: z.enum(['default', 'enabled', 'disabled']),
+    enabled: z.boolean(),
+    source: z.enum(['global', 'feature']),
+  }),
   repo_status: z.array(ServerRepoStatusSchema).optional(),
   cycle: ServerCycleSchema.optional(),
   review_gate: z.object({

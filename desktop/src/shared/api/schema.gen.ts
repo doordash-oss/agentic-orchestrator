@@ -1451,6 +1451,7 @@ export interface components {
             inquireness?: string;
             pipeline?: string;
             checkpoints: unknown;
+            automatic_review_enabled?: boolean;
         };
         NotificationConfig: {
             mute_feature_input: boolean;
@@ -1469,6 +1470,15 @@ export interface components {
             pipeline?: string;
             /** @enum {string} */
             input_notifications?: "default" | "enabled" | "muted";
+            /** @enum {string} */
+            automatic_review_mode?: "default" | "enabled" | "disabled";
+        };
+        AutomaticReviewState: {
+            /** @enum {string} */
+            mode: "default" | "enabled" | "disabled";
+            enabled: boolean;
+            /** @enum {string} */
+            source: "global" | "feature";
         };
         EffortConfig: {
             inquiry?: string;
@@ -1659,6 +1669,7 @@ export interface components {
             review?: string;
             utilities?: string;
             kb_build?: string;
+            automatic_review?: string;
         };
         Timing: {
             /** Format: int64 */
@@ -1794,6 +1805,7 @@ export interface components {
             wait_reason?: string;
             pipeline?: string;
             models: components["schemas"]["ModelDefaults"];
+            automatic_review: components["schemas"]["AutomaticReviewState"];
             active_run_detail?: components["schemas"]["RunSummary"];
             historical_runs: components["schemas"]["RunSummary"][];
             repo_status: components["schemas"]["RepoStatus"][];

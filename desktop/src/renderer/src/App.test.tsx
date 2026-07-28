@@ -38,6 +38,7 @@ const WORKSPACE_DEFAULTS: WorkspaceDefaults = {
   },
   pipeline: 'large',
   muteFeatureInput: false,
+  automaticReviewEnabled: false,
 };
 
 beforeEach(() => {

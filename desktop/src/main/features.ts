@@ -501,6 +501,11 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       feature.active_run_detail?.phase_status ?? feature.progress.current_phase_status,
     ),
     ...(setup === null ? {} : { setup }),
+    automaticReview: {
+      mode: feature.automatic_review.mode,
+      enabled: feature.automatic_review.enabled,
+      source: feature.automatic_review.source,
+    },
     actions: (feature.actions ?? []).map((action) => ({
       id: action.id,
       enabled: action.enabled,

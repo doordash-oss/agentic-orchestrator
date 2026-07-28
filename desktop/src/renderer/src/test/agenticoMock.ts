@@ -123,6 +123,11 @@ export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): Featu
     repos: ['repo-a'],
     createdAt: '2026-07-14T10:00:00Z',
     activeRun: 1,
+    automaticReview: {
+      mode: 'default',
+      enabled: true,
+      source: 'global',
+    },
     reviewGate: {
       reviewingGate: false,
       reviewFixing: false,

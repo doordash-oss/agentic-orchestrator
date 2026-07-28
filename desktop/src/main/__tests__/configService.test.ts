@@ -31,6 +31,81 @@ const checkpoints = {
 };
 
 describe('ConfigService effort routing', () => {
+  it('round-trips the feature automatic-review override and reviewer model', async () => {
+    const featureConfig = {
+      api_version: 'v1',
+      feature_id: 'feat-1',
+      current: {
+        models: { automatic_review: 'claude:haiku' },
+        inquireness: 'medium',
+        checkpoints,
+        automatic_review_mode: 'enabled',
+      },
+      defaults: {
+        models: { automatic_review: '' },
+        inquireness: 'medium',
+        checkpoints,
+        automatic_review_mode: 'default',
+      },
+      publishability: { manual_publish: true },
+    };
+    const { service, calls } = makeService((_path, init) =>
+      init?.method === 'POST'
+        ? { status: 200, body: { api_version: 'v1' } }
+        : { status: 200, body: featureConfig },
+    );
+
+    const snapshot = await service.getFeatureConfig('feat-1');
+    expect(Reflect.get(snapshot.current, 'automaticReviewMode')).toBe('enabled');
+    expect(Reflect.get(snapshot.current.models, 'automaticReview')).toBe('claude:haiku');
+
+    const config = Object.assign({}, snapshot.current, { automaticReviewMode: 'disabled' });
+    await service.updateFeatureConfig({ featureId: 'feat-1', config });
+    expect(calls[1]?.init?.body).toEqual(
+      expect.objectContaining({
+        automatic_review_mode: 'disabled',
+        models: expect.objectContaining({ automatic_review: 'claude:haiku' }),
+      }),
+    );
+  });
+
+  it('round-trips workspace automatic-review enablement and reviewer selection', async () => {
+    const runtimeConfig = {
+      api_version: 'v1',
+      feature_defaults: {
+        models: { automatic_review: 'opencode:anthropic/claude-haiku' },
+        inquireness: 'medium',
+        checkpoints,
+        pipeline: 'large',
+        automatic_review_enabled: true,
+      },
+      notifications: { mute_feature_input: false },
+    };
+    const { service, calls } = makeService((_path, init) =>
+      init?.method === 'PATCH'
+        ? { status: 200, body: { api_version: 'v1' } }
+        : { status: 200, body: runtimeConfig },
+    );
+
+    const defaults = await service.getWorkspaceDefaults();
+    expect(Reflect.get(defaults, 'automaticReviewEnabled')).toBe(true);
+    expect(Reflect.get(defaults.models, 'automaticReview')).toBe('opencode:anthropic/claude-haiku');
+
+    await service.updateWorkspaceDefaults(
+      Object.assign({}, defaults, { automaticReviewEnabled: false }),
+    );
+    expect(calls[1]?.init?.body).toEqual(
+      expect.objectContaining({
+        defaults: expect.objectContaining({
+          automatic_review_enabled: false,
+          models: expect.objectContaining({
+            automatic_review: 'opencode:anthropic/claude-haiku',
+          }),
+        }),
+      }),
+    );
+  });
+
   it('round-trips per-phase effort through feature config updates', async () => {
     const featureConfig = {
       api_version: 'v1',

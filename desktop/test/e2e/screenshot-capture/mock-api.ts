@@ -48,7 +48,14 @@ const DEMO_FEATURE_CONFIG = {
   },
   pipeline: 'large',
   inputNotifications: 'default' as const,
+  automaticReviewMode: 'default' as const,
 };
+
+const AUTOMATIC_REVIEW = {
+  mode: 'default',
+  enabled: true,
+  source: 'global',
+} as const;
 
 const SEALED_RUNS: RunSummaryView[] = [
   {
@@ -314,6 +321,7 @@ const FEATURE_SNAPSHOT: FeatureSnapshot = {
   repos: ['signal-lab', 'orchestrator-core'],
   createdAt: '2026-07-14T10:00:00Z',
   activeRun: 8,
+  automaticReview: AUTOMATIC_REVIEW,
   reviewGate: {
     reviewingGate: true,
     reviewFixing: false,
@@ -358,6 +366,7 @@ function flightSnapshot(
     repos,
     createdAt,
     activeRun: 1,
+    automaticReview: AUTOMATIC_REVIEW,
     reviewGate: {
       reviewingGate: false,
       reviewFixing: false,
@@ -472,6 +481,7 @@ const CYCLES_FEATURE_SNAPSHOT: FeatureSnapshot = {
   repos: ['signal-lab', 'orchestrator-core'],
   createdAt: '2026-07-14T10:00:00Z',
   activeRun: 8,
+  automaticReview: AUTOMATIC_REVIEW,
   reviewGate: {
     reviewingGate: false,
     reviewFixing: false,
@@ -1245,6 +1255,7 @@ function makeMockApi(
         checkpoints: DEMO_FEATURE_CONFIG.checkpoints,
         pipeline: 'large',
         muteFeatureInput: false,
+        automaticReviewEnabled: true,
       }),
     updateWorkspaceDefaults: () => Promise.reject(new Error('unused')),
     getModelCatalogue: () =>

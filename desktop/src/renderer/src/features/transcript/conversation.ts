@@ -27,6 +27,7 @@ export type ConversationItem =
       key: string;
       text: string;
     }
+  | { kind: 'status'; key: string; text: string }
   | {
       kind: 'file-change';
       key: string;
@@ -147,6 +148,7 @@ export function buildConversation(
     }
 
     const role = entry.role.toLocaleLowerCase();
+    const type = entry.type.toLocaleLowerCase();
     const text = entry.text?.trim();
     if (entry.autoPicked === true && role === 'user' && text !== undefined && text !== '') {
       items.push({
@@ -154,6 +156,10 @@ export function buildConversation(
         key: `auto-pick-${messageKey(entry)}`,
         text: `Option ${autoPickOptionNumber(entry.autoPickQuestion, text)}: ${text}`,
       });
+      continue;
+    }
+    if (type === 'status' && text !== undefined && text !== '') {
+      items.push({ kind: 'status', key: `status-${messageKey(entry)}`, text });
       continue;
     }
     // Task lifecycle rows fold into a live sub-agent group: `task_started`
@@ -166,7 +172,7 @@ export function buildConversation(
       if (entry.task.description?.trim()) agent.description = entry.task.description.trim();
       if (entry.task.taskType?.trim()) agent.taskType = entry.task.taskType.trim();
       if (entry.task.lastToolName?.trim()) agent.lastTool = entry.task.lastToolName.trim();
-      if (entry.type.toLocaleLowerCase() === 'task_notification') {
+      if (type === 'task_notification') {
         const status = entry.task.status?.trim().toLocaleLowerCase() ?? '';
         agent.state = status === 'failed' || status === 'error' ? 'failed' : 'done';
         if (entry.task.summary?.trim()) agent.summary = entry.task.summary.trim();

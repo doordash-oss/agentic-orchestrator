@@ -39,6 +39,7 @@ const ServerModelsSchema = z.object({
   review: z.string().optional(),
   utilities: z.string().optional(),
   kb_build: z.string().optional(),
+  automatic_review: z.string().optional(),
 });
 
 const ServerEffortSchema = z.object({
@@ -68,6 +69,7 @@ const ServerFeatureConfigSchema = z.object({
   checkpoints: ServerCheckpointsSchema,
   pipeline: z.string().optional(),
   input_notifications: z.string().optional(),
+  automatic_review_mode: z.string().optional(),
 });
 
 const FeatureConfigResponseSchema = z.object({
@@ -86,6 +88,7 @@ const RuntimeConfigResponseSchema = z.object({
     inquireness: z.string().optional(),
     checkpoints: ServerCheckpointsSchema.optional(),
     pipeline: z.string().optional(),
+    automatic_review_enabled: z.boolean().optional(),
   }),
   notifications: z.object({ mute_feature_input: z.boolean() }).optional(),
 });
@@ -122,6 +125,9 @@ function toPhaseModels(models: z.output<typeof ServerModelsSchema>): PhaseModels
     ...(entry(models.review) === undefined ? {} : { review: models.review }),
     ...(entry(models.utilities) === undefined ? {} : { utilities: models.utilities }),
     ...(entry(models.kb_build) === undefined ? {} : { kbBuild: models.kb_build }),
+    ...(entry(models.automatic_review) === undefined
+      ? {}
+      : { automaticReview: models.automatic_review }),
   };
 }
 
@@ -134,6 +140,7 @@ function toServerModels(models: PhaseModels): Record<string, string> {
     review: models.review ?? '',
     utilities: models.utilities ?? '',
     kb_build: models.kbBuild ?? '',
+    automatic_review: models.automaticReview ?? '',
   };
 }
 
@@ -209,6 +216,12 @@ function normalizeInputNotifications(value: string | undefined): 'default' | 'en
   return value === 'enabled' || value === 'muted' ? value : 'default';
 }
 
+function normalizeAutomaticReviewMode(
+  value: string | undefined,
+): 'default' | 'enabled' | 'disabled' {
+  return value === 'enabled' || value === 'disabled' ? value : 'default';
+}
+
 function toFeatureConfig(cfg: z.output<typeof ServerFeatureConfigSchema>): FeatureConfig {
   return {
     models: toPhaseModels(cfg.models),
@@ -217,6 +230,7 @@ function toFeatureConfig(cfg: z.output<typeof ServerFeatureConfigSchema>): Featu
     checkpoints: toCheckpoints(cfg.checkpoints),
     pipeline: cfg.pipeline ?? '',
     inputNotifications: normalizeInputNotifications(cfg.input_notifications),
+    automaticReviewMode: normalizeAutomaticReviewMode(cfg.automatic_review_mode),
   };
 }
 
@@ -256,6 +270,7 @@ export class ConfigService {
           checkpoints: toServerCheckpoints(req.config.checkpoints),
           ...(req.config.pipeline === '' ? {} : { pipeline: req.config.pipeline }),
           input_notifications: req.config.inputNotifications,
+          automatic_review_mode: req.config.automaticReviewMode,
         },
       },
       REMEDIES,
@@ -279,6 +294,7 @@ export class ConfigService {
       checkpoints: toCheckpoints(defaults.checkpoints ?? {}),
       pipeline: defaults.pipeline ?? '',
       muteFeatureInput: parsed.data.notifications?.mute_feature_input ?? false,
+      automaticReviewEnabled: defaults.automatic_review_enabled ?? false,
     };
   }
 
@@ -295,6 +311,7 @@ export class ConfigService {
             inquireness: defaults.inquireness,
             checkpoints: toServerCheckpoints(defaults.checkpoints),
             ...(defaults.pipeline === '' ? {} : { pipeline: defaults.pipeline }),
+            automatic_review_enabled: defaults.automaticReviewEnabled,
           },
           notifications: { mute_feature_input: defaults.muteFeatureInput },
         },

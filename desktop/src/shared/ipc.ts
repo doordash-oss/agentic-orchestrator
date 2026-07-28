@@ -737,6 +737,16 @@ export const VerificationItemViewSchema = z.strictObject({
 });
 export type VerificationItemView = z.output<typeof VerificationItemViewSchema>;
 
+export const AutomaticReviewModeSchema = z.enum(['default', 'enabled', 'disabled']);
+export type AutomaticReviewMode = z.output<typeof AutomaticReviewModeSchema>;
+
+export const AutomaticReviewStateSchema = z.strictObject({
+  mode: AutomaticReviewModeSchema,
+  enabled: z.boolean(),
+  source: z.enum(['global', 'feature']),
+});
+export type AutomaticReviewState = z.output<typeof AutomaticReviewStateSchema>;
+
 export const FeatureSnapshotSchema = z.strictObject({
   id: FeatureIdSchema,
   name: z.string(),
@@ -764,6 +774,8 @@ export const FeatureSnapshotSchema = z.strictObject({
   cycle: CycleViewSchema.optional(),
   /** Active plan or implementation/final-review gate from the server. */
   reviewGate: ReviewGateViewSchema,
+  /** Effective Automatic Bash review state and the scope that selected it. */
+  automaticReview: AutomaticReviewStateSchema,
   /** Ordered per-command harness verification state during phaseStatus "verifying". */
   verificationItems: z.array(VerificationItemViewSchema).optional(),
   /** Aggregate run time across the feature's runs, for the queue readout. */
@@ -2126,6 +2138,7 @@ export const PhaseModelsSchema = z.strictObject({
   review: z.string().max(200).optional(),
   utilities: z.string().max(200).optional(),
   kbBuild: z.string().max(200).optional(),
+  automaticReview: z.string().max(200).optional(),
 });
 export type PhaseModels = z.output<typeof PhaseModelsSchema>;
 
@@ -2165,6 +2178,7 @@ export const FeatureConfigSchema = z.strictObject({
   checkpoints: CheckpointsSchema,
   pipeline: z.string().max(50),
   inputNotifications: InputNotificationsModeSchema,
+  automaticReviewMode: AutomaticReviewModeSchema,
 });
 export type FeatureConfig = z.output<typeof FeatureConfigSchema>;
 
@@ -2191,6 +2205,8 @@ export const WorkspaceDefaultsSchema = z.strictObject({
   pipeline: z.string().max(50),
   /** Workspace-level input alerts: true mutes feature-input notifications. */
   muteFeatureInput: z.boolean(),
+  /** Default Automatic Bash review state for newly dispatched sessions. */
+  automaticReviewEnabled: z.boolean(),
 });
 export type WorkspaceDefaults = z.output<typeof WorkspaceDefaultsSchema>;
 

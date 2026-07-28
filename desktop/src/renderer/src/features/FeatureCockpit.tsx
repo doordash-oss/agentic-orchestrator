@@ -147,6 +147,15 @@ function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch
         </div>
       ) : null}
       <div className="cockpit__fact">
+        <dt>Automatic review</dt>
+        <dd>
+          <code>
+            {snapshot.automaticReview.enabled ? 'On' : 'Off'} ·{' '}
+            {snapshot.automaticReview.source === 'global' ? 'workspace' : 'feature'}
+          </code>
+        </dd>
+      </div>
+      <div className="cockpit__fact">
         <dt>{snapshot.repos.length === 1 ? 'Repository' : 'Repositories'}</dt>
         <dd>
           <code>{snapshot.repos.join(', ')}</code>

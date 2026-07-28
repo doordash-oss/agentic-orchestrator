@@ -547,6 +547,21 @@ body {
   overflow-wrap: anywhere;
 }
 
+.conversation__status {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--color-signal);
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-signal) 8%, transparent);
+  font: var(--type-meta);
+}
+
+.conversation__status p {
+  margin: 0;
+}
+
 .ama-dock__empty {
   display: flex;
   flex: 1;

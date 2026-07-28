@@ -154,8 +154,8 @@ type ImplementConfig struct {
 	// the per-iteration review gate on SUCCESS and immediately return
 	// "review_passed". Medium and Large profiles set this to true in the
 	// single-repo path, relying on the Final Review for quality gating.
-	// Moonshot, multi-repo orchestration, repo-scoped cycles, and refactor loops
-	// keep per-iteration review enabled.
+	// Moonshot, multi-repo orchestration, and repo-scoped cycles keep
+	// per-iteration review enabled.
 	SkipIterationReview bool
 
 	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
@@ -1656,7 +1656,7 @@ type waitForStatusOptions struct {
 	// EnableContextHandoff arms the context-utilization wind-down nudge.
 	// The handoff message references the implement progress.md schema, so
 	// only Implementation-phase sessions should set this true. Plan,
-	// roadmap, final-review, and refactor sessions produce different
+	// roadmap, and final-review sessions produce different
 	// artifacts and have heavy required-reading loads that would trip the
 	// threshold before they could write any output.
 	EnableContextHandoff bool
@@ -1806,7 +1806,7 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	//
 	// Gated on EnableContextHandoff: only Implementation-phase sessions
 	// arm the nudge. When disabled, handoffSent starts true so the ticker
-	// case is a no-op for plan, roadmap, final-review, and refactor.
+	// case is a no-op for plan, roadmap, and final-review.
 	var handoffC <-chan time.Time
 	var handoffTicker *time.Ticker
 	if opts.EnableContextHandoff {

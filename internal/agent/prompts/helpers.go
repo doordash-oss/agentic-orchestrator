@@ -110,12 +110,6 @@ func DesignUserPrompt(in any) string {
 	return MustRender("design.user", in)
 }
 
-// RefactorPlanUserPrompt renders the refactor-plan step user prompt
-// (refactor_plan.user.tmpl).
-func RefactorPlanUserPrompt(in any) string {
-	return MustRender("refactor_plan.user", in)
-}
-
 // RoadmapUserPrompt renders the Plan/Roadmap initial-creation user prompt
 // (roadmap.user.tmpl).
 func RoadmapUserPrompt(in any) string {

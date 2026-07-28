@@ -242,8 +242,6 @@ func (m *DashboardModel) syncPreview() {
 func (m DashboardModel) shouldRenderLivePreview(f *feature.Feature) bool {
 	return f != nil &&
 		m.rightPanelMode != dashboardRightPanelOverview &&
-		!m.preview.refactorActive &&
-		!m.preview.refactorPipelineActive &&
 		isLivePreviewEligible(f)
 }
 
@@ -519,7 +517,6 @@ func (m DashboardModel) renderFooter() string {
 				hints = append(hints, "[p] Publish")
 			}
 			if (!activePublishedCycle && f.Status == feature.StatusPublished) || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
-				hints = append(hints, "[Shift+F] Refactor")
 				hints = append(hints, "[b] Rebase")
 			}
 			if f.Status == feature.StatusCodeReady && !f.IsPublishable() {
@@ -1283,8 +1280,6 @@ func repoCycleFinalReviewLabel(t feature.RepoCycleType) string {
 		return "Final Review (Review Comments)"
 	case feature.CycleRebase:
 		return "Final Review (Rebase)"
-	case feature.CycleRefactor:
-		return "Final Review (Refactor)"
 	default:
 		return "Final Review (Repo Cycle)"
 	}
@@ -1298,8 +1293,6 @@ func repoCycleRunningLabel(t feature.RepoCycleType) string {
 		return "Addressing Review Comments"
 	case feature.CycleRebase:
 		return "Rebasing"
-	case feature.CycleRefactor:
-		return "Refactoring"
 	default:
 		return "Repo Cycle Running"
 	}
@@ -1359,13 +1352,6 @@ func formatStatus(f *feature.Feature) string {
 			}
 			return base + elapsed
 		}
-		if f.IsRefactoring() && strings.Contains(normalizedPath, "/refactor-") && f.CurrentPhase == feature.PhaseImplement {
-			base := fmt.Sprintf("Refactoring: Implementing [%d]", f.CurrentIteration)
-			if needsInput {
-				return WarningStyle.Render(base+" | waiting input") + elapsed
-			}
-			return base + elapsed
-		}
 		if f.ReviewingGate {
 			return ReviewStyle.Render(fmt.Sprintf("Reviewing [%d]", f.CurrentIteration)) + elapsed
 		}
@@ -1389,44 +1375,31 @@ func formatStatus(f *feature.Feature) string {
 		return "Building KB" + elapsed
 	case feature.StatusResearching:
 		label := "Researching"
-		if f.IsRefactoring() {
-			label = "Refactoring: Researching"
-		}
 		if needsInput {
 			return WarningStyle.Render(label+" | waiting input") + elapsed
 		}
 		return label + elapsed
 	case feature.StatusInquiring:
 		label := "Inquiring"
-		if f.IsRefactoring() {
-			label = "Refactoring: Inquiring"
-		}
 		if needsInput {
 			return WarningStyle.Render(label+" | waiting input") + elapsed
 		}
 		return label + elapsed
 	case feature.StatusDesigning:
 		label := "Designing"
-		if f.IsRefactoring() {
-			label = "Refactoring: Designing"
-		}
 		if needsInput {
 			return WarningStyle.Render(label+" | waiting input") + elapsed
 		}
 		return label + elapsed
 	case feature.StatusPlanning:
-		refPrefix := ""
-		if f.IsRefactoring() {
-			refPrefix = "Refactoring: "
-		}
 		if f.CurrentRoadmapPhase > 0 {
 			// Per-phase planning
 			if f.ValidatingPlan {
-				return ReviewStyle.Render(fmt.Sprintf("%sValidating Phase %d plan", refPrefix, f.CurrentRoadmapPhase)) + elapsed
+				return ReviewStyle.Render(fmt.Sprintf("Validating Phase %d plan", f.CurrentRoadmapPhase)) + elapsed
 			}
-			base := fmt.Sprintf("%sPlanning Phase %d", refPrefix, f.CurrentRoadmapPhase)
+			base := fmt.Sprintf("Planning Phase %d", f.CurrentRoadmapPhase)
 			if f.PlanIteration > 1 {
-				base = fmt.Sprintf("%sPlanning Phase %d [%d]", refPrefix, f.CurrentRoadmapPhase, f.PlanIteration)
+				base = fmt.Sprintf("Planning Phase %d [%d]", f.CurrentRoadmapPhase, f.PlanIteration)
 			}
 			if needsInput {
 				return WarningStyle.Render(base+" | waiting input") + elapsed
@@ -1435,19 +1408,19 @@ func formatStatus(f *feature.Feature) string {
 		}
 		// Roadmap creation (phase 0)
 		if f.ValidatingPlan {
-			return ReviewStyle.Render(refPrefix+"Validating roadmap") + elapsed
+			return ReviewStyle.Render("Validating roadmap") + elapsed
 		}
 		if f.PlanIteration > 1 {
-			base := fmt.Sprintf("%sCreating Roadmap [%d]", refPrefix, f.PlanIteration)
+			base := fmt.Sprintf("Creating Roadmap [%d]", f.PlanIteration)
 			if needsInput {
 				return WarningStyle.Render(base+" | waiting input") + elapsed
 			}
 			return base + elapsed
 		}
 		if needsInput {
-			return WarningStyle.Render(refPrefix+"Creating Roadmap | waiting input") + elapsed
+			return WarningStyle.Render("Creating Roadmap | waiting input") + elapsed
 		}
-		return refPrefix + "Creating Roadmap" + elapsed
+		return "Creating Roadmap" + elapsed
 	case feature.StatusPlanNeedsReview:
 		return WarningStyle.Render("Plan needs review") + elapsed
 	case feature.StatusPromptNeedsReview:

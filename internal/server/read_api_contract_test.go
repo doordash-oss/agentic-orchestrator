@@ -238,11 +238,11 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusCodeReady
 		ff.CurrentPhase = feature.PhasePublish
-		ff.SetRefactorCount(1)
+		ff.SetRebaseCount(1)
 		ff.ActiveCycle = nil
 		ff.SetActiveCycleType("")
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			repoNameSelf: {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
+			repoNameSelf: {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 		}
 		return nil
 	}); err != nil {
@@ -264,8 +264,8 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if !ok {
 		t.Fatalf("summary feature cycle missing in %+v", summaryDTO)
 	}
-	if summaryCycle["type"] != actionRefactor || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
-		t.Fatalf("summary feature cycle = %+v, want running refactor #1", summaryCycle)
+	if summaryCycle["type"] != actionRebase || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
+		t.Fatalf("summary feature cycle = %+v, want running rebase #1", summaryCycle)
 	}
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
@@ -274,8 +274,8 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if !ok {
 		t.Fatalf("detail feature cycle missing in %+v", featureDTO)
 	}
-	if cycle["type"] != actionRefactor || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
-		t.Fatalf("detail feature cycle = %+v, want running refactor #1", cycle)
+	if cycle["type"] != actionRebase || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
+		t.Fatalf("detail feature cycle = %+v, want running rebase #1", cycle)
 	}
 }
 
@@ -847,7 +847,6 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		actionRewind,
 		actionRebase,
 		actionReviewComments,
-		actionRefactor,
 		actionRetry,
 		actionMarkDone,
 		actionCleanup,
@@ -855,6 +854,11 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	}
 	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
 		t.Fatalf("action ids = %v; want %v", gotIDs, wantIDs)
+	}
+	for _, id := range gotIDs {
+		if id == "refactor" {
+			t.Fatalf("action catalog still exposes removed refactor action: %v", gotIDs)
+		}
 	}
 	actionsByID := map[string]map[string]any{}
 	for _, rawAction := range rawActions {
@@ -875,17 +879,9 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	assertActionInputNames(t, actionsByID[actionReviewComments], "repo", "mode")
 	assertActionInputRequired(t, actionsByID[actionReviewComments], "repo", true)
 	assertActionInputRequired(t, actionsByID[actionReviewComments], "mode", true)
-	assertActionScope(t, actionsByID[actionRefactor], "optional")
-	assertActionInputNames(t, actionsByID[actionRefactor], "repo", "prompt", "pipeline")
-	assertActionInputRequired(t, actionsByID[actionRefactor], "repo", false)
-	assertActionInputRequired(t, actionsByID[actionRefactor], "prompt", true)
 	assertActionScope(t, actionsByID[actionCleanup], "")
 	assertActionInputNames(t, actionsByID[actionCleanup], "target")
 	assertActionScope(t, actionsByID[actionDelete], "")
-	refactorPrompt := actionInputByName(t, actionsByID[actionRefactor], "prompt")
-	if got := int(refactorPrompt["max_length"].(float64)); got != MaxActionTextBytes {
-		t.Fatalf("refactor prompt max_length = %d; want %d", got, MaxActionTextBytes)
-	}
 	raw := mustMarshalJSON(t, rawActions)
 	for _, forbidden := range []string{secretTokenLiteral, "raw prompt", testRepoPath, worktreePathLiteral} {
 		if strings.Contains(raw, forbidden) {
@@ -932,9 +928,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish:  {enabled: true},
-				actionMerge:    {disabledCode: disabledNotLocalOnly},
-				actionRefactor: {disabledCode: disabledStatusNotAllowed},
+				actionPublish: {enabled: true},
+				actionMerge:   {disabledCode: disabledNotLocalOnly},
+				actionRebase:  {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
@@ -945,7 +941,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				disabledCode string
 			}{
 				actionPublish:  {disabledCode: "manual_publish_required"},
-				actionRefactor: {enabled: true},
+				actionRebase:   {enabled: true},
 				actionMarkDone: {enabled: true},
 			},
 		},
@@ -991,10 +987,10 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish:  {disabledCode: "already_published"},
-				actionMerge:    {disabledCode: disabledNotLocalOnly},
-				actionRefactor: {enabled: true},
-				actionCleanup:  {enabled: true},
+				actionPublish: {disabledCode: "already_published"},
+				actionMerge:   {disabledCode: disabledNotLocalOnly},
+				actionRebase:  {enabled: true},
+				actionCleanup: {enabled: true},
 			},
 		},
 		{
@@ -1008,7 +1004,6 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			}{
 				actionRebase:         {disabledCode: disabledCycleActive},
 				actionReviewComments: {disabledCode: disabledCycleActive},
-				actionRefactor:       {disabledCode: disabledCycleActive},
 			},
 		},
 		{

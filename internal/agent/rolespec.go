@@ -46,7 +46,6 @@ const (
 	RoleImplementationReviewCleanliness           = roles.RoleImplementationReviewCleanliness
 	RoleImplementationReviewQA                    = roles.RoleImplementationReviewQA
 	RoleImplementationReviewDesign                = roles.RoleImplementationReviewDesign
-	RoleRefactorPlanStep                          = roles.RoleRefactorPlanStep
 	RoleKnowledgeBaseBuilder                      = roles.RoleKnowledgeBaseBuilder
 	RoleInquirer                                  = roles.RoleInquirer
 	RoleResearcher                                = roles.RoleResearcher
@@ -114,11 +113,6 @@ func ResearcherRoleSpec() RoleSpec {
 // DesignerRoleSpec returns the canonical Design RoleSpec wrapper.
 func DesignerRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.DesignerRoleSpec())
-}
-
-// RefactorPlanRoleSpec returns the RoleSpec-backed refactor-plan role.
-func RefactorPlanRoleSpec() RoleSpec {
-	return wrapRoleSpec(roles.RefactorPlanRoleSpec())
 }
 
 // ImplementationReviewAxisRoleSpecs returns the RoleSpec-backed per-axis
@@ -266,8 +260,6 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 			out.PhaseArtifactPath = path
 			return nil, nil
 		}
-	case roles.ValidatorRefactorPlanMarkdown:
-		return validateRefactorPlanMarkdownArtifact
 	case roles.ValidatorReviewFeedback:
 		displayPath := artifact.DisplayPath
 		return func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {

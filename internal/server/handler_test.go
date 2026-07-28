@@ -348,6 +348,48 @@ func stringPtr(value string) *string {
 	return &value
 }
 
+// TestRemovedRefactorActionFollowsUnknownActionContract verifies that the
+// removed refactor action is indistinguishable from any other unrecognized
+// action string: a POST falls through the mutation switch and hits the
+// generic method-not-allowed response instead of a dedicated handler.
+func TestRemovedRefactorActionFollowsUnknownActionContract(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{
+		Mutations:             permissionAnswerMutationTarget{},
+		DisableHostValidation: true,
+	})
+	for _, path := range []string{
+		"/api/v1/features/feat-1/actions/refactor",
+		"/api/v1/features/feat-1/actions/refactor/restart",
+		"/api/v1/features/feat-1/actions/unrecognized-action",
+	} {
+		t.Run(strings.TrimPrefix(path, "/api/v1/features/feat-1/actions/"), func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{}`)))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d; want generic unknown-action response 405", resp.StatusCode)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != "method_not_allowed" {
+				t.Fatalf("error code = %q; want method_not_allowed", body.Error.Code)
+			}
+		})
+	}
+}
+
 type permissionAnswerMutationTarget struct {
 	MutationTarget
 	received *[]PermissionAnswerRequest

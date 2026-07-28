@@ -41,7 +41,7 @@ func BuildInquirePrompt(f *feature.Feature, skillsDir string, kbInfos ...KBInfo)
 
 	in := roles.InquireUserInput{
 		Name:        f.Name,
-		Description: f.EffectiveDescription(),
+		Description: f.Description,
 		Images:      append([]string(nil), f.Images...),
 		Attachments: append([]string(nil), f.Attachments...),
 		Repos:       repos,

@@ -583,7 +583,6 @@ components:
           - rebase
           - review-comments
           - review-decision
-          - refactor
           - need-user-input
           - need-user-input-draft
           - mark-done
@@ -1295,10 +1294,6 @@ components:
               $ref: "#/components/schemas/ReviewCommentsFetchResponse"
             review_comments_start_response:
               $ref: "#/components/schemas/ReviewCommentsStartResponse"
-            refactor_start_response:
-              $ref: "#/components/schemas/RefactorStartResponse"
-            refactor_restart_response:
-              $ref: "#/components/schemas/RefactorRestartResponse"
             mark_done_response:
               $ref: "#/components/schemas/MarkDoneResponse"
             cleanup_feature_response:
@@ -1341,8 +1336,6 @@ components:
             dispatch:
               type: string
             repo_cycle_count:
-              type: integer
-            refactor_count:
               type: integer
             session_ids:
               type: array
@@ -1541,24 +1534,6 @@ components:
               type: string
             source:
               type: string
-    RefactorStartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [cycle_type]
-          properties:
-            repo:
-              type: string
-            cycle_type:
-              type: string
-            pipeline:
-              type: string
-            session_id:
-              type: string
-    RefactorRestartResponse:
-      allOf:
-        - $ref: "#/components/schemas/RefactorStartResponse"
     MarkDoneResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"

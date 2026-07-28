@@ -141,22 +141,9 @@ func (pr *PhaseRunner) EffortCapabilitiesForModel(model string) []llm.EffortLeve
 // model) falls back to the pipeline level (or low for Utilities) with a
 // runtime warning and does not mutate persisted state.
 func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRole, model string) (llm.EffortLevel, llm.EffortSource) {
-	return pr.resolveEffortForRoleWithPipeline(f, role, model, "")
-}
-
-// resolveEffortForRoleWithPipeline is the shared resolver for both primary and
-// secondary session launches. When pipelineOverride is a valid PipelineProfile,
-// it supplies the Auto baseline for this launch only — used by refactor
-// requests whose temporary pipeline differs from the feature's configured
-// pipeline. An empty pipelineOverride falls back to f.EffectivePipeline().
-// Explicit role values are always preserved regardless of the Auto baseline.
-func (pr *PhaseRunner) resolveEffortForRoleWithPipeline(f *feature.Feature, role llm.PhaseRole, model string, pipelineOverride feature.PipelineProfile) (llm.EffortLevel, llm.EffortSource) {
 	field := llm.ConfigFieldForRole(role)
 	configured := config.EffortConfigFieldByName(f.Effort, field)
 	pipelineEffort := f.EffectivePipeline().EffortLevel()
-	if pipelineOverride.IsValid() {
-		pipelineEffort = pipelineOverride.EffortLevel()
-	}
 
 	if role == llm.PhaseChat && (configured == "" || configured == "auto") {
 		return llm.EffortLow, llm.EffortSourceAuto
@@ -176,14 +163,12 @@ func (pr *PhaseRunner) resolveEffortForRoleWithPipeline(f *feature.Feature, role
 // helpers). It resolves the effective effort and source from the same
 // configured role as the selected model: Planning for planning agents, Review
 // for validators and review axes, Implementation for implementation and fix
-// workers, and Utilities for utility helpers. When pipelineOverride is a
-// valid PipelineProfile, it supplies the Auto baseline for this launch only
-// (used by refactor requests); an empty value falls back to the feature's
-// effective pipeline. Capability drift projects the affected role as Auto,
-// omits unsupported provider arguments, and emits a runtime warning through
-// the standard log channel without mutating persisted state.
-func (pr *PhaseRunner) ResolveSecondaryEffort(f *feature.Feature, role llm.PhaseRole, model string, pipelineOverride feature.PipelineProfile) (llm.EffortLevel, llm.EffortSource) {
-	return pr.resolveEffortForRoleWithPipeline(f, role, model, pipelineOverride)
+// workers, and Utilities for utility helpers. Capability drift projects the
+// affected role as Auto, omits unsupported provider arguments, and emits a
+// runtime warning through the standard log channel without mutating persisted
+// state.
+func (pr *PhaseRunner) ResolveSecondaryEffort(f *feature.Feature, role llm.PhaseRole, model string) (llm.EffortLevel, llm.EffortSource) {
+	return pr.resolveEffortForRole(f, role, model)
 }
 
 // logRuntimeWarning emits a warning through the standard logger channel.
@@ -208,11 +193,11 @@ func (pr *PhaseRunner) buildSessionForFeature(f *feature.Feature) BuildSessionFu
 	}
 }
 
-// resolvePhaseArtifactDir returns the artifact directory for a pipeline phase,
-// accounting for active refactor cycles. Paths route through the active run
-// directory so sealed runs are not overwritten.
+// resolvePhaseArtifactDir returns the artifact directory for a pipeline phase.
+// Paths route through the active run directory so sealed runs are not
+// overwritten.
 func (pr *PhaseRunner) resolvePhaseArtifactDir(f *feature.Feature, phaseName string) string {
-	return filepath.Join(ActiveRunDir(pr.StateDir, f), f.RefactorPrefix(), phaseName)
+	return filepath.Join(ActiveRunDir(pr.StateDir, f), phaseName)
 }
 
 // interactivePhaseConfig holds the values that differ across the async
@@ -382,7 +367,7 @@ func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPat
 }
 
 // explorationAgentNames returns the codebase- and web-exploration subagents
-// shared by research and the planning, review, and refactor phases.
+// shared by research and the planning and review phases.
 func explorationAgentNames() []string {
 	return []string{
 		"codebase-locator",
@@ -1237,8 +1222,7 @@ func installAutoReviewObserver(handler ports.PermissionHandler, observer *observ
 
 // resolveImplementArtifactDir returns the artifact directory for implementation
 // within the feature's active run. When in a roadmap phase, uses phase-scoped
-// directories. Includes refactor prefix when an active refactor cycle is in
-// progress.
+// directories.
 func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 	runDir := ActiveRunDir(pr.StateDir, f)
 	// Cycle prefix takes precedence — when an active cycle is running,
@@ -1247,7 +1231,7 @@ func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 	if prefix := f.CyclePrefix(); prefix != "" {
 		return filepath.Join(runDir, prefix, "implement")
 	}
-	base := filepath.Join(runDir, f.RefactorPrefix())
+	base := runDir
 	if f.CurrentRoadmapPhase > 0 {
 		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
 	}
@@ -1634,7 +1618,7 @@ func (pr *PhaseRunner) AskingClauseForModel(model string) string {
 
 // ModelForRole resolves the effective model for a phase role. If configured is
 // non-empty it is returned as-is; otherwise the catalog default for the role is
-// returned. Exported so external callers (e.g. refactor loop) can perform the
+// returned. Exported so external callers (e.g. cycle loops) can perform the
 // same resolution that PhaseRunner uses internally.
 func (pr *PhaseRunner) ModelForRole(configured string, role llm.PhaseRole) string {
 	return pr.modelForRole(configured, role)

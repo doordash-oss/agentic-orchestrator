@@ -73,8 +73,6 @@ func resolveActiveCycleType(f *feature.Feature) feature.RepoCycleType {
 	switch {
 	case f.AddressingReviews():
 		return feature.CycleReviewComments
-	case f.IsRefactoring():
-		return feature.CycleRefactor
 	}
 	return ""
 }
@@ -569,10 +567,9 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 	}
 
 	baseDir := o.stateDir()
-	refPrefix := f.RefactorPrefix()
 	phaseDir := ""
 	if baseDir != "" {
-		phaseDir = filepath.Join(agent.ActiveRunDir(baseDir, f), refPrefix, phaseKey)
+		phaseDir = filepath.Join(agent.ActiveRunDir(baseDir, f), phaseKey)
 	}
 	var violations []agent.ProtocolViolation
 	if baseDir == "" {
@@ -973,7 +970,7 @@ func (o *Orchestrator) writePlanRevisionFeedback(f *feature.Feature, feedback st
 	if roadmapPhase > 0 {
 		planDir = o.phasePlanDirForFeature(f, roadmapPhase)
 	} else {
-		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "plan")
+		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), "plan")
 	}
 	latestAttempt := agent.LatestCompletedPlanAttempt(planDir)
 	if latestAttempt <= 0 {

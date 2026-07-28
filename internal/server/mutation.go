@@ -115,8 +115,6 @@ type MutationTarget interface {
 	StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error)
 	FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error)
 	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error)
-	StartRefactor(featureID string, req RefactorActionRequest) (RefactorStartResponse, error)
-	RestartRefactor(featureID string, req RefactorActionRequest) (RefactorRestartResponse, error)
 	MarkDone(featureID string) (MarkDoneResponse, error)
 	CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error)
 	DeleteFeature(featureID string) (DeleteFeatureResponse, error)
@@ -365,14 +363,6 @@ type ReviewCommentsActionRequest struct {
 	Comments []ReviewCommentDTO `json:"comments,omitempty"`
 }
 
-type RefactorActionRequest struct {
-	Repo        string                  `json:"repo,omitempty"`
-	Prompt      string                  `json:"prompt"`
-	Images      []string                `json:"images,omitempty"`
-	Attachments []string                `json:"attachments,omitempty"`
-	Pipeline    feature.PipelineProfile `json:"pipeline,omitempty"`
-}
-
 type CleanupActionRequest struct {
 	Target string `json:"target,omitempty"`
 }
@@ -515,13 +505,12 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete:
+		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
 			if (parts[2] == actionPublish && parts[3] == phaseNameDescription) ||
-				(parts[2] == actionReviewComments && parts[3] == "fetch") ||
-				(parts[2] == actionRefactor && parts[3] == actionRestart) {
+				(parts[2] == actionReviewComments && parts[3] == "fetch") {
 				return []string{http.MethodPost}, true
 			}
 		}
@@ -812,8 +801,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionReviewComments:
 		return h.handleReviewCommentsAction(w, r, featureID, subaction)
-	case actionRefactor:
-		return h.handleRefactorAction(w, r, featureID, subaction)
 	case actionCleanup:
 		if subaction != "" {
 			return false
@@ -1081,34 +1068,6 @@ func (h *apiHandler) handleReviewCommentsFetch(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *apiHandler) handleRefactorAction(w http.ResponseWriter, r *http.Request, featureID, subaction string) bool {
-	var req RefactorActionRequest
-	if !decodeMutationJSON(w, r, &req) || !validateRefactorRequest(w, req) {
-		return true
-	}
-	if subaction == actionRestart {
-		resp, err := h.mutations.RestartRefactor(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "restarted")
-		writeActionJSON(w, http.StatusOK, &resp)
-		return true
-	}
-	if subaction != "" {
-		return false
-	}
-	resp, err := h.mutations.StartRefactor(featureID, req)
-	if err != nil {
-		writeMutationError(w, err)
-		return true
-	}
-	defaultActionFields(&resp, featureID, resultStarted)
-	writeActionJSON(w, http.StatusOK, &resp)
-	return true
-}
-
 func validatePipelineProfile(w http.ResponseWriter, profile feature.PipelineProfile) bool {
 	if profile == "" || profile.IsValid() {
 		return true
@@ -1242,22 +1201,6 @@ func validateReviewCommentsMode(w http.ResponseWriter, mode string) bool {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "mode must be auto or address_all", nil)
 		return false
 	}
-}
-
-func validateRefactorRequest(w http.ResponseWriter, req RefactorActionRequest) bool {
-	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "prompt is required", nil)
-		return false
-	}
-	if len(prompt) > MaxActionTextBytes {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "prompt is too long", nil)
-		return false
-	}
-	if !validateRepoName(w, req.Repo, false) || !validatePipelineProfile(w, req.Pipeline) {
-		return false
-	}
-	return true
 }
 
 func validateCleanupRequest(w http.ResponseWriter, req CleanupActionRequest) bool {

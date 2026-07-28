@@ -159,19 +159,15 @@ func TestBuildResearchFromQuestionsPromptHasRepoInfo(t *testing.T) {
 	}
 }
 
-func TestBuildDesignPromptUsesEffectiveDescription(t *testing.T) {
+func TestBuildDesignPromptUsesDescription(t *testing.T) {
 	f := &feature.Feature{
-		Name:           "Design Refactor",
-		Description:    "original desc",
-		RefactorPrompt: "improve performance",
+		Name:        "Design Feature",
+		Description: "original desc",
 		Repos: []feature.FeatureRepo{
 			{Name: "repo", Path: "/tmp/test"},
 		},
 	}
 	prompt := BuildDesignPrompt(f, "", "", "some research output", nil)
-	if !strings.Contains(prompt, "improve performance") {
-		t.Error("expected refactor prompt in design output")
-	}
 	if !strings.Contains(prompt, "original desc") {
 		t.Error("expected original description in design output")
 	}

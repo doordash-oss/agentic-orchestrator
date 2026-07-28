@@ -461,7 +461,7 @@ type PlanLoopConfig struct {
 	PermissionCache *permission.Cache
 
 	// RepoName is the repo scope for permission caching. Empty means global
-	// scope. When set (e.g. from a refactor loop), planning sessions will
+	// scope. When set (e.g. from a cycle loop), planning sessions will
 	// scope permission rules to this repo.
 	RepoName string
 
@@ -473,7 +473,6 @@ type PlanLoopConfig struct {
 	// When set, RunRoadmapPlanningLoop uses filepath.Join(ArtifactBaseDir, "roadmap")
 	// and RunPhasePlanningLoop uses filepath.Join(ArtifactBaseDir, "phase-NN", "plan")
 	// instead of deriving paths from StateDir + Feature.ID.
-	// Used by RunRefactorLoop to scope artifacts to the per-repo refactor directory.
 	ArtifactBaseDir string
 
 	// SessionStartFunc overrides session.Manager.StartSession in tests.
@@ -1141,7 +1140,7 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 
 	return roles.BuildValidateSpecializedPrompt(roles.ValidateSpecializedUserInput{
 		Name:                      f.Name,
-		Description:               f.EffectiveDescription(),
+		Description:               f.Description,
 		ExitCriteria:              f.ExitCriteria,
 		RiskLevel:                 string(f.RiskLevel),
 		DomainName:                domain.Name,
@@ -1455,7 +1454,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 	if cfg.ArtifactBaseDir != "" {
 		artifactDir = filepath.Join(cfg.ArtifactBaseDir, "roadmap")
 	} else {
-		baseDir := filepath.Join(ActiveRunDir(cfg.StateDir, cfg.Feature), cfg.Feature.RefactorPrefix())
+		baseDir := ActiveRunDir(cfg.StateDir, cfg.Feature)
 		artifactDir = filepath.Join(baseDir, "roadmap")
 	}
 	_ = os.MkdirAll(artifactDir, 0o755)
@@ -1834,7 +1833,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 	if cfg.ArtifactBaseDir != "" {
 		artifactDir = filepath.Join(cfg.ArtifactBaseDir, fmt.Sprintf("phase-%02d", cfg.Phase.Number), "plan")
 	} else {
-		baseDir := filepath.Join(ActiveRunDir(cfg.StateDir, cfg.Feature), cfg.Feature.RefactorPrefix())
+		baseDir := ActiveRunDir(cfg.StateDir, cfg.Feature)
 		artifactDir = filepath.Join(baseDir, fmt.Sprintf("phase-%02d", cfg.Phase.Number), "plan")
 	}
 	_ = os.MkdirAll(artifactDir, 0o755)

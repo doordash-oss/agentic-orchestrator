@@ -70,7 +70,6 @@ Keys available in the right panel depend on the feature's current status:
 |-----|--------|
 | `p` | Publish (create PR) |
 | `v` | View diff |
-| `Shift+F` | Refactor (re-run pipeline) |
 | `b` | Rebase on main |
 | `Shift+M` | Merge to base branch |
 | `Shift+D` | Mark as done |
@@ -79,7 +78,6 @@ Keys available in the right panel depend on the feature's current status:
 
 | Key | Action |
 |-----|--------|
-| `Shift+F` | Refactor (re-run pipeline) |
 | `b` | Rebase on main |
 | `g` | View PR review comments |
 | `c` | Clean worktree |

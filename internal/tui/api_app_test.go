@@ -103,7 +103,6 @@ const (
 // Shared pipeline/cycle/phase-kind literals.
 const (
 	testPipelineRoadmap      = "roadmap"
-	testPipelineRefactor     = "refactor"
 	testPipelineSizeMedium   = "medium"
 	testCycleTypeRebase      = "rebase"
 	testPhaseNameImplement   = "implement"
@@ -249,8 +248,6 @@ const (
 	testPipelineSizeMoonshot             = "moonshot"
 	testPhaseKeyInquire                  = "inquire"
 	testParamKindString                  = "string"
-	testActivityRefactoring              = "Refactoring"
-	testPasteTextMultiline               = "line1\nline2\nline3"
 	testFeatureNamePublishedWork         = "Published work"
 	testFeatureSlugPublishedWork         = "published-work"
 	testFeatureIDNext                    = "next"
@@ -1079,10 +1076,10 @@ func TestAPIAppModelDashboardFeatureUsesDetailModels(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
+func TestAPIAppModelOverviewShowsRESTRebaseCycleSubphase(t *testing.T) {
 	t.Parallel()
 
-	cycle := &server.CycleDTO{Type: testPipelineRefactor, Status: featureStatusTokenRunning, Count: 1, Iteration: 1}
+	cycle := &server.CycleDTO{Type: testCycleTypeRebase, Status: featureStatusTokenRunning, Count: 1, Iteration: 1}
 	summary := server.FeatureSummary{
 		ID:           testFeatureIDActive,
 		Name:         "Sicilian README",
@@ -1106,7 +1103,7 @@ func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 				Cycle:  cycle,
 				Timing: server.TimingDTO{ByPhase: map[string]int64{testPhaseNameImplement: 300}},
 				RepoStatus: []server.RepoStatusDTO{
-					{Name: testRepoNameOrchestrator, Touched: true, Publishable: true, CycleType: testPipelineRefactor, CycleStatus: featureStatusTokenRunning},
+					{Name: testRepoNameOrchestrator, Touched: true, Publishable: true, CycleType: testCycleTypeRebase, CycleStatus: featureStatusTokenRunning},
 				},
 			})},
 		},
@@ -1117,25 +1114,25 @@ func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 		t.Fatalf("apiDashboardFeatures length = %d, want 1", len(features))
 	}
 	f := features[0]
-	if f.ActiveCycle == nil || f.ActiveCycle.Type != feature.CycleRefactor || f.ActiveCycle.Status != feature.RepoCycleRunning || f.ActiveCycle.Count != 1 {
-		t.Fatalf("ActiveCycle = %+v, want running refactor #1", f.ActiveCycle)
+	if f.ActiveCycle == nil || f.ActiveCycle.Type != feature.CycleRebase || f.ActiveCycle.Status != feature.RepoCycleRunning || f.ActiveCycle.Count != 1 {
+		t.Fatalf("ActiveCycle = %+v, want running rebase #1", f.ActiveCycle)
 	}
-	if got := f.RefactorCount(); got != 1 {
-		t.Fatalf("RefactorCount = %d, want 1 from REST cycle count", got)
+	if got := f.RebaseCount(); got != 1 {
+		t.Fatalf("RebaseCount = %d, want 1 from REST cycle count", got)
 	}
-	if got := f.ActiveCycleType(); got != feature.CycleRefactor {
-		t.Fatalf("ActiveCycleType = %q, want refactor", got)
+	if got := f.ActiveCycleType(); got != feature.CycleRebase {
+		t.Fatalf("ActiveCycleType = %q, want rebase", got)
 	}
 
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{labelInfo, "Phase Progress", "Refactor #1", "in progress", "[l] Live Preview"} {
+	for _, want := range []string{labelInfo, "Phase Progress", "Rebase #1", "in progress", "[l] Live Preview"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("REST refactor cycle overview missing %q in:\n%s", want, view)
+			t.Fatalf("REST rebase cycle overview missing %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{"Feature ID", "Current: Refactoring", "[o] Overview"} {
+	for _, notWant := range []string{"Feature ID", "Current: Rebasing", "[o] Overview"} {
 		if strings.Contains(view, notWant) {
-			t.Fatalf("REST refactor cycle overview contained live-preview copy %q in:\n%s", notWant, view)
+			t.Fatalf("REST rebase cycle overview contained live-preview copy %q in:\n%s", notWant, view)
 		}
 	}
 }
@@ -7268,188 +7265,6 @@ func maxPlainLineWidth(s string) int {
 	return maxWidth
 }
 
-// newRefactorActionClient builds a fakeTUIAPIClient exposing an enabled
-// feature-scoped testPipelineRefactor action on an otherwise-published feature.
-func newRefactorActionClient() *fakeTUIAPIClient {
-	return &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now(), Repos: []string{testRepoNameOrchestrator}},
-		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish}, server.FeatureDetailDTO{
-
-			RepoStatus: []server.RepoStatusDTO{
-				{Name: testRepoNameOrchestrator, Publishable: true},
-			},
-			Actions: []server.ActionDTO{
-				{
-					ID:      testPipelineRefactor,
-					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: testActionScopeFeature},
-					RequiredInputs: []server.ActionInputDTO{
-						{Name: actionInputNameRepo, Kind: testParamKindString, Required: false},
-						{Name: testActionInputNamePrompt, Kind: testParamKindString, Required: true, MaxLength: server.MaxActionTextBytes},
-						{Name: "pipeline", Kind: testParamKindEnum, Required: false, Options: []string{testPipelineSizeMedium, testPipelineSizeLarge, testPipelineSizeMoonshot}},
-					},
-				},
-			},
-		})},
-		startRefactorAccepted: apiTestActionResponse{},
-	}
-}
-
-func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testing.T) {
-	t.Parallel()
-
-	client := newRefactorActionClient()
-	app := newTestAPIAppModel(t, client)
-
-	model, cmd := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
-	if cmd != nil {
-		t.Fatal("Update(Shift+F) returned command before refactor prompt submit")
-	}
-	refactor := model.(APIAppModel)
-	view := stripANSI(refactor.View().Content)
-	for _, want := range []string{"Refactor", testFeatureNameActiveWork, "What changes do you want to make?", "Describe the refactoring for", "agentic-orchestrator...", "ctrl+s"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("API app View() missing %q in refactor prompt:\n%s", want, view)
-		}
-	}
-
-	for _, r := range "extract transport boundary" {
-		model, _ = refactor.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		refactor = model.(APIAppModel)
-	}
-	model, cmd = refactor.Update(tea.KeyPressMsg{Code: 's', Text: "s", Mod: tea.ModCtrl})
-	if cmd != nil {
-		t.Fatal("Update(ctrl+s) returned command before pipeline selection")
-	}
-	refactor = model.(APIAppModel)
-	view = stripANSI(refactor.View().Content)
-	for _, want := range []string{"Select Pipeline for Refactor", testPipelineSizeMedium, testPipelineSizeLarge, testPipelineSizeMoonshot, "Inquiry + research + planning", "Confirm"} { //nolint:goconst // "Confirm" here is a substring check against the composite "[enter] Confirm" key hint, coincidentally matching unrelated keybinding-description literals elsewhere
-		if !strings.Contains(view, want) {
-			t.Fatalf("API app View() missing %q in refactor pipeline selector:\n%s", want, view)
-		}
-	}
-
-	model, cmd = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want refactor start mutation")
-	}
-	msg := cmd()
-	model, cmd = model.(APIAppModel).Update(msg)
-	started := model.(APIAppModel)
-
-	if got := strings.Join(client.startRefactorFeatureIDs, ","); got != testFeatureIDActive {
-		t.Fatalf("StartRefactor feature IDs = %q, want active", got)
-	}
-	if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != testRepoNameOrchestrator || got[0].Prompt != "extract transport boundary" || got[0].Pipeline != feature.PipelineLarge {
-		t.Fatalf("StartRefactor requests = %+v, want agentic-orchestrator prompt with large pipeline", got)
-	}
-	if cmd == nil {
-		t.Fatal("refactor mutation result returned nil command, want immediate feature detail refresh")
-	}
-
-	cycle := &server.CycleDTO{Type: testPipelineRefactor, Status: featureStatusTokenRunning}
-	client.detail = server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, Cycle: cycle, CreatedAt: time.Now(), Repos: []string{testRepoNameOrchestrator}}, server.FeatureDetailDTO{
-
-		Cycle: cycle,
-		RepoStatus: []server.RepoStatusDTO{
-			{Name: testRepoNameOrchestrator, Touched: true, Publishable: true, CycleType: testPipelineRefactor, CycleStatus: featureStatusTokenRunning},
-		},
-	})}
-	msg = cmd()
-	model, _ = started.Update(msg)
-	refreshed := model.(APIAppModel)
-
-	view = stripANSI(refreshed.View().Content)
-	for _, want := range []string{"Started Refactor", testFeatureIDActive, testActivityRefactoring} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("API app View() missing %q in:\n%s", want, view)
-		}
-	}
-}
-
-func TestAPIAppModelRefactorPromptShiftEnterAndTerminalPaste(t *testing.T) {
-	t.Parallel()
-
-	client := newRefactorActionClient()
-	app := newTestAPIAppModel(t, client)
-
-	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
-	refactor := model.(APIAppModel)
-	model, _ = refactor.Update(tea.KeyPressMsg{Text: "line1"})
-	refactor = model.(APIAppModel)
-	model, _ = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
-	refactor = model.(APIAppModel)
-	model, _ = refactor.Update(tea.PasteMsg{Content: "line2\nline3"})
-	refactor = model.(APIAppModel)
-
-	if refactor.refactorPrompt == nil {
-		t.Fatal("refactor prompt closed unexpectedly")
-	}
-	if got := refactor.refactorPrompt.input.Value(); got != testPasteTextMultiline {
-		t.Fatalf("refactor prompt value = %q, want %q", got, testPasteTextMultiline)
-	}
-}
-
-func TestAPIAppModelRefactorPromptTracksPastedImagesAndFiles(t *testing.T) {
-	t.Parallel()
-
-	client := newRefactorActionClient()
-	app := newTestAPIAppModel(t, client)
-
-	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
-	refactor := model.(APIAppModel)
-	model, _ = refactor.Update(ImagePastedMsg{Path: "/tmp/refactor-image.png"})
-	refactor = model.(APIAppModel)
-	model, _ = refactor.Update(FilesPastedMsg{Paths: []string{"/tmp/spec.pdf"}, Names: []string{"spec.pdf"}})
-	refactor = model.(APIAppModel)
-	model, _ = refactor.Update(TextPastedMsg{Text: " tighten the layout"})
-	refactor = model.(APIAppModel)
-
-	if refactor.refactorPrompt == nil {
-		t.Fatal("refactor prompt closed unexpectedly")
-	}
-	if got := refactor.refactorPrompt.input.Value(); got != "[Image #1][spec.pdf] tighten the layout" {
-		t.Fatalf("refactor prompt value = %q, want pasted placeholders and text", got)
-	}
-
-	model, cmd := refactor.Update(tea.KeyPressMsg{Code: 's', Text: "s", Mod: tea.ModCtrl})
-	if cmd != nil {
-		t.Fatal("Update(ctrl+s) returned command before pipeline selection")
-	}
-	refactor = model.(APIAppModel)
-	_, cmd = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want refactor start mutation")
-	}
-	_ = cmd()
-	if got := client.startRefactorRequests; len(got) != 1 ||
-		!slices.Equal(got[0].Images, []string{"/tmp/refactor-image.png"}) ||
-		!slices.Equal(got[0].Attachments, []string{"/tmp/spec.pdf"}) {
-		t.Fatalf("StartRefactor requests = %+v, want image and attachment paths", got)
-	}
-}
-
-func TestAPIAppModelRefactorRestartShortcutIsNotExposed(t *testing.T) {
-	t.Parallel()
-
-	client := newRefactorActionClient()
-	app := newTestAPIAppModel(t, client)
-
-	model, cmd := app.Update(tea.KeyPressMsg{Code: 'f', Text: "f", Mod: tea.ModCtrl})
-	if cmd != nil {
-		t.Fatal("Update(Ctrl+F) returned command; restart refactor is not a dashboard shortcut")
-	}
-	updated := model.(APIAppModel)
-	if updated.refactorPrompt != nil || updated.refactorPipeline != nil {
-		t.Fatal("Update(Ctrl+F) opened refactor restart UI; want no normal-user restart shortcut")
-	}
-	if len(client.restartRefactorFeatureIDs) != 0 || len(client.startRefactorFeatureIDs) != 0 {
-		t.Fatalf("refactor calls start=%v restart=%v; want none", client.startRefactorFeatureIDs, client.restartRefactorFeatureIDs)
-	}
-}
-
 func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 	t.Parallel()
 
@@ -7699,10 +7514,10 @@ func TestAPIAppModelListRefreshClearsStalePublishedCycleDetail(t *testing.T) {
 	}
 	staleDetail := server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(published, server.FeatureDetailDTO{
 
-		Cycle: &server.CycleDTO{Type: testPipelineRefactor, Status: featureStatusTokenRunning, Count: 1},
+		Cycle: &server.CycleDTO{Type: testCycleTypeRebase, Status: featureStatusTokenRunning, Count: 1},
 		RepoStatus: []server.RepoStatusDTO{{
 			Name:        testRepoNameOrchestrator,
-			CycleType:   testPipelineRefactor,
+			CycleType:   testCycleTypeRebase,
 			CycleStatus: featureStatusTokenRunning,
 			Touched:     true,
 		}},
@@ -7717,8 +7532,8 @@ func TestAPIAppModelListRefreshClearsStalePublishedCycleDetail(t *testing.T) {
 		Features: &server.FeatureListResponse{Features: []server.FeatureSummary{published}},
 	})
 	view := stripANSI(app.View().Content)
-	if strings.Contains(view, testSectionLabelInProgress) || strings.Contains(view, testActivityRefactoring) {
-		t.Fatalf("list-only refresh kept stale refactor cycle in dashboard:\n%s", view)
+	if strings.Contains(view, testSectionLabelInProgress) || strings.Contains(view, "Rebasing") {
+		t.Fatalf("list-only refresh kept stale rebase cycle in dashboard:\n%s", view)
 	}
 	if !strings.Contains(view, "PUBLISHED") || !strings.Contains(view, testFeatureSlugActiveWork) {
 		t.Fatalf("list-only refresh did not render feature as published:\n%s", view)
@@ -7976,7 +7791,7 @@ func TestAPIAppModelRebaseDoesNotOpenRepoSelector(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) {
+func TestAPIAppModelReviewCommentsRepoSelectorUsesSelectedRepo(t *testing.T) {
 	t.Parallel()
 
 	t.Run("review comments", func(t *testing.T) {
@@ -7999,43 +7814,6 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 		_, _ = model.(APIAppModel).Update(msg)
 		if got := client.reviewCommentsFetchRequests; len(got) != 1 || got[0].Repo != testRepoNameWeb {
 			t.Fatalf("FetchReviewComments requests = %+v, want repo web", got)
-		}
-	})
-
-	t.Run(testPipelineRefactor, func(t *testing.T) {
-		t.Parallel()
-
-		client := apiRepoSelectorClient(testPipelineRefactor)
-		app := newTestAPIAppModel(t, client)
-
-		model, cmd := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
-		if cmd != nil {
-			t.Fatal("Update(F) returned command before repo selection")
-		}
-		model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
-		model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		if cmd != nil {
-			t.Fatal("repo selection returned command before refactor prompt")
-		}
-		prompting := model.(APIAppModel)
-		view := stripANSI(prompting.View().Content)
-		if !strings.Contains(view, "Describe the refactoring for") || !strings.Contains(view, "web...") {
-			t.Fatalf("refactor prompt missing selected repo:\n%s", view)
-		}
-
-		for _, r := range "split transport" {
-			model, _ = prompting.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-			prompting = model.(APIAppModel)
-		}
-		model, _ = prompting.Update(tea.KeyPressMsg{Code: 's', Text: "s", Mod: tea.ModCtrl})
-		model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-		if cmd == nil {
-			t.Fatal("pipeline selection returned nil command")
-		}
-		msg := cmd()
-		_, _ = model.(APIAppModel).Update(msg)
-		if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != testRepoNameWeb || got[0].Prompt != "split transport" {
-			t.Fatalf("StartRefactor requests = %+v, want repo web prompt", got)
 		}
 	})
 }
@@ -8629,12 +8407,6 @@ func apiRepoSelectorClient(actionID string) *fakeTUIAPIClient {
 			{Name: actionInputNameRepo, Kind: testParamKindString, Required: true},
 			{Name: "mode", Kind: testParamKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
 		}
-	case testPipelineRefactor:
-		action.RequiredInputs = []server.ActionInputDTO{
-			{Name: actionInputNameRepo, Kind: testParamKindString, Required: false},
-			{Name: testActionInputNamePrompt, Kind: testParamKindString, Required: true, MaxLength: server.MaxActionTextBytes},
-			{Name: "pipeline", Kind: testParamKindEnum, Required: false, Options: []string{testPipelineSizeMedium, testPipelineSizeLarge, testPipelineSizeMoonshot}},
-		}
 	}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
@@ -8650,7 +8422,6 @@ func apiRepoSelectorClient(actionID string) *fakeTUIAPIClient {
 		})},
 		startRebaseAccepted:         accepted,
 		startReviewCommentsAccepted: accepted,
-		startRefactorAccepted:       accepted,
 	}
 	return client
 }
@@ -8780,14 +8551,6 @@ type fakeTUIAPIClient struct {
 	startRebaseErr                 error
 	startRebaseFeatureIDs          []string
 	startRebaseRequests            []server.RebaseActionRequest
-	startRefactorAccepted          apiTestActionResponse
-	startRefactorErr               error
-	startRefactorFeatureIDs        []string
-	startRefactorRequests          []server.RefactorActionRequest
-	restartRefactorAccepted        apiTestActionResponse
-	restartRefactorErr             error
-	restartRefactorFeatureIDs      []string
-	restartRefactorRequests        []server.RefactorActionRequest
 	rewindAccepted                 apiTestActionResponse
 	rewindErr                      error
 	rewindFeatureIDs               []string
@@ -9084,20 +8847,6 @@ func (f *fakeTUIAPIClient) StartRebase(_ context.Context, featureID string, req 
 	f.startRebaseFeatureIDs = append(f.startRebaseFeatureIDs, featureID)
 	f.startRebaseRequests = append(f.startRebaseRequests, req)
 	return server.RebaseStartResponse{FeatureID: f.startRebaseAccepted.featureID(featureID), Result: f.startRebaseAccepted.result("started"), CycleType: f.startRebaseAccepted.CycleType}, f.startRebaseErr
-}
-
-func (f *fakeTUIAPIClient) StartRefactor(_ context.Context, featureID string, req server.RefactorActionRequest) (server.RefactorStartResponse, error) {
-	f.calls = append(f.calls, "StartRefactor")
-	f.startRefactorFeatureIDs = append(f.startRefactorFeatureIDs, featureID)
-	f.startRefactorRequests = append(f.startRefactorRequests, req)
-	return server.RefactorStartResponse{FeatureID: f.startRefactorAccepted.featureID(featureID), Result: f.startRefactorAccepted.result("started"), Repo: req.Repo, CycleType: f.startRefactorAccepted.CycleType, Pipeline: string(req.Pipeline)}, f.startRefactorErr
-}
-
-func (f *fakeTUIAPIClient) RestartRefactor(_ context.Context, featureID string, req server.RefactorActionRequest) (server.RefactorRestartResponse, error) {
-	f.calls = append(f.calls, "RestartRefactor")
-	f.restartRefactorFeatureIDs = append(f.restartRefactorFeatureIDs, featureID)
-	f.restartRefactorRequests = append(f.restartRefactorRequests, req)
-	return server.RefactorRestartResponse{FeatureID: f.restartRefactorAccepted.featureID(featureID), Result: f.restartRefactorAccepted.result("restarted"), Repo: req.Repo, CycleType: f.restartRefactorAccepted.CycleType, Pipeline: string(req.Pipeline)}, f.restartRefactorErr
 }
 
 func (f *fakeTUIAPIClient) RewindFeature(_ context.Context, featureID string, req server.RewindFeatureRequest) (server.RewindFeatureResponse, error) {

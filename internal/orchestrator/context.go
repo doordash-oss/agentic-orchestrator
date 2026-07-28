@@ -106,9 +106,8 @@ func (o *Orchestrator) resolveArtifactPathForKey(f *feature.Feature, phase strin
 
 			// Legacy basename form: values are relative to the phase's output
 			// directory. Use resolvePhaseDirForKey so phase-N-plan keys are
-			// resolved against the canonical phase-NN/plan dir
-			// (refactor-scoped when applicable), not the literal
-			// "phase-N-plan" dir which does not exist on disk.
+			// resolved against the canonical phase-NN/plan dir, not the
+			// literal "phase-N-plan" dir which does not exist on disk.
 			phaseDir := o.resolvePhaseDirForKey(f, phase)
 			if phaseDir == "" {
 				phaseDir = filepath.Join(activeRunDir, phase)
@@ -142,8 +141,7 @@ func (o *Orchestrator) resolveArtifactPathForKey(f *feature.Feature, phase strin
 
 // resolvePhaseDirForKey maps an artifact key to the correct filesystem
 // directory. Phase plan keys (e.g. "phase-2-plan") map to phase-NN/plan/
-// directories, scoped to the feature's active refactor cycle when applicable.
-// Mirrors app.go:9811-9817.
+// directories. Mirrors app.go:9811-9817.
 func (o *Orchestrator) resolvePhaseDirForKey(f *feature.Feature, key string) string {
 	baseDir := o.stateDir()
 	if baseDir == "" {
@@ -156,22 +154,18 @@ func (o *Orchestrator) resolvePhaseDirForKey(f *feature.Feature, key string) str
 	return filepath.Join(agent.ActiveRunDir(baseDir, f), key)
 }
 
-// phasePlanDirForFeature returns the plan subdirectory for a roadmap phase,
-// scoped to the feature's active refactor cycle when applicable. Mirrors the
-// directory choice RunPhasePlanningLoop makes at plan_validation.go:1441 —
-// when the feature has a RefactorPrefix, the phase-plan artifacts live under
-// <stateDir>/<featureID>/refactor-N/phase-NN/plan. Returns "" when the state
+// phasePlanDirForFeature returns the plan subdirectory for a roadmap phase.
+// Mirrors the directory choice RunPhasePlanningLoop makes at
+// plan_validation.go — the phase-plan artifacts live under
+// <stateDir>/<featureID>/runs/run-N/phase-NN/plan. Returns "" when the state
 // dir is unset. Callers that reach into phase-plan directories (iterate
 // invalidation, reviewProceed per-phase dispatch, auto-approved per-phase
-// dispatch) must use this helper so refactor-scoped phase plans are resolved
-// to the same directory the planner writes to.
+// dispatch) must use this helper so phase plans are resolved to the same
+// directory the planner writes to.
 func (o *Orchestrator) phasePlanDirForFeature(f *feature.Feature, phase int) string {
 	baseDir := o.stateDir()
 	if baseDir == "" {
 		return ""
-	}
-	if prefix := f.RefactorPrefix(); prefix != "" {
-		return filepath.Join(agent.ActiveRunDir(baseDir, f), prefix, fmt.Sprintf("phase-%02d", phase), "plan")
 	}
 	return agent.PhasePlanDir(baseDir, f, phase)
 }
@@ -185,7 +179,7 @@ func (o *Orchestrator) phasePlanDirForFeature(f *feature.Feature, phase int) str
 // collectQAFilePaths gathers Q&A answer files from earlier phases (inquire,
 // research, design, roadmap) so they can be passed to planning prompts.
 // Mirrors app.go:5761-5773. Missing files are gracefully skipped via os.Stat.
-func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) []string {
+func (o *Orchestrator) collectQAFilePaths(f *feature.Feature) []string {
 	baseDir := o.stateDir()
 	if baseDir == "" || f == nil {
 		return nil
@@ -193,7 +187,7 @@ func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) 
 	runDir := agent.ActiveRunDir(baseDir, f)
 	var paths []string
 	for _, phase := range []string{"inquire", "research", "design", "roadmap"} {
-		qaPath := filepath.Join(runDir, refPrefix, phase, "qa-answers.md")
+		qaPath := filepath.Join(runDir, phase, "qa-answers.md")
 		if _, err := os.Stat(qaPath); err == nil {
 			paths = append(paths, qaPath)
 		}

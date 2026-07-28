@@ -61,8 +61,8 @@ func (o *Orchestrator) startFeatureReviewComments(
 		return "", errors.New("phase runner not configured")
 	}
 
-	implEffort, implEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseImplementation, f.Models.Implementation, "")
-	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review, "")
+	implEffort, implEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseImplementation, f.Models.Implementation)
+	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review)
 
 	// Aggregate comments across every Feature.Repos PR. Each repo's
 	// per-repo comments.json was saved by the TUI before dispatch

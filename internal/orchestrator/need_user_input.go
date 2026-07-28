@@ -171,9 +171,8 @@ func (o *Orchestrator) failRepoCycleGatePersistence(featureID, repoName string, 
 // decision. Resume validates answers, clears the paused gate fields while
 // preserving cycle Count / Type / artifact anchors, then dispatches to the
 // cycle-type-specific restart seam through restartPausedRepoCycle. Abort
-// fails only the affected cycle (FailRepoCycle clears the gate fields and
-// the refactor prompt when applicable); the parent feature stays Published
-// and sibling cycles keep running.
+// fails only the affected cycle (FailRepoCycle clears the gate fields); the
+// parent feature stays Published and sibling cycles keep running.
 func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -253,8 +252,8 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 			summary = fmt.Sprintf("user aborted at need-user-input gate for cycle on repo %s", d.RepoName)
 		}
 		abortRepos := []string{d.RepoName}
-		// FailRepoCycle clears the gate path and, for refactor cycles, the
-		// feature-level RefactorPrompt. The parent feature stays Published.
+		// FailRepoCycle clears the gate path. The parent feature stays
+		// Published.
 		for _, name := range abortRepos {
 			if err := o.deps.Lifecycle.FailRepoCycle(featureID, name, summary); err != nil {
 				return err

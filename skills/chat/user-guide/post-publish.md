@@ -1,6 +1,6 @@
 # Post-Publish Workflows
 
-After a feature reaches **CodeReady** or **Published** state, several actions are available for iterating on the code. These workflows let you make manual adjustments, rebase onto the latest main, address PR review feedback, or re-run the full pipeline.
+After a feature reaches **CodeReady** or **Published** state, several actions are available for iterating on the code. These workflows let you make manual adjustments, rebase onto the latest main, or address PR review feedback.
 
 ## Rebase (`b`)
 
@@ -52,28 +52,6 @@ Press `g` from the detail panel on a Published feature with a PR. When the featu
 
 If the worktree was previously cleaned, Agentic recreates it before starting.
 
-## Refactor (`Shift+F`)
-
-Refactor re-runs the pipeline on a published or code-ready feature, letting the AI agent make deeper structural changes guided by your description.
-
-### Starting
-
-Press `Shift+F` from the detail panel. A textarea appears where you describe the refactoring you want — submit with `Ctrl+S` or cancel with `Esc`. When the feature spans 2+ repos, a cycle selector first opens to choose which repo to refactor and each repo's refactor runs independently; for a single-repo feature the refactor dispatches directly without the selector.
-
-After submitting the prompt, a **pipeline selector** overlay appears so you can pick the profile for this refactor cycle — **Medium**, **Large** (default), or **Moonshot**. Navigate with `←`/`→` and confirm with `Enter`.
-
-### Flow
-
-The refactor transitions the feature back to an earlier pipeline phase based on the selected profile:
-
-- **Medium** — transitions to **PlanReady** and starts with planning
-- **Large / Moonshot** — transitions to **Inquiring** and runs the full inquiry → research → design → plan → implement cycle
-
-After implementation completes:
-1. Commits changes with "Apply refactor changes"
-2. For Published features with a PR: pull-rebases and pushes
-3. Returns to CodeReady or Published state
-
 ## Merge (`Shift+M`)
 
 Merge is available only for **non-publishable features** (local repos with no remote) in the CodeReady state. It merges the feature branch into the local base branch.
@@ -88,7 +66,7 @@ Merge is available only for **non-publishable features** (local repos with no re
 
 Marks a feature as completed. Available from Published state, or from CodeReady state for non-publishable features.
 
-Not available while post-publish cycles (rebase, review comments, refactor) are still active.
+Not available while post-publish cycles (rebase, review comments) are still active.
 
 ### What Happens
 

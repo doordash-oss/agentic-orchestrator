@@ -141,7 +141,6 @@ const (
 	FeatureActionPauseStop          FeatureAction = "pause-stop"
 	FeatureActionPublish            FeatureAction = "publish"
 	FeatureActionRebase             FeatureAction = "rebase"
-	FeatureActionRefactor           FeatureAction = "refactor"
 	FeatureActionRestart            FeatureAction = "restart"
 	FeatureActionResume             FeatureAction = "resume"
 	FeatureActionRetry              FeatureAction = "retry"
@@ -171,8 +170,6 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionPublish:
 		return true
 	case FeatureActionRebase:
-		return true
-	case FeatureActionRefactor:
 		return true
 	case FeatureActionRestart:
 		return true
@@ -303,7 +300,6 @@ const (
 	RunFeatureActionParamsActionPauseStop          RunFeatureActionParamsAction = "pause-stop"
 	RunFeatureActionParamsActionPublish            RunFeatureActionParamsAction = "publish"
 	RunFeatureActionParamsActionRebase             RunFeatureActionParamsAction = "rebase"
-	RunFeatureActionParamsActionRefactor           RunFeatureActionParamsAction = "refactor"
 	RunFeatureActionParamsActionRestart            RunFeatureActionParamsAction = "restart"
 	RunFeatureActionParamsActionResume             RunFeatureActionParamsAction = "resume"
 	RunFeatureActionParamsActionRetry              RunFeatureActionParamsAction = "retry"
@@ -333,8 +329,6 @@ func (e RunFeatureActionParamsAction) Valid() bool {
 	case RunFeatureActionParamsActionPublish:
 		return true
 	case RunFeatureActionParamsActionRebase:
-		return true
-	case RunFeatureActionParamsActionRefactor:
 		return true
 	case RunFeatureActionParamsActionRestart:
 		return true
@@ -381,7 +375,6 @@ const (
 	RunFeatureSubactionParamsActionPauseStop          RunFeatureSubactionParamsAction = "pause-stop"
 	RunFeatureSubactionParamsActionPublish            RunFeatureSubactionParamsAction = "publish"
 	RunFeatureSubactionParamsActionRebase             RunFeatureSubactionParamsAction = "rebase"
-	RunFeatureSubactionParamsActionRefactor           RunFeatureSubactionParamsAction = "refactor"
 	RunFeatureSubactionParamsActionRestart            RunFeatureSubactionParamsAction = "restart"
 	RunFeatureSubactionParamsActionResume             RunFeatureSubactionParamsAction = "resume"
 	RunFeatureSubactionParamsActionRetry              RunFeatureSubactionParamsAction = "retry"
@@ -411,8 +404,6 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 	case RunFeatureSubactionParamsActionPublish:
 		return true
 	case RunFeatureSubactionParamsActionRebase:
-		return true
-	case RunFeatureSubactionParamsActionRefactor:
 		return true
 	case RunFeatureSubactionParamsActionRestart:
 		return true
@@ -657,8 +648,6 @@ type ActionResponse struct {
 	PublishFeatureResponse        PublishFeatureResponse        `json:"publish_feature_response,omitempty"`
 	RebaseStartResponse           RebaseStartResponse           `json:"rebase_start_response,omitempty"`
 	RecoveryActionResponse        RecoveryActionResponse        `json:"recovery_action_response,omitempty"`
-	RefactorRestartResponse       RefactorRestartResponse       `json:"refactor_restart_response,omitempty"`
-	RefactorStartResponse         RefactorStartResponse         `json:"refactor_start_response,omitempty"`
 	RetryFeatureResponse          RetryFeatureResponse          `json:"retry_feature_response,omitempty"`
 	ReviewCommentsFetchResponse   ReviewCommentsFetchResponse   `json:"review_comments_fetch_response,omitempty"`
 	ReviewCommentsStartResponse   ReviewCommentsStartResponse   `json:"review_comments_start_response,omitempty"`
@@ -969,7 +958,6 @@ type FeatureRestartResponse struct {
 	FeatureID      string       `json:"feature_id"`
 	Meta           ResponseMeta `json:"meta,omitempty"`
 	Phase          string       `json:"phase,omitempty"`
-	RefactorCount  int          `json:"refactor_count,omitempty"`
 	RepoCycleCount int          `json:"repo_cycle_count,omitempty"`
 	Result         string       `json:"result"`
 	SessionIDs     []string     `json:"session_ids,omitempty"`
@@ -1285,21 +1273,6 @@ type RecoverySnapshotResponse struct {
 	Items      []RecoveryItem `json:"items"`
 	Meta       ResponseMeta   `json:"meta,omitempty"`
 	SnapshotID string         `json:"snapshot_id"`
-}
-
-// RefactorRestartResponse defines model for RefactorRestartResponse.
-type RefactorRestartResponse = RefactorStartResponse
-
-// RefactorStartResponse defines model for RefactorStartResponse.
-type RefactorStartResponse struct {
-	APIVersion string       `json:"api_version"`
-	CycleType  string       `json:"cycle_type"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Pipeline   string       `json:"pipeline,omitempty"`
-	Repo       string       `json:"repo,omitempty"`
-	Result     string       `json:"result"`
-	SessionID  string       `json:"session_id,omitempty"`
 }
 
 // RepoStatus defines model for RepoStatus.

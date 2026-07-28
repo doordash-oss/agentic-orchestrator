@@ -438,8 +438,8 @@ func (o *Orchestrator) rebaseLoopConfigForFeature(
 	if pr == nil {
 		return agent.RebaseLoopConfig{}, errors.New("phase runner not configured")
 	}
-	implEffort, implEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseImplementation, f.Models.Implementation, "")
-	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review, "")
+	implEffort, implEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseImplementation, f.Models.Implementation)
+	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review)
 	return agent.RebaseLoopConfig{
 		Feature:                    f,
 		FeatureStore:               o.deps.Store,
@@ -833,8 +833,8 @@ func (o *Orchestrator) clearRebaseSuccessState(
 }
 
 // handleFeatureCycleDone implements the routing shared by
-// handleFeatureRefactorDone and handleFeatureReviewCommentsDone: the unified
-// review-comments/refactor loops share the
+// handleFeatureReviewCommentsDone: the unified
+// review-comments loop shares the
 // same FinalStatus vocabulary and non-success handling. The caller reduces
 // its concrete *XLoopResult to the primitive fields below; errPrefix labels
 // failure messages (e.g. "review-comments"). onPassed/onNeedUserInput/onFailure carry

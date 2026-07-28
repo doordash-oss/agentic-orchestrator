@@ -88,8 +88,6 @@ type APIClient interface {
 	SubmitReviewSessionDecision(context.Context, string, string, server.ReviewSessionDecisionRequest) (server.ReviewSessionDecisionResponse, error)
 	FetchReviewComments(context.Context, string, server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error)
 	StartReviewComments(context.Context, string, server.ReviewCommentsActionRequest) (server.ReviewCommentsStartResponse, error)
-	StartRefactor(context.Context, string, server.RefactorActionRequest) (server.RefactorStartResponse, error)
-	RestartRefactor(context.Context, string, server.RefactorActionRequest) (server.RefactorRestartResponse, error)
 	AnswerPermission(context.Context, server.PermissionAnswerRequest) (server.PermissionAnswerResponse, error)
 	SendHelp(context.Context, server.HelpAnswerRequest) (server.HelpSendResponse, error)
 	StartChat(context.Context, server.ChatStartRequest) (server.ChatStartResponse, error)
@@ -176,8 +174,6 @@ const (
 	mutationKindFeatureRewind                = "feature.rewind"
 	mutationKindFeatureResume                = "feature.resume"
 	mutationKindFeatureRetry                 = "feature.retry"
-	mutationKindFeatureRefactorStart         = "feature.refactor.start"
-	mutationKindFeatureRefactorRestart       = "feature.refactor.restart"
 	mutationKindFeatureStart                 = "feature.start"
 	mutationKindFeatureMerge                 = "feature.merge"
 	mutationKindFeatureRestart               = "feature.restart"
@@ -199,7 +195,6 @@ const (
 	actionIDMarkDone       = "mark-done"
 	actionIDCleanup        = "cleanup"
 	actionIDReviewComments = "review-comments"
-	actionIDRefactor       = "refactor"
 	actionIDRewind         = "rewind"
 	actionIDStop           = "stop"
 	actionIDDelete         = "delete"
@@ -209,7 +204,6 @@ const (
 const (
 	actionInputNameRepo        = "repo"
 	actionInputNameMode        = "mode"
-	actionInputNamePipeline    = "pipeline"
 	actionInputNameTargetPhase = "target_phase"
 )
 
@@ -496,8 +490,6 @@ type APIAppModel struct {
 	artifactReview             *ArtifactReviewModel
 	wizard                     *WizardModel
 	reviewComments             *apiReviewCommentsPanel
-	refactorPrompt             *apiRefactorPrompt
-	refactorPipeline           *apiRefactorPipelinePanel
 	configEditor               *EditConfigModel
 	workspaceManager           *WorkspaceManagerModel
 	wizardRuntimeConfigPending bool
@@ -726,35 +718,6 @@ type apiRoadmapRewindRow struct {
 	Effect        string
 	ResetBoundary string
 	CurrentPhase  bool
-}
-
-type apiRefactorPrompt struct {
-	featureID     string
-	featureName   string
-	repo          string
-	draft         string
-	input         SimpleTextarea
-	pipelines     []feature.PipelineProfile
-	restart       bool
-	canPaste      bool
-	imageTempDir  string
-	attachTempDir string
-	imageCounter  int
-	images        []string
-	attachments   []string
-	attachNames   []string
-}
-
-type apiRefactorPipelinePanel struct {
-	featureID   string
-	featureName string
-	repo        string
-	prompt      string
-	images      []string
-	attachments []string
-	pipelines   []feature.PipelineProfile
-	cursor      int
-	restart     bool
 }
 
 type apiFeatureContentSnapshot struct {
@@ -1282,9 +1245,6 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.welcome != nil {
 			return m.updateAPIWelcome(msg)
 		}
-		if m.refactorPrompt != nil {
-			return m.handleAPIRefactorPromptMsg(msg)
-		}
 		if m.wizard != nil {
 			return m.handleAPIWizardMsg(msg)
 		}
@@ -1355,12 +1315,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.rewindPanel != nil {
 		return m.handleAPIRewindKey(msg)
-	}
-	if m.refactorPipeline != nil {
-		return m.handleAPIRefactorPipelineKey(msg)
-	}
-	if m.refactorPrompt != nil {
-		return m.handleAPIRefactorPromptKey(msg)
 	}
 	if m.permissionPromptActive {
 		switch strings.ToLower(msg.Text) {
@@ -1458,8 +1412,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.confirmSelectedFeatureAction(mutationKindFeatureMerge), nil
 	case "D":
 		return m.confirmSelectedFeatureAction(mutationKindFeatureMarkDone), nil
-	case "F":
-		return m.openRefactorPrompt(), nil
 	}
 	switch strings.ToLower(msg.Text) {
 	case "q":
@@ -1886,7 +1838,6 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 	default:
 		dashboard.syncPreview()
 	}
-	m.applyAPIDashboardRefactorState(&dashboard)
 	spinnerView := m.spinnerView()
 	dashboard.spinnerView = spinnerView
 	dashboard.preview.spinnerView = spinnerView
@@ -1913,23 +1864,6 @@ func (m APIAppModel) spinnerView() string {
 		return view
 	}
 	return newAPIAppSpinner().View()
-}
-
-func (m APIAppModel) applyAPIDashboardRefactorState(dashboard *DashboardModel) {
-	if dashboard == nil {
-		return
-	}
-	dashboard.preview.refactorActive = false
-	dashboard.preview.refactorPipelineActive = false
-	if prompt := m.refactorPrompt; prompt != nil {
-		dashboard.preview.refactorActive = true
-		dashboard.preview.refactorFeatureName = firstNonEmpty(prompt.featureName, prompt.featureID)
-		dashboard.preview.refactorInputView = prompt.input.View()
-	}
-	if panel := m.refactorPipeline; panel != nil {
-		dashboard.preview.refactorPipelineActive = true
-		dashboard.preview.refactorPipelineView = m.renderAPIRefactorPipelineSelector()
-	}
 }
 
 func (m APIAppModel) apiDashboardFeatures() []*feature.Feature {
@@ -2068,7 +2002,6 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	}
 	activeCycleType := feature.RepoCycleType("")
 	rebaseCount := 0
-	refactorCount := 0
 	reviewCommentsCount := 0
 	if summary.Cycle != nil && (summary.Cycle.Type != "" || summary.Cycle.Status != "") {
 		cycleType := feature.RepoCycleType(summary.Cycle.Type)
@@ -2086,8 +2019,6 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		switch cycleType {
 		case feature.CycleRebase:
 			rebaseCount = cycleCount
-		case feature.CycleRefactor:
-			refactorCount = cycleCount
 		case feature.CycleReviewComments:
 			reviewCommentsCount = cycleCount
 		}
@@ -2175,7 +2106,6 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		IsRewind:                        f.IsRewind,
 		ActiveCycleType:                 activeCycleType,
 		RebaseCount:                     rebaseCount,
-		RefactorCount:                   refactorCount,
 		ReviewCommentsCount:             reviewCommentsCount,
 		RepoStates:                      f.RepoStates,
 		RepoCycles:                      f.RepoCycles,
@@ -4403,12 +4333,6 @@ func (m *APIAppModel) removeFeatureState(featureID string) {
 	if m.configEditor != nil && m.configEditor.featureID == featureID {
 		m.configEditor = nil
 	}
-	if m.refactorPrompt != nil && m.refactorPrompt.featureID == featureID {
-		m.refactorPrompt = nil
-	}
-	if m.refactorPipeline != nil && m.refactorPipeline.featureID == featureID {
-		m.refactorPipeline = nil
-	}
 	if m.permissionFeatureID == featureID {
 		m.clearPermissionPrompt()
 	}
@@ -5688,75 +5612,6 @@ func (m APIAppModel) openReviewCommentsPreview() (APIAppModel, tea.Cmd) {
 	return m, m.fetchReviewCommentsCmd(m.selectedFeature, m.selectedFeatureName(), repo, mode, modes)
 }
 
-func (m APIAppModel) openRefactorPrompt() APIAppModel {
-	return m.openRefactorPromptFor(false)
-}
-
-func (m APIAppModel) openRefactorPromptFor(restart bool) APIAppModel {
-	if !m.requireSelectedFeature() {
-		return m
-	}
-	kind := mutationKindFeatureRefactorStart
-	if restart {
-		kind = mutationKindFeatureRefactorRestart
-	}
-	if !m.selectedActionReady(kind) {
-		m.statusMessage = apiMutationKindLabel(kind) + " is unavailable"
-		return m
-	}
-	repos := m.selectedRepoActionOptions(kind)
-	if len(repos) > 1 {
-		m.repoActionPanel = newAPIRepoActionPanel(m.selectedFeature, m.selectedFeatureName(), kind, repos, false)
-		m.refactorPrompt = nil
-		m.refactorPipeline = nil
-		m.statusMessage = ""
-		return m
-	}
-	repo := ""
-	if len(repos) == 1 {
-		repo = repos[0].Name
-	}
-	return m.openRefactorPromptForRepo(kind, repo, restart)
-}
-
-func (m APIAppModel) openRefactorPromptForRepo(kind, repo string, restart bool) APIAppModel {
-	pipelines, ok := m.selectedRefactorPipelines(kind)
-	if !ok {
-		m.statusMessage = "refactor action is unavailable"
-		return m
-	}
-	ta := NewSimpleTextarea()
-	ta.Placeholder = "Describe the refactoring for " + repo + "..."
-	ta.ShowFocusedHint = true
-	ta.SetWidth(max(m.width-12, 20))
-	if m.width >= 100 {
-		ta.SetWidth(max((m.width/2)-10, 20))
-	}
-	ta.SetHeight(5)
-	_ = ta.Focus()
-	canPaste := canPasteClipboardImage()
-	var imageTempDir string
-	var attachTempDir string
-	if canPaste {
-		imageTempDir, _ = os.MkdirTemp("", "agentic-refactor-images-*")
-		attachTempDir, _ = os.MkdirTemp("", "agentic-refactor-attach-*")
-	}
-	m.refactorPrompt = &apiRefactorPrompt{
-		featureID:     m.selectedFeature,
-		featureName:   m.selectedFeatureName(),
-		repo:          repo,
-		input:         ta,
-		pipelines:     pipelines,
-		restart:       restart,
-		canPaste:      canPaste,
-		imageTempDir:  imageTempDir,
-		attachTempDir: attachTempDir,
-	}
-	m.refactorPipeline = nil
-	m.statusMessage = ""
-	return m
-}
-
 func newAPIRepoActionPanel(featureID, featureName, kind string, repos []apiRepoActionOption, multi bool) *apiRepoActionPanel {
 	selected := map[string]bool{}
 	if multi {
@@ -5876,18 +5731,6 @@ func (m APIAppModel) selectedReviewCommentsModeDefaults() (string, []string) {
 	return modes[0], modes
 }
 
-func (m APIAppModel) selectedRefactorPipelines(kind string) ([]feature.PipelineProfile, bool) {
-	action, ok := m.selectedRawAction(kind)
-	if !ok || !action.Enabled {
-		return nil, false
-	}
-	pipelines := apiRefactorPipelines(nil)
-	if input, found := findActionInput(action, actionInputNamePipeline); found {
-		pipelines = apiRefactorPipelines(input.Options)
-	}
-	return pipelines, true
-}
-
 func (m APIAppModel) selectedRawAction(kind string) (server.ActionDTO, bool) {
 	detail, ok := m.featureDetails[m.selectedFeature]
 	if !ok {
@@ -5978,7 +5821,6 @@ func (m APIAppModel) selectedActionReady(kind string) bool {
 		return ok && (status == feature.StatusInterrupted || status == feature.StatusNeedUserInput)
 	case mutationKindFeaturePublish, mutationKindFeatureMerge, mutationKindFeatureRestart,
 		mutationKindFeatureMarkDone, mutationKindFeatureRebase, mutationKindFeatureCleanup,
-		mutationKindFeatureRefactorStart, mutationKindFeatureRefactorRestart,
 		mutationKindFeatureDelete:
 		return m.selectedFeature != ""
 	case mutationKindFeatureRetry:
@@ -6041,10 +5883,6 @@ func apiActionMatchesMutationKind(actionID, kind string) bool {
 		return actionID == actionIDCleanup
 	case mutationKindFeatureReviewComments:
 		return actionID == actionIDReviewComments
-	case mutationKindFeatureRefactorStart:
-		return actionID == actionIDRefactor
-	case mutationKindFeatureRefactorRestart:
-		return actionID == actionIDRefactor
 	case mutationKindFeatureRewind:
 		return actionID == actionIDRewind
 	case mutationKindFeatureStop:
@@ -6507,41 +6345,6 @@ func apiRewindPhaseLabel(phase string) string {
 	default:
 		return strings.TrimSpace(phase)
 	}
-}
-
-func (m APIAppModel) renderAPIRefactorPipelineSelector() string {
-	panel := m.refactorPipeline
-	if panel == nil {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString(TitleStyle.Render("Select Pipeline for Refactor"))
-	b.WriteString("\n\n")
-	parts := make([]string, 0, len(panel.pipelines))
-	for i, option := range panel.pipelines {
-		if i == panel.cursor {
-			parts = append(parts, SelectedRowStyle.Render("\u25b8 "+string(option)))
-		} else {
-			parts = append(parts, "  "+string(option))
-		}
-	}
-	b.WriteString(strings.Join(parts, "    "))
-	b.WriteString("\n\n")
-	selected := feature.PipelineLarge
-	if len(panel.pipelines) > 0 && panel.cursor >= 0 && panel.cursor < len(panel.pipelines) {
-		selected = panel.pipelines[panel.cursor]
-	}
-	switch selected {
-	case feature.PipelineMedium:
-		b.WriteString(MutedStyle.Render("Skip research - go straight to planning"))
-	case feature.PipelineLarge:
-		b.WriteString(MutedStyle.Render("Inquiry + research + planning"))
-	case feature.PipelineMoonshot:
-		b.WriteString(MutedStyle.Render("Full pipeline with all gates enabled"))
-	}
-	b.WriteString("\n\n")
-	b.WriteString(KeyHelpStyle.Render(" [\u2190/\u2192] Navigate   [enter] Confirm   [esc] Cancel"))
-	return b.String()
 }
 
 func (m APIAppModel) renderPermissionPrompt() string {
@@ -7343,12 +7146,6 @@ func (m APIAppModel) acceptAPIRepoAction(panel apiRepoActionPanel) (tea.Model, t
 		mode, modes := m.selectedReviewCommentsModeDefaults()
 		m.statusMessage = "Fetching review comments..."
 		return m, m.fetchReviewCommentsCmd(panel.featureID, panel.featureName, repo, mode, modes)
-	case mutationKindFeatureRefactorStart:
-		m.selectedFeature = panel.featureID
-		return m.openRefactorPromptForRepo(panel.kind, repo, false), nil
-	case mutationKindFeatureRefactorRestart:
-		m.selectedFeature = panel.featureID
-		return m.openRefactorPromptForRepo(panel.kind, repo, true), nil
 	default:
 		m.statusMessage = "Unsupported repo action " + panel.kind
 		return m, nil
@@ -7515,126 +7312,6 @@ func (p apiReviewCommentsPanel) withComments(comments []server.ReviewCommentDTO)
 	p.comments = append([]server.ReviewCommentDTO(nil), comments...)
 	p.browser = newReviewCommentsBrowserModel(p.featureName, p.repo, reviewCommentItemsFromDTO(p.comments), p.browser.width, p.browser.height)
 	return p
-}
-
-func (m APIAppModel) handleAPIRefactorPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	prompt := m.refactorPrompt
-	if prompt == nil {
-		return m, nil
-	}
-	if msg.Code == 's' && msg.Mod.Contains(tea.ModCtrl) {
-		value := strings.TrimSpace(prompt.input.Value())
-		if value == "" {
-			m.statusMessage = "Refactor prompt cannot be empty"
-			return m, nil
-		}
-		m.refactorPipeline = &apiRefactorPipelinePanel{
-			featureID:   prompt.featureID,
-			featureName: prompt.featureName,
-			repo:        prompt.repo,
-			prompt:      value,
-			images:      append([]string(nil), prompt.images...),
-			attachments: append([]string(nil), prompt.attachments...),
-			pipelines:   append([]feature.PipelineProfile(nil), prompt.pipelines...),
-			cursor:      apiDefaultRefactorPipelineCursor(prompt.pipelines),
-			restart:     prompt.restart,
-		}
-		m.refactorPrompt = nil
-		m.statusMessage = ""
-		return m, nil
-	}
-	if msg.Code == tea.KeyEscape {
-		m.refactorPrompt = nil
-		m.statusMessage = ""
-		return m, nil
-	}
-	if msg.Code == 'v' && msg.Mod.Contains(tea.ModCtrl) && prompt.canPaste {
-		imgDir := prompt.imageTempDir
-		attachDir := prompt.attachTempDir
-		nextIdx := prompt.imageCounter + 1
-		return m, func() tea.Msg {
-			path, err := saveClipboardImage(imgDir, nextIdx)
-			if err == nil {
-				return ImagePastedMsg{Path: path}
-			}
-			paths, names, ferr := saveClipboardFiles(attachDir)
-			if ferr == nil && len(paths) > 0 {
-				return FilesPastedMsg{Paths: paths, Names: names}
-			}
-			text, terr := getClipboardText()
-			if terr == nil && text != "" {
-				return TextPastedMsg{Text: text}
-			}
-			return ImagePasteFailedMsg{}
-		}
-	}
-	var cmd tea.Cmd
-	prompt.input, cmd = prompt.input.Update(msg)
-	prompt.draft = prompt.input.Value()
-	m.statusMessage = ""
-	return m, cmd
-}
-
-func (m APIAppModel) handleAPIRefactorPromptMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
-	prompt := m.refactorPrompt
-	if prompt == nil {
-		return m, nil
-	}
-	switch msg := msg.(type) {
-	case ImagePastedMsg:
-		prompt.imageCounter++
-		prompt.images = append(prompt.images, msg.Path)
-		prompt.input.InsertString(fmt.Sprintf("[Image #%d]", len(prompt.images)))
-	case ImagePasteFailedMsg:
-	case TextPastedMsg:
-		prompt.input.InsertString(msg.Text)
-	case FilesPastedMsg:
-		prompt.attachments = append(prompt.attachments, msg.Paths...)
-		prompt.attachNames = append(prompt.attachNames, msg.Names...)
-		for _, name := range msg.Names {
-			prompt.input.InsertString(fmt.Sprintf("[%s]", name))
-		}
-	case tea.PasteMsg:
-		var cmd tea.Cmd
-		prompt.input, cmd = prompt.input.Update(msg)
-		prompt.draft = prompt.input.Value()
-		m.statusMessage = ""
-		return m, cmd
-	default:
-		return m, nil
-	}
-	prompt.draft = prompt.input.Value()
-	m.statusMessage = ""
-	return m, nil
-}
-
-func (m APIAppModel) handleAPIRefactorPipelineKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	panel := m.refactorPipeline
-	if panel == nil {
-		return m, nil
-	}
-	switch msg.Code {
-	case tea.KeyEscape:
-		m.refactorPipeline = nil
-		m.statusMessage = ""
-		return m, nil
-	case tea.KeyLeft:
-		moveCursor(&panel.cursor, -1, len(panel.pipelines))
-		return m, nil
-	case tea.KeyRight:
-		moveCursor(&panel.cursor, 1, len(panel.pipelines))
-		return m, nil
-	case tea.KeyEnter:
-		m.refactorPipeline = nil
-		return m, m.startRefactorCmd(*panel)
-	}
-	switch strings.ToLower(msg.Text) {
-	case "h":
-		moveCursor(&panel.cursor, -1, len(panel.pipelines))
-	case "l":
-		moveCursor(&panel.cursor, 1, len(panel.pipelines))
-	}
-	return m, nil
 }
 
 func (m APIAppModel) handleAPIConfigEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -7852,36 +7529,6 @@ func (m APIAppModel) startReviewCommentsCmd(panel apiReviewCommentsPanel) tea.Cm
 		})
 		return apiMutationResultMsg{
 			kind:      mutationKindFeatureReviewComments,
-			featureID: panel.featureID,
-			err:       err,
-		}
-	}
-}
-
-func (m APIAppModel) startRefactorCmd(panel apiRefactorPipelinePanel) tea.Cmd {
-	return func() tea.Msg {
-		ctx := m.apiCtx()
-		pipeline := feature.PipelineLarge
-		if len(panel.pipelines) > 0 && panel.cursor >= 0 && panel.cursor < len(panel.pipelines) {
-			pipeline = panel.pipelines[panel.cursor]
-		}
-		req := server.RefactorActionRequest{
-			Repo:        panel.repo,
-			Prompt:      panel.prompt,
-			Images:      append([]string(nil), panel.images...),
-			Attachments: append([]string(nil), panel.attachments...),
-			Pipeline:    pipeline,
-		}
-		kind := mutationKindFeatureRefactorStart
-		var err error
-		if panel.restart {
-			kind = mutationKindFeatureRefactorRestart
-			_, err = m.client.RestartRefactor(ctx, panel.featureID, req)
-		} else {
-			_, err = m.client.StartRefactor(ctx, panel.featureID, req)
-		}
-		return apiMutationResultMsg{
-			kind:      kind,
 			featureID: panel.featureID,
 			err:       err,
 		}
@@ -8402,48 +8049,6 @@ func apiReviewCommentModes(values []string) []string {
 		return []string{reviewCommentsModeAuto, reviewCommentsModeAddressAll}
 	}
 	return modes
-}
-
-func apiRefactorPipelines(values []string) []feature.PipelineProfile {
-	pipelines := make([]feature.PipelineProfile, 0, len(values))
-	for _, value := range values {
-		var pipeline feature.PipelineProfile
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case string(feature.PipelineMedium):
-			pipeline = feature.PipelineMedium
-		case string(feature.PipelineLarge):
-			pipeline = feature.PipelineLarge
-		case string(feature.PipelineMoonshot):
-			pipeline = feature.PipelineMoonshot
-		default:
-			continue
-		}
-		if !pipelineSliceContains(pipelines, pipeline) {
-			pipelines = append(pipelines, pipeline)
-		}
-	}
-	if len(pipelines) == 0 {
-		return []feature.PipelineProfile{feature.PipelineMedium, feature.PipelineLarge, feature.PipelineMoonshot}
-	}
-	return pipelines
-}
-
-func apiDefaultRefactorPipelineCursor(pipelines []feature.PipelineProfile) int {
-	for i, pipeline := range pipelines {
-		if pipeline == feature.PipelineLarge {
-			return i
-		}
-	}
-	return 0
-}
-
-func pipelineSliceContains(values []feature.PipelineProfile, needle feature.PipelineProfile) bool {
-	for _, value := range values {
-		if value == needle {
-			return true
-		}
-	}
-	return false
 }
 
 func (m APIAppModel) selectedFeatureCurrentPhase(featureID string) string {
@@ -9319,10 +8924,6 @@ func apiMutationKindLabel(kind string) string {
 		return "Rewind" //nolint:goconst // action-verb label, unrelated to other domains sharing this word
 	case mutationKindFeatureReviewComments:
 		return helpContextReviewComments
-	case mutationKindFeatureRefactorStart:
-		return "Refactor"
-	case mutationKindFeatureRefactorRestart:
-		return "Restart Refactor"
 	case mutationKindFeatureNeedUserInputDecision:
 		return "Need Input Decision"
 	case mutationKindFeatureNeedUserInputDraft:
@@ -9348,9 +8949,7 @@ func apiMutationKindLabel(kind string) string {
 
 func apiMutationSuccessMessage(kind string) string {
 	switch kind {
-	case mutationKindFeatureRefactorRestart:
-		return "Restarted Refactor"
-	case mutationKindFeatureRebase, mutationKindFeatureReviewComments, mutationKindFeatureRefactorStart:
+	case mutationKindFeatureRebase, mutationKindFeatureReviewComments:
 		return "Started " + apiMutationKindLabel(kind)
 	default:
 		return "Completed " + apiMutationKindLabel(kind)
@@ -9360,9 +8959,7 @@ func apiMutationSuccessMessage(kind string) string {
 func apiMutationRefreshesFeatureDetail(kind string) bool {
 	switch kind {
 	case mutationKindFeatureRebase,
-		mutationKindFeatureReviewComments,
-		mutationKindFeatureRefactorStart,
-		mutationKindFeatureRefactorRestart:
+		mutationKindFeatureReviewComments:
 		return true
 	default:
 		return false

@@ -373,18 +373,6 @@ func (c *Client) StartReviewComments(ctx context.Context, featureID string, req 
 	return out, err
 }
 
-func (c *Client) StartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorStartResponse, error) {
-	var out RefactorStartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor), nil, req, &out, true)
-	return out, err
-}
-
-func (c *Client) RestartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorRestartResponse, error) {
-	var out RefactorRestartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor)+"/restart", nil, req, &out, true)
-	return out, err
-}
-
 func (c *Client) MarkDone(ctx context.Context, featureID string) (MarkDoneResponse, error) {
 	var out MarkDoneResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionMarkDone), nil, map[string]any{}, &out, true)

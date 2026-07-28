@@ -107,7 +107,7 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 				Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
 					"api": {
-						Type:                     feature.CycleRefactor,
+						Type:                     feature.CycleRebase,
 						Status:                   feature.RepoCycleNeedUserInput,
 						PendingNeedUserInputPath: "/tmp/api/need-user-input.yaml",
 					},
@@ -115,7 +115,7 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 			},
 			wantKind:    attentionNeedUserInput,
 			wantCTA:     "Answer",
-			wantSummary: "refactor input gate for api",
+			wantSummary: "rebase input gate for api",
 			wantRepo:    "api",
 		},
 		{

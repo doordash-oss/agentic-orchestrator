@@ -93,7 +93,6 @@ type Run struct {
 	PlanIteration    int `yaml:"plan_iteration,omitempty"`
 	ReviewIteration  int `yaml:"review_iteration,omitempty"`
 	RebaseCount      int `yaml:"rebase_count,omitempty"`
-	RefactorCount    int `yaml:"refactor_count,omitempty"`
 	// ReviewCommentsCount is the run-level review-comments cycle counter.
 	// Incremented per RunReviewCommentsLoop invocation. Each invocation gets a
 	// flat artifact dir at runs/run-N/review-comments-N/iteration-NN/ with no
@@ -118,7 +117,6 @@ type Run struct {
 	// ActiveCycle for the TUI's per-repo rendering surface (RepoCycles map
 	// below) which still consults the legacy field.
 	ActiveCycleType RepoCycleType `yaml:"active_cycle_type,omitempty"`
-	RefactorPrompt  string        `yaml:"refactor_prompt,omitempty"`
 	// ActiveCycle is the feature-level active post-publish cycle under
 	// SchemaVersionCurrent = 4.
 	ActiveCycle *CycleState `yaml:"active_cycle,omitempty"`
@@ -228,11 +226,6 @@ func (r *Run) AccumulateActiveTime() {
 	r.ActivePhaseStart = nil
 }
 
-// IsRefactoring returns true when the run is in an active refactor cycle.
-func (r *Run) IsRefactoring() bool {
-	return r != nil && r.RefactorPrompt != ""
-}
-
 // SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
 // work. Non-positive phases are ignored because roadmap phases are 1-indexed.
 func (r *Run) SetRoadmapPhaseFrontend(phase int, frontend bool) {
@@ -271,19 +264,6 @@ func (r *Run) AnyRoadmapPhaseFrontend() bool {
 		}
 	}
 	return false
-}
-
-// RefactorPrefix returns the artifact directory prefix for the current
-// refactor cycle. Returns empty string when not refactoring (filepath.Join
-// handles this gracefully).
-func (r *Run) RefactorPrefix() string {
-	if r == nil {
-		return ""
-	}
-	if r.RefactorCount > 0 && r.RefactorPrompt != "" {
-		return fmt.Sprintf("refactor-%d", r.RefactorCount)
-	}
-	return ""
 }
 
 // CyclePrefix returns the artifact directory prefix for the current

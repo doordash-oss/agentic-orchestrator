@@ -85,7 +85,6 @@ const (
 	actionPauseStop      = "pause-stop"
 	actionPublish        = "publish"
 	actionRebase         = "rebase"
-	actionRefactor       = "refactor"
 	actionRestart        = "restart"
 	actionResume         = "resume"
 	actionStart          = "start"
@@ -179,7 +178,7 @@ func activeCycleDTO(f *feature.Feature) *CycleDTO {
 	if f == nil {
 		return nil
 	}
-	if f.ActiveCycle != nil {
+	if f.ActiveCycle != nil && f.ActiveCycle.Type.IsValid() {
 		return &CycleDTO{
 			Type:      string(f.ActiveCycle.Type),
 			Status:    f.ActiveCycle.Status,
@@ -209,7 +208,7 @@ func activeCycleDTO(f *feature.Feature) *CycleDTO {
 }
 
 func activeRepoCycleDTO(f *feature.Feature, cycle *feature.RepoCycleState) *CycleDTO {
-	if cycle == nil || !isActiveRepoCycleStatus(cycle.Status) {
+	if cycle == nil || !cycle.Type.IsValid() || !isActiveRepoCycleStatus(cycle.Status) {
 		return nil
 	}
 	return &CycleDTO{
@@ -238,10 +237,6 @@ func activeCycleCount(f *feature.Feature, cycle *feature.RepoCycleState) int {
 	case feature.CycleRebase:
 		if f.RebaseCount() > count {
 			count = f.RebaseCount()
-		}
-	case feature.CycleRefactor:
-		if f.RefactorCount() > count {
-			count = f.RefactorCount()
 		}
 	case feature.CycleReviewComments:
 		if f.ReviewCommentsCount() > count {
@@ -283,7 +278,6 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 		return dto
 	}
 	featureScope := ActionScopeDTO{Type: entityFeature}
-	repoOptional := ActionScopeDTO{Type: entityFeature, RepoSelection: "optional"}
 	repoRequired := ActionScopeDTO{Type: entityFeature, RepoSelection: "required"}
 
 	canStart := !running && !activeCycle && (status == feature.StatusCreated ||
@@ -302,7 +296,6 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
 	canPostPublishCycle := publishedOrManualReady && !activeCycle
-	canRefactor := publishedOrManualReady && !activeCycle
 	canRetry := status == feature.StatusFailed
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
@@ -325,11 +318,6 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 			{Name: "repo", Kind: actionInputKindString, Required: true},
 			{Name: "mode", Kind: actionInputKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
 		}, postPublishCycleDisabledReason(f, actionReviewComments)),
-		action(actionRefactor, canRefactor, repoOptional, []ActionInputDTO{
-			{Name: "repo", Kind: actionInputKindString, Required: false},
-			{Name: "prompt", Kind: actionInputKindString, Required: true, MaxLength: MaxActionTextBytes},
-			{Name: "pipeline", Kind: actionInputKindEnum, Required: false, Options: []string{string(feature.PipelineMedium), string(feature.PipelineLarge), string(feature.PipelineMoonshot)}},
-		}, postPublishCycleDisabledReason(f, actionRefactor)),
 		action(actionRetry, canRetry, featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
 		action(actionMarkDone, canMarkDone, featureScope, nil, ActionDisabledReasonDTO{Code: "not_complete", Message: "feature is not ready to mark done"}),
 		action(actionCleanup, canCleanup, featureScope, []ActionInputDTO{

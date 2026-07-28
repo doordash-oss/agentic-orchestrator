@@ -384,16 +384,6 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 			wantPath:   filepath.Join(base, "runs", "run-001", "design"),
 			wantMarker: filepath.Join(base, "runs", "run-001", "design", "phase_complete"),
 		},
-		{
-			name:       "refactor plan",
-			spec:       RefactorPlanRoleSpec(),
-			phaseDir:   filepath.Join(base, "runs", "run-001", "refactor-1"),
-			wantPhase:  feature.PhasePlan,
-			wantRole:   RoleRefactorPlanStep,
-			wantSkill:  "refactor",
-			wantPath:   filepath.Join(base, "runs", "run-001", "refactor-1", "refactor-plan.md"),
-			wantMarker: filepath.Join(base, "runs", "run-001", "refactor-1", "phase_complete"),
-		},
 	}
 
 	for _, tt := range tests {
@@ -681,7 +671,7 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 	// Document-only planning roles and bounded implementation-review axes must
 	// refuse source writes outside their declared output roots. Implementer,
-	// validators, refactor-plan, KB-builder, and InteractivePTY all have
+	// validators, KB-builder, and InteractivePTY all have
 	// legitimate non-document writes.
 	readOnly := []struct {
 		name string
@@ -733,7 +723,6 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 		{"final review fixer", FinalReviewFixerRoleSpec()},
 		{"researcher", ResearcherRoleSpec()},
 		{"knowledge base builder", KnowledgeBaseBuilderRoleSpec()},
-		{"refactor plan", RefactorPlanRoleSpec()},
 	}
 	for _, tt := range writeAllowed {
 		t.Run(tt.name+"_flag_unset", func(t *testing.T) {

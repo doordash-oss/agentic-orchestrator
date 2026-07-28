@@ -394,11 +394,6 @@ func (m *MockFeatureLifecycle) ReturnToPublished(featureID string) error {
 // Post-publish cycles
 // ---------------------------------------------------------------------------
 
-func (m *MockFeatureLifecycle) CompleteRefactor(featureID string) error {
-	m.record("CompleteRefactor", featureID)
-	return m.DefaultError
-}
-
 func (m *MockFeatureLifecycle) StartAddressingReviews(featureID string) error {
 	m.record("StartAddressingReviews", featureID)
 	if m.StartAddressingReviewsFn != nil {

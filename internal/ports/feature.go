@@ -101,7 +101,6 @@ type FeatureLifecycle interface {
 	ReturnToPublished(featureID string) error
 
 	// Post-publish cycles
-	CompleteRefactor(featureID string) error
 	StartAddressingReviews(featureID string) error
 	ClearAddressingReviews(featureID string) error
 	StartFeatureRebaseOperation(featureID string) error

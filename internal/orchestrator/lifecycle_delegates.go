@@ -134,9 +134,6 @@ func (o *Orchestrator) RecordRoadmapRejection(featureID, feedback string) {
 	}
 
 	roadmapDir := agent.RoadmapDir(baseDir, f)
-	if f.RefactorPrefix() != "" {
-		roadmapDir = fmt.Sprintf("%s/%s/roadmap", agent.ActiveRunDir(baseDir, f), f.RefactorPrefix())
-	}
 
 	latestAttempt := agent.LatestCompletedPlanAttempt(roadmapDir)
 	if latestAttempt <= 0 {
@@ -589,8 +586,8 @@ type UpdateFeatureConfigInput struct {
 // and active sessions pick them up on the next phase or restart.
 var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 
-// UpdateFeatureConfig atomically writes the editable config axes. Same
-// idiom as ApplyRefactorPipeline — Store.Modify handles locking + atomic
+// UpdateFeatureConfig atomically writes the editable config axes.
+// Store.Modify handles locking + atomic
 // write. On success, emits ports.Event{Type: FeatureConfigChanged}
 // (non-blocking) and fires hooks.OnFeatureConfigChanged(before, after) so the
 // observer writes a feature.config_changed audit entry.
@@ -708,22 +705,13 @@ type RepoCycleRestart struct {
 	PlanContent string
 }
 
-// RefactorRestart describes the single refactor cycle that needs to be
-// re-launched after a restart. Refactor cycles are limited to one per feature
-// so at most one instance is returned.
-type RefactorRestart struct {
-	RepoName string
-	Prompt   string
-}
-
 // CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
 // reads each review-comments cycle's plan file from disk, clears the cycle
-// state, and returns restart descriptors the TUI must dispatch. At most one
-// refactor cycle is returned (only one refactor runs at a time).
-func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, *RefactorRestart, error) {
+// state, and returns restart descriptors the TUI must dispatch.
+func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load feature: %w", err)
+		return nil, fmt.Errorf("load feature: %w", err)
 	}
 
 	type cycleSnapshot struct {
@@ -737,27 +725,12 @@ func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]Rep
 	}
 
 	if err := o.deps.Lifecycle.ClearRepoCycles(featureID); err != nil {
-		return nil, nil, fmt.Errorf("clear repo cycles: %w", err)
+		return nil, fmt.Errorf("clear repo cycles: %w", err)
 	}
 
 	var restarts []RepoCycleRestart
-	var refactor *RefactorRestart
 	for _, c := range cycles {
 		switch c.cycleType {
-		case feature.CycleRefactor:
-			if refactor != nil {
-				// Only restart one refactor per feature — one at a time.
-				continue
-			}
-			prompt := f.RefactorPrompt
-			if prompt == "" && c.planPath != "" {
-				data, _ := os.ReadFile(c.planPath)
-				prompt = extractRefactorPromptFromPlan(string(data))
-			}
-			refactor = &RefactorRestart{
-				RepoName: c.repoName,
-				Prompt:   prompt,
-			}
 		case feature.CycleReviewComments:
 			data, _ := os.ReadFile(c.planPath)
 			restarts = append(restarts, RepoCycleRestart{
@@ -768,41 +741,7 @@ func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]Rep
 		}
 	}
 
-	return restarts, refactor, nil
-}
-
-// extractRefactorPromptFromPlan returns the user prompt stored in a
-// refactor plan file. Matches the TUI's extractRefactorPrompt format
-// ("# Refactor: <repoName>\n\n<prompt>\n").
-func extractRefactorPromptFromPlan(content string) string {
-	if content == "" {
-		return ""
-	}
-	if idx := indexDoubleNewline(content); idx >= 0 {
-		return trimSpace(content[idx+2:])
-	}
-	return trimSpace(content)
-}
-
-func indexDoubleNewline(s string) int {
-	for i := 0; i+1 < len(s); i++ {
-		if s[i] == '\n' && s[i+1] == '\n' {
-			return i
-		}
-	}
-	return -1
-}
-
-func trimSpace(s string) string {
-	start := 0
-	for start < len(s) && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-		start++
-	}
-	end := len(s)
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-		end--
-	}
-	return s[start:end]
+	return restarts, nil
 }
 
 // GateReviewContext bundles the artifact path and worktree directory the TUI
@@ -907,9 +846,9 @@ func (o *Orchestrator) ResolveGateReviewContext(featureID string, targetPhase fe
 	case feature.PhaseImplement:
 		// Roadmap features at phase 0 → roadmap artifact (initial roadmap review).
 		// Roadmap features at phase N > 0 → per-phase plan artifact
-		// (phase-N-plan key routes through resolvePhaseDirForKey, which is
-		// refactor-aware via RefactorPrefix() — mirrors the TUI's
-		// startPlanReviewSessionCmd path and the cascade used by resolvePlanPath).
+		// (phase-N-plan key routes through resolvePhaseDirForKey —
+		// mirrors the TUI's startPlanReviewSessionCmd path and the
+		// cascade used by resolvePlanPath).
 		// Legacy single-repo non-roadmap → generic "plan" artifact.
 		switch {
 		case f.TotalRoadmapPhases > 0 && f.CurrentRoadmapPhase == 0:
@@ -961,8 +900,7 @@ const (
 	RestartDispatchPhase
 
 	// RestartDispatchRepoCycles — the TUI should fan out a
-	// restartRepoCycleMsg for each entry in RepoCycleRestarts and a
-	// restartRefactorCycleMsg for RefactorRestart (when non-nil).
+	// restartRepoCycleMsg for each entry in RepoCycleRestarts.
 	RestartDispatchRepoCycles
 )
 
@@ -972,7 +910,6 @@ type RestartOutcome struct {
 	Action            RestartAction
 	Phase             feature.Phase // meaningful only for RestartDispatchPhase
 	RepoCycleRestarts []RepoCycleRestart
-	RefactorRestart   *RefactorRestart
 }
 
 // RestartPhase is the single orchestrator entrypoint for user-initiated phase
@@ -984,7 +921,7 @@ type RestartOutcome struct {
 //     surface does not carry config so the TUI reads Defaults and passes them).
 //   - On Published features with RepoCycles present, collects and clears the
 //     per-cycle restart descriptors and returns RestartDispatchRepoCycles
-//     (the TUI fans those out as restartRepoCycleMsg / restartRefactorCycleMsg).
+//     (the TUI fans those out as restartRepoCycleMsg).
 //   - Otherwise, walks the phase+status decision tree to transition the
 //     feature back to a startable status and returns RestartDispatchPhase
 //     with the phase the TUI should re-launch via StartPhaseMsg.
@@ -1036,14 +973,13 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 				return RestartOutcome{}, fmt.Errorf("restore status for cycle restart: %w", err)
 			}
 		}
-		restarts, refactor, collectErr := o.CollectAndClearRepoCycleRestarts(featureID)
+		restarts, collectErr := o.CollectAndClearRepoCycleRestarts(featureID)
 		if collectErr != nil {
 			return RestartOutcome{}, fmt.Errorf("collect cycles: %w", collectErr)
 		}
 		return RestartOutcome{
 			Action:            RestartDispatchRepoCycles,
 			RepoCycleRestarts: restarts,
-			RefactorRestart:   refactor,
 		}, nil
 	}
 

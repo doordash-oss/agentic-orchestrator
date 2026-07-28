@@ -1350,3 +1350,121 @@ artifacts: {}
 		t.Errorf("saved feature.yaml lost ticket reference in description field")
 	}
 }
+
+// TestStoreLoadDropsLegacyRefactorKeys verifies that a legacy run.yaml
+// containing refactor_prompt / refactor_count keys (from the removed Refactor
+// post-publish cycle) loads cleanly without activating any cycle, and that a
+// round-trip save does not re-emit the dropped keys.
+func TestStoreLoadDropsLegacyRefactorKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "refactor-legacy-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Refactor
+slug: legacy-refactor
+description: pre-removal state with refactor cycle keys
+created: 2026-01-01T00:00:00Z
+status: Published
+current_phase: 6
+repos:
+  - name: repo-a
+    path: /tmp/a
+    worktree_path: ""
+    branch: ""
+models: {}
+exit_criteria: ""
+inquireness: medium
+permissions_queue: []
+help_queue: []
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+started_at: 2026-01-01T00:00:00Z
+rebase_count: 0
+refactor_count: 2
+active_cycle_type: refactor
+active_cycle:
+  type: refactor
+  status: running
+  count: 2
+refactor_prompt: extract shared config
+repo_cycles:
+  repo-a:
+    type: refactor
+    status: running
+    count: 1
+  repo-b:
+    type: review-comments
+    status: failed
+    count: 1
+    last_error: boom
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (legacy refactor keys must be ignored)", err)
+	}
+	// Legacy Refactor cycle state must be dropped on load: no active cycle
+	// type, no feature-level active cycle, no Refactor repo-cycle entries.
+	if got := string(loaded.ActiveCycleType()); got != "" {
+		t.Errorf("ActiveCycleType() = %q, want empty for dropped refactor cycle", got)
+	}
+	if loaded.ActiveCycle != nil {
+		t.Errorf("ActiveCycle = %+v, want nil for dropped refactor cycle", loaded.ActiveCycle)
+	}
+	if _, ok := loaded.RepoCycles["repo-a"]; ok {
+		t.Errorf("RepoCycles[repo-a] = %+v, want absent (refactor entry must be dropped)", loaded.RepoCycles["repo-a"])
+	}
+	if rc := loaded.RepoCycles["repo-b"]; rc == nil || rc.Type != CycleReviewComments || rc.Status != RepoCycleFailed {
+		t.Errorf("RepoCycles[repo-b] = %+v, want surviving failed review-comments entry preserved", rc)
+	}
+	if loaded.HasActiveRepoCycles() {
+		t.Error("HasActiveRepoCycles() = true, want false for dropped refactor cycle")
+	}
+	// No artifact-cycle prefix may engage for dropped cycle state.
+	if got := loaded.CyclePrefix(); got != "" {
+		t.Errorf("CyclePrefix() = %q, want empty for dropped refactor cycle", got)
+	}
+	loadedRun, err := store.LoadRun(featureID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun: %v", err)
+	}
+	if got := loadedRun.CyclePrefix(); got != "" {
+		t.Errorf("Run.CyclePrefix() = %q, want empty for dropped refactor cycle", got)
+	}
+
+	// Round-trip save and re-read the raw run.yaml: dropped keys and cycle
+	// state must not be re-emitted.
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(runDir, "run.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile after Save: %v", err)
+	}
+	savedStr := string(saved)
+	if strings.Contains(savedStr, "refactor") {
+		t.Errorf("saved run.yaml still contains 'refactor'; should not be re-emitted after round-trip:\n%s", savedStr)
+	}
+	if strings.Contains(savedStr, "active_cycle") {
+		t.Errorf("saved run.yaml still contains 'active_cycle'; dropped cycle state should not be re-emitted:\n%s", savedStr)
+	}
+}

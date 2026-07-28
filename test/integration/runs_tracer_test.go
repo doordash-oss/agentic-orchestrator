@@ -158,9 +158,6 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if got := agent.RoadmapDir(stateDir, f); !underRun1(got, run1Dir) {
 		t.Errorf("RoadmapDir = %q, want under %q", got, run1Dir)
 	}
-	if got := agent.RefactorBaseDir(stateDir, f, 1); !underRun1(got, run1Dir) {
-		t.Errorf("RefactorBaseDir(..., 1) = %q, want under %q", got, run1Dir)
-	}
 
 	// No error.log should have leaked to the feature root.
 	for _, phase := range []string{"inquire", "research", "design"} {

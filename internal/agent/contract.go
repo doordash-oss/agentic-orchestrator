@@ -706,48 +706,6 @@ func hasMarkdownHeading(body, heading string) bool {
 	return false
 }
 
-func validateRefactorPlanMarkdownArtifact(iterDir string, path string, out *Outcome) ([]ProtocolViolation, error) {
-	if path == "" {
-		return []ProtocolViolation{{Artifact: "refactor-plan.md", Reason: missingArtifactReason("refactor-plan.md", iterDir)}}, nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []ProtocolViolation{{Artifact: "refactor-plan.md", Reason: missingArtifactReason("refactor-plan.md", filepath.Dir(path))}}, nil
-		}
-		return nil, fmt.Errorf("reading refactor-plan.md: %w", err)
-	}
-	if strings.TrimSpace(string(data)) == "" {
-		return []ProtocolViolation{{Artifact: "refactor-plan.md", Reason: "refactor-plan.md is empty"}}, nil
-	}
-	out.PlanMarkdownPath = path
-	planText := string(data)
-	violations := verificationScopeViolations(planText)
-	for _, task := range ParsePlanTasks(planText) {
-		if len(task.Repos) != 1 {
-			violations = append(violations, ProtocolViolation{
-				Artifact: "refactor-plan.md",
-				Reason: fmt.Sprintf("%s must declare exactly one `**Repo:** <name>` tag; split cross-repo work into one task per repo",
-					strings.TrimSpace(task.Heading)),
-			})
-		}
-	}
-	var fence fenceState
-	for _, line := range strings.Split(planText, "\n") {
-		if fence.update(line) || fence.inside() {
-			continue
-		}
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") && strings.Contains(strings.ToLower(trimmed), "cross-repo verification") {
-			violations = append(violations, ProtocolViolation{
-				Artifact: "refactor-plan.md",
-				Reason:   "unsupported Cross-Repo Verification section; put each command in Automated Verification and scope it to one runnable repository",
-			})
-		}
-	}
-	return violations, nil
-}
-
 func validateKnowledgeBaseIndexArtifact(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
 	info, err := os.Stat(path)
 	if err != nil {

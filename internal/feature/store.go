@@ -257,6 +257,7 @@ func (s *Store) loadRunUnlocked(featureID string, runNumber int) (*Run, error) {
 		return nil, fmt.Errorf("parsing run file: %w", err)
 	}
 	normalizeLegacyArtifactAliases(r.Artifacts)
+	dropUnknownCycleState(&r)
 	return &r, nil
 }
 

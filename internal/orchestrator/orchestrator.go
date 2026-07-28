@@ -237,7 +237,7 @@ type Orchestrator struct {
 
 	// cycleWG tracks background goroutines launched by per-repo cycle
 	// dispatch (StartRepoCycleImplement, StartCycleFinalReview,
-	// startFeatureRefactor). Tests that drive these methods against a
+	// startFeatureReviewComments). Tests that drive these methods against a
 	// t.TempDir() state directory must call WaitForCycles before the
 	// test returns so the goroutine's writes don't race with TempDir
 	// cleanup.
@@ -386,11 +386,11 @@ func (o *Orchestrator) featureRebaseControl(featureID string) *featureRebaseCont
 
 // WaitForCycles blocks until every background goroutine launched by the
 // per-repo cycle entry points (StartRepoCycleImplement,
-// StartCycleFinalReview, runRefactorLoop) has returned. Production
+// StartCycleFinalReview) has returned. Production
 // callers do not need this — the orchestrator drives cycles to completion
 // via its event loop. It exists for tests whose state directory is a
 // t.TempDir(): without synchronizing on the goroutine, TempDir cleanup
-// can race with in-flight writes from the implementation/refactor loop.
+// can race with in-flight writes from the implementation loop.
 func (o *Orchestrator) WaitForCycles() { o.cycleWG.Wait() }
 
 // SetPublishFn installs a test hook that intercepts publish dispatch in place
@@ -1007,10 +1007,9 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 	var qaFilePaths []string
 	baseDir := o.stateDir()
 	if baseDir != "" {
-		refPrefix := f.RefactorPrefix()
 		runDir := agent.ActiveRunDir(baseDir, f)
 		for _, phase := range []string{"inquire", "research"} {
-			qaPath := filepath.Join(runDir, refPrefix, phase, "qa-answers.md")
+			qaPath := filepath.Join(runDir, phase, "qa-answers.md")
 			if _, statErr := os.Stat(qaPath); statErr == nil {
 				qaFilePaths = append(qaFilePaths, qaPath)
 			}
@@ -1055,7 +1054,7 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 		return PhaseStartResult{}, errors.New("no design doc or research artifact found; cannot proceed to planning")
 	}
 
-	qaFilePaths := o.collectQAFilePaths(f, f.RefactorPrefix())
+	qaFilePaths := o.collectQAFilePaths(f)
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
 		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
@@ -1111,7 +1110,7 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 		return PhaseStartResult{}, fmt.Errorf("phase %d not found in roadmap", f.CurrentRoadmapPhase)
 	}
 
-	qaFilePaths := o.collectQAFilePaths(f, f.RefactorPrefix())
+	qaFilePaths := o.collectQAFilePaths(f)
 
 	var priorPhasePlanPaths []string
 	for i := 1; i < currentPhase.Number; i++ {
@@ -1319,7 +1318,7 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 // (stopping sessions, clearing pending flags, transitioning to interrupted)
 // AND additionally have KBStatus cleared to match the startup sweep.
 // Non-running features (Published, CodeReady) with active repo cycles
-// (rebase/review-comments/refactor) are interrupted at the feature level so
+// (rebase/review-comments) are interrupted at the feature level so
 // the dashboard keeps them in the active bucket. KBStatus is preserved for
 // every post-publish cycle shape. CodeReady is the manual_publish=true shape
 // where a rebase cycle can be in flight while the feature waits for the user
@@ -1383,8 +1382,8 @@ func (o *Orchestrator) InterruptAllRunning() error {
 }
 
 // hasActiveRepoCycles returns true if the feature has any running/reviewing
-// post-publish cycle. Legacy cycles live in RepoCycles; feature-level rebase,
-// review-comment, and refactor flows live only in ActiveCycle.
+// post-publish cycle. Legacy cycles live in RepoCycles; feature-level rebase
+// and review-comment flows live only in ActiveCycle.
 func hasActiveRepoCycles(f *feature.Feature) bool {
 	if hasActiveFeatureLevelInterruptibleCycle(f) {
 		return true
@@ -1406,7 +1405,7 @@ func hasInterruptibleRepoCycles(f *feature.Feature) bool {
 			continue
 		}
 		switch rc.Type {
-		case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
+		case feature.CycleRebase, feature.CycleReviewComments:
 		default:
 			continue
 		}
@@ -1429,7 +1428,7 @@ func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
 		cycleType = f.ActiveCycleType()
 	}
 	switch cycleType {
-	case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
+	case feature.CycleRebase, feature.CycleReviewComments:
 		return true
 	default:
 		return false
@@ -1548,9 +1547,8 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 		}
 		// Persist the resolved plan path so subsequent implementation reuses it.
 		// Mirrors startImplement's persistence (orchestrator.go:770-779). The
-		// fallback cascade in resolvePlanPath is refactor-aware
-		// (phasePlanDirForFeature), so refactor-scoped phase plans are picked
-		// over decoy non-refactor paths.
+		// fallback cascade in resolvePlanPath (phasePlanDirForFeature) locates
+		// the phase-plan dir the planner writes to.
 		if reloaded, err := o.deps.Lifecycle.Get(featureID); err == nil && reloaded != nil {
 			if planPath := o.resolvePlanPath(reloaded); planPath != "" {
 				_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
@@ -1825,27 +1823,19 @@ func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phas
 	}
 	var candidates []string
 	if phasePlan && f.CurrentRoadmapPhase > 0 {
-		// Refactor-aware: RunPhasePlanningLoop writes attempt-NN/meta.yaml under
-		// the refactor cycle's phase-plan dir when the feature has a refactor
-		// prefix (plan_validation.go:1441). Targeting the non-refactor dir here
+		// RunPhasePlanningLoop writes attempt-NN/meta.yaml under the
+		// phase-plan dir (plan_validation.go). Targeting any other dir here
 		// would leave the APPROVED attempt untouched in the real attempt tree,
-		// and the next plan run would short-circuit via plan_validation.go:1056.
+		// and the next plan run would short-circuit via the attempt cache.
 		candidates = append(candidates, o.phasePlanDirForFeature(f, f.CurrentRoadmapPhase))
 	} else {
-		// Refactor-aware roadmap dir: matches the path RunRoadmapPlanningLoop
-		// reads from during a refactor cycle (mirrors TUI at app.go:3279-3282).
+		// Roadmap dir: matches the path RunRoadmapPlanningLoop reads from.
 		roadmapDir := agent.RoadmapDir(baseDir, f)
-		if f.RefactorPrefix() != "" {
-			roadmapDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "roadmap")
-		}
 		// Legacy plan dir: features carried forward from a build that ran the
 		// (now-removed) RunPlanningLoop may have APPROVED metadata at
 		// runs/run-NNN/plan/attempt-NN/meta.yaml. Invalidate it defensively so
 		// LatestCompletedPlanAttempt won't return a stale match for those features.
 		legacyPlanDir := filepath.Join(agent.ActiveRunDir(baseDir, f), "plan")
-		if f.RefactorPrefix() != "" {
-			legacyPlanDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "plan")
-		}
 		candidates = append(candidates, roadmapDir, legacyPlanDir)
 	}
 	for _, planDir := range candidates {

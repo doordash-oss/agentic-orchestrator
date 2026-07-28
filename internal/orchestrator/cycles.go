@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator owns post-publish review-comments/refactor cycle
+// Package orchestrator owns post-publish review-comments cycle
 // lifecycle methods for multi-repo features.
 package orchestrator
 
@@ -36,7 +36,7 @@ import (
 const finalStatusLoopError = "error"
 
 // RepoCycleLoopResultInput carries the result of an agent implementation loop
-// for a per-repo cycle (rebase / review-comments / refactor).
+// for a per-repo cycle (rebase / review-comments).
 type RepoCycleLoopResultInput struct {
 	RepoName string
 	Result   *agent.LoopResult
@@ -120,8 +120,7 @@ func cycleTypeForRepo(o *Orchestrator, featureID, repoName string) feature.RepoC
 // restartPausedRepoCycle dispatches a paused cycle to its cycle-type-specific
 // restart seam. The cycle entry's Type is the source of truth; UI hints in
 // the decision record are diagnostic only. Review-comments re-enters through
-// restartRepoCycleImplement; refactor re-enters through restartRefactorRepoCycle.
-// Cycle Count and PlanPath survive the round-trip on every type.
+// restartRepoCycleImplement. Cycle Count and PlanPath survive the round-trip.
 func (o *Orchestrator) restartPausedRepoCycle(featureID, repoName string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -135,47 +134,9 @@ func (o *Orchestrator) restartPausedRepoCycle(featureID, repoName string) error 
 	case feature.CycleReviewComments:
 		_, err := o.restartRepoCycleImplement(featureID, repoName, rc)
 		return err
-	case feature.CycleRefactor:
-		return o.restartRefactorRepoCycle(featureID, repoName, rc)
 	default:
 		return fmt.Errorf("unsupported cycle type %q for repo %q", rc.Type, repoName)
 	}
-}
-
-// restartRefactorRepoCycle re-launches a refactor loop for a paused refactor
-// cycle. Refactor is feature-level; the gate-only restart path resolves the
-// persisted prompt and re-dispatches via startFeatureRefactor. The legacy
-// "preserve Count / PlanPath" guard is unnecessary because the flat artifact
-// layout (no per-repo subdir) and AtomicPhaseStamp staged-subset semantics make
-// a fresh dir on every retry the simpler invariant.
-func (o *Orchestrator) restartRefactorRepoCycle(featureID, repoName string, rc *feature.RepoCycleState) error {
-	if rc == nil {
-		return fmt.Errorf("nil cycle state for repo %q", repoName)
-	}
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return fmt.Errorf("load feature: %w", err)
-	}
-	if f.RefactorPrompt == "" && rc.PlanPath != "" {
-		if data, readErr := os.ReadFile(rc.PlanPath); readErr == nil {
-			if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-				ff.RefactorPrompt = string(data)
-				return nil
-			}); err != nil {
-				return fmt.Errorf("restore refactor prompt: %w", err)
-			}
-			f, err = o.deps.Lifecycle.Get(featureID)
-			if err != nil {
-				return fmt.Errorf("reload feature: %w", err)
-			}
-		}
-	}
-	if f.RefactorPrompt == "" {
-		return fmt.Errorf("no refactor prompt available for paused cycle on repo %q", repoName)
-	}
-
-	_, err = o.startFeatureRefactor(featureID, repoName, f.RefactorPrompt, RefactorEvidence{})
-	return err
 }
 
 // restartRepoCycleImplement re-launches an autonomous cycle implementation
@@ -235,7 +196,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		log.Printf("feature %s: implementation effort %q is not supported by model %q; falling back to Auto (%s)",
 			f.ID, f.Effort.Implementation, implModel, string(pipelineEffort))
 	}
-	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review, "")
+	reviewEffort, reviewEffortSource := pr.ResolveSecondaryEffort(f, llm.PhaseReview, f.Models.Review)
 	cfg := agent.ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               o.deps.Store,
@@ -337,8 +298,8 @@ func (o *Orchestrator) StartCycleFinalReview(featureID string) error {
 // post-cycle Final Review.
 //
 // On review_passed: iterates per-repo CompleteRepoCycle for backward
-// compatibility with the legacy fallthrough path (rebase / review-comments /
-// refactor are routed via their unified loops post slices-4-7, so this
+// compatibility with the legacy fallthrough path (rebase / review-comments
+// are routed via their unified loops post slices-4-7, so this
 // branch is rarely exercised in production).
 //
 // On failure: marks every active cycle entry failed.
@@ -355,7 +316,7 @@ func (o *Orchestrator) handleCycleFinalReviewDone(
 	}
 
 	// Review approved — the legacy per-repo-cycle path (rebase /
-	// review-comments / refactor) iterates CompleteRepoCycle for backward
+	// review-comments) iterates CompleteRepoCycle for backward
 	// compatibility, but the unified loops own those paths post slices-4-7.
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -464,8 +425,6 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 		}
 		return nil
 
-	case feature.CycleRefactor:
-		return o.CompleteRefactorRepoCycle(featureID, repoName)
 	}
 
 	return fmt.Errorf("unsupported repo cycle type %q for repo %q", cycleType, repoName)
@@ -473,7 +432,7 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 
 // DispatchRepoCycle is the top-level entry point for launching any per-repo
 // post-publish cycle. It routes to StartRepoCycleImplement (which runs an
-// autonomous implementation loop) or StartRefactorCycle.
+// autonomous implementation loop).
 //
 // Callers (including the TUI) should use this method rather than dispatching
 // directly so cycle-type routing stays in one place.
@@ -485,134 +444,9 @@ func (o *Orchestrator) DispatchRepoCycle(
 	switch cycleType {
 	case feature.CycleReviewComments:
 		return o.StartRepoCycleImplement(featureID, repoName, cycleType, planContent)
-	case feature.CycleRefactor:
-		// Refactor cycles are launched via StartRefactorCycle — DispatchRepoCycle
-		// treats the planContent as the refactor prompt for convenience.
-		return o.StartRefactorCycle(featureID, repoName, planContent)
 	default:
 		return "", fmt.Errorf("unknown cycle type %q", cycleType)
 	}
-}
-
-// StartRefactorCycle launches the feature-level refactor cycle. The per-repo
-// entry shape is preserved for the TUI (Manager.StartRefactor /
-// app.startRefactorCmd) — repoName is treated as a hint, the loop mounts every
-// Feature.Repos worktree, and the refactor-plan step's `**Repo:** <name>` tags
-// determine the staged subset.
-//
-// Validates StatusCodeReady/StatusPublished, blocks concurrent refactor cycles
-// on the same feature, and dispatches the loop in a background goroutine. The
-// inner loop owns RefactorCount increment, ActiveCycle stamping, and
-// the refactor-plan + iterative implement state machine. Result routing
-// flows through handleFeatureRefactorDone, which mirrors the legacy
-// HandleRefactorCycleLoopDone surface so per-repo TUI rendering keeps working.
-//
-// Ports startRefactorCmd (app.go).
-func (o *Orchestrator) StartRefactorCycle(
-	featureID, repoName, prompt string,
-	evidence ...RefactorEvidence,
-) (string, error) {
-	return o.startFeatureRefactor(featureID, repoName, prompt, mergeRefactorEvidence(evidence...))
-}
-
-// RestartRefactorCycle re-launches a refactor loop for a stale cycle. Unlike
-// StartRefactorCycle, it does NOT increment RefactorCount — it reuses the
-// existing refactor directory and count from the prior attempt.
-//
-// Ports restartRepoCycleRefactorCmd (app.go:7092-7184).
-func (o *Orchestrator) RestartRefactorCycle(
-	featureID, repoName, prompt string,
-	evidence ...RefactorEvidence,
-) (string, error) {
-	// Refactor is feature-level, so "restart" semantics collapse with "start":
-	// the loop increments and stages a new dir per invocation. The legacy
-	// "reuse refactor-N count" behavior is unnecessary because the flat artifact
-	// layout (no per-repo subdir) and AtomicPhaseStamp staged-subset semantics
-	// make a fresh dir on every retry the simpler invariant.
-	return o.startFeatureRefactor(featureID, repoName, prompt, mergeRefactorEvidence(evidence...))
-}
-
-// CompleteRefactorRepoCycle finalizes a per-repo refactor cycle: commits
-// any refactor changes, pull-rebases, pushes, clears RefactorPrompt, and
-// completes the cycle. Failures call FailRepoCycle.
-//
-// Ports completeRefactorRepoCycleCmd (app.go:7209-7252).
-func (o *Orchestrator) CompleteRefactorRepoCycle(featureID, repoName string) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return fmt.Errorf("load feature: %w", err)
-	}
-
-	var repo *feature.FeatureRepo
-	for i := range f.Repos {
-		if f.Repos[i].Name == repoName {
-			repo = &f.Repos[i]
-			break
-		}
-	}
-	if repo == nil {
-		return fmt.Errorf("repo %q not found in feature", repoName)
-	}
-
-	workDir := repoWorkDir(*repo)
-	branch := repoBranch(f, *repo)
-
-	// Publisher/Rebaser may be nil in unit tests that exercise the lifecycle
-	// plumbing without wiring git adapters; skip the commit/push when absent
-	// so the refactor-cycle finalisation still clears state and marks the
-	// cycle complete.
-	if o.deps.Publisher != nil {
-		_ = o.deps.Publisher.CommitAll(workDir, "Apply refactor changes")
-	}
-
-	if o.deps.Rebaser != nil {
-		if prr := o.deps.Rebaser.PullRebase(workDir, branch); prr.Outcome != ports.PullRebaseSuccess {
-			// Log-equivalent: swallow failure like TUI logPhaseError path.
-			_ = prr.Err
-		}
-	}
-
-	if o.deps.Publisher != nil {
-		if err := o.deps.Publisher.Push(workDir, branch); err != nil {
-			_ = o.deps.Lifecycle.FailRepoCycle(featureID, repoName, "push: "+err.Error())
-			return fmt.Errorf("push: %w", err)
-		}
-	}
-
-	// Clear refactor state and complete the cycle.
-	_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		ff.RefactorPrompt = ""
-		return nil
-	})
-	if err := o.deps.Lifecycle.CompleteRepoCycle(featureID, repoName); err != nil {
-		return fmt.Errorf("complete repo cycle: %w", err)
-	}
-	return nil
-}
-
-// hasRunningRefactor returns true if any repo on the feature has an active
-// CycleRefactor cycle — running, reviewing, or paused on a NEED_USER_INPUT
-// gate. Paused refactor cycles still own the shared feature-level
-// RefactorPrompt/RefactorCount, so they must remain exclusive the same way
-// as the running/reviewing states. Mirrors the TUI's hasRunningRefactorCycle
-// helper at app.go:7503.
-func hasRunningRefactor(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	for _, rc := range f.RepoCycles {
-		if rc == nil {
-			continue
-		}
-		if rc.Type != feature.CycleRefactor {
-			continue
-		}
-		switch rc.Status {
-		case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
-			return true
-		}
-	}
-	return false
 }
 
 func reviewCommentsPRURL(f *feature.Feature, repoName string) string {

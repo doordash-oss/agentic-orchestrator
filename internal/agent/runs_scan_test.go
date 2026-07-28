@@ -48,8 +48,8 @@ func TestRunsModel_ScanDetectsVariableBasedJoins(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "refactor prefix function call",
-			src:  `package p; import "path/filepath"; type F struct{}; func (F) RefactorPrefix() string { return "" }; func f(stateDir, featureID string, ff F) string { return filepath.Join(stateDir, featureID, ff.RefactorPrefix()) }`,
+			name: "cycle prefix method call",
+			src:  `package p; import "path/filepath"; type F struct{}; func (F) CyclePrefix() string { return "" }; func f(stateDir, featureID string, ff F) string { return filepath.Join(stateDir, featureID, ff.CyclePrefix()) }`,
 			want: true,
 		},
 		{
@@ -63,8 +63,8 @@ func TestRunsModel_ScanDetectsVariableBasedJoins(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "Sprintf refactor-N",
-			src:  `package p; import ("fmt"; "path/filepath"); func f(stateDir, featureID string, n int) string { return filepath.Join(stateDir, featureID, fmt.Sprintf("refactor-%d", n)) }`,
+			name: "Sprintf cycle-N",
+			src:  `package p; import ("fmt"; "path/filepath"); func f(stateDir, featureID string, n int) string { return filepath.Join(stateDir, featureID, fmt.Sprintf("rebase-%d", n)) }`,
 			want: true,
 		},
 		{
@@ -175,13 +175,13 @@ func TestRunsModel_ScanDetectsVariableBasedJoins(t *testing.T) {
 // under internal/agent/, internal/orchestrator/, and internal/tui/ and
 // fails if any filepath.Join callsite still joins
 // (stateDir, featureID, <something>, …) directly at the feature root —
-// the runs-first layout (Phase 1) requires every phase/cycle/refactor
+// the runs-first layout (Phase 1) requires every phase/cycle
 // artifact to route through ActiveRunDir or a helper that nests inside
 // runs/run-NNN/.
 //
 // internal/tui is scanned because the TUI writes artifacts and error
 // logs directly (handleSessionDone's save-output path, logPhaseError
-// helper, publish/rebase/refactor/review-comments error surfaces). The
+// helper, publish/rebase/review-comments error surfaces). The
 // iteration-2 reviewer caught that the TUI still recreated flat
 // <feature>/<phase>/ paths after agent/orchestrator had been fixed, so
 // the scanner must cover it to prevent future regressions.
@@ -194,8 +194,8 @@ func TestRunsModel_ScanDetectsVariableBasedJoins(t *testing.T) {
 // images, attachments, description-review.md, observe-summary.yaml, and
 // the PID-file family (session.pid / session-<repo>.pid / session-<suffix>).
 //
-// Anything else — phase literals, `f.RefactorPrefix()`, `cyclePrefix`,
-// `cycleDirName`, `refPrefix`, `phase`, `phaseKey`, `fmt.Sprintf("refactor-%d", …)`,
+// Anything else — phase literals, `f.CyclePrefix()`, `cyclePrefix`,
+// `cycleDirName`, `refPrefix`, `phase`, `phaseKey`, `fmt.Sprintf("rebase-%d", …)`,
 // and so on — triggers a violation. Variable-based joins are caught
 // precisely because we do NOT limit condition 3 to string literals.
 func TestRunsModel_NoFeatureRootArtifactAccess(t *testing.T) {
@@ -279,9 +279,9 @@ func scanFile(t *testing.T, path string) []string {
 		}
 		// Condition 3: every later arg MUST be a feature-root-safe expression.
 		// A single non-safe arg flags the whole call. This catches literal
-		// phase names, phase-/refactor-/rebase- prefixes, AND
+		// phase names, phase-/cycle- prefixes, AND
 		// variable-based joins (cyclePrefix, refPrefix, cycleDirName,
-		// phaseKey, phase.DirName(), f.RefactorPrefix(), …) — the whole
+		// phaseKey, phase.DirName(), f.CyclePrefix(), …) — the whole
 		// family the reviewer flagged as false negatives in iteration 1.
 		safe := true
 		for i := 2; i < len(call.Args); i++ {
@@ -369,8 +369,8 @@ func tailIdent(e ast.Expr) string {
 //   - fmt.Sprintf("session-...", ...) — the PID-file builder pattern.
 //
 // Anything else — variable identifiers (phase, phaseKey, refPrefix,
-// cyclePrefix, cycleDirName, ...), selector calls (f.RefactorPrefix(),
-// phase.DirName()), fmt.Sprintf("refactor-%d", n), etc. — is considered
+// cyclePrefix, cycleDirName, ...), selector calls (f.CyclePrefix(),
+// phase.DirName()), fmt.Sprintf("rebase-%d", n), etc. — is considered
 // unsafe and flags a violation when paired with (stateDir, featureID).
 func isFeatureRootSafe(e ast.Expr) bool {
 	switch v := e.(type) {

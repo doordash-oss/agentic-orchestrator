@@ -128,7 +128,6 @@ Create features from the TUI wizard by pressing `n` on the dashboard. The wizard
 
 After a feature is published, several actions are available:
 
-- **Refactor** (`Shift+F`) — re-runs the full pipeline on a published feature
 - **Rebase** (`b`) — rebases the feature branch onto the latest main
 - **Review Comments** (`g`) — fetches and addresses PR review comments
 - **Merge** (`Shift+M`) — merges to the base branch (local repos only)

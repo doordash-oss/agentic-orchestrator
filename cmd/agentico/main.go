@@ -1014,18 +1014,6 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 				return err
 			}
 		}
-		if outcome.RefactorRestart != nil {
-			resp.RefactorCount = 1
-			sessionID, err := t.orch.RestartRefactorCycle(featureID, outcome.RefactorRestart.RepoName, outcome.RefactorRestart.Prompt)
-			if sessionID != "" {
-				sessionIDs = append(sessionIDs, sessionID)
-			}
-			if err != nil {
-				return err
-			}
-		} else {
-			resp.RefactorCount = 0
-		}
 		if len(sessionIDs) > 0 {
 			resp.SessionIDs = sessionIDs
 		}
@@ -1686,22 +1674,6 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 	return resp, nil
 }
 
-func (t *serverMutationTarget) StartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.RefactorStartResponse, error) {
-	return t.startRefactorAction(featureID, req, false)
-}
-
-func (t *serverMutationTarget) RestartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.RefactorRestartResponse, error) {
-	resp, err := t.startRefactorAction(featureID, req, true)
-	return serverruntime.RefactorRestartResponse{
-		FeatureID: resp.FeatureID,
-		Result:    resp.Result,
-		Repo:      resp.Repo,
-		CycleType: resp.CycleType,
-		Pipeline:  resp.Pipeline,
-		SessionID: resp.SessionID,
-	}, err
-}
-
 func (t *serverMutationTarget) MarkDone(featureID string) (serverruntime.MarkDoneResponse, error) {
 	if t.orch == nil {
 		return serverruntime.MarkDoneResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
@@ -1772,48 +1744,6 @@ func actionConflictError(err error) error {
 		}
 	}
 	return nil
-}
-
-func (t *serverMutationTarget) startRefactorAction(featureID string, req serverruntime.RefactorActionRequest, restart bool) (serverruntime.RefactorStartResponse, error) {
-	resp := serverruntime.RefactorStartResponse{
-		FeatureID: featureID,
-		Repo:      req.Repo,
-		CycleType: string(feature.CycleRefactor),
-		Pipeline:  string(req.Pipeline),
-	}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
-	var (
-		sessionID string
-		err       error
-	)
-	if restart {
-		sessionID, err = t.orch.RestartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
-			Images:      append([]string(nil), req.Images...),
-			Attachments: append([]string(nil), req.Attachments...),
-			Pipeline:    req.Pipeline,
-		})
-	} else {
-		sessionID, err = t.orch.StartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
-			Images:      append([]string(nil), req.Images...),
-			Attachments: append([]string(nil), req.Attachments...),
-			Pipeline:    req.Pipeline,
-		})
-	}
-	if sessionID != "" {
-		resp.SessionID = sessionID
-	}
-	if err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	if restart {
-		resp.Result = "restarted"
-	} else {
-		resp.Result = resultStarted
-	}
-	return resp, nil
 }
 
 func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewCommentDTO {

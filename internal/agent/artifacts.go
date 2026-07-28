@@ -110,12 +110,6 @@ func RoadmapDir(stateDir string, f *feature.Feature) string {
 	return filepath.Join(ActiveRunDir(stateDir, f), "roadmap")
 }
 
-// RefactorBaseDir returns the base directory for a refactor cycle's artifacts
-// within the active run. e.g., runs/run-001/refactor-1/.
-func RefactorBaseDir(stateDir string, f *feature.Feature, n int) string {
-	return filepath.Join(ActiveRunDir(stateDir, f), fmt.Sprintf("refactor-%d", n))
-}
-
 type IterationMeta struct {
 	Iteration    int           `yaml:"iteration"`
 	StartedAt    time.Time     `yaml:"started_at"`

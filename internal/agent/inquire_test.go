@@ -65,19 +65,15 @@ func TestBuildInquirePromptWithImages(t *testing.T) {
 	}
 }
 
-func TestBuildInquirePromptUsesEffectiveDescription(t *testing.T) {
+func TestBuildInquirePromptUsesDescription(t *testing.T) {
 	f := &feature.Feature{
-		Name:           "Inquire Refactor",
-		Description:    "original desc",
-		RefactorPrompt: "improve performance",
+		Name:        "Inquire Feature",
+		Description: "original desc",
 		Repos: []feature.FeatureRepo{
 			{Name: "repo", Path: "/tmp/test"},
 		},
 	}
 	prompt := BuildInquirePrompt(f, "")
-	if !strings.Contains(prompt, "improve performance") {
-		t.Error("expected refactor prompt in inquire output")
-	}
 	if !strings.Contains(prompt, "original desc") {
 		t.Error("expected original description in inquire output")
 	}

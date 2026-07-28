@@ -136,9 +136,8 @@ PROGRESS_EOF
 if [ ! -f "$_d/verification-report.yaml" ]; then
   printf 'version: 1\nrequired_checks:\n  - name: Deferred check\n    requirement: go test ./...\n    status: not_run\n    evidence: pending retry iteration\n' > "$_d/verification-report.yaml"
 fi
-touch "$_d/phase_complete"
 `+testutil.JSONLInit+`
-`+testutil.JSONLSuccess+`
+`+testutil.JSONLRetry+`
 `)
 
 	// Review: would emit APPROVED if invoked. The test asserts FinalStatus
@@ -196,256 +195,11 @@ func padIter(n int) string {
 	return string(rune('0'+n/10)) + string(rune('0'+n%10))
 }
 
-// TestImplementLoop_Routing_NEED_USER_INPUT_PausesFeature locks in the
-// single-repo pause path: `## Iteration State: NEED_USER_INPUT` plus a
-// `## Questions for User` section and agent-authored need-user-input.yaml
-// produce a need_user_input LoopResult pointing at the parsed gate artifact.
-func TestImplementLoop_Routing_NEED_USER_INPUT_PausesFeature(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	artifactDir := filepath.Join(tmpDir, "artifacts")
-	stateDir := filepath.Join(tmpDir, "state", "test-feat-003")
-	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
-		_ = os.MkdirAll(d, 0o755)
-	}
-
-	const progressNote = "Progress note should not be used as the persisted gate summary."
-	const gateSummary = "Gate summary from need-user-input.yaml."
-	questions := []string{
-		"Should implementation target the legacy auth path or the new auth service?",
-		"Is it acceptable to skip migration of historical sessions?",
-	}
-	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+
-			testutil.WriteImplementNeedUserInputArtifactsWithGateSummary(artifactDir, progressNote, gateSummary, questions...)+"\n"+
-			testutil.JSONLSuccess+"\n")
-	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	f := newTestFeature(t, workDir)
-	planPath := writePlanFile(t, artifactDir, "Routing NEED_USER_INPUT test")
-
-	cfg := ImplementConfig{
-		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 5,
-		MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
-		Model: "agent", ReviewModel: "reviewer",
-		ArtifactDir: artifactDir, StateDir: stateDir,
-		BuildSession: mockBuildSession(agentScript, reviewScript),
-	}
-	result, err := RunImplementationLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("loop error: %v", err)
-	}
-	if result.FinalStatus != "need_user_input" {
-		t.Errorf("FinalStatus = %q, want need_user_input", result.FinalStatus)
-	}
-	if !strings.Contains(result.LastError, gateSummary) {
-		t.Errorf("LastError = %q, want parsed gate summary %q", result.LastError, gateSummary)
-	}
-	if strings.Contains(result.LastError, progressNote) {
-		t.Errorf("LastError = %q, should not reuse progress.md state note", result.LastError)
-	}
-	if result.NeedUserInputPath == "" {
-		t.Fatalf("NeedUserInputPath should be set when a gate is persisted")
-	}
-	rec, readErr := ReadNeedUserInputRecord(result.NeedUserInputPath)
-	if readErr != nil {
-		t.Fatalf("read gate: %v", readErr)
-	}
-	if rec.Summary != gateSummary {
-		t.Errorf("gate summary = %q, want %q", rec.Summary, gateSummary)
-	}
-	if len(rec.Questions) != len(questions) {
-		t.Fatalf("gate questions = %d, want %d", len(rec.Questions), len(questions))
-	}
-	for i, want := range questions {
-		if rec.Questions[i].Prompt != want {
-			t.Errorf("gate Q%d prompt = %q, want %q", i+1, rec.Questions[i].Prompt, want)
-		}
-		if rec.Questions[i].Answer != "" {
-			t.Errorf("gate Q%d answer should be empty before user fills it", i+1)
-		}
-	}
-	// meta.yaml must be persisted so LatestIteration() advances past the
-	// paused iteration; a resume run picks up at iteration N+1.
-	am := NewArtifactManager(artifactDir)
-	if got := am.LatestIteration(); got != result.Iterations {
-		t.Errorf("LatestIteration = %d, want %d (paused iteration must be committed)", got, result.Iterations)
-	}
-}
-
-func TestImplementLoop_Routing_NEED_USER_INPUT_MissingGateTripsProtocolViolation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	artifactDir := filepath.Join(tmpDir, "artifacts")
-	stateDir := filepath.Join(tmpDir, "state", "test-feat-missing-gate")
-	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
-		_ = os.MkdirAll(d, 0o755)
-	}
-
-	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+
-			testutil.WriteImplementNeedUserInputWithoutGate(artifactDir, "Need a choice.", "Legacy or new auth?")+"\n"+
-			testutil.JSONLSuccess+"\n")
-	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	f := newTestFeature(t, workDir)
-	planPath := writePlanFile(t, artifactDir, "Missing gate test")
-	result, err := RunImplementationLoop(ImplementConfig{
-		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 3,
-		MaxConsecFails: 2, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
-		Model: "agent", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
-		BuildSession: mockBuildSession(agentScript, reviewScript),
-	}, sm)
-	if err != nil {
-		t.Fatalf("loop error: %v", err)
-	}
-	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
-		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
-	}
-	if !strings.Contains(result.LastError, "need-user-input.yaml") || !strings.Contains(result.LastError, "missing") {
-		t.Fatalf("LastError = %q, want missing need-user-input.yaml", result.LastError)
-	}
-}
-
-func TestImplementLoop_Routing_NEED_USER_INPUT_MalformedGateTripsProtocolViolation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	artifactDir := filepath.Join(tmpDir, "artifacts")
-	stateDir := filepath.Join(tmpDir, "state", "test-feat-malformed-gate")
-	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
-		_ = os.MkdirAll(d, 0o755)
-	}
-
-	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+
-			testutil.WriteImplementNeedUserInputMalformedGate(artifactDir, "Need a choice.", "Legacy or new auth?")+"\n"+
-			testutil.JSONLSuccess+"\n")
-	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	f := newTestFeature(t, workDir)
-	planPath := writePlanFile(t, artifactDir, "Malformed gate test")
-	result, err := RunImplementationLoop(ImplementConfig{
-		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 3,
-		MaxConsecFails: 2, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
-		Model: "agent", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
-		BuildSession: mockBuildSession(agentScript, reviewScript),
-	}, sm)
-	if err != nil {
-		t.Fatalf("loop error: %v", err)
-	}
-	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
-		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
-	}
-	if !strings.Contains(result.LastError, "need-user-input.yaml") || !strings.Contains(result.LastError, "unparseable") {
-		t.Fatalf("LastError = %q, want unparseable need-user-input.yaml", result.LastError)
-	}
-}
-
-// TestImplementLoop_Routing_NEED_USER_INPUT_StubGateBackfilledFromProgress
-// reproduces the real-world failure where the implementer emits a rich
-// progress.md (state note + numbered questions) but a blank need-user-input.yaml
-// stub. The persisted gate must be backfilled from progress.md so the desktop app
-// renders the actual summary and questions rather than an empty form.
-func TestImplementLoop_Routing_NEED_USER_INPUT_StubGateBackfilledFromProgress(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	artifactDir := filepath.Join(tmpDir, "artifacts")
-	stateDir := filepath.Join(tmpDir, "state", "test-feat-stub-gate")
-	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
-		_ = os.MkdirAll(d, 0o755)
-	}
-
-	const note = "Plan contradicts the worktree; the owner must choose an ordering."
-	questions := []string{
-		"Should the pre-flight run before or after the latest-release fetch?",
-		"Is aborting an already-current install under an unwritable dir acceptable?",
-	}
-	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+
-			testutil.WriteImplementNeedUserInputStubGate(artifactDir, note, questions...)+"\n"+
-			testutil.JSONLSuccess+"\n")
-	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	f := newTestFeature(t, workDir)
-	planPath := writePlanFile(t, artifactDir, "Stub gate backfill test")
-	result, err := RunImplementationLoop(ImplementConfig{
-		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 5,
-		MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
-		Model: "agent", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
-		BuildSession: mockBuildSession(agentScript, reviewScript),
-	}, sm)
-	if err != nil {
-		t.Fatalf("loop error: %v", err)
-	}
-	if result.FinalStatus != "need_user_input" {
-		t.Fatalf("FinalStatus = %q, want need_user_input (LastError=%q)", result.FinalStatus, result.LastError)
-	}
-	if result.NeedUserInputPath == "" {
-		t.Fatalf("NeedUserInputPath should be set when a gate is persisted")
-	}
-	rec, readErr := ReadNeedUserInputRecord(result.NeedUserInputPath)
-	if readErr != nil {
-		t.Fatalf("read gate: %v", readErr)
-	}
-	if rec.Summary != note {
-		t.Errorf("gate summary = %q, want backfilled progress note %q", rec.Summary, note)
-	}
-	if len(rec.Questions) != len(questions) {
-		t.Fatalf("gate questions = %d, want %d backfilled from progress.md", len(rec.Questions), len(questions))
-	}
-	for i, want := range questions {
-		if rec.Questions[i].Prompt != want {
-			t.Errorf("gate Q%d prompt = %q, want %q", i+1, rec.Questions[i].Prompt, want)
-		}
-		if rec.Questions[i].Index != i+1 {
-			t.Errorf("gate Q%d index = %d, want %d", i+1, rec.Questions[i].Index, i+1)
-		}
-	}
-}
-
-// TestImplementLoop_Routing_MisplacedQuestionsStayOnProtocolViolationPath
-// locks in the conditional ordering rule: even when the agent emits a
-// `## Questions for User` section with valid numbered prompts, placing it
-// AFTER `## Iteration State` keeps the iteration on the protocol-violation
-// retry path. The deterministic gate must reject the malformed handoff
-// before any need-user-input.yaml gate artifact is persisted.
-func TestImplementLoop_Routing_MisplacedQuestionsStayOnProtocolViolationPath(t *testing.T) {
+// TestImplementLoop_Routing_LegacyQuestionsStayOnProtocolViolationPath locks
+// in that progress.md cannot create a user-input gate. Questions must use the
+// live root AskUserQuestion control; a legacy state/section stays on the
+// protocol-violation path and never persists a gate artifact.
+func TestImplementLoop_Routing_LegacyQuestionsStayOnProtocolViolationPath(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -499,7 +253,6 @@ PROGRESS_EOF
 if [ ! -f "$_d/verification-report.yaml" ]; then
   printf 'version: 1\nrequired_checks: []\n' > "$_d/verification-report.yaml"
 fi
-touch "$_d/phase_complete"
 `+testutil.JSONLInit+`
 `+testutil.JSONLSuccess+`
 `)
@@ -511,7 +264,7 @@ touch "$_d/phase_complete"
 	defer sm.Shutdown()
 
 	f := newTestFeature(t, workDir)
-	planPath := writePlanFile(t, artifactDir, "Misordered questions routing test")
+	planPath := writePlanFile(t, artifactDir, "Legacy questions routing test")
 
 	cfg := ImplementConfig{
 		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 1,
@@ -525,7 +278,7 @@ touch "$_d/phase_complete"
 		t.Fatalf("loop error: %v", err)
 	}
 	if result.FinalStatus == "need_user_input" {
-		t.Fatalf("misordered questions must not open a gate: %+v", result)
+		t.Fatalf("legacy progress questions must not open a gate: %+v", result)
 	}
 	feedbackPath := filepath.Join(artifactDir, "iteration-01", "review-feedback.md")
 	feedback, readErr := os.ReadFile(feedbackPath)
@@ -533,10 +286,10 @@ touch "$_d/phase_complete"
 		t.Fatalf("read review-feedback.md: %v", readErr)
 	}
 	if !strings.Contains(string(feedback), "Questions for User") {
-		t.Fatalf("review-feedback.md = %s, want ordering violation", feedback)
+		t.Fatalf("review-feedback.md = %s, want legacy question-section violation", feedback)
 	}
 	if _, statErr := os.Stat(filepath.Join(artifactDir, "iteration-01", "need-user-input.yaml")); !os.IsNotExist(statErr) {
-		t.Fatalf("misordered questions must not persist a gate artifact: stat err = %v", statErr)
+		t.Fatalf("legacy progress questions must not persist a gate artifact: stat err = %v", statErr)
 	}
 }
 
@@ -557,10 +310,10 @@ func TestImplementLoop_Routing_ProtocolViolation_BypassesReview(t *testing.T) {
 		_ = os.MkdirAll(d, 0o755)
 	}
 
-	// Agent script only touches phase_complete; never writes progress.md.
-	// The harness should reject as protocol violation, never invoke review.
+	// Agent script never writes progress.md. The harness should reject the
+	// artifact contract and never invoke review.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.TouchPhaseComplete(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -640,7 +393,7 @@ func TestImplementLoop_Routing_ProtocolViolation_ResumesFailureBudget(t *testing
 	}
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementProtocolViolation(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 

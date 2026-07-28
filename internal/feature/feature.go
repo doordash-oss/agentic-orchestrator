@@ -287,10 +287,8 @@ const (
 	FailureProtocolViolation = "protocol_violation"
 	FailureInfrastructure    = "infrastructure"
 	FailureWorktreeSetup     = "worktree_setup"
-	// FailureNeedUserInput marks a feature failure caused by an
-	// implement iteration emitting `## Iteration State: NEED_USER_INPUT`
-	// in progress.md. The harness treats this as a terminal state today;
-	// richer human-in-the-loop recovery is a follow-up.
+	// FailureNeedUserInput marks a feature failure caused by the user aborting
+	// a harness-created verification capability gate.
 	FailureNeedUserInput = "need_user_input"
 )
 

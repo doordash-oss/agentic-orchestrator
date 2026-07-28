@@ -607,7 +607,7 @@ func ValidateRequiredAgentOwnedEvidence(contract *TestingContract, iterationDir 
 }
 
 // PreflightAgentEvidence is the read-only, in-session equivalent of the
-// file-backed checks the report-integrity gate runs after phase_complete. It
+// file-backed checks the report-integrity gate runs during completion commit. It
 // lets the implementer confirm — before signaling SUCCESS — that every
 // required agent-owned capture is present, well-formed, correctly sized, and
 // not a byte-identical copy of another contracted row. Catching those here

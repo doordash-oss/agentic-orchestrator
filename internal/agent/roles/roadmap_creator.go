@@ -30,9 +30,8 @@ var roadmapCreatorRoleSpec = RoleSpec{
 	Required:     []feature.Phase{feature.PhaseDesign},
 	OutputRoots: []OutputRootSpec{
 		artifactDirOutputRoot("Shared roadmap artifact root. The roadmap markdown is written here across attempts."),
-		attemptDirOutputRoot("Active roadmap attempt directory. Debug prompts, attempt metadata, validator output, and phase_complete are written here."),
+		attemptDirOutputRoot("Active roadmap attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
 	},
-	MarkerRoot: "attempt_dir",
 	Artifacts: []RoleArtifactSpec{
 		roadmapMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),

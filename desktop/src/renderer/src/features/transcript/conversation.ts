@@ -1,4 +1,4 @@
-import type { TranscriptMessage } from '../../../../shared/ipc';
+import type { SessionTaskActivity, TranscriptMessage } from '../../../../shared/ipc';
 
 /** Upper bound on retained rows; keeps the live preview and AMA memory-safe. */
 export const MAX_TRANSCRIPT_MESSAGES = 200;
@@ -8,7 +8,7 @@ const SUPPRESSED_TYPES = ['usage_update', 'success', 'result', 'system', 'prompt
 
 export type ConversationMode = 'chat' | 'assistant-only';
 
-export type SubagentState = 'running' | 'done' | 'failed';
+export type SubagentState = 'running' | 'done' | 'failed' | 'cancelled';
 
 /** Live view of one delegated sub-agent, folded from its task lifecycle rows. */
 export interface SubagentActivity {
@@ -112,6 +112,8 @@ export interface BuildConversationOptions {
   mode?: ConversationMode;
   initialPrompt?: string;
   optimisticMessage?: string | null;
+  /** Durable provider-neutral task snapshots; authoritative over bounded transcript rows. */
+  taskActivities?: readonly SessionTaskActivity[];
 }
 
 /** Reduce a validated row stream into conversational responses and activity groups. */
@@ -119,7 +121,7 @@ export function buildConversation(
   messages: readonly TranscriptMessage[],
   options: BuildConversationOptions = {},
 ): ConversationItem[] {
-  const { mode = 'chat', initialPrompt, optimisticMessage } = options;
+  const { mode = 'chat', initialPrompt, optimisticMessage, taskActivities = [] } = options;
   const includeUser = mode === 'chat';
   const items: ConversationItem[] = [];
   const subagentsById = new Map<string, SubagentActivity>();
@@ -174,7 +176,9 @@ export function buildConversation(
       if (entry.task.lastToolName?.trim()) agent.lastTool = entry.task.lastToolName.trim();
       if (type === 'task_notification') {
         const status = entry.task.status?.trim().toLocaleLowerCase() ?? '';
-        agent.state = status === 'failed' || status === 'error' ? 'failed' : 'done';
+        if (status === 'failed' || status === 'error') agent.state = 'failed';
+        else if (status === 'cancelled' || status === 'canceled') agent.state = 'cancelled';
+        else agent.state = 'done';
         if (entry.task.summary?.trim()) agent.summary = entry.task.summary.trim();
       }
       if (known === undefined) {
@@ -216,6 +220,25 @@ export function buildConversation(
         labels: label === '' ? [] : [label],
       });
     }
+  }
+
+  for (const task of taskActivities) {
+    const known = subagentsById.get(task.taskId);
+    const agent: SubagentActivity = known ?? { id: task.taskId, state: 'running' };
+    if (task.description?.trim()) agent.description = task.description.trim();
+    if (task.lastToolName?.trim()) agent.lastTool = task.lastToolName.trim();
+    if (task.summary?.trim()) agent.summary = task.summary.trim();
+    if (task.state === 'running') agent.state = 'running';
+    else if (task.state === 'failed') agent.state = 'failed';
+    else if (task.state === 'cancelled') agent.state = 'cancelled';
+    else agent.state = 'done';
+    if (known !== undefined) continue;
+
+    subagentsById.set(task.taskId, agent);
+    const lastGroup = [...items].reverse().find((item) => item.kind === 'subagents');
+    if (lastGroup?.kind === 'subagents') lastGroup.agents.push(agent);
+    else
+      items.push({ kind: 'subagents', key: `subagents-registry-${task.taskId}`, agents: [agent] });
   }
 
   const optimistic = optimisticMessage?.trim();

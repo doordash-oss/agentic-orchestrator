@@ -833,7 +833,7 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 	}
 }
 
-func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T) {
+func TestRunInteractivePhase_RemovesPriorCompletionReceiptBeforeSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	stateDir := filepath.Join(tmpDir, "state")
@@ -844,7 +844,7 @@ func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T
 	}
 
 	f := &feature.Feature{
-		ID:        "test-stale-inquire-marker",
+		ID:        "test-prior-inquire-receipt",
 		Name:      "Test Feature",
 		ActiveRun: 1,
 		RunCount:  1,
@@ -856,17 +856,16 @@ func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", artifactDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(artifactDir, PhaseCompleteFile), []byte("stale\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(phase_complete): %v", err)
-	}
+	writeTestCompletionReceipt(t, artifactDir)
 
 	var buildCalled bool
-	var markerPresentAtBuild bool
+	var receiptPresentAtBuild bool
 	pr := &PhaseRunner{
 		StateDir: stateDir,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			buildCalled = true
-			markerPresentAtBuild = HasPhaseComplete(artifactDir)
+			_, receiptErr := ReadCompletionReceipt(artifactDir)
+			receiptPresentAtBuild = receiptErr == nil
 			return nil, nil, nil, fmt.Errorf("test: stopping after capture")
 		},
 	}
@@ -878,11 +877,11 @@ func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T
 	if !buildCalled {
 		t.Fatal("BuildSessionFn was not called")
 	}
-	if markerPresentAtBuild {
-		t.Fatal("BuildSessionFn observed stale phase_complete; marker should be removed before session build")
+	if receiptPresentAtBuild {
+		t.Fatal("BuildSessionFn observed the prior completion receipt")
 	}
-	if HasPhaseComplete(artifactDir) {
-		t.Fatal("stale phase_complete still exists after RunInquire")
+	if _, err := os.Stat(filepath.Join(artifactDir, PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("prior completion receipt still exists after RunInquire: %v", err)
 	}
 }
 
@@ -1192,7 +1191,7 @@ func TestRunKnowledgeBaseForRepo_SkillReadInstruction(t *testing.T) {
 	}
 }
 
-func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testing.T) {
+func TestRunKnowledgeBaseForRepo_RemovesPriorCompletionReceiptBeforeSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	stateDir := filepath.Join(tmpDir, "state")
@@ -1204,7 +1203,7 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 
 	repo := feature.FeatureRepo{Name: "test-repo", Path: workDir}
 	f := &feature.Feature{
-		ID:     "test-stale-kb-marker",
+		ID:     "test-prior-kb-receipt",
 		Name:   "Test KB",
 		Repos:  []feature.FeatureRepo{repo},
 		Models: config.ModelConfig{},
@@ -1216,16 +1215,15 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 	if err := os.WriteFile(KBPath(kbDir), []byte("# stale kb\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(index.md): %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(kbDir, PhaseCompleteFile), []byte("stale\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(phase_complete): %v", err)
-	}
+	writeTestCompletionReceipt(t, kbDir)
 
 	var buildCalled bool
-	var markerPresentAtBuild bool
+	var receiptPresentAtBuild bool
 	pr := NewPhaseRunner(nil, nil, stateDir)
 	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		buildCalled = true
-		markerPresentAtBuild = HasPhaseComplete(kbDir)
+		_, receiptErr := ReadCompletionReceipt(kbDir)
+		receiptPresentAtBuild = receiptErr == nil
 		return nil, nil, nil, fmt.Errorf("test: stopping after capture")
 	}
 
@@ -1236,11 +1234,11 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 	if !buildCalled {
 		t.Fatal("BuildSessionFn was not called")
 	}
-	if markerPresentAtBuild {
-		t.Fatal("BuildSessionFn observed stale phase_complete; marker should be removed before session build")
+	if receiptPresentAtBuild {
+		t.Fatal("BuildSessionFn observed the prior completion receipt")
 	}
-	if HasPhaseComplete(kbDir) {
-		t.Fatal("stale phase_complete still exists after RunKnowledgeBaseForRepo")
+	if _, err := os.Stat(filepath.Join(kbDir, PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("prior completion receipt still exists after RunKnowledgeBaseForRepo: %v", err)
 	}
 }
 
@@ -1318,15 +1316,14 @@ func newRegistryWithProviders() *llm.Registry {
 }
 
 type captureProvider struct {
-	name            string
-	model           string
-	contextWindow   int
-	watchdog        bool
-	finishOrViolate bool
-	boundedSandbox  bool
-	sessionResume   bool
-	buildOpts       llm.CommandBuildOpts
-	protocolOpts    llm.ProtocolOpts
+	name           string
+	model          string
+	contextWindow  int
+	watchdog       bool
+	boundedSandbox bool
+	sessionResume  bool
+	buildOpts      llm.CommandBuildOpts
+	protocolOpts   llm.ProtocolOpts
 }
 
 func (p *captureProvider) Name() string                 { return p.name }
@@ -1352,7 +1349,6 @@ func (p *captureProvider) EnvVarsToExclude() []string {
 func (p *captureProvider) ComputeCost(string, int64, int64) float64 { return 0 }
 func (p *captureProvider) ContextWindowForModel(string) int         { return p.contextWindow }
 func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
-func (p *captureProvider) SupportsFinishOrViolateNudge() bool       { return p.finishOrViolate }
 func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
 func (p *captureProvider) SupportsSessionResume() bool              { return p.sessionResume }
 
@@ -1399,16 +1395,14 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 	pr.Registry = newRegistryWithCaptureProvider(provider)
 	pr.SkillsDir = skillsDir
 	pr.GuidelinesDir = guidelinesDir
-	markerPath := filepath.Join(dir, "phase_complete")
-
 	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:           "model-a[1M]",
-		Prompt:          "rendered prompt",
-		SystemPrompt:    "system prompt",
-		AdditionalDirs:  []string{kbDir},
-		WorkDir:         workDir,
-		MarkerPath:      markerPath,
-		ResumeSessionID: "session-prior",
+		Model:              "model-a[1M]",
+		Prompt:             "rendered prompt",
+		SystemPrompt:       "system prompt",
+		AdditionalDirs:     []string{kbDir},
+		WorkDir:            workDir,
+		CompletionProtocol: true,
+		ResumeSessionID:    "session-prior",
 	})
 	if err != nil {
 		t.Fatalf("BuildSession() error: %v", err)
@@ -1436,9 +1430,6 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 	if got := provider.protocolOpts.InitialPrompt; got != "rendered prompt" {
 		t.Fatalf("Protocol InitialPrompt = %q, want rendered prompt", got)
 	}
-	if got := provider.protocolOpts.MarkerPath; got != markerPath {
-		t.Fatalf("Protocol MarkerPath = %q, want %q", got, markerPath)
-	}
 	if got := provider.protocolOpts.ResumeSessionID; got != "session-prior" {
 		t.Fatalf("Protocol ResumeSessionID = %q, want session-prior", got)
 	}
@@ -1461,32 +1452,28 @@ func TestWatchdogConfigForProviderCapability(t *testing.T) {
 	}
 }
 
-func TestBuildSession_SurfacesBoundedHelperCapabilities(t *testing.T) {
+func TestBuildSession_SurfacesBoundedHelperSandboxCapability(t *testing.T) {
 	dir := t.TempDir()
 	for _, tc := range []struct {
 		name    string
-		nudge   bool
 		sandbox bool
 	}{
-		{name: "capable provider", nudge: true, sandbox: true},
-		{name: "incapable provider", nudge: false, sandbox: false},
+		{name: "capable provider", sandbox: true},
+		{name: "incapable provider", sandbox: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, finishOrViolate: tc.nudge, boundedSandbox: tc.sandbox}
+			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, boundedSandbox: tc.sandbox}
 			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
 			pr.Registry = newRegistryWithCaptureProvider(provider)
 			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-				Model:        "model-a[1M]",
-				Prompt:       "p",
-				SystemPrompt: "s",
-				WorkDir:      dir,
-				MarkerPath:   filepath.Join(dir, "phase_complete"),
+				Model:              "model-a[1M]",
+				Prompt:             "p",
+				SystemPrompt:       "s",
+				WorkDir:            dir,
+				CompletionProtocol: true,
 			})
 			if err != nil {
 				t.Fatalf("BuildSession() error: %v", err)
-			}
-			if sessOpts.SupportsFinishOrViolateNudge != tc.nudge {
-				t.Errorf("SupportsFinishOrViolateNudge = %v, want %v", sessOpts.SupportsFinishOrViolateNudge, tc.nudge)
 			}
 			if sessOpts.UsesBoundedHelperSandbox != tc.sandbox {
 				t.Errorf("UsesBoundedHelperSandbox = %v, want %v", sessOpts.UsesBoundedHelperSandbox, tc.sandbox)
@@ -1509,11 +1496,11 @@ func TestBuildSession_SurfacesSessionResumeCapability(t *testing.T) {
 			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
 			pr.Registry = newRegistryWithCaptureProvider(provider)
 			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-				Model:        "model-a[1M]",
-				Prompt:       "p",
-				SystemPrompt: "s",
-				WorkDir:      dir,
-				MarkerPath:   filepath.Join(dir, "phase_complete"),
+				Model:              "model-a[1M]",
+				Prompt:             "p",
+				SystemPrompt:       "s",
+				WorkDir:            dir,
+				CompletionProtocol: true,
 			})
 			if err != nil {
 				t.Fatalf("BuildSession() error: %v", err)
@@ -1700,7 +1687,6 @@ func TestBuildSession_CodexExplicitWritableRootsDoNotInheritStateOrAdditionalDir
 	workDir := filepath.Join(dir, "work")
 	additionalDir := filepath.Join(dir, "attempt-01")
 	feedbackPath := filepath.Join(additionalDir, "validate-scope", "validation-scope-feedback.md")
-	markerPath := filepath.Join(additionalDir, "validate-scope", "phase_complete")
 	for _, path := range []string{stateDir, workDir, filepath.Dir(feedbackPath)} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q) error = %v", path, err)
@@ -1717,7 +1703,7 @@ func TestBuildSession_CodexExplicitWritableRootsDoNotInheritStateOrAdditionalDir
 	pr := NewPhaseRunner(sm, store, stateDir)
 	pr.Registry = newRegistryWithProviders()
 
-	wantRoots := []string{feedbackPath, markerPath}
+	wantRoots := []string{feedbackPath}
 	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:          "gpt-5.4",
 		Prompt:         "validate this plan",

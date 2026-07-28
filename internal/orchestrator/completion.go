@@ -51,8 +51,6 @@ func isTerminalForCompletion(f *feature.Feature) bool {
 // to give that caller an unambiguous short-circuit signal.
 var errFinalReviewInterrupted = errors.New("final review interrupted")
 
-var validateAgentContract = agent.Validate
-
 var finalReviewRootOrchestrationArtifacts = []string{
 	agent.PhaseCompleteFile,
 	"progress.md",
@@ -145,7 +143,8 @@ func (o *Orchestrator) MarkFailed(featureID, failureType, errMsg string) error {
 //
 // Success path:
 //  1. Stale-completion guard on feature status != StatusBuildingKB.
-//  2. Validate phase_complete and the KnowledgeBase role contract.
+//  2. Consume the supervisor-committed outcome and validate the KnowledgeBase
+//     artifact contract.
 //  3. MarkKBFresh (best-effort).
 //  4. MarkRepoKBCompleted(featureID, repoName).
 //  5. When AllKBsCompleted → clear ForceKBRebuild, CompleteKnowledgeBase,
@@ -209,13 +208,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	if err != nil {
 		return err
 	}
-	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, feature.PhaseKnowledgeBase, kbDir, repoName)
-	if err != nil {
-		return fmt.Errorf("enforce knowledge base read-only repo guard: %w", err)
-	}
-	violations = append(violations, repoMutationViolations...)
-
-	if kbDir == "" && len(violations) > 0 {
+	if len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
 		if repoName != "" {
 			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
@@ -229,59 +222,6 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
 		o.wakeKBWaiters(featureID)
 		return err
-	}
-
-	sidecarFilename := agent.KBProtocolRetrySidecarFilename(featureID)
-	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, sidecarFilename)
-	if err != nil {
-		return fmt.Errorf("read knowledge base retry sidecar: %w", err)
-	}
-	decision := agent.DecideProtocolRetry(
-		agent.RoleKnowledgeBaseBuilder,
-		kbDir,
-		f.ActiveRun,
-		sidecar,
-		violations,
-		agent.DefaultMaxConsecutiveProtocolViolations,
-	)
-	switch decision.Action {
-	case agent.ProtocolRetryActionSucceed:
-		if err := agent.DeleteProtocolRetrySidecarAt(kbDir, sidecarFilename); err != nil {
-			return fmt.Errorf("delete knowledge base retry sidecar: %w", err)
-		}
-	case agent.ProtocolRetryActionRetry:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecarAt(kbDir, sidecarFilename, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write knowledge base retry sidecar: %w", err)
-			}
-		}
-		if err := agent.RemovePhaseCompleteMarker(kbDir); err != nil {
-			return fmt.Errorf("remove knowledge base phase_complete marker: %w", err)
-		}
-		if _, err := o.startKB(featureID); err != nil {
-			return fmt.Errorf("retry knowledge base: %w", err)
-		}
-		return nil
-	case agent.ProtocolRetryActionTerminal:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecarAt(kbDir, sidecarFilename, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write terminal knowledge base retry sidecar: %w", err)
-			}
-		}
-		if repoName != "" {
-			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, decision.FormattedError)
-		}
-		if o.deps.Sessions != nil {
-			for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
-				_ = o.deps.Sessions.StopSession(s.ID())
-			}
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(decision.FormattedError))
-		err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, decision.FormattedError)
-		o.wakeKBWaiters(featureID)
-		return err
-	default:
-		return fmt.Errorf("unknown knowledge base protocol retry action %d", decision.Action)
 	}
 
 	// Mark KB fresh on disk — best-effort, failures don't block the phase.
@@ -344,16 +284,9 @@ func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outc
 		})
 	default:
 		kbDir = agent.KBStateDir(baseDir, repoName)
-		if !agent.HasPhaseComplete(kbDir) {
-			violations = append(violations, agent.ProtocolViolation{
-				Artifact: agent.PhaseCompleteFile,
-				Reason:   "SDK reported success but phase_complete was not present",
-			})
-		}
-
 		var contractViolations []agent.ProtocolViolation
 		var err error
-		outcome, contractViolations, err = validateAgentContract(
+		outcome, contractViolations, err = agent.Validate(
 			feature.PhaseKnowledgeBase,
 			agent.RoleKnowledgeBaseBuilder,
 			kbDir,
@@ -384,8 +317,8 @@ func findRepo(f *feature.Feature, name string) (feature.FeatureRepo, bool) {
 // onArtifactPhaseCompleted handles completion for the three interactive
 // artifact phases (inquire, research, design).
 //
-//  1. Validate phase_complete and the registry-owned markdown artifact
-//     contract for the phase output dir.
+//  1. Consume the supervisor-committed outcome and validate the
+//     registry-owned markdown artifact contract for the phase output dir.
 //  2. Persist the registry-selected artifact path to f.Artifacts[phase].
 //  3. For Q&A-bearing planning phases, write qa-answers.md from the
 //     session's QALog (best-effort).
@@ -439,54 +372,10 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	if err != nil {
 		return err
 	}
-	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, input.Phase, phaseDir)
-	if err != nil {
-		return fmt.Errorf("enforce %s read-only repo guard: %w", phaseKey, err)
-	}
-	violations = append(violations, repoMutationViolations...)
-	if phaseDir == "" && len(violations) > 0 {
+	if len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(artifactPhaseRoleMust(input.Phase), phaseDir, violations)
 		o.emitPhaseCompleted(featureID, input.Phase, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
-	}
-
-	sidecar, err := agent.ReadProtocolRetrySidecar(phaseDir)
-	if err != nil {
-		return fmt.Errorf("read %s retry sidecar: %w", phaseKey, err)
-	}
-	decision := agent.DecideProtocolRetry(
-		artifactPhaseRoleMust(input.Phase),
-		phaseDir,
-		f.ActiveRun,
-		sidecar,
-		violations,
-		agent.DefaultMaxConsecutiveProtocolViolations,
-	)
-	switch decision.Action {
-	case agent.ProtocolRetryActionSucceed:
-		if err := agent.DeleteProtocolRetrySidecar(phaseDir); err != nil {
-			return fmt.Errorf("delete %s retry sidecar: %w", phaseKey, err)
-		}
-	case agent.ProtocolRetryActionRetry:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecar(phaseDir, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write %s retry sidecar: %w", phaseKey, err)
-			}
-		}
-		if err := agent.RemovePhaseCompleteMarker(phaseDir); err != nil {
-			return fmt.Errorf("remove %s phase_complete marker: %w", phaseKey, err)
-		}
-		return o.retryArtifactPhase(featureID, input.Phase)
-	case agent.ProtocolRetryActionTerminal:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecar(phaseDir, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write terminal %s retry sidecar: %w", phaseKey, err)
-			}
-		}
-		o.emitPhaseCompleted(featureID, input.Phase, errors.New(decision.FormattedError))
-		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, decision.FormattedError)
-	default:
-		return fmt.Errorf("unknown protocol retry action %d", decision.Action)
 	}
 
 	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
@@ -515,24 +404,6 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 func artifactPhaseRoleMust(phase feature.Phase) agent.Role {
 	role, _ := artifactPhaseRole(phase)
 	return role
-}
-
-func (o *Orchestrator) retryArtifactPhase(featureID string, phase feature.Phase) error {
-	var err error
-	switch phase {
-	case feature.PhaseInquire:
-		_, err = o.startInquire(featureID)
-	case feature.PhaseResearch:
-		_, err = o.startResearch(featureID)
-	case feature.PhaseDesign:
-		_, err = o.startDesign(featureID)
-	default:
-		return fmt.Errorf("no artifact phase starter for %s", phase)
-	}
-	if err != nil {
-		return fmt.Errorf("restart %s: %w", phase, err)
-	}
-	return nil
 }
 
 func artifactPhasePersistsQALog(phaseKey string) bool {
@@ -581,14 +452,7 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 		})
 		return agent.Outcome{}, phaseDir, violations, nil
 	}
-	if !agent.HasPhaseComplete(phaseDir) {
-		violations = append(violations, agent.ProtocolViolation{
-			Artifact: agent.PhaseCompleteFile,
-			Reason:   "SDK reported success but phase_complete was not present",
-		})
-	}
-
-	outcome, contractViolations, err := validateAgentContract(input.Phase, role, phaseDir)
+	outcome, contractViolations, err := agent.Validate(input.Phase, role, phaseDir)
 	if err != nil {
 		return agent.Outcome{}, phaseDir, nil, fmt.Errorf("validating %s contract: %w", phaseKey, err)
 	}

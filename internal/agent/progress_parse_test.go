@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,16 +25,7 @@ import (
 // state. iterDir is interpolated into the Verification Report path bullet
 // so the cross-check against the expected runtime path passes when the
 // caller passes filepath.Join(iterDir, "verification-report.yaml").
-//
-// For NEED_USER_INPUT the helper inlines a single placeholder question so
-// the parser's gate-completeness validation passes; tests that need to
-// drive missing/malformed question variants build the body from
-// progressMdNeedUserInput directly.
 func progressMdHappy(state, iterDir, stateNote string) string {
-	var qBlock string
-	if state == "NEED_USER_INPUT" {
-		qBlock = "\n## Questions for User\n\n1. Should the harness pick option A or B?\n"
-	}
 	body := `# Iteration Progress
 
 ## Iteration Handoff
@@ -61,7 +51,7 @@ closed_deferrals: []
 
 - **Path**: ` + iterDir + `/verification-report.yaml
 - **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-` + qBlock + `
+
 ## Iteration State
 
 ` + state + "\n"
@@ -87,14 +77,12 @@ func writeTempProgress(t *testing.T, body string) (path, iterDir string) {
 
 func TestParseProgressMd_RoundTripStates(t *testing.T) {
 	tests := []struct {
-		name      string
-		state     string
-		want      IterationState
-		stateNote string
+		name  string
+		state string
+		want  IterationState
 	}{
-		{testResultSuccessValue, agentStatusSuccess, StateSuccess, ""},
-		{"retry", "RETRY", StateRetry, ""},
-		{"need_user_input", "NEED_USER_INPUT", StateNeedUserInput, "Plan contradicts worktree."},
+		{testResultSuccessValue, agentStatusSuccess, StateSuccess},
+		{"retry", "RETRY", StateRetry},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -102,7 +90,7 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 			iterDir := filepath.Join(dir, "iteration-01")
 			_ = os.MkdirAll(iterDir, 0o755)
 			path := filepath.Join(dir, "progress.md")
-			body := progressMdHappy(tt.state, iterDir, tt.stateNote)
+			body := progressMdHappy(tt.state, iterDir, "")
 			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 				t.Fatalf("write: %v", err)
 			}
@@ -115,9 +103,6 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 			}
 			if parsed.State != tt.want {
 				t.Errorf("State = %v, want %v", parsed.State, tt.want)
-			}
-			if tt.stateNote != "" && !strings.Contains(parsed.StateNote, tt.stateNote) {
-				t.Errorf("StateNote = %q, want it to contain %q", parsed.StateNote, tt.stateNote)
 			}
 		})
 	}
@@ -460,330 +445,23 @@ func TestFormatProtocolViolationFeedback_TerminatesWithStatusLine(t *testing.T) 
 	}
 }
 
-// TestParseProgressMd_NeedUserInputQuestions covers the happy-path
-// `## Questions for User` parser: numbered prompts are captured into
-// ParsedProgress.Questions for later persistence in the gate artifact.
-func TestParseProgressMd_NeedUserInputQuestions(t *testing.T) {
-	dir := t.TempDir()
-	iterDir := filepath.Join(dir, "iteration-01")
-	_ = os.MkdirAll(iterDir, 0o755)
-	body := `# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- traced the gap
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-` + "```yaml" + `
-deferrals: []
-closed_deferrals: []
-` + "```" + `
-
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-
-## Questions for User
-
-1. Should the new path use the legacy library or the new one?
-2. Is it acceptable to skip migration of historical sessions?
-
-## Iteration State
-
-NEED_USER_INPUT
-Plan contradicts the worktree.
-`
-	path := filepath.Join(dir, "progress.md")
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write progress.md: %v", err)
-	}
-	parsed, err := ParseProgressMd(path)
-	if err != nil {
-		t.Fatalf("ParseProgressMd: %v", err)
-	}
-	if !parsed.OK() {
-		t.Fatalf("expected OK; violations=%v", parsed.ProtocolViolations)
-	}
-	if parsed.State != StateNeedUserInput {
-		t.Fatalf("State = %v, want StateNeedUserInput", parsed.State)
-	}
-	if !strings.Contains(parsed.StateNote, "Plan contradicts") {
-		t.Errorf("StateNote = %q, want it to contain summary", parsed.StateNote)
-	}
-	if len(parsed.Questions) != 2 {
-		t.Fatalf("Questions count = %d, want 2: %v", len(parsed.Questions), parsed.Questions)
-	}
-	if !strings.Contains(parsed.Questions[0], "legacy library") {
-		t.Errorf("Questions[0] = %q, want it to contain prompt text", parsed.Questions[0])
-	}
-	if !strings.Contains(parsed.Questions[1], "skip migration") {
-		t.Errorf("Questions[1] = %q, want it to contain prompt text", parsed.Questions[1])
-	}
-}
-
-// progressMdNeedUserInput renders a NEED_USER_INPUT progress.md with the
-// requested summary note and questions list. iterDir is interpolated into
-// the Verification Report path bullet so the cross-check passes when the
-// caller wires the same iterDir into ParseProgressMd.
-func progressMdNeedUserInput(iterDir, note string, questions []string) string {
-	var qBlock string
-	if questions != nil {
-		qBlock = "\n## Questions for User\n\n"
-		for i, q := range questions {
-			qBlock += fmt.Sprintf("%d. %s\n", i+1, q)
-		}
-	}
-	return `# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- traced the gap
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-` + "```yaml" + `
-deferrals: []
-closed_deferrals: []
-` + "```" + `
-
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-` + qBlock + `
-## Iteration State
-
-NEED_USER_INPUT
-` + note + "\n"
-}
-
-// TestParseProgressMd_NeedUserInputRejectsMissingQuestions covers the
-// reviewer-flagged failure mode: a NEED_USER_INPUT handoff with no
-// `## Questions for User` section is unrecoverable (the user has nothing
-// to answer and resume's answer-completeness check rejects an empty set),
-// so the parser must surface a protocol violation instead of letting the
-// orchestrator persist a malformed gate.
-func TestParseProgressMd_NeedUserInputRejectsMissingQuestions(t *testing.T) {
-	dir := t.TempDir()
-	iterDir := filepath.Join(dir, "iteration-01")
-	_ = os.MkdirAll(iterDir, 0o755)
-	body := progressMdNeedUserInput(iterDir, "Plan contradicts worktree.", nil)
-	path := filepath.Join(dir, "progress.md")
-	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if parsed.OK() {
-		t.Fatalf("expected violation when NEED_USER_INPUT lacks ## Questions for User")
-	}
-	hit := false
-	for _, v := range parsed.ProtocolViolations {
-		if strings.Contains(v, "Questions for User") && strings.Contains(v, "missing") {
-			hit = true
-		}
-	}
-	if !hit {
-		t.Errorf("expected violation citing missing Questions for User; got %v", parsed.ProtocolViolations)
-	}
-}
-
-// TestParseProgressMd_NeedUserInputRejectsEmptyStateNote ensures the gate
-// summary (the body after the NEED_USER_INPUT token) is mandatory: without
-// it the user has no description of why the gate opened.
-func TestParseProgressMd_NeedUserInputRejectsEmptyStateNote(t *testing.T) {
-	dir := t.TempDir()
-	iterDir := filepath.Join(dir, "iteration-01")
-	_ = os.MkdirAll(iterDir, 0o755)
-	body := progressMdNeedUserInput(iterDir, "", []string{"What now?"})
-	path := filepath.Join(dir, "progress.md")
-	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if parsed.OK() {
-		t.Fatalf("expected violation when NEED_USER_INPUT has empty summary")
-	}
-	hit := false
-	for _, v := range parsed.ProtocolViolations {
-		if strings.Contains(v, "summary") && strings.Contains(v, "NEED_USER_INPUT") {
-			hit = true
-		}
-	}
-	if !hit {
-		t.Errorf("expected violation citing missing summary; got %v", parsed.ProtocolViolations)
-	}
-}
-
-// TestParseProgressMd_NeedUserInputRejectsHeadingWithoutPrompts covers the
-// "heading present but body parses zero prompts" case: an unnumbered
-// bullet list under `## Questions for User` is not a valid gate.
-func TestParseProgressMd_NeedUserInputRejectsHeadingWithoutPrompts(t *testing.T) {
-	dir := t.TempDir()
-	iterDir := filepath.Join(dir, "iteration-01")
-	_ = os.MkdirAll(iterDir, 0o755)
-	body := `# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- traced the gap
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-` + "```yaml" + `
-deferrals: []
-closed_deferrals: []
-` + "```" + `
-
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
-
-## Questions for User
-
-- not numbered, just a bullet
-- another bullet
-
-## Iteration State
-
-NEED_USER_INPUT
-Plan contradicts the worktree.
-`
-	path := filepath.Join(dir, "progress.md")
-	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if parsed.OK() {
-		t.Fatalf("expected violation when Questions for User has zero numbered prompts")
-	}
-	hit := false
-	for _, v := range parsed.ProtocolViolations {
-		if strings.Contains(v, "Questions for User") && strings.Contains(v, "zero") {
-			hit = true
-		}
-	}
-	if !hit {
-		t.Errorf("expected violation citing zero parsed prompts; got %v", parsed.ProtocolViolations)
-	}
-}
-
-// TestParseProgressMd_RejectsQuestionsOnSuccessOrRetry guards against a
-// stale `## Questions for User` block surviving into a non-gate iteration
-// (e.g. the agent forgot to delete it after answering questions). Both
-// SUCCESS and RETRY must reject the section.
-func TestParseProgressMd_RejectsQuestionsOnSuccessOrRetry(t *testing.T) {
-	for _, state := range []string{agentStatusSuccess, "RETRY"} {
-		t.Run(state, func(t *testing.T) {
-			dir := t.TempDir()
-			iterDir := filepath.Join(dir, "iteration-01")
-			_ = os.MkdirAll(iterDir, 0o755)
-			body := strings.Replace(
-				progressMdHappy(state, iterDir, ""),
-				"## Iteration State",
-				"## Questions for User\n\n1. Stale question.\n\n## Iteration State",
-				1,
-			)
-			path := filepath.Join(dir, "progress.md")
-			_ = os.WriteFile(path, []byte(body), 0o644)
-			parsed, _ := ParseProgressMd(path)
-			if parsed.OK() {
-				t.Fatalf("expected violation when state is %s but Questions for User is present", state)
-			}
-			hit := false
-			for _, v := range parsed.ProtocolViolations {
-				if strings.Contains(v, "Questions for User") && strings.Contains(v, state) {
-					hit = true
-				}
-			}
-			if !hit {
-				t.Errorf("expected violation citing stale Questions for User on %s; got %v", state, parsed.ProtocolViolations)
-			}
-		})
-	}
-}
-
-// TestParseProgressMd_RejectsQuestionsAfterIterationState locks in the
-// section-ordering contract: `## Questions for User` MUST sit between
-// `## Verification Report` and `## Iteration State`. A misplaced section
-// (e.g., appended after `## Iteration State`) is a protocol violation so
-// the deterministic retry path rejects the iteration before the gate
-// artifact is persisted.
-func TestParseProgressMd_RejectsQuestionsAfterIterationState(t *testing.T) {
+func TestParseProgressMd_RejectsAgentAuthoredQuestionGate(t *testing.T) {
 	dir := t.TempDir()
 	iterDir := filepath.Join(dir, "iteration-01")
 	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iter: %v", err)
+		t.Fatal(err)
 	}
-
-	body := `# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- traced the blocker
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-` + "```yaml" + `
-deferrals: []
-closed_deferrals: []
-` + "```" + `
-
-## Verification Report
-
-- **Path**: ` + filepath.Join(iterDir, "verification-report.yaml") + `
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-
-## Iteration State
-
-NEED_USER_INPUT
-Need a product choice before touching auth.
-
-## Questions for User
-
-1. Should implementation target the legacy auth path or the new auth service?
-`
+	body := strings.Replace(progressMdHappy(agentStatusSuccess, iterDir, ""), "## Iteration State", "## Questions for User\n\n1. Which option?\n\n## Iteration State", 1)
 	path := filepath.Join(dir, "progress.md")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write progress.md: %v", err)
+		t.Fatal(err)
 	}
-
 	parsed, err := ParseProgressMd(path)
 	if err != nil {
-		t.Fatalf("ParseProgressMd: %v", err)
+		t.Fatal(err)
 	}
-	if parsed.OK() {
-		t.Fatalf("expected misplaced Questions for User section to be rejected")
-	}
-	if !strings.Contains(strings.Join(parsed.ProtocolViolations, "\n"), "between `## Deferrals` and `## Iteration State`") {
-		t.Fatalf("violations = %v, want explicit ordering guidance", parsed.ProtocolViolations)
+	if parsed.OK() || !strings.Contains(strings.Join(parsed.ProtocolViolations, "\n"), "AskUserQuestion") {
+		t.Fatalf("violations = %v, want formal AskUserQuestion guidance", parsed.ProtocolViolations)
 	}
 }
 

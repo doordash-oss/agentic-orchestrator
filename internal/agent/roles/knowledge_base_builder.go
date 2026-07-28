@@ -30,7 +30,6 @@ var knowledgeBaseBuilderRoleSpec = RoleSpec{
 	OutputRoots: []OutputRootSpec{
 		singleShotPhaseDirOutputRoot("Repository-scoped knowledge-base root. The KB graph entrypoint is written here."),
 	},
-	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		{
 			Name:         "knowledge_base_index",

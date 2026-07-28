@@ -450,7 +450,7 @@ func TestOrchestrator_StartKB_SessionBuildFailureMarksFeatureFailed(t *testing.T
 // did load are still re-dispatched.
 func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 	stateDir := t.TempDir()
-	writeKBCompletionArtifacts(t, stateDir, "repo-shared", true, true)
+	writeKBCompletionArtifacts(t, stateDir, "repo-shared", true)
 
 	holder := &feature.Feature{
 		ID:           "feat-holder",

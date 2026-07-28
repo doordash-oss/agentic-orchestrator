@@ -111,7 +111,6 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 	}
 	return prompts.RoleSystemPrompt(prompts.RoleSystemInput{
 		OutputRoots:          rootViews,
-		MarkerPath:           spec.MarkerPath(rt),
 		SkillPath:            skillPath,
 		RequiredSkills:       requiredSkills,
 		ArtifactPreflight:    artifactPreflightCommand(spec, in.IterationDir),

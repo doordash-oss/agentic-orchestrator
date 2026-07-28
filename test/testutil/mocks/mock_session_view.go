@@ -70,7 +70,10 @@ type MockSessionView struct {
 	LastStdoutAtVal      time.Time
 
 	// Query
-	HasPendingAskUserQuestionVal bool
+	HasPendingAskUserQuestionVal     bool
+	HasPendingRootAskUserQuestionVal bool
+	RootCompletionIntentVal          llm.CompletionIntent
+	TaskActivitiesVal                []llm.TaskActivity
 
 	// Channels
 	StatusChVal chan string
@@ -186,7 +189,27 @@ func (m *MockSessionView) Done() <-chan struct{}           { return m.DoneChVal 
 
 // --- Query ---
 
-func (m *MockSessionView) HasPendingAskUserQuestion() bool { return m.HasPendingAskUserQuestionVal }
+func (m *MockSessionView) HasPendingAskUserQuestion() bool {
+	return m.HasPendingAskUserQuestionVal
+}
+func (m *MockSessionView) HasPendingRootAskUserQuestion() bool {
+	return m.HasPendingRootAskUserQuestionVal
+}
+func (m *MockSessionView) RootCompletionIntent() llm.CompletionIntent {
+	return m.RootCompletionIntentVal
+}
+func (m *MockSessionView) LiveBackgroundTaskCount() int {
+	count := 0
+	for _, activity := range m.TaskActivitiesVal {
+		if activity.IsRunning() {
+			count++
+		}
+	}
+	return count
+}
+func (m *MockSessionView) TaskActivities() []llm.TaskActivity {
+	return append([]llm.TaskActivity(nil), m.TaskActivitiesVal...)
+}
 
 // --- Interaction ---
 

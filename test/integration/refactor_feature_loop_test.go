@@ -335,13 +335,9 @@ func TestRefactorFeatureLoop_ProtocolViolation_FirstViolationRetriesThenSucceeds
 	}
 
 	fix := newRefactorProtocolFixture(t, "refactor-retry-success")
-	markerStatePath := filepath.Join(fix.tmpDir, "marker-state.txt")
-	markerPath := filepath.Join(fix.artifactDir, agent.PhaseCompleteFile)
 	scripts := []string{
-		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, true, nil),
-		writeRefactorPlanSessionScript(t, fix, "success.sh", true, true, []string{
-			fmt.Sprintf(`if [ -e %q ]; then printf present > %q; else printf absent > %q; fi`, markerPath, markerStatePath, markerStatePath),
-		}),
+		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, nil),
+		writeRefactorPlanSessionScript(t, fix, "success.sh", true, nil),
 	}
 
 	result, runErr, calls := runRefactorProtocolLoopWithScripts(t, fix, scripts, 0)
@@ -354,9 +350,6 @@ func TestRefactorFeatureLoop_ProtocolViolation_FirstViolationRetriesThenSucceeds
 	if calls != 2 {
 		t.Fatalf("refactor-plan calls = %d, want 2", calls)
 	}
-	if got := readTrimmedFile(t, markerStatePath); got != "absent" {
-		t.Fatalf("phase_complete at second attempt start = %q, want absent", got)
-	}
 	assertNoRefactorSidecar(t, fix.artifactDir)
 }
 
@@ -367,9 +360,9 @@ func TestRefactorFeatureLoop_ProtocolViolation_ThreeConsecutiveViolationsTermina
 
 	fix := newRefactorProtocolFixture(t, "refactor-three-violations")
 	scripts := []string{
-		writeRefactorPlanSessionScript(t, fix, "missing-plan-1.sh", false, true, nil),
-		writeRefactorPlanSessionScript(t, fix, "missing-plan-2.sh", false, true, nil),
-		writeRefactorPlanSessionScript(t, fix, "missing-plan-3.sh", false, true, nil),
+		writeRefactorPlanSessionScript(t, fix, "missing-plan-1.sh", false, nil),
+		writeRefactorPlanSessionScript(t, fix, "missing-plan-2.sh", false, nil),
+		writeRefactorPlanSessionScript(t, fix, "missing-plan-3.sh", false, nil),
 	}
 
 	result, runErr, calls := runRefactorProtocolLoopWithScripts(t, fix, scripts, 0)
@@ -382,9 +375,14 @@ func TestRefactorFeatureLoop_ProtocolViolation_ThreeConsecutiveViolationsTermina
 	if result.FinalStatus != "protocol_violation" {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
-	wantErr := refactorPlanValidationError(t, fix.artifactDir)
-	if result.LastError != wantErr {
-		t.Fatalf("LastError = %q, want %q", result.LastError, wantErr)
+	for _, want := range []string{
+		"protocol violation: refactor_plan_step",
+		"refactor-plan.md: required artifact was not committed by a valid root outcome",
+		"agentico-outcome: root agent ended the turn without exactly one structured completion outcome",
+	} {
+		if !strings.Contains(result.LastError, want) {
+			t.Fatalf("LastError = %q, want violation %q", result.LastError, want)
+		}
 	}
 
 	sidecar := readRefactorSidecar(t, fix.artifactDir)
@@ -411,8 +409,8 @@ func TestRefactorFeatureLoop_ProtocolViolation_ThreeConsecutiveViolationsTermina
 	if got.ActiveCycle == nil || got.ActiveCycle.Status != feature.RepoCycleFailed {
 		t.Fatalf("ActiveCycle = %+v, want failed", got.ActiveCycle)
 	}
-	if got.ActiveCycle.LastError != wantErr {
-		t.Fatalf("ActiveCycle.LastError = %q, want %q", got.ActiveCycle.LastError, wantErr)
+	if got.ActiveCycle.LastError != result.LastError {
+		t.Fatalf("ActiveCycle.LastError = %q, want %q", got.ActiveCycle.LastError, result.LastError)
 	}
 }
 
@@ -424,7 +422,7 @@ func TestRefactorFeatureLoop_ProtocolViolation_RestartSurvival(t *testing.T) {
 	fix := newRefactorProtocolFixture(t, "refactor-restart-survival")
 	seedRefactorSidecar(t, fix, fix.feature.ActiveRun, 2)
 	scripts := []string{
-		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, true, nil),
+		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, nil),
 	}
 
 	result, runErr, calls := runRefactorProtocolLoopWithScripts(t, fix, scripts, 0)
@@ -452,8 +450,8 @@ func TestRefactorFeatureLoop_ProtocolViolation_StaleActiveRunResetsCounter(t *te
 	seedRefactorSidecar(t, fix, fix.feature.ActiveRun+99, 2)
 	captureDir := filepath.Join(fix.tmpDir, "captured-sidecar")
 	scripts := []string{
-		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, true, nil),
-		writeRefactorPlanSessionScript(t, fix, "success.sh", true, true, []string{
+		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, nil),
+		writeRefactorPlanSessionScript(t, fix, "success.sh", true, []string{
 			fmt.Sprintf(`mkdir -p %q`, captureDir),
 			fmt.Sprintf(`cp %q %q`, filepath.Join(fix.artifactDir, agent.ProtocolRetrySidecarFile), filepath.Join(captureDir, agent.ProtocolRetrySidecarFile)),
 		}),
@@ -525,8 +523,8 @@ func TestRefactorFeatureLoop_ProtocolViolation_SuccessDeletesPriorSidecar(t *tes
 	seedRefactorSidecar(t, fix, fix.feature.ActiveRun, 1)
 	captureDir := filepath.Join(fix.tmpDir, "captured-sidecar")
 	scripts := []string{
-		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, true, nil),
-		writeRefactorPlanSessionScript(t, fix, "success.sh", true, true, []string{
+		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, nil),
+		writeRefactorPlanSessionScript(t, fix, "success.sh", true, []string{
 			fmt.Sprintf(`mkdir -p %q`, captureDir),
 			fmt.Sprintf(`cp %q %q`, filepath.Join(fix.artifactDir, agent.ProtocolRetrySidecarFile), filepath.Join(captureDir, agent.ProtocolRetrySidecarFile)),
 		}),
@@ -653,7 +651,7 @@ func runRefactorProtocolLoopWithScripts(t *testing.T, fix refactorProtocolFixtur
 	return result, err, calls
 }
 
-func writeRefactorPlanSessionScript(t *testing.T, fix refactorProtocolFixture, name string, writePlan, touchMarker bool, beforeSuccess []string) string {
+func writeRefactorPlanSessionScript(t *testing.T, fix refactorProtocolFixture, name string, writePlan bool, beforeSuccess []string) string {
 	t.Helper()
 	planPath := filepath.Join(fix.artifactDir, "refactor-plan.md")
 	lines := []string{
@@ -663,9 +661,6 @@ func writeRefactorPlanSessionScript(t *testing.T, fix refactorProtocolFixture, n
 	lines = append(lines, beforeSuccess...)
 	if writePlan {
 		lines = append(lines, fmt.Sprintf("cat > %q <<'PLAN_EOF'\n%s\nPLAN_EOF", planPath, refactorProtocolPlanText()))
-	}
-	if touchMarker {
-		lines = append(lines, fmt.Sprintf("touch %q", filepath.Join(fix.artifactDir, agent.PhaseCompleteFile)))
 	}
 	lines = append(lines, testutil.JSONLSuccess)
 	return testutil.WriteScript(t, fix.scriptsDir, name, strings.Join(lines, "\n")+"\n")
@@ -718,22 +713,4 @@ func assertNoRefactorSidecar(t *testing.T, dir string) {
 	if _, err := os.Stat(filepath.Join(dir, agent.ProtocolRetrySidecarFile)); !os.IsNotExist(err) {
 		t.Fatalf("sidecar stat error = %v, want os.ErrNotExist", err)
 	}
-}
-
-func refactorPlanValidationError(t *testing.T, artifactDir string) string {
-	t.Helper()
-	_, violations, err := agent.Validate(feature.PhasePlan, agent.RoleRefactorPlanStep, artifactDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	return agent.FormatSingleShotProtocolViolationError(agent.RoleRefactorPlanStep, artifactDir, violations)
-}
-
-func readTrimmedFile(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return strings.TrimSpace(string(data))
 }

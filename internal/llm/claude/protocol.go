@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -111,6 +112,29 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 			msg.Assistant.Message.Usage.ContextWindow = p.contextWindow
 		}
 		p.mu.Unlock()
+	}
+
+	msg.OccurredAt = time.Now().UTC()
+	msg.Origin = llm.EventOrigin{Kind: llm.EventOriginRoot}
+	switch {
+	case msg.TaskStarted != nil:
+		msg.Origin = llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         msg.TaskStarted.TaskID,
+			ChildSessionID: msg.TaskStarted.SessionID,
+		}
+	case msg.TaskProgress != nil:
+		msg.Origin = llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         msg.TaskProgress.TaskID,
+			ChildSessionID: msg.TaskProgress.SessionID,
+		}
+	case msg.TaskNotification != nil:
+		msg.Origin = llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         msg.TaskNotification.TaskID,
+			ChildSessionID: msg.TaskNotification.SessionID,
+		}
 	}
 
 	return []llm.SDKMessage{msg}, nil

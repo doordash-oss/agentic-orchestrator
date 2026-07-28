@@ -116,6 +116,10 @@ type Session struct {
 	accumulatedUsage llm.Usage   // cumulative usage across all messages
 	messageLog       *MessageLog // structured message log
 	cost             *llm.ResultMessage
+	// rootCompletionIntent is replaced by each final root-assistant message
+	// and cleared whenever a new root turn starts. Child task output can never
+	// mutate it.
+	rootCompletionIntent llm.CompletionIntent
 
 	// statusCh carries the SDK-derived session lifecycle status:
 	// "SUCCESS" / "API_ERROR" / "FAILED" (see resultSubtypeToStatus).
@@ -163,7 +167,7 @@ type Session struct {
 	// progress or notification message — i.e., msg.TaskProgress or
 	// msg.TaskNotification is non-nil. Used by the agent layer to surface
 	// subagent heartbeats to events.jsonl while the main agent is blocked
-	// in a Task() call. Codex does not emit these messages.
+	// in a delegated task.
 	onSubagentEvent func(msg llm.SDKMessage)
 
 	// onMessage forwards locally appended records through the same manager
@@ -248,19 +252,15 @@ type Session struct {
 	resultShutdownStarted atomic.Bool
 	resultShutdownGrace   time.Duration
 
-	// keepAliveOnTruncatedResult lets loop-managed sessions continue the same
-	// provider process after a CLI-truncated turn. Normal Result cleanup still
-	// runs for deliberate end_turn / error results so wrapper processes do not
-	// hang.
-	keepAliveOnTruncatedResult bool
+	// keepAliveOnTurnResult lets loop-managed sessions continue the same
+	// provider process after any completed turn so the harness can nudge,
+	// resume background work, or recover a truncated response.
+	keepAliveOnTurnResult bool
 
-	// liveBackgroundTasks tracks background subagents (Task tool) that have
-	// started but not yet emitted their terminal task_notification. A
-	// loop-managed session with live entries stays up after an end_turn
-	// Result: the agent yielded to wait for its tasks, and the CLI will
-	// re-invoke it when they complete. Keyed by task_id (tool_use_id
-	// fallback). Guarded by mu.
-	liveBackgroundTasks map[string]struct{}
+	// taskActivities is the provider-neutral delegated-task registry. It
+	// retains terminal tasks for observability while lifecycle decisions count
+	// only entries whose state is still running. Guarded by mu.
+	taskActivities map[string]*llm.TaskActivity
 
 	// lifecycleCtxVal and lifecycleCancel are created once with the session
 	// and reused by every permission request. The context is cancelled when
@@ -985,6 +985,16 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		}
 
 		for _, msg := range parsed {
+			// Root is the safe default for legacy/generic protocol messages:
+			// delegated-task adapters must opt into task provenance explicitly.
+			// Central normalization keeps direct JSONL providers and test
+			// protocols on the same contract as Claude, Codex, and OpenCode.
+			if msg.Origin.Kind == "" {
+				msg.Origin.Kind = llm.EventOriginRoot
+			}
+			if msg.OccurredAt.IsZero() {
+				msg.OccurredAt = time.Now().UTC()
+			}
 			if s.watchdog != nil {
 				s.watchdog.Observe(msg)
 			}
@@ -1008,6 +1018,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			// If handled (hook_callback, auto-approved tool), suppress the message
 			// so the desktop app doesn't show a spurious permission prompt.
 			if msg.ControlRequest != nil {
+				msg.ControlRequest.Origin = msg.Origin
 				if s.tryHandleControlRequest(msg) {
 					// Auto-handled — don't forward to onMessage/attach/log.
 					// Still log the raw JSONL (already done above).
@@ -1101,6 +1112,8 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				s.mu.Unlock()
 			}
 
+			s.observeCompletionIntent(msg)
+
 			// Notify tool use callback for non-partial assistant messages containing
 			// tool_use blocks. This catches tool calls that bypass control requests
 			// (e.g., --dangerously-skip-permissions). Partial messages are skipped
@@ -1124,7 +1137,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			// Track subagent (Task tool) lifecycle so shouldShutdownOnResult
 			// and the loop waiter can tell an agent that yielded for running
 			// background tasks apart from one that deliberately stopped.
-			s.observeBackgroundTasks(msg)
+			s.observeTaskActivity(msg)
 
 			// Notify subagent (Task tool) lifecycle callback. These messages
 			// are the main signal that a Task() call is still alive while the
@@ -1196,11 +1209,11 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			// turn/completed is NOT a process-exit signal. Closing stdin
 			// here would EOF the JSON-RPC channel and kill the app-server,
 			// which breaks the SessionWaitingHelp branch in
-			// agent.waitForStatus that needs the session alive to deliver
+			// agent.WaitForPhaseOutcome that needs the session alive to deliver
 			// a follow-up user message. Skip the wrapper-cleanup logic for
 			// codex; cleanup happens via the explicit Stop() path instead.
 			// Loop-managed Claude sessions also keep stdin open for truncated
-			// turns so waitForStatus can send its auto-resume message on the
+			// turns so WaitForPhaseOutcome can send its auto-resume message on the
 			// same session. Gate on the producer's lifecycle, not just the
 			// message type.
 			if msg.Result != nil && s.shouldShutdownOnResult(msg.Result) && s.resultShutdownStarted.CompareAndSwap(false, true) {
@@ -1328,6 +1341,15 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 	// AskUserQuestion normally surfaces to the desktop app, except for allowlisted
 	// confidence-qualified creator questions that the session can answer safely.
 	if req.Request.ToolName == "AskUserQuestion" {
+		if msg.Origin.Kind == llm.EventOriginTask {
+			s.respondToControlViaProtocol(
+				req.RequestID,
+				false,
+				nil,
+				"Delegated tasks cannot ask the user directly; report the question to the root agent.",
+			)
+			return true
+		}
 		if s.tryAutoPickAskUser(req) {
 			return true
 		}
@@ -1525,6 +1547,7 @@ func (s *Session) writeJSON(v interface{}) error {
 func (s *Session) SendUserMessage(text string) error {
 	s.mu.Lock()
 	s.hasUnansweredQuestion = false
+	s.rootCompletionIntent = llm.CompletionIntent{}
 	s.clearPendingControlRequestsLocked()
 	if s.status == SessionWaitingHelp && !s.hasUnansweredQuestion {
 		s.status = SessionRunning
@@ -1555,6 +1578,34 @@ func (s *Session) SendUserMessage(text string) error {
 		}
 	}
 	return nil
+}
+
+// RootCompletionIntent returns the structured outcome emitted by the current
+// root-agent turn. A detached value is returned so callers cannot mutate
+// session state.
+func (s *Session) RootCompletionIntent() llm.CompletionIntent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rootCompletionIntent
+}
+
+// observeCompletionIntent tracks only final root-assistant text. A child task
+// may repeat the system prompt or emit completion-like text, but its origin
+// prevents that output from authorizing the phase.
+func (s *Session) observeCompletionIntent(msg llm.SDKMessage) {
+	if msg.Assistant == nil || msg.Subtype == "partial" || !msg.Origin.IsRoot() {
+		return
+	}
+	var text strings.Builder
+	for _, block := range msg.Assistant.Message.Content {
+		if block.IsText() {
+			text.WriteString(block.Text)
+		}
+	}
+	intent := llm.ParseCompletionIntent(text.String())
+	s.mu.Lock()
+	s.rootCompletionIntent = intent
+	s.mu.Unlock()
 }
 
 // RespondToControl sends a control response to a pending control request.
@@ -1805,6 +1856,22 @@ func (s *Session) HasPendingAskUserQuestion() bool {
 	return s.hasPendingAskUserQuestionLocked()
 }
 
+// HasPendingRootAskUserQuestion reports whether the root agent is waiting for
+// user input. Delegated-task questions are denied at ingress and never create
+// this gate.
+func (s *Session) HasPendingRootAskUserQuestion() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, cr := range s.pendingControlRequests {
+		if cr != nil &&
+			cr.Request.ToolName == "AskUserQuestion" &&
+			cr.Origin.IsRoot() {
+			return true
+		}
+	}
+	return false
+}
+
 // hasPendingAskUserQuestionLocked reports whether any pending
 // control_request is for the AskUserQuestion tool. Caller must hold s.mu.
 func (s *Session) hasPendingAskUserQuestionLocked() bool {
@@ -1958,36 +2025,113 @@ func (s *Session) Wait() {
 	<-s.done
 }
 
-// observeBackgroundTasks maintains liveBackgroundTasks from subagent (Task
-// tool) lifecycle messages. task_started and task_progress mark a task live
-// (progress covers tasks whose start predates this session's stream);
-// task_notification is the terminal event and removes it.
-func (s *Session) observeBackgroundTasks(msg llm.SDKMessage) {
+// observeTaskActivity folds provider-normalized task lifecycle events into a
+// durable snapshot. Progress can create a task when the start event predates
+// the current stream; terminal events retain the task for post-run inspection.
+func (s *Session) observeTaskActivity(msg llm.SDKMessage) {
 	key := ""
-	live := false
+	taskID := ""
+	toolUseID := ""
 	switch {
 	case msg.TaskStarted != nil:
-		key, live = backgroundTaskKey(msg.TaskStarted.TaskID, msg.TaskStarted.ToolUseID), true
+		taskID = msg.TaskStarted.TaskID
+		toolUseID = msg.TaskStarted.ToolUseID
 	case msg.TaskProgress != nil:
-		key, live = backgroundTaskKey(msg.TaskProgress.TaskID, msg.TaskProgress.ToolUseID), true
+		taskID = msg.TaskProgress.TaskID
+		toolUseID = msg.TaskProgress.ToolUseID
 	case msg.TaskNotification != nil:
-		key = backgroundTaskKey(msg.TaskNotification.TaskID, msg.TaskNotification.ToolUseID)
+		taskID = msg.TaskNotification.TaskID
+		toolUseID = msg.TaskNotification.ToolUseID
 	default:
 		return
 	}
+	key = backgroundTaskKey(taskID, toolUseID)
 	if key == "" {
 		return
 	}
+	at := msg.OccurredAt
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if live {
-		if s.liveBackgroundTasks == nil {
-			s.liveBackgroundTasks = make(map[string]struct{})
+	if s.taskActivities == nil {
+		s.taskActivities = make(map[string]*llm.TaskActivity)
+	}
+	activity := s.findTaskActivityLocked(taskID, toolUseID)
+	if activity == nil {
+		stableID := taskID
+		if stableID == "" {
+			stableID = toolUseID
 		}
-		s.liveBackgroundTasks[key] = struct{}{}
+		activity = &llm.TaskActivity{
+			TaskID:    stableID,
+			ToolUseID: toolUseID,
+			State:     llm.TaskActivityRunning,
+			StartedAt: at,
+		}
+		s.taskActivities[key] = activity
+	} else if !activity.IsRunning() && msg.TaskNotification == nil {
+		// Provider events can arrive slightly out of order. Once a task has a
+		// terminal notification, delayed start/progress must never resurrect it
+		// and strand the phase behind a phantom live task.
 		return
 	}
-	delete(s.liveBackgroundTasks, key)
+	if taskID != "" && (activity.TaskID == "" || activity.TaskID == activity.ToolUseID) {
+		activity.TaskID = taskID
+	}
+	if activity.ToolUseID == "" {
+		activity.ToolUseID = toolUseID
+	}
+	if msg.Origin.ChildSessionID != "" {
+		activity.ChildSessionID = msg.Origin.ChildSessionID
+	}
+	activity.UpdatedAt = at
+
+	switch {
+	case msg.TaskStarted != nil:
+		if msg.TaskStarted.Description != "" {
+			activity.Description = msg.TaskStarted.Description
+		}
+		activity.State = llm.TaskActivityRunning
+	case msg.TaskProgress != nil:
+		if msg.TaskProgress.Description != "" {
+			activity.Description = msg.TaskProgress.Description
+		}
+		if msg.TaskProgress.LastToolName != "" {
+			activity.LastToolName = msg.TaskProgress.LastToolName
+		}
+		if msg.TaskProgress.LastPath != "" {
+			activity.LastPath = msg.TaskProgress.LastPath
+		}
+		activity.Usage = cloneTaskUsage(msg.TaskProgress.Usage)
+		activity.State = llm.TaskActivityRunning
+	case msg.TaskNotification != nil:
+		activity.Status = msg.TaskNotification.Status
+		activity.Summary = msg.TaskNotification.Summary
+		activity.OutputFile = msg.TaskNotification.OutputFile
+		if msg.TaskNotification.Usage != nil {
+			activity.Usage = cloneTaskUsage(msg.TaskNotification.Usage)
+		}
+		activity.State = terminalTaskActivityState(msg.TaskNotification.Status)
+		activity.FinishedAt = at
+	}
+}
+
+func (s *Session) findTaskActivityLocked(taskID, toolUseID string) *llm.TaskActivity {
+	for _, activity := range s.taskActivities {
+		if activity == nil {
+			continue
+		}
+		if taskID != "" && activity.TaskID == taskID {
+			return activity
+		}
+		if toolUseID != "" && activity.ToolUseID == toolUseID {
+			return activity
+		}
+	}
+	return nil
 }
 
 func backgroundTaskKey(taskID, toolUseID string) string {
@@ -2002,35 +2146,75 @@ func backgroundTaskKey(taskID, toolUseID string) string {
 func (s *Session) LiveBackgroundTaskCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.liveBackgroundTasks)
+	count := 0
+	for _, activity := range s.taskActivities {
+		if activity != nil && activity.IsRunning() {
+			count++
+		}
+	}
+	return count
+}
+
+// TaskActivities returns a stable, detached snapshot of every delegated task
+// observed by the session, including terminal tasks.
+func (s *Session) TaskActivities() []llm.TaskActivity {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]llm.TaskActivity, 0, len(s.taskActivities))
+	for _, activity := range s.taskActivities {
+		if activity == nil {
+			continue
+		}
+		snapshot := *activity
+		snapshot.Usage = cloneTaskUsage(activity.Usage)
+		out = append(out, snapshot)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].StartedAt.Equal(out[j].StartedAt) {
+			return backgroundTaskKey(out[i].TaskID, out[i].ToolUseID) <
+				backgroundTaskKey(out[j].TaskID, out[j].ToolUseID)
+		}
+		return out[i].StartedAt.Before(out[j].StartedAt)
+	})
+	return out
+}
+
+func cloneTaskUsage(usage *llm.TaskUsage) *llm.TaskUsage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	return &cloned
+}
+
+func terminalTaskActivityState(status string) llm.TaskActivityState {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "completed", "complete", "success", "succeeded":
+		return llm.TaskActivityCompleted
+	case "cancelled", "canceled":
+		return llm.TaskActivityCancelled
+	default:
+		return llm.TaskActivityFailed
+	}
 }
 
 // shouldShutdownOnResult reports whether this session's underlying CLI should
 // be torn down after a Result message. Single-shot autonomous sessions need
 // wrapper cleanup (stdin close + SIGTERM/SIGKILL watchdog) to unstick a
 // process.Wait() that would otherwise hang on the wrapper's `cat`.
-// Multi-turn server CLIs (Codex `app-server`) and interactive sessions
-// stay alive after a Result and must not be torn down here; Stop() or user EOF
-// is the explicit cleanup path for them. Loop-managed Claude sessions also
-// keep stdin open for truncated turns so the waiter can send its auto-resume
-// continuation before any explicit Stop().
-func (s *Session) shouldShutdownOnResult(result *llm.ResultMessage) bool {
+// Multi-turn server CLIs (Codex `app-server`), interactive sessions, and
+// loop-managed provider sessions stay alive after a Result; Stop() or user EOF
+// is their explicit cleanup path.
+func (s *Session) shouldShutdownOnResult(_ *llm.ResultMessage) bool {
 	s.mu.Lock()
 	name := s.providerName
 	turnMode := s.turnMode
-	keepAliveOnTruncatedResult := s.keepAliveOnTruncatedResult
-	liveBackgroundTasks := len(s.liveBackgroundTasks)
+	keepAliveOnTurnResult := s.keepAliveOnTurnResult
 	s.mu.Unlock()
 	if turnMode == ports.TurnModeInteractive {
 		return false
 	}
-	if keepAliveOnTruncatedResult && result.IsTurnTruncated() {
-		return false
-	}
-	// An end_turn with background subagents still running is the agent
-	// yielding until their notifications arrive — the CLI re-invokes it when
-	// they complete, so the process must stay up for the loop waiter.
-	if keepAliveOnTruncatedResult && liveBackgroundTasks > 0 {
+	if keepAliveOnTurnResult {
 		return false
 	}
 	return name != "codex"
@@ -2280,6 +2464,8 @@ type persistedTranscriptRecord struct {
 type persistedSDKMessage struct {
 	Type               string                       `json:"type"`
 	Subtype            string                       `json:"subtype,omitempty"`
+	Origin             llm.EventOrigin              `json:"origin"`
+	OccurredAt         time.Time                    `json:"occurred_at,omitempty"`
 	Init               *llm.SystemInitMessage       `json:"init,omitempty"`
 	Assistant          *llm.AssistantMessage        `json:"assistant,omitempty"`
 	User               *llm.UserMessage             `json:"user,omitempty"`
@@ -2306,7 +2492,8 @@ type persistedSDKMessage struct {
 
 func persistableSDKMessage(msg llm.SDKMessage) persistedSDKMessage {
 	return persistedSDKMessage{
-		Type: msg.Type, Subtype: msg.Subtype, Init: msg.Init, Assistant: msg.Assistant,
+		Type: msg.Type, Subtype: msg.Subtype, Origin: msg.Origin, OccurredAt: msg.OccurredAt,
+		Init: msg.Init, Assistant: msg.Assistant,
 		User: msg.User, Result: msg.Result, ControlRequest: msg.ControlRequest,
 		Status: msg.Status, ToolProgress: msg.ToolProgress, HookStarted: msg.HookStarted,
 		HookProgress: msg.HookProgress, HookResponse: msg.HookResponse, RateLimit: msg.RateLimit,
@@ -2320,7 +2507,8 @@ func persistableSDKMessage(msg llm.SDKMessage) persistedSDKMessage {
 
 func (m persistedSDKMessage) sdkMessage() llm.SDKMessage {
 	return llm.SDKMessage{
-		Type: m.Type, Subtype: m.Subtype, Init: m.Init, Assistant: m.Assistant,
+		Type: m.Type, Subtype: m.Subtype, Origin: m.Origin, OccurredAt: m.OccurredAt,
+		Init: m.Init, Assistant: m.Assistant,
 		User: m.User, Result: m.Result, ControlRequest: m.ControlRequest,
 		Status: m.Status, ToolProgress: m.ToolProgress, HookStarted: m.HookStarted,
 		HookProgress: m.HookProgress, HookResponse: m.HookResponse, RateLimit: m.RateLimit,

@@ -1537,6 +1537,26 @@ export const SessionUsageSchema = z.strictObject({
   costUsd: z.number().nonnegative().optional(),
 });
 
+export const SessionTaskActivitySchema = z.strictObject({
+  taskId: z.string().max(500),
+  toolUseId: z.string().max(500).optional(),
+  childSessionId: z.string().max(500).optional(),
+  description: OptionalBoundedTextSchema,
+  state: z.enum(['running', 'completed', 'failed', 'cancelled']),
+  lastToolName: z.string().max(500).optional(),
+  lastPath: OptionalBoundedTextSchema,
+  status: z.string().max(200).optional(),
+  summary: OptionalBoundedTextSchema,
+  outputFile: OptionalBoundedTextSchema,
+  totalTokens: z.number().int().nonnegative().optional(),
+  toolUses: z.number().int().nonnegative().optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+  startedAt: z.string().max(100),
+  updatedAt: z.string().max(100),
+  finishedAt: z.string().max(100).optional(),
+});
+export type SessionTaskActivity = z.output<typeof SessionTaskActivitySchema>;
+
 export const SessionSummarySchema = z.strictObject({
   id: SessionIdSchema,
   featureId: FeatureIdSchema,
@@ -1552,6 +1572,8 @@ export const SessionSummarySchema = z.strictObject({
   startedAt: z.string().max(100),
   iteration: z.number().int().nonnegative().optional(),
   contextPercentage: z.number().int().min(0).max(100).optional(),
+  taskActivities: z.array(SessionTaskActivitySchema).max(1000),
+  runningTaskCount: z.number().int().nonnegative(),
   usage: SessionUsageSchema,
 });
 export type SessionSummary = z.output<typeof SessionSummarySchema>;

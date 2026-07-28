@@ -46,7 +46,6 @@ var implementRoleSpec = RoleSpec{
 			},
 		},
 	},
-	MarkerRoot: "iteration_dir",
 	Artifacts: []RoleArtifactSpec{
 		{
 			Name:         "progress",
@@ -56,17 +55,6 @@ var implementRoleSpec = RoleSpec{
 			Presence:     ArtifactRequired,
 			Description:  "structured progress markdown with iteration handoff, deferrals, and iteration state",
 			Validate:     ValidatorProgress,
-		},
-		{
-			Name:         "need_user_input",
-			DisplayPath:  "need-user-input.yaml",
-			RootName:     "iteration_dir",
-			RelativePath: "need-user-input.yaml",
-			Presence:     ArtifactConditional,
-			Condition:    "required when progress.md reports NEED_USER_INPUT",
-			Description:  "YAML gate file containing the structured user questions needed before the next iteration",
-			When:         ConditionProgressNeedUserInput,
-			Validate:     ValidatorNeedUserInput,
 		},
 	},
 }
@@ -78,13 +66,12 @@ func ImplementRoleSpec() RoleSpec {
 
 // ImplementUserInput is the data passed to implement.user.tmpl.
 type ImplementUserInput struct {
-	PlanPath              string
-	ExitCriteria          string
-	Feedback              string
-	PlanRevisionFeedback  string
-	HelpAnswers           string
-	PriorUserInputAnswers string
-	Iteration             int
+	PlanPath             string
+	ExitCriteria         string
+	Feedback             string
+	PlanRevisionFeedback string
+	HelpAnswers          string
+	Iteration            int
 }
 
 // BuildImplementPrompt renders the implement user prompt.

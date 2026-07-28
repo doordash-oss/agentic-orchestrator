@@ -43,6 +43,32 @@ const (
 	repoAPath        = "/tmp/repo-a"
 )
 
+func writeRebaseVerificationGate(t *testing.T, stateRoot, featureID, summary string) string {
+	t.Helper()
+	contractPath := filepath.Join(stateRoot, featureID, "testing-contract.yaml")
+	if err := agent.WriteTestingContract(contractPath, agent.TestingContract{
+		Version:  1,
+		Revision: 1,
+		Items: []agent.TestingContractItem{{
+			ID: "rebase-capability",
+			Policy: agent.TestingContractItemPolicy{
+				Required:    true,
+				AllowWaiver: true,
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("WriteTestingContract: %v", err)
+	}
+	rec := agent.SynthesizeVerificationNeedUserInputGate(contractPath, 1, []string{"rebase-capability"}, 2)
+	rec.Summary = summary
+	rec.Questions[0].Answer = agent.NeedUserVerificationRetryAfterAuth
+	gatePath := filepath.Join(stateRoot, featureID, "rebase-iteration-02", agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord: %v", err)
+	}
+	return gatePath
+}
+
 type blockingGetLifecycle struct {
 	*feature.Manager
 	blockAt  int32
@@ -786,18 +812,7 @@ func TestHandleNeedUserInputDecisionResumesFeatureRebaseCycle(t *testing.T) {
 	if err := fixture.manager.MarkFeatureRebaseStage(fixture.featureID, feature.RebaseStageSmartRebase); err != nil {
 		t.Fatalf("MarkFeatureRebaseStage: %v", err)
 	}
-	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-		Summary:   "Choose the conflict resolution.",
-		Iteration: 2,
-		Questions: []agent.NeedUserInputQuestion{{
-			Index:  1,
-			Prompt: "Keep the API compatibility shim?",
-			Answer: "Yes",
-		}},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord: %v", err)
-	}
+	gatePath := writeRebaseVerificationGate(t, fixture.store.BaseDir, fixture.featureID, "Choose the conflict resolution.")
 	if err := fixture.manager.MarkFeatureRebaseNeedUserInput(
 		fixture.featureID,
 		gatePath,
@@ -893,18 +908,7 @@ func TestHandleNeedUserInputDecisionKeepsRebaseGateWhenRelaunchCannotDispatch(t 
 	if err := fixture.manager.MarkFeatureRebaseStage(fixture.featureID, feature.RebaseStageSmartRebase); err != nil {
 		t.Fatalf("MarkFeatureRebaseStage: %v", err)
 	}
-	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-		Summary:   "Choose the conflict resolution.",
-		Iteration: 2,
-		Questions: []agent.NeedUserInputQuestion{{
-			Index:  1,
-			Prompt: "Continue?",
-			Answer: "Yes",
-		}},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord: %v", err)
-	}
+	gatePath := writeRebaseVerificationGate(t, fixture.store.BaseDir, fixture.featureID, "Choose the conflict resolution.")
 	if err := fixture.manager.MarkFeatureRebaseNeedUserInput(
 		fixture.featureID,
 		gatePath,

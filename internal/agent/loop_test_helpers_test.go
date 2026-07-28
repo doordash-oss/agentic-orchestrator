@@ -74,7 +74,6 @@ const (
 const (
 	wantProgressPathTemplate           = "`progress.md`: `{phase_dir}/progress.md`"
 	wantVerificationReportPathTemplate = "`verification-report.yaml`: `{iteration_dir}/verification-report.yaml`"
-	wantPhaseCompletePathTemplate      = "`phase_complete`: `{iteration_dir}/phase_complete`"
 )
 
 type loopTestFeatureOptions struct {

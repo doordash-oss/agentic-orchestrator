@@ -81,7 +81,6 @@ func planValidatorRoleSpec(role Role, skillName, axis string) RoleSpec {
 			validatorAttemptDirOutputRoot(),
 			validatorHelperDirOutputRoot(),
 		},
-		MarkerRoot: "helper_dir",
 		Artifact: RoleArtifactSpec{
 			Name:         "plan_validator_feedback",
 			DisplayPath:  fmt.Sprintf("validation-%s-feedback.md", axis),

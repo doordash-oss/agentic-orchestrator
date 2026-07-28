@@ -72,7 +72,6 @@ type OutputRootView struct {
 // modify source code (e.g. Implement).
 type RoleSystemInput struct {
 	OutputRoots          []OutputRootView
-	MarkerPath           string
 	SkillPath            string
 	RequiredSkills       []SkillView
 	ArtifactPreflight    string

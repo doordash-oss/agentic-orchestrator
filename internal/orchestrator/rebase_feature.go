@@ -433,7 +433,7 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 	if result != nil && result.FinalStatus == finalStatusNeedUserInput {
 		summary := strings.TrimSpace(result.LastError)
 		if summary == "" {
-			summary = "smart rebase iteration emitted NEED_USER_INPUT without a description"
+			summary = "smart rebase verification requires a user decision"
 		}
 		if err := o.runFeatureRebaseStateMutation(featureID, func() error {
 			return o.deps.Lifecycle.MarkFeatureRebaseNeedUserInput(

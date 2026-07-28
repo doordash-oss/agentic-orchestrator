@@ -17,6 +17,8 @@ function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, 'id'>
     kind: 'validator',
     status: 'running',
     startedAt: '2026-07-22T00:00:00Z',
+    taskActivities: [],
+    runningTaskCount: 0,
     usage: {},
     ...overrides,
   };

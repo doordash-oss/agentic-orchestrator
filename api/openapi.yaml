@@ -3640,6 +3640,58 @@ components:
           type: number
           format: double
           x-go-name: CostUSD
+    TaskActivityUsage:
+      type: object
+      properties:
+        total_tokens:
+          type: integer
+        tool_uses:
+          type: integer
+        duration_ms:
+          type: integer
+          format: int64
+    TaskActivity:
+      type: object
+      required:
+        - task_id
+        - state
+        - started_at
+        - updated_at
+      properties:
+        task_id:
+          type: string
+        tool_use_id:
+          type: string
+        child_session_id:
+          type: string
+        description:
+          type: string
+        state:
+          type: string
+          enum: [running, completed, failed, cancelled]
+        last_tool_name:
+          type: string
+        last_path:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        output_file:
+          type: string
+        usage:
+          $ref: "#/components/schemas/TaskActivityUsage"
+          x-go-type-skip-optional-pointer: false
+        started_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
     SessionSummary:
       type: object
       required:
@@ -3650,6 +3702,8 @@ components:
         - kind
         - status
         - started_at
+        - task_activities
+        - running_task_count
         - usage
       properties:
         id:
@@ -3687,6 +3741,13 @@ components:
           type: string
         effort_source:
           type: string
+        task_activities:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskActivity"
+        running_task_count:
+          type: integer
+          minimum: 0
         usage:
           $ref: "#/components/schemas/Usage"
     Cursor:

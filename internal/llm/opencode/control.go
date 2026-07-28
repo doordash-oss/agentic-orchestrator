@@ -17,19 +17,14 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
-
-// statFunc resolves the phase_complete marker on disk. It is a variable so
-// tests can drive marker presence deterministically without touching the
-// filesystem.
-var statFunc = os.Stat
 
 // syntheticAskUserPrefix marks AskUserQuestion request ids the tracer
 // synthesizes from plain assistant text. Such questions have no native ACP
@@ -67,10 +62,33 @@ func (p *Protocol) handleRequestPermission(rawID json.RawMessage, params json.Ra
 	}
 
 	reqID := strconv.Itoa(id)
+	var msg llm.SDKMessage
 	if pp.ToolCall.Kind == ToolKindQuestion {
-		return p.buildQuestionControl(reqID, pp), true
+		msg = p.buildQuestionControl(reqID, pp)
+	} else {
+		msg = p.buildPermissionControl(reqID, pp)
 	}
-	return p.buildPermissionControl(reqID, pp), true
+	origin := p.originForSession(pp.SessionID)
+	msg.Origin = origin
+	msg.OccurredAt = time.Now().UTC()
+	if msg.ControlRequest != nil {
+		msg.ControlRequest.Origin = origin
+	}
+	return msg, true
+}
+
+func (p *Protocol) originForSession(sessionID string) llm.EventOrigin {
+	p.mu.Lock()
+	rootSessionID := p.acpSessionID
+	p.mu.Unlock()
+	if sessionID != "" && rootSessionID != "" && sessionID != rootSessionID {
+		return llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         sessionID,
+			ChildSessionID: sessionID,
+		}
+	}
+	return llm.EventOrigin{Kind: llm.EventOriginRoot}
 }
 
 // buildPermissionControl normalizes a tool-permission request into a
@@ -417,14 +435,6 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 		return llm.SDKMessage{}, false, false
 	}
 
-	// A present phase_complete marker means the agent finished its work this
-	// turn; treat the turn as a completion even if its text reads like a
-	// question, so a stray '?' can never block a finished phase.
-	if p.markerPresent() {
-		p.resetFormatRetry()
-		return llm.SDKMessage{}, false, false
-	}
-
 	if stripped, ok := trimFreeFormSentinel(lastText); ok {
 		p.resetFormatRetry()
 		return p.synthesizeAskUser(stripped, nil), true, true
@@ -482,16 +492,6 @@ func (p *Protocol) resetFormatRetry() {
 	p.mu.Lock()
 	p.formatRetryCount = 0
 	p.mu.Unlock()
-}
-
-// markerPresent reports whether the phase_complete marker exists on disk. A
-// missing marker path is treated as absent.
-func (p *Protocol) markerPresent() bool {
-	if p.opts.MarkerPath == "" {
-		return false
-	}
-	_, err := statFunc(p.opts.MarkerPath)
-	return err == nil
 }
 
 // synthesizeAskUser builds an AskUserQuestion control request from a plain-text

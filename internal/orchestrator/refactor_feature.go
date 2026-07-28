@@ -171,11 +171,8 @@ func (o *Orchestrator) startFeatureRefactor(
 		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
-		FinishOrViolateNudge: pr.FinishOrViolateNudgeForModel(f.Models.Implementation) &&
-			pr.FinishOrViolateNudgeForModel(f.Models.Planning) &&
-			pr.FinishOrViolateNudgeForModel(f.Models.Review),
-		Observer:      pr.Observer,
-		CommandRunner: pr.CommandRunner,
+		Observer:                   pr.Observer,
+		CommandRunner:              pr.CommandRunner,
 	}
 	_ = hintRepoName // diagnostic only under the unified flow.
 
@@ -340,8 +337,8 @@ func (o *Orchestrator) handleFeatureRefactorDone(
 			}
 		},
 		func(gate *agent.LoopResult) {
-			// Surface the gate via the legacy per-repo NEED_USER_INPUT
-			// pathway for the staged subset. Repos outside the staged
+			// Surface the harness gate on the staged repository subset.
+			// Repos outside the staged
 			// subset stay as RepoCycleRunning until the gate resolves.
 			for _, name := range repoNames {
 				if stagedSet[name] {

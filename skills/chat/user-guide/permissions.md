@@ -60,7 +60,7 @@ When an **Allow & Remember** decision is available through a compatible client, 
 | `npm test --coverage` | `Bash(npm test *)` |
 | `go build ./...` | `Bash(go build *)` |
 | `ls -la /tmp` | `Bash(ls *)` |
-| `touch /tmp/phase_complete` | `Bash(touch *)` |
+| `touch /tmp/build-note.txt` | `Bash(touch *)` |
 | `cd /path && make build` | `Bash(make build *)` |
 | `git push origin main` | `Bash(git push *)` |
 

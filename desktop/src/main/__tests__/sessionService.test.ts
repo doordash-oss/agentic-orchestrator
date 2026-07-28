@@ -29,6 +29,8 @@ const summary = {
   status: 'running',
   started_at: '2026-07-15T00:00:00Z',
   usage: {},
+  task_activities: [],
+  running_task_count: 0,
 };
 
 describe('SessionService snapshots', () => {
@@ -72,6 +74,8 @@ describe('SessionService snapshots', () => {
         status: 'running',
         startedAt: '2026-07-15T00:00:00Z',
         usage: {},
+        taskActivities: [],
+        runningTaskCount: 0,
       },
     ]);
     await expect(service.get('session-1')).resolves.toMatchObject({

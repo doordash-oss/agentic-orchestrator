@@ -203,13 +203,12 @@ type VerificationItemView struct {
 }
 
 type ImplementUserInput struct {
-	PlanPath              string
-	ExitCriteria          string
-	Feedback              string
-	PlanRevisionFeedback  string
-	HelpAnswers           string
-	PriorUserInputAnswers string
-	Iteration             int
+	PlanPath             string
+	ExitCriteria         string
+	Feedback             string
+	PlanRevisionFeedback string
+	HelpAnswers          string
+	Iteration            int
 }
 
 type ReviewUserInput struct {
@@ -485,8 +484,7 @@ func TestGoldenSnapshots(t *testing.T) {
 						{Name: "phase_dir", Path: "/state/feat-x/run-1/phase-1/implement", Description: "Phase-level implement artifact root shared across iterations."},
 						{Name: "iteration_dir", Path: "/state/feat-x/run-1/phase-1/implement/iteration-02", Description: "Active iteration artifact directory."},
 					},
-					MarkerPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/phase_complete",
-					SkillPath:  "/skills/implement/SKILL.md",
+					SkillPath: "/skills/implement/SKILL.md",
 					Preflight: PreflightInput{
 						KBInfos: []KBView{
 							{Name: "agentic", IndexPath: "/state/kb/agentic/index.md", RootDir: "/state/kb/agentic"},
@@ -509,8 +507,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					OutputRoots: []OutputRootView{
 						{Name: "phase_dir", Path: "/state/feat-x/run-1/design", Description: "Design phase artifact directory."},
 					},
-					MarkerPath: "/state/feat-x/run-1/design/phase_complete",
-					SkillPath:  "/skills/design/SKILL.md",
+					SkillPath: "/skills/design/SKILL.md",
 					Preflight: PreflightInput{
 						KBInfos: []KBView{
 							{Name: "web", IndexPath: "/state/kb/web/index.md", RootDir: "/state/kb/web"},
@@ -729,8 +726,7 @@ func TestRoleSystemPromptSuppressesUsefulResourcesWhenEmpty(t *testing.T) {
 		OutputRoots: []OutputRootView{
 			{Name: "phase_dir", Path: "/state/feat-x/inquire"},
 		},
-		MarkerPath: "/state/feat-x/inquire/phase_complete",
-		SkillPath:  "/skills/inquire/SKILL.md",
+		SkillPath: "/skills/inquire/SKILL.md",
 	})
 	if strings.Contains(got, "# Useful Resources") {
 		t.Fatalf("RoleSystemPrompt() rendered empty Useful Resources section:\n%s", got)
@@ -741,7 +737,6 @@ func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 	const clause = "Sub-agents are available."
 	base := RoleSystemInput{
 		OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/state/feat-x/x"}},
-		MarkerPath:  "/state/feat-x/x/phase_complete",
 	}
 
 	avail := base

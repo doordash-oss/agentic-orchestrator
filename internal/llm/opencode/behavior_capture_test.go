@@ -72,7 +72,8 @@ func TestCaptureManagedSessionLaunchBehavior(t *testing.T) {
 
 	role := "# Agentico Role Instructions\n" +
 		"- Write only inside the output roots.\n" +
-		"- Create the phase_complete marker as the final action.\n" +
+		"- Never write phase_complete; the harness owns that receipt.\n" +
+		"- End with exactly one structured agentico-outcome tag.\n" +
 		"- Run the artifact preflight before completion.\n"
 	phasePrompt := "Implement Phase 4 per the approved plan. Output root: " + state + "\n"
 

@@ -687,6 +687,10 @@ body {
   background: var(--color-danger);
 }
 
+.conversation__subagent[data-state='cancelled'] .conversation__subagent-lamp {
+  background: var(--color-muted);
+}
+
 .conversation__subagent-desc {
   overflow: hidden;
   color: var(--color-text);

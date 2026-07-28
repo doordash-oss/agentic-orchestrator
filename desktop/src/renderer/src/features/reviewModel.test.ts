@@ -10,6 +10,8 @@ const base: SessionSummary = {
   kind: 'validator',
   status: 'failed',
   startedAt: '2026-07-21T12:00:00Z',
+  taskActivities: [],
+  runningTaskCount: 0,
   usage: {},
 };
 

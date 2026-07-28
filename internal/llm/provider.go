@@ -288,7 +288,6 @@ type ProtocolOpts struct {
 	WritableRoots  []string
 	DSP            bool
 	StateDir       string
-	MarkerPath     string
 	// NativeToollessReview selects the provider's audited one-turn reviewer
 	// protocol boundary. Providers that attest NativeToollessReviewer use this
 	// to omit every tool, question, child-session, continuation, and persistent

@@ -324,9 +324,6 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 			if err := os.WriteFile(artifactPath, []byte("# "+tc.name+"\n"), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-				t.Fatalf("write phase_complete: %v", err)
-			}
 			qaPath := filepath.Join(phaseDir, "qa-answers.md")
 			if err := os.WriteFile(qaPath, []byte(fanoutQAFile), 0o644); err != nil {
 				t.Fatalf("pre-write qa-answers.md: %v", err)

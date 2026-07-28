@@ -240,6 +240,8 @@ const SESSIONS: SessionSummary[] = [
     provider: 'claude',
     status: 'completed',
     startedAt: '2026-07-17T13:30:00Z',
+    taskActivities: [],
+    runningTaskCount: 0,
     usage: { inputTokens: 45000, outputTokens: 12000, costUsd: 1.2 },
   },
   {
@@ -251,6 +253,8 @@ const SESSIONS: SessionSummary[] = [
     provider: 'claude',
     status: 'completed',
     startedAt: '2026-07-17T13:00:00Z',
+    taskActivities: [],
+    runningTaskCount: 0,
     usage: { inputTokens: 38000, outputTokens: 10000, costUsd: 0.95 },
   },
   {
@@ -262,6 +266,8 @@ const SESSIONS: SessionSummary[] = [
     provider: 'claude',
     status: 'completed',
     startedAt: '2026-07-17T12:45:00Z',
+    taskActivities: [],
+    runningTaskCount: 0,
     usage: { inputTokens: 22000, outputTokens: 8000, costUsd: 0.33 },
   },
 ];
@@ -278,6 +284,17 @@ const CYCLE_SESSION: SessionSummary = {
   status: 'running',
   startedAt: '2026-07-25T14:20:00Z',
   contextPercentage: 42,
+  taskActivities: [
+    {
+      taskId: 'task-rebase-verification',
+      description: 'Verify rebased implementation',
+      state: 'running',
+      lastToolName: 'Bash',
+      startedAt: '2026-07-25T14:21:00Z',
+      updatedAt: '2026-07-25T14:22:00Z',
+    },
+  ],
+  runningTaskCount: 1,
   usage: { inputTokens: 45000, outputTokens: 12000, costUsd: 1.2 },
 };
 
@@ -291,6 +308,8 @@ const CHAT_SESSION: SessionSummary = {
   provider: 'claude',
   status: 'running',
   startedAt: '2026-07-19T14:20:00Z',
+  taskActivities: [],
+  runningTaskCount: 0,
   usage: { inputTokens: 3200, outputTokens: 900, costUsd: 0.08 },
 };
 
@@ -1350,6 +1369,18 @@ function makeMockApi(
           status: 'running',
           startedAt: '2026-07-19T14:20:00Z',
           model: 'claude-sonnet-5',
+          taskActivities: [
+            {
+              taskId: 'task-live-review',
+              description: 'Inspect renderer state',
+              state: 'running',
+              lastToolName: 'Read',
+              lastPath: 'src/renderer/app.tsx',
+              startedAt: '2026-07-19T14:20:05Z',
+              updatedAt: '2026-07-19T14:20:30Z',
+            },
+          ],
+          runningTaskCount: 1,
           usage: {},
         },
         transcript: [
@@ -1520,7 +1551,7 @@ function makeMockApi(
         offset: 0,
         limit: 65536,
         size: 220,
-        text: '[implement] iteration 3 started\n[model] requesting review-comments cycle\n[implement] NEED_USER_INPUT: apply suggested fix?\n[cycle] review-comments paused on gate\n[recovery] orphan process detected (pid 412)\n[recovery] log excerpt available — Resume or Kill.',
+        text: '[implement] iteration 3 started\n[model] requesting review-comments cycle\n[verification] capability gate requires a decision\n[cycle] review-comments paused on gate\n[recovery] orphan process detected (pid 412)\n[recovery] log excerpt available — Resume or Kill.',
         truncated: false,
       }),
     bulkPreview: () => Promise.resolve(BULK_PREVIEW_DATA),

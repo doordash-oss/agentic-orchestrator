@@ -16,7 +16,6 @@ package opencode
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -562,7 +561,7 @@ func TestPromptEndTurn_InformationalListStaysCompletion(t *testing.T) {
 		"2. Added a regression test for the new limit.",
 	}, "\n"))
 	msgs := endTurn(t, p, promptID)
-	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs).IsSuccess() {
 		t.Fatalf("informational list produced %+v, want a success result", msgs)
 	}
 }
@@ -636,7 +635,7 @@ func TestPromptEndTurn_InteractiveNeverSynthesizesQuestion(t *testing.T) {
 			})
 			streamAssistantText(t, p, c.text)
 			msgs := endTurn(t, p, promptID)
-			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+			if !terminalResult(t, msgs).IsSuccess() {
 				t.Fatalf("produced %+v, want a success result", msgs)
 			}
 			if buf.String() != "" {
@@ -653,7 +652,7 @@ func TestPromptEndTurn_NonQuestionIsCleanSuccess(t *testing.T) {
 	p, _, promptID := newPostHandshakeProtocol(t)
 	streamAssistantText(t, p, "All done. I wrote the marker and finished the work.")
 	msgs := endTurn(t, p, promptID)
-	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs).IsSuccess() {
 		t.Fatalf("non-question end_turn produced %+v, want a success result", msgs)
 	}
 }
@@ -669,7 +668,7 @@ func TestPromptEndTurn_SecondTurnAlsoEmitsSuccess(t *testing.T) {
 	p, _, promptID1 := newPostHandshakeProtocol(t)
 	streamAssistantText(t, p, "First answer.")
 	msgs1 := endTurn(t, p, promptID1)
-	if len(msgs1) != 1 || msgs1[0].Result == nil || !msgs1[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs1).IsSuccess() {
 		t.Fatalf("first turn produced %+v, want a success result", msgs1)
 	}
 
@@ -679,7 +678,7 @@ func TestPromptEndTurn_SecondTurnAlsoEmitsSuccess(t *testing.T) {
 	promptID2 := p.promptIDForTest()
 	streamAssistantText(t, p, "Second answer.")
 	msgs2 := endTurn(t, p, promptID2)
-	if len(msgs2) != 1 || msgs2[0].Result == nil || !msgs2[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs2).IsSuccess() {
 		t.Fatalf("second turn produced %+v, want a success result", msgs2)
 	}
 }
@@ -700,29 +699,8 @@ func TestPromptEndTurn_InformationalNumberedListIsCleanSuccess(t *testing.T) {
 		"3. Logs are written to /tmp/agentico.log.",
 	}, "\n"))
 	msgs := endTurn(t, p, promptID)
-	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+	if !terminalResult(t, msgs).IsSuccess() {
 		t.Fatalf("informational numbered list produced %+v, want a success result", msgs)
-	}
-}
-
-// TestPromptEndTurn_MarkerPresentTreatsQuestionAsCompletion proves a present
-// phase_complete marker makes end_turn a completion even when the final text
-// reads like a question, so a stray '?' cannot block a finished phase (Task 3).
-func TestPromptEndTurn_MarkerPresentTreatsQuestionAsCompletion(t *testing.T) {
-	marker := t.TempDir() + "/phase_complete"
-	if err := os.WriteFile(marker, []byte("done"), 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-	p := NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5", MarkerPath: marker})
-	buf := &syncBuffer{}
-	p.SetStdin(buf)
-	p.setRequestIDsForTest(100, 101, 102)
-	p.acpSessionID = "ses_x"
-
-	streamAssistantText(t, p, "Did that cover everything you needed?")
-	msgs := endTurn(t, p, 102)
-	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
-		t.Fatalf("question-with-marker produced %+v, want a success completion", msgs)
 	}
 }
 

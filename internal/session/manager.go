@@ -194,7 +194,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 			s.resultShutdownGrace = opts[0].ResultShutdownGrace
 		}
 		s.stderrPath = opts[0].StderrPath
-		s.keepAliveOnTruncatedResult = opts[0].KeepAliveOnTruncatedResult
+		s.keepAliveOnTurnResult = opts[0].KeepAliveOnTurnResult
 		s.kind = opts[0].Kind
 		s.turnMode = opts[0].TurnMode
 		s.label = opts[0].Label

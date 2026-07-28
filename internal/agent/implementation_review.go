@@ -242,13 +242,14 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
 	// Stop/restart resume: an axis that already completed its verdict for
 	// this iteration is reused instead of re-running the helper. Helper
-	// failure stubs never persist phase_complete, so they are never reused.
-	if HasPhaseComplete(axisDir) {
+	// Failure stubs never receive a harness completion receipt, so they are
+	// never reused.
+	if HasCommittedPhaseOutcome(axisDir, feature.PhaseReview, axis.Role) {
 		if cached, err := ParseReviewFeedback(feedbackPath); err == nil && len(cached.ProtocolViolations) == 0 {
 			return cached.Verdict, cached.Body, nil
 		}
 	}
-	RemovePhaseComplete(axisDir)
+	RemoveCompletionReceipt(axisDir)
 	reviewPrompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
 		Gate:                   implementationReviewGatePerPhase,
 		AxisLabel:              axis.Name,

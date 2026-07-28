@@ -50,6 +50,17 @@ it('wraps Tab focus within the active modal', () => {
   expect(last).toHaveFocus();
 });
 
+it('preserves focus when an open modal rerenders with a new close callback', () => {
+  render(<RerenderingModalHarness />);
+  const refresh = screen.getByRole('button', { name: 'Refresh content' });
+
+  refresh.focus();
+  fireEvent.click(refresh);
+
+  expect(screen.getByText('Refreshes: 1')).toBeVisible();
+  expect(refresh).toHaveFocus();
+});
+
 function NestedModalHarness({
   outerClosed,
   nestedClosed,
@@ -87,6 +98,23 @@ function NestedDialog({ onClose }: { onClose(): void }) {
       <button type="button">Nested action</button>
     </div>
   );
+}
+
+function RerenderingModalHarness() {
+  const [open, setOpen] = useState(true);
+  const [refreshes, setRefreshes] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+  useModalDismiss(ref, () => setOpen(false), open);
+
+  return open ? (
+    <div ref={ref} role="dialog" aria-modal="true" aria-label="Refreshing dialog" tabIndex={-1}>
+      <button type="button">First action</button>
+      <button type="button" onClick={() => setRefreshes((count) => count + 1)}>
+        Refresh content
+      </button>
+      <span>Refreshes: {refreshes}</span>
+    </div>
+  ) : null;
 }
 
 function FocusTrapHarness() {

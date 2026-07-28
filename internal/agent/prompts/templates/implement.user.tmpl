@@ -13,7 +13,7 @@
 **Exit criteria**: {{ .ExitCriteria }}
 {{- if gt .Iteration 1 }}
 
-{{- if or .PlanRevisionFeedback .Feedback .PriorUserInputAnswers .HelpAnswers }}
+{{- if or .PlanRevisionFeedback .Feedback .HelpAnswers }}
 This is iteration {{ .Iteration }}. Resume according to the implement skill handoff rules and use the context below.
 {{- else }}
 This is iteration {{ .Iteration }}. Resume according to the implement skill handoff rules.
@@ -28,10 +28,6 @@ Previous progress.md may predate this approved plan revision. Treat progress.md 
 
 Reviewer feedback from previous iteration:
 {{ .Feedback }}
-{{- end }}{{- if .PriorUserInputAnswers }}
-
-Resolved NEED_USER_INPUT from previous iterations:
-{{ .PriorUserInputAnswers }}
 {{- end }}{{- if .HelpAnswers }}
 
 Answers to NEED_HELP questions:

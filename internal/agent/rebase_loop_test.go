@@ -371,9 +371,9 @@ func TestRunRebaseLoop_InterruptedPreservesState(t *testing.T) {
 	}
 }
 
-// TestRunRebaseLoop_NeedUserInputSurfacesGate verifies that an agent-authored
-// NEED_USER_INPUT handoff pauses the rebase cycle instead of stamping the
-// staged repos failed.
+// TestRunRebaseLoop_NeedUserInputSurfacesGate verifies that a harness-created
+// verification gate pauses the rebase cycle instead of stamping staged repos
+// failed.
 func TestRunRebaseLoop_NeedUserInputSurfacesGate(t *testing.T) {
 	stateDir := t.TempDir()
 	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-nui", []string{testRepoNameAPI, testRepoNameWeb})
@@ -929,7 +929,6 @@ func TestRebasePlanMultiRepoFormatting(t *testing.T) {
 		"do not push",
 		"The orchestrator runs Final\nReview and applies publish policy after approval",
 		wantProgressPathTemplate,
-		wantPhaseCompletePathTemplate,
 		"Do not place `progress.md` under `{iteration_dir}`",
 		"## Repo: `api`",
 		"## Repo: `web`",
@@ -977,13 +976,13 @@ func TestRebaseSkillDocumentsStandardImplementHandoff(t *testing.T) {
 		t.Fatalf("read rebase skill: %v", err)
 	}
 	content := string(data)
-	for _, want := range []string{
-		wantProgressPathTemplate,
-		wantPhaseCompletePathTemplate,
-	} {
+	for _, want := range []string{wantProgressPathTemplate} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("skills/rebase/SKILL.md missing %q", want)
 		}
+	}
+	if !strings.Contains(content, "`phase_complete` is harness-owned; never create or edit it") {
+		t.Fatal("skills/rebase/SKILL.md missing harness-owned completion guidance")
 	}
 	if strings.Contains(content, "at the cycle's iteration artifact dir") {
 		t.Fatalf("skills/rebase/SKILL.md still says the handoff is at the iteration artifact dir")

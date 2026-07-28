@@ -649,6 +649,29 @@ const ServerUsageSchema = z.object({
   cost_usd: z.number().nonnegative().optional(),
 });
 
+const ServerTaskActivityUsageSchema = z.object({
+  total_tokens: z.number().int().nonnegative().optional(),
+  tool_uses: z.number().int().nonnegative().optional(),
+  duration_ms: z.number().int().nonnegative().optional(),
+});
+
+const ServerTaskActivitySchema = z.object({
+  task_id: z.string(),
+  tool_use_id: z.string().optional(),
+  child_session_id: z.string().optional(),
+  description: z.string().optional(),
+  state: z.enum(['running', 'completed', 'failed', 'cancelled']),
+  last_tool_name: z.string().optional(),
+  last_path: z.string().optional(),
+  status: z.string().optional(),
+  summary: z.string().optional(),
+  output_file: z.string().optional(),
+  usage: ServerTaskActivityUsageSchema.optional(),
+  started_at: z.string(),
+  updated_at: z.string(),
+  finished_at: z.string().optional(),
+});
+
 export const ServerSessionSummarySchema = z.object({
   id: z.string(),
   feature_id: z.string(),
@@ -664,6 +687,8 @@ export const ServerSessionSummarySchema = z.object({
   started_at: z.string(),
   iteration: z.number().int().nonnegative().optional(),
   context_percentage: z.number().int().optional(),
+  task_activities: z.array(ServerTaskActivitySchema).max(1000),
+  running_task_count: z.number().int().nonnegative(),
   usage: ServerUsageSchema,
 });
 export type ServerSessionSummary = z.output<typeof ServerSessionSummarySchema>;

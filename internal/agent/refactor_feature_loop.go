@@ -107,12 +107,6 @@ type RefactorFeatureLoopConfig struct {
 	Observer              *observe.Observer
 	CommandRunner         ports.CommandRunner
 
-	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
-	// for the refactor cycle's sessions (refactor-plan step + the inner
-	// implement loop). Resolved per-model from the provider capability, so only
-	// capability-positive providers opt in.
-	FinishOrViolateNudge bool
-
 	// RunImplementFn is a test seam: when non-nil, RunRefactorFeatureLoop
 	// calls this instead of RunImplementationLoop so unit tests can drive
 	// the outer state-machine without launching a real Claude session.
@@ -137,8 +131,8 @@ type RefactorFeatureLoopConfig struct {
 //   - "safety_rail":      consecutive-failure / no-progress rail tripped.
 //   - "interrupted":      shutdown / feature stopped mid-loop. No atomic
 //     stamp; persisted state preserved for restart.
-//   - "need_user_input":  iteration emitted NEED_USER_INPUT — feature-level
-//     pause gate; NeedUserInputPath points to the persisted gate artifact.
+//   - "need_user_input":  harness verification requires a user decision;
+//     NeedUserInputPath points to the harness-owned gate artifact.
 //   - "failed":           dispatch error before iteration began (or the
 //     refactor-plan step failed).
 //   - "protocol_violation": the refactor-plan step repeatedly violated its
@@ -281,7 +275,6 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				KBInfos:                    cfg.KBInfos,
 				SkillsDir:                  cfg.SkillsDir,
 				GuidelinesDir:              cfg.GuidelinesDir,
-				FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
 			}, sm)
 		}
 	}
@@ -311,7 +304,7 @@ planRevisionLoop:
 	for revisionRound := 0; ; revisionRound++ {
 		var scope PhaseScopeResult
 		for {
-			if err := RemovePhaseCompleteMarker(artifactDir); err != nil {
+			if err := RemoveCompletionReceipt(artifactDir); err != nil {
 				_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, err.Error())
 				return &RefactorFeatureLoopResult{
 					FinalStatus: "failed",
@@ -497,7 +490,6 @@ planRevisionLoop:
 			ReviewEffortSource:         cfg.ReviewEffortSource,
 			SkillsDir:                  cfg.SkillsDir,
 			GuidelinesDir:              cfg.GuidelinesDir,
-			FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
 			Observer:                   cfg.Observer,
 			CommandRunner:              cfg.CommandRunner,
 			// Refactor cycles run the per-iteration review gate so the
@@ -711,11 +703,10 @@ type refactorPlanStepInput struct {
 	KBInfos                 []KBInfo
 	SkillsDir               string
 	GuidelinesDir           string
-	FinishOrViolateNudge    bool
 }
 
-// runRefactorPlanStep launches a single Claude session to author the
-// refactor plan markdown and waits for `phase_complete`. The plan markdown
+// runRefactorPlanStep launches a single agent session to author the refactor
+// plan markdown and waits for a validated root outcome. The plan markdown
 // is expected to follow the phase-plan format (one `**Repo:** <name>` per
 // Task, a `## Tasks` section, and repo-scoped verification commands) so
 // PhaseScope and CompileTestingContractMultiRepo can consume it directly.
@@ -747,9 +738,9 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		AskingClause:  asking,
 	})
 
-	// Clear stale completion marker before spawning. Refactor-plan retries
+	// Clear a stale completion receipt before spawning. Refactor-plan retries
 	// intentionally leave markdown and retry sidecars in place.
-	if err := RemovePhaseCompleteMarker(in.ArtifactDir); err != nil {
+	if err := RemoveCompletionReceipt(in.ArtifactDir); err != nil {
 		return "", err
 	}
 
@@ -769,20 +760,17 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		EffortLevel:                    planEffort,
 		Phase:                          feature.PhasePlan,
 		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(in.ArtifactDir, PhaseCompleteFile),
+		CompletionProtocol:             true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("building refactor-plan session: %w", err)
 	}
-	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	sessOpts = enableTurnContinuation(sessOpts)
 	if in.PlanningEffectiveEffort != "" {
 		sessOpts.EffectiveEffort = in.PlanningEffectiveEffort
 		sessOpts.EffortSource = in.PlanningEffortSource
 	}
 	sessOpts.RunNumber = in.Feature.ActiveRun
-	if in.FinishOrViolateNudge {
-		sessOpts.TurnMode = ports.TurnModeInteractive
-	}
 	WriteDebugPrompts(in.ArtifactDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessID := fmt.Sprintf("%s-refactor-plan", in.Feature.ID)
@@ -796,26 +784,32 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		sess.SetLogFile(logFile)
 	}
 
-	agentStatus := waitForStatusDetailed(sess, sm, sessID, waitForStatusOptions{
-		ReadyCheck: func() bool {
-			if HasPhaseComplete(in.ArtifactDir) {
+	waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+		CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+			_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+				Phase:       feature.PhasePlan,
+				Role:        RoleRefactorPlanStep,
+				ArtifactDir: in.ArtifactDir,
+				SessionID:   sessID,
+				Intent:      intent,
+			})
+			if err == nil && len(violations) == 0 {
 				sess.SetHasUnansweredQuestion(false)
-				return true
 			}
-			return false
+			return violations, err
 		},
-		FinishOrViolateNudge: in.FinishOrViolateNudge,
-		MissingArtifacts:     []string{"refactor-plan.md"},
-	}).Status
+		MissingArtifacts: []string{"refactor-plan.md"},
+	})
+	agentStatus := waitResult.Status
 
 	output := sess.MessageLog().Text()
 	_ = os.WriteFile(logPath, []byte(output), 0o644)
 
-	if agentStatus == agentStatusMissingMarker {
-		return "", newProtocolViolationError(RoleRefactorPlanStep, in.ArtifactDir, []ProtocolViolation{{
-			Artifact: PhaseCompleteFile,
-			Reason:   "SDK reported success but phase_complete was not present",
-		}})
+	if waitResult.Err != nil {
+		return "", fmt.Errorf("committing refactor-plan outcome: %w", waitResult.Err)
+	}
+	if agentStatus == agentStatusProtocolViolation {
+		return "", newProtocolViolationError(RoleRefactorPlanStep, in.ArtifactDir, waitResult.ProtocolViolations)
 	}
 	if agentStatus != agentStatusSuccess {
 		return "", fmt.Errorf("refactor-plan session did not complete successfully (status: %s)", agentStatus)

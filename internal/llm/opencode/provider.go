@@ -124,12 +124,6 @@ func (p *Provider) EnablesPendingToolWatchdog() bool { return true }
 // permission denials.
 func (p *Provider) UsesBoundedHelperSandbox() bool { return true }
 
-// SupportsFinishOrViolateNudge opts this adapter into the shared
-// finish-or-violate auto-continuation retry: when a session ends its turn
-// without writing its required completion artifacts, the harness keeps the same
-// live session and nudges it to finish before declaring a protocol violation.
-func (p *Provider) SupportsFinishOrViolateNudge() bool { return true }
-
 // SupportsSessionResume reports that a prior ACP session can be resumed via
 // ProtocolOpts.ResumeSessionID (session/load). Agents that do not advertise
 // the loadSession capability fail the resume handshake with a clear error,

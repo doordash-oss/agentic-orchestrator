@@ -322,15 +322,20 @@ type ItemStartedParams struct {
 
 // ItemUnion is a polymorphic item; Type discriminates the variant.
 type ItemUnion struct {
-	ID               string          `json:"id"`
-	Type             string          `json:"type"`
-	Phase            string          `json:"phase,omitempty"`
-	Text             string          `json:"text,omitempty"`
-	AggregatedOutput string          `json:"aggregatedOutput,omitempty"`
-	ExitCode         *int            `json:"exitCode,omitempty"`
-	Summary          []string        `json:"summary,omitempty"`
-	CommandActions   []CommandAction `json:"commandActions,omitempty"`
-	Changes          []FileChange    `json:"changes,omitempty"`
+	ID                string          `json:"id"`
+	Type              string          `json:"type"`
+	Phase             string          `json:"phase,omitempty"`
+	Text              string          `json:"text,omitempty"`
+	Tool              string          `json:"tool,omitempty"`
+	Status            string          `json:"status,omitempty"`
+	Prompt            string          `json:"prompt,omitempty"`
+	Command           string          `json:"command,omitempty"`
+	ReceiverThreadIDs []string        `json:"receiverThreadIds,omitempty"`
+	AggregatedOutput  string          `json:"aggregatedOutput,omitempty"`
+	ExitCode          *int            `json:"exitCode,omitempty"`
+	Summary           []string        `json:"summary,omitempty"`
+	CommandActions    []CommandAction `json:"commandActions,omitempty"`
+	Changes           []FileChange    `json:"changes,omitempty"`
 }
 
 // CommandAction is Codex's structured description of a command's filesystem
@@ -360,6 +365,8 @@ type FileChangeKind struct {
 
 // UserInputRequestParams holds the params for tool/requestUserInput server requests.
 type UserInputRequestParams struct {
+	ThreadID  string          `json:"threadId"`
+	TurnID    string          `json:"turnId"`
 	Questions []InputQuestion `json:"questions"`
 }
 

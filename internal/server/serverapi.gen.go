@@ -271,6 +271,30 @@ func (e RewindWorktreeConsequenceResetKind) Valid() bool {
 	}
 }
 
+// Defines values for TaskActivityState.
+const (
+	Cancelled TaskActivityState = "cancelled"
+	Completed TaskActivityState = "completed"
+	Failed    TaskActivityState = "failed"
+	Running   TaskActivityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the TaskActivityState enum.
+func (e TaskActivityState) Valid() bool {
+	switch e {
+	case Cancelled:
+		return true
+	case Completed:
+		return true
+	case Failed:
+		return true
+	case Running:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureAction.
 const (
 	FeatureActionCleanup            FeatureAction = "cleanup"
@@ -2246,9 +2270,11 @@ type SessionDetail struct {
 	Provider         string           `json:"provider,omitempty"`
 	Repo             string           `json:"repo,omitempty"`
 	RunNumber        int              `json:"run_number"`
+	RunningTaskCount int              `json:"running_task_count"`
 	SafeError        string           `json:"safe_error,omitempty"`
 	StartedAt        time.Time        `json:"started_at"`
 	Status           string           `json:"status"`
+	TaskActivities   []TaskActivity   `json:"task_activities"`
 	TranscriptCursor Cursor           `json:"transcript_cursor"`
 	TurnState        string           `json:"turn_state,omitempty"`
 	Usage            Usage            `json:"usage"`
@@ -2281,23 +2307,25 @@ type SessionOutputChunk struct {
 
 // SessionSummary defines model for SessionSummary.
 type SessionSummary struct {
-	ContextPct   int       `json:"context_percentage,omitempty"`
-	Effort       string    `json:"effort,omitempty"`
-	EffortSource string    `json:"effort_source,omitempty"`
-	FeatureID    string    `json:"feature_id"`
-	ID           string    `json:"id"`
-	Iteration    int       `json:"iteration,omitempty"`
-	Kind         string    `json:"kind"`
-	Label        string    `json:"label,omitempty"`
-	Model        string    `json:"model,omitempty"`
-	Phase        string    `json:"phase"`
-	Provider     string    `json:"provider,omitempty"`
-	Repo         string    `json:"repo,omitempty"`
-	RunNumber    int       `json:"run_number"`
-	StartedAt    time.Time `json:"started_at"`
-	Status       string    `json:"status"`
-	TurnState    string    `json:"turn_state,omitempty"`
-	Usage        Usage     `json:"usage"`
+	ContextPct       int            `json:"context_percentage,omitempty"`
+	Effort           string         `json:"effort,omitempty"`
+	EffortSource     string         `json:"effort_source,omitempty"`
+	FeatureID        string         `json:"feature_id"`
+	ID               string         `json:"id"`
+	Iteration        int            `json:"iteration,omitempty"`
+	Kind             string         `json:"kind"`
+	Label            string         `json:"label,omitempty"`
+	Model            string         `json:"model,omitempty"`
+	Phase            string         `json:"phase"`
+	Provider         string         `json:"provider,omitempty"`
+	Repo             string         `json:"repo,omitempty"`
+	RunNumber        int            `json:"run_number"`
+	RunningTaskCount int            `json:"running_task_count"`
+	StartedAt        time.Time      `json:"started_at"`
+	Status           string         `json:"status"`
+	TaskActivities   []TaskActivity `json:"task_activities"`
+	TurnState        string         `json:"turn_state,omitempty"`
+	Usage            Usage          `json:"usage"`
 }
 
 // Setup defines model for Setup.
@@ -2348,6 +2376,34 @@ type Task struct {
 	Summary      string `json:"summary,omitempty"`
 	TaskType     string `json:"task_type,omitempty"`
 	ToolUseID    string `json:"tool_use_id,omitempty"`
+}
+
+// TaskActivity defines model for TaskActivity.
+type TaskActivity struct {
+	ChildSessionID string             `json:"child_session_id,omitempty"`
+	Description    string             `json:"description,omitempty"`
+	FinishedAt     *time.Time         `json:"finished_at,omitempty"`
+	LastPath       string             `json:"last_path,omitempty"`
+	LastToolName   string             `json:"last_tool_name,omitempty"`
+	OutputFile     string             `json:"output_file,omitempty"`
+	StartedAt      time.Time          `json:"started_at"`
+	State          TaskActivityState  `json:"state"`
+	Status         string             `json:"status,omitempty"`
+	Summary        string             `json:"summary,omitempty"`
+	TaskID         string             `json:"task_id"`
+	ToolUseID      string             `json:"tool_use_id,omitempty"`
+	UpdatedAt      time.Time          `json:"updated_at"`
+	Usage          *TaskActivityUsage `json:"usage,omitempty"`
+}
+
+// TaskActivityState defines model for TaskActivity.State.
+type TaskActivityState string
+
+// TaskActivityUsage defines model for TaskActivityUsage.
+type TaskActivityUsage struct {
+	DurationMs  int64 `json:"duration_ms,omitempty"`
+	ToolUses    int   `json:"tool_uses,omitempty"`
+	TotalTokens int   `json:"total_tokens,omitempty"`
 }
 
 // TextContentResponse defines model for TextContentResponse.

@@ -96,8 +96,9 @@ export function AmaDock({
         mode: 'chat',
         initialPrompt: session?.initialPrompt,
         optimisticMessage,
+        taskActivities: session?.taskActivities ?? [],
       }),
-    [optimisticMessage, session?.initialPrompt, transcript.messages],
+    [optimisticMessage, session?.initialPrompt, session?.taskActivities, transcript.messages],
   );
   const lastConversationItem = conversation.at(-1);
   const waitingForAssistant =

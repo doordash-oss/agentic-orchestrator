@@ -827,13 +827,10 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationPreservesPlanBetweenAtt
 					return "", err
 				}
 				return "", newProtocolViolationError(RoleRefactorPlanStep, stagedDir, []ProtocolViolation{{
-					Artifact: PhaseCompleteFile,
-					Reason:   "SDK reported success but phase_complete was not present",
+					Artifact: "agentico-outcome",
+					Reason:   "root agent did not emit a valid structured outcome",
 				}})
 			case 2:
-				if err := os.WriteFile(filepath.Join(stagedDir, PhaseCompleteFile), nil, 0o644); err != nil {
-					return "", err
-				}
 				outcome, violations, validateErr := Validate(feature.PhasePlan, RoleRefactorPlanStep, stagedDir)
 				if validateErr != nil {
 					return "", validateErr
@@ -925,7 +922,7 @@ func TestRunRefactorPlanStep_ProvisionsExplorationSubagents(t *testing.T) {
 	}
 }
 
-func TestRunRefactorPlanStep_MissingPlanAfterPhaseCompleteReturnsProtocolViolation(t *testing.T) {
+func TestRunRefactorPlanStep_MissingPlanReturnsProtocolViolation(t *testing.T) {
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
 	scriptsDir := t.TempDir()
@@ -933,7 +930,6 @@ func TestRunRefactorPlanStep_MissingPlanAfterPhaseCompleteReturnsProtocolViolati
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.TouchPhaseCompleteInDir(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	sm := session.NewManager(make(chan interface{}, 10))
 	defer sm.Shutdown()
@@ -948,7 +944,7 @@ func TestRunRefactorPlanStep_MissingPlanAfterPhaseCompleteReturnsProtocolViolati
 	}
 }
 
-func TestRunRefactorPlanStep_MissingPhaseCompleteReturnsProtocolViolation(t *testing.T) {
+func TestRunRefactorPlanStep_MissingRootOutcomeReturnsProtocolViolation(t *testing.T) {
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
 	scriptsDir := t.TempDir()
@@ -958,7 +954,7 @@ func TestRunRefactorPlanStep_MissingPhaseCompleteReturnsProtocolViolation(t *tes
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+
 			fmt.Sprintf("mkdir -p %q\ncat > %q <<'PLAN_EOF'\n%s\nPLAN_EOF\n", artifactDir, planPath, validRefactorPlanText())+
-			testutil.JSONLSuccess+"\n")
+			testutil.JSONLResult("")+"\n")
 	sm := session.NewManager(make(chan interface{}, 10))
 	defer sm.Shutdown()
 
@@ -967,16 +963,16 @@ func TestRunRefactorPlanStep_MissingPhaseCompleteReturnsProtocolViolation(t *tes
 		t.Fatal("runRefactorPlanStep() error = nil, want protocol violation")
 	}
 	if !strings.Contains(err.Error(), "protocol violation: refactor_plan_step @") ||
-		!strings.Contains(err.Error(), "phase_complete") {
-		t.Fatalf("error = %q, want missing phase_complete protocol violation", err)
+		!strings.Contains(err.Error(), "agentico-outcome") {
+		t.Fatalf("error = %q, want missing root outcome protocol violation", err)
 	}
 }
 
-func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsPlan(t *testing.T) {
+func TestRunRefactorPlanStep_ExistingPlanWithRootOutcomeReturnsPlan(t *testing.T) {
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
 	scriptsDir := t.TempDir()
-	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-stale-marker", []string{testRepoNameAPI})
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-existing", []string{testRepoNameAPI})
 	stalePlanPath := filepath.Join(artifactDir, "refactor-plan.md")
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		t.Fatalf("mkdir artifact dir: %v", err)
@@ -987,7 +983,6 @@ func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsPlan(t *testing.T) {
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.TouchPhaseCompleteInDir(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	sm := session.NewManager(make(chan interface{}, 10))
 	defer sm.Shutdown()
@@ -1006,9 +1001,9 @@ func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsPlan(t *testing.T) {
 
 // TestRunRefactorPlanStep_FinishOrViolateNudgeRecoversSameSession proves the
 // refactor-plan step recovers via the finish-or-violate nudge: the first turn
-// ends without refactor-plan.md + phase_complete, the harness nudges the same
-// live session, and the nudged turn writes both so the step returns the plan
-// path without a protocol violation.
+// ends without a root outcome, the harness nudges the same live session, and
+// the nudged turn writes the plan plus a structured outcome so the step returns
+// the plan path without a protocol violation.
 func TestRunRefactorPlanStep_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -1029,18 +1024,16 @@ while IFS= read -r _line; do
 %s
 PLAN_EOF
       %s
-      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
       exit 0
       ;;
   esac
 done
-`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, artifactDir, planPath, validRefactorPlanText(), testutil.TouchPhaseCompleteInDir(artifactDir)))
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, artifactDir, planPath, validRefactorPlanText(), testutil.JSONLSuccess))
 
 	sm := session.NewManager(make(chan interface{}, 10))
 	defer sm.Shutdown()
 
 	in := refactorPlanStepTestInput(t, store, f, stateDir, artifactDir, planScript)
-	in.FinishOrViolateNudge = true
 
 	got, err := runRefactorPlanStep(in, sm)
 	if err != nil {

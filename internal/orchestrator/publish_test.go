@@ -875,6 +875,16 @@ func (s *publishDescriptionSessionHandle) Done() <-chan struct{}           { ret
 func (s *publishDescriptionSessionHandle) HasPendingAskUserQuestion() bool {
 	return false
 }
+func (s *publishDescriptionSessionHandle) HasPendingRootAskUserQuestion() bool {
+	return false
+}
+func (s *publishDescriptionSessionHandle) RootCompletionIntent() llm.CompletionIntent {
+	return llm.CompletionIntent{}
+}
+func (s *publishDescriptionSessionHandle) LiveBackgroundTaskCount() int { return 0 }
+func (s *publishDescriptionSessionHandle) TaskActivities() []llm.TaskActivity {
+	return nil
+}
 func (s *publishDescriptionSessionHandle) SendUserMessage(text string) error { return nil }
 func (s *publishDescriptionSessionHandle) RespondToControl(requestID string, allow bool, reason string) error {
 	return nil

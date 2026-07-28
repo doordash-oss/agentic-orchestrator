@@ -759,7 +759,7 @@ func TestSessionStop(t *testing.T) {
 // Codex provider exception for one-shot post-Result wrapper cleanup. The
 // Codex provider's `app-server` is multi-turn: a Result on turn/completed is
 // not a process-exit signal, and the orchestrator's
-// SessionWaitingHelp branch (agent.waitForStatus) needs the session
+// SessionWaitingHelp branch (agent.WaitForPhaseOutcome) needs the session
 // alive to deliver a follow-up user message. Closing stdin would EOF
 // the JSON-RPC channel and kill app-server.
 //
@@ -860,7 +860,7 @@ func TestSession_ResultUnsticksHungWrapper(t *testing.T) {
 	}
 }
 
-func TestSession_TruncatedResultKeepsStdinForContinuationWhenOptedIn(t *testing.T) {
+func TestSession_TurnResultKeepsStdinForContinuationWhenOptedIn(t *testing.T) {
 	if testing.Short() {
 		t.Skip("subprocess-backed truncated-turn continuation extended regression")
 	}
@@ -889,7 +889,7 @@ func TestSession_TruncatedResultKeepsStdinForContinuationWhenOptedIn(t *testing.
 		[]string{"bash", script},
 		dir,
 		[]string{"CONTINUED_FILE=" + continuedPath},
-		&SessionOpts{KeepAliveOnTruncatedResult: true, ResultShutdownGrace: 100 * time.Millisecond},
+		&SessionOpts{KeepAliveOnTurnResult: true, ResultShutdownGrace: 100 * time.Millisecond},
 	)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -2708,63 +2708,232 @@ func TestObserveBackgroundTasks_TracksLifecycle(t *testing.T) {
 		t.Fatalf("initial LiveBackgroundTaskCount() = %d, want 0", got)
 	}
 
-	s.observeBackgroundTasks(taskStartedMsg("task-a"))
-	s.observeBackgroundTasks(taskStartedMsg("task-b"))
+	s.observeTaskActivity(taskStartedMsg("task-a"))
+	s.observeTaskActivity(taskStartedMsg("task-b"))
 	if got := s.LiveBackgroundTaskCount(); got != 2 {
 		t.Fatalf("after two starts LiveBackgroundTaskCount() = %d, want 2", got)
 	}
 
 	// Duplicate progress for a known task must not double-count.
-	s.observeBackgroundTasks(taskProgressMsg("task-a"))
+	s.observeTaskActivity(taskProgressMsg("task-a"))
 	if got := s.LiveBackgroundTaskCount(); got != 2 {
 		t.Fatalf("after progress LiveBackgroundTaskCount() = %d, want 2", got)
 	}
 
 	// Progress for a task whose start we never saw (session attach mid-task)
 	// registers it as live.
-	s.observeBackgroundTasks(taskProgressMsg("task-c"))
+	s.observeTaskActivity(taskProgressMsg("task-c"))
 	if got := s.LiveBackgroundTaskCount(); got != 3 {
 		t.Fatalf("after unseen-task progress LiveBackgroundTaskCount() = %d, want 3", got)
 	}
 
 	// task_notification is the terminal lifecycle event.
-	s.observeBackgroundTasks(taskNotificationMsg("task-a"))
-	s.observeBackgroundTasks(taskNotificationMsg("task-b"))
-	s.observeBackgroundTasks(taskNotificationMsg("task-c"))
+	s.observeTaskActivity(taskNotificationMsg("task-a"))
+	s.observeTaskActivity(taskNotificationMsg("task-b"))
+	s.observeTaskActivity(taskNotificationMsg("task-c"))
 	if got := s.LiveBackgroundTaskCount(); got != 0 {
 		t.Fatalf("after notifications LiveBackgroundTaskCount() = %d, want 0", got)
 	}
 
-	// Notification for an unknown task is a no-op, not a panic or negative count.
-	s.observeBackgroundTasks(taskNotificationMsg("task-x"))
+	// Delayed progress after a terminal event must not resurrect a phantom task.
+	s.observeTaskActivity(taskProgressMsg("task-a"))
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("after delayed terminal-task progress LiveBackgroundTaskCount() = %d, want 0", got)
+	}
+
+	// Notification for an unknown task records a terminal snapshot without
+	// producing a panic or negative count.
+	s.observeTaskActivity(taskNotificationMsg("task-x"))
 	if got := s.LiveBackgroundTaskCount(); got != 0 {
 		t.Fatalf("after unknown notification LiveBackgroundTaskCount() = %d, want 0", got)
 	}
 }
 
-func TestShouldShutdownOnResult_LiveBackgroundTasksKeepAlive(t *testing.T) {
+func TestTaskActivities_PreserveProviderNeutralLifecycleDetails(t *testing.T) {
+	s := NewSession("task-activity-test", "feat-1", feature.PhaseImplement)
+	startedAt := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	progressAt := startedAt.Add(2 * time.Minute)
+	finishedAt := progressAt.Add(time.Minute)
+
+	s.observeTaskActivity(llm.SDKMessage{
+		Type:       "system",
+		Subtype:    "task_started",
+		OccurredAt: startedAt,
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         "task-a",
+			ChildSessionID: "child-session-a",
+		},
+		TaskStarted: &llm.TaskStartedMessage{
+			TaskID:      "task-a",
+			ToolUseID:   "tool-a",
+			Description: "Refactor the execution path",
+		},
+	})
+	s.observeTaskActivity(llm.SDKMessage{
+		Type:       "system",
+		Subtype:    "task_progress",
+		OccurredAt: progressAt,
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         "task-a",
+			ChildSessionID: "child-session-a",
+		},
+		TaskProgress: &llm.TaskProgressMessage{
+			TaskID:       "task-a",
+			LastToolName: "apply_patch",
+			LastPath:     "internal/server/runtime.go",
+			Usage:        &llm.TaskUsage{TotalTokens: 1200, ToolUses: 4},
+		},
+	})
+
+	running := s.TaskActivities()
+	if len(running) != 1 {
+		t.Fatalf("len(TaskActivities()) = %d, want 1", len(running))
+	}
+	if got := running[0]; got.State != llm.TaskActivityRunning ||
+		got.TaskID != "task-a" ||
+		got.ChildSessionID != "child-session-a" ||
+		got.Description != "Refactor the execution path" ||
+		got.LastToolName != "apply_patch" ||
+		got.LastPath != "internal/server/runtime.go" ||
+		!got.StartedAt.Equal(startedAt) ||
+		!got.UpdatedAt.Equal(progressAt) ||
+		got.Usage == nil ||
+		got.Usage.TotalTokens != 1200 {
+		t.Fatalf("running TaskActivities()[0] = %+v", got)
+	}
+	if got := s.LiveBackgroundTaskCount(); got != 1 {
+		t.Fatalf("LiveBackgroundTaskCount() = %d, want 1", got)
+	}
+
+	s.observeTaskActivity(llm.SDKMessage{
+		Type:       "system",
+		Subtype:    "task_notification",
+		OccurredAt: finishedAt,
+		Origin: llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         "task-a",
+			ChildSessionID: "child-session-a",
+		},
+		TaskNotification: &llm.TaskNotificationMessage{
+			TaskID:  "task-a",
+			Status:  "failed",
+			Summary: "tests failed",
+		},
+	})
+
+	finished := s.TaskActivities()
+	if len(finished) != 1 {
+		t.Fatalf("len(TaskActivities()) after terminal event = %d, want 1", len(finished))
+	}
+	if got := finished[0]; got.State != llm.TaskActivityFailed ||
+		got.Summary != "tests failed" ||
+		!got.FinishedAt.Equal(finishedAt) ||
+		!got.UpdatedAt.Equal(finishedAt) {
+		t.Fatalf("finished TaskActivities()[0] = %+v", got)
+	}
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("LiveBackgroundTaskCount() after terminal event = %d, want 0", got)
+	}
+}
+
+func TestTaskActivities_CorrelatesToolUseFallbackWithLaterProviderTaskID(t *testing.T) {
+	s := NewSession("task-identity-upgrade", "feat-1", feature.PhaseImplement)
+	s.observeTaskActivity(llm.SDKMessage{
+		OccurredAt: time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
+		TaskStarted: &llm.TaskStartedMessage{
+			ToolUseID:   "tool-a",
+			Description: "Started before the provider assigned a task ID",
+		},
+	})
+	s.observeTaskActivity(llm.SDKMessage{
+		OccurredAt: time.Date(2026, 7, 28, 10, 1, 0, 0, time.UTC),
+		TaskProgress: &llm.TaskProgressMessage{
+			TaskID:      "task-a",
+			ToolUseID:   "tool-a",
+			Description: "Provider task ID assigned",
+		},
+	})
+	s.observeTaskActivity(llm.SDKMessage{
+		OccurredAt: time.Date(2026, 7, 28, 10, 2, 0, 0, time.UTC),
+		TaskNotification: &llm.TaskNotificationMessage{
+			TaskID:    "task-a",
+			ToolUseID: "tool-a",
+			Status:    "completed",
+		},
+	})
+
+	activities := s.TaskActivities()
+	if len(activities) != 1 {
+		t.Fatalf("TaskActivities() = %+v, want one correlated task", activities)
+	}
+	if got := activities[0]; got.TaskID != "task-a" ||
+		got.ToolUseID != "tool-a" ||
+		got.State != llm.TaskActivityCompleted {
+		t.Fatalf("TaskActivities()[0] = %+v, want upgraded terminal task identity", got)
+	}
+	if got := s.LiveBackgroundTaskCount(); got != 0 {
+		t.Fatalf("LiveBackgroundTaskCount() = %d, want 0", got)
+	}
+}
+
+func TestRootCompletionIntent_IgnoresDelegatedTaskOutput(t *testing.T) {
+	s := NewSession("completion-origin-test", "feat-1", feature.PhaseImplement)
+	outcomeText := `<agentico-outcome>{"status":"success"}</agentico-outcome>`
+
+	s.observeCompletionIntent(llm.SDKMessage{
+		Type:   "assistant",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginTask, TaskID: "task-a"},
+		Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: outcomeText}},
+			},
+		},
+	})
+	if got := s.RootCompletionIntent(); got.Found {
+		t.Fatalf("child RootCompletionIntent() = %+v, want no root intent", got)
+	}
+
+	s.observeCompletionIntent(llm.SDKMessage{
+		Type:   "assistant",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginRoot},
+		Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: outcomeText}},
+			},
+		},
+	})
+	if got := s.RootCompletionIntent(); !got.Valid() || got.Status != llm.CompletionIntentSuccess {
+		t.Fatalf("root RootCompletionIntent() = %+v, want valid success", got)
+	}
+}
+
+func TestShouldShutdownOnResult_LoopManagedSessionsStayAlive(t *testing.T) {
 	endTurn := &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
 
 	t.Run("keep-alive session with live tasks stays up on end_turn", func(t *testing.T) {
 		s := NewSession("bg-keepalive", "feat-1", feature.PhaseImplement)
-		s.keepAliveOnTruncatedResult = true
-		s.observeBackgroundTasks(taskStartedMsg("task-a"))
+		s.keepAliveOnTurnResult = true
+		s.observeTaskActivity(taskStartedMsg("task-a"))
 		if s.shouldShutdownOnResult(endTurn) {
 			t.Error("shouldShutdownOnResult() = true, want false while background tasks run")
 		}
 	})
 
-	t.Run("keep-alive session without live tasks shuts down on end_turn", func(t *testing.T) {
+	t.Run("keep-alive session without live tasks stays up for a harness nudge", func(t *testing.T) {
 		s := NewSession("bg-none", "feat-1", feature.PhaseImplement)
-		s.keepAliveOnTruncatedResult = true
-		if !s.shouldShutdownOnResult(endTurn) {
-			t.Error("shouldShutdownOnResult() = false, want true with no background tasks")
+		s.keepAliveOnTurnResult = true
+		if s.shouldShutdownOnResult(endTurn) {
+			t.Error("shouldShutdownOnResult() = true, want false for loop-managed turn")
 		}
 	})
 
 	t.Run("non-loop session with live tasks still shuts down", func(t *testing.T) {
 		s := NewSession("bg-oneshot", "feat-1", feature.PhaseImplement)
-		s.observeBackgroundTasks(taskStartedMsg("task-a"))
+		s.observeTaskActivity(taskStartedMsg("task-a"))
 		if !s.shouldShutdownOnResult(endTurn) {
 			t.Error("shouldShutdownOnResult() = false, want true for non-keep-alive session")
 		}

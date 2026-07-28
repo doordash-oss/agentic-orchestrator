@@ -430,7 +430,7 @@ func parseVerifyEvidenceArgs(opts launchOptions, args []string) (launchOptions, 
 }
 
 // runVerifyEvidence is the in-session self-check the implementer runs before
-// phase_complete: it reads the testing contract and confirms every required
+// declaring semantic success: it reads the testing contract and confirms every required
 // agent-owned capture is present, well-formed, correctly sized, and not a
 // byte-identical duplicate of another row — the same file-backed checks the
 // post-handoff report-integrity gate applies, surfaced early so a missing or
@@ -464,9 +464,9 @@ subcommand to start the foreground loopback HTTP server for headless automation.
 Run 'agentico update' to open the desktop Updates panel when Agentico is
 registered, or print package-manager guidance otherwise. Run
 'agentico update --check' (alias -n) for a read-only stable-version check.
-Run 'agentico validate-artifacts' from agent sessions before phase_complete
+Run 'agentico validate-artifacts' from agent sessions before declaring an outcome
 to parse and validate role output artifacts without starting the server.
-Run 'agentico verify-evidence' from implementer sessions before phase_complete
+Run 'agentico verify-evidence' from implementer sessions before declaring an outcome
 to confirm required agent-owned captures are present, correctly sized, and not
 duplicates — catching gaps before the post-handoff integrity gate does.
 

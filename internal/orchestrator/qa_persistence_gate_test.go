@@ -158,9 +158,6 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 			if err := os.MkdirAll(phaseDir, 0o755); err != nil {
 				t.Fatalf("mkdir phaseDir: %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-				t.Fatalf("write phase_complete: %v", err)
-			}
 			// Drop a stand-in artifact so contract validation doesn't trip the
 			// onArtifactPhaseCompleted control flow.
 			artifactPath := filepath.Join(phaseDir, tc.phaseKey+".md")
@@ -253,9 +250,6 @@ func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
 	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {
 		t.Fatalf("pre-write qa-answers.md: %v", err)
@@ -325,9 +319,6 @@ func TestInquirePhase_AutoPickAnnotationPreserved(t *testing.T) {
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
 	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {
 		t.Fatalf("pre-write qa: %v", err)
@@ -391,10 +382,6 @@ func TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile(t *testing.T) {
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
-
 	lc := newGateLifecycle(f)
 	fs := newGateFeatureStore(f)
 	sm := sessionManagerWithQALog("sess-1")
@@ -455,9 +442,6 @@ func TestInquirePhase_RefPrefix_WritesQAFile(t *testing.T) {
 	artifactPath := filepath.Join(phaseDir, "inquire.md")
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
 	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
 	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {

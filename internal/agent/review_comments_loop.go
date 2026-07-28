@@ -136,8 +136,8 @@ type ReviewCommentsLoopConfig struct {
 //   - "safety_rail":      consecutive-failure / no-progress rail tripped.
 //   - "interrupted":      shutdown / feature stopped mid-loop. No atomic
 //     stamp; persisted state preserved for restart.
-//   - "need_user_input":  iteration emitted NEED_USER_INPUT — cycle pause
-//     gate; NeedUserInputPath points to the persisted gate artifact.
+//   - "need_user_input":  harness verification requires a user decision;
+//     NeedUserInputPath points to the harness-owned gate artifact.
 //   - "no_op":            no repos with unaddressed comments at entry.
 //   - "failed":           dispatch error before iteration began.
 //

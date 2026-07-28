@@ -1826,6 +1826,32 @@ export interface components {
             /** Format: double */
             cost_usd?: number;
         };
+        TaskActivityUsage: {
+            total_tokens?: number;
+            tool_uses?: number;
+            /** Format: int64 */
+            duration_ms?: number;
+        };
+        TaskActivity: {
+            task_id: string;
+            tool_use_id?: string;
+            child_session_id?: string;
+            description?: string;
+            /** @enum {string} */
+            state: "running" | "completed" | "failed" | "cancelled";
+            last_tool_name?: string;
+            last_path?: string;
+            status?: string;
+            summary?: string;
+            output_file?: string;
+            usage?: components["schemas"]["TaskActivityUsage"];
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            finished_at?: string;
+        };
         SessionSummary: {
             id: string;
             feature_id: string;
@@ -1844,6 +1870,8 @@ export interface components {
             context_percentage?: number;
             effort?: string;
             effort_source?: string;
+            task_activities: components["schemas"]["TaskActivity"][];
+            running_task_count: number;
             usage: components["schemas"]["Usage"];
         };
         Cursor: {

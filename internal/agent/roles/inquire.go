@@ -30,7 +30,6 @@ var inquirerRoleSpec = RoleSpec{
 	OutputRoots: []OutputRootSpec{
 		singleShotPhaseDirOutputRoot("Inquire phase artifact directory."),
 	},
-	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("inquire markdown artifact"),
 	},

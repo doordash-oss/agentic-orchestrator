@@ -525,13 +525,6 @@ type PlanLoopConfig struct {
 	// all child spans (sessions, validation, validators) derive from this parent.
 	// Do not set externally — the loop function manages this.
 	PhaseSpanCtx observe.SpanContext
-
-	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
-	// for planner sessions: the session runs in interactive turn mode and, on a
-	// deliberate end_turn without the completion marker, is nudged to finish
-	// before a protocol violation is recorded. Resolved per-model from the
-	// provider capability, so only capability-positive providers opt in.
-	FinishOrViolateNudge bool
 }
 
 func (cfg PlanLoopConfig) initialPlanningResearchArtifactPath() string {
@@ -735,7 +728,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		// Infrastructure retries stay inside the same plan attempt. Clear any
 		// synthetic artifacts from the failed session and use a distinct session
 		// ID so lifecycle bookkeeping cannot alias the completed process.
-		RemovePhaseComplete(helperIterDir)
+		RemoveCompletionReceipt(helperIterDir)
 		_ = os.Remove(feedbackPath)
 		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
 			SessionID:              retrySessionID(reviewID, sessionAttempt),
@@ -1552,10 +1545,9 @@ roadmapAttemptLoop:
 			}
 			sessionAttempt := nextPlanSessionAttempt(artifactDir, attempt)
 			for {
-				// Clear stale phase_complete BEFORE spawning the script: otherwise
-				// the agent may write the marker before we get here, and we'd
-				// delete it.
-				RemovePhaseComplete(attemptDir)
+				// Clear the prior harness receipt before starting a new root
+				// session for this attempt.
+				RemoveCompletionReceipt(attemptDir)
 				cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
 					Model:                          cfg.Feature.Models.Planning,
 					Prompt:                         prompt,
@@ -1568,18 +1560,15 @@ roadmapAttemptLoop:
 					EffortLevel:                    planEffortLevel(cfg),
 					Phase:                          feature.PhasePlan,
 					SystemPromptHasUsefulResources: true,
-					MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
+					CompletionProtocol:             true,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("building roadmap session (attempt %d): %w", attempt, err)
 				}
-				sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+				sessOpts = enableTurnContinuation(sessOpts)
 				if cfg.EffectiveEffort != "" {
 					sessOpts.EffectiveEffort = cfg.EffectiveEffort
 					sessOpts.EffortSource = cfg.EffortSource
-				}
-				if cfg.FinishOrViolateNudge {
-					sessOpts.TurnMode = ports.TurnModeInteractive
 				}
 				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 				sessOpts.PermCacheScope = cfg.RepoName
@@ -1627,17 +1616,22 @@ roadmapAttemptLoop:
 					sess.SetLogFile(logFile)
 				}
 
-				agentStatus := waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
-					ReadyCheck: func() bool {
-						if HasPhaseComplete(attemptDir) {
+				waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+					CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+						_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+							Phase:       plannerSpec.Phase,
+							Role:        plannerSpec.Role,
+							ArtifactDir: attemptDir,
+							SessionID:   sessionID,
+							Intent:      intent,
+						})
+						if err == nil && len(violations) == 0 {
 							sess.SetHasUnansweredQuestion(false)
-							return true
 						}
-						return false
+						return violations, err
 					},
-					FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-					MissingArtifacts:     []string{"roadmap.md"},
-				}).Status
+					MissingArtifacts: []string{"roadmap.md"},
+				})
 
 				cost := ExtractSessionCost(sess)
 				if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
@@ -1654,7 +1648,7 @@ roadmapAttemptLoop:
 				}
 
 				outcome, sessionResult, newCriticFeedback, newSessionAttempt := handleCompletedPlanSession(
-					cfg, planSessionCtx, sessionID, sess, cost, sessionStart, agentStatus, sm,
+					cfg, planSessionCtx, sessionID, sess, cost, sessionStart, waitResult, sm,
 					attempt, maxAttempts, sessionAttempt, plannerSpec, attemptDir, artifactDir, logPath,
 				)
 				switch outcome {
@@ -1938,10 +1932,9 @@ phasePlanAttemptLoop:
 			}
 			sessionAttempt := nextPlanSessionAttempt(artifactDir, attempt)
 			for {
-				// Clear stale phase_complete BEFORE spawning the script: otherwise
-				// the agent may write the marker before we get here, and we'd
-				// delete it.
-				RemovePhaseComplete(attemptDir)
+				// Clear the prior harness receipt before starting a new root
+				// session for this attempt.
+				RemoveCompletionReceipt(attemptDir)
 				cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
 					Model:                          cfg.Feature.Models.Planning,
 					Prompt:                         prompt,
@@ -1954,18 +1947,15 @@ phasePlanAttemptLoop:
 					EffortLevel:                    planEffortLevel(cfg.PlanLoopConfig),
 					Phase:                          feature.PhasePlan,
 					SystemPromptHasUsefulResources: true,
-					MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
+					CompletionProtocol:             true,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("building phase plan session (attempt %d): %w", attempt, err)
 				}
-				sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+				sessOpts = enableTurnContinuation(sessOpts)
 				if cfg.EffectiveEffort != "" {
 					sessOpts.EffectiveEffort = cfg.EffectiveEffort
 					sessOpts.EffortSource = cfg.EffortSource
-				}
-				if cfg.FinishOrViolateNudge {
-					sessOpts.TurnMode = ports.TurnModeInteractive
 				}
 				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 				sessOpts.PermCacheScope = cfg.RepoName
@@ -2013,17 +2003,22 @@ phasePlanAttemptLoop:
 					sess.SetLogFile(logFile)
 				}
 
-				agentStatus := waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
-					ReadyCheck: func() bool {
-						if HasPhaseComplete(attemptDir) {
+				waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+					CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+						_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+							Phase:       plannerSpec.Phase,
+							Role:        plannerSpec.Role,
+							ArtifactDir: attemptDir,
+							SessionID:   sessionID,
+							Intent:      intent,
+						})
+						if err == nil && len(violations) == 0 {
 							sess.SetHasUnansweredQuestion(false)
-							return true
 						}
-						return false
+						return violations, err
 					},
-					FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-					MissingArtifacts:     []string{"plan.md"},
-				}).Status
+					MissingArtifacts: []string{"plan.md"},
+				})
 
 				cost := ExtractSessionCost(sess)
 				if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
@@ -2041,7 +2036,7 @@ phasePlanAttemptLoop:
 				}
 
 				outcome, sessionResult, newCriticFeedback, newSessionAttempt := handleCompletedPlanSession(
-					cfg.PlanLoopConfig, planSessionCtx, sessionID, sess, cost, sessionStart, agentStatus, sm,
+					cfg.PlanLoopConfig, planSessionCtx, sessionID, sess, cost, sessionStart, waitResult, sm,
 					attempt, maxAttempts, sessionAttempt, plannerSpec, attemptDir, artifactDir, logPath,
 				)
 				switch outcome {
@@ -2289,18 +2284,26 @@ func handleCompletedPlanSession(
 	sess ports.SessionHandle,
 	cost SessionCost,
 	sessionStart time.Time,
-	agentStatus string,
+	waitResult PhaseOutcomeWaitResult,
 	sm ports.SessionManager,
 	attempt, maxAttempts, sessionAttempt int,
 	plannerSpec RoleSpec,
 	attemptDir, artifactDir, logPath string,
 ) (outcome planSessionOutcome, result *PlanLoopResult, newCriticFeedback string, newSessionAttempt int) {
+	agentStatus := waitResult.Status
 	cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
 		toSessionUsage(cost), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
 
 	output := sess.MessageLog().Text()
 	_ = os.WriteFile(logPath, []byte(output), 0o644)
 
+	if waitResult.Err != nil {
+		return planOutcomeReturn, &PlanLoopResult{
+			FinalStatus: "failed",
+			Iterations:  attempt,
+			LastError:   fmt.Sprintf("committing planner outcome: %v", waitResult.Err),
+		}, "", sessionAttempt
+	}
 	if agentStatus == agentStatusSuccess {
 		return planOutcomeProceed, nil, "", sessionAttempt
 	}
@@ -2309,8 +2312,11 @@ func handleCompletedPlanSession(
 	if agentStatus == "FAILED" && sm != nil && sm.IsShuttingDown() {
 		return planOutcomeReturn, &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, "", sessionAttempt
 	}
-	if agentStatus == agentStatusMissingMarker {
-		violations := missingPhaseCompleteViolations()
+	if agentStatus == agentStatusProtocolViolation {
+		violations := waitResult.ProtocolViolations
+		if len(violations) == 0 {
+			violations = completionIntentViolations(rootCompletionIntent(sess), nil)
+		}
 		lastErr := formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)
 		criticFeedback := formatPlanContractViolationFeedback(plannerSpec.Role, violations)
 		_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
@@ -2375,13 +2381,6 @@ func formatPlanContractViolationFeedback(role Role, violations []ProtocolViolati
 	return strings.TrimSpace(b.String()) + "\n"
 }
 
-func missingPhaseCompleteViolations() []ProtocolViolation {
-	return []ProtocolViolation{{
-		Artifact: PhaseCompleteFile,
-		Reason:   "agent completed successfully but did not write phase_complete",
-	}}
-}
-
 // resolvePlanArtifactPath reads the plan artifact path from the feature store.
 // Falls back to globbing the artifact directory for common plan filenames.
 func resolvePlanArtifactPath(store ports.FeatureStore, featureID, artifactDir string) string {
@@ -2423,24 +2422,6 @@ func resolvePlanArtifactPath(store ports.FeatureStore, featureID, artifactDir st
 		}
 	}
 	return bestPath
-}
-
-// PhaseCompleteFile is the signal file the agent writes to indicate it has
-// finished its work. The presence of this file is the universal completion
-// signal across all phases. If the agent ends its turn without writing it,
-// the session stays alive (the agent likely has a question or hit an issue).
-const PhaseCompleteFile = "phase_complete"
-
-// HasPhaseComplete returns true if the phase_complete signal file exists in dir.
-func HasPhaseComplete(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, PhaseCompleteFile))
-	return err == nil
-}
-
-// RemovePhaseComplete removes the phase_complete signal file if it exists.
-// Called at the start of each phase/iteration to avoid stale signals.
-func RemovePhaseComplete(dir string) {
-	_ = os.Remove(filepath.Join(dir, PhaseCompleteFile))
 }
 
 // IsArtifactExcluded returns true if the filename should be excluded from

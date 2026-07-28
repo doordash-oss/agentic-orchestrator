@@ -39,16 +39,14 @@ func (h *mockHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.Permissio
 func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) {
 	helperDir := t.TempDir()
 	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
-	markerPath := filepath.Join(helperDir, "phase_complete")
 	approvalPath := filepath.Join(helperDir, "axis-approved-scope.md")
 
 	handler := &BoundedHelperArtifactHandler{
-		AllowedPaths: []string{feedbackPath, markerPath, approvalPath},
+		AllowedPaths: []string{feedbackPath, approvalPath},
 	}
 
 	requirePermissionAllowed(t, handler, "Read", `{"file_path":"`+feedbackPath+`"}`)
 	requirePermissionAllowed(t, handler, toolNameWrite, `{"file_path":"`+feedbackPath+`"}`)
-	requirePermissionAllowed(t, handler, toolNameEdit, `{"file_path":"`+markerPath+`"}`)
 	requirePermissionAllowed(t, handler, toolNameWrite, `{"file_path":"`+approvalPath+`"}`)
 
 	requirePermissionDenied(t, handler, toolNameWrite, `{"file_path":"`+filepath.Join(helperDir, "notes.md")+`"}`)
@@ -56,9 +54,9 @@ func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) 
 	requirePermissionDenied(t, handler, toolNameWrite, `{"file_path":"`+filepath.Join(helperDir, "..", "review-feedback.md")+`"}`)
 	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"ls `+helperDir+` 2>/dev/null || echo \"DIR_NOT_FOUND\""}`)
 	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"test -f `+feedbackPath+` && echo \"FEEDBACK_EXISTS\" || echo \"FEEDBACK_NOT_FOUND\""}`)
-	requirePermissionDenied(t, handler, toolNameBash, `{"command":"touch phase_complete"}`)
+	requirePermissionDenied(t, handler, toolNameBash, `{"command":"touch undeclared.txt"}`)
 	requirePermissionDenied(t, handler, toolNameBash, `{"command":"mkdir -p `+filepath.Join(helperDir, "subdir")+`"}`)
-	requirePermissionDenied(t, handler, toolNameBash, `{"command":"echo ok > `+markerPath+`"}`)
+	requirePermissionDenied(t, handler, toolNameBash, `{"command":"echo ok > `+filepath.Join(helperDir, "undeclared.txt")+`"}`)
 	requirePermissionAllowed(t, handler, "Agent", `{"prompt":"explore the implementation"}`)
 }
 
@@ -108,7 +106,7 @@ func TestBoundedHelperArtifactHandler_DeniesWriteCapableReadCommands(t *testing.
 // restrictive allowlist, and edits stay gated to declared artifacts either way.
 func TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell(t *testing.T) {
 	helperDir := t.TempDir()
-	allowed := []string{filepath.Join(helperDir, "review-feedback.md"), filepath.Join(helperDir, "phase_complete")}
+	allowed := []string{filepath.Join(helperDir, "review-feedback.md")}
 	// The real read-only analysis (loop + command substitution) that aborts a
 	// non-sandboxed glm helper.
 	analysis := `{"command":"for s in a b; do c=$(grep -c \"$s\" README.md); echo \"$s: $c\"; done"}`
@@ -137,14 +135,14 @@ func requirePermissionDeferred(t *testing.T, handler ports.PermissionHandler, in
 
 func TestCreateWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
 	root := t.TempDir()
-	marker := filepath.Join(root, "phase_complete")
+	artifact := filepath.Join(root, "artifact.txt")
 	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
-	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"touch `+marker+`"}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"touch `+artifact+`"}`)
 	// Multiple targets, all inside a root, still qualify.
-	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"touch `+marker+` `+filepath.Join(root, "other")+`"}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"touch `+artifact+` `+filepath.Join(root, "other")+`"}`)
 	// Non-Bash tools and non-touch Bash still fall through to Inner unchanged.
-	requirePermissionAllowed(t, handler, toolNameWrite, `{"file_path":"`+marker+`"}`)
+	requirePermissionAllowed(t, handler, toolNameWrite, `{"file_path":"`+artifact+`"}`)
 	requirePermissionDeferred(t, handler, `{"command":"ls `+root+`"}`)
 }
 
@@ -153,7 +151,7 @@ func TestCreateWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
 	outside := t.TempDir()
 	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
-	requirePermissionDeferred(t, handler, `{"command":"touch `+filepath.Join(outside, "phase_complete")+`"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+filepath.Join(outside, "artifact.txt")+`"}`)
 	// One target outside the root is enough to defer, even if another is inside.
 	requirePermissionDeferred(t, handler,
 		`{"command":"touch `+filepath.Join(root, "ok")+` `+filepath.Join(outside, "bad")+`"}`)
@@ -161,19 +159,19 @@ func TestCreateWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
 
 func TestCreateWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testing.T) {
 	root := t.TempDir()
-	marker := filepath.Join(root, "phase_complete")
+	artifact := filepath.Join(root, "artifact.txt")
 	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
-	requirePermissionDeferred(t, handler, `{"command":"touch -r `+marker+` `+marker+`"}`)
-	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+` && rm -rf /"}`)
-	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+`; echo done"}`)
-	requirePermissionDeferred(t, handler, `{"command":"touch $(echo `+marker+`)"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch -r `+artifact+` `+artifact+`"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+artifact+` && rm -rf /"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+artifact+`; echo done"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch $(echo `+artifact+`)"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch `+root+`/{marker,../../outside}"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch `+root+`/*.md"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch $MARKER"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch ~/marker"}`)
-	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+` > /dev/null"}`)
-	requirePermissionDeferred(t, handler, `{"command":"nottouch `+marker+`"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+artifact+` > /dev/null"}`)
+	requirePermissionDeferred(t, handler, `{"command":"nottouch `+artifact+`"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch"}`)
 }
 
@@ -206,7 +204,7 @@ func TestCreateWithinRootsHandler_MkdirDefersOutsideRootOrOnOtherFlags(t *testin
 
 func TestWrapGeneralPhaseHandlerWithSafeCreate_WrapsAcceptEditsAndCaching(t *testing.T) {
 	root := t.TempDir()
-	marker := filepath.Join(root, "phase_complete")
+	artifact := filepath.Join(root, "artifact.txt")
 
 	for _, inner := range []ports.PermissionHandler{
 		&AutoApproveHandler{},
@@ -215,17 +213,17 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_WrapsAcceptEditsAndCaching(t *tes
 		Guarded(&AcceptEditsHandler{}),
 	} {
 		wrapped := WrapGeneralPhaseHandlerWithSafeCreate(inner, []string{root})
-		requirePermissionAllowed(t, wrapped, toolNameBash, `{"command":"touch `+marker+`"}`)
+		requirePermissionAllowed(t, wrapped, toolNameBash, `{"command":"touch `+artifact+`"}`)
 	}
 }
 
 func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t *testing.T) {
 	root := t.TempDir()
-	marker := filepath.Join(root, "phase_complete")
+	artifact := filepath.Join(root, "artifact.txt")
 
 	for name, inner := range map[string]ports.PermissionHandler{
-		"BoundedHelperArtifactHandler":        &BoundedHelperArtifactHandler{AllowedPaths: []string{marker}},
-		"BoundedHelperArtifactHandlerGuarded": Guarded(&BoundedHelperArtifactHandler{AllowedPaths: []string{marker}}),
+		"BoundedHelperArtifactHandler":        &BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}},
+		"BoundedHelperArtifactHandlerGuarded": Guarded(&BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}}),
 		"AMAHandler":                          &AMAHandler{},
 		"ReadOnlyHandler":                     &ReadOnlyHandler{},
 	} {
@@ -270,12 +268,11 @@ func TestLiveRunReviewHandler_AllowsBroadShellAndScratchWritesOnly(t *testing.T)
 	helperDir := t.TempDir()
 	sourceDir := t.TempDir()
 	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
-	markerPath := filepath.Join(helperDir, "phase_complete")
 	evidenceRoot := filepath.Join(helperDir, "evidence")
 	tempRoot := filepath.Join(helperDir, "tmp")
 
 	handler := &LiveRunReviewHandler{
-		AllowedPaths:  []string{feedbackPath, markerPath},
+		AllowedPaths:  []string{feedbackPath},
 		ScratchRoots:  []string{evidenceRoot, tempRoot},
 		DenyWriteHint: "live-run review may write only helper artifacts and scratch roots",
 	}
@@ -285,7 +282,7 @@ func TestLiveRunReviewHandler_AllowsBroadShellAndScratchWritesOnly(t *testing.T)
 	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+filepath.Join(evidenceRoot, "screenshots", "home.png")+`"}`)
 	requirePermissionAllowed(t, handler, "Edit", `{"file_path":"`+filepath.Join(tempRoot, "server.log")+`"}`)
 	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+feedbackPath+`"}`)
-	requirePermissionAllowed(t, handler, "NotebookEdit", `{"file_path":"`+markerPath+`"}`)
+	requirePermissionAllowed(t, handler, "NotebookEdit", `{"notebook_path":"`+filepath.Join(tempRoot, "notes.ipynb")+`"}`)
 
 	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(sourceDir, "main.go")+`"}`)
 	requirePermissionDenied(t, handler, "Edit", `{"file_path":"`+filepath.Join(helperDir, "notes.md")+`"}`)
@@ -429,7 +426,7 @@ func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
 		{name: "ls piped", command: `{"command":"ls -la | head -20"}`},
 		{name: "find", command: `{"command":"find src -type f"}`},
 		// agentico's own artifact-validation preflight, run by every agent
-		// session before phase_complete (see rolespec_prompt.go).
+		// session before it emits a structured completion outcome.
 		{name: "validate-artifacts", command: `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_review_fixer --dir \"/state/feat-x/runs/run-001/review/iteration-03\""}`},
 		{name: "cd then validate-artifacts", command: `{"command":"cd /repo && \"$AGENTICO_BIN\" validate-artifacts --phase plan --role designer --dir \"/state/feat-x/plan\""}`},
 	}
@@ -545,7 +542,7 @@ func TestInferBashPattern(t *testing.T) {
 
 		// Binary with flags only (second token is flag → binary *)
 		{"ls with flags", toolNameBash, "ls -la /tmp", patternBashLS},
-		{"touch absolute path uses binary wildcard", toolNameBash, `touch "/private/var/tmp/agentico/features/run-001/phase_complete"`, "Bash(touch *)"},
+		{"touch absolute path uses binary wildcard", toolNameBash, `touch "/private/var/tmp/agentico/features/run-001/artifact.txt"`, "Bash(touch *)"},
 		{"rm with flags stays exact", toolNameBash, "rm -rf /tmp/foo", "Bash(rm -rf /tmp/foo)"},
 		{"grep with flags", toolNameBash, "grep -rn 'pattern' .", "Bash(grep *)"},
 		{"rm absolute path stays exact", toolNameBash, "rm /private/var/tmp/agentico/knowledge-base/dbaccess/verification/build-and-lint.md", "Bash(rm /private/var/tmp/agentico/knowledge-base/dbaccess/verification/build-and-lint.md)"},
@@ -572,7 +569,7 @@ func TestInferBashPattern(t *testing.T) {
 		{"json npm test", toolNameBash, testJSONNpmTestCoverage, patternBashNpmTest},
 		{"json ls", toolNameBash, testJSONLsLa, patternBashLS},
 		{"json go test", toolNameBash, `{"command":"go test ./..."}`, patternBashGoTest},
-		{"json touch", toolNameBash, `{"command":"touch \"/private/var/tmp/agentico/features/run-001/phase_complete\""}`, "Bash(touch *)"},
+		{"json touch", toolNameBash, `{"command":"touch \"/private/var/tmp/agentico/features/run-001/artifact.txt\""}`, "Bash(touch *)"},
 		{"json cd chain", toolNameBash, `{"command":"cd /repo && npm test"}`, patternBashNpmTest},
 		{"json empty command", toolNameBash, `{"command":""}`, patternBashAny},
 	}
@@ -1258,7 +1255,7 @@ func TestCacheCheckConcurrentSafety(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SizeGuardHandler tests
+// SessionGuardHandler tests
 // ---------------------------------------------------------------------------
 
 // writeInput builds a JSON-encoded Write tool input with the given content.
@@ -1266,9 +1263,9 @@ func writeInput(content string) string {
 	return fmt.Sprintf(`{"file_path":"/tmp/x","content":%q}`, content)
 }
 
-func TestSizeGuardHandler_BlocksOversizedClaudeWrite(t *testing.T) {
+func TestSessionGuardHandler_BlocksOversizedClaudeWrite(t *testing.T) {
 	inner := &mockHandler{behavior: DecisionAllow}
-	h := &SizeGuardHandler{Inner: inner, MaxBytes: 100}
+	h := &SessionGuardHandler{Inner: inner, MaxWriteBytes: 100}
 
 	req := ports.ToolPermissionRequest{
 		ToolName:     toolNameWrite,
@@ -1287,9 +1284,9 @@ func TestSizeGuardHandler_BlocksOversizedClaudeWrite(t *testing.T) {
 	}
 }
 
-func TestSizeGuardHandler_AllowsUnderThreshold(t *testing.T) {
+func TestSessionGuardHandler_AllowsUnderThreshold(t *testing.T) {
 	inner := &mockHandler{behavior: DecisionAllow}
-	h := &SizeGuardHandler{Inner: inner, MaxBytes: 1000}
+	h := &SessionGuardHandler{Inner: inner, MaxWriteBytes: 1000}
 
 	req := ports.ToolPermissionRequest{
 		ToolName:     toolNameWrite,
@@ -1305,9 +1302,9 @@ func TestSizeGuardHandler_AllowsUnderThreshold(t *testing.T) {
 	}
 }
 
-func TestSizeGuardHandler_IgnoresCodex(t *testing.T) {
+func TestSessionGuardHandler_IgnoresCodex(t *testing.T) {
 	inner := &mockHandler{behavior: DecisionAllow}
-	h := &SizeGuardHandler{Inner: inner, MaxBytes: 100}
+	h := &SessionGuardHandler{Inner: inner, MaxWriteBytes: 100}
 
 	req := ports.ToolPermissionRequest{
 		ToolName:     toolNameWrite,
@@ -1323,9 +1320,9 @@ func TestSizeGuardHandler_IgnoresCodex(t *testing.T) {
 	}
 }
 
-func TestSizeGuardHandler_IgnoresOtherTools(t *testing.T) {
+func TestSessionGuardHandler_IgnoresOtherTools(t *testing.T) {
 	inner := &mockHandler{behavior: DecisionAllow}
-	h := &SizeGuardHandler{Inner: inner, MaxBytes: 100}
+	h := &SessionGuardHandler{Inner: inner, MaxWriteBytes: 100}
 
 	// Edit is not size-guarded (it streams only a diff, not a full payload).
 	req := ports.ToolPermissionRequest{
@@ -1342,9 +1339,9 @@ func TestSizeGuardHandler_IgnoresOtherTools(t *testing.T) {
 	}
 }
 
-func TestSizeGuardHandler_DisabledWhenMaxBytesZero(t *testing.T) {
+func TestSessionGuardHandler_DisabledWhenMaxWriteBytesZero(t *testing.T) {
 	inner := &mockHandler{behavior: DecisionAllow}
-	h := &SizeGuardHandler{Inner: inner, MaxBytes: 0}
+	h := &SessionGuardHandler{Inner: inner, MaxWriteBytes: 0}
 
 	req := ports.ToolPermissionRequest{
 		ToolName:     toolNameWrite,
@@ -1356,15 +1353,15 @@ func TestSizeGuardHandler_DisabledWhenMaxBytesZero(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if decision.Behavior != DecisionAllow {
-		t.Errorf("Behavior = %q, want allow (MaxBytes=0 disables guard)", decision.Behavior)
+		t.Errorf("Behavior = %q, want allow (MaxWriteBytes=0 disables guard)", decision.Behavior)
 	}
 }
 
-func TestSizeGuardHandler_DelegatesOnMalformedInput(t *testing.T) {
+func TestSessionGuardHandler_DelegatesOnMalformedInput(t *testing.T) {
 	// If the input is not valid JSON or lacks a content field, the guard should
 	// defer to the inner handler rather than block (fail-open on parse errors).
 	inner := &mockHandler{behavior: DecisionDeny}
-	h := &SizeGuardHandler{Inner: inner, MaxBytes: 10}
+	h := &SessionGuardHandler{Inner: inner, MaxWriteBytes: 10}
 
 	req := ports.ToolPermissionRequest{
 		ToolName:     toolNameWrite,
@@ -1380,10 +1377,10 @@ func TestSizeGuardHandler_DelegatesOnMalformedInput(t *testing.T) {
 	}
 }
 
-func TestSizeGuardHandler_PropagatesInnerError(t *testing.T) {
+func TestSessionGuardHandler_PropagatesInnerError(t *testing.T) {
 	boom := errors.New("inner boom")
 	inner := &mockHandler{err: boom}
-	h := &SizeGuardHandler{Inner: inner, MaxBytes: 1000}
+	h := &SessionGuardHandler{Inner: inner, MaxWriteBytes: 1000}
 
 	req := ports.ToolPermissionRequest{
 		ToolName:     toolNameWrite,
@@ -1396,14 +1393,54 @@ func TestSizeGuardHandler_PropagatesInnerError(t *testing.T) {
 	}
 }
 
+func TestSessionGuardHandler_DeniesHarnessReceiptMutationForEveryProvider(t *testing.T) {
+	receipt := filepath.Join(t.TempDir(), completionReceiptFilename)
+	for _, provider := range []string{"claude", "codex", "opencode"} {
+		for _, tc := range []struct {
+			name  string
+			tool  string
+			input string
+		}{
+			{name: "write", tool: toolNameWrite, input: `{"file_path":"` + receipt + `","content":"done"}`},
+			{name: "edit", tool: toolNameEdit, input: `{"file_path":"` + receipt + `","old_string":"","new_string":"done"}`},
+			{name: "notebook", tool: toolNameNotebookEdit, input: `{"notebook_path":"` + receipt + `"}`},
+			{name: "shell", tool: toolNameBash, input: `{"command":"touch ` + receipt + `"}`},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				handler := Guarded(&AutoApproveHandler{})
+				decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
+					ToolName:     tc.tool,
+					Input:        tc.input,
+					ProviderName: provider,
+				})
+				if err != nil {
+					t.Fatalf("CanUseTool() error = %v", err)
+				}
+				if decision.Behavior != DecisionDeny {
+					t.Fatalf("Behavior = %q, want deny", decision.Behavior)
+				}
+				if !strings.Contains(decision.Reason, "harness-owned") {
+					t.Fatalf("Reason = %q, want harness-owned guidance", decision.Reason)
+				}
+			})
+		}
+	}
+}
+
+func TestSessionGuardHandler_AllowsReceiptReadThroughReadOnlyTool(t *testing.T) {
+	receipt := filepath.Join(t.TempDir(), completionReceiptFilename)
+	handler := Guarded(&AutoApproveHandler{})
+	requirePermissionAllowed(t, handler, "Read", `{"file_path":"`+receipt+`"}`)
+}
+
 func TestGuarded_UsesDefaultThreshold(t *testing.T) {
 	inner := &mockHandler{behavior: DecisionAllow}
-	guard, ok := Guarded(inner).(*SizeGuardHandler)
+	guard, ok := Guarded(inner).(*SessionGuardHandler)
 	if !ok {
-		t.Fatalf("Guarded returned %T, want *SizeGuardHandler", guard)
+		t.Fatalf("Guarded returned %T, want *SessionGuardHandler", guard)
 	}
-	if guard.MaxBytes != DefaultWriteGuardBytes {
-		t.Errorf("MaxBytes = %d, want %d", guard.MaxBytes, DefaultWriteGuardBytes)
+	if guard.MaxWriteBytes != DefaultWriteGuardBytes {
+		t.Errorf("MaxWriteBytes = %d, want %d", guard.MaxWriteBytes, DefaultWriteGuardBytes)
 	}
 	if guard.Inner != inner {
 		t.Error("Guarded did not preserve inner handler")

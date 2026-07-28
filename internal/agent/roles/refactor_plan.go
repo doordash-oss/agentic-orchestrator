@@ -33,7 +33,6 @@ var refactorPlanRoleSpec = RoleSpec{
 	OutputRoots: []OutputRootSpec{
 		singleShotPhaseDirOutputRoot("Flat refactor cycle artifact directory."),
 	},
-	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		{
 			Name:         "refactor_plan_markdown",

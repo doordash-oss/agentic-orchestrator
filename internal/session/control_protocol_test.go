@@ -16,9 +16,11 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +30,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error { return nil }
 
 const (
 	roleUser        = "user"
@@ -456,6 +464,37 @@ func TestHasUnansweredQuestion_ClearedBySendUserMessage(t *testing.T) {
 	}
 	if s.hasUnansweredQuestion {
 		t.Error("hasUnansweredQuestion should be cleared after SendUserMessage")
+	}
+}
+
+func TestTryHandleControlRequest_DelegatedTaskQuestionCannotCreateRootGate(t *testing.T) {
+	s := NewSession("child-question", "feat-1", feature.PhaseImplement)
+	var stdin bytes.Buffer
+	s.SetStdinForTest(nopWriteCloser{Writer: &stdin})
+
+	msg := llm.SDKMessage{
+		Type:   "control_request",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginTask, TaskID: "task-1", ChildSessionID: "child-1"},
+		ControlRequest: &llm.ControlRequestMessage{
+			Type:      "control_request",
+			RequestID: "child-question-1",
+			Request: llm.ControlRequest{
+				Subtype:  "can_use_tool",
+				ToolName: "AskUserQuestion",
+				Input:    json.RawMessage(`{"questions":[{"question":"Which API?"}]}`),
+			},
+		},
+	}
+
+	if !s.tryHandleControlRequest(msg) {
+		t.Fatal("delegated task question was surfaced as a root control request")
+	}
+	if s.HasPendingRootAskUserQuestion() {
+		t.Fatal("delegated task question created a root user-input gate")
+	}
+	if !strings.Contains(stdin.String(), `"behavior":"deny"`) ||
+		!strings.Contains(stdin.String(), "Delegated tasks cannot ask the user") {
+		t.Fatalf("child question response = %q, want explicit denial", stdin.String())
 	}
 }
 

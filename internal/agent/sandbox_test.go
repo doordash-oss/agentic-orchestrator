@@ -16,8 +16,6 @@ package agent
 
 import (
 	"testing"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
 func TestMaybeWrapHelperSandbox_DisabledUnchanged(t *testing.T) {
@@ -26,43 +24,5 @@ func TestMaybeWrapHelperSandbox_DisabledUnchanged(t *testing.T) {
 	cleanup()
 	if sandboxed || len(got) != 2 || got[0] != "helper" || got[1] != "run" {
 		t.Errorf("disabled sandbox: got=%v sandboxed=%v, want unchanged [helper run]", got, sandboxed)
-	}
-}
-
-func TestFinishOrViolateNudgeForModel(t *testing.T) {
-	capable := &captureProvider{name: "nudge", model: "nudge-model", finishOrViolate: true}
-	plain := &captureProvider{name: "plain", model: "plain-model"}
-
-	reg := llm.NewRegistry()
-	reg.Register(capable)
-	reg.Register(plain)
-
-	cases := []struct {
-		name     string
-		registry *llm.Registry
-		model    string
-		want     bool
-	}{
-		{name: "capability positive provider", registry: reg, model: "nudge-model", want: true},
-		{name: "provider without capability", registry: reg, model: "plain-model", want: false},
-		{name: "unresolved model", registry: reg, model: "unknown-model", want: false},
-		{name: "nil registry", registry: nil, model: "nudge-model", want: false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			pr := &PhaseRunner{Registry: tc.registry}
-			if got := pr.finishOrViolateNudgeForModel(tc.model); got != tc.want {
-				t.Errorf("finishOrViolateNudgeForModel(%q) = %v, want %v", tc.model, got, tc.want)
-			}
-			// The exported wrapper (used by the orchestrator package) must
-			// delegate to the unexported resolver, not diverge.
-			if got := pr.FinishOrViolateNudgeForModel(tc.model); got != tc.want {
-				t.Errorf("FinishOrViolateNudgeForModel(%q) = %v, want %v", tc.model, got, tc.want)
-			}
-		})
-	}
-
-	if got := (*PhaseRunner)(nil).finishOrViolateNudgeForModel("nudge-model"); got {
-		t.Errorf("nil PhaseRunner: got %v, want false", got)
 	}
 }

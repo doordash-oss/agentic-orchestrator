@@ -33,9 +33,9 @@ import (
 //     failed (LastError set) for every PhaseRepos entry.
 //   - "safety_rail":      no-progress / consecutive-failure rail tripped.
 //   - "interrupted":      shutdown / feature stopped while running.
-//   - "need_user_input":  iteration emitted NEED_USER_INPUT — feature-scoped
-//     pause gate; NeedUserInputPath points to the persisted gate
-//     artifact at the phase-iteration dir.
+//   - "need_user_input":  harness verification requires a user decision;
+//     NeedUserInputPath points to the harness-owned gate artifact at the
+//     phase-iteration dir.
 //   - "plan_revision_required": implementation found a phase-plan contract
 //     defect that must be repaired before another implementation attempt.
 //
@@ -64,9 +64,9 @@ type PhaseImplementLoopResult struct {
 // together. AtomicPhaseStamp commits the outcome in one Modify write at the
 // end of the loop.
 //
-// NEED_USER_INPUT and RETRY are phase-scoped. The gate artifact lives at the
-// phase-iteration artifact dir; the orchestrator surfaces it via the feature-
-// level pending-need-user-input pointer.
+// RETRY is phase-scoped. Harness-created verification gates live at the
+// phase-iteration artifact dir; the orchestrator surfaces them via the
+// feature-level pending-need-user-input pointer.
 //
 // Crash recovery: re-runs the interrupted unit (iteration N's implement, or
 // iteration N's review) from scratch. Durable state on disk
@@ -172,8 +172,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		// per-repo path historically used: Medium/Large skip per-
 		// iteration review and rely on Final Review for quality gating;
 		// Moonshot runs the per-iteration gate.
-		SkipIterationReview:  cfg.Feature.EffectivePipeline().ShouldSkipIterationReview(),
-		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+		SkipIterationReview: cfg.Feature.EffectivePipeline().ShouldSkipIterationReview(),
 	}
 
 	// Mark mid-flight phase status at the feature level so observers and

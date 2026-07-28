@@ -827,9 +827,16 @@ function useTranscriptStage(
   const rows = usesFallback
     ? (preview?.transcript ?? EMPTY_ROWS)
     : (transcripts[selectedSession?.id ?? ''] ?? EMPTY_ROWS);
-  const items = useMemo(() => buildConversation(rows, { mode: 'assistant-only' }), [rows]);
-  const labels = useMemo(() => cohortTabLabels(cohort), [cohort]);
   const activeSession = selectedSession ?? preview?.session ?? null;
+  const items = useMemo(
+    () =>
+      buildConversation(rows, {
+        mode: 'assistant-only',
+        taskActivities: activeSession?.taskActivities ?? [],
+      }),
+    [activeSession?.taskActivities, rows],
+  );
+  const labels = useMemo(() => cohortTabLabels(cohort), [cohort]);
   const waiting = activeSession !== null && !isTerminalSessionStatus(activeSession.status);
   const assistantName =
     (selectedSession !== null ? labels.get(selectedSession.id) : undefined) ??

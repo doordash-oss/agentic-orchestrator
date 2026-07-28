@@ -512,9 +512,8 @@ func (o *Orchestrator) ReportMissingArtifactFailure(featureID, errMsg string) er
 	return o.markFailedWithEvent(featureID, feature.FailureMissingArtifact, errMsg)
 }
 
-// ReportProtocolViolation marks a feature failed when a session ended without
-// the universal completion marker or produced artifacts that violate its role
-// contract.
+// ReportProtocolViolation marks a feature failed when a root turn violates the
+// completion protocol or produces artifacts that violate its role contract.
 func (o *Orchestrator) ReportProtocolViolation(featureID, errMsg string) error {
 	return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
 }

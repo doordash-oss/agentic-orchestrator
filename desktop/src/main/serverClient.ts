@@ -371,6 +371,25 @@ export function toSessionSummary(session: ServerSessionSummary): SessionSummary 
       ...(session.context_percentage === undefined
         ? {}
         : { contextPercentage: session.context_percentage }),
+      taskActivities: session.task_activities.map((task) => ({
+        taskId: task.task_id,
+        ...(task.tool_use_id === undefined ? {} : { toolUseId: task.tool_use_id }),
+        ...(task.child_session_id === undefined ? {} : { childSessionId: task.child_session_id }),
+        ...(task.description === undefined ? {} : { description: task.description }),
+        state: task.state,
+        ...(task.last_tool_name === undefined ? {} : { lastToolName: task.last_tool_name }),
+        ...(task.last_path === undefined ? {} : { lastPath: task.last_path }),
+        ...(task.status === undefined ? {} : { status: task.status }),
+        ...(task.summary === undefined ? {} : { summary: task.summary }),
+        ...(task.output_file === undefined ? {} : { outputFile: task.output_file }),
+        ...(task.usage?.total_tokens === undefined ? {} : { totalTokens: task.usage.total_tokens }),
+        ...(task.usage?.tool_uses === undefined ? {} : { toolUses: task.usage.tool_uses }),
+        ...(task.usage?.duration_ms === undefined ? {} : { durationMs: task.usage.duration_ms }),
+        startedAt: task.started_at,
+        updatedAt: task.updated_at,
+        ...(task.finished_at === undefined ? {} : { finishedAt: task.finished_at }),
+      })),
+      runningTaskCount: session.running_task_count,
       usage: {
         ...(session.usage.input_tokens === undefined
           ? {}

@@ -898,82 +898,6 @@ func TestContractRegistryImplementerAllowsRetryWithNotRunVerification(t *testing
 	}
 }
 
-func TestContractRegistryImplementerParsesNeedUserInputWhenProgressNeedsUserInput(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	gatePath := NeedUserInputPath(iterDir)
-
-	writeNeedUserInputProgress(t, progressPath, reportPath, "Need a product decision.", []string{"Legacy path or new service?"})
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-	writeNeedUserInputGate(t, gatePath, "Gate summary from yaml", []string{"Legacy path or new service?"})
-
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(violations) != 0 || !out.OK {
-		t.Fatalf("Validate() = (%+v, %v), want OK", out, violations)
-	}
-	if out.NeedUserInput == nil || out.NeedUserInput.Summary != "Gate summary from yaml" {
-		t.Fatalf("NeedUserInput = %+v, want parsed yaml payload", out.NeedUserInput)
-	}
-}
-
-func TestContractRegistryImplementerReportsMissingNeedUserInput(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeNeedUserInputProgress(t, progressPath, reportPath, "Need a product decision.", []string{"Legacy path or new service?"})
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := JoinProtocolViolations(violations)
-	if !strings.Contains(got, "need-user-input.yaml") || !strings.Contains(got, "missing") {
-		t.Fatalf("JoinProtocolViolations() = %q, want missing need-user-input.yaml", got)
-	}
-}
-
-func TestContractRegistryImplementerReportsMalformedNeedUserInput(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeNeedUserInputProgress(t, progressPath, reportPath, "Need a product decision.", []string{"Legacy path or new service?"})
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-	if err := os.WriteFile(NeedUserInputPath(iterDir), []byte("questions: [\n"), 0o644); err != nil {
-		t.Fatalf("write malformed need-user-input.yaml: %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := JoinProtocolViolations(violations)
-	if !strings.Contains(got, "need-user-input.yaml") || !strings.Contains(got, "unparseable") {
-		t.Fatalf("JoinProtocolViolations() = %q, want unparseable need-user-input.yaml", got)
-	}
-}
-
 func TestContractRegistryImplementerDoesNotRequireNeedUserInputForSuccess(t *testing.T) {
 	iterDir := t.TempDir()
 	artifactDir := filepath.Dir(iterDir)
@@ -989,7 +913,7 @@ func TestContractRegistryImplementerDoesNotRequireNeedUserInputForSuccess(t *tes
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if len(violations) != 0 || !out.OK || out.NeedUserInput != nil {
+	if len(violations) != 0 || !out.OK {
 		t.Fatalf("Validate() = (%+v, %v), want OK without need-user-input payload", out, violations)
 	}
 }
@@ -1233,63 +1157,6 @@ func validPhasePlanText() string {
 
 func validRefactorPlanText() string {
 	return "# Refactor: test\n\n## Tasks\n\n### Task 1: touch api\n\n**Repo:** api\n\nTouch the api repo.\n"
-}
-
-func writeNeedUserInputProgress(t *testing.T, path string, reportPath string, note string, questions []string) {
-	t.Helper()
-	var q strings.Builder
-	q.WriteString("## Questions for User\n\n")
-	for i, question := range questions {
-		fmt.Fprintf(&q, "%d. %s\n", i+1, question)
-	}
-	body := fmt.Sprintf(`# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- registry test
-
-### Remaining from the plan
-- none
-
-### Where I stopped
-- waiting on user
-
-### Gotchas / blockers / in-flight decisions
-- user decision required
-
-## Deferrals
-
-~~~yaml
-deferrals: []
-closed_deferrals: []
-~~~
-
-## Verification Report
-
-- **Path**: %s
-- **Summary**: registry test
-
-%s
-## Iteration State
-
-NEED_USER_INPUT
-%s
-`, reportPath, q.String(), note)
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write progress: %v", err)
-	}
-}
-
-func writeNeedUserInputGate(t *testing.T, path string, summary string, questions []string) {
-	t.Helper()
-	rec := NeedUserInputRecord{Summary: summary, Iteration: 1}
-	for i, question := range questions {
-		rec.Questions = append(rec.Questions, NeedUserInputQuestion{Index: i + 1, Prompt: question})
-	}
-	if err := WriteNeedUserInputRecord(path, rec); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
-	}
 }
 
 func TestVerificationScopeViolations(t *testing.T) {

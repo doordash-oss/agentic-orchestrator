@@ -28,8 +28,8 @@ import (
 // validated.
 type Role string
 
-// ArtifactPresence describes whether a RoleSpec artifact is always required,
-// optional, or required only when its predicate matches parsed state.
+// ArtifactPresence describes whether a RoleSpec artifact is required or
+// optional.
 type ArtifactPresence string
 
 const (
@@ -37,8 +37,6 @@ const (
 	ArtifactRequired ArtifactPresence = "required"
 	// ArtifactOptional means the artifact may be present and must parse if it is.
 	ArtifactOptional ArtifactPresence = "optional"
-	// ArtifactConditional means the artifact is required only when When matches.
-	ArtifactConditional ArtifactPresence = "conditional"
 )
 
 // ArtifactValidator names the deterministic validator used by the agent
@@ -47,7 +45,6 @@ type ArtifactValidator string
 
 const (
 	ValidatorProgress                  ArtifactValidator = "progress"
-	ValidatorNeedUserInput             ArtifactValidator = "need_user_input"
 	ValidatorRoadmap                   ArtifactValidator = "roadmap"
 	ValidatorPhasePlanMarkdown         ArtifactValidator = "phase_plan_markdown"
 	ValidatorPlanAttemptMeta           ArtifactValidator = "plan_attempt_meta"
@@ -56,14 +53,6 @@ const (
 	ValidatorRefactorPlanMarkdown      ArtifactValidator = "refactor_plan_markdown"
 	ValidatorReviewFeedback            ArtifactValidator = "review_feedback"
 	ValidatorPlanValidatorAxisApproval ArtifactValidator = "plan_validator_axis_approval"
-)
-
-// ArtifactCondition names the parsed-state predicate that makes a conditional
-// artifact required.
-type ArtifactCondition string
-
-const (
-	ConditionProgressNeedUserInput ArtifactCondition = "progress_need_user_input"
 )
 
 // RoleRuntime carries runtime paths used to resolve named output roots.
@@ -85,11 +74,9 @@ type RoleArtifactSpec struct {
 	RootName      string
 	RelativePath  string
 	Presence      ArtifactPresence
-	Condition     string
 	Description   string
 	HideFromSkill bool
 	ResolvePath   func(RoleRuntime, RoleArtifactSpec) string
-	When          ArtifactCondition
 	Validate      ArtifactValidator
 }
 
@@ -108,7 +95,6 @@ type RoleSpec struct {
 	SkillName            string
 	UserTemplate         string
 	OutputRoots          []OutputRootSpec
-	MarkerRoot           string
 	Artifacts            []RoleArtifactSpec
 	Required             []feature.Phase
 	AskingClauseFor      func(model string) string
@@ -155,15 +141,6 @@ func (s RoleSpec) OutputRootPaths(rt RoleRuntime) map[string]string {
 	return roots
 }
 
-// MarkerPath resolves the role's phase_complete marker path.
-func (s RoleSpec) MarkerPath(rt RoleRuntime) string {
-	root := s.OutputRootPaths(rt)[s.MarkerRoot]
-	if root == "" {
-		return "phase_complete"
-	}
-	return filepath.Join(root, "phase_complete")
-}
-
 // RenderOutputFilesSection renders the generated SKILL.md section derived from
 // RoleSpec.Artifacts.
 func RenderOutputFilesSection(spec RoleSpec) string {
@@ -176,9 +153,6 @@ func RenderOutputFilesSection(spec RoleSpec) string {
 			continue
 		}
 		requirement := string(artifact.Presence)
-		if artifact.Condition != "" {
-			requirement = fmt.Sprintf("%s: %s", requirement, artifact.Condition)
-		}
 		fmt.Fprintf(&b, "| `%s` | `{%s}/%s` | %s | %s |\n",
 			artifact.DisplayPath,
 			artifact.RootName,
@@ -324,7 +298,6 @@ type reviewFeedbackAxisRoleSpecConfig struct {
 	UserTemplate         string
 	Required             []feature.Phase
 	OutputRoots          []OutputRootSpec
-	MarkerRoot           string
 	Artifact             RoleArtifactSpec
 	ReadOnlyOutsideRoots bool
 }
@@ -337,7 +310,6 @@ func reviewFeedbackAxisRoleSpec(cfg reviewFeedbackAxisRoleSpecConfig) RoleSpec {
 		UserTemplate:         cfg.UserTemplate,
 		Required:             cfg.Required,
 		OutputRoots:          cfg.OutputRoots,
-		MarkerRoot:           cfg.MarkerRoot,
 		Artifacts:            []RoleArtifactSpec{cfg.Artifact},
 		ReadOnlyOutsideRoots: cfg.ReadOnlyOutsideRoots,
 	}

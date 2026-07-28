@@ -34,7 +34,7 @@ type ReportGateCategory string
 const (
 	// GateCategorySchema covers structural integrity issues: missing
 	// required checks, empty evidence on pass, unknown status values, or
-	// not_run entries after phase_complete.
+	// not_run entries when completion is requested.
 	GateCategorySchema ReportGateCategory = "schema"
 
 	// GateCategoryHedge covers pass claims whose evidence text describes a
@@ -56,7 +56,7 @@ const (
 	KindMissingRequired       ReportGateKind = "missing_required"
 	KindUnknownItemID         ReportGateKind = "unknown_item_id"
 	KindEmptyEvidence         ReportGateKind = "empty_evidence"
-	KindNotRunAtEnd           ReportGateKind = "not_run_at_phase_complete"
+	KindNotRunAtCompletion    ReportGateKind = "not_run_at_completion"
 	KindUnknownStatus         ReportGateKind = "unknown_status"
 	KindHedgePhrase           ReportGateKind = "hedge_phrase"
 	KindStaleRevision         ReportGateKind = "stale_contract_revision"
@@ -121,16 +121,16 @@ var hedgePhrases = []string{
 // The gate is designed to catch two classes of over-claim cheaply:
 //
 //  1. Schema lies — the agent marking items passed that are empty, missing,
-//     or still not_run after it signaled phase_complete.
+//     or still not_run when it requested completion.
 //  2. Prose lies — the agent marking items passed while the Evidence text
 //     itself describes failure ("fails on macOS", "pre-existing bug",
 //     "orthogonal to this phase").
 //
-// phaseComplete reflects whether the agent has signaled it's done (i.e.
-// wrote the phase_complete marker). When true, any not_run required check
-// is a contradiction and blocks the gate.
-func ValidateVerificationReport(report *VerificationReport, required []RequiredVerificationItem, contract *TestingContract, phaseComplete bool) ReportGateResult {
-	return ValidateVerificationReportWithContext(report, required, phaseComplete, VerificationReportValidationContext{
+// rootSuccess reflects whether the root agent emitted a structured success
+// outcome. When true, any not_run required check is a contradiction and blocks
+// the gate.
+func ValidateVerificationReport(report *VerificationReport, required []RequiredVerificationItem, contract *TestingContract, rootSuccess bool) ReportGateResult {
+	return ValidateVerificationReportWithContext(report, required, rootSuccess, VerificationReportValidationContext{
 		Contract: contract,
 	})
 }
@@ -138,7 +138,7 @@ func ValidateVerificationReport(report *VerificationReport, required []RequiredV
 // ValidateVerificationReportWithContext runs the deterministic integrity gate
 // and, when supplied with an iteration directory, validates file-backed visual
 // and behavioral evidence under that iteration root.
-func ValidateVerificationReportWithContext(report *VerificationReport, required []RequiredVerificationItem, phaseComplete bool, ctx VerificationReportValidationContext) ReportGateResult {
+func ValidateVerificationReportWithContext(report *VerificationReport, required []RequiredVerificationItem, rootSuccess bool, ctx VerificationReportValidationContext) ReportGateResult {
 	result := ReportGateResult{KnownCaveats: report.KnownCaveats}
 
 	checks := reportChecks(report)
@@ -213,12 +213,12 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 			}
 
 		case VerificationStatusNotRun:
-			if phaseComplete {
+			if rootSuccess {
 				result.Findings = append(result.Findings, ReportGateFinding{
 					CheckName: name,
 					Category:  GateCategorySchema,
-					Kind:      KindNotRunAtEnd,
-					Detail:    "status is not_run but the phase is marked complete — either run the check and record the result, or explain why this check cannot run (mark as pending_human if blocked on a human)",
+					Kind:      KindNotRunAtCompletion,
+					Detail:    "status is not_run but the root outcome reports success — either run the check and record the result, or explain why this check cannot run (mark as pending_human if blocked on a human)",
 				})
 			}
 
@@ -723,7 +723,7 @@ func quotedUnique(ss []string) []string {
 // can re-parse it cleanly downstream.
 //
 // Repetitive findings are consolidated: if many checks all have the same
-// failure mode (e.g. all `not_run` at phase_complete, several with empty
+// failure mode (e.g. all `not_run` at completion, several with empty
 // evidence), the feedback shows ONE bullet that lists the affected checks
 // — rather than N verbose repetitions of the same detail. Hedge-phrase and
 // unknown-status findings stay per-check because each carries a distinct
@@ -856,10 +856,10 @@ func buildSchemaBullets(findings []ReportGateFinding) []string {
 	}
 	var out []string
 
-	if fs := byKind[KindNotRunAtEnd]; len(fs) > 0 {
+	if fs := byKind[KindNotRunAtCompletion]; len(fs) > 0 {
 		names := collectCheckNames(fs)
 		out = append(out, fmt.Sprintf(
-			"- **%d verification check%s left at `status: not_run` while `phase_complete` was written.** Either run the checks and record results, or emit `## Iteration State: RETRY` in progress.md (with the unfinished work listed under `### Remaining from the plan`) instead of `SUCCESS`. Affected: %s",
+			"- **%d verification check%s left at `status: not_run` when completion was requested.** Either run the checks and record results, or emit `## Iteration State: RETRY` in progress.md (with the unfinished work listed under `### Remaining from the plan`) instead of `SUCCESS`. Affected: %s",
 			len(fs), plural(len(fs)), joinCheckNames(names),
 		))
 	}
@@ -885,7 +885,7 @@ func buildSchemaBullets(findings []ReportGateFinding) []string {
 	// Any other kinds under schema (forward-compat) stay per-check.
 	for kind, fs := range byKind {
 		switch kind {
-		case KindNotRunAtEnd, KindEmptyEvidence, KindMissingRequired, KindUnknownStatus:
+		case KindNotRunAtCompletion, KindEmptyEvidence, KindMissingRequired, KindUnknownStatus:
 			continue
 		}
 		for _, f := range fs {

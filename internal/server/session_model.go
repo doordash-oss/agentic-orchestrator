@@ -293,29 +293,76 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 	if result := sess.Cost(); result != nil {
 		cost = result.TotalCostUSD
 	}
+	taskActivities, runningTaskCount := sessionTaskActivities(sess)
 	return SessionSummaryDTO{
-		ID:           sess.ID(),
-		FeatureID:    sess.FeatureID(),
-		RunNumber:    sessionRunNumber(sess),
-		Phase:        sess.Phase().String(),
-		Repo:         sess.RepoName(),
-		Kind:         sess.Kind().String(),
-		Label:        sess.Label(),
-		Provider:     sess.ProviderName(),
-		Model:        sess.Model(),
-		Status:       sess.Status().String(),
-		TurnState:    sessionTurnState(sess),
-		StartedAt:    sess.StartedAt(),
-		Iteration:    sess.Iteration(),
-		ContextPct:   max(sess.ContextPercentage(), 0),
-		Effort:       string(sess.EffectiveEffort()),
-		EffortSource: string(sess.EffortSource()),
+		ID:               sess.ID(),
+		FeatureID:        sess.FeatureID(),
+		RunNumber:        sessionRunNumber(sess),
+		Phase:            sess.Phase().String(),
+		Repo:             sess.RepoName(),
+		Kind:             sess.Kind().String(),
+		Label:            sess.Label(),
+		Provider:         sess.ProviderName(),
+		Model:            sess.Model(),
+		Status:           sess.Status().String(),
+		TurnState:        sessionTurnState(sess),
+		StartedAt:        sess.StartedAt(),
+		Iteration:        sess.Iteration(),
+		ContextPct:       max(sess.ContextPercentage(), 0),
+		Effort:           string(sess.EffectiveEffort()),
+		EffortSource:     string(sess.EffortSource()),
+		TaskActivities:   taskActivities,
+		RunningTaskCount: runningTaskCount,
 		Usage: UsageDTO{
 			InputTokens:  usage.InputTokens,
 			OutputTokens: usage.OutputTokens,
 			CostUSD:      cost,
 		},
 	}
+}
+
+func sessionTaskActivities(sess ports.SessionView) ([]TaskActivity, int) {
+	if sess == nil {
+		return []TaskActivity{}, 0
+	}
+	snapshots := sess.TaskActivities()
+	activities := make([]TaskActivity, 0, len(snapshots))
+	running := 0
+	for _, snapshot := range snapshots {
+		if snapshot.IsRunning() {
+			running++
+		}
+		var usage *TaskActivityUsage
+		if snapshot.Usage != nil {
+			usage = &TaskActivityUsage{
+				TotalTokens: snapshot.Usage.TotalTokens,
+				ToolUses:    snapshot.Usage.ToolUses,
+				DurationMs:  snapshot.Usage.DurationMs,
+			}
+		}
+		var finishedAt *time.Time
+		if !snapshot.FinishedAt.IsZero() {
+			value := snapshot.FinishedAt
+			finishedAt = &value
+		}
+		activities = append(activities, TaskActivity{
+			TaskID:         snapshot.TaskID,
+			ToolUseID:      snapshot.ToolUseID,
+			ChildSessionID: snapshot.ChildSessionID,
+			Description:    snapshot.Description,
+			State:          TaskActivityState(snapshot.State),
+			LastToolName:   snapshot.LastToolName,
+			LastPath:       snapshot.LastPath,
+			Status:         snapshot.Status,
+			Summary:        snapshot.Summary,
+			OutputFile:     snapshot.OutputFile,
+			Usage:          usage,
+			StartedAt:      snapshot.StartedAt,
+			UpdatedAt:      snapshot.UpdatedAt,
+			FinishedAt:     finishedAt,
+		})
+	}
+	return activities, running
 }
 
 func sessionRunNumber(sess ports.SessionView) int {
@@ -327,23 +374,25 @@ func sessionRunNumber(sess ports.SessionView) int {
 
 func sessionDetailFromSummary(summary SessionSummaryDTO) SessionDetailDTO {
 	return SessionDetailDTO{
-		ID:           summary.ID,
-		FeatureID:    summary.FeatureID,
-		RunNumber:    summary.RunNumber,
-		Phase:        summary.Phase,
-		Repo:         summary.Repo,
-		Kind:         summary.Kind,
-		Label:        summary.Label,
-		Provider:     summary.Provider,
-		Model:        summary.Model,
-		Status:       summary.Status,
-		TurnState:    summary.TurnState,
-		StartedAt:    summary.StartedAt,
-		Iteration:    summary.Iteration,
-		ContextPct:   summary.ContextPct,
-		Effort:       summary.Effort,
-		EffortSource: summary.EffortSource,
-		Usage:        summary.Usage,
+		ID:               summary.ID,
+		FeatureID:        summary.FeatureID,
+		RunNumber:        summary.RunNumber,
+		Phase:            summary.Phase,
+		Repo:             summary.Repo,
+		Kind:             summary.Kind,
+		Label:            summary.Label,
+		Provider:         summary.Provider,
+		Model:            summary.Model,
+		Status:           summary.Status,
+		TurnState:        summary.TurnState,
+		StartedAt:        summary.StartedAt,
+		Iteration:        summary.Iteration,
+		ContextPct:       summary.ContextPct,
+		Effort:           summary.Effort,
+		EffortSource:     summary.EffortSource,
+		TaskActivities:   summary.TaskActivities,
+		RunningTaskCount: summary.RunningTaskCount,
+		Usage:            summary.Usage,
 	}
 }
 

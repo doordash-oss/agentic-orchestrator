@@ -497,7 +497,7 @@ func TestNativeToollessReviewPreservesExactDecisionAndCompletesOneTurn(t *testin
 			assertAssistantText(t, msgs, decision)
 
 			msgs = mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": StopReasonEndTurn}))
-			if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+			if !terminalResult(t, msgs).IsSuccess() {
 				t.Fatalf("%s review completion produced %+v, want one success result", decision, msgs)
 			}
 		})
@@ -798,6 +798,92 @@ func TestParseLine_OpenCodeNonTaskToolHasNoTaskLifecycle(t *testing.T) {
 	}
 }
 
+func TestParseLine_OpenCodeAssignsRootAndTaskOrigins(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t)
+
+	root := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "agent_message_chunk",
+			"messageId":     "root-message",
+			"content":       map[string]any{"type": "text", "text": "working"},
+		},
+	}))
+	if len(root) == 0 || !root[0].Origin.IsRoot() {
+		t.Fatalf("root messages = %+v", root)
+	}
+
+	task := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call_task",
+			"kind":          "think",
+			"status":        "in_progress",
+			"rawInput": map[string]any{
+				"description": "Inspect server code",
+				"prompt":      "Inspect the server package.",
+			},
+		},
+	}))
+	if len(task) < 2 ||
+		task[1].TaskStarted == nil ||
+		task[1].Origin.Kind != llm.EventOriginTask ||
+		task[1].Origin.TaskID != "call_task" {
+		t.Fatalf("task messages = %+v", task)
+	}
+
+	child := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_child",
+		"update": map[string]any{
+			"sessionUpdate": "agent_message_chunk",
+			"messageId":     "child-message",
+			"content":       map[string]any{"type": "text", "text": "child output"},
+		},
+	}))
+	if len(child) != 1 ||
+		child[0].Assistant != nil ||
+		child[0].TaskProgress == nil ||
+		child[0].TaskProgress.TaskID != "call_task" ||
+		child[0].TaskProgress.ToolUseID != "call_task" ||
+		child[0].Origin.Kind != llm.EventOriginTask ||
+		child[0].Origin.TaskID != "call_task" ||
+		child[0].Origin.ChildSessionID != "ses_child" {
+		t.Fatalf("child messages = %+v", child)
+	}
+}
+
+func TestParseLine_OpenCodeDoesNotGuessChildTaskWhenParallelTasksAreActive(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t)
+	for _, taskID := range []string{"call-a", "call-b"} {
+		mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+			"sessionId": "ses_x",
+			"update": map[string]any{
+				"sessionUpdate": "tool_call_update",
+				"toolCallId":    taskID,
+				"kind":          "think",
+				"status":        "in_progress",
+				"rawInput": map[string]any{
+					"description": "Inspect code",
+					"prompt":      "Inspect the package.",
+				},
+			},
+		}))
+	}
+
+	child := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_child",
+		"update": map[string]any{
+			"sessionUpdate": "agent_message_chunk",
+			"messageId":     "child-message",
+			"content":       map[string]any{"type": "text", "text": "child output"},
+		},
+	}))
+	if len(child) != 0 {
+		t.Fatalf("ambiguous child activity = %+v, want no guessed task identity", child)
+	}
+}
+
 func TestParseLine_PromptEndTurnIsSuccess(t *testing.T) {
 	p, _, promptID := newPostHandshakeProtocol(t)
 	msgs := mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": "end_turn"}))
@@ -993,20 +1079,17 @@ func TestParseLine_MalformedStdoutAfterResultIsIgnored(t *testing.T) {
 	}
 }
 
-// TestPromptSuccessRequiresMarkerToCompletePhase proves the provider's success
-// result cannot, by itself, satisfy phase completion: the standard
-// marker-backed termination classifier still gates on the phase_complete
-// marker, exactly as for existing providers.
-func TestPromptSuccessRequiresMarkerToCompletePhase(t *testing.T) {
+func TestPromptSuccessRequiresRootIntentToCompletePhase(t *testing.T) {
 	p, _, promptID := newPostHandshakeProtocol(t)
 	msgs := mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": "end_turn"}))
 	result := msgs[0].Result
 
-	if cls := llm.ClassifyTermination(llm.TerminationInputs{Result: result, PhaseCompleteExists: false}); cls == llm.TermCompleted {
-		t.Fatal("ACP end_turn success classified as Completed without the phase_complete marker")
+	if got := llm.ClassifyTurn(llm.TurnSignals{Result: result}); got != llm.TurnProtocolViolation {
+		t.Fatalf("ClassifyTurn() = %v, want ProtocolViolation without root intent", got)
 	}
-	if cls := llm.ClassifyTermination(llm.TerminationInputs{Result: result, PhaseCompleteExists: true}); cls != llm.TermCompleted {
-		t.Fatalf("ACP end_turn success with marker classified as %v, want Completed", cls)
+	intent := llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}
+	if got := llm.ClassifyTurn(llm.TurnSignals{Result: result, RootIntent: intent}); got != llm.TurnCommitSuccess {
+		t.Fatalf("ClassifyTurn() = %v, want CommitSuccess with root intent", got)
 	}
 }
 
@@ -1065,11 +1148,6 @@ func TestParseLine_FailsClosedOnUnsupportedServerRequests(t *testing.T) {
 	}
 }
 
-// TestFailClosedControlNeverSatisfiesPhase proves a failed control event yields
-// a non-success result that the marker classifier never treats as Completed —
-// whether or not a phase_complete marker is present on disk. Task 5 requires
-// that a failed control event cannot satisfy marker-backed completion, so the
-// marker-present case is asserted explicitly, not assumed.
 func TestFailClosedControlNeverSatisfiesPhase(t *testing.T) {
 	p, _, _ := newPostHandshakeProtocol(t)
 	msgs := mustParse(t, p, serverRequestLine(t, 5, "terminal/create", map[string]any{"sessionId": "ses_x"}))
@@ -1077,15 +1155,9 @@ func TestFailClosedControlNeverSatisfiesPhase(t *testing.T) {
 	if result.IsSuccess() {
 		t.Fatal("fail-closed result reported success")
 	}
-	// Without a marker the fail-closed error is plainly non-success.
-	if cls := llm.ClassifyTermination(llm.TerminationInputs{Result: result, PhaseCompleteExists: false}); cls == llm.TermCompleted {
-		t.Fatal("fail-closed control event classified as Completed (no marker)")
-	}
-	// And even if a phase_complete marker happens to exist on disk, the error
-	// result must remain non-successful — the marker cannot launder a failed
-	// control event into a clean completion.
-	if cls := llm.ClassifyTermination(llm.TerminationInputs{Result: result, PhaseCompleteExists: true}); cls != llm.TermErrored {
-		t.Fatalf("fail-closed control event with marker classified as %v, want Errored", cls)
+	intent := llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}
+	if got := llm.ClassifyTurn(llm.TurnSignals{Result: result, RootIntent: intent}); got != llm.TurnErrored {
+		t.Fatalf("ClassifyTurn() = %v, want Errored even with a success intent", got)
 	}
 }
 
@@ -1094,8 +1166,8 @@ func TestFailClosedControlNeverSatisfiesPhase(t *testing.T) {
 // terminal error, and a LATER prompt end_turn response — which OpenCode may
 // still send after we reject the control request — must NOT be converted into a
 // success. The first terminal result is sticky, so the session can never observe
-// a success after the fail-closed error, and a phase_complete marker present on
-// disk cannot launder the rejected turn into a clean completion (Task 5).
+// a success after the fail-closed error. A later semantic outcome cannot
+// launder the rejected turn into a clean completion.
 func TestParseLine_FailClosedControlIsStickyOverLaterPromptSuccess(t *testing.T) {
 	p, _, promptID := newPostHandshakeProtocol(t)
 
@@ -1112,11 +1184,9 @@ func TestParseLine_FailClosedControlIsStickyOverLaterPromptSuccess(t *testing.T)
 		t.Fatalf("prompt end_turn after fail-closed control produced %+v, want no messages (no success may follow the terminal error)", later)
 	}
 
-	// Even with a phase_complete marker on disk, the only terminal result the
-	// session ever saw is the fail-closed error, which never classifies as
-	// Completed.
-	if cls := llm.ClassifyTermination(llm.TerminationInputs{Result: failMsgs[0].Result, PhaseCompleteExists: true}); cls != llm.TermErrored {
-		t.Fatalf("fail-closed control event with marker classified as %v, want Errored", cls)
+	intent := llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}
+	if got := llm.ClassifyTurn(llm.TurnSignals{Result: failMsgs[0].Result, RootIntent: intent}); got != llm.TurnErrored {
+		t.Fatalf("ClassifyTurn() = %v, want Errored", got)
 	}
 }
 

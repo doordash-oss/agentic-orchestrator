@@ -35,6 +35,10 @@ interface CycleGateFixture {
   iteration: number;
 }
 
+const verificationDecisionPrompt =
+  'Enter WAIVE to authorize waiving these blocked checks, or RETRY_AFTER_AUTH after making the required login/permission available.';
+const retryAfterAuth = 'RETRY_AFTER_AUTH';
+
 test('packaged spatial shell keeps tab navigation, draft cancellation, and narrow attention resolution reachable', async ({}, testInfo) => {
   const transcript = new Transcript(
     'spatial-shell-primary-journey',
@@ -486,7 +490,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
       repoPatterns: [/gate-lab/],
     });
     const feature = await waitForFeatureNamed(handle.page, 'Packaged Gate Fixture');
-    const gatePath = seedNeedUserInputGate(world, feature.id);
+    const gatePath = seedVerificationNeedUserInputGate(world, feature.id);
     transcript.json('seeded need-user-input gate', { featureId: feature.id, gatePath });
 
     await closeApp(handle);
@@ -505,18 +509,16 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     const inbox = await openInbox(handle);
     await expandInboxItem(inbox, /Input gate/);
     await expect(
-      inbox.getByText(/Choose the deployment window before implementation continues/),
+      inbox.getByText(/Required verification is blocked by missing deployment credentials/),
     ).toBeVisible();
     const resume = inbox.getByRole('button', { name: 'Resume' });
     await expect(resume).toBeDisabled();
     await expect(inbox.getByText('Answer every question before resuming.')).toBeVisible();
 
-    await inbox
-      .getByLabel(/Which deployment window should implementation use/)
-      .fill('After packaged attention evidence passes.');
+    await inbox.getByLabel(verificationDecisionPrompt).fill(retryAfterAuth);
     await resume.focus();
     await waitFor(
-      () => fs.readFileSync(gatePath, 'utf8').includes('After packaged attention evidence passes.'),
+      () => fs.readFileSync(gatePath, 'utf8').includes(retryAfterAuth),
       'need-user-input draft persisted to gate file',
       15_000,
     );
@@ -533,9 +535,9 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await waitForAttentionGate(handle.page, feature.id);
     const relaunchedInbox = await openInbox(handle);
     await expandInboxItem(relaunchedInbox, /Input gate/);
-    await expect(
-      relaunchedInbox.getByLabel(/Which deployment window should implementation use/),
-    ).toHaveValue('After packaged attention evidence passes.');
+    await expect(relaunchedInbox.getByLabel(verificationDecisionPrompt)).toHaveValue(
+      retryAfterAuth,
+    );
     await expect(relaunchedInbox.getByRole('button', { name: 'Resume' })).toBeEnabled();
     await evidenceShot(handle, 'attention-need-user-input-gate');
     await relaunchedInbox.getByRole('button', { name: 'Abort gate', exact: true }).click();
@@ -549,9 +551,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await handle.page.getByRole('tab', { name: /Packaged Gate Fixture/ }).click();
     const gateCockpit = handle.page.getByLabel('Feature Packaged Gate Fixture');
     const inlineGate = gateCockpit.getByRole('region', { name: 'Feature attention' });
-    await expect(
-      inlineGate.getByLabel(/Which deployment window should implementation use/),
-    ).toHaveValue('After packaged attention evidence passes.');
+    await expect(inlineGate.getByLabel(verificationDecisionPrompt)).toHaveValue(retryAfterAuth);
     await expect(inlineGate.getByRole('button', { name: 'Resume' })).toBeEnabled();
     await inlineGate.getByRole('button', { name: 'Resume' }).click();
     await waitForAttentionMissing(handle.page, feature.id, 'gate');
@@ -568,7 +568,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
       repoPatterns: [/gate-lab/],
     });
     const abortFeature = await waitForFeatureNamed(handle.page, 'Packaged Abort Gate Fixture');
-    seedNeedUserInputGate(world, abortFeature.id);
+    seedVerificationNeedUserInputGate(world, abortFeature.id);
     await closeApp(handle);
     handle = null;
     await assertNoLeakedProcessesEventually(world);
@@ -582,9 +582,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await waitForAttentionGate(handle.page, abortFeature.id);
     const abortInbox = await openInbox(handle);
     await expandInboxItem(abortInbox, /Input gate/);
-    await abortInbox
-      .getByLabel(/Which deployment window should implementation use/)
-      .fill('Abort this seeded gate for scope verification.');
+    await abortInbox.getByLabel(verificationDecisionPrompt).fill(retryAfterAuth);
     await abortInbox.getByRole('button', { name: 'Abort gate', exact: true }).focus();
     await expect(abortInbox.getByText('Draft saved.')).toBeVisible();
     await abortInbox.getByRole('button', { name: 'Abort gate', exact: true }).click();
@@ -611,16 +609,16 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
       repoName: 'gate-api-lab',
       cycleType: 'review-comments',
       summary: 'Choose the API review-comments recovery path.',
-      question: 'Which API rollout window should review comments use?',
-      answer: 'After the API fixture records cycle-scope evidence.',
+      question: verificationDecisionPrompt,
+      answer: retryAfterAuth,
       iteration: 4,
     });
     const webCycleGate = seedCycleNeedUserInputGate(world, cycleFeature.id, {
       repoName: 'gate-web-lab',
       cycleType: 'refactor',
       summary: 'Choose the web refactor recovery path.',
-      question: 'Which web evidence path should refactor use?',
-      answer: 'Use the independent web-cycle abort evidence.',
+      question: verificationDecisionPrompt,
+      answer: retryAfterAuth,
       iteration: 5,
     });
     transcript.json('seeded cycle need-user-input gates', {
@@ -730,9 +728,10 @@ async function waitForFeatureNamed(
   return found!;
 }
 
-function seedNeedUserInputGate(world: JourneyWorld, featureId: string): string {
+function seedVerificationNeedUserInputGate(world: JourneyWorld, featureId: string): string {
   const runDir = path.join(world.stateDir, featureId, 'runs', 'run-001');
   const planPath = path.join(runDir, 'phase-03', 'plan', 'phase-plan.md');
+  const contractPath = path.join(world.stateDir, featureId, 'testing-contract.yaml');
   const gatePath = path.join(
     runDir,
     'phase-03',
@@ -763,15 +762,24 @@ function seedNeedUserInputGate(world: JourneyWorld, featureId: string): string {
     ].join('\n'),
   );
   fs.mkdirSync(path.dirname(gatePath), { recursive: true });
+  fs.writeFileSync(contractPath, seededVerificationContractYaml('deployment-capability'));
   fs.writeFileSync(
     gatePath,
     [
-      'summary: Choose the deployment window before implementation continues.',
+      'summary: Required verification is blocked by missing deployment credentials.',
       'iteration: 3',
       'questions:',
       '  - index: 1',
-      '    prompt: Which deployment window should implementation use?',
+      `    prompt: ${verificationDecisionPrompt}`,
       '    answer: ""',
+      'verification_decision:',
+      `  contract_path: ${contractPath}`,
+      '  contract_revision: 1',
+      '  item_ids:',
+      '    - deployment-capability',
+      '  allowed_actions:',
+      '    - WAIVE',
+      `    - ${retryAfterAuth}`,
       '',
     ].join('\n'),
   );
@@ -821,7 +829,13 @@ function seedCycleNeedUserInputGate(
     `iteration-${String(fixture.iteration).padStart(2, '0')}`,
     'need-user-input.yaml',
   );
+  const contractPath = path.join(world.stateDir, featureId, 'testing-contract.yaml');
+  const itemId = `${fixture.repoName}-capability`;
   fs.mkdirSync(path.dirname(gatePath), { recursive: true });
+  fs.writeFileSync(
+    contractPath,
+    seededVerificationContractYaml('gate-api-lab-capability', 'gate-web-lab-capability'),
+  );
   fs.writeFileSync(
     gatePath,
     [
@@ -831,6 +845,14 @@ function seedCycleNeedUserInputGate(
       '  - index: 1',
       `    prompt: ${fixture.question}`,
       `    answer: ${JSON.stringify(fixture.answer)}`,
+      'verification_decision:',
+      `  contract_path: ${contractPath}`,
+      '  contract_revision: 1',
+      '  item_ids:',
+      `    - ${itemId}`,
+      '  allowed_actions:',
+      '    - WAIVE',
+      `    - ${retryAfterAuth}`,
       '',
     ].join('\n'),
   );
@@ -851,6 +873,32 @@ function seedCycleNeedUserInputGate(
   featureYaml = upsertYamlScalar(featureYaml, 'status', 'Published');
   fs.writeFileSync(featurePath, featureYaml);
   return { ...fixture, featureId, gatePath };
+}
+
+function seededVerificationContractYaml(...itemIds: string[]): string {
+  return [
+    'version: 2',
+    'revision: 1',
+    'scope: seeded-e2e-capability',
+    'generated_from: {}',
+    'items:',
+    ...itemIds.flatMap((itemId) => [
+      `  - id: ${itemId}`,
+      '    source: manual',
+      '    owner: harness',
+      `    name: ${itemId}`,
+      '    command: seeded capability probe',
+      '    expected_evidence:',
+      '      kind: manual_observation',
+      '      matcher: non_empty_summary',
+      '    policy:',
+      '      required: true',
+      '      allow_substitution: false',
+      '      allow_blocked: false',
+      '      allow_waiver: true',
+    ]),
+    '',
+  ].join('\n');
 }
 
 function upsertYamlMapScalar(yaml: string, mapKey: string, key: string, value: string): string {

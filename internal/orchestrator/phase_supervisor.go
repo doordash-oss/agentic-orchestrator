@@ -24,11 +24,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-const (
-	phaseSupervisorStatusSuccess  = "SUCCESS"
-	phaseSupervisorStatusFailed   = "FAILED"
-	phaseSupervisorStatusAPIError = "API_ERROR"
-)
+const phaseSupervisorStatusSuccess = "SUCCESS"
 
 // Shared FinalStatus values reported by agent implementation/rebase/review
 // loops (agent.OrchestratorResult, agent.RebaseLoopResult, etc.).
@@ -49,12 +45,14 @@ type phaseCompletionSink interface {
 type phaseSupervisorConfig struct {
 	Completion        phaseCompletionSink
 	Sessions          ports.SessionManager
+	CommitOutcome     func(featureID, sessionID string, phase feature.Phase, intent llm.CompletionIntent) ([]agent.ProtocolViolation, error)
 	OnCompletionError func(featureID string, err error)
 }
 
 type phaseSupervisor struct {
 	completion        phaseCompletionSink
 	sessions          ports.SessionManager
+	commitOutcome     func(featureID, sessionID string, phase feature.Phase, intent llm.CompletionIntent) ([]agent.ProtocolViolation, error)
 	onCompletionError func(featureID string, err error)
 
 	singleShotMu       sync.Mutex
@@ -65,6 +63,7 @@ func newPhaseSupervisor(cfg phaseSupervisorConfig) *phaseSupervisor {
 	return &phaseSupervisor{
 		completion:        cfg.Completion,
 		sessions:          cfg.Sessions,
+		commitOutcome:     cfg.CommitOutcome,
 		onCompletionError: cfg.OnCompletionError,
 	}
 }
@@ -85,35 +84,39 @@ func (s *phaseSupervisor) superviseSingleShotSession(featureID, sessionID string
 }
 
 func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {
-	doneCh := sess.Done()
-	for {
-		select {
-		case <-doneCh:
-			select {
-			case status := <-sess.StatusCh():
-				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, true) {
-					return
-				}
-				doneCh = nil
-				continue
-			default:
+	result := agent.WaitForPhaseOutcome(sess, agent.PhaseOutcomeWaitOptions{
+		CommitOutcome: func(intent llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
+			if s.commitOutcome == nil {
+				return []agent.ProtocolViolation{{
+					Artifact: "agentico-outcome",
+					Reason:   "single-shot completion committer is not configured",
+				}}, nil
 			}
-			if cost := sess.Cost(); cost != nil {
-				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, singleShotStatusFromResult(cost), true) {
-					return
-				}
-				doneCh = nil
-				continue
-			}
-			s.completeSingleShotFailure(featureID, sessionID, phase, sess)
-			return
-
-		case status := <-sess.StatusCh():
-			if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, false) {
-				return
-			}
-		}
+			return s.commitOutcome(featureID, sessionID, phase, intent)
+		},
+	})
+	s.releaseSingleShotSession(sessionID)
+	if result.Status == phaseSupervisorStatusSuccess {
+		s.complete(featureID, PhaseCompletionInput{
+			Phase:     phase,
+			SessionID: sessionID,
+			Success:   true,
+		})
+		return
 	}
+
+	detail := singleShotErrorDetail(phase, sess)
+	if result.Err != nil {
+		detail = result.Err.Error()
+	} else if len(result.ProtocolViolations) > 0 {
+		detail = formatSingleShotProtocolViolationError("", "", result.ProtocolViolations)
+	}
+	s.complete(featureID, PhaseCompletionInput{
+		Phase:       phase,
+		SessionID:   sessionID,
+		Success:     false,
+		ErrorDetail: detail,
+	})
 }
 
 func (s *phaseSupervisor) claimSingleShotSession(sessionID string) bool {
@@ -133,52 +136,6 @@ func (s *phaseSupervisor) releaseSingleShotSession(sessionID string) {
 	s.singleShotMu.Lock()
 	defer s.singleShotMu.Unlock()
 	delete(s.singleShotSessions, sessionID)
-}
-
-func (s *phaseSupervisor) handleSingleShotStatus(featureID, sessionID string, phase feature.Phase, sess ports.SessionView, status string, sessionDone bool) bool {
-	if status == phaseSupervisorStatusAPIError && !sessionDone {
-		return false
-	}
-	_ = sess.Stop()
-	s.releaseSingleShotSession(sessionID)
-	if status == phaseSupervisorStatusSuccess {
-		s.complete(featureID, PhaseCompletionInput{
-			Phase:     phase,
-			SessionID: sessionID,
-			Success:   true,
-		})
-		return true
-	}
-	s.complete(featureID, PhaseCompletionInput{
-		Phase:       phase,
-		SessionID:   sessionID,
-		Success:     false,
-		ErrorDetail: singleShotErrorDetail(phase, sess),
-	})
-	return true
-}
-
-func (s *phaseSupervisor) completeSingleShotFailure(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {
-	s.releaseSingleShotSession(sessionID)
-	s.complete(featureID, PhaseCompletionInput{
-		Phase:       phase,
-		SessionID:   sessionID,
-		Success:     false,
-		ErrorDetail: singleShotErrorDetail(phase, sess),
-	})
-}
-
-func singleShotStatusFromResult(result *llm.ResultMessage) string {
-	if result == nil {
-		return phaseSupervisorStatusFailed
-	}
-	if result.IsSuccess() {
-		return phaseSupervisorStatusSuccess
-	}
-	if result.Subtype == "error" || result.IsError { //nolint:goconst // llm.ResultMessage.Subtype wire value, unrelated to this package's FinalStatus vocabulary
-		return phaseSupervisorStatusAPIError
-	}
-	return phaseSupervisorStatusFailed
 }
 
 func singleShotErrorDetail(phase feature.Phase, sess ports.SessionView) string {

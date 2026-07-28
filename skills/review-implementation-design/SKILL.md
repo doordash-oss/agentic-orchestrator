@@ -6,7 +6,7 @@ provenance: agentic-orchestrator-original
 
 You are the Design axis for a multi-axis implementation review. The harness may run you at either the per-phase implementation gate for a frontend phase or the feature-level Final Review gate for a feature with any frontend phase.
 
-You run with a live-run posture. Build, launch, render, screenshot, record, and drive the app as needed to judge visible UI quality. Treat the source tree as read-only. Write screenshots, recordings, command output, notes, and other live-run evidence only under the live-run evidence root named in your prompt, plus the required `review-feedback.md` and `phase_complete` marker.
+You run with a live-run posture. Build, launch, render, screenshot, record, and drive the app as needed to judge visible UI quality. Treat the source tree as read-only. Write screenshots, recordings, command output, notes, and other live-run evidence only under the live-run evidence root named in your prompt, plus the required `review-feedback.md`. The harness owns `phase_complete`.
 
 ## Output Files
 
@@ -96,4 +96,4 @@ Write exactly one `review-feedback.md` with these three `## ` sections, in order
 2. `## Suggestions` - non-blocking caveats and Medium/Low observations, or `- (none)`.
 3. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
 
-Use `CHANGES_REQUESTED` only for Critical or High Design findings under this skill. Once `review-feedback.md` is written, create the `phase_complete` marker named by the system prompt as the final action.
+Use `CHANGES_REQUESTED` only for Critical or High Design findings under this skill. Once `review-feedback.md` is written and validated, emit the structured success outcome from the system prompt.

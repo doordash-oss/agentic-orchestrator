@@ -1059,7 +1059,7 @@ func TestOrchestrator_ResolveRewindReviewContext_PartialImplementReturnsPendingP
 		t.Errorf("ArtifactPath = %q, want phase plan %q", ctx.ArtifactPath, phasePlanPath)
 	}
 	if ctx.ArtifactPath == globalPlanPath {
-		t.Error("ArtifactPath fell back to global plan despite pending partial phase marker")
+		t.Error("ArtifactPath fell back to global plan despite a pending partial roadmap phase")
 	}
 	if len(ctx.Warnings) != 0 {
 		t.Errorf("Warnings = %v, want none", ctx.Warnings)

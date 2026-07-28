@@ -2973,6 +2973,7 @@ type fakeSessionView struct {
 	permCacheScope string
 	contextPct     *int
 	usage          *llm.Usage
+	taskActivities []llm.TaskActivity
 }
 
 func (s *fakeSessionView) ID() string                  { return s.id }
@@ -3044,6 +3045,29 @@ func (s *fakeSessionView) HasPendingAskUserQuestion() bool {
 		}
 	}
 	return false
+}
+func (s *fakeSessionView) HasPendingRootAskUserQuestion() bool {
+	for _, req := range s.pending {
+		if req.Request.ToolName == toolNameAskUserQuestion && req.Origin.IsRoot() {
+			return true
+		}
+	}
+	return false
+}
+func (s *fakeSessionView) RootCompletionIntent() llm.CompletionIntent {
+	return llm.CompletionIntent{}
+}
+func (s *fakeSessionView) LiveBackgroundTaskCount() int {
+	count := 0
+	for _, activity := range s.taskActivities {
+		if activity.IsRunning() {
+			count++
+		}
+	}
+	return count
+}
+func (s *fakeSessionView) TaskActivities() []llm.TaskActivity {
+	return append([]llm.TaskActivity(nil), s.taskActivities...)
 }
 func (s *fakeSessionView) SendUserMessage(string) error                { return nil }
 func (s *fakeSessionView) RespondToControl(string, bool, string) error { return nil }

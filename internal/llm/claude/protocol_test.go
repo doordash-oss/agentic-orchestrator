@@ -128,6 +128,29 @@ func TestClaudeProtocol_UpdatesContextWindowFromResultModelUsage(t *testing.T) {
 	}
 }
 
+func TestClaudeProtocol_AssignsRootAndTaskOrigins(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+
+	root, err := p.ParseLine([]byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(root): %v", err)
+	}
+	if len(root) != 1 || !root[0].Origin.IsRoot() {
+		t.Fatalf("root origin = %+v", root)
+	}
+
+	task, err := p.ParseLine([]byte(`{"type":"system","subtype":"task_progress","task_id":"task-1","session_id":"child-1","description":"checking tests","last_tool_name":"Bash"}`))
+	if err != nil {
+		t.Fatalf("ParseLine(task): %v", err)
+	}
+	if len(task) != 1 ||
+		task[0].Origin.Kind != llm.EventOriginTask ||
+		task[0].Origin.TaskID != "task-1" ||
+		task[0].Origin.ChildSessionID != "child-1" {
+		t.Fatalf("task origin = %+v", task)
+	}
+}
+
 func TestClaudeProtocol_Interrupt_WritesControlRequest(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{})
 	var buf bytes.Buffer

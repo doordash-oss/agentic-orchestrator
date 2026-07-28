@@ -260,11 +260,10 @@ type SessionOpts struct {
 	// ResultShutdownGrace overrides the post-result subprocess shutdown grace.
 	// Zero uses the production default.
 	ResultShutdownGrace time.Duration
-	// KeepAliveOnTruncatedResult leaves stdin open when a Result indicates a
-	// resumable truncated turn. Loop waiters that send an automatic
-	// continuation set this so the continuation is not racing a post-Result
-	// stdin shutdown.
-	KeepAliveOnTruncatedResult bool
+	// KeepAliveOnTurnResult leaves stdin open after a provider turn. Loop
+	// waiters set this when they may need to send a completion nudge, resume
+	// after delegated tasks, or continue a truncated turn.
+	KeepAliveOnTurnResult bool
 	// Kind classifies the session for desktop app and observer purposes. Defaults to
 	// KindPhase when the zero value is used.
 	Kind SessionKind
@@ -280,12 +279,9 @@ type SessionOpts struct {
 	AskUserAutoPick *AskUserAutoPickConfig
 	// Watchdog enables generic session lifecycle watchdogs. Nil disables them.
 	Watchdog *SessionWatchdogConfig
-	// SupportsFinishOrViolateNudge and UsesBoundedHelperSandbox carry the
-	// resolved provider's bounded-helper capabilities. The session builder sets
-	// them so a bounded helper can read them off its session options without
-	// re-resolving the provider (its own runner may carry no provider registry).
-	SupportsFinishOrViolateNudge bool
-	UsesBoundedHelperSandbox     bool
+	// UsesBoundedHelperSandbox carries the resolved provider's sandbox
+	// capability so helper runners need not resolve the provider again.
+	UsesBoundedHelperSandbox bool
 	// SupportsSessionResume reports that the resolved provider can resume a
 	// prior provider-native session via BuildSessionOpts.ResumeSessionID.
 	// Used by crash-resume: when a provider process dies mid-turn, the loop
@@ -402,6 +398,10 @@ type SessionView interface {
 	Done() <-chan struct{}
 
 	HasPendingAskUserQuestion() bool
+	HasPendingRootAskUserQuestion() bool
+	RootCompletionIntent() llm.CompletionIntent
+	LiveBackgroundTaskCount() int
+	TaskActivities() []llm.TaskActivity
 
 	SendUserMessage(text string) error
 	RespondToControl(requestID string, allow bool, reason string) error

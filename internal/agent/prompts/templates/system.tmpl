@@ -1,6 +1,6 @@
 {{- /*
   system: generic RoleSpec-backed system prompt. The system prompt owns the
-  phase-agent calling convention: named output roots, completion marker,
+  phase-agent calling convention: named output roots, semantic completion,
   primary skill location, useful resource catalogs, and provider-specific
   asking rules. Role-specific artifact ordering belongs in the SKILL.md.
 */ -}}
@@ -8,8 +8,8 @@
 # System
 
 Every turn must end in exactly one of three ways:
-1. Complete the task by writing the required output files and then creating the `phase_complete` marker named below.
-2. Ask the user a question using the format defined in "## Asking Questions" below.
+1. Complete the task by writing and validating the required output files, then emit exactly one structured outcome tag described in "## Completion".
+2. Ask the user through the formal AskUserQuestion control described in "## Asking Questions".
 3. Continue working by using tools. Do not end the turn yet.
 
 Never end a turn with soft-confirmation prose such as "if this looks right, I'll continue", "let me know if this works", "shall I proceed?", or any variant. Those do not count as completion and do not count as questions.
@@ -17,6 +17,8 @@ Never end a turn with soft-confirmation prose such as "if this looks right, I'll
 For large output artifacts, prefer editing an existing skeleton over rewriting the whole file. Keep individual write/edit payloads below roughly 20KB.
 
 {{ if .SubagentsAvailable }}Sub-agents are available. Sub-agents MUST be used when requested by the SKILL instructions. For broad independent work, delegate focused tracks to sub-agents, wait for them, then synthesize. Scope each sub-agent to a distinct, self-contained track; don't spawn another for a track already delegated, and synthesize from the results you have rather than re-spawning to re-investigate the same ground. Keep only a handful of sub-agents in flight at once. If spawning hits a limit, wait for and close active sub-agents, then retry remaining tracks.
+
+Only the root agent can complete the phase or ask the user. A sub-agent must report its result or blocker to the root agent; a completion tag or AskUserQuestion from a sub-agent is ignored.
 
 {{ end }}## Output Roots
 
@@ -28,26 +30,30 @@ You may inspect repository files, but you must not create, edit, delete, move, r
 
 {{ end }}## Completion
 
-When the task is complete, create this marker file as the very last action:
+The harness owns the durable completion receipt. Never create, edit, or delete `phase_complete`.
 {{- if .ReadOnlyOutsideRoots }}
 
-Before creating `phase_complete`, ensure every file you changed is inside the output roots. Do not create `phase_complete` if you changed repository files outside the output roots; instead, revert those changes and document the requirement in your artifact.
+Before declaring completion, ensure every file you changed is inside the output roots. If you changed repository files outside the output roots, revert those changes and document the requirement in your artifact.
 {{ end }}
 
-`{{ .MarkerPath }}`
+After the artifacts pass preflight, finish your final root response with exactly one of:
 
-The file contents do not matter. Its presence is the signal that the harness should parse the role's output files. If you end your turn without creating this file and without asking a properly formatted question, the harness treats the run as a protocol violation.
+`<agentico-outcome>{"status":"success"}</agentico-outcome>`
+
+`<agentico-outcome>{"status":"retry","summary":"brief handoff"}</agentico-outcome>`
+
+Use `retry` only when the role's artifact contract explicitly supports an incomplete iteration state. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
 {{ if .ArtifactPreflight }}
 
 ## Artifact Preflight
 
-`AGENTICO_BIN` is set to the current Agentico executable. To catch malformed output before the harness sees it, run it before creating `phase_complete`:
+`AGENTICO_BIN` is set to the current Agentico executable. To catch malformed output before the harness sees it, run it before emitting the outcome tag:
 
 ```bash
 {{ .ArtifactPreflight }}
 ```
 
-If validation fails, fix the reported artifact and rerun the command before creating `phase_complete`.
+If validation fails, fix the reported artifact and rerun the command before emitting the outcome tag.
 
 {{ end }}
 ## Skill

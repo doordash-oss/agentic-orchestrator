@@ -446,11 +446,8 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			s.setReviewFixing(true)
 			fixStatus, fixErr := s.runFix(i, iterDir, feedback)
 
-			if fixStatus == agentStatusMissingMarker {
-				violations := []ProtocolViolation{{
-					Artifact: PhaseCompleteFile,
-					Reason:   "SDK reported success but phase_complete was not present",
-				}}
+			if fixStatus == agentStatusProtocolViolation {
+				violations := protocolViolationsFromError(fixErr)
 				if done := s.recordFixProtocolViolation(iterDir, i, violations, &consecutiveFailures); done != nil {
 					return done, nil
 				}
@@ -509,7 +506,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (ReviewStatus, string, error) {
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	_ = os.Remove(feedbackPath)
-	RemovePhaseComplete(iterDir)
+	RemoveCompletionReceipt(iterDir)
 
 	status, feedback, err := s.runFinalReviewAxes(iteration, iterDir)
 	if err != nil {
@@ -593,7 +590,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
 		return ReviewFailed, "", fmt.Errorf("creating %s final review helper directory: %w", axis.Name, err)
 	}
-	RemovePhaseComplete(axisDir)
+	RemoveCompletionReceipt(axisDir)
 
 	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
 	_ = os.Remove(feedbackPath)
@@ -733,7 +730,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		AskingClause:  cfg.AskingClause,
 	})
 
-	RemovePhaseComplete(iterDir)
+	RemoveCompletionReceipt(iterDir)
 
 	additionalDirs := append([]string{s.workspace.Cwd}, additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
 	additionalDirs = append(additionalDirs, guidelineAdditionalDirs(cfg.GuidelinesDir)...)
@@ -750,20 +747,17 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		EffortLevel:                    finalReviewFixEffortLevel(cfg),
 		Phase:                          feature.PhaseReview,
 		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
+		CompletionProtocol:             true,
 	})
 	if buildErr != nil {
 		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)
 	}
-	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	sessOpts = enableTurnContinuation(sessOpts)
 	if finalReviewFixEffectiveEffort(cfg) != "" {
 		sessOpts.EffectiveEffort = finalReviewFixEffectiveEffort(cfg)
 		sessOpts.EffortSource = finalReviewFixEffortSource(cfg)
 	}
 	sessOpts.RunNumber = cfg.Feature.ActiveRun
-	if cfg.FinishOrViolateNudge {
-		sessOpts.TurnMode = ports.TurnModeInteractive
-	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessionID := s.featureFinalReviewSessionID("fix", iteration)
@@ -797,17 +791,28 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	}
 	sess.SetLogFile(logFile)
 
-	agentStatus := waitForStatusDetailed(sess, s.sm, sessionID, waitForStatusOptions{
-		ReadyCheck: func() bool {
-			if HasPhaseComplete(iterDir) {
+	waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+		CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+			_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+				Phase:       feature.PhaseReview,
+				Role:        RoleFinalReviewFixer,
+				ArtifactDir: iterDir,
+				SessionID:   sessionID,
+				Intent:      intent,
+			})
+			if err == nil && len(violations) == 0 {
 				sess.SetHasUnansweredQuestion(false)
-				return true
 			}
-			return false
+			return violations, err
 		},
-		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
-	}).Status
-	return agentStatus, nil
+	})
+	if waitResult.Err != nil {
+		return waitResult.Status, waitResult.Err
+	}
+	if waitResult.Status == agentStatusProtocolViolation {
+		return waitResult.Status, newProtocolViolationError(RoleFinalReviewFixer, iterDir, waitResult.ProtocolViolations)
+	}
+	return waitResult.Status, nil
 }
 
 func (s *featureFinalReviewLoopState) recordFixProtocolViolation(iterDir string, iteration int, violations []ProtocolViolation, consecutiveFailures *int) *FeatureFinalReviewResult {

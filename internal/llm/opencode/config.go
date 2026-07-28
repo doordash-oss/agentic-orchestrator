@@ -326,10 +326,10 @@ func rootPattern(root string) string {
 // matches neither stripped nor relative forms, so the edit falls through to the
 // catch-all deny. Emitting the absolute, the slash-stripped absolute, and (when
 // workDir is known) the cwd-relative forms keeps a root matchable on every
-// surface. The exact (non-/**) pattern matters for bounded helpers that pass file
-// roots such as validation feedback artifacts and phase_complete; without it
-// OpenCode only allows children of those files and denies the actual artifact
-// write. An empty or non-relativizable workDir yields the absolute forms alone.
+// surface. The exact (non-/**) pattern matters for bounded helpers that pass
+// file roots such as validation feedback artifacts; without it OpenCode only
+// allows children of those files and denies the actual artifact write. An empty
+// or non-relativizable workDir yields the absolute forms alone.
 //
 // A root or workDir that still traverses a symlink (e.g. macOS's /var ->
 // /private/var, /tmp -> /private/tmp) adds another axis of the same problem:

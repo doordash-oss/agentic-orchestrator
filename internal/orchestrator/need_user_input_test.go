@@ -50,6 +50,33 @@ func writeGateArtifact(t *testing.T, summary string, prompts []string, answers [
 	return path
 }
 
+func writeHarnessVerificationGate(t *testing.T, stateRoot, featureID, summary, answer string) string {
+	t.Helper()
+	contractPath := filepath.Join(stateRoot, featureID, "testing-contract.yaml")
+	contract := agent.TestingContract{
+		Version:  1,
+		Revision: 1,
+		Items: []agent.TestingContractItem{{
+			ID: "capability-blocked",
+			Policy: agent.TestingContractItemPolicy{
+				Required:    true,
+				AllowWaiver: true,
+			},
+		}},
+	}
+	if err := agent.WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatalf("write testing contract: %v", err)
+	}
+	rec := agent.SynthesizeVerificationNeedUserInputGate(contractPath, 1, []string{"capability-blocked"}, 2)
+	rec.Summary = summary
+	rec.Questions[0].Answer = answer
+	path := filepath.Join(stateRoot, featureID, "iteration-02", agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(path, rec); err != nil {
+		t.Fatalf("write harness gate: %v", err)
+	}
+	return path
+}
+
 // TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature locks
 // in that an implement loop result with FinalStatus == "need_user_input"
 // transitions the feature into StatusNeedUserInput, persists the gate
@@ -173,14 +200,51 @@ func TestHandleNeedUserInputDecisionAppliesHarnessWaiverBeforeResume(t *testing.
 	}
 }
 
+func TestHandleNeedUserInputDecisionRejectsVerificationGateOutsideFeatureScope(t *testing.T) {
+	stateRoot := t.TempDir()
+	const featureID = "feat-gate-scope"
+	contractPath := filepath.Join(stateRoot, featureID, "testing-contract.yaml")
+	if err := agent.WriteTestingContract(contractPath, agent.TestingContract{
+		Version: 1, Revision: 1,
+		Items: []agent.TestingContractItem{{ID: "blocked"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := agent.SynthesizeVerificationNeedUserInputGate(contractPath, 1, []string{"blocked"}, 1)
+	rec.Questions[0].Answer = agent.NeedUserVerificationRetryAfterAuth
+	gatePath := filepath.Join(stateRoot, "another-feature", "iteration-01", agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		t.Fatal(err)
+	}
+	f := &feature.Feature{
+		ID: featureID, Name: "Gate scope", Slug: "gate-scope", Status: feature.StatusNeedUserInput,
+		CurrentPhase: feature.PhaseImplement, PendingNeedUserInputPath: gatePath,
+		Repos: []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	o := orchestrator.New(
+		orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store},
+		orchestrator.Hooks{},
+	)
+
+	err := o.HandleNeedUserInputDecision(featureID, orchestrator.NeedUserInputDecision{Decision: "resume"})
+	if err == nil || !strings.Contains(err.Error(), "gate") || !strings.Contains(err.Error(), "not scoped") {
+		t.Fatalf("HandleNeedUserInputDecision() error = %v, want off-feature gate rejection", err)
+	}
+}
+
 // sharedGateFeature builds a two-repo feature paused on one shared
 // review-comments NEED_USER_INPUT gate — both repos point at the same
 // gate path — and wires a lifecycle/store pair that mirrors real
 // FailRepoCycle side-effects.
-func sharedGateFeature(t *testing.T) (*feature.Feature, *mocks.MockFeatureLifecycle, *featureStore, string) {
+func sharedGateFeature(t *testing.T) (*feature.Feature, *mocks.MockFeatureLifecycle, *featureStore, string, string) {
 	t.Helper()
-	gatePath := writeGateArtifact(t, "Shared gate needs answers.",
-		[]string{"Apply suggestion?", "Keep tests?"}, []string{"yes", "yes"})
+	stateRoot := t.TempDir()
+	gatePath := writeHarnessVerificationGate(t, stateRoot, "feat-shared-gate",
+		"Shared verification gate needs a decision.", agent.NeedUserVerificationRetryAfterAuth)
 
 	f := &feature.Feature{
 		ID:     "feat-shared-gate",
@@ -216,14 +280,14 @@ func sharedGateFeature(t *testing.T) (*feature.Feature, *mocks.MockFeatureLifecy
 		return nil
 	}
 	fs := newFeatureStore(f)
-	return f, lc, fs, gatePath
+	return f, lc, fs, gatePath, stateRoot
 }
 
 // TestHandleNeedUserInputDecision_SharedGateAbortFailsAllRepos verifies
 // that aborting a shared multi-repo gate fails every repo that shares the
 // gate, not just the repo named in the decision.
 func TestHandleNeedUserInputDecision_SharedGateAbortFailsAllRepos(t *testing.T) {
-	f, lc, fs, _ := sharedGateFeature(t)
+	f, lc, fs, _, _ := sharedGateFeature(t)
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
 	err := o.HandleNeedUserInputDecision("feat-shared-gate",
@@ -262,7 +326,7 @@ func TestHandleNeedUserInputDecision_SharedGateAbortFailsAllRepos(t *testing.T) 
 // both repos were transitioned to Running before the restart failure
 // rolls them back.
 func TestHandleNeedUserInputDecision_SharedGateResumeClearsAllRepos(t *testing.T) {
-	f, lc, fs, gatePath := sharedGateFeature(t)
+	f, lc, fs, gatePath, stateRoot := sharedGateFeature(t)
 
 	// Track whether each repo was ever set to Running during the resume
 	// attempt (before rollback).
@@ -278,7 +342,11 @@ func TestHandleNeedUserInputDecision_SharedGateResumeClearsAllRepos(t *testing.T
 		return err
 	}
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		PhaseRunner: &agent.PhaseRunner{StateDir: stateRoot},
+	}, orchestrator.Hooks{})
 
 	err := o.HandleNeedUserInputDecision("feat-shared-gate",
 		orchestrator.NeedUserInputDecision{Decision: "resume", RepoName: "repo-a"})

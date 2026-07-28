@@ -128,12 +128,6 @@ type OrchestratorConfig struct {
 	// GuidelinesDir is the path to the reconciled guidelines directory on disk.
 	GuidelinesDir string
 
-	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
-	// for the feature-level Final Review sessions (review + fix legs). Resolved
-	// per-model from the provider capability, so only capability-positive
-	// providers opt in.
-	FinishOrViolateNudge bool
-
 	// Observer is the observability facade for lifecycle events. Nil = no-op.
 	Observer *observe.Observer
 

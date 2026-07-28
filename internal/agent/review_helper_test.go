@@ -44,7 +44,6 @@ func TestRunReadOnlyReviewHelper_UsesBoundedHelperArtifactHandler(t *testing.T) 
 	}
 
 	script := testutil.WriteScript(t, root, "reviewer.sh", testutil.WriteReviewApprovedInDir(helperDir)+`
-touch "`+filepath.Join(helperDir, "phase_complete")+`"
 `+testutil.JSONLInit+`
 `+testutil.JSONLSuccess)
 
@@ -89,8 +88,8 @@ touch "`+filepath.Join(helperDir, "phase_complete")+`"
 	if !strings.Contains(got.SystemPrompt, helperDir) {
 		t.Fatalf("SystemPrompt missing helper dir %q:\n%s", helperDir, got.SystemPrompt)
 	}
-	if !strings.Contains(got.SystemPrompt, filepath.Join(helperDir, "phase_complete")) {
-		t.Fatalf("SystemPrompt missing helper phase_complete path:\n%s", got.SystemPrompt)
+	if !strings.Contains(got.SystemPrompt, "The harness owns the durable completion receipt") {
+		t.Fatalf("SystemPrompt missing harness-owned receipt rule:\n%s", got.SystemPrompt)
 	}
 }
 
@@ -106,7 +105,6 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 	}
 
 	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
-	markerPath := filepath.Join(helperDir, "phase_complete")
 	evidenceRoot := filepath.Join(helperDir, "evidence")
 	buildCacheRoot := filepath.Join(helperDir, "build-cache")
 	tempRoot := filepath.Join(helperDir, "tmp")
@@ -124,9 +122,7 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 		if err := os.WriteFile(feedbackPath, []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
 			t.Errorf("write feedback: %v", err)
 		}
-		if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
-			t.Errorf("write marker: %v", err)
-		}
+		sess.setRootIntent(validSuccessCompletionIntent())
 		sess.statusCh <- "SUCCESS"
 		return sess, nil
 	}
@@ -176,7 +172,7 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 			t.Fatalf("scratch root %s stat = %v, info=%v; want directory", dir, err, info)
 		}
 	}
-	for _, want := range []string{feedbackPath, markerPath, evidenceRoot, buildCacheRoot, tempRoot} {
+	for _, want := range []string{feedbackPath, evidenceRoot, buildCacheRoot, tempRoot} {
 		if !stringSliceContains(got.WritableRoots, want) {
 			t.Fatalf("WritableRoots missing %q in %#v", want, got.WritableRoots)
 		}
@@ -205,94 +201,6 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
 }
 
-// TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode proves the bounded
-// review helper gates TurnModeInteractive on the finish-or-violate capability of
-// the helper model's provider: interactive when the provider opts in, default
-// one-shot otherwise.
-func TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode(t *testing.T) {
-	cases := []struct {
-		name     string
-		nudge    bool
-		wantMode ports.SessionTurnMode
-	}{
-		{name: "capability armed uses interactive", nudge: true, wantMode: ports.TurnModeInteractive},
-		{name: "capability off uses one-shot", nudge: false, wantMode: ports.TurnModeOneShot},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			helperDir := filepath.Join(root, "review")
-			workDir := filepath.Join(root, "work")
-			for _, d := range []string{helperDir, workDir} {
-				if err := os.MkdirAll(d, 0o755); err != nil {
-					t.Fatalf("mkdir %s: %v", d, err)
-				}
-			}
-
-			provider := &captureProvider{name: testMockIdentifier, model: "test-model", finishOrViolate: tc.nudge}
-			reg := llm.NewRegistry()
-			reg.Register(provider)
-
-			sess := newUtilityTestSession()
-			sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn}
-
-			var capturedOpts *ports.SessionOpts
-			sm := mocks.NewMockSessionManager()
-			sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-				if len(opts) > 0 {
-					capturedOpts = opts[0]
-				}
-				// Write phase_complete so the helper finalizes on the first
-				// status without entering the finish-or-violate nudge path
-				// (which would otherwise wait for a second turn).
-				if err := os.WriteFile(filepath.Join(helperDir, PhaseCompleteFile), nil, 0o644); err != nil {
-					t.Errorf("write marker: %v", err)
-				}
-				sess.statusCh <- agentStatusSuccess
-				return sess, nil
-			}
-
-			pr := &PhaseRunner{
-				StateDir:       root,
-				SessionManager: sm,
-				Registry:       reg,
-				BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-					// Mirror production BuildSession: surface the provider's
-					// bounded-helper capability on sessOpts.
-					return []string{"bash", "true"}, nil, &ports.SessionOpts{
-						PermHandler:                  opts.PermHandler,
-						ProviderName:                 testMockIdentifier,
-						SupportsFinishOrViolateNudge: provider.SupportsFinishOrViolateNudge(),
-					}, nil
-				},
-			}
-
-			_, _ = pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
-				SessionID:     "review-helper-tm",
-				FeatureID:     "feature-1",
-				Phase:         feature.PhaseReview,
-				Model:         "test-model",
-				Prompt:        "review the diff",
-				PromptPath:    filepath.Join(helperDir, "review-prompt.md"),
-				ResponsePath:  filepath.Join(helperDir, "review-output.txt"),
-				FeedbackPath:  filepath.Join(helperDir, "review-feedback.md"),
-				HelperIterDir: helperDir,
-				Role:          RoleImplementationReviewCraft,
-				WorkDir:       workDir,
-				LogPath:       filepath.Join(helperDir, "review-output.txt"),
-				EffortLevel:   llm.EffortMedium,
-			})
-
-			if capturedOpts == nil {
-				t.Fatal("expected SessionOpts to be captured")
-			}
-			if capturedOpts.TurnMode != tc.wantMode {
-				t.Errorf("TurnMode = %v, want %v", capturedOpts.TurnMode, tc.wantMode)
-			}
-		})
-	}
-}
-
 func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *testing.T) {
 	root := t.TempDir()
 	helperDir := filepath.Join(root, "attempt-01", "validate-scope")
@@ -306,13 +214,11 @@ func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *test
 	}
 
 	feedbackPath := filepath.Join(helperDir, "validation-scope-feedback.md")
-	markerPath := filepath.Join(helperDir, "phase_complete")
 	notesPath := filepath.Join(helperDir, "notes.md")
-	wantRoots := []string{feedbackPath, markerPath, notesPath}
+	wantRoots := []string{feedbackPath, notesPath}
 
 	script := testutil.WriteScript(t, root, "validator.sh", `cat > "`+feedbackPath+`" << 'REVIEWEOF'
 `+testutil.StructuredReviewFeedback("", "", agentStatusApproved)+`REVIEWEOF
-touch "`+markerPath+`"
 `+testutil.JSONLInit+`
 `+testutil.JSONLSuccess)
 
@@ -366,7 +272,7 @@ touch "`+markerPath+`"
 	}
 }
 
-func TestRunReadOnlyReviewHelper_ProtocolViolationOverridesApprovedFeedback(t *testing.T) {
+func TestRunReadOnlyReviewHelper_MissingRootOutcomeOverridesApprovedFeedback(t *testing.T) {
 	root := t.TempDir()
 	helperDir := filepath.Join(root, "review")
 	workDir := filepath.Join(root, "work")
@@ -376,10 +282,10 @@ func TestRunReadOnlyReviewHelper_ProtocolViolationOverridesApprovedFeedback(t *t
 		}
 	}
 
-	script := testutil.WriteScript(t, root, "reviewer-no-marker.sh",
+	script := testutil.WriteScript(t, root, "reviewer-no-outcome.sh",
 		testutil.WriteReviewApprovedInDir(helperDir)+`
 `+testutil.JSONLInit+`
-`+testutil.JSONLSuccess)
+echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'`)
 
 	pr := &PhaseRunner{
 		StateDir:       root,
@@ -424,8 +330,8 @@ func TestRunReadOnlyReviewHelper_ProtocolViolationOverridesApprovedFeedback(t *t
 	if result.Status != ReviewChangesRequested {
 		t.Fatalf("result.Status = %s, want %s", result.Status, ReviewChangesRequested)
 	}
-	if !strings.Contains(result.Feedback, "phase_complete") {
-		t.Fatalf("result.Feedback missing phase_complete violation:\n%s", result.Feedback)
+	if !strings.Contains(result.Feedback, "agentico-outcome") {
+		t.Fatalf("result.Feedback missing root-outcome violation:\n%s", result.Feedback)
 	}
 	if strings.Contains(result.Feedback, "\nAPPROVED") {
 		t.Fatalf("result.Feedback preserved approved verdict:\n%s", result.Feedback)
@@ -443,7 +349,7 @@ func permissionHandlerIncludesBoundedArtifacts(handler ports.PermissionHandler) 
 	switch h := handler.(type) {
 	case *permission.BoundedHelperArtifactHandler:
 		return true
-	case *permission.SizeGuardHandler:
+	case *permission.SessionGuardHandler:
 		return permissionHandlerIncludesBoundedArtifacts(h.Inner)
 	default:
 		return false
@@ -454,7 +360,7 @@ func permissionHandlerIncludesLiveRun(handler ports.PermissionHandler) bool {
 	switch h := handler.(type) {
 	case *permission.LiveRunReviewHandler:
 		return true
-	case *permission.SizeGuardHandler:
+	case *permission.SessionGuardHandler:
 		return permissionHandlerIncludesLiveRun(h.Inner)
 	default:
 		return false

@@ -186,11 +186,8 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 		if spec.UserTemplate != "implementation_review_axis.user" {
 			t.Fatalf("%s UserTemplate = %q, want implementation_review_axis.user", axis.SkillName, spec.UserTemplate)
 		}
-		if len(spec.OutputRoots) != 1 || spec.OutputRoots[0].Name != "helper_dir" || spec.MarkerRoot != "helper_dir" {
-			t.Fatalf("%s roots = %+v marker=%q, want helper_dir-only axis helper", axis.SkillName, spec.OutputRoots, spec.MarkerRoot)
-		}
-		if got := spec.MarkerPath(RoleRuntime{IterationDir: "/tmp/iter-01/review/" + implementationReviewAxisSlug(axis.Name)}); !strings.HasSuffix(got, "/phase_complete") {
-			t.Fatalf("%s MarkerPath() = %q, want helper-local phase_complete", axis.SkillName, got)
+		if len(spec.OutputRoots) != 1 || spec.OutputRoots[0].Name != "helper_dir" {
+			t.Fatalf("%s roots = %+v, want helper_dir-only axis helper", axis.SkillName, spec.OutputRoots)
 		}
 		if len(spec.Artifacts) != 1 {
 			t.Fatalf("%s artifact count = %d, want review feedback only", axis.SkillName, len(spec.Artifacts))
@@ -530,7 +527,6 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 	}
 	for _, want := range []string{
 		filepath.Join(iterDir, "review", "design", "review-feedback.md"),
-		filepath.Join(iterDir, "review", "design", "phase_complete"),
 		filepath.Join(iterDir, "review", "design", "evidence"),
 		filepath.Join(iterDir, "review", "design", "build-cache"),
 		filepath.Join(iterDir, "review", "design", "tmp"),

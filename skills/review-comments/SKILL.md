@@ -68,15 +68,14 @@ Emit `progress.md` per the standard handoff contract (see [implement skill](../i
 
 - Standard handoff paths:
   - `progress.md`: `{phase_dir}/progress.md`
-  - `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.
-  - `phase_complete`: `{iteration_dir}/phase_complete`
+  - `phase_complete` is harness-owned; never create or edit it.
 - Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.
 - `## Iteration Handoff → Completed this iteration` — one bullet per repo touched (e.g., `- api: addressed 3 comments, dismissed 1, force-pushed`).
 - `## Iteration Handoff → Remaining from the plan` — comments not yet decided (empty when every aggregated comment has a resolution entry).
 - `## Iteration State` — exactly one of:
   - `SUCCESS` — every aggregated comment has a resolution entry, your focused development tests on the touched repos pass, and the combined `review-resolutions.json` is written.
   - `RETRY` — partial progress (e.g., one comment fix broke a test; revisit on the next iteration with fresh context). The next iteration starts from your `progress.md`.
-  - `NEED_USER_INPUT` — a comment is fundamentally ambiguous (e.g., the reviewer asked for a behavior change that contradicts a prior product decision and you cannot resolve it from the visible context). Surface a `## Questions for User` section.
+  - If a comment is fundamentally ambiguous, call the formal AskUserQuestion control and continue after the answer.
 
 ## Comment resolution heuristics
 

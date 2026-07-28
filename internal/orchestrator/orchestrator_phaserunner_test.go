@@ -109,6 +109,16 @@ func (s *stubSessionHandle) Done() <-chan struct{}           { return s.done }
 
 // SessionView query.
 func (s *stubSessionHandle) HasPendingAskUserQuestion() bool { return false }
+func (s *stubSessionHandle) HasPendingRootAskUserQuestion() bool {
+	return false
+}
+func (s *stubSessionHandle) RootCompletionIntent() llm.CompletionIntent {
+	return llm.CompletionIntent{}
+}
+func (s *stubSessionHandle) LiveBackgroundTaskCount() int { return 0 }
+func (s *stubSessionHandle) TaskActivities() []llm.TaskActivity {
+	return nil
+}
 
 // SessionView interaction (no-ops).
 func (s *stubSessionHandle) SendUserMessage(text string) error { return nil }

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,7 +31,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"gopkg.in/yaml.v3"
@@ -42,17 +40,8 @@ func TestBuildImplementPrompt(t *testing.T) {
 	prompt := BuildImplementPrompt(
 		"/tmp/plans/plan.md",
 		"Relevant tests pass",
-		"/tmp/progress.md",
-		"/tmp/verification-report.yaml",
-		"/tmp/testing-contract.yaml",
 		"Fix the auth bug",
 		"Use JWT",
-		"",
-		"",
-		"",
-		[]RequiredVerificationItem{
-			{Name: "Unit tests pass", Requirement: "go test ./..."},
-		},
 		3,
 	)
 
@@ -85,7 +74,7 @@ func TestBuildImplementPrompt(t *testing.T) {
 }
 
 func TestBuildImplementPromptMinimal(t *testing.T) {
-	prompt := BuildImplementPrompt("/tmp/plan.md", "criteria", "", "", "", "", "", "", "", "", nil, 1)
+	prompt := BuildImplementPrompt("/tmp/plan.md", "criteria", "", "", 1)
 	if !strings.Contains(prompt, "/tmp/plan.md") {
 		t.Error("expected plan path in minimal prompt")
 	}
@@ -170,17 +159,6 @@ func TestRunImplementationLoop_GrantsOnlyActiveRunState(t *testing.T) {
 	}
 }
 
-func TestBuildImplementPrompt_TestingContractPath(t *testing.T) {
-	prompt := BuildImplementPrompt(
-		"/tmp/plan.md", "criteria", "/tmp/progress.md",
-		"/tmp/verification-report.yaml", "/tmp/state/feat/runs/run-001/phase-02/testing-contract.yaml",
-		"", "", "", "", "", nil, 1)
-	if !strings.Contains(prompt, "/tmp/state/feat/runs/run-001/phase-02/testing-contract.yaml") {
-		return
-	}
-	t.Error("testing contract path should not be inlined into the lean implement user prompt")
-}
-
 func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
 	planDir := t.TempDir()
 	planPath := filepath.Join(planDir, "phase-plan.md")
@@ -214,16 +192,7 @@ func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
 	prompt := BuildImplementPrompt(
 		planPath,
 		"Relevant tests pass",
-		"/tmp/progress.md",
-		"/tmp/verification-report.yaml",
-		"/tmp/testing-contract.yaml",
-		"",
-		"",
-		"",
-		"",
-		"",
-		nil,
-		3,
+		"", "", 3,
 	)
 
 	for _, want := range []string{
@@ -269,16 +238,7 @@ func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
 	prompt := BuildImplementPrompt(
 		planPath,
 		"Relevant tests pass",
-		"/tmp/progress.md",
-		"/tmp/verification-report.yaml",
-		"/tmp/testing-contract.yaml",
-		"",
-		"",
-		"",
-		"",
-		"",
-		nil,
-		2,
+		"", "", 2,
 	)
 
 	for _, unexpected := range []string{
@@ -508,290 +468,12 @@ func TestBuildHelpAnswers(t *testing.T) {
 	}
 }
 
-func TestWaitForStatus(t *testing.T) {
-	t.Run("done_before_status_returns_FAILED", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.CloseDone()
-
-		got := waitForStatus(sess, nil, "")
-		if got != "FAILED" {
-			t.Errorf("waitForStatus() = %q, want FAILED", got)
-		}
-	})
-
-	t.Run("done_with_pending_SUCCESS", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.SendStatus(agentStatusSuccess)
-		sess.CloseDone()
-
-		got := waitForStatus(sess, nil, "")
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	})
-
-	t.Run("done_with_pending_SUCCESS_ready_false_returns_MISSING_PHASE_COMPLETE", func(t *testing.T) {
-		for i := 0; i < 200; i++ {
-			sess := session.NewSession("test", "feat", feature.PhaseImplement)
-			sess.SetCost(newEndedAfterTextResult())
-			sess.SendStatus(agentStatusSuccess)
-			sess.CloseDone()
-
-			got := waitForStatus(sess, nil, "", func() bool { return false })
-			if got != agentStatusMissingMarker {
-				t.Fatalf("waitForStatus() iteration %d = %q, want %q", i, got, agentStatusMissingMarker)
-			}
-		}
-	})
-
-	t.Run("done_with_result_but_no_status_ready_false_returns_MISSING_PHASE_COMPLETE", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.SetCost(newEndedAfterTextResult())
-		sess.CloseDone()
-
-		got := waitForStatus(sess, nil, "", func() bool { return false })
-		if got != agentStatusMissingMarker {
-			t.Errorf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
-		}
-	})
-
-	t.Run("done_with_pending_truncated_SUCCESS_auto_resumes", func(t *testing.T) {
-		sess := newDoneFirstStatusSession()
-		sess.result = newTruncatedResult()
-		sess.statusCh <- agentStatusSuccess
-		close(sess.done)
-
-		var ready atomic.Bool
-		done := make(chan string, 1)
-		go func() {
-			done <- waitForStatus(sess, nil, "", func() bool { return ready.Load() })
-		}()
-
-		select {
-		case got := <-sess.userMessages:
-			if !strings.Contains(got, "Continue where you left off") {
-				t.Fatalf("SendUserMessage() = %q, want auto-resume message", got)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for auto-resume message")
-		}
-
-		select {
-		case got := <-done:
-			t.Fatalf("waitForStatus() returned %q; want it to keep waiting after auto-resume", got)
-		default:
-		}
-
-		ready.Store(true)
-		sess.statusCh <- agentStatusSuccess
-
-		select {
-		case got := <-done:
-			if got != agentStatusSuccess {
-				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for final SUCCESS")
-		}
-	})
-
-	t.Run("done_before_status_ready_true_returns_SUCCESS", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.CloseDone()
-
-		got := waitForStatus(sess, nil, "", func() bool { return true })
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	})
-
-	t.Run("done_with_pending_FAILED_ready_true_returns_SUCCESS", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.SendStatus(agentStatusFailed)
-		sess.CloseDone()
-
-		got := waitForStatus(sess, nil, "", func() bool { return true })
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	})
-
-	t.Run("done_with_pending_FAILED_ready_false_returns_FAILED", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.SendStatus(agentStatusFailed)
-		sess.CloseDone()
-
-		got := waitForStatus(sess, nil, "", func() bool { return false })
-		if got != agentStatusFailed {
-			t.Errorf("waitForStatus() = %q, want FAILED", got)
-		}
-	})
-
-	t.Run("done_with_pending_API_ERROR_ready_true_returns_SUCCESS", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.SendStatus("API_ERROR")
-		sess.CloseDone()
-
-		got := waitForStatus(sess, nil, "", func() bool { return true })
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	})
-
-	t.Run("done_with_pending_API_ERROR_returns_FAILED", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		sess.SendStatus("API_ERROR")
-		sess.CloseDone()
-
-		got := waitForStatus(sess, nil, "")
-		if got != "FAILED" {
-			t.Errorf("waitForStatus() = %q, want FAILED", got)
-		}
-	})
-
-	t.Run("status_SUCCESS_before_done", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		go func() {
-			sess.SendStatus(agentStatusSuccess)
-		}()
-
-		got := waitForStatus(sess, nil, "")
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	})
-
-	t.Run("API_ERROR_then_SUCCESS", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		go func() {
-			sess.SendStatus("API_ERROR")
-			sess.SendStatus(agentStatusSuccess)
-		}()
-
-		got := waitForStatus(sess, nil, "")
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	})
-
-	t.Run("API_ERROR_then_done_returns_FAILED", func(t *testing.T) {
-		sess := session.NewSession("test", "feat", feature.PhaseImplement)
-		go func() {
-			sess.SendStatus("API_ERROR")
-			sess.CloseDone()
-		}()
-
-		got := waitForStatus(sess, nil, "")
-		if got != "FAILED" {
-			t.Errorf("waitForStatus() = %q, want FAILED", got)
-		}
-	})
-}
-
-// TestBuildPriorUserInputAnswers covers the artifact-scanning helper that
-// renders resolved gate answers into a single prompt-ready block. The
-// helper must include answered iterations (every question carries a
-// non-empty answer) and skip unresolved gates (any answer left blank) so
-// the resumed prompt only surfaces decisions the user has actually made.
-func TestBuildPriorUserInputAnswers(t *testing.T) {
-	dir := t.TempDir()
-
-	resolved := NeedUserInputRecord{
-		Summary:   "Need a decision on auth direction.",
-		Iteration: 2,
-		Questions: []NeedUserInputQuestion{
-			{Index: 1, Prompt: "Legacy auth path or new auth service?", Answer: "Use the new auth service."},
-			{Index: 2, Prompt: "May we skip session migration?", Answer: "Yes, skip it in this phase."},
-		},
-	}
-	if err := WriteNeedUserInputRecord(filepath.Join(dir, "iteration-02", "need-user-input.yaml"), resolved); err != nil {
-		t.Fatalf("write resolved gate: %v", err)
-	}
-
-	unresolved := NeedUserInputRecord{
-		Summary:   "Still waiting on a later answer.",
-		Iteration: 3,
-		Questions: []NeedUserInputQuestion{
-			{Index: 1, Prompt: "Which rollout flag?", Answer: ""},
-		},
-	}
-	if err := WriteNeedUserInputRecord(filepath.Join(dir, "iteration-03", "need-user-input.yaml"), unresolved); err != nil {
-		t.Fatalf("write unresolved gate: %v", err)
-	}
-
-	got := buildPriorUserInputAnswers(dir)
-	if !strings.Contains(got, "Use the new auth service.") {
-		t.Fatalf("resolved answer missing from %q", got)
-	}
-	if !strings.Contains(got, "Yes, skip it in this phase.") {
-		t.Fatalf("second resolved answer missing from %q", got)
-	}
-	if !strings.Contains(got, "### Iteration 2") {
-		t.Fatalf("iteration label missing from %q", got)
-	}
-	if strings.Contains(got, "Still waiting on a later answer.") {
-		t.Fatalf("unresolved gate should not be included in %q", got)
-	}
-	if strings.Contains(got, "Which rollout flag?") {
-		t.Fatalf("unresolved prompt should not be included in %q", got)
-	}
-}
-
-// TestBuildPriorUserInputAnswers_NoArtifacts confirms the helper returns
-// the empty string when no iteration directories exist (or none carry a
-// resolved gate). The empty string flips the prompt template's
-// PriorUserInputAnswers section off.
-func TestBuildPriorUserInputAnswers_NoArtifacts(t *testing.T) {
-	dir := t.TempDir()
-	if got := buildPriorUserInputAnswers(dir); got != "" {
-		t.Fatalf("buildPriorUserInputAnswers(empty) = %q, want \"\"", got)
-	}
-}
-
-// TestBuildImplementPromptWithPriorNeedUserInputAnswers proves the
-// resumed implement prompt carries a dedicated `Resolved NEED_USER_INPUT`
-// block beside (and separate from) the live `NEED_HELP` answers section.
-// The two histories serve different recovery paths and must not collapse.
-func TestBuildImplementPromptWithPriorNeedUserInputAnswers(t *testing.T) {
-	prompt := BuildImplementPrompt(
-		"/tmp/plan.md",
-		"criteria",
-		"/tmp/progress.md",
-		"/tmp/verification-report.yaml",
-		"",
-		"",
-		"Q: runtime question?\nA: runtime answer.",
-		"### Iteration 2\nSummary: Need a decision on auth direction.\nQ1: Legacy auth path or new auth service?\nA1: Use the new auth service.",
-		"",
-		"",
-		nil,
-		2,
-	)
-
-	if !strings.Contains(prompt, "Resolved NEED_USER_INPUT from previous iterations") {
-		t.Fatal("expected prior need-user-input section in prompt")
-	}
-	if !strings.Contains(prompt, "Use the new auth service.") {
-		t.Fatal("expected prior gate answer body in prompt")
-	}
-	if !strings.Contains(prompt, "Answers to NEED_HELP questions") {
-		t.Fatal("expected NEED_HELP section to remain separate")
-	}
-}
-
 func TestBuildImplementPromptWithHelpAnswers(t *testing.T) {
 	prompt := BuildImplementPrompt(
 		"/tmp/plan.md",
 		"criteria",
-		"/tmp/progress.md",
-		"/tmp/verification-report.yaml",
-		"",
 		"",
 		"Q: What auth?\nA: Use JWT",
-		"",
-		"",
-		"",
-		nil,
 		1,
 	)
 	if !strings.Contains(prompt, "Q: What auth?") {
@@ -805,8 +487,7 @@ func TestBuildImplementPromptWithHelpAnswers(t *testing.T) {
 	}
 }
 
-// writeMockCodexBinaryForImpl creates a mock "codex" shell script that
-// writes phase_complete to the iteration-01 subdirectory of the artifact dir.
+// writeMockCodexBinaryForImpl creates a minimal mock "codex" app-server.
 func writeMockCodexBinaryForImpl(t *testing.T, binDir string) string {
 	t.Helper()
 	mockCodex := filepath.Join(binDir, "codex")
@@ -834,12 +515,7 @@ read -r line
 # 7. Send turn/start response
 echo '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-test-001","status":"in_progress"}}}'
 
-# 8. Write phase_complete signal to the iteration directory
-if [ -n "$MOCK_PHASE_COMPLETE_DIR" ]; then
-  touch "$MOCK_PHASE_COMPLETE_DIR/iteration-01/phase_complete"
-fi
-
-# 9. Send turn/completed
+# 8. Send turn/completed
 echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-test-001","status":"completed"}}}'
 `
 	if err := os.WriteFile(mockCodex, []byte(script), 0o755); err != nil {
@@ -887,7 +563,7 @@ func TestImplementLoopCodexRouting(t *testing.T) {
 			}
 
 			// Agent script: writes the implement-iteration handoff artifacts
-			// (verification-report.yaml + progress.md + phase_complete) and
+			// (verification-report.yaml + progress.md) and
 			// emits stream-json success.
 			agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 				testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working...")+"\n"+
@@ -901,7 +577,6 @@ func TestImplementLoopCodexRouting(t *testing.T) {
 			if tt.wantCodex {
 				writeMockCodexBinaryForImpl(t, mockBinDir)
 				t.Setenv("PATH", mockBinDir+":"+os.Getenv("PATH"))
-				t.Setenv("MOCK_PHASE_COMPLETE_DIR", artifactDir)
 			}
 
 			eventCh := make(chan interface{}, 100)
@@ -1101,83 +776,8 @@ func TestImplementLoopCodexRoutingUnit(t *testing.T) {
 					t.Fatal("expected SessionOpts to be captured")
 				}
 			}
-			if !capturedOpts.KeepAliveOnTruncatedResult {
+			if !capturedOpts.KeepAliveOnTurnResult {
 				t.Error("implementation sessions must keep stdin alive for truncated-turn auto-resume")
-			}
-		})
-	}
-}
-
-// TestImplementLoop_SessionUsesInteractiveTurnMode proves the implement loop
-// gates TurnModeInteractive on the finish-or-violate capability: it is armed
-// only when ImplementConfig.FinishOrViolateNudge is set and stays at the default
-// one-shot mode otherwise (the Claude/Codex path).
-func TestImplementLoop_SessionUsesInteractiveTurnMode(t *testing.T) {
-	cases := []struct {
-		name     string
-		nudge    bool
-		wantMode ports.SessionTurnMode
-	}{
-		{name: "capability armed uses interactive", nudge: true, wantMode: ports.TurnModeInteractive},
-		{name: "capability off uses one-shot", nudge: false, wantMode: ports.TurnModeOneShot},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
-			workDir := filepath.Join(tmpDir, "work")
-			artifactDir := filepath.Join(tmpDir, "artifacts")
-			stateDir := filepath.Join(tmpDir, "state", "test-impl-tm")
-			for _, d := range []string{workDir, artifactDir, stateDir} {
-				os.MkdirAll(d, 0o755)
-			}
-			planPath := filepath.Join(artifactDir, "plan.md")
-			_ = os.WriteFile(planPath, []byte("# Plan\nDo something"), 0o644)
-
-			store := feature.NewStore(filepath.Join(tmpDir, "state"))
-			f := &feature.Feature{
-				ID:           "test-impl-tm",
-				Name:         "Test",
-				Slug:         "test",
-				Status:       feature.StatusImplementing,
-				CurrentPhase: feature.PhaseImplement,
-				Repos:        []feature.FeatureRepo{{Name: "r", Path: workDir}},
-			}
-			_ = store.Save(f)
-
-			var capturedOpts *session.SessionOpts
-			cfg := ImplementConfig{
-				Feature:              f,
-				FeatureStore:         store,
-				WorkDir:              workDir,
-				PlanPath:             planPath,
-				MaxIterations:        1,
-				MaxConsecFails:       3,
-				MaxConsecNoProgress:  3,
-				ExitCriteria:         "Relevant tests pass",
-				Model:                "model-a",
-				ReviewModel:          "reviewer",
-				ArtifactDir:          artifactDir,
-				StateDir:             stateDir,
-				FinishOrViolateNudge: tc.nudge,
-				BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-					return []string{"echo", "unused"}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
-				},
-				SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
-					if len(opts) > 0 {
-						capturedOpts = opts[0]
-					}
-					return nil, session.ErrShuttingDown
-				},
-			}
-
-			if _, err := RunImplementationLoop(cfg, nil); err != nil {
-				t.Fatalf("RunImplementationLoop() error: %v", err)
-			}
-			if capturedOpts == nil {
-				t.Fatal("expected SessionOpts to be captured")
-			}
-			if capturedOpts.TurnMode != tc.wantMode {
-				t.Errorf("TurnMode = %v, want %v", capturedOpts.TurnMode, tc.wantMode)
 			}
 		})
 	}
@@ -1185,8 +785,8 @@ func TestImplementLoop_SessionUsesInteractiveTurnMode(t *testing.T) {
 
 // TestImplementLoop_FinishOrViolateNudgeRecoversSameSession proves the
 // end-to-end finish-or-violate flow: a single interactive session ends its
-// first turn without the completion artifacts, the harness nudges the SAME live
-// session, and the nudged turn writes the artifacts + phase_complete so the
+// first turn without a root outcome, the harness nudges the SAME live session,
+// and the nudged turn writes the artifacts plus a structured outcome so the
 // iteration succeeds without a protocol violation.
 func TestImplementLoop_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
 	if testing.Short() {
@@ -1206,22 +806,22 @@ func TestImplementLoop_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
 	planPath := filepath.Join(artifactDir, "plan.md")
 	_ = os.WriteFile(planPath, []byte("# Plan\nDo something"), 0o644)
 
-	// Turn 1 emits a deliberate end_turn result with NO artifacts. The script
-	// then blocks reading stdin; the finish-or-violate nudge arrives as the
-	// next stdin line, after which turn 2 writes the artifacts + phase_complete
-	// and emits a second success result.
+	// Turn 1 emits a deliberate end_turn result with no outcome. The script then
+	// blocks reading stdin; the finish-or-violate nudge arrives as the next
+	// stdin line, after which turn 2 writes the artifacts and emits a structured
+	// success outcome.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", fmt.Sprintf(`%s
 echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
 while IFS= read -r _line; do
   case "$_line" in
     %s)
       %s
-      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+      %s
       exit 0
       ;;
   esac
 done
-`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, testutil.WriteImplementSuccessArtifacts(artifactDir)))
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, testutil.WriteImplementSuccessArtifacts(artifactDir), testutil.JSONLSuccess))
 
 	f := &feature.Feature{
 		ID:            "test-fov-001",
@@ -1257,7 +857,6 @@ done
 		StateDir:                   stateDir,
 		DangerouslySkipPermissions: true,
 		SkipIterationReview:        true,
-		FinishOrViolateNudge:       true,
 		BuildSession:               mockBuildSession(agentScript, ""),
 	}, sm)
 	if err != nil {
@@ -1366,27 +965,27 @@ func (s *nudgeRecorderSession) SendUserMessage(text string) error {
 func TestDecideFinishOrViolate(t *testing.T) {
 	cases := []struct {
 		name        string
-		class       llm.TerminationClass
+		disposition llm.TurnDisposition
 		startNudges int
 		sendErr     error
 		wantNudged  bool
 		wantNudges  int
 		wantSends   int
 	}{
-		{name: "ended after text sends nudge", class: llm.TermEndedAfterText, wantNudged: true, wantNudges: 1, wantSends: 1},
-		{name: "second ended after text sends nudge", class: llm.TermEndedAfterText, startNudges: 1, wantNudged: true, wantNudges: 2, wantSends: 1},
-		{name: "at cap returns false without send", class: llm.TermEndedAfterText, startNudges: maxFinishOrViolateNudges, wantNudged: false, wantNudges: maxFinishOrViolateNudges, wantSends: 0},
-		{name: "truncated not nudged", class: llm.TermTurnTruncated, wantNudged: false, wantNudges: 0, wantSends: 0},
-		{name: "asked formal not nudged", class: llm.TermAskedFormal, wantNudged: false, wantNudges: 0, wantSends: 0},
-		{name: "errored not nudged", class: llm.TermErrored, wantNudged: false, wantNudges: 0, wantSends: 0},
-		{name: "refused not nudged", class: llm.TermRefused, wantNudged: false, wantNudges: 0, wantSends: 0},
-		{name: "send error returns false", class: llm.TermEndedAfterText, sendErr: errSendFailed, wantNudged: false, wantNudges: 1, wantSends: 0},
+		{name: "protocol violation sends nudge", disposition: llm.TurnProtocolViolation, wantNudged: true, wantNudges: 1, wantSends: 1},
+		{name: "second protocol violation sends nudge", disposition: llm.TurnProtocolViolation, startNudges: 1, wantNudged: true, wantNudges: 2, wantSends: 1},
+		{name: "at cap returns false without send", disposition: llm.TurnProtocolViolation, startNudges: maxFinishOrViolateNudges, wantNudged: false, wantNudges: maxFinishOrViolateNudges, wantSends: 0},
+		{name: "truncated not nudged", disposition: llm.TurnTruncated, wantNudged: false, wantNudges: 0, wantSends: 0},
+		{name: "asked formal not nudged", disposition: llm.TurnAwaitingUser, wantNudged: false, wantNudges: 0, wantSends: 0},
+		{name: "errored not nudged", disposition: llm.TurnErrored, wantNudged: false, wantNudges: 0, wantSends: 0},
+		{name: "refused not nudged", disposition: llm.TurnRefused, wantNudged: false, wantNudges: 0, wantSends: 0},
+		{name: "send error returns false", disposition: llm.TurnProtocolViolation, sendErr: errSendFailed, wantNudged: false, wantNudges: 1, wantSends: 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := newNudgeRecorderSession(tc.sendErr)
 			nudges := tc.startNudges
-			got := decideFinishOrViolate(sess, tc.class, &nudges, []string{"plan.md"})
+			got := decideFinishOrViolate(sess, tc.disposition, &nudges, []string{"plan.md"})
 			if got != tc.wantNudged {
 				t.Errorf("decideFinishOrViolate() = %v, want %v", got, tc.wantNudged)
 			}
@@ -1402,18 +1001,20 @@ func TestDecideFinishOrViolate(t *testing.T) {
 
 var errSendFailed = errors.New("stdin closed")
 
+var finishOrViolateNudgeCasePattern = "*" + strings.ReplaceAll(finishOrViolateNudgeFragment, " ", `\ `) + "*"
+
 func TestFormatFinishOrViolateNudge_MentionsMissingArtifacts(t *testing.T) {
 	msg := formatFinishOrViolateNudge([]string{"plan.md", "verification-report.yaml"})
 	if !strings.Contains(msg, "plan.md") || !strings.Contains(msg, "verification-report.yaml") {
 		t.Errorf("nudge should name missing artifacts, got: %s", msg)
 	}
-	if !strings.Contains(msg, "phase_complete") {
-		t.Errorf("nudge should reference phase_complete marker, got: %s", msg)
+	if !strings.Contains(msg, "agentico-outcome") {
+		t.Errorf("nudge should reference the semantic outcome, got: %s", msg)
 	}
 
 	empty := formatFinishOrViolateNudge(nil)
-	if !strings.Contains(empty, "phase_complete") {
-		t.Errorf("empty nudge should reference phase_complete marker, got: %s", empty)
+	if !strings.Contains(empty, "agentico-outcome") {
+		t.Errorf("empty nudge should reference the semantic outcome, got: %s", empty)
 	}
 
 	// Both branches must carry the shared fragment that countNudgeMessages and
@@ -1427,44 +1028,10 @@ func TestFormatFinishOrViolateNudge_MentionsMissingArtifacts(t *testing.T) {
 	}
 }
 
-// countContinuationMessages reports how many times the auto-resume
-// continuation text appears in the captured stdin, via a substring match on
-// a stable fragment so tests are not brittle to JSON-encoding whitespace or
-// field ordering.
-func countContinuationMessages(body string) int {
-	return strings.Count(body, "Continue where you left off")
-}
-
 // countHandoffMessages reports how many times the context-handoff text
-// appears in the captured stdin. Uses a stable fragment for the same
-// robustness reason as countContinuationMessages.
+// appears in the captured stdin.
 func countHandoffMessages(body string) int {
 	return strings.Count(body, "Wind this iteration down now")
-}
-
-type doneFirstStatusSession struct {
-	*utilityTestSession
-	statusCalls  atomic.Int32
-	userMessages chan string
-}
-
-func newDoneFirstStatusSession() *doneFirstStatusSession {
-	return &doneFirstStatusSession{
-		utilityTestSession: newUtilityTestSession(),
-		userMessages:       make(chan string, 2),
-	}
-}
-
-func (s *doneFirstStatusSession) StatusCh() <-chan string {
-	if s.statusCalls.Add(1) == 1 {
-		return nil
-	}
-	return s.statusCh
-}
-
-func (s *doneFirstStatusSession) SendUserMessage(text string) error {
-	s.userMessages <- text
-	return nil
 }
 
 type cleanupFailedAfterSuccessSession struct {
@@ -1516,6 +1083,117 @@ func waitForHandoffPolls(t *testing.T, ch <-chan struct{}, want int, timeout tim
 		case <-deadline:
 			t.Fatalf("timed out waiting for context handoff poll %d/%d", i+1, want)
 		}
+	}
+}
+
+func TestWaitForPhaseOutcome_ContextHandoffSendsOnceAtThreshold(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	sess := session.NewSession("test", "feature", feature.PhaseImplement)
+	sess.SetLatestUsage(&llm.Usage{ContextTotalTokens: 600_000, ContextWindow: 1_000_000})
+	sink := attachCaptureSink(sess)
+	polls := make(chan struct{}, 8)
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			EnableContextHandoff:   true,
+			ContextHandoffPollHook: handoffPollHook(polls),
+		})
+	}()
+
+	sink.waitForWrite(t, time.Second)
+	if got := countHandoffMessages(sink.contents()); got != 1 {
+		t.Fatalf("handoff messages = %d, want 1", got)
+	}
+	if !strings.Contains(sink.contents(), "above Agentic's 60% handoff threshold") {
+		t.Fatalf("handoff message missing threshold context: %s", sink.contents())
+	}
+	waitForHandoffPolls(t, polls, 3, time.Second)
+	if got := countHandoffMessages(sink.contents()); got != 1 {
+		t.Fatalf("handoff messages after later polls = %d, want 1", got)
+	}
+
+	sess.CloseDone()
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusFailed {
+			t.Fatalf("result.Status = %q, want FAILED after test session exit", result.Status)
+		}
+		if result.Handoff.Pct != 60 || result.Handoff.TotalTokens != 600_000 ||
+			result.Handoff.WindowTokens != 1_000_000 {
+			t.Fatalf("result.Handoff = %+v, want threshold snapshot", result.Handoff)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPhaseOutcome() did not exit")
+	}
+}
+
+func TestWaitForPhaseOutcome_ContextHandoffDisabledForSmallWindow(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	sess := session.NewSession("test", "feature", feature.PhaseImplement)
+	sess.SetLatestUsage(&llm.Usage{ContextTotalTokens: 180_000, ContextWindow: 200_000})
+	sink := attachCaptureSink(sess)
+	polls := make(chan struct{}, 8)
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			EnableContextHandoff:   true,
+			ContextHandoffPollHook: handoffPollHook(polls),
+		})
+	}()
+
+	waitForHandoffPolls(t, polls, 3, time.Second)
+	if got := countHandoffMessages(sink.contents()); got != 0 {
+		t.Fatalf("handoff messages for 200k window = %d, want 0", got)
+	}
+	sess.CloseDone()
+	select {
+	case <-resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPhaseOutcome() did not exit")
+	}
+}
+
+func TestWaitForPhaseOutcome_FormalRootQuestionPausesWithoutCommitting(t *testing.T) {
+	sess := newUtilityTestSession()
+	sess.result = newEndedAfterTextResult()
+	sess.setRootAsk(true)
+	sess.statusCh <- agentStatusSuccess
+
+	var commits atomic.Int32
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				commits.Add(1)
+				return nil, nil
+			},
+		})
+	}()
+
+	select {
+	case result := <-resultCh:
+		t.Fatalf("WaitForPhaseOutcome() returned while root question was pending: %+v", result)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if got := commits.Load(); got != 0 {
+		t.Fatalf("commit calls while root question was pending = %d, want 0", got)
+	}
+
+	sess.setRootAsk(false)
+	sess.setRootIntent(validSuccessCompletionIntent())
+	sess.statusCh <- agentStatusSuccess
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusSuccess || result.Err != nil {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want success after answer", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPhaseOutcome() did not resume after the root question")
+	}
+	if got := commits.Load(); got != 1 {
+		t.Fatalf("commit calls = %d, want 1", got)
 	}
 }
 
@@ -1576,9 +1254,8 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 		SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
 			iterDir := filepath.Join(artifactDir, "iteration-01")
 			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
-			if err := os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("complete\n"), 0o644); err != nil {
-				t.Fatalf("write phase_complete: %v", err)
-			}
+			sess.setRootIntent(validSuccessCompletionIntent())
+			sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 			sess.statusCh <- agentStatusSuccess
 			return sess, nil
 		},
@@ -1697,10 +1374,9 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 		// The resumed process finishes the iteration.
 		iterDir := filepath.Join(artifactDir, "iteration-01")
 		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
-		if err := os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("complete\n"), 0o644); err != nil {
-			t.Fatalf("write phase_complete: %v", err)
-		}
 		resumed := newUtilityTestSession()
+		resumed.setRootIntent(validSuccessCompletionIntent())
+		resumed.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 		resumed.statusCh <- agentStatusSuccess
 		return resumed, nil
 	}
@@ -1806,568 +1482,6 @@ func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
 	}
 }
 
-func TestWaitForStatus_TurnTruncated_AutoResumes(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	var ready atomic.Bool // stays false — agent never writes phase_complete
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForImplementationStatus(sess, nil, "", func() bool { return ready.Load() })
-	}()
-
-	// Simulate a CLI-truncated SUCCESS: Cost is set, StopReason=tool_use.
-	sess.SetCost(newTruncatedResult())
-	sess.SendStatus(agentStatusSuccess)
-
-	// waitForStatus should SendUserMessage (observable via stdin write)
-	// rather than flipping the session to SessionWaitingHelp.
-	sink.waitForWrite(t, 2*time.Second)
-
-	if got := countContinuationMessages(sink.contents()); got != 1 {
-		t.Errorf("continuation messages written = %d, want 1", got)
-	}
-	if got := sess.Status(); got == session.SessionWaitingHelp {
-		t.Errorf("session flipped to SessionWaitingHelp on truncation; expected auto-resume kept it running")
-	}
-
-	select {
-	case <-done:
-		t.Fatal("waitForStatus returned; expected it to keep waiting after auto-resume")
-	default:
-	}
-
-	// Let the agent now signal completion — readyCheck will be true, so
-	// waitForStatus should return SUCCESS cleanly.
-	ready.Store(true)
-	sess.SendStatus(agentStatusSuccess)
-
-	select {
-	case got := <-done:
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for final SUCCESS")
-	}
-}
-
-func TestWaitForStatus_TurnTruncated_RetryCapEscalates(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatus(sess, nil, "", func() bool { return false })
-	}()
-
-	// Send exactly maxAutoResumeAttempts truncated SUCCESSes — each should
-	// trigger an auto-resume message without escalating.
-	for i := 0; i < maxAutoResumeAttempts; i++ {
-		sess.SetCost(newTruncatedResult())
-		sess.SendStatus(agentStatusSuccess)
-		sink.waitForWrite(t, 2*time.Second)
-	}
-
-	if got := countContinuationMessages(sink.contents()); got != maxAutoResumeAttempts {
-		t.Errorf("continuation messages = %d, want %d", got, maxAutoResumeAttempts)
-	}
-
-	// One more truncated SUCCESS beyond the cap — this one must return a
-	// missing-marker status instead of sending another continuation.
-	sess.SetCost(newTruncatedResult())
-	sess.SendStatus(agentStatusSuccess)
-
-	if got := countContinuationMessages(sink.contents()); got != maxAutoResumeAttempts {
-		t.Errorf("continuation messages after cap = %d, want %d (no extra send)", got, maxAutoResumeAttempts)
-	}
-
-	select {
-	case got := <-done:
-		if got != agentStatusMissingMarker {
-			t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-}
-
-// TestWaitForStatus_EndedAfterText_ReturnsMissingMarker proves that, with the
-// finish-or-violate capability armed (the canonical capability-positive path),
-// a deliberate end_turn without the completion marker sends exactly one nudge
-// on the first turn and keeps waiting on the same live session rather than
-// escalating immediately. (No truncation auto-resume fires either.)
-func TestWaitForStatus_EndedAfterText_ReturnsMissingMarker(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:           func() bool { return false },
-			FinishOrViolateNudge: true,
-		}).Status
-	}()
-
-	// A deliberate end_turn SUCCESS — no truncation auto-resume should fire,
-	// but the capability is armed so exactly one nudge is sent.
-	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus(agentStatusSuccess)
-	sink.waitForWrite(t, 2*time.Second)
-
-	if got := countContinuationMessages(sink.contents()); got != 0 {
-		t.Errorf("unexpected continuation messages on end_turn: %d, want 0", got)
-	}
-	if got := countNudgeMessages(sink.contents()); got != 1 {
-		t.Errorf("nudge messages on first end_turn = %d, want 1", got)
-	}
-
-	// The nudge keeps the session alive; the function must not have returned.
-	select {
-	case got := <-done:
-		t.Fatalf("waitForStatus returned %q; expected it to keep waiting after the nudge", got)
-	case <-time.After(200 * time.Millisecond):
-	}
-}
-
-// TestWaitForStatus_EndedAfterText_RetryStateNotNudged locks the
-// RETRY/NEED_USER_INPUT structural guard: when the capability is armed but the
-// readiness check passes (the agent wrote phase_complete + valid progress.md
-// before ending its turn, as a legitimate RETRY does), the nudge block is never
-// entered — the function returns SUCCESS and sends zero nudges.
-func TestWaitForStatus_EndedAfterText_RetryStateNotNudged(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:           func() bool { return true },
-			FinishOrViolateNudge: true,
-		}).Status
-	}()
-
-	// A deliberate end_turn SUCCESS with the readiness check satisfied — the
-	// RETRY path. !isReady() is false, so the nudge block is unreachable.
-	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus(agentStatusSuccess)
-
-	select {
-	case got := <-done:
-		if got != agentStatusSuccess {
-			t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-	if got := countNudgeMessages(sink.contents()); got != 0 {
-		t.Errorf("nudge messages = %d, want 0 (RETRY path must bypass the nudge)", got)
-	}
-}
-
-// countNudgeMessages reports how many finish-or-violate nudges appear in the
-// captured stdin, via the shared finishOrViolateNudgeFragment so this stays in
-// sync with the prompt wording and the integration-script case patterns.
-func countNudgeMessages(body string) int {
-	return strings.Count(body, finishOrViolateNudgeFragment)
-}
-
-// finishOrViolateNudgeCasePattern is the shell `case` glob the integration
-// scripts use to detect the nudge on stdin. Derived from the production
-// fragment (spaces escaped for the shell) so a prompt-wording change keeps the
-// scripts in sync automatically.
-var finishOrViolateNudgeCasePattern = "*" + strings.ReplaceAll(finishOrViolateNudgeFragment, " ", `\ `) + "*"
-
-// TestWaitForStatus_EndedAfterText_NudgesThenSucceeds proves that, with the
-// finish-or-violate capability armed, a deliberate end_turn without the
-// completion marker sends one nudge to the same live session and then returns
-// SUCCESS cleanly once the agent finishes.
-func TestWaitForStatus_EndedAfterText_NudgesThenSucceeds(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	var ready atomic.Bool
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:           func() bool { return ready.Load() },
-			FinishOrViolateNudge: true,
-			MissingArtifacts:     []string{"plan.md"},
-		}).Status
-	}()
-
-	// First end_turn without the marker — should nudge, not escalate.
-	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus(agentStatusSuccess)
-	sink.waitForWrite(t, 2*time.Second)
-
-	if got := countNudgeMessages(sink.contents()); got != 1 {
-		t.Errorf("nudge messages = %d, want 1", got)
-	}
-	select {
-	case <-done:
-		t.Fatal("waitForStatus returned; expected it to keep waiting after the nudge")
-	default:
-	}
-
-	// Now the agent finishes — readyCheck becomes true.
-	ready.Store(true)
-	sess.SendStatus(agentStatusSuccess)
-
-	select {
-	case got := <-done:
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for final SUCCESS")
-	}
-}
-
-// TestWaitForStatus_EndedAfterText_NudgeCapEscalates proves the nudge budget is
-// bounded: after maxFinishOrViolateNudges nudges, a further end_turn without the
-// marker returns the missing-marker status instead of nudging again.
-func TestWaitForStatus_EndedAfterText_NudgeCapEscalates(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:           func() bool { return false },
-			FinishOrViolateNudge: true,
-		}).Status
-	}()
-
-	for i := 0; i < maxFinishOrViolateNudges; i++ {
-		sess.SetCost(newEndedAfterTextResult())
-		sess.SendStatus(agentStatusSuccess)
-		sink.waitForWrite(t, 2*time.Second)
-	}
-	if got := countNudgeMessages(sink.contents()); got != maxFinishOrViolateNudges {
-		t.Errorf("nudge messages = %d, want %d", got, maxFinishOrViolateNudges)
-	}
-
-	// One more end_turn beyond the cap — must escalate, no extra nudge.
-	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus(agentStatusSuccess)
-
-	select {
-	case got := <-done:
-		if got != agentStatusMissingMarker {
-			t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-	if got := countNudgeMessages(sink.contents()); got != maxFinishOrViolateNudges {
-		t.Errorf("nudge messages after cap = %d, want %d (no extra send)", got, maxFinishOrViolateNudges)
-	}
-}
-
-// TestWaitForStatus_EndedAfterText_DisabledNotNudged proves the nudge is gated:
-// when the capability is not armed, a deliberate end_turn returns the
-// missing-marker status with no nudge (the Claude/Codex path).
-func TestWaitForStatus_EndedAfterText_DisabledNotNudged(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck: func() bool { return false },
-		}).Status
-	}()
-
-	sess.SetCost(newEndedAfterTextResult())
-	sess.SendStatus(agentStatusSuccess)
-
-	select {
-	case got := <-done:
-		if got != agentStatusMissingMarker {
-			t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-	if got := countNudgeMessages(sink.contents()); got != 0 {
-		t.Errorf("nudge messages = %d, want 0 when capability disabled", got)
-	}
-}
-
-func TestWaitForStatus_AskedFormal_ReturnsMissingMarker(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	// Seed a pending AskUserQuestion control request so the classifier
-	// returns TermAskedFormal even though stop_reason looks like truncation.
-	sess.SetLastControlRequest(&llm.ControlRequestMessage{
-		Type:      "control_request",
-		RequestID: "req-ask-1",
-		Request:   llm.ControlRequest{ToolName: "AskUserQuestion"},
-	})
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatus(sess, nil, "", func() bool { return false })
-	}()
-
-	sess.SetCost(newTruncatedResult())
-	sess.SendStatus(agentStatusSuccess)
-
-	if got := countContinuationMessages(sink.contents()); got != 0 {
-		t.Errorf("continuation messages = %d, want 0 when AskUserQuestion is pending", got)
-	}
-
-	select {
-	case got := <-done:
-		if got != agentStatusMissingMarker {
-			t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-}
-
-// Compile-time assertion that captureSink satisfies io.WriteCloser.
-var _ io.WriteCloser = (*captureSink)(nil)
-
-func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
-	withHandoffPollInterval(t, 2*time.Millisecond)
-
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	// Seed usage at exactly the threshold — 60%, on a 1M window.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 600_000, ContextWindow: 1_000_000})
-
-	var ready atomic.Bool // stays false until the test flips it.
-	polls := make(chan struct{}, 8)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return ready.Load() },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
-		}).Status
-	}()
-
-	// Wait for the ticker to observe the threshold and send the handoff.
-	sink.waitForWrite(t, 2*time.Second)
-
-	if got := countHandoffMessages(sink.contents()); got != 1 {
-		t.Errorf("handoff messages = %d, want 1", got)
-	}
-	if !strings.Contains(sink.contents(), "above Agentic's 60% handoff threshold") {
-		t.Errorf("handoff message should include observed threshold, got: %s", sink.contents())
-	}
-	if got := countContinuationMessages(sink.contents()); got != 0 {
-		t.Errorf("unexpected auto-resume messages sent alongside handoff: %d", got)
-	}
-
-	// Observe several more ticker passes; the handoff must not be sent a
-	// second time while the iteration is still running.
-	waitForHandoffPolls(t, polls, 3, 2*time.Second)
-	if got := countHandoffMessages(sink.contents()); got != 1 {
-		t.Errorf("handoff messages after extra ticks = %d, want 1 (send-once semantics)", got)
-	}
-
-	// Let the agent complete cleanly.
-	ready.Store(true)
-	sess.SendStatus(agentStatusSuccess)
-
-	select {
-	case got := <-done:
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for final SUCCESS")
-	}
-}
-
-func TestWaitForStatus_ContextHandoff_CodexUsesDefaultThreshold(t *testing.T) {
-	withHandoffPollInterval(t, 2*time.Millisecond)
-
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sess.SetProviderName("codex")
-	sink := attachCaptureSink(sess)
-
-	// Codex follows the shared 60% threshold once the window is at least 1M.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 600_000, ContextWindow: 1_000_000})
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:           func() bool { return true },
-			EnableContextHandoff: true,
-		}).Status
-	}()
-
-	sink.waitForWrite(t, 2*time.Second)
-
-	if got := countHandoffMessages(sink.contents()); got != 1 {
-		t.Errorf("handoff messages at 60%% for codex = %d, want 1", got)
-	}
-	if !strings.Contains(sink.contents(), "above Agentic's 60% handoff threshold") {
-		t.Errorf("codex handoff message should include 60%% threshold, got: %s", sink.contents())
-	}
-
-	sess.SendStatus(agentStatusSuccess)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-}
-
-func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
-	withHandoffPollInterval(t, 2*time.Millisecond)
-
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sess.SetProviderName("codex")
-	sink := attachCaptureSink(sess)
-	sess.SetLatestUsage(&llm.Usage{
-		ContextTotalTokens: 604_800,
-		ContextWindow:      1_000_000,
-		ContextBaseline:    12_000,
-	})
-
-	done := make(chan waitForStatusResult, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:           func() bool { return true },
-			EnableContextHandoff: true,
-		})
-	}()
-
-	sink.waitForWrite(t, 2*time.Second)
-	sess.SendStatus(agentStatusSuccess)
-
-	select {
-	case got := <-done:
-		if got.Handoff.Pct != 60 {
-			t.Errorf("Handoff.Pct = %d, want 60", got.Handoff.Pct)
-		}
-		if got.Handoff.TotalTokens != 604_800 {
-			t.Errorf("Handoff.TotalTokens = %d, want 604800", got.Handoff.TotalTokens)
-		}
-		if got.Handoff.WindowTokens != 1_000_000 {
-			t.Errorf("Handoff.WindowTokens = %d, want 1000000", got.Handoff.WindowTokens)
-		}
-		if got.Handoff.BaselineTokens != 12_000 {
-			t.Errorf("Handoff.BaselineTokens = %d, want 12000", got.Handoff.BaselineTokens)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-}
-
-func TestWaitForStatus_ContextHandoff_BelowThreshold_NoSend(t *testing.T) {
-	withHandoffPollInterval(t, 2*time.Millisecond)
-
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	// 40% usage — comfortably below the 60% threshold.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 400_000, ContextWindow: 1_000_000})
-	polls := make(chan struct{}, 8)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return true },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
-		}).Status
-	}()
-
-	// Observe several ticker passes below threshold.
-	waitForHandoffPolls(t, polls, 3, 2*time.Second)
-
-	if got := countHandoffMessages(sink.contents()); got != 0 {
-		t.Errorf("handoff messages below threshold = %d, want 0", got)
-	}
-
-	// Clean up.
-	sess.SendStatus(agentStatusSuccess)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-}
-
-func TestWaitForStatus_ContextHandoff_DisabledBelowOneMillionWindow(t *testing.T) {
-	withHandoffPollInterval(t, 2*time.Millisecond)
-
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	// 90% usage would otherwise cross the default threshold, but the
-	// implementation nudge is disabled for context windows below 1M tokens.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 180_000, ContextWindow: 200_000})
-	polls := make(chan struct{}, 8)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return true },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
-		}).Status
-	}()
-
-	waitForHandoffPolls(t, polls, 3, 2*time.Second)
-
-	if got := countHandoffMessages(sink.contents()); got != 0 {
-		t.Errorf("handoff messages below 1M window = %d, want 0", got)
-	}
-
-	sess.SendStatus(agentStatusSuccess)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-}
-
-func TestWaitForStatus_ContextHandoff_NotSentBeforeUsageArrives(t *testing.T) {
-	withHandoffPollInterval(t, 2*time.Millisecond)
-
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-	sink := attachCaptureSink(sess)
-
-	// latestUsage stays nil — ContextPercentage() returns -1, so the
-	// threshold check must not trip.
-	polls := make(chan struct{}, 8)
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return true },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
-		}).Status
-	}()
-
-	waitForHandoffPolls(t, polls, 3, 2*time.Second)
-
-	if got := countHandoffMessages(sink.contents()); got != 0 {
-		t.Errorf("handoff messages before usage data = %d, want 0", got)
-	}
-
-	sess.SendStatus(agentStatusSuccess)
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-}
-
 func TestParseLargeCodexCommandOutput(t *testing.T) {
 	line := []byte(`{"method":"item/completed","params":{"item":{"type":"commandExecution","command":"rg -n foo","aggregatedOutput":"` + strings.Repeat("x", 21) + `","exitCode":0,"durationMs":123}}}`)
 	got, ok := parseLargeCodexCommandOutput(line, 20)
@@ -2400,65 +1514,6 @@ func TestParseLargeCodexCommandOutputIgnoresSmallAndNonCommandEvents(t *testing.
 	}
 }
 
-func TestWaitForStatus_ContextHandoff_DisabledForSharedWaiter(t *testing.T) {
-	withHandoffPollInterval(t, 2*time.Millisecond)
-
-	sess := session.NewSession("test", "feat", feature.PhaseReview)
-	sink := attachCaptureSink(sess)
-
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 120_000, ContextWindow: 200_000})
-
-	done := make(chan string, 1)
-	go func() {
-		done <- waitForStatus(sess, nil, "", func() bool { return true })
-	}()
-
-	if got := countHandoffMessages(sink.contents()); got != 0 {
-		t.Errorf("handoff messages from shared waiter = %d, want 0", got)
-	}
-
-	sess.SendStatus(agentStatusSuccess)
-	select {
-	case got := <-done:
-		if got != agentStatusSuccess {
-			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus to return")
-	}
-}
-
-func TestWaitForStatus_ReadyCheckFalse(t *testing.T) {
-	sess := session.NewSession("test", "feat", feature.PhaseImplement)
-
-	var ready atomic.Bool
-	ready.Store(false)
-
-	done := make(chan string, 1)
-	go func() {
-		got := waitForStatus(sess, nil, "", func() bool {
-			return ready.Load()
-		})
-		done <- got
-	}()
-
-	// SUCCESS with a false readyCheck should return a structured
-	// missing-marker status instead of parking the session for help.
-	sess.SendStatus(agentStatusSuccess)
-
-	select {
-	case got := <-done:
-		if got != agentStatusMissingMarker {
-			t.Errorf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for waitForStatus")
-	}
-}
-
-// TestImplementLoopSkipIterationReview verifies that when SkipIterationReview
-// is true, the loop returns "review_passed" immediately on SUCCESS without
-// invoking the review gate (BuildSession called only once for implementation).
 func TestImplementLoopSkipIterationReview(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
@@ -2640,7 +1695,7 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	}
 }
 
-func TestImplementLoopReviewHelperUsesChildDirAndMarker(t *testing.T) {
+func TestImplementLoopReviewHelperUsesChildDirAndHarnessReceipt(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
@@ -2705,8 +1760,9 @@ func TestImplementLoopReviewHelperUsesChildDirAndMarker(t *testing.T) {
 	}
 }
 
-func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t *testing.T) {
-	// Extended-regression owner: review-helper protocol violations tripping the consecutive-failure rail.
+func TestImplementLoopReviewHelperMissingRootOutcomeCountsConsecutiveFailure(t *testing.T) {
+	// Extended-regression owner: review-helper protocol violations tripping
+	// the consecutive-failure rail.
 	if testing.Short() {
 		t.Skip("skipping in short mode: extended regression covers review-helper protocol violations tripping the consecutive-failure rail")
 	}
@@ -2714,7 +1770,7 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
-	stateDir := filepath.Join(tmpDir, "state", "test-review-marker-001")
+	stateDir := filepath.Join(tmpDir, "state", "test-review-outcome-001")
 	scriptsDir := filepath.Join(tmpDir, "scripts")
 	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
 		os.MkdirAll(d, 0o755)
@@ -2722,8 +1778,8 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-	reviewScript := testutil.WriteScript(t, scriptsDir, "review-no-marker.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteReviewApprovedWithoutPhaseComplete(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review-no-outcome.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLResult("")+"\n")
 
 	eventCh := make(chan interface{}, 100)
 	sm := session.NewManager(eventCh)
@@ -2733,7 +1789,7 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	_ = os.WriteFile(planPath, []byte("# Plan\nImplement something"), 0o644)
 
 	f := newTestFeature(t, workDir)
-	f.ID = "test-review-marker-001"
+	f.ID = "test-review-outcome-001"
 	store := feature.NewStore(filepath.Join(tmpDir, "state"))
 	_ = store.Save(f)
 
@@ -2759,8 +1815,8 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if !strings.Contains(result.LastError, "implementation_review_") || !strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want implementation-review axis phase_complete violation", result.LastError)
+	if !strings.Contains(result.LastError, "implementation_review_") || !strings.Contains(result.LastError, "agentico-outcome") {
+		t.Fatalf("LastError = %q, want implementation-review axis root-outcome violation", result.LastError)
 	}
 
 	metaBytes, err := os.ReadFile(filepath.Join(artifactDir, "iteration-02", "meta.yaml"))
@@ -2784,8 +1840,8 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	if err != nil {
 		t.Fatalf("reading mirrored parent review feedback: %v", err)
 	}
-	if !strings.Contains(string(parentFeedback), "phase_complete") {
-		t.Fatalf("parent review feedback missing phase_complete violation:\n%s", parentFeedback)
+	if !strings.Contains(string(parentFeedback), "agentico-outcome") {
+		t.Fatalf("parent review feedback missing root-outcome violation:\n%s", parentFeedback)
 	}
 	if !strings.Contains(string(parentFeedback), ReviewChangesRequested.String()) || strings.Contains(string(parentFeedback), "\n"+ReviewApproved.String()) {
 		t.Fatalf("parent review feedback did not override approved verdict:\n%s", parentFeedback)
@@ -2890,8 +1946,6 @@ case "$_step" in
 		b.WriteString(")\n")
 		switch failure {
 		case mixedFailureDrift:
-			b.WriteString(testutil.WriteImplementProtocolViolation(artifactDir))
-			b.WriteString("\n")
 			b.WriteString(testutil.JSONLSuccess)
 		case mixedFailureCrash:
 			b.WriteString(testutil.JSONLError("mock agent crash"))
@@ -2960,7 +2014,7 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 		t.Fatalf("result = %+v, want review_error park when no axis produced a verdict", result)
 	}
 	iterDir := filepath.Join(artifactDir, "iteration-01")
-	if !HasPhaseComplete(iterDir) {
+	if !HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer) {
 		t.Fatal("phase_complete missing; review-only resume would re-run the implementer")
 	}
 	if _, statErr := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(statErr) {
@@ -2993,9 +2047,7 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cachedAxisDir, "review-feedback.md"), []byte(cachedFeedback), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cachedAxisDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeTestCompletionReceiptFor(t, cachedAxisDir, feature.PhaseReview, RoleImplementationReviewCraft)
 	testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	resumed, err := RunImplementationLoop(cfg, sm)
@@ -3305,9 +2357,9 @@ func TestImplementLoop_IntegrityGateRejectsWithoutLLM(t *testing.T) {
 		os.MkdirAll(d, 0o755)
 	}
 
-	// Agent script: overwrites verification-report.yaml in the latest
-	// iteration dir with invalid content (pass + hedge evidence),
-	// touches phase_complete, then emits SUCCESS.
+	// Agent script overwrites verification-report.yaml in the latest iteration
+	// with invalid content (pass + hedge evidence), then emits structured
+	// success.
 	badReport := `version: 1
 required_checks:
   - name: Unit tests
@@ -3325,7 +2377,6 @@ required_checks:
 			// passes and the iteration reaches the Report Integrity Gate
 			// where the contradiction is rejected.
 			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
-			testutil.TouchPhaseComplete(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	// Review script: MUST NOT run. If it does, we'd see an APPROVED result.
@@ -3812,7 +2863,6 @@ func TestImplementLoop_RejectsImplementerContractMutation(t *testing.T) {
 			// Custom verification-report is written above; pair with a
 			// valid progress.md so the harness handoff parser passes.
 			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
-			testutil.TouchPhaseComplete(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
@@ -3976,6 +3026,7 @@ func newBgTaskSession() *bgTaskSession {
 func (s *bgTaskSession) LiveBackgroundTaskCount() int { return int(s.liveTasks.Load()) }
 func (s *bgTaskSession) LastStdoutAt() time.Time      { return time.Unix(0, s.lastStdoutNs.Load()) }
 func (s *bgTaskSession) SendUserMessage(text string) error {
+	s.setRootIntent(llm.CompletionIntent{})
 	s.userMessages <- text
 	return nil
 }
@@ -3991,167 +3042,81 @@ func withBackgroundTaskPollInterval(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { backgroundTaskPollInterval = prev })
 }
 
-func TestWaitForStatus_BackgroundTasks(t *testing.T) {
-	t.Run("end_turn with live tasks keeps waiting without nudge or stop", func(t *testing.T) {
-		withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T) {
+	withBackgroundTaskPollInterval(t, 5*time.Millisecond)
 
-		sess := newBgTaskSession()
-		sess.result = newEndedAfterTextResult()
-		sess.liveTasks.Store(3)
-		sess.lastStdoutNs.Store(time.Now().UnixNano())
+	sess := newBgTaskSession()
+	sess.liveTasks.Store(1)
+	sess.result = newEndedAfterTextResult()
+	sess.setRootIntent(validSuccessCompletionIntent())
+	sess.statusCh <- agentStatusSuccess
 
-		var ready atomic.Bool
-		done := make(chan string, 1)
-		go func() {
-			done <- waitForStatus(sess, nil, "", func() bool { return ready.Load() })
-		}()
+	var commits atomic.Int32
+	resultCh := make(chan PhaseOutcomeWaitResult, 1)
+	go func() {
+		resultCh <- WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+			CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+				commits.Add(1)
+				return nil, nil
+			},
+		})
+	}()
 
-		sess.statusCh <- agentStatusSuccess
+	select {
+	case result := <-resultCh:
+		t.Fatalf("WaitForPhaseOutcome() returned while task was live: %+v", result)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if got := commits.Load(); got != 0 {
+		t.Fatalf("commit calls while task was live = %d, want 0", got)
+	}
 
-		select {
-		case got := <-done:
-			t.Fatalf("waitForStatus() returned %q; want it to keep waiting on background tasks", got)
-		case msg := <-sess.userMessages:
-			t.Fatalf("unexpected user message %q while background tasks run", msg)
-		case <-time.After(100 * time.Millisecond):
+	sess.liveTasks.Store(0)
+	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
+	select {
+	case <-sess.userMessages:
+	case <-time.After(time.Second):
+		t.Fatal("root session was not resumed after delegated tasks finished")
+	}
+	sess.setRootIntent(validSuccessCompletionIntent())
+	sess.statusCh <- agentStatusSuccess
+
+	select {
+	case result := <-resultCh:
+		if result.Status != agentStatusSuccess || result.Err != nil || len(result.ProtocolViolations) != 0 {
+			t.Fatalf("WaitForPhaseOutcome() = %+v, want success", result)
 		}
-		if sess.stopped.Load() {
-			t.Fatal("session was stopped while background tasks were running")
-		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPhaseOutcome() did not finish after root outcome")
+	}
+	if got := commits.Load(); got != 1 {
+		t.Fatalf("commit calls = %d, want 1", got)
+	}
+}
 
-		// Background tasks finish; the CLI re-invokes the agent, which
-		// completes normally.
-		sess.liveTasks.Store(0)
-		ready.Store(true)
-		sess.statusCh <- agentStatusSuccess
+func TestWaitForPhaseOutcome_RejectsProviderExitWithLiveDelegatedTasks(t *testing.T) {
+	sess := newBgTaskSession()
+	sess.liveTasks.Store(1)
+	sess.result = newEndedAfterTextResult()
+	sess.setRootIntent(validSuccessCompletionIntent())
+	close(sess.done)
 
-		select {
-		case got := <-done:
-			if got != agentStatusSuccess {
-				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for final SUCCESS")
-		}
-		select {
-		case msg := <-sess.userMessages:
-			t.Fatalf("unexpected user message %q; completion needed no nudge", msg)
-		default:
-		}
+	var commits atomic.Int32
+	result := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+		CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+			commits.Add(1)
+			return nil, nil
+		},
 	})
-
-	t.Run("tasks finish quietly without re-invocation triggers auto-resume", func(t *testing.T) {
-		withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-
-		sess := newBgTaskSession()
-		sess.result = newEndedAfterTextResult()
-		sess.liveTasks.Store(1)
-		sess.lastStdoutNs.Store(time.Now().UnixNano())
-
-		var ready atomic.Bool
-		done := make(chan string, 1)
-		go func() {
-			done <- waitForStatus(sess, nil, "", func() bool { return ready.Load() })
-		}()
-
-		sess.statusCh <- agentStatusSuccess
-
-		// Give the waiter a moment to defer, then finish the tasks with a
-		// stale stdout stamp: the CLI never re-invoked the agent.
-		time.Sleep(20 * time.Millisecond)
-		sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
-		sess.liveTasks.Store(0)
-
-		select {
-		case msg := <-sess.userMessages:
-			if !strings.Contains(msg, "Continue where you left off") {
-				t.Fatalf("SendUserMessage() = %q, want auto-resume message", msg)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for auto-resume after tasks finished")
-		}
-
-		ready.Store(true)
-		sess.statusCh <- agentStatusSuccess
-		select {
-		case got := <-done:
-			if got != agentStatusSuccess {
-				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for final SUCCESS")
-		}
-	})
-
-	t.Run("silent live tasks wait indefinitely until terminal", func(t *testing.T) {
-		withBackgroundTaskPollInterval(t, 5*time.Millisecond)
-
-		sess := newBgTaskSession()
-		sess.result = newEndedAfterTextResult()
-		sess.liveTasks.Store(1)
-		sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
-
-		var ready atomic.Bool
-		done := make(chan string, 1)
-		go func() {
-			done <- waitForStatus(sess, nil, "", func() bool { return ready.Load() })
-		}()
-
-		sess.statusCh <- agentStatusSuccess
-
-		select {
-		case got := <-done:
-			t.Fatalf("waitForStatus() returned %q while provider still declared a live task", got)
-		case msg := <-sess.userMessages:
-			t.Fatalf("unexpected user message %q while provider still declared a live task", msg)
-		case <-time.After(100 * time.Millisecond):
-		}
-		if sess.stopped.Load() {
-			t.Fatal("session was stopped while provider still declared a live task")
-		}
-
-		sess.liveTasks.Store(0)
-		select {
-		case msg := <-sess.userMessages:
-			if !strings.Contains(msg, "Continue where you left off") {
-				t.Fatalf("SendUserMessage() = %q, want auto-resume after terminal task", msg)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for auto-resume after terminal task")
-		}
-		ready.Store(true)
-		sess.statusCh <- agentStatusSuccess
-		select {
-		case got := <-done:
-			if got != agentStatusSuccess {
-				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for final SUCCESS")
-		}
-	})
-
-	t.Run("dead session with stale live tasks does not hang", func(t *testing.T) {
-		sess := newBgTaskSession()
-		sess.result = newEndedAfterTextResult()
-		sess.liveTasks.Store(2)
-		sess.statusCh <- agentStatusSuccess
-		close(sess.done)
-
-		done := make(chan string, 1)
-		go func() {
-			done <- waitForStatus(sess, nil, "", func() bool { return false })
-		}()
-
-		select {
-		case got := <-done:
-			if got != agentStatusMissingMarker {
-				t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("waitForStatus() hung on a dead session with stale background tasks")
-		}
-	})
+	if result.Status != agentStatusProtocolViolation || len(result.ProtocolViolations) != 1 {
+		t.Fatalf("WaitForPhaseOutcome() = %+v, want delegated-task protocol violation", result)
+	}
+	if got := commits.Load(); got != 0 {
+		t.Fatalf("commit calls = %d, want 0", got)
+	}
+	if !strings.Contains(result.ProtocolViolations[0].Reason, "delegated tasks") {
+		t.Fatalf("violation = %+v, want delegated-task explanation", result.ProtocolViolations[0])
+	}
 }
 
 func TestRetryReviewFeedbackReminder(t *testing.T) {

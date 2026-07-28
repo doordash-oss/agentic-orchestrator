@@ -58,15 +58,14 @@ Emit `progress.md` per the standard handoff contract (see [implement skill](../i
 
 - Standard handoff paths:
   - `progress.md`: `{phase_dir}/progress.md`
-  - `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.
-  - `phase_complete`: `{iteration_dir}/phase_complete`
+  - `phase_complete` is harness-owned; never create or edit it.
 - Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.
 - `## Iteration Handoff → Completed this iteration` — one bullet per repo rebased (e.g., `- api: rebased onto origin/main, verified; not pushed`).
 - `## Iteration Handoff → Remaining from the plan` — repos NOT yet rebased (empty when every behind repo is done).
 - `## Iteration State` — exactly one of:
   - `SUCCESS` — every target repo is rebased, no rebase is in progress, and conflict markers are gone (Agentico re-verifies the plan-declared conflict-marker check after handoff). Do not require or report a push.
   - `RETRY` — partial progress (e.g., one repo rebased cleanly, another hit a non-trivial conflict you want to revisit with fresh context). The next iteration starts from your `progress.md`.
-  - `NEED_USER_INPUT` — the conflict is fundamentally ambiguous (e.g., the same line was independently rewritten by two PRs and either resolution is plausible). Surface a `## Questions for User` section. Do NOT use this as an escape hatch for "the conflict is hard"; reserve for genuine ambiguity.
+  - If the conflict is fundamentally ambiguous, call the formal AskUserQuestion control. Do not use it as an escape hatch for "the conflict is hard"; reserve it for genuine ambiguity.
 
 ## Conflict resolution heuristics
 
@@ -79,7 +78,7 @@ Emit `progress.md` per the standard handoff contract (see [implement skill](../i
 ## Push policy
 
 - Do not push from this cycle. The orchestrator runs Final Review and applies publish policy after approval.
-- The agent does NOT need to commit before rebasing; the rebase carries existing commits forward. If you find uncommitted local changes in a worktree, that is a pre-existing dirty state — emit `NEED_USER_INPUT` rather than guessing whether to stash, commit, or discard.
+- The agent does NOT need to commit before rebasing; the rebase carries existing commits forward. If you find uncommitted local changes in a worktree, that is a pre-existing dirty state — call the formal AskUserQuestion control rather than guessing whether to stash, commit, or discard.
 
 ## What success looks like
 

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,10 @@ type utilityTestSession struct {
 	usage       llm.Usage
 	lastControl *llm.ControlRequestMessage
 	pendingAsk  bool
+	stateMu     sync.RWMutex
+	rootAsk     bool
+	rootIntent  llm.CompletionIntent
+	activities  []llm.TaskActivity
 }
 
 type terminalStatusTestSession struct {
@@ -116,6 +121,42 @@ func (s *utilityTestSession) AttachCh() <-chan llm.SDKMessage { return s.attachC
 func (s *utilityTestSession) Done() <-chan struct{}           { return s.done }
 func (s *utilityTestSession) HasPendingAskUserQuestion() bool {
 	return s.pendingAsk
+}
+func (s *utilityTestSession) HasPendingRootAskUserQuestion() bool {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.rootAsk
+}
+func (s *utilityTestSession) RootCompletionIntent() llm.CompletionIntent {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.rootIntent
+}
+func (s *utilityTestSession) LiveBackgroundTaskCount() int {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	count := 0
+	for _, activity := range s.activities {
+		if activity.IsRunning() {
+			count++
+		}
+	}
+	return count
+}
+func (s *utilityTestSession) TaskActivities() []llm.TaskActivity {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return append([]llm.TaskActivity(nil), s.activities...)
+}
+func (s *utilityTestSession) setRootAsk(pending bool) {
+	s.stateMu.Lock()
+	s.rootAsk = pending
+	s.stateMu.Unlock()
+}
+func (s *utilityTestSession) setRootIntent(intent llm.CompletionIntent) {
+	s.stateMu.Lock()
+	s.rootIntent = intent
+	s.stateMu.Unlock()
 }
 func (s *utilityTestSession) SendUserMessage(text string) error { return nil }
 func (s *utilityTestSession) RespondToControl(requestID string, allow bool, reason string) error {

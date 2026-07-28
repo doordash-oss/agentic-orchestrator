@@ -229,6 +229,12 @@ describe('buildConversation', () => {
         redacted: true,
         task: { id: 'b', status: 'failed', summary: 'Timed out' },
       }),
+      row({
+        index: 5,
+        type: 'task_notification',
+        redacted: true,
+        task: { id: 'c', status: 'cancelled' },
+      }),
     ]);
     expect(items).toEqual([
       {
@@ -244,6 +250,7 @@ describe('buildConversation', () => {
             summary: 'Found 3 entry points',
           },
           { id: 'b', state: 'failed', description: 'Map API surface', summary: 'Timed out' },
+          { id: 'c', state: 'cancelled' },
         ],
       },
     ]);
@@ -271,6 +278,74 @@ describe('buildConversation', () => {
       agents: [{ id: 'a', state: 'running', lastTool: 'Grep' }],
     });
     expect(items[1]).toMatchObject({ kind: 'message' });
+  });
+
+  it('uses the task registry as the authoritative state beyond the bounded transcript', () => {
+    const items = buildConversation(
+      [
+        row({
+          index: 0,
+          type: 'task_started',
+          redacted: true,
+          task: { id: 'older-task', description: 'Inspect the old path' },
+        }),
+      ],
+      {
+        taskActivities: [
+          {
+            taskId: 'older-task',
+            description: 'Inspect the old path',
+            state: 'completed',
+            summary: 'Inspection complete',
+            startedAt: '2026-07-28T12:00:00Z',
+            updatedAt: '2026-07-28T12:01:00Z',
+            finishedAt: '2026-07-28T12:01:00Z',
+          },
+          {
+            taskId: 'newer-task',
+            description: 'Run verification',
+            state: 'running',
+            lastToolName: 'Bash',
+            startedAt: '2026-07-28T12:02:00Z',
+            updatedAt: '2026-07-28T12:03:00Z',
+          },
+          {
+            taskId: 'cancelled-task',
+            description: 'Inspect a superseded path',
+            state: 'cancelled',
+            startedAt: '2026-07-28T12:04:00Z',
+            updatedAt: '2026-07-28T12:05:00Z',
+            finishedAt: '2026-07-28T12:05:00Z',
+          },
+        ],
+      },
+    );
+
+    expect(items).toEqual([
+      {
+        kind: 'subagents',
+        key: 'subagents-0:0',
+        agents: [
+          {
+            id: 'older-task',
+            state: 'done',
+            description: 'Inspect the old path',
+            summary: 'Inspection complete',
+          },
+          {
+            id: 'newer-task',
+            state: 'running',
+            description: 'Run verification',
+            lastTool: 'Bash',
+          },
+          {
+            id: 'cancelled-task',
+            state: 'cancelled',
+            description: 'Inspect a superseded path',
+          },
+        ],
+      },
+    ]);
   });
 
   it('keeps task rows without an id as plain activity labels', () => {

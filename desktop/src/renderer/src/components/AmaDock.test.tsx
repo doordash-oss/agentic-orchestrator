@@ -265,6 +265,8 @@ function activeChatSession(overrides: Record<string, unknown> = {}) {
     status: 'running',
     turnState: 'running',
     startedAt: '2026-07-21T00:00:00Z',
+    taskActivities: [],
+    runningTaskCount: 0,
     usage: {},
     transcriptCursor: { total: 0, start: 0, end: 0 },
     pendingControlCount: 0,

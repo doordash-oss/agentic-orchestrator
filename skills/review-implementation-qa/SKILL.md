@@ -42,4 +42,4 @@ Write exactly one `review-feedback.md` with these three `## ` sections, in order
 2. `## Suggestions` - non-blocking caveats and Medium/Low observations, or `- (none)`.
 3. `## Verdict` - exactly `APPROVED` or `CHANGES_REQUESTED`.
 
-Once `review-feedback.md` is written, create the `phase_complete` marker named by the system prompt as the final action.
+Once `review-feedback.md` is written and validated, emit the structured success outcome from the system prompt. The harness writes `phase_complete`.

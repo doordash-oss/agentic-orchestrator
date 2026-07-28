@@ -39,7 +39,7 @@ import (
 func (o *Orchestrator) onSingleRepoNeedUserInput(featureID string, result *agent.LoopResult) error {
 	summary := strings.TrimSpace(result.LastError)
 	if summary == "" {
-		summary = "implementation iteration emitted NEED_USER_INPUT without a description"
+		summary = "implementation verification requires a user decision"
 	}
 
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
@@ -207,7 +207,7 @@ func (o *Orchestrator) onRepoCycleNeedUserInput(
 	}
 	summary := strings.TrimSpace(result.LastError)
 	if summary == "" {
-		summary = "post-publish cycle iteration emitted NEED_USER_INPUT without a description"
+		summary = "post-publish verification requires a user decision"
 	}
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		if f.RepoCycles == nil {
@@ -413,8 +413,7 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 // feature-scoped gate flow. Resume validates answers, clears the pending
 // gate pointer, transitions the feature back to StatusImplementing, and
 // re-dispatches the paused implementation. Harness verification capability
-// gates resume the same implementation iteration; agent-authored decision
-// gates resume implementation work in the next iteration.
+// gates resume the same implementation iteration.
 // Abort routes through markFailedWithEvent(FailureNeedUserInput).
 func (o *Orchestrator) handleFeatureNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -504,7 +503,7 @@ func (o *Orchestrator) handleFeatureNeedUserInputDecision(featureID string, d Ne
 
 func (o *Orchestrator) applyTrustedVerificationDecision(featureID, gatePath string, rec agent.NeedUserInputRecord) error {
 	if rec.VerificationDecision == nil {
-		return nil
+		return errors.New("need-user-input gate is not a harness verification decision")
 	}
 	contractPath := filepath.Clean(strings.TrimSpace(rec.VerificationDecision.ContractPath))
 	stateRoot, err := filepath.Abs(o.stateDir())
@@ -529,7 +528,20 @@ func (o *Orchestrator) applyTrustedVerificationDecision(featureID, gatePath stri
 	if len(parts) == 0 || parts[0] != featureID {
 		return fmt.Errorf("verification decision contract %q is not scoped to feature %q", absContract, featureID)
 	}
-	if filepath.Base(filepath.Clean(gatePath)) != agent.NeedUserInputArtifactName {
+	absGate, err := filepath.Abs(filepath.Clean(strings.TrimSpace(gatePath)))
+	if err != nil {
+		return fmt.Errorf("resolve verification gate path: %w", err)
+	}
+	gateRel, err := filepath.Rel(stateRoot, absGate)
+	if err != nil {
+		return fmt.Errorf("relate verification gate %q to state root %q: %w", absGate, stateRoot, err)
+	}
+	gateParts := strings.Split(filepath.ToSlash(gateRel), "/")
+	if gateRel == ".." || strings.HasPrefix(gateRel, ".."+string(filepath.Separator)) ||
+		len(gateParts) == 0 || gateParts[0] != featureID {
+		return fmt.Errorf("verification decision gate %q is not scoped to feature %q", absGate, featureID)
+	}
+	if filepath.Base(absGate) != agent.NeedUserInputArtifactName {
 		return fmt.Errorf("verification decision came from a non-canonical gate artifact")
 	}
 	return agent.ApplyNeedUserVerificationDecision(rec)

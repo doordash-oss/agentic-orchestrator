@@ -113,9 +113,8 @@ type RebaseLoopConfig struct {
 	SessionStartFunc func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
 
 	// ResumeExistingCycle reuses the current ActiveCycle.Count instead of
-	// opening a new rebase-N directory. Used when resuming a rebase
-	// NEED_USER_INPUT gate so answered prompts carry into the next
-	// iteration of the same cycle.
+	// opening a new rebase-N directory. Used when resuming a harness-created
+	// verification gate so answered prompts carry into the same cycle.
 	ResumeExistingCycle bool
 
 	// RunImplementFn is a test seam: when non-nil, RunRebaseLoop calls
@@ -148,8 +147,8 @@ type RebaseRepoTarget struct {
 //     AtomicPhaseStamp wrote failed (LastError set).
 //   - "interrupted":      shutdown / feature stopped mid-loop. No atomic
 //     stamp; persisted state preserved for restart.
-//   - "need_user_input":  iteration emitted NEED_USER_INPUT — cycle pause
-//     gate; NeedUserInputPath points to the persisted gate artifact.
+//   - "need_user_input":  harness verification requires a user decision;
+//     NeedUserInputPath points to the harness-owned gate artifact.
 //   - "no_op":            no behind repos at loop entry; nothing to do.
 //   - "failed":           dispatch error before iteration began.
 //
@@ -575,9 +574,7 @@ func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 func standardImplementCycleCommunicationContract() string {
 	return "## Cycle Communication Contract\n\n" +
 		"This cycle is executed by the generic implementer role. Use the named output roots from the system prompt and the standard implement handoff artifact layout:\n\n" +
-		"- `progress.md`: `{phase_dir}/progress.md`\n" +
-		"- `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.\n" +
-		"- `phase_complete`: `{iteration_dir}/phase_complete`\n\n" +
+		"- `progress.md`: `{phase_dir}/progress.md`\n\n" +
 		"Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.\n\n"
 }
 

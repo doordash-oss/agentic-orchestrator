@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -9,6 +9,9 @@ export function useModalDismiss(
   onClose: () => void,
   active = true,
 ): void {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!active) return;
     const node = ref.current;
@@ -25,7 +28,7 @@ export function useModalDismiss(
       if (node?.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== 'Tab' || node === null) return;
@@ -52,5 +55,5 @@ export function useModalDismiss(
       document.body.style.overflow = previousOverflow;
       requestAnimationFrame(() => previouslyFocused?.focus());
     };
-  }, [active, onClose, ref]);
+  }, [active, ref]);
 }

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -326,6 +327,8 @@ type boundedNudgeSession struct {
 	result    *llm.ResultMessage
 	nudges    chan string
 	stopCalls int
+	intentMu  sync.RWMutex
+	intent    llm.CompletionIntent
 }
 
 func newBoundedNudgeSession(result *llm.ResultMessage) *boundedNudgeSession {
@@ -342,65 +345,29 @@ func (s *boundedNudgeSession) StatusCh() <-chan string  { return s.statusC }
 func (s *boundedNudgeSession) Done() <-chan struct{}    { return s.doneC }
 func (s *boundedNudgeSession) Cost() *llm.ResultMessage { return s.result }
 func (s *boundedNudgeSession) SendUserMessage(text string) error {
+	s.setRootIntent(llm.CompletionIntent{})
 	s.nudges <- text
 	return nil
 }
 func (s *boundedNudgeSession) Stop() error { s.stopCalls++; return nil }
+func (s *boundedNudgeSession) RootCompletionIntent() llm.CompletionIntent {
+	s.intentMu.RLock()
+	defer s.intentMu.RUnlock()
+	return s.intent
+}
+func (s *boundedNudgeSession) setRootIntent(intent llm.CompletionIntent) {
+	s.intentMu.Lock()
+	s.intent = intent
+	s.intentMu.Unlock()
+}
 
-// TestRunBoundedHelper_NudgesOnMissingArtifactsThenFinalizes proves the bounded
-// helper's statusCh arm nudges the same live session when it ends a turn without
-// phase_complete (capability armed), then finalizes as completed once the nudged
-// turn writes the marker.
-func TestRunBoundedHelper_NudgesOnMissingArtifactsThenFinalizes(t *testing.T) {
-	phaseDir := t.TempDir()
-	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
-
-	sm := mocks.NewMockSessionManager()
-	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-		return sess, nil
-	}
-	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
-
-	resultCh := make(chan *BoundedHelperResult, 1)
-	go func() {
-		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:            "helper-nudge",
-			workDir:              t.TempDir(),
-			phaseCompleteDir:     phaseDir,
-			finishOrViolateNudge: true,
-		})
-		resultCh <- result
-	}()
-
-	// First turn ends without phase_complete → expect a nudge.
-	sess.statusC <- agentStatusSuccess
-	select {
-	case <-sess.nudges:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected a finish-or-violate nudge on missing phase_complete")
-	}
-
-	// The nudged turn writes the marker, then ends its turn again.
-	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-	sess.statusC <- agentStatusSuccess
-
-	select {
-	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusCompleted {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for bounded helper to finalize")
-	}
+func validSuccessCompletionIntent() llm.CompletionIntent {
+	return llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}
 }
 
 // TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes proves the
-// nudge handles the full contract scenario: with a contractRole set, the nudged
-// turn writing only phase_complete is not enough — once it also writes the
-// required review-feedback artifact, finalization is BoundedHelperStatusCompleted
-// rather than a protocol violation.
+// bounded completion protocol nudges a clean end with no root outcome, then
+// commits once the next turn emits an outcome and satisfies the role contract.
 func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T) {
 	phaseDir := t.TempDir()
 	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
@@ -414,30 +381,26 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:            "helper-contract",
-			workDir:              t.TempDir(),
-			phaseCompleteDir:     phaseDir,
-			contractPhase:        feature.PhaseReview,
-			contractRole:         RoleImplementationReviewCraft,
-			finishOrViolateNudge: true,
+			sessionID:     "helper-contract",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
 
-	// First turn ends without the marker → expect a nudge.
+	// First turn ends without a root outcome → expect a nudge.
 	sess.statusC <- agentStatusSuccess
 	select {
 	case <-sess.nudges:
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected a finish-or-violate nudge on missing phase_complete")
+		t.Fatal("expected a semantic-completion nudge")
 	}
 
-	// The nudged turn writes BOTH the required contract artifact and the
-	// marker, then ends its turn.
+	// The nudged turn writes the contract artifact and emits a root outcome.
 	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
-	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
+	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.statusC <- agentStatusSuccess
 
 	select {
@@ -451,8 +414,8 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 }
 
 // TestRunBoundedHelper_DoneBranchDoesNotNudge proves the Done() arm never
-// nudges: a session that exits without the marker finalizes immediately as a
-// protocol violation, even with the capability armed.
+// nudges: a session that exits without a root outcome finalizes immediately as
+// a protocol violation.
 func TestRunBoundedHelper_DoneBranchDoesNotNudge(t *testing.T) {
 	phaseDir := t.TempDir()
 	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
@@ -466,16 +429,15 @@ func TestRunBoundedHelper_DoneBranchDoesNotNudge(t *testing.T) {
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:            "helper-done",
-			workDir:              t.TempDir(),
-			phaseCompleteDir:     phaseDir,
-			contractRole:         RoleImplementationReviewCraft,
-			finishOrViolateNudge: true,
+			sessionID:     "helper-done",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
 
-	// Process exits without the marker — the Done arm must finalize, not nudge.
+	// Process exits without an outcome — the Done arm must finalize, not nudge.
 	close(sess.doneC)
 
 	select {
@@ -513,22 +475,20 @@ func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
 			return newTerminalStatusTestSession(ports.SessionFailed), nil
 		}
 		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
-		if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-			t.Fatalf("write marker: %v", err)
-		}
 		sess := newUtilityTestSession()
 		sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn}
+		sess.setRootIntent(validSuccessCompletionIntent())
 		sess.statusCh <- agentStatusSuccess
 		return sess, nil
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
 	result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-		sessionID:        "review-helper",
-		workDir:          workDir,
-		phaseCompleteDir: phaseDir,
-		contractPhase:    feature.PhaseReview,
-		contractRole:     RoleImplementationReviewCraft,
+		sessionID:     "review-helper",
+		workDir:       workDir,
+		completionDir: phaseDir,
+		contractPhase: feature.PhaseReview,
+		contractRole:  RoleImplementationReviewCraft,
 	})
 	if err != nil {
 		t.Fatalf("runBoundedHelperSession() error = %v", err)
@@ -543,7 +503,7 @@ func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
 }
 
 // TestRunBoundedHelper_NudgeCapThenViolation proves the nudge budget is bounded:
-// after maxFinishOrViolateNudges nudges with the marker still missing, the run
+// after maxFinishOrViolateNudges nudges with the root outcome still missing, the run
 // finalizes as a protocol violation.
 func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
 	phaseDir := t.TempDir()
@@ -558,16 +518,15 @@ func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:            "helper-cap",
-			workDir:              t.TempDir(),
-			phaseCompleteDir:     phaseDir,
-			contractRole:         RoleImplementationReviewCraft,
-			finishOrViolateNudge: true,
+			sessionID:     "helper-cap",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
 
-	// Each end_turn without the marker, up to the cap, draws a nudge.
+	// Each clean end without an outcome, up to the cap, draws a nudge.
 	for i := 0; i < maxFinishOrViolateNudges; i++ {
 		sess.statusC <- agentStatusSuccess
 		select {
@@ -615,7 +574,7 @@ func (s *boundedBgTaskSession) LastStdoutAt() time.Time      { return time.Unix(
 
 // TestRunBoundedHelper_DefersOnLiveBackgroundTasks proves the bounded helper
 // waiter defers instead of finalizing when the helper ends its turn without
-// phase_complete while its background subagents are still running — the CLI
+// a root turn while its background subagents are still running — the CLI
 // re-invokes the agent when they complete. Nudge capability is unarmed,
 // matching providers where the yield-for-tasks pattern showed up.
 func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
@@ -634,16 +593,16 @@ func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:        "helper-bg-defer",
-			workDir:          t.TempDir(),
-			phaseCompleteDir: phaseDir,
-			contractPhase:    feature.PhaseReview,
-			contractRole:     RoleImplementationReviewCraft,
+			sessionID:     "helper-bg-defer",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
 
-	// First turn ends without the marker while tasks are live → defer.
+	// First turn ends while tasks are live → defer.
 	sess.statusC <- agentStatusSuccess
 	select {
 	case result := <-resultCh:
@@ -656,13 +615,11 @@ func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
 		t.Fatal("session was stopped while background tasks were running")
 	}
 
-	// Tasks finish; the re-invoked agent writes the contract artifacts and
-	// ends its turn again.
+	// Tasks finish; the re-invoked agent writes the contract artifact, emits
+	// a root outcome, and ends its turn again.
 	sess.liveTasks.Store(0)
 	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
-	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
+	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.statusC <- agentStatusSuccess
 
 	select {
@@ -700,11 +657,11 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:        "helper-bg-resume",
-			workDir:          t.TempDir(),
-			phaseCompleteDir: phaseDir,
-			contractPhase:    feature.PhaseReview,
-			contractRole:     RoleImplementationReviewCraft,
+			sessionID:     "helper-bg-resume",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
@@ -728,9 +685,8 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 
 	// The resumed turn writes the contract artifacts and ends cleanly.
 	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
-	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
+	sess.setRootIntent(validSuccessCompletionIntent())
+	sess.result.StopReason = testStopReasonEndTurn
 	sess.statusC <- agentStatusSuccess
 
 	select {
@@ -764,13 +720,10 @@ func TestRunBoundedHelper_RetriesOnErroredResult(t *testing.T) {
 		if startCalls == 1 {
 			return erroredSess, nil
 		}
-		// The retry attempt removes the stale marker before starting
-		// (mirrors a real re-dispatched helper); simulate the resumed
-		// helper writing its contract artifacts before ending its turn.
+		// Simulate the resumed helper writing its contract artifact and
+		// emitting a root outcome before ending its turn.
 		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
-		if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-			t.Fatalf("write marker: %v", err)
-		}
+		okSess.setRootIntent(validSuccessCompletionIntent())
 		return okSess, nil
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
@@ -779,11 +732,11 @@ func TestRunBoundedHelper_RetriesOnErroredResult(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:        "helper-errored-retry",
-			workDir:          t.TempDir(),
-			phaseCompleteDir: phaseDir,
-			contractPhase:    feature.PhaseReview,
-			contractRole:     RoleImplementationReviewCraft,
+			sessionID:     "helper-errored-retry",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 		errCh <- err
@@ -828,11 +781,11 @@ func TestRunBoundedHelper_ErroredResultRetryExhausts(t *testing.T) {
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
 	result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-		sessionID:        "helper-errored-exhaust",
-		workDir:          t.TempDir(),
-		phaseCompleteDir: phaseDir,
-		contractPhase:    feature.PhaseReview,
-		contractRole:     RoleImplementationReviewCraft,
+		sessionID:     "helper-errored-exhaust",
+		workDir:       t.TempDir(),
+		completionDir: phaseDir,
+		contractPhase: feature.PhaseReview,
+		contractRole:  RoleImplementationReviewCraft,
 	})
 
 	if result == nil || result.Status != BoundedHelperStatusFailed {
@@ -902,11 +855,11 @@ func TestRunBoundedHelper_TruncatedTurnAutoResumes(t *testing.T) {
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:        "helper-truncated-resume",
-			workDir:          t.TempDir(),
-			phaseCompleteDir: phaseDir,
-			contractPhase:    feature.PhaseReview,
-			contractRole:     RoleImplementationReviewCraft,
+			sessionID:     "helper-truncated-resume",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
@@ -926,9 +879,8 @@ func TestRunBoundedHelper_TruncatedTurnAutoResumes(t *testing.T) {
 
 	// The resumed turn writes the contract artifacts and ends cleanly.
 	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
-	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
+	sess.setRootIntent(validSuccessCompletionIntent())
+	sess.result.StopReason = testStopReasonEndTurn
 	sess.statusC <- agentStatusSuccess
 
 	select {
@@ -958,11 +910,11 @@ func TestRunBoundedHelper_TruncatedTurnResumeCapThenFails(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:        "helper-truncated-cap",
-			workDir:          t.TempDir(),
-			phaseCompleteDir: phaseDir,
-			contractPhase:    feature.PhaseReview,
-			contractRole:     RoleImplementationReviewCraft,
+			sessionID:     "helper-truncated-cap",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 		errCh <- err
@@ -1022,11 +974,11 @@ func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
 	resultCh := make(chan *BoundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:        "helper-bg-stall",
-			workDir:          t.TempDir(),
-			phaseCompleteDir: phaseDir,
-			contractPhase:    feature.PhaseReview,
-			contractRole:     RoleImplementationReviewCraft,
+			sessionID:     "helper-bg-stall",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
 	}()
@@ -1052,9 +1004,7 @@ func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
 	}
 
 	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
-	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
+	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.statusC <- agentStatusSuccess
 	select {
 	case result := <-resultCh:
@@ -1066,13 +1016,15 @@ func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
 	}
 }
 
-// TestRunBoundedHelper_DoneArmIgnoresStaleBackgroundTasks proves a dead
-// process never defers to its stale task set: the Done arm finalizes
-// immediately even when the counter still reports live tasks.
-func TestRunBoundedHelper_DoneArmIgnoresStaleBackgroundTasks(t *testing.T) {
+// TestRunBoundedHelper_DoneArmRejectsLiveBackgroundTasks proves a dead
+// provider cannot commit a valid root outcome while its task registry still
+// contains live delegated work.
+func TestRunBoundedHelper_DoneArmRejectsLiveBackgroundTasks(t *testing.T) {
 	phaseDir := t.TempDir()
 	sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 	sess.liveTasks.Store(2)
+	sess.setRootIntent(validSuccessCompletionIntent())
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
@@ -1081,14 +1033,17 @@ func TestRunBoundedHelper_DoneArmIgnoresStaleBackgroundTasks(t *testing.T) {
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
 	resultCh := make(chan *BoundedHelperResult, 1)
+	errCh := make(chan error, 1)
 	go func() {
-		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-			sessionID:        "helper-bg-done",
-			workDir:          t.TempDir(),
-			phaseCompleteDir: phaseDir,
-			contractRole:     RoleImplementationReviewCraft,
+		result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:     "helper-bg-done",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
 		})
 		resultCh <- result
+		errCh <- err
 	}()
 
 	close(sess.doneC)
@@ -1098,23 +1053,29 @@ func TestRunBoundedHelper_DoneArmIgnoresStaleBackgroundTasks(t *testing.T) {
 		if result.Status != BoundedHelperStatusProtocolViolation {
 			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusProtocolViolation)
 		}
+		if err := <-errCh; err == nil || !strings.Contains(err.Error(), "delegated tasks") {
+			t.Fatalf("err = %v, want delegated-task protocol violation", err)
+		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("runBoundedHelperSession() hung on a dead session with stale background tasks")
+		t.Fatal("runBoundedHelperSession() hung after the provider exited with live tasks")
+	}
+	if _, err := ReadCompletionReceipt(phaseDir); err == nil {
+		t.Fatal("helper committed a receipt while delegated tasks were still live")
 	}
 }
 
-// TestRunBoundedHelper_ArmsKeepAliveForMarkeredHelpers proves helpers with
-// phase_complete semantics start their session with KeepAliveOnTruncatedResult
+// TestRunBoundedHelper_ArmsKeepAliveForCompletionHelpers proves helpers with
+// semantic completion start their session with KeepAliveOnTurnResult
 // so the session layer keeps the CLI up after an end_turn result while
-// background tasks are live. Markerless helpers keep the old behavior.
-func TestRunBoundedHelper_ArmsKeepAliveForMarkeredHelpers(t *testing.T) {
+// background tasks are live. Ordinary helpers keep one-shot behavior.
+func TestRunBoundedHelper_ArmsKeepAliveForCompletionHelpers(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		phaseDir      string
 		wantKeepAlive bool
 	}{
-		{name: "markered helper arms keep-alive", phaseDir: t.TempDir(), wantKeepAlive: true},
-		{name: "markerless helper does not", phaseDir: "", wantKeepAlive: false},
+		{name: "completion helper arms keep-alive", phaseDir: t.TempDir(), wantKeepAlive: true},
+		{name: "ordinary helper does not", phaseDir: "", wantKeepAlive: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotOpts *session.SessionOpts
@@ -1126,9 +1087,10 @@ func TestRunBoundedHelper_ArmsKeepAliveForMarkeredHelpers(t *testing.T) {
 				sess := newUtilityTestSession()
 				sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, Result: "done", StopReason: testStopReasonEndTurn}
 				if tc.phaseDir != "" {
-					if err := os.WriteFile(filepath.Join(tc.phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
-						t.Fatalf("write marker: %v", err)
+					if err := os.WriteFile(filepath.Join(tc.phaseDir, "index.md"), []byte("# Knowledge Base\n"), 0o644); err != nil {
+						t.Fatalf("write contract artifact: %v", err)
 					}
+					sess.setRootIntent(validSuccessCompletionIntent())
 				}
 				sess.statusCh <- agentStatusSuccess
 				return sess, nil
@@ -1136,16 +1098,18 @@ func TestRunBoundedHelper_ArmsKeepAliveForMarkeredHelpers(t *testing.T) {
 			pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
 			_, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
-				sessionID:        "helper-keepalive",
-				workDir:          t.TempDir(),
-				phaseCompleteDir: tc.phaseDir,
+				sessionID:     "helper-keepalive",
+				workDir:       t.TempDir(),
+				completionDir: tc.phaseDir,
+				contractPhase: feature.PhaseKnowledgeBase,
+				contractRole:  RoleKnowledgeBaseBuilder,
 			})
 			if err != nil {
 				t.Fatalf("runBoundedHelperSession() error = %v", err)
 			}
-			gotKeepAlive := gotOpts != nil && gotOpts.KeepAliveOnTruncatedResult
+			gotKeepAlive := gotOpts != nil && gotOpts.KeepAliveOnTurnResult
 			if gotKeepAlive != tc.wantKeepAlive {
-				t.Errorf("KeepAliveOnTruncatedResult = %v, want %v", gotKeepAlive, tc.wantKeepAlive)
+				t.Errorf("KeepAliveOnTurnResult = %v, want %v", gotKeepAlive, tc.wantKeepAlive)
 			}
 		})
 	}

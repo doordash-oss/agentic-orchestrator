@@ -241,7 +241,7 @@ type interactivePhaseConfig struct {
 func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePhaseConfig) (string, error) {
 	artifactDir := pr.resolvePhaseArtifactDir(f, cfg.DirName)
 	_ = os.MkdirAll(artifactDir, 0o755)
-	RemovePhaseComplete(artifactDir)
+	RemoveCompletionReceipt(artifactDir)
 	phaseModel := pr.modelForRole(cfg.ConfiguredModel, cfg.ModelRole)
 
 	effectiveEffort, effortSource := pr.resolveEffortForRole(f, cfg.ModelRole, phaseModel)
@@ -281,7 +281,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		EffortLevel:                    effortLevel,
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(artifactDir, PhaseCompleteFile),
+		CompletionProtocol:             true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("building inquire session: %w", err)
@@ -503,7 +503,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		_ = ReleaseKBLock(kbDir, f.ID)
 		return "", nil
 	}
-	RemovePhaseComplete(kbDir)
+	RemoveCompletionReceipt(kbDir)
 
 	// Determine full vs incremental build
 	var existingKBPath, lastCommit string
@@ -560,7 +560,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		EffortLevel:                    kbEffortLevel,
 		Phase:                          feature.PhaseKnowledgeBase,
 		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(kbDir, PhaseCompleteFile),
+		CompletionProtocol:             true,
 		LogPath:                        logPath,
 	})
 	if err != nil {
@@ -709,7 +709,6 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		ValidatorEffortSource:        validatorEffortSource,
 		SkillsDir:                    pr.SkillsDir,
 		GuidelinesDir:                pr.GuidelinesDir,
-		FinishOrViolateNudge:         pr.finishOrViolateNudgeForModel(planningModel),
 		Observer:                     pr.Observer,
 	}
 
@@ -780,7 +779,6 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			ValidatorEffortSource:        phaseValidatorEffortSource,
 			SkillsDir:                    pr.SkillsDir,
 			GuidelinesDir:                pr.GuidelinesDir,
-			FinishOrViolateNudge:         pr.finishOrViolateNudgeForModel(phasePlanModel),
 			Observer:                     pr.Observer,
 		},
 		RoadmapPath:         roadmapPath,
@@ -872,7 +870,6 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
-		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 	}
@@ -936,7 +933,6 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		ReviewEffortSource:         cycleReviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
-		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
@@ -1007,7 +1003,6 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
-		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 		RunImplementFn:             pr.RunImplementFn,
@@ -1069,7 +1064,6 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		ReviewEffortSource:         reviewEffortSource,
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
-		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
@@ -1138,8 +1132,8 @@ func (pr *PhaseRunner) resolveLoopLimits(f *feature.Feature) (int, int, int) {
 // When skip is false (normal mode): auto-approve reads and file edits;
 // leave Bash and other tools for the desktop app to prompt.
 //
-// The returned handler is always wrapped in a SizeGuardHandler that denies
-// oversized Claude Write calls — see permission.SizeGuardHandler for the
+// The returned handler is always wrapped in a SessionGuardHandler that denies
+// oversized Claude Write calls — see permission.SessionGuardHandler for the
 // failure mode (~20KB Write payloads have hung the tool call for minutes
 // and then dropped the turn with nothing written).
 func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.PermissionHandler {
@@ -1342,13 +1336,9 @@ type BuildSessionOpts struct {
 	// that still pass ad-hoc prompts leave this false so BuildSession can
 	// append the guideline preamble when needed.
 	SystemPromptHasUsefulResources bool
-	// MarkerPath, when set, is the absolute path to the role's
-	// `phase_complete` marker file. Forwarded to llm.ProtocolOpts so providers
-	// that synthesize completion-vs-question signals from end-of-turn text
-	// (Codex) can use marker existence as the authoritative completion signal.
-	// Leave empty for paths that don't have a marker contract; the provider
-	// falls back to its legacy heuristic.
-	MarkerPath string
+	// CompletionProtocol keeps the provider session alive across bounded
+	// completion nudges and requires a root-owned semantic outcome.
+	CompletionProtocol bool
 	// ResumeSessionID, when set, asks the provider to resume that prior session
 	// identity rather than start a fresh one. It is forwarded to both command and
 	// protocol setup so each provider resumes via its own supported path.
@@ -1602,7 +1592,6 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		WritableRoots:   writableRoots,
 		DSP:             dangerouslySkipPermissions,
 		StateDir:        pr.StateDir,
-		MarkerPath:      opts.MarkerPath,
 		ResumeSessionID: opts.ResumeSessionID,
 		Interactive:     opts.Interactive,
 	})
@@ -1621,9 +1610,8 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	sessOpts = &ports.SessionOpts{
 		PIDDir: opts.PIDDir,
 		// commandWritableRoots is the same boundary just computed for the
-		// provider's own writable-root config, so a plain `touch` or
-		// `mkdir -p` inside it (e.g. the phase_complete marker, or a run
-		// directory the harness already created) can be trusted the same way
+		// provider's own writable-root config, so a plain `mkdir -p` inside a
+		// run directory the harness already created can be trusted the same way
 		// AcceptEditsHandler already trusts an equivalent empty Write —
 		// see permission.WrapGeneralPhaseHandlerWithSafeCreate.
 		PermHandler:         permHandler,
@@ -1639,8 +1627,8 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		AutoReview:          arSnap,
 		SessionBuildNotices: automaticReviewSessionBuildNotices(pr.Observer, arSnap),
 	}
-	if c, ok := prov.(finishOrViolateNudgeProvider); ok {
-		sessOpts.SupportsFinishOrViolateNudge = c.SupportsFinishOrViolateNudge()
+	if opts.CompletionProtocol {
+		sessOpts.TurnMode = ports.TurnModeInteractive
 	}
 	if c, ok := prov.(boundedHelperSandboxProvider); ok {
 		sessOpts.UsesBoundedHelperSandbox = c.UsesBoundedHelperSandbox()

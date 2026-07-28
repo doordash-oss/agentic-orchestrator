@@ -2668,6 +2668,14 @@ func (s *mutationTargetSessionView) HasPendingAskUserQuestion() bool {
 	}
 	return false
 }
+func (s *mutationTargetSessionView) HasPendingRootAskUserQuestion() bool {
+	return s.HasPendingAskUserQuestion()
+}
+func (s *mutationTargetSessionView) RootCompletionIntent() llm.CompletionIntent {
+	return llm.CompletionIntent{}
+}
+func (s *mutationTargetSessionView) LiveBackgroundTaskCount() int       { return 0 }
+func (s *mutationTargetSessionView) TaskActivities() []llm.TaskActivity { return nil }
 func (s *mutationTargetSessionView) SendUserMessage(text string) error {
 	s.sentMessages = append(s.sentMessages, text)
 	return nil

@@ -40,14 +40,17 @@ function subagentDetail(agent: SubagentActivity): string {
       : 'starting up';
   }
   if (agent.summary?.trim()) return agent.summary.trim();
-  return agent.state === 'failed' ? 'Failed' : 'Finished';
+  if (agent.state === 'failed') return 'Failed';
+  return agent.state === 'cancelled' ? 'Cancelled' : 'Finished';
 }
 
 function subagentTally(agents: SubagentActivity[]): string {
   const running = agents.filter((agent) => agent.state === 'running').length;
   const failed = agents.filter((agent) => agent.state === 'failed').length;
+  const cancelled = agents.filter((agent) => agent.state === 'cancelled').length;
   if (running > 0) return `${running} of ${agents.length} running`;
-  return failed > 0 ? `${failed} of ${agents.length} failed` : 'all finished';
+  if (failed > 0) return `${failed} of ${agents.length} failed`;
+  return cancelled > 0 ? `${cancelled} of ${agents.length} cancelled` : 'all finished';
 }
 
 export function SubagentGroupCard({ agents }: { agents: SubagentActivity[] }) {

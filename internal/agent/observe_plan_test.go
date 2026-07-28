@@ -50,7 +50,7 @@ func TestRoadmapPlanningLoopEmitsEvents(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(planDir, "plan.md"), []byte("# Roadmap\n## Phase 1: Observability Skeleton\nDo stuff"), 0o644)
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
-		testutil.JSONLInit+"\nsleep 0.2\n"+testutil.TouchPhaseCompleteInLatestAttemptDir(planDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\nsleep 0.2\n"+testutil.JSONLSuccess+"\n")
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\nsleep 0.1\n"+testutil.WriteAnyValidatorApproved(stateDir)+"\n"+testutil.JSONLSuccess+"\n")
 

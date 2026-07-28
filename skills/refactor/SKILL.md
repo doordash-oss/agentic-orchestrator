@@ -39,7 +39,7 @@ This step runs once per cycle. Read the user's refactor request, the feature des
 - Each Task may include a `#### Automated Verification:` block with checklist items naming bash commands. The harness compiles those into the per-repo testing contract.
 - A top-level `### Automated Verification` section may also be used. In a multi-repo refactor, every top-level command begins with `[repo: <name>]`. Commands run from that repository root; never add `cd <repo>` or use a Cross-Repo Verification section.
 
-Do NOT make code edits in this step — that work happens in the iterations that follow. Emit `phase_complete` once `refactor-plan.md` is written.
+Do NOT make code edits in this step — that work happens in the iterations that follow. Validate `refactor-plan.md`, then emit the structured success outcome from the system prompt. The harness writes `phase_complete`.
 
 ### Step 2 — Iterate on the plan
 
@@ -60,7 +60,7 @@ Cycle-specific guidance for `progress.md`:
 - `## Iteration State` — exactly one of:
   - `SUCCESS` — every plan-staged Task is addressed, development tests and agent-owned evidence are complete, and (when publishable) every touched repo's branch is force-pushed. Agentico runs final commands next.
   - `RETRY` — partial progress (e.g., one repo's edits landed cleanly; another needs reviewer feedback before continuing). The next iteration starts from your `progress.md`.
-  - `NEED_USER_INPUT` — the refactor's design is fundamentally ambiguous (e.g., the user's prompt admits two architectures with no objective tiebreaker). Surface a `## Questions for User` section. Do NOT use this as an escape hatch for "the refactor is hard"; reserve for genuine ambiguity.
+  - If the refactor's design is fundamentally ambiguous, call the formal AskUserQuestion control. Do not use it as an escape hatch for "the refactor is hard"; reserve it for genuine ambiguity.
 
 ## Cross-repo refactor heuristics
 

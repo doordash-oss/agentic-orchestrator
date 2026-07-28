@@ -40,15 +40,15 @@ func isReadOnlyTool(name string) bool {
 	return readOnlyToolNames[name]
 }
 
-// DefaultWriteGuardBytes is the byte threshold above which the SizeGuardHandler
+// DefaultWriteGuardBytes is the byte threshold above which the SessionGuardHandler
 // denies Claude `Write` tool calls. Large Writes (observed at ~50KB, sometimes
 // smaller) have repeatedly hung the server-side tool call for minutes and then
 // dropped the turn with nothing written to disk. 20KB is a conservative limit
 // that matches the in-prompt directive in internal/agent/phase.go.
 const DefaultWriteGuardBytes = 20_000
 
-// SizeGuardHandler denies Claude `Write` tool calls whose `content` payload
-// exceeds MaxBytes, returning an actionable message that nudges the model
+// SessionGuardHandler denies Claude `Write` tool calls whose `content` payload
+// exceeds MaxWriteBytes, returning an actionable message that nudges the model
 // toward the skeleton-then-Edit pattern. This is a structural enforcement of
 // the write-vs-edit directive in internal/agent/phase.go: prompt guidance
 // alone has proven insufficient.
@@ -56,16 +56,23 @@ const DefaultWriteGuardBytes = 20_000
 // Only fires for ProviderName == "claude". Codex routes through the same
 // permission pipeline but has not exhibited the hang, so we leave it alone.
 //
-// Set MaxBytes to 0 to disable the guard entirely (useful in tests).
-type SizeGuardHandler struct {
-	Inner    ports.PermissionHandler
-	MaxBytes int
+// Set MaxWriteBytes to 0 to disable the guard entirely (useful in tests).
+type SessionGuardHandler struct {
+	Inner         ports.PermissionHandler
+	MaxWriteBytes int
 }
 
-// CanUseTool enforces the Write payload limit for Claude, then delegates.
-func (h *SizeGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	if h.MaxBytes > 0 && req.ProviderName == providerNameClaude && req.ToolName == toolNameWrite {
-		if n, ok := writeContentSize(req.Input); ok && n > h.MaxBytes {
+// CanUseTool protects harness-owned protocol state, enforces the Claude Write
+// payload limit, then delegates.
+func (h *SessionGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if requestsCompletionReceiptMutation(req) {
+		return ports.PermissionDecision{
+			Behavior: DecisionDeny,
+			Reason:   "phase_complete is a harness-owned completion receipt; emit the structured root outcome instead",
+		}, nil
+	}
+	if h.MaxWriteBytes > 0 && req.ProviderName == providerNameClaude && req.ToolName == toolNameWrite {
+		if n, ok := writeContentSize(req.Input); ok && n > h.MaxWriteBytes {
 			return ports.PermissionDecision{
 				Behavior: DecisionDeny,
 				Reason: fmt.Sprintf(
@@ -73,11 +80,30 @@ func (h *SizeGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.Pe
 						"Large Writes have repeatedly hung the Claude tool-call stream and dropped the turn with nothing written. "+
 						"Instead: use Write to create a small skeleton (<5KB) containing only section headings and short `<!-- SECTION -->` placeholders, "+
 						"then fill in each section with a separate Edit call. If a single Edit's new_string would still exceed this limit, split it across multiple Edit calls against successive anchor points.",
-					n, h.MaxBytes),
+					n, h.MaxWriteBytes),
 			}, nil
 		}
 	}
 	return h.Inner.CanUseTool(req)
+}
+
+const completionReceiptFilename = "phase_complete"
+
+func requestsCompletionReceiptMutation(req ports.ToolPermissionRequest) bool {
+	switch req.ToolName {
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
+		if path, ok := toolInputFilePath(req.Input); ok {
+			return filepath.Base(filepath.Clean(path)) == completionReceiptFilename
+		}
+		return strings.Contains(req.Input, completionReceiptFilename)
+	case toolNameBash:
+		// Bash is write-capable and shell syntax is intentionally not parsed
+		// here. Deny any receipt reference through Bash; read-only inspection
+		// remains available through the Read tool.
+		return strings.Contains(extractBashCommand(req.Input), completionReceiptFilename)
+	default:
+		return false
+	}
 }
 
 // writeContentSize extracts the byte length of the "content" field from a
@@ -94,11 +120,11 @@ func writeContentSize(raw string) (int, bool) {
 	return len(*payload.Content), true
 }
 
-// Guarded wraps inner in a SizeGuardHandler using DefaultWriteGuardBytes.
-// Use this at every site that constructs a permission handler for a session
-// so oversized Claude Writes get rejected uniformly.
+// Guarded wraps inner in a SessionGuardHandler. Every guarded session rejects
+// agent writes to the harness completion receipt; oversized Claude Writes are
+// rejected uniformly as well.
 func Guarded(inner ports.PermissionHandler) ports.PermissionHandler {
-	return &SizeGuardHandler{Inner: inner, MaxBytes: DefaultWriteGuardBytes}
+	return &SessionGuardHandler{Inner: inner, MaxWriteBytes: DefaultWriteGuardBytes}
 }
 
 // AutoApproveHandler approves all tool use requests immediately.
@@ -139,11 +165,9 @@ func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.
 // path falls within Roots, deferring to Inner for everything else. Both
 // commands can only bring an empty file or directory into existence (or, for
 // touch, bump an existing file's mtime) — the same effect Edit/Write already
-// have when AcceptEditsHandler approves them unconditionally — so this closes
-// a gap where the harness prompts for something like a `phase_complete`
-// marker or a `mkdir -p` the harness itself already ran via os.MkdirAll
-// before the session started (see resolvePhaseArtifactDir/runInteractivePhase
-// and RunKnowledgeBaseForRepo), while the equivalent Write/directory-already-
+// have when AcceptEditsHandler approves them unconditionally. This closes a
+// gap where the harness prompts for an output directory it already created
+// before the session started, while the equivalent Write/directory-already-
 // exists case would go through silently.
 //
 // Unlike Edit/Write, OpenCode has no per-path scoping for Bash to fall back
@@ -243,7 +267,7 @@ func pathWithinRoots(path string, roots []string) bool {
 // WrapGeneralPhaseHandlerWithSafeCreate wraps h in a CreateWithinRootsHandler
 // when h is one of the general accept-edits handlers permHandlerFor builds
 // (AutoApproveHandler, AcceptEditsHandler, or CachingHandler over one of
-// those — optionally already wrapped in a SizeGuardHandler via Guarded).
+// those — optionally already wrapped in a SessionGuardHandler via Guarded).
 // Any other handler shape — bounded helpers, review-feedback sessions, and
 // restricted read-only sessions — is returned unchanged, since those exist
 // specifically to restrict writes below the general writable-root policy and
@@ -256,12 +280,12 @@ func WrapGeneralPhaseHandlerWithSafeCreate(h ports.PermissionHandler, roots []st
 }
 
 // IsGeneralPhaseHandler reports whether h is, optionally through a
-// SizeGuardHandler, one of the handler types permHandlerFor builds. Callers
+// SessionGuardHandler, one of the handler types permHandlerFor builds. Callers
 // outside the permission package use it to scope behavior that must only
 // attach to the general-phase permission policy (e.g. the automatic Bash-
 // review decorator), never to review-helper or restricted handlers.
 func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
-	if guard, ok := h.(*SizeGuardHandler); ok {
+	if guard, ok := h.(*SessionGuardHandler); ok {
 		h = guard.Inner
 	}
 	switch h.(type) {
@@ -280,7 +304,7 @@ func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
 // Keep this separate from IsGeneralPhaseHandler: AMA chat must not inherit
 // unrelated general-phase exceptions such as safe-create approval.
 func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
-	if guard, ok := h.(*SizeGuardHandler); ok {
+	if guard, ok := h.(*SessionGuardHandler); ok {
 		h = guard.Inner
 	}
 	if _, ok := h.(*AMAHandler); ok {
@@ -475,12 +499,19 @@ func pathUnderAnyRoot(path string, roots []string) bool {
 
 func toolInputFilePath(input string) (string, bool) {
 	var payload struct {
-		FilePath string `json:"file_path"`
+		FilePath     string `json:"file_path"`
+		NotebookPath string `json:"notebook_path"`
 	}
-	if err := json.Unmarshal([]byte(input), &payload); err != nil || payload.FilePath == "" {
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
 		return "", false
 	}
-	return payload.FilePath, true
+	if payload.FilePath != "" {
+		return payload.FilePath, true
+	}
+	if payload.NotebookPath != "" {
+		return payload.NotebookPath, true
+	}
+	return "", false
 }
 
 // boundedHelperReadOnlyBashAllowed reports whether a bounded helper's bash

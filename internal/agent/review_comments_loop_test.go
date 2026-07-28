@@ -809,7 +809,6 @@ func TestBuildAggregatedReviewCommentsPlan_Formatting(t *testing.T) {
 	for _, want := range []string{
 		"## Cycle Communication Contract",
 		wantProgressPathTemplate,
-		wantPhaseCompletePathTemplate,
 		"Do not place `progress.md` under `{iteration_dir}`",
 		"## Repo: `api`",
 		"## Repo: `web`",
@@ -863,13 +862,13 @@ func TestReviewCommentsSkillDocumentsStandardImplementHandoff(t *testing.T) {
 		t.Fatalf("read review-comments skill: %v", err)
 	}
 	content := string(data)
-	for _, want := range []string{
-		wantProgressPathTemplate,
-		wantPhaseCompletePathTemplate,
-	} {
+	for _, want := range []string{wantProgressPathTemplate} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("skills/review-comments/SKILL.md missing %q", want)
 		}
+	}
+	if !strings.Contains(content, "`phase_complete` is harness-owned; never create or edit it") {
+		t.Fatal("skills/review-comments/SKILL.md missing harness-owned completion guidance")
 	}
 	if strings.Contains(content, "at the cycle's iteration artifact dir") {
 		t.Fatalf("skills/review-comments/SKILL.md still says the handoff is at the iteration artifact dir")

@@ -86,7 +86,6 @@ func TestOrchestrator_AdvanceToNextPhase_Gate_EmitsReviewRequired(t *testing.T) 
 	lc.CompleteInquireFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	var gotPhase feature.Phase
@@ -1352,7 +1351,6 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t 
 	}
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	var failedCalls []struct{ id, ft, msg string }
@@ -1423,7 +1421,6 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_MarkFailedAlsoFails_B
 	lc.MarkFailedFn = func(id, ft, msg string) error { return markErr }
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	o := orchestrator.New(orchestrator.Deps{

@@ -1186,6 +1186,7 @@ body {
 .cycle-workspace__main {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .cycle-workspace__header {
@@ -1210,6 +1211,7 @@ body {
 }
 
 .cycle-workspace__stop,
+.cycle-workspace__config,
 .cycle-workspace__primary,
 .cycle-workspace__failed-actions button {
   flex: 0 0 auto;
@@ -1235,6 +1237,14 @@ body {
 
 .cycle-workspace__failed-actions {
   display: flex;
+  gap: var(--space-2);
+}
+
+.cycle-workspace__header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -1305,20 +1315,20 @@ body {
 }
 
 .cycle-workspace .current-inspection {
-  flex: 1 0 auto;
-  min-height: clamp(540px, calc(100vh - 360px), 760px);
+  flex: 1 1 auto;
+  min-height: 0;
   margin: var(--space-3) clamp(24px, 3vw, 40px);
   padding: var(--space-3);
   gap: var(--space-2);
-  overflow: visible;
+  overflow: hidden;
 }
 
 .cycle-workspace .current-inspection__preview {
-  min-height: 360px;
+  min-height: 0;
 }
 
 .cycle-workspace .live-preview__frame {
-  min-height: clamp(360px, calc(100vh - 590px), 560px);
+  min-height: 0;
 }
 
 .cycle-workspace .current-inspection__activity {
@@ -1588,6 +1598,25 @@ body {
     grid-template-columns: none;
     grid-auto-flow: column;
   }
+
+  .cycle-workspace.post-workspace {
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 230px);
+    overflow: hidden;
+  }
+
+  .cycle-workspace .cycle-workspace__main {
+    overflow: hidden;
+  }
+
+  .cycle-workspace .feature-facts {
+    overflow: auto;
+    border-top: 0;
+    border-left: 1px solid var(--color-hairline);
+  }
+
+  .cycle-workspace .feature-facts__list {
+    display: flex;
+  }
 }
 
 @media (max-width: 620px) {
@@ -1611,6 +1640,16 @@ body {
 
   .cycle-workspace__failed-actions {
     flex-direction: column;
+  }
+
+  .cycle-workspace.post-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(96px, 22vh);
+  }
+
+  .cycle-workspace .feature-facts {
+    border-top: 1px solid var(--color-hairline);
+    border-left: 0;
   }
 
   .cycle-workspace .review-gate {

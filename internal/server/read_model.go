@@ -190,7 +190,10 @@ func activeCycleDTO(f *feature.Feature) *CycleDTO {
 			Phase:     activeCyclePhase(f, f.ActiveCycle.Type),
 			LastError: SafeDisplayText(f.ActiveCycle.LastError, 240),
 		}
-		if f.RebaseOperation != nil && !f.RebaseOperation.StartedAt.IsZero() {
+		if !f.ActiveCycle.StartedAt.IsZero() {
+			startedAt := f.ActiveCycle.StartedAt
+			dto.StartedAt = &startedAt
+		} else if f.RebaseOperation != nil && !f.RebaseOperation.StartedAt.IsZero() {
 			startedAt := f.RebaseOperation.StartedAt
 			dto.StartedAt = &startedAt
 		}

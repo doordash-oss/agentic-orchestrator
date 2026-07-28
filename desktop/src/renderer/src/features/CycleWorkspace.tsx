@@ -12,6 +12,7 @@ export interface CycleWorkspaceProps {
   onResume(): void;
   onRetry(): void;
   onReturnToAftercare(): void;
+  onOpenConfig(): void;
   onOpenRunRecord(): void;
   onOpenPullRequest(url: string): void;
 }
@@ -25,6 +26,7 @@ export function CycleWorkspace({
   onResume,
   onRetry,
   onReturnToAftercare,
+  onOpenConfig,
   onOpenRunRecord,
   onOpenPullRequest,
 }: CycleWorkspaceProps): React.ReactElement {
@@ -54,39 +56,44 @@ export function CycleWorkspace({
             </p>
             <h2>{presentation.headline}</h2>
           </div>
-          {failed ? (
-            <div className="cycle-workspace__failed-actions">
-              <button
-                type="button"
-                className="cycle-workspace__primary"
-                disabled={retryAction?.enabled !== true}
-                title={
-                  retryAction?.enabled === true
-                    ? undefined
-                    : retryAction?.disabledReasons[0]?.message
-                }
-                onClick={onRetry}
-              >
-                Retry cycle
-              </button>
-              <button type="button" onClick={onReturnToAftercare}>
-                Return to Aftercare
-              </button>
-            </div>
-          ) : resumable ? (
-            <div className="cycle-workspace__failed-actions">
-              <button type="button" className="cycle-workspace__primary" onClick={onResume}>
-                Resume cycle
-              </button>
-              <button type="button" onClick={onReturnToAftercare}>
-                Return to Aftercare
-              </button>
-            </div>
-          ) : stoppable ? (
-            <button type="button" className="cycle-workspace__stop" onClick={onStop}>
-              Stop cycle
+          <div className="cycle-workspace__header-actions">
+            <button type="button" className="cycle-workspace__config" onClick={onOpenConfig}>
+              Edit configuration…
             </button>
-          ) : null}
+            {failed ? (
+              <div className="cycle-workspace__failed-actions">
+                <button
+                  type="button"
+                  className="cycle-workspace__primary"
+                  disabled={retryAction?.enabled !== true}
+                  title={
+                    retryAction?.enabled === true
+                      ? undefined
+                      : retryAction?.disabledReasons[0]?.message
+                  }
+                  onClick={onRetry}
+                >
+                  Retry cycle
+                </button>
+                <button type="button" onClick={onReturnToAftercare}>
+                  Return to Aftercare
+                </button>
+              </div>
+            ) : resumable ? (
+              <div className="cycle-workspace__failed-actions">
+                <button type="button" className="cycle-workspace__primary" onClick={onResume}>
+                  Resume cycle
+                </button>
+                <button type="button" onClick={onReturnToAftercare}>
+                  Return to Aftercare
+                </button>
+              </div>
+            ) : stoppable ? (
+              <button type="button" className="cycle-workspace__stop" onClick={onStop}>
+                Stop cycle
+              </button>
+            ) : null}
+          </div>
         </header>
 
         <ol

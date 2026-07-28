@@ -561,6 +561,103 @@ describe('CurrentRunInspection', () => {
     );
   });
 
+  it('shows elapsed time and cost from the active cycle accounting key', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Resolving conflicts',
+      contextPercentage: 31,
+      totalSeconds: 4500,
+      totalUsd: 18.75,
+      transcript: [],
+    });
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 8,
+      artifactCount: 0,
+      timing: { totalSeconds: 4500, byPhase: { Publish: 300, 'rebase-4': 732 } },
+      cost: { totalUsd: 18.75, byPhase: { Publish: 1.5, 'rebase-4': 9.84 } },
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Publish"
+        reviewGate={REVIEW_GATE}
+        presentation="cycle"
+        cycle={{
+          type: 'rebase',
+          status: 'running',
+          count: 4,
+          phase: 'resolve_conflicts',
+          startedAt: '2026-07-23T10:00:00Z',
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('12m 12s')).toBeVisible();
+    expect(screen.getByText('$9.84')).toBeVisible();
+  });
+
+  it('uses the selected cycle session context when the live preview has no active session', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Interrupted',
+      contextPercentage: -1,
+      totalSeconds: 4500,
+      totalUsd: 18.75,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 8,
+      sessions: [
+        validator({
+          id: 'rebase-3-impl-1',
+          label: 'Implement',
+          phase: 'Rebase',
+          kind: 'implement',
+          status: 'failed',
+          contextPercentage: 91,
+          startedAt: '2026-07-22T10:00:00Z',
+        }),
+        validator({
+          id: 'rebase-4-impl-1',
+          label: 'Implement',
+          phase: 'Rebase',
+          kind: 'implement',
+          status: 'failed',
+          contextPercentage: 63,
+          startedAt: '2026-07-23T10:00:00Z',
+        }),
+      ],
+    });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Publish"
+        reviewGate={REVIEW_GATE}
+        presentation="cycle"
+        cycle={{
+          type: 'rebase',
+          status: 'interrupted',
+          count: 4,
+          phase: 'resolve_conflicts',
+          startedAt: '2026-07-23T10:00:00Z',
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('63%')).toBeVisible();
+    expect(screen.queryByText('91%')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument();
+  });
+
   it('renders required inspection data before optional model metadata resolves', async () => {
     const mock = installAgenticoMock();
     const canonicalModel = 'portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]';

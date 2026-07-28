@@ -624,6 +624,9 @@ func TestRunRefactorFeatureLoop_ActiveCycleSetAtEntry(t *testing.T) {
 	if midRunCycle.Status != feature.RepoCycleRunning {
 		t.Errorf("ActiveCycle.Status = %q, want running", midRunCycle.Status)
 	}
+	if midRunCycle.StartedAt.IsZero() {
+		t.Error("ActiveCycle.StartedAt is zero, want the cycle session boundary")
+	}
 }
 
 // TestRunRefactorFeatureLoop_NilFeatureReturnsError covers defensive

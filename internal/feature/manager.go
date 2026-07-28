@@ -819,7 +819,12 @@ func (m *Manager) StartFeatureRebaseOperation(featureID string) error {
 		f.SetRebaseCount(f.RebaseCount() + 1)
 		now := time.Now()
 		f.SetActiveCycleType(CycleRebase)
-		f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount()}
+		f.ActiveCycle = &CycleState{
+			Type:      CycleRebase,
+			Status:    RepoCycleRunning,
+			Count:     f.RebaseCount(),
+			StartedAt: now,
+		}
 		f.RebaseOperation = &RebaseOperationState{
 			Stage:     RebaseStageHarness,
 			StartedAt: now,
@@ -847,9 +852,17 @@ func (m *Manager) MarkFeatureRebaseStage(featureID string, stage RebaseStage) er
 		f.RebaseOperation.Stage = stage
 		f.RebaseOperation.UpdatedAt = now
 		if f.ActiveCycle == nil {
-			f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount() + 1}
+			f.ActiveCycle = &CycleState{
+				Type:      CycleRebase,
+				Status:    RepoCycleRunning,
+				Count:     f.RebaseCount() + 1,
+				StartedAt: now,
+			}
 		} else {
 			f.ActiveCycle.Type = CycleRebase
+			if f.ActiveCycle.StartedAt.IsZero() {
+				f.ActiveCycle.StartedAt = f.RebaseOperation.StartedAt
+			}
 		}
 		switch stage {
 		case RebaseStageFinalReview:

@@ -349,6 +349,29 @@ describe('FeatureCockpit snapshot rendering', () => {
     expect(screen.queryByLabelText('Feature pipeline')).not.toBeInTheDocument();
   });
 
+  it('keeps feature configuration available while a maintenance cycle owns the stage', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Published',
+        cycle: {
+          type: 'rebase',
+          status: 'running',
+          count: 4,
+          iteration: 1,
+          phase: 'resolve_conflicts',
+        },
+        actions: [{ id: 'pause-stop', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+
+    const cycle = await screen.findByRole('region', { name: 'Rebase cycle' });
+    await user.click(within(cycle).getByRole('button', { name: 'Edit configuration…' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Feature configuration' })).toBeVisible();
+  });
+
   it('offers Publish from CodeReady without repeating the feature title in Aftercare', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({

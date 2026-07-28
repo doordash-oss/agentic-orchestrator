@@ -48,6 +48,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
@@ -223,9 +224,10 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		}
 		f.SetActiveCycleType(feature.CycleRefactor)
 		f.ActiveCycle = &feature.CycleState{
-			Type:   feature.CycleRefactor,
-			Status: feature.RepoCycleRunning,
-			Count:  f.RefactorCount(),
+			Type:      feature.CycleRefactor,
+			Status:    feature.RepoCycleRunning,
+			Count:     f.RefactorCount(),
+			StartedAt: time.Now(),
 		}
 		refactorCount = f.RefactorCount()
 		return nil

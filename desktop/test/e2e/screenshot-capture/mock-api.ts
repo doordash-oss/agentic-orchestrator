@@ -259,6 +259,21 @@ const SESSIONS: SessionSummary[] = [
   },
 ];
 
+const CYCLE_SESSION: SessionSummary = {
+  id: 'rebase-2-impl-01',
+  featureId: 'abcd1234ef567890',
+  runNumber: 8,
+  phase: 'Rebase',
+  kind: 'implement',
+  label: 'Implement',
+  provider: 'claude',
+  model: 'claude-sonnet-5',
+  status: 'running',
+  startedAt: '2026-07-25T14:20:00Z',
+  contextPercentage: 42,
+  usage: { inputTokens: 45000, outputTokens: 12000, costUsd: 1.2 },
+};
+
 const CHAT_SESSION: SessionSummary = {
   id: CHAT_SESSION_ID,
   featureId: CHAT_SESSION_ID,
@@ -1277,6 +1292,20 @@ function makeMockApi(
           cost: { totalUsd: 95.18, byPhase: RUN_DETAIL.cost?.byPhase ?? {} },
         } as RunDetailView);
       }
+      if (scene.startsWith('post-cycle-')) {
+        const cycleKey =
+          scene === 'post-cycle-rebase' || scene === 'post-cycle-failed'
+            ? 'rebase-2'
+            : scene === 'post-cycle-refactor'
+              ? 'refactor-1'
+              : 'review-comments-1';
+        return Promise.resolve({
+          ...RUN_DETAIL,
+          runNumber,
+          timing: { totalSeconds: 15132, byPhase: { [cycleKey]: 732 } },
+          cost: { totalUsd: 14.66, byPhase: { [cycleKey]: 9.84 } },
+        } as RunDetailView);
+      }
       const summary = SEALED_RUNS.find((r) => r.runNumber === runNumber);
       // The active (non-sealed) run still carries per-phase timing/cost detail.
       if (summary === undefined) {
@@ -1292,7 +1321,7 @@ function makeMockApi(
     listRunSessions: ({ runNumber }) =>
       Promise.resolve({
         runNumber,
-        sessions: SESSIONS,
+        sessions: scene.startsWith('post-cycle-') ? [CYCLE_SESSION] : SESSIONS,
       } as RunSessionsListResult),
     getLivePreview: (featureId) =>
       Promise.resolve({

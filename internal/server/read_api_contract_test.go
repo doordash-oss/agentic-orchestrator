@@ -384,6 +384,43 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 	}
 }
 
+func TestFeatureDetailProjectsFeatureCycleStart(t *testing.T) {
+	t.Parallel()
+
+	for _, cycleType := range []feature.RepoCycleType{
+		feature.CycleReviewComments,
+		feature.CycleRefactor,
+	} {
+		cycleType := cycleType
+		t.Run(string(cycleType), func(t *testing.T) {
+			t.Parallel()
+
+			store, f := seedReadFeature(t)
+			startedAt := time.Date(2026, time.July, 26, 12, 34, 56, 0, time.UTC)
+			f.ID = "feat-" + string(cycleType)
+			f.Status = feature.StatusPublished
+			f.ActiveCycle = &feature.CycleState{
+				Type:      cycleType,
+				Status:    feature.RepoCycleInterrupted,
+				Count:     3,
+				StartedAt: startedAt,
+			}
+			f.SetActiveCycleType(cycleType)
+			if err := store.Save(f); err != nil {
+				t.Fatalf("save feature: %v", err)
+			}
+			handler := NewHandler(baseReadHandlerOptions(store))
+
+			body := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+			featureBody := body[entityFeature].(map[string]any)
+			cycle := featureBody["cycle"].(map[string]any)
+			if got := cycle["started_at"]; got != startedAt.Format(time.RFC3339) {
+				t.Fatalf("cycle started_at = %v, want %s", got, startedAt.Format(time.RFC3339))
+			}
+		})
+	}
+}
+
 func TestFeatureDetailProjectsFailedRebasePublishContext(t *testing.T) {
 	t.Parallel()
 

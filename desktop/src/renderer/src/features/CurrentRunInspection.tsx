@@ -219,6 +219,8 @@ export function CurrentRunInspection({
       : live.cohort;
   const selectedSession =
     presentedCohort.find((session) => session.id === live.selectedId) ?? presentedCohort[0] ?? null;
+  const metricPhase = cycleTimingKey(presentation, cycle, currentPhase);
+  const metricRoadmapPhase = presentation === 'cycle' ? undefined : currentRoadmapPhase;
   const stage = useTranscriptStage(presentedCohort, live.transcripts, selectedSession, preview);
   const initialLoading =
     preview === null && presentedCohort.length === 0 && attentionFooter === undefined;
@@ -455,10 +457,11 @@ export function CurrentRunInspection({
               <PreviewMetrics
                 preview={preview}
                 runDetail={runDetail}
-                currentPhase={currentPhase}
-                currentRoadmapPhase={currentRoadmapPhase}
+                currentPhase={metricPhase}
+                currentRoadmapPhase={metricRoadmapPhase}
                 modelCatalogue={modelCatalogue}
                 model={preview.session?.model ?? selectedSession?.model ?? null}
+                fallbackContextPercentage={selectedSession?.contextPercentage}
                 verifying={verifying}
               />
             </>
@@ -613,10 +616,11 @@ export function CurrentRunInspection({
           selectSession={live.selectSession}
           preview={preview}
           runDetail={runDetail}
-          currentPhase={currentPhase}
-          currentRoadmapPhase={currentRoadmapPhase}
+          currentPhase={metricPhase}
+          currentRoadmapPhase={metricRoadmapPhase}
           modelCatalogue={modelCatalogue}
           model={preview?.session?.model ?? selectedSession?.model ?? null}
+          fallbackContextPercentage={selectedSession?.contextPercentage}
           waitReason={waitReason}
           attentionFooter={attentionFooter}
           verifying={verifying}
@@ -661,11 +665,32 @@ function focusCurrentCycleSession(
     ? cohort
     : cohort.filter((session) => Date.parse(session.startedAt) >= cycleStartedAt);
   const selected = eligible.find((session) => session.id === selectedId);
-  if (selected !== undefined && !isTerminalSessionStatus(selected.status)) return [selected];
+  const preserveTerminalSession = cycle?.status === 'failed' || cycle?.status === 'interrupted';
+  if (
+    selected !== undefined &&
+    (preserveTerminalSession || !isTerminalSessionStatus(selected.status))
+  ) {
+    return [selected];
+  }
 
   const active = eligible.find((session) => !isTerminalSessionStatus(session.status));
   if (active !== undefined) return [active];
+  if (preserveTerminalSession) {
+    const terminal = eligible.find((session) => isTerminalSessionStatus(session.status));
+    if (terminal !== undefined) return [terminal];
+  }
   return [];
+}
+
+function cycleTimingKey(
+  presentation: CurrentRunInspectionProps['presentation'],
+  cycle: CycleView | undefined,
+  fallback: string,
+): string {
+  const type = cycle?.type?.trim();
+  if (presentation !== 'cycle' || type === undefined || type === '') return fallback;
+  const count = cycle?.count;
+  return count !== undefined && count > 0 ? `${type}-${count}` : type;
 }
 
 function cycleStageAgentLabel(phase?: string): string {
@@ -958,6 +983,7 @@ function PreviewMetrics({
   currentRoadmapPhase,
   modelCatalogue,
   model,
+  fallbackContextPercentage,
   verifying = false,
 }: {
   preview: LivePreviewView;
@@ -966,10 +992,15 @@ function PreviewMetrics({
   currentRoadmapPhase?: number;
   modelCatalogue: ModelCatalogue | null;
   model: string | null;
+  fallbackContextPercentage?: number;
   verifying?: boolean;
 }): React.ReactElement {
   const phaseSeconds = phaseMetric(runDetail?.timing?.byPhase, currentPhase, currentRoadmapPhase);
   const phaseUsd = phaseMetric(runDetail?.cost?.byPhase, currentPhase, currentRoadmapPhase);
+  const contextPercentage =
+    preview.contextPercentage >= 0
+      ? preview.contextPercentage
+      : (fallbackContextPercentage ?? preview.session?.contextPercentage ?? -1);
   return (
     <dl className="current-inspection__metrics">
       {/* The harness runs the contract with no live LLM session, so the
@@ -977,7 +1008,7 @@ function PreviewMetrics({
       {verifying ? null : (
         <div>
           <dt>Context</dt>
-          <dd>{preview.contextPercentage < 0 ? 'Unavailable' : `${preview.contextPercentage}%`}</dd>
+          <dd>{contextPercentage < 0 ? 'Unavailable' : `${contextPercentage}%`}</dd>
         </div>
       )}
       <div>
@@ -1012,6 +1043,7 @@ function LivePreviewOverlay({
   currentRoadmapPhase,
   modelCatalogue,
   model,
+  fallbackContextPercentage,
   waitReason,
   attentionFooter,
   verifying,
@@ -1029,6 +1061,7 @@ function LivePreviewOverlay({
   currentRoadmapPhase?: number;
   modelCatalogue: ModelCatalogue | null;
   model: string | null;
+  fallbackContextPercentage?: number;
   waitReason?: string;
   attentionFooter?: ReactNode;
   verifying: boolean;
@@ -1097,6 +1130,7 @@ function LivePreviewOverlay({
                   currentRoadmapPhase={currentRoadmapPhase}
                   modelCatalogue={modelCatalogue}
                   model={model}
+                  fallbackContextPercentage={fallbackContextPercentage}
                   verifying={verifying}
                 />
               </div>

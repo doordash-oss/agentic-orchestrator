@@ -1676,6 +1676,7 @@ export function FeatureCockpit({
               setCycleReceipt(receiptForCycleEnd(snapshot.cycle, snapshot));
               setDismissedCycleId(cycleIdentity(snapshot) ?? undefined);
             }}
+            onOpenConfig={() => setConfigOpen(true)}
             onOpenRunRecord={() => setRunRecordOpen(true)}
             onOpenPullRequest={(url) => {
               void window.agentico.openExternal({ url });
@@ -1694,6 +1695,16 @@ export function FeatureCockpit({
         <p className="cockpit__announcement" role="status" aria-live="polite">
           {announcement}
         </p>
+
+        {configOpen ? (
+          <CockpitModal
+            title="Configuration"
+            ariaLabel="Feature configuration"
+            onClose={() => setConfigOpen(false)}
+          >
+            <FeatureConfigPanel featureId={featureId} />
+          </CockpitModal>
+        ) : null}
 
         {activeGate === undefined ? null : (
           <NeedUserInputModal

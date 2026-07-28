@@ -53,6 +53,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -216,9 +217,10 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		f.SetReviewCommentsCount(f.ReviewCommentsCount() + 1)
 		f.SetActiveCycleType(feature.CycleReviewComments)
 		f.ActiveCycle = &feature.CycleState{
-			Type:   feature.CycleReviewComments,
-			Status: feature.RepoCycleRunning,
-			Count:  f.ReviewCommentsCount(),
+			Type:      feature.CycleReviewComments,
+			Status:    feature.RepoCycleRunning,
+			Count:     f.ReviewCommentsCount(),
+			StartedAt: time.Now(),
 		}
 		cycleCount = f.ReviewCommentsCount()
 		return nil

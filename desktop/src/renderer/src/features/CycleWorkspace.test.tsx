@@ -31,6 +31,7 @@ describe('CycleWorkspace', () => {
         onResume={vi.fn()}
         onRetry={vi.fn()}
         onReturnToAftercare={vi.fn()}
+        onOpenConfig={vi.fn()}
         onOpenRunRecord={vi.fn()}
         onOpenPullRequest={vi.fn()}
       />,
@@ -72,6 +73,7 @@ describe('CycleWorkspace', () => {
         onResume={vi.fn()}
         onRetry={vi.fn()}
         onReturnToAftercare={vi.fn()}
+        onOpenConfig={vi.fn()}
         onOpenRunRecord={vi.fn()}
         onOpenPullRequest={vi.fn()}
       />,
@@ -103,6 +105,7 @@ describe('CycleWorkspace', () => {
         onResume={vi.fn()}
         onRetry={vi.fn()}
         onReturnToAftercare={vi.fn()}
+        onOpenConfig={vi.fn()}
         onOpenRunRecord={vi.fn()}
         onOpenPullRequest={vi.fn()}
       />,

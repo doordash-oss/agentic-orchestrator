@@ -249,9 +249,10 @@ const SchemaVersionCurrent = 7
 // surface; the unified cycle loops mirror their per-repo entries there so
 // existing per-repo badges keep working.
 type CycleState struct {
-	Type   RepoCycleType `yaml:"type"`
-	Status string        `yaml:"status"` // RepoCycle* constants
-	Count  int           `yaml:"count,omitempty"`
+	Type      RepoCycleType `yaml:"type"`
+	Status    string        `yaml:"status"` // RepoCycle* constants
+	Count     int           `yaml:"count,omitempty"`
+	StartedAt time.Time     `yaml:"started_at,omitempty"`
 	// PlanPath is the cycle's plan artifact (refactor/review-comments) when
 	// applicable. Empty for plan-less cycles (rebase).
 	PlanPath string `yaml:"plan_path,omitempty"`

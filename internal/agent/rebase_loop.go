@@ -48,6 +48,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -237,9 +238,10 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		f.SetRebaseCount(f.RebaseCount() + 1)
 		f.SetActiveCycleType(feature.CycleRebase)
 		f.ActiveCycle = &feature.CycleState{
-			Type:   feature.CycleRebase,
-			Status: feature.RepoCycleRunning,
-			Count:  f.RebaseCount(),
+			Type:      feature.CycleRebase,
+			Status:    feature.RepoCycleRunning,
+			Count:     f.RebaseCount(),
+			StartedAt: time.Now(),
 		}
 		rebaseCount = f.RebaseCount()
 		return nil

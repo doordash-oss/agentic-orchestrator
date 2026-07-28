@@ -1620,6 +1620,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		RepoName:            opts.RepoName,
 		LogPath:             opts.LogPath,
 		ProviderName:        prov.Name(),
+		Model:               bareModel,
 		Protocol:            protocol,
 		DebugSystemPrompt:   opts.SystemPrompt,
 		TurnMode:            opts.TurnMode,

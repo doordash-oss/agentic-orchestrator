@@ -222,6 +222,9 @@ sleep 30
 	if got := restored[0].Phase(); got != feature.PhaseImplement {
 		t.Fatalf("restored phase = %s, want Implement", got)
 	}
+	if got := restored[0].Model(); got != "test" {
+		t.Fatalf("restored model = %q, want test", got)
+	}
 	if got := restored[0].MessageLog().Len(); got != 2 {
 		t.Fatalf("restored transcript rows = %d, want 2", got)
 	}
@@ -238,6 +241,37 @@ sleep 30
 	case <-sess.Done():
 	case <-time.After(2 * time.Second):
 		t.Fatal("original session did not observe restored-session stop")
+	}
+}
+
+func TestStartSessionKeepsConfiguredModelWhenInitOmitsModel(t *testing.T) {
+	sm := NewManager(nil)
+	t.Cleanup(sm.Shutdown)
+
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "model-fallback.sh")
+	if err := os.WriteFile(scriptPath, []byte(`#!/bin/bash
+echo '{"type":"system","subtype":"init","session_id":"s1"}'
+echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}'
+`), 0o755); err != nil {
+		t.Fatalf("writing script: %v", err)
+	}
+
+	sess, err := sm.StartSession(
+		"model-fallback", "feat-1", feature.PhaseInquire,
+		[]string{"bash", scriptPath}, tmpDir, nil,
+		&SessionOpts{Model: "gpt-5.4-mini[272K]"},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	select {
+	case <-sess.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not complete within timeout")
+	}
+	if got := sess.Model(); got != "gpt-5.4-mini[272K]" {
+		t.Fatalf("Model() = %q, want configured fallback", got)
 	}
 }
 

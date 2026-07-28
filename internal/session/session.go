@@ -334,7 +334,11 @@ func (s *Session) SessionID() string {
 	return s.protocol.SessionID()
 }
 func (s *Session) PermCacheScope() string { return s.permCacheScope }
-func (s *Session) Model() string          { return s.model }
+func (s *Session) Model() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model
+}
 func (s *Session) EffectiveEffort() llm.EffortLevel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -531,7 +535,11 @@ func (s *Session) LastStdoutAt() time.Time {
 
 // --- Setter methods (for test code) ---
 
-func (s *Session) SetModel(m string)           { s.model = m }
+func (s *Session) SetModel(m string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.model = m
+}
 func (s *Session) SetProviderName(name string) { s.providerName = name }
 func (s *Session) SetLatestUsage(u *llm.Usage) {
 	s.mu.Lock()
@@ -833,7 +841,7 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 			ManagerID: s.id, RunNumber: s.runNumber, Phase: s.phase.String(),
 			Iteration: s.iteration, RepoName: s.repoName, WorkDir: s.workDir,
 			LogPath: logPath, Transcript: s.transcriptPath, Provider: s.providerName,
-			Kind: s.kind, Label: s.label,
+			Model: s.model, Kind: s.kind, Label: s.label,
 		}
 		if err := WritePIDFile(s.pidDir, pf); err != nil {
 			_ = stdinPipe.Close()
@@ -1002,7 +1010,9 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			// Handle init message to capture model
 			if msg.Init != nil {
 				s.mu.Lock()
-				s.model = msg.Init.Model
+				if strings.TrimSpace(msg.Init.Model) != "" {
+					s.model = msg.Init.Model
+				}
 				pidDir := s.pidDir
 				s.mu.Unlock()
 
@@ -2450,7 +2460,7 @@ func (s *Session) pidFile(pid int, providerSessionID string) PIDFile {
 		ManagerID: s.id, RunNumber: s.runNumber, Phase: s.phase.String(),
 		Iteration: s.iteration, SessionID: providerSessionID, RepoName: s.repoName,
 		WorkDir: s.workDir, LogPath: logPath, Transcript: s.transcriptPath,
-		Provider: s.providerName, Kind: s.kind, Label: s.label,
+		Provider: s.providerName, Model: s.model, Kind: s.kind, Label: s.label,
 	}
 }
 

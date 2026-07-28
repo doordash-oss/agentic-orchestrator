@@ -54,6 +54,7 @@ type PIDFile struct {
 	LogPath     string      `yaml:"log_path,omitempty"`
 	Transcript  string      `yaml:"transcript_path,omitempty"`
 	Provider    string      `yaml:"provider,omitempty"`
+	Model       string      `yaml:"model,omitempty"`
 	Kind        SessionKind `yaml:"kind,omitempty"`
 	Label       string      `yaml:"label,omitempty"`
 	Dir         string      `yaml:"-"`

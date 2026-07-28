@@ -242,12 +242,15 @@ type SessionOpts struct {
 	// ContextWindow is the resolved model window for the session. It lets the
 	// session expose an initial prompt context estimate before provider
 	// telemetry arrives.
-	ContextWindow     int
-	LogPath           string
-	StderrPath        string
-	RepoName          string
-	PermCacheScope    string
-	ProviderName      string
+	ContextWindow  int
+	LogPath        string
+	StderrPath     string
+	RepoName       string
+	PermCacheScope string
+	ProviderName   string
+	// Model is the resolved provider model selected for launch. Provider init
+	// telemetry may refine it later, but sessions expose this value immediately.
+	Model             string
 	Protocol          llm.Protocol
 	DebugSystemPrompt string
 	// CriticalAttachSendTimeout overrides the bounded send timeout for

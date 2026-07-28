@@ -184,6 +184,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.repoName = opts[0].RepoName
 		s.permCacheScope = opts[0].PermCacheScope
 		s.providerName = opts[0].ProviderName
+		s.model = opts[0].Model
 		if opts[0].Protocol != nil {
 			s.protocol = opts[0].Protocol
 		}
@@ -374,12 +375,16 @@ func (m *Manager) restoreLiveSessions(stateDir string) error {
 		s.workDir = pf.WorkDir
 		s.startedAt = pf.StartedAt
 		s.providerName = pf.Provider
+		s.model = pf.Model
 		s.kind = pf.Kind
 		s.label = pf.Label
 		s.pidDir = pf.Dir
 		s.transcriptPath = transcriptPath
 		s.recoveredPID = pf.PID
 		for _, msg := range messages {
+			if msg.Init != nil && strings.TrimSpace(msg.Init.Model) != "" {
+				s.model = msg.Init.Model
+			}
 			s.messageLog.Append(msg)
 		}
 		m.sessions[s.id] = s

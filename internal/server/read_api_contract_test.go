@@ -2015,6 +2015,36 @@ func TestLivePreviewWithoutSessionReturnsEmptyTranscriptArray(t *testing.T) {
 	}
 }
 
+func TestLivePreviewIncludesActivePhaseTiming(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	activeStart := time.Now().Add(-2 * time.Minute)
+	if err := store.Modify(f.ID, func(current *feature.Feature) error {
+		current.PhaseTimings = map[string]time.Duration{"inquire": 30 * time.Second}
+		current.ActivePhaseStart = &activeStart
+		current.ActiveTimingKey = "research"
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
+	timing := body["timing"].(map[string]any)
+	byPhase := timing["by_phase"].(map[string]any)
+	rawResearch, ok := byPhase["research"]
+	if !ok {
+		t.Fatalf("timing by_phase = %v; want active research entry", byPhase)
+	}
+	researchSeconds := int64(rawResearch.(float64))
+	if researchSeconds < 120 || researchSeconds > 121 {
+		t.Fatalf("active research seconds = %d; want 120..121", researchSeconds)
+	}
+	if totalSeconds := int64(timing["total_seconds"].(float64)); totalSeconds != 30+researchSeconds {
+		t.Fatalf("timing total_seconds = %d; want %d", totalSeconds, 30+researchSeconds)
+	}
+}
+
 func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

@@ -647,6 +647,11 @@ func timingDTO(f *feature.Feature) TimingDTO {
 		byPhase[phase] = seconds
 		total += seconds
 	}
+	if f.ActiveTimingKey != "" && f.ActivePhaseStart != nil {
+		activeSeconds := int64(f.PhaseRuntime(f.ActiveTimingKey).Seconds())
+		total += activeSeconds - byPhase[f.ActiveTimingKey]
+		byPhase[f.ActiveTimingKey] = activeSeconds
+	}
 	return TimingDTO{TotalSeconds: total, ByPhase: byPhase}
 }
 

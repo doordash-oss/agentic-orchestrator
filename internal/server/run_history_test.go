@@ -233,6 +233,42 @@ func TestRunDetailIsRunAuthenticWithProvenance(t *testing.T) {
 	}
 }
 
+func TestRunDetailIncludesActivePhaseTiming(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t)
+	activeStart := time.Now().Add(-2 * time.Minute)
+	if err := store.Modify(f.ID, func(current *feature.Feature) error {
+		current.PhaseTimings = map[string]time.Duration{"inquire": 30 * time.Second}
+		current.ActivePhaseStart = &activeStart
+		current.ActiveTimingKey = "research"
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+f.ID+"/runs/1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Code)
+	}
+	body := decodeBodyMap(t, w.Result())
+	timing := body["run"].(map[string]any)["timing"].(map[string]any)
+	byPhase := timing["by_phase"].(map[string]any)
+	rawResearch, ok := byPhase["research"]
+	if !ok {
+		t.Fatalf("timing by_phase = %v; want active research entry", byPhase)
+	}
+	researchSeconds := int64(rawResearch.(float64))
+	if researchSeconds < 120 || researchSeconds > 121 {
+		t.Fatalf("active research seconds = %d; want 120..121", researchSeconds)
+	}
+	if totalSeconds := int64(timing["total_seconds"].(float64)); totalSeconds != 30+researchSeconds {
+		t.Fatalf("timing total_seconds = %d; want %d", totalSeconds, 30+researchSeconds)
+	}
+}
+
 func TestRunDetailMissingRunIsNotFound(t *testing.T) {
 	t.Parallel()
 	store, f := seedHistoryFeature(t)

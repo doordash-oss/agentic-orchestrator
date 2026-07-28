@@ -50,6 +50,7 @@ import { useModalDismiss } from '../components/useModalDismiss';
 import { RebaseOperationsStage } from './RebaseOperationsStage';
 
 const IDLE_ACTIVITY_LABEL = 'Thinking through the next step';
+const LIVE_METRICS_REFRESH_MS = 1000;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -306,7 +307,43 @@ export function CurrentRunInspection({
     return () => {
       requestRef.current += 1;
     };
-  }, [refresh]);
+  }, [refresh, metricPhase, metricRoadmapPhase]);
+
+  useEffect(() => {
+    if (!shouldStream || presentation === 'record' || runNumber < 1) return;
+    let disposed = false;
+    let inFlight = false;
+    const poll = async (): Promise<void> => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const nextRunDetail = await window.agentico.getRun({ featureId, runNumber });
+        if (disposed) return;
+        setRunDetail(nextRunDetail);
+        onRunMetrics?.({
+          totalSeconds: nextRunDetail.timing?.totalSeconds ?? preview?.totalSeconds ?? 0,
+          totalUsd: nextRunDetail.cost?.totalUsd ?? preview?.totalUsd ?? 0,
+        });
+      } catch {
+        // Keep the last good snapshot; the next tick or manual refresh can recover.
+      } finally {
+        inFlight = false;
+      }
+    };
+    const interval = setInterval(() => void poll(), LIVE_METRICS_REFRESH_MS);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
+  }, [
+    featureId,
+    onRunMetrics,
+    presentation,
+    preview?.totalSeconds,
+    preview?.totalUsd,
+    runNumber,
+    shouldStream,
+  ]);
 
   const openContent = useCallback(
     async (kind: 'artifact' | 'log', id: string, size?: number, label = id) => {
@@ -996,7 +1033,8 @@ function PreviewMetrics({
   verifying?: boolean;
 }): React.ReactElement {
   const phaseSeconds = phaseMetric(runDetail?.timing?.byPhase, currentPhase, currentRoadmapPhase);
-  const phaseUsd = phaseMetric(runDetail?.cost?.byPhase, currentPhase, currentRoadmapPhase);
+  const recordedPhaseUsd = phaseMetric(runDetail?.cost?.byPhase, currentPhase, currentRoadmapPhase);
+  const phaseUsd = recordedPhaseUsd ?? (phaseSeconds === undefined ? undefined : 0);
   const contextPercentage =
     preview.contextPercentage >= 0
       ? preview.contextPercentage

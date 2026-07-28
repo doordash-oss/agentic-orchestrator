@@ -5,7 +5,10 @@ import type { ModelCatalogue, SessionSummary } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { CurrentRunInspection } from './CurrentRunInspection';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 function validator(
   overrides: Partial<SessionSummary> & Pick<SessionSummary, 'id' | 'label'>,
@@ -559,6 +562,138 @@ describe('CurrentRunInspection', () => {
     await waitFor(() =>
       expect(onRunMetrics).toHaveBeenCalledWith({ totalSeconds: 3844, totalUsd: 21.62 }),
     );
+  });
+
+  it('shows zero accumulated cost when an active phase has not finalized a session', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running research',
+      contextPercentage: 7,
+      totalSeconds: 600,
+      totalUsd: 9.04,
+      transcript: [],
+    });
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 8,
+      artifactCount: 0,
+      timing: { totalSeconds: 600, byPhase: { Inquire: 585, Research: 15 } },
+      cost: { totalUsd: 9.04, byPhase: { Inquire: 9.04 } },
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Research"
+        featureStatus="Researching"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    expect(await screen.findByText('15s')).toBeVisible();
+    expect(screen.getByText('$0.00')).toBeVisible();
+  });
+
+  it('refreshes run metrics when the active phase changes', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running pipeline',
+      contextPercentage: 12,
+      totalSeconds: 615,
+      totalUsd: 9.54,
+      transcript: [],
+    });
+    mock.api.getRun
+      .mockResolvedValueOnce({
+        runNumber: 8,
+        artifactCount: 0,
+        timing: { totalSeconds: 600, byPhase: { Research: 15 } },
+        cost: { totalUsd: 9.04, byPhase: { Research: 0.5 } },
+      })
+      .mockResolvedValueOnce({
+        runNumber: 8,
+        artifactCount: 0,
+        timing: { totalSeconds: 615, byPhase: { Research: 15, Design: 15 } },
+        cost: { totalUsd: 9.54, byPhase: { Research: 0.5, Design: 0.5 } },
+      });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    const view = render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Research"
+        featureStatus="Researching"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+    expect(await screen.findByText('$0.50')).toBeVisible();
+
+    view.rerender(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Design"
+        featureStatus="Designing"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+
+    await waitFor(() => expect(mock.api.getRun).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('15s')).toBeVisible();
+    expect(screen.getByText('$0.50')).toBeVisible();
+  });
+
+  it('polls active run metrics while the session is streaming', async () => {
+    vi.useFakeTimers();
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running research',
+      contextPercentage: 12,
+      totalSeconds: 600,
+      totalUsd: 9.04,
+      transcript: [],
+    });
+    mock.api.getRun
+      .mockResolvedValueOnce({
+        runNumber: 8,
+        artifactCount: 0,
+        timing: { totalSeconds: 600, byPhase: { Research: 60 } },
+        cost: { totalUsd: 9.04, byPhase: { Research: 0.5 } },
+      })
+      .mockResolvedValueOnce({
+        runNumber: 8,
+        artifactCount: 0,
+        timing: { totalSeconds: 601, byPhase: { Research: 61 } },
+        cost: { totalUsd: 9.14, byPhase: { Research: 0.6 } },
+      });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Research"
+        featureStatus="Researching"
+        reviewGate={REVIEW_GATE}
+      />,
+    );
+    await act(async () => Promise.resolve());
+    expect(screen.getByText('1m 00s')).toBeVisible();
+    expect(screen.getByText('$0.50')).toBeVisible();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+
+    expect(mock.api.getRun).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('1m 01s')).toBeVisible();
+    expect(screen.getByText('$0.60')).toBeVisible();
   });
 
   it('shows elapsed time and cost from the active cycle accounting key', async () => {

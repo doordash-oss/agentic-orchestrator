@@ -1061,6 +1061,37 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 			return serverruntime.FeatureConfigUpdateResponse{}, err
 		}
 	}
+	// Detect parent/child relationship and route to paired config update
+	// when the addressed feature is either a parent with an active child
+	// or the active child itself. The submitted pipeline must match the
+	// addressed record's pipeline.
+	if t.orch != nil {
+		parentID, _, paired := t.orch.DetectPairedConfigTarget(featureID)
+		if paired {
+			if err := t.orch.UpdatePairedFeatureConfig(parentID, feature.PairedConfigInput{
+				Models:              req.Models,
+				Effort:              req.Effort,
+				Inquireness:         feature.Inquireness(req.Inquireness),
+				Checkpoints:         req.Checkpoints,
+				InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
+				AutomaticReviewMode: automaticReviewMode,
+			}, feature.PipelineProfile(req.Pipeline), featureID); err != nil {
+				return serverruntime.FeatureConfigUpdateResponse{}, err
+			}
+			f, err := t.store.Load(featureID)
+			if err != nil {
+				return serverruntime.FeatureConfigUpdateResponse{}, err
+			}
+			pipeline := req.Pipeline
+			if pipeline == "" {
+				pipeline = f.EffectivePipeline()
+			}
+			if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+				return serverruntime.FeatureConfigUpdateResponse{}, err
+			}
+			return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
+		}
+	}
 	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
 		Models:              req.Models,
 		Effort:              req.Effort,
@@ -1760,6 +1791,16 @@ func (t *serverMutationTarget) DeleteFeature(featureID string) (serverruntime.De
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
+}
+
+func (t *serverMutationTarget) DiscardChild(featureID string) (serverruntime.DiscardChildResponse, error) {
+	if t.orch == nil {
+		return serverruntime.DiscardChildResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.DiscardChild(featureID); err != nil {
+		return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: "discarded"}, nil
 }
 
 func actionConflictError(err error) error {

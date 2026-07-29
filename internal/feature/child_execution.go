@@ -98,4 +98,8 @@ const (
 	// ChildCloseOutcomeCompleted: the child's work was integrated into the
 	// parent and the relationship closed successfully.
 	ChildCloseOutcomeCompleted = "completed"
+	// ChildCloseOutcomeDiscarded: the child was discarded without integrating
+	// its work into the parent. The relationship is closed and the child
+	// record is retained for inspection.
+	ChildCloseOutcomeDiscarded = "discarded"
 )

@@ -111,7 +111,7 @@ func TestChildFeatureExcludedFromTopLevelListButDetailWorks(t *testing.T) {
 	for _, raw := range actions {
 		ids[raw.(map[string]any)["id"].(string)] = true
 	}
-	want := map[string]bool{actionStart: true, actionResume: true, actionRestart: true, actionRetry: true, actionCleanup: true, actionDelete: true}
+	want := map[string]bool{actionStart: true, actionResume: true, actionRestart: true, actionRetry: true, actionDiscard: true, actionCleanup: true, actionDelete: true}
 	if len(actions) != len(want) {
 		t.Fatalf("child detail actions = %v, want %v", ids, want)
 	}

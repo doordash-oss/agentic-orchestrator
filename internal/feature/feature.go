@@ -728,6 +728,16 @@ type Feature struct {
 	// and child materialization; startup reconciliation rolls an interrupted
 	// creation forward from it.
 	PendingChild *ChildCreationIntent `yaml:"pending_child,omitempty"`
+	// PendingConfigUpdate is the durable intent for an in-flight paired
+	// Review configuration update. Present only between the intent commit
+	// and the completion of both record updates; startup reconciliation
+	// rolls an interrupted update forward exactly once.
+	PendingConfigUpdate *PairedConfigIntent `yaml:"pending_config_update,omitempty"`
+	// DiscardIntent is the durable intent for an in-flight child discard.
+	// Present on the child from the moment discard is requested until safe
+	// closure is durable. Startup reconciliation resumes an interrupted
+	// discard from the durable step.
+	DiscardIntent *DiscardIntent `yaml:"discard_intent,omitempty"`
 
 	TraceID       string `yaml:"trace_id,omitempty"`        // observability correlation; derived from ID if absent
 	FeatureSpanID string `yaml:"feature_span_id,omitempty"` // persisted feature-level span ID so all phases share a common parent

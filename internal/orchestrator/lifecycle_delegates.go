@@ -197,6 +197,9 @@ func (o *Orchestrator) TryCompletePublish(featureID string) (bool, error) {
 // terminal transition. Used by explicit mark-done paths where the feature
 // reached a terminal state without the orchestrator's publish pipeline.
 func (o *Orchestrator) MarkDone(featureID string) error {
+	if err := o.RelationshipGuard(featureID, MutationMarkDone); err != nil {
+		return err
+	}
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		return f.Transition(feature.StatusDone)
 	}); err != nil {
@@ -297,6 +300,9 @@ func (o *Orchestrator) ClearRepoCycles(featureID string) error {
 // the plan can't be read (best-effort recovery — the next orchestrator
 // cycle's PhaseScope call will revalidate before launching the loop).
 func (o *Orchestrator) RetryPhase(featureID string) error {
+	if err := o.RelationshipGuard(featureID, MutationRetry); err != nil {
+		return err
+	}
 	if err := o.checkChildExecution(featureID, false); err != nil {
 		return err
 	}
@@ -388,6 +394,9 @@ func (o *Orchestrator) UpgradePipeline(featureID string, profile feature.Pipelin
 // RewindToPhase delegates to Lifecycle.RewindToPhase. Returns the effective
 // target phase and warnings computed during the rewind.
 func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error) {
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, targetPhase, err
+	}
 	sourceRun := o.currentRunNumber(featureID)
 	warnings, effectiveTarget, err := o.deps.Lifecycle.RewindToPhase(featureID, targetPhase)
 	if err != nil {
@@ -401,6 +410,9 @@ func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase
 // RewindWithRequest delegates to Lifecycle.RewindWithRequest for rewind
 // flows that carry additional request fields such as a roadmap phase.
 func (o *Orchestrator) RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, 0, err
+	}
 	sourceRun := o.currentRunNumber(featureID)
 	warnings, effectiveTarget, err := o.deps.Lifecycle.RewindWithRequest(featureID, request)
 	if err != nil {
@@ -455,6 +467,9 @@ func (o *Orchestrator) SaveFeatureSummary(featureID, summary string) error {
 // feature Done. Used by mergeLocalCmd for non-publishable features. Errors
 // are surfaced per-repo so the TUI can show a diagnostic.
 func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
+	if err := o.RelationshipGuard(featureID, MutationMerge); err != nil {
+		return err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
@@ -934,6 +949,13 @@ type RestartOutcome struct {
 // is Plan). Pass 0 to skip the bump. The defaults (10 / 2) live in the TUI so
 // the port surface stays free of config plumbing.
 func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPlanIterationsDelta int) (RestartOutcome, error) {
+	// The relationship guard rejects parent restart while a child is active
+	// (only paired config and discard are allowed). For children, the guard
+	// allows restart; the existing checkChildExecution gate then enforces
+	// capability and integration-resumable routing.
+	if err := o.RelationshipGuard(featureID, MutationRestart); err != nil {
+		return RestartOutcome{}, err
+	}
 	// Refuse if any session for this feature is still active. This catches the
 	// "user spammed 'r' during a stop" case: InterruptFeature is mid-loop,
 	// sessions are still draining, but the feature already shows

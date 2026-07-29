@@ -55,6 +55,10 @@ const (
 	errCodeChildExecutionBlocked          = "child_execution_blocked"
 	errCodeChildProfileUnsupported        = "child_profile_unsupported"
 	errCodeChildRelationshipClosed        = "child_relationship_closed"
+	errCodeParentMutationLocked           = "parent_mutation_locked"
+	errCodeChildMutationRestricted        = "child_mutation_restricted"
+	errCodeCascadeDeleteNotAvailable      = "cascade_delete_not_available"
+	errCodePipelineMismatch               = "pipeline_mismatch"
 )
 
 // resultCreated is the ActionResultDTO.Result value for a newly created
@@ -133,6 +137,7 @@ type MutationTarget interface {
 	MarkDone(featureID string) (MarkDoneResponse, error)
 	CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error)
 	DeleteFeature(featureID string) (DeleteFeatureResponse, error)
+	DiscardChild(featureID string) (DiscardChildResponse, error)
 	ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error)
 	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (RecoveryActionResponse, error)
 }
@@ -419,12 +424,36 @@ func writeMutationError(w http.ResponseWriter, err error) {
 	if writeChildLaunchError(w, err) {
 		return
 	}
+	if writeRelationshipGuardError(w, err) {
+		return
+	}
 	var conflict *ActionConflictError
 	if errors.As(err, &conflict) {
 		writeAPIError(w, http.StatusConflict, errCodeConflict, conflict.Error(), conflict.Target)
 		return
 	}
+	if errors.Is(err, feature.ErrPipelineMismatch) {
+		writeAPIError(w, http.StatusConflict, errCodePipelineMismatch, err.Error(), nil)
+		return
+	}
 	writeAPIError(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
+}
+
+// writeRelationshipGuardError maps the typed relationship-guard rejections to
+// their stable API machine codes. Returns true when err was a recognized
+// guard rejection.
+func writeRelationshipGuardError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, feature.ErrParentMutationLocked):
+		writeAPIError(w, http.StatusConflict, errCodeParentMutationLocked, err.Error(), nil)
+	case errors.Is(err, feature.ErrChildMutationRestricted):
+		writeAPIError(w, http.StatusConflict, errCodeChildMutationRestricted, err.Error(), nil)
+	case errors.Is(err, feature.ErrCascadeDeleteNotAvailable):
+		writeAPIError(w, http.StatusConflict, errCodeCascadeDeleteNotAvailable, err.Error(), nil)
+	default:
+		return false
+	}
+	return true
 }
 
 // writeChildLaunchError maps the typed child-launch failures of
@@ -585,7 +614,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionRefactor:
+		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionRefactor, actionDiscard:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
@@ -900,6 +929,21 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		defaultActionFields(&resp, featureID, "cleaned")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionDiscard:
+		if subaction != "" {
+			return false
+		}
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.DiscardChild(featureID)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "discarded")
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		return false

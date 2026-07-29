@@ -2002,6 +2002,9 @@ type PublishOptions struct {
 // selected repos when Repos is non-empty. Title and Body override generated PR
 // metadata for interactive publish flows that already reviewed those fields.
 func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions) error {
+	if err := o.RelationshipGuard(featureID, MutationPublish); err != nil {
+		return err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
@@ -2158,6 +2161,9 @@ func (o *Orchestrator) StopFeatureSessions(featureID string) {
 // lifecycle. Synchronous (caller learns the outcome via the returned error);
 // no ports.Event is emitted, matching the TUI's legacy delete semantics.
 func (o *Orchestrator) Delete(featureID string) error {
+	if err := o.RelationshipGuard(featureID, MutationDelete); err != nil {
+		return err
+	}
 	o.StopFeatureSessions(featureID)
 	if err := o.deps.Lifecycle.Delete(featureID); err != nil {
 		return fmt.Errorf("deleting feature: %w", err)

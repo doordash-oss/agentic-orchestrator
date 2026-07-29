@@ -80,6 +80,7 @@ const controlRequestStatusPending = "pending"
 const (
 	actionCleanup        = "cleanup"
 	actionDelete         = "delete"
+	actionDiscard        = "discard"
 	actionMarkDone       = "mark-done"
 	actionMerge          = "merge"
 	actionNeedUserInput  = "need-user-input"
@@ -203,7 +204,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 	for _, item := range f.VerificationItems {
 		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
 	}
-	detail.Actions = actionCatalogDTOs(f)
+	detail.Actions = actionCatalogDTOsWithChildGuard(f, detail.ActiveChild != nil)
 	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {
 		detail.Failure = &FailureDTO{
@@ -374,6 +375,17 @@ func activeCycleCount(f *feature.Feature, cycle *feature.RepoCycleState) int {
 }
 
 func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
+	return actionCatalogDTOsWithChildGuard(f, false)
+}
+
+// disabledParentHasActiveChild is the ActionDisabledReasonDTO used when a
+// parent action is locked because an active child exists.
+var disabledParentHasActiveChild = ActionDisabledReasonDTO{
+	Code:    "active_child_present",
+	Message: "parent mutations are locked while a child is active; only paired config editing and discard are available",
+}
+
+func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []ActionDTO {
 	if f == nil {
 		return nil
 	}
@@ -432,30 +444,57 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	// child, mirroring the launch validation in feature.CreateRefactorChild.
 	canRefactor := status == feature.StatusPublished || status == feature.StatusCodeReady
 
+	// While a child is active, parent mutations are locked except for
+	// paired config editing and discard. The action catalog agrees with
+	// the authoritative relationship guard enforced at the mutation layer.
+	if hasActiveChild {
+		canStart = false
+		canStop = false
+		canResume = false
+		canRestart = false
+		canPublish = false
+		canMerge = false
+		canRewind = false
+		canPostPublishCycle = false
+		canRetry = false
+		canMarkDone = false
+		canCleanup = false
+		canDelete = false
+		canRefactor = false
+	}
+
+	// Prepend the child-guard disabled reason to locked actions.
+	childGuardReason := func(enabled bool, fallback ...ActionDisabledReasonDTO) []ActionDisabledReasonDTO {
+		if hasActiveChild && !enabled {
+			return append([]ActionDisabledReasonDTO{disabledParentHasActiveChild}, fallback...)
+		}
+		return fallback
+	}
+
 	return []ActionDTO{
-		action(actionStart, canStart, featureScope, nil, disabledStatusReason(status)),
-		action(actionPauseStop, canStop, featureScope, nil, ActionDisabledReasonDTO{Code: "not_running", Message: "feature has no active work to pause or stop"}),
-		action(actionResume, canResume, featureScope, nil, ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"}),
-		action(actionRestart, canRestart, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"}),
-		action(actionPublish, canPublish, featureScope, nil, publishDisabledReason(f)),
-		action(actionMerge, canMerge, featureScope, nil, mergeDisabledReason(f)),
+		action(actionStart, canStart, featureScope, nil, childGuardReason(canStart, disabledStatusReason(status))...),
+		action(actionPauseStop, canStop, featureScope, nil, childGuardReason(canStop, ActionDisabledReasonDTO{Code: "not_running", Message: "feature has no active work to pause or stop"})...),
+		action(actionResume, canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
+		action(actionRestart, canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"})...),
+		action(actionPublish, canPublish, featureScope, nil, childGuardReason(canPublish, publishDisabledReason(f))...),
+		action(actionMerge, canMerge, featureScope, nil, childGuardReason(canMerge, mergeDisabledReason(f))...),
 		action(actionRewind, canRewind, featureScope, []ActionInputDTO{
 			{Name: "target_phase", Kind: actionInputKindEnum, Required: true, Options: rewindPhaseOptions(f)},
 			{Name: "roadmap_phase", Kind: "integer", Required: false},
 			{Name: "upgrade_pipeline", Kind: actionInputKindEnum, Required: false, Options: rewindUpgradePipelineOptions(f)},
-		}, ActionDisabledReasonDTO{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"}),
-		action(actionRebase, canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, actionRebase)),
+		}, childGuardReason(canRewind, ActionDisabledReasonDTO{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"})...),
+		action(actionRebase, canPostPublishCycle, featureScope, nil, childGuardReason(canPostPublishCycle, postPublishCycleDisabledReason(f, actionRebase))...),
 		action(actionReviewComments, canPostPublishCycle && f.IsPublishable(), repoRequired, []ActionInputDTO{
 			{Name: "repo", Kind: actionInputKindString, Required: true},
 			{Name: "mode", Kind: actionInputKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
-		}, postPublishCycleDisabledReason(f, actionReviewComments)),
-		action(actionRefactor, canRefactor, featureScope, nil, disabledStatusReason(status)),
-		action(actionRetry, canRetry, featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
-		action(actionMarkDone, canMarkDone, featureScope, nil, ActionDisabledReasonDTO{Code: "not_complete", Message: "feature is not ready to mark done"}),
+		}, childGuardReason(canPostPublishCycle && f.IsPublishable(), postPublishCycleDisabledReason(f, actionReviewComments))...),
+		action(actionRefactor, canRefactor, featureScope, nil, childGuardReason(canRefactor, disabledStatusReason(status))...),
+		action(actionRetry, canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"})...),
+		action(actionMarkDone, canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReasonDTO{Code: "not_complete", Message: "feature is not ready to mark done"})...),
 		action(actionCleanup, canCleanup, featureScope, []ActionInputDTO{
 			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
-		}, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"}),
-		action(actionDelete, canDelete, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"}),
+		}, childGuardReason(canCleanup, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"})...),
+		action(actionDelete, canDelete, featureScope, nil, childGuardReason(canDelete, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"})...),
 	}
 }
 
@@ -559,6 +598,7 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"})),
 		action(actionRestart, canRestart, featureScope, nil, restartReason),
 		action(actionRetry, childSetupFailed(f), featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
+		action(actionDiscard, f.IsActiveChild() && stopped, featureScope, nil, ActionDisabledReasonDTO{Code: "not_active", Message: "discard is only available for active children"}),
 		action(actionCleanup, stopped, featureScope, []ActionInputDTO{
 			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
 		}, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"}),

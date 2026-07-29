@@ -77,12 +77,26 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 			o.emitSetupReconciled(id)
 		}
 	}
+	// Reconcile interrupted paired config updates before integration
+	// transactions so both records converge before any integration work.
+	if reconciler, ok := o.deps.Store.(interface {
+		ReconcilePendingConfigUpdates() ([]string, error)
+	}); ok {
+		if _, err := reconciler.ReconcilePendingConfigUpdates(); err != nil {
+			return nil, fmt.Errorf("reconcile pending config updates: %w", err)
+		}
+	}
 	// Reconcile interrupted integration transactions before ordinary session
 	// recovery observes or relaunches sessions.
 	if o.deps.Store != nil {
 		if err := o.ReconcileIntegrationTransactions(); err != nil {
 			return nil, fmt.Errorf("reconcile integration transactions: %w", err)
 		}
+	}
+	// Reconcile discard intents before ordinary session recovery so
+	// interrupted discards resume from the durable step.
+	if err := o.ReconcileDiscardIntents(); err != nil {
+		return nil, fmt.Errorf("reconcile discard intents: %w", err)
 	}
 	items, err := o.deps.Recovery.ScanForRecovery(ctx)
 	if err != nil {

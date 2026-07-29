@@ -41,6 +41,17 @@ var (
 	// ErrChildExecutionBlocked: setup-complete children are deliberately
 	// non-runnable; every pipeline start/resume/restart path rejects them.
 	ErrChildExecutionBlocked = errors.New("child features are not runnable")
+	// ErrParentMutationLocked: the parent has an active child or a discard
+	// intent that has not reached safe closure. Only read-only inspection
+	// and paired Review editing are allowed.
+	ErrParentMutationLocked = errors.New("parent mutation is locked while a child is active")
+	// ErrChildMutationRestricted: the child operation is not in the allowed
+	// set (ordinary execution controls, input handling, paired Review
+	// editing, typed discard).
+	ErrChildMutationRestricted = errors.New("child mutation is restricted")
+	// ErrCascadeDeleteNotAvailable: parent Delete is not available until
+	// Phase 6 supplies the complete cascade operation.
+	ErrCascadeDeleteNotAvailable = errors.New("cascade delete is not available while a child is active")
 )
 
 // ActiveChildExistsError reports that the parent already has an active child

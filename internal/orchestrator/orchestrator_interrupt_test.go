@@ -43,9 +43,10 @@ func findInterruptLifecycleCall(lc *mocks.MockFeatureLifecycle, method string) *
 func TestOrchestrator_InterruptFeature(t *testing.T) {
 	kbStatus := map[string]string{repoName: kbStatusBuilding, repoNameB: kbStatusCompleted}
 	f := &feature.Feature{
-		ID:       "feat-int",
-		Status:   feature.StatusImplementing,
-		Pipeline: feature.PipelineLarge,
+		ID:                       "feat-int",
+		Status:                   feature.StatusNeedUserInput,
+		Pipeline:                 feature.PipelineLarge,
+		PendingNeedUserInputPath: "/tmp/feat-int-need-user-input.yaml",
 		HelpQueue: []feature.HelpRequest{
 			{Question: "q1", Pending: true},
 			{Question: "q2", Pending: false},
@@ -93,6 +94,9 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 		if p.Pending {
 			t.Errorf("PermissionsQueue entry still pending: %+v", p)
 		}
+	}
+	if f.PendingNeedUserInputPath != "" {
+		t.Errorf("PendingNeedUserInputPath = %q, want empty after Stop", f.PendingNeedUserInputPath)
 	}
 
 	// KBStatus preserved (NOT cleared by InterruptFeature).

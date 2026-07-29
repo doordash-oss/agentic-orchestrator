@@ -541,6 +541,7 @@ func TestTranscriptDTOsWriteToolUseMarksEveryLineAdded(t *testing.T) {
 func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
+	f.Status = feature.StatusNeedUserInput
 	f.PendingNeedUserInputPath = filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	f.Pipeline = feature.PipelineMedium
 	f.Checkpoints = feature.Checkpoints{InquiryReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true, DraftPublish: true}
@@ -693,6 +694,7 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("WriteNeedUserInputRecord(feature gate) error = %v", err)
 	}
+	f.Status = feature.StatusNeedUserInput
 	f.PendingNeedUserInputPath = featureGatePath
 	f.CurrentIteration = 3
 
@@ -783,6 +785,28 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 				t.Fatalf("gate leaked %q: %s", forbidden, encoded)
 			}
 		}
+	}
+}
+
+func TestInterruptedFeatureDoesNotExposeStaleNeedUserInputGate(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	writeFile(t, gatePath, "questions: []\n")
+	f.Status = feature.StatusInterrupted
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	if gates := prompts["need_user_inputs"].([]any); len(gates) != 0 {
+		t.Fatalf("need_user_inputs = %+v; want no stale gate for interrupted feature", gates)
+	}
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	if gate := detail[entityFeature].(map[string]any)["need_user_input"]; gate != nil {
+		t.Fatalf("detail need_user_input = %+v; want nil for interrupted feature", gate)
 	}
 }
 
@@ -1277,6 +1301,21 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			},
 		},
 		{
+			name: "feature gate can stop",
+			f: func() *feature.Feature {
+				f := actionCatalogTestFeature(feature.StatusNeedUserInput, feature.Checkpoints{}, &publishable, nil)
+				f.PendingNeedUserInputPath = "/tmp/need-user-input.yaml"
+				return f
+			}(),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				actionPauseStop: {enabled: true},
+				actionResume:    {enabled: true},
+			},
+		},
+		{
 			name: "running cleanup disabled",
 			f:    actionCatalogTestFeature(feature.StatusImplementing, feature.Checkpoints{}, &publishable, nil),
 			want: map[string]struct {
@@ -1377,6 +1416,8 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 		Time:     time.Date(2026, 6, 13, 12, 5, 0, 0, time.UTC),
 		Pending:  true,
 	}}
+	oldest.Status = feature.StatusNeedUserInput
+	newest.Status = feature.StatusNeedUserInput
 	oldGatePath := filepath.Join(store.RunDir(oldest.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	newGatePath := filepath.Join(store.RunDir(newest.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	writeFile(t, oldGatePath, "questions: []\n")
@@ -1442,6 +1483,7 @@ func TestPromptAndPermissionSnapshotsExposeStableWaitingSince(t *testing.T) {
 	t.Parallel()
 
 	store, f := seedReadFeature(t)
+	f.Status = feature.StatusNeedUserInput
 	legacyGatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	writeFile(t, legacyGatePath, "questions: []\n")
 	legacyGateTime := time.Date(2026, 6, 13, 12, 2, 0, 0, time.UTC)

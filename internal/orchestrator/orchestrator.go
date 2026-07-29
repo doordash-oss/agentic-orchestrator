@@ -1324,7 +1324,7 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 		o.releaseKBLocksForFeature(f)
 	}
 
-	// Clear pending help/permission requests.
+	// Clear pending help, permission, and feature-scoped gate requests.
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		for i := range f.HelpQueue {
 			if f.HelpQueue[i].Pending {
@@ -1336,6 +1336,7 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 				f.PermissionsQueue[i].Pending = false
 			}
 		}
+		f.PendingNeedUserInputPath = ""
 		return nil
 	}); err != nil {
 		return fmt.Errorf("clear pending flags: %w", err)

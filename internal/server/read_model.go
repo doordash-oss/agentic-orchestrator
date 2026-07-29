@@ -151,7 +151,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 			Message: SafeDisplayText(f.LastError, 240),
 		}
 	}
-	if f.PendingNeedUserInputPath != "" {
+	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 		gate := needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
 		detail.NeedUserInput = &gate
 	}
@@ -336,7 +336,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 		status == feature.StatusDesignReady ||
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
-	canStop := running || stoppableCycle
+	canStop := running || status == feature.StatusNeedUserInput || stoppableCycle
 	canResume := status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != "" ||
@@ -946,7 +946,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 				index:     i,
 			})
 		}
-		if f.PendingNeedUserInputPath != "" {
+		if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 			gates = append(gates, orderedNeedInputGate{
 				dto:       needUserInputGateDTO(f.ID, entityFeature, "", "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath),
 				featureID: f.ID,

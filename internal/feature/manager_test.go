@@ -3811,7 +3811,7 @@ func TestManagerFeatureRebaseNeedUserInputAndExplicitCycleCleanup(t *testing.T) 
 		t.Fatalf("gate operation = %+v, want smart_rebase", got.RebaseOperation)
 	}
 
-	if err := m.FailFeatureRebaseCycle(f.ID, "aborted by user"); err != nil {
+	if err := m.FailFeatureRebaseCycle(f.ID, "smart rebase failed"); err != nil {
 		t.Fatalf("fail gated cycle: %v", err)
 	}
 	if err := m.ClearRepoCycles(f.ID); err != nil {
@@ -5657,7 +5657,7 @@ func TestFailRepoCycle_ClearsPausedGateAndRefactorPrompt(t *testing.T) {
 		t.Fatalf("seed paused refactor: %v", err)
 	}
 
-	if err := mgr.FailRepoCycle(f.ID, "test-repo", "user aborted"); err != nil {
+	if err := mgr.FailRepoCycle(f.ID, "test-repo", "cycle failed"); err != nil {
 		t.Fatalf("FailRepoCycle: %v", err)
 	}
 	got, err := mgr.Get(f.ID)
@@ -5671,14 +5671,14 @@ func TestFailRepoCycle_ClearsPausedGateAndRefactorPrompt(t *testing.T) {
 	if rc.Status != feature.RepoCycleFailed {
 		t.Errorf("Status = %q, want %q", rc.Status, feature.RepoCycleFailed)
 	}
-	if rc.LastError != "user aborted" {
-		t.Errorf("LastError = %q, want %q", rc.LastError, "user aborted")
+	if rc.LastError != "cycle failed" {
+		t.Errorf("LastError = %q, want %q", rc.LastError, "cycle failed")
 	}
 	if rc.PendingNeedUserInputPath != "" {
 		t.Errorf("PendingNeedUserInputPath = %q, want empty", rc.PendingNeedUserInputPath)
 	}
 	if got.RefactorPrompt != "" {
-		t.Errorf("RefactorPrompt = %q, want empty after refactor abort", got.RefactorPrompt)
+		t.Errorf("RefactorPrompt = %q, want empty after refactor cycle failure", got.RefactorPrompt)
 	}
 }
 

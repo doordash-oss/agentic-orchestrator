@@ -1035,7 +1035,7 @@ func (m *Manager) RemoveRepoCycle(featureID, repoName string) error {
 }
 
 // FailRepoCycle marks a per-repo cycle as failed and clears any paused
-// gate state so post-publish abort cannot leave dangling gate pointers.
+// gate state so a terminal cycle failure cannot leave dangling gate pointers.
 // For refactor cycles, also clears the feature-level RefactorPrompt so the
 // next refactor attempt starts from a clean slate.
 func (m *Manager) FailRepoCycle(featureID, repoName, errMsg string) error {

@@ -475,6 +475,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     workflowProvider: true,
   });
   createRepo(world, 'gate-lab', { commit: true });
+  createRepo(world, 'gate-stop-lab', { commit: true });
   createRepo(world, 'gate-api-lab', { commit: true });
   createRepo(world, 'gate-web-lab', { commit: true });
   let handle: AppHandle | null = null;
@@ -582,6 +583,92 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     transcript.codeBlock('drafted need-user-input gate', fs.readFileSync(gatePath, 'utf8'));
     transcript.step(
       'feature-scoped retry choice survived relaunch and dispatched verification from the cockpit',
+    );
+
+    transcript.section('Feature-scoped Stop clears the paused gate');
+    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    await createFeatureViaForm(handle, {
+      name: 'Packaged Feature Stop Gate Fixture',
+      description: 'Seeded feature-scoped NEED_USER_INPUT gate stopped through the cockpit.',
+      repoPatterns: [/gate-stop-lab/],
+    });
+    const stopFeature = await waitForFeatureNamed(
+      handle.page,
+      'Packaged Feature Stop Gate Fixture',
+    );
+    await closeApp(handle);
+    handle = null;
+    await assertNoLeakedProcessesEventually(world);
+
+    const stopGatePath = seedVerificationNeedUserInputGate(world, stopFeature.id, 'gate-stop-lab');
+    const stopRunPath = path.join(world.stateDir, stopFeature.id, 'runs', 'run-001', 'run.yaml');
+    transcript.json('seeded feature gate for Stop', {
+      featureId: stopFeature.id,
+      stopGatePath,
+    });
+
+    handle = await launchApp(world, testInfo, { traceName: 'attention-feature-stop-gate' });
+    await expect(
+      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
+    ).toBeVisible({
+      timeout: 60_000,
+    });
+    await waitForAttentionGate(handle.page, stopFeature.id);
+    await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
+    const featureStopGateDialog = handle.page.getByRole('dialog', {
+      name: 'Verification needs your input',
+    });
+    await expect(featureStopGateDialog).toBeVisible();
+    await featureStopGateDialog.getByRole('button', { name: 'Answer later' }).click();
+    await expect(featureStopGateDialog).toHaveCount(0);
+
+    const stopFeatureTab = handle.page.getByRole('tab', {
+      name: 'Packaged Feature Stop Gate Fixture',
+    });
+    await stopFeatureTab.click();
+    await expect(stopFeatureTab).toHaveAttribute('aria-selected', 'true');
+    const stopFeatureCockpit = handle.page.getByLabel('Feature Packaged Feature Stop Gate Fixture');
+    const featureStopButton = stopFeatureCockpit.getByRole('button', {
+      name: 'Stop',
+      exact: true,
+    });
+    await expect(featureStopButton).toBeEnabled();
+    await featureStopButton.click();
+    const featureStopDialog = handle.page.getByRole('dialog', {
+      name: 'Stop Packaged Feature Stop Gate Fixture?',
+    });
+    await expect(featureStopDialog).toBeVisible();
+    await featureStopDialog.getByRole('button', { name: 'Confirm stop' }).click();
+    await expect(featureStopDialog).toHaveCount(0);
+
+    await waitFor(
+      async () => {
+        const snapshot = await handle!.page.evaluate(
+          (featureId) => window.agentico.getFeature(featureId),
+          stopFeature.id,
+        );
+        return snapshot.status.toLowerCase() === 'interrupted';
+      },
+      'feature-scoped gate fixture to reach Interrupted after Stop',
+      60_000,
+    );
+    await waitForAttentionMissing(handle.page, stopFeature.id, 'gate');
+    await waitFor(
+      () => !fs.readFileSync(stopRunPath, 'utf8').includes('pending_need_user_input_path:'),
+      'feature-scoped gate pointer to clear from persisted run state',
+      30_000,
+    );
+    await handle.page.reload();
+    await waitForAttentionMissing(handle.page, stopFeature.id, 'gate');
+    await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 0 pending/);
+    const reloadedStoppedFeature = await handle.page.evaluate(
+      (featureId) => window.agentico.getFeature(featureId),
+      stopFeature.id,
+    );
+    expect(reloadedStoppedFeature.status.toLowerCase()).toBe('interrupted');
+    expect(fs.readFileSync(stopRunPath, 'utf8')).not.toContain('pending_need_user_input_path:');
+    transcript.step(
+      'feature Stop persisted Interrupted, cleared its gate pointer, and kept attention empty after reload',
     );
 
     transcript.section('Cycle-scoped gates retain textarea fallback');
@@ -794,7 +881,11 @@ async function waitForFeatureNamed(
   return found!;
 }
 
-function seedVerificationNeedUserInputGate(world: JourneyWorld, featureId: string): string {
+function seedVerificationNeedUserInputGate(
+  world: JourneyWorld,
+  featureId: string,
+  repoName = 'gate-lab',
+): string {
   const runDir = path.join(world.stateDir, featureId, 'runs', 'run-001');
   const planPath = path.join(runDir, 'phase-03', 'plan', 'phase-plan.md');
   const contractPath = path.join(world.stateDir, featureId, 'testing-contract.yaml');
@@ -826,7 +917,7 @@ function seedVerificationNeedUserInputGate(world: JourneyWorld, featureId: strin
       '## Tasks',
       '### Task 1: Resume seeded implementation',
       '',
-      '**Repo:** gate-lab',
+      `**Repo:** ${repoName}`,
       '',
       '#### What to build',
       'Record that the packaged gate resume path can relaunch implementation.',

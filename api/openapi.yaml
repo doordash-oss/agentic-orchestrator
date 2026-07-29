@@ -644,6 +644,7 @@ components:
           - cleanup
           - delete
           - refactor
+          - discard
     FeatureSubaction:
       name: subaction
       in: path
@@ -1361,6 +1362,8 @@ components:
               $ref: "#/components/schemas/CleanupFeatureResponse"
             delete_feature_response:
               $ref: "#/components/schemas/DeleteFeatureResponse"
+            discard_child_response:
+              $ref: "#/components/schemas/DiscardChildResponse"
             recovery_action_response:
               $ref: "#/components/schemas/RecoveryActionResponse"
             shutdown_response:
@@ -1667,6 +1670,10 @@ components:
             target:
               type: string
     DeleteFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    DiscardChildResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"

@@ -16,6 +16,7 @@ package feature_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -442,6 +443,185 @@ func TestCreateRefactorChildConcurrentLaunchesHaveOneWinner(t *testing.T) {
 	}
 	if children != 1 {
 		t.Fatalf("children on disk = %d, want 1", children)
+	}
+}
+
+// TestModifyGuardedSerializesWithCreateChildLocked verifies that the guard
+// check inside ModifyGuarded and the child creation inside CreateChildLocked
+// are serialized under the same store mutex. When both run concurrently, the
+// invariant holds: the guard either sees the child (and rejects the mutation)
+// or the mutation completes before the child is created (and the child
+// creation observes the mutated parent). There is no time-of-check/time-of-use
+// gap where a mutation lands while a child exists without the guard having
+// seen it.
+func TestModifyGuardedSerializesWithCreateChildLocked(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp store; goroutines contend only on
+	// the store mutex.
+	const iterations = 50
+	for i := 0; i < iterations; i++ {
+		mgr := newChildTestManager(t, nil, cleanEverywhere())
+		parent := &feature.Feature{
+			ID:       "parent-guarded",
+			Slug:     "parent-guarded",
+			Status:   feature.StatusPublished,
+			Pipeline: feature.PipelineMoonshot,
+		}
+		saveChildTestParent(t, mgr, parent)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		var modifyErr error
+		var childCreated bool
+
+		// ModifyGuarded: guard rejects when activeChild != nil, otherwise
+		// transitions the parent to Done.
+		go func() {
+			defer wg.Done()
+			modifyErr = mgr.Store.ModifyGuarded("parent-guarded",
+				func(f *feature.Feature, activeChild *feature.Feature) error {
+					if activeChild != nil {
+						return fmt.Errorf("parent has active child")
+					}
+					return nil
+				},
+				func(f *feature.Feature) error {
+					return f.Transition(feature.StatusDone)
+				},
+			)
+		}()
+
+		// CreateChildLocked: creates a child if no active child exists and
+		// the parent is still Published (eligible for child creation).
+		go func() {
+			defer wg.Done()
+			child, err := mgr.Store.CreateChildLocked("parent-guarded",
+				func(p *feature.Feature, activeChild *feature.Feature) (*feature.Feature, *feature.ChildCreationIntent, error) {
+					if activeChild != nil {
+						return nil, nil, fmt.Errorf("active child exists")
+					}
+					if p.Status != feature.StatusPublished {
+						return nil, nil, fmt.Errorf("parent not eligible: %s", p.Status)
+					}
+					c := &feature.Feature{
+						ID:     "child-guarded",
+						Slug:   "child-guarded",
+						Status: feature.StatusCreated,
+						Parent: &feature.ChildRelationship{
+							ParentID: "parent-guarded",
+							Kind:     feature.ChildKindRefactor,
+						},
+					}
+					if c.ActiveRun == 0 {
+						c.ActiveRun = 1
+					}
+					if c.RunCount == 0 {
+						c.RunCount = 1
+					}
+					intent := &feature.ChildCreationIntent{ChildID: c.ID}
+					return c, intent, nil
+				},
+			)
+			_ = err
+			childCreated = child != nil
+		}()
+
+		wg.Wait()
+
+		// Invariant: both cannot succeed. If ModifyGuarded's guard saw no
+		// child (mutation succeeded), CreateChildLocked must have seen the
+		// parent as Done (not Published) and failed. If CreateChildLocked
+		// succeeded, ModifyGuarded's guard must have seen the child and
+		// the mutation must have failed.
+		if modifyErr == nil && childCreated {
+			t.Fatalf("iteration %d: both ModifyGuarded and CreateChildLocked succeeded — serialization broken", i)
+		}
+
+		// Verify the on-disk state is consistent.
+		features, err := mgr.Store.List()
+		if err != nil {
+			t.Fatalf("iteration %d: list: %v", i, err)
+		}
+		for _, f := range features {
+			if f.IsChild() && f.Parent != nil && f.Parent.ParentID == "parent-guarded" {
+				// A child exists — the parent must NOT be Done (the guard
+				// would have blocked the transition).
+				p, err := mgr.Store.Load("parent-guarded")
+				if err != nil {
+					t.Fatalf("iteration %d: load parent: %v", i, err)
+				}
+				if p.Status == feature.StatusDone {
+					t.Fatalf("iteration %d: child exists but parent is Done — guard did not block", i)
+				}
+			}
+		}
+	}
+}
+
+// TestPairedConfigRearmSaveFailurePropagatesBothErrors verifies that when the
+// first parent save fails, the error properly wraps the failure and the
+// revert path succeeds — the re-arm error is not silently discarded.
+func TestPairedConfigRearmSaveFailurePropagatesBothErrors(t *testing.T) {
+	t.Parallel()
+	mgr := newChildTestManager(t, nil, cleanEverywhere())
+	parent := &feature.Feature{
+		ID:       "p-rearm",
+		Slug:     "p-rearm",
+		Status:   feature.StatusPublished,
+		Pipeline: feature.PipelineMoonshot,
+	}
+	saveChildTestParent(t, mgr, parent)
+
+	child, err := mgr.CreateRefactorChild("p-rearm", childTestSpec())
+	if err != nil {
+		t.Fatalf("CreateRefactorChild: %v", err)
+	}
+	_ = child
+
+	// The save sequence in UpdatePairedConfig is:
+	//   1. Save child (new config) — succeeds
+	//   2. Save parent (clear intent) — FAIL (FailOnCall=2)
+	//   3. Save child (revert to old) — succeeds
+	//   4. Save parent (revert in memory, clear intent) — succeeds
+	// When all steps after the failure succeed, the error should say
+	// "both records reverted to prior config" and the parent's config
+	// should be back to its original value.
+	hook := &feature.StoreSaveHook{
+		FailOnFeatureID: "p-rearm",
+		FailOnCall:      3, // Fail the parent save that clears the intent (step 3)
+	}
+	mgr.Store.SetSaveHook(hook)
+
+	input := feature.PairedConfigInput{
+		Models:              config.ModelConfig{Implementation: "new-model"},
+		Effort:              config.EffortConfig{Planning: "high"},
+		Inquireness:         feature.InquirenessHigh,
+		Checkpoints:         feature.Checkpoints{PhasePlanReview: true, ManualPublish: true},
+		InputNotifications:  feature.InputNotificationsEnabled,
+		AutomaticReviewMode: feature.AutomaticReviewDefault,
+	}
+	result, err := mgr.Store.UpdatePairedConfig("p-rearm", input, feature.PipelineMoonshot, "p-rearm")
+	_ = result
+	if err == nil {
+		t.Fatal("expected error from UpdatePairedConfig, got nil")
+	}
+	if !strings.Contains(err.Error(), "saving parent config") {
+		t.Fatalf("error should mention parent config save failure: %v", err)
+	}
+	if !strings.Contains(err.Error(), "reverted") {
+		t.Fatalf("error should mention revert: %v", err)
+	}
+
+	// Verify the parent's config was actually reverted (not left in a
+	// split state with the child having the new config).
+	mgr.Store.ResetSaveHook()
+	p, err := mgr.Store.Load("p-rearm")
+	if err != nil {
+		t.Fatalf("loading parent: %v", err)
+	}
+	if p.Models.Implementation == "new-model" {
+		t.Fatal("parent config should have been reverted, but still has new-model")
 	}
 }
 

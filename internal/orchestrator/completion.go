@@ -31,9 +31,20 @@ import (
 // isTerminalForCompletion returns true when the feature is in a terminal
 // state that completion handlers must short-circuit on. Mirrors the stale
 // completion guard present in every TUI completion handler (app.go:2927,
-// 3560, 3688, 3806).
+// 3560, 3688, 3806). A child whose relationship is closed (discarded or
+// completed) or whose discard intent is in flight is also terminal so late
+// completion callbacks cannot overwrite discard or closure state.
 func isTerminalForCompletion(f *feature.Feature) bool {
-	return f != nil && (f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed)
+	if f == nil {
+		return false
+	}
+	if f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed {
+		return true
+	}
+	if f.IsChild() && f.Parent != nil && (f.Parent.CloseOutcome != "" || f.IsDiscarding()) {
+		return true
+	}
+	return false
 }
 
 // errFinalReviewInterrupted signals that the deferred Final Review pass

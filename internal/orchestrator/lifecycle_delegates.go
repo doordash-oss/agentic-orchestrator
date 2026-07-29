@@ -12,17 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator — lifecycle_delegates.go exposes thin feature-lifecycle
-// pass-throughs that the TUI can call in place of direct featureManager.*
-// method invocations from Update-dispatched handlers. Each method wraps the
-// corresponding ports.FeatureLifecycle call with no additional logic so that
-// the existing TUI tea.Cmd dispatch pattern can continue to route events.
-//
-// Update-dispatched TUI code paths route feature lifecycle mutations through
-// this file rather than calling featureManager.* directly. The lifecycle
-// transitions themselves continue to live in feature.Manager; the orchestrator
-// owns the call site so observer emission and cross-cutting concerns can hook
-// through a single chokepoint.
+// Package orchestrator — lifecycle_delegates.go exposes feature-lifecycle
+// pass-throughs that the TUI and REST mutation handlers can call in place of
+// direct featureManager.* method invocations from Update-dispatched handlers.
+// The orchestrator is the mutation chokepoint: several delegates now
+// intentionally enforce relationship guards and other cross-cutting behavior
+// before delegating to the underlying ports.FeatureLifecycle call. The
+// lifecycle transitions themselves continue to live in feature.Manager; the
+// orchestrator owns the call site so observer emission, relationship guards,
+// and cross-cutting concerns hook through a single chokepoint.
 package orchestrator
 
 import (
@@ -197,10 +195,7 @@ func (o *Orchestrator) TryCompletePublish(featureID string) (bool, error) {
 // terminal transition. Used by explicit mark-done paths where the feature
 // reached a terminal state without the orchestrator's publish pipeline.
 func (o *Orchestrator) MarkDone(featureID string) error {
-	if err := o.RelationshipGuard(featureID, MutationMarkDone); err != nil {
-		return err
-	}
-	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+	if err := o.guardedModify(featureID, MutationMarkDone, func(f *feature.Feature) error {
 		return f.Transition(feature.StatusDone)
 	}); err != nil {
 		return err
@@ -286,9 +281,14 @@ func (o *Orchestrator) TransitionTo(featureID string, status feature.Status) err
 
 // ClearRepoCycles removes every RepoCycles entry on a feature without firing
 // failure events. Used by stopFeatureCmd's Published-with-cycles path so the
-// TUI never touches featureManager mutators directly.
+// TUI never touches featureManager mutators directly. The relationship guard
+// ensures cleanup is never performed on an active child or while a parent has
+// an active child.
 func (o *Orchestrator) ClearRepoCycles(featureID string) error {
-	return o.deps.Lifecycle.ClearRepoCycles(featureID)
+	return o.guardedModify(featureID, MutationCleanup, func(f *feature.Feature) error {
+		f.RepoCycles = nil
+		return nil
+	})
 }
 
 // RetryPhase clears feature-level error/gate state so the unified
@@ -300,6 +300,8 @@ func (o *Orchestrator) ClearRepoCycles(featureID string) error {
 // the plan can't be read (best-effort recovery — the next orchestrator
 // cycle's PhaseScope call will revalidate before launching the loop).
 func (o *Orchestrator) RetryPhase(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationRetry); err != nil {
 		return err
 	}
@@ -394,6 +396,8 @@ func (o *Orchestrator) UpgradePipeline(featureID string, profile feature.Pipelin
 // RewindToPhase delegates to Lifecycle.RewindToPhase. Returns the effective
 // target phase and warnings computed during the rewind.
 func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
 		return nil, targetPhase, err
 	}
@@ -410,6 +414,15 @@ func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase
 // RewindWithRequest delegates to Lifecycle.RewindWithRequest for rewind
 // flows that carry additional request fields such as a roadmap phase.
 func (o *Orchestrator) RewindWithRequest(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	return o.rewindWithRequestLocked(featureID, request)
+}
+
+// rewindWithRequestLocked is the lock-held rewind entry point. Callers must
+// hold the relationship read lock so the guard check and the rewind execute
+// atomically with any preceding mutations (e.g. pipeline upgrade).
+func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature.RewindRequest) ([]string, feature.Phase, error) {
 	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
 		return nil, 0, err
 	}
@@ -421,6 +434,27 @@ func (o *Orchestrator) RewindWithRequest(featureID string, request feature.Rewin
 	o.fireFeatureRewoundHook(featureID, request, effectiveTarget, sourceRun)
 	o.emitEventBlocking(ports.Event{Type: ports.FeatureRewound, FeatureID: featureID, Phase: effectiveTarget})
 	return warnings, effectiveTarget, nil
+}
+
+// RewindWithUpgrade performs an optional pipeline upgrade, session stop, and
+// rewind as one atomic relationship-guarded operation. The relationship guard
+// check, pipeline upgrade, session stop, and rewind all execute under the
+// same read lock so a concurrent refactor launch cannot interleave a child
+// creation between the guard check and the mutations. Callers that need a
+// plain rewind (no pipeline upgrade) should use RewindWithRequest.
+func (o *Orchestrator) RewindWithUpgrade(featureID string, request feature.RewindRequest, upgradePipeline feature.PipelineProfile) ([]string, feature.Phase, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationRewind); err != nil {
+		return nil, 0, err
+	}
+	if upgradePipeline != "" {
+		if err := o.deps.Lifecycle.UpgradePipeline(featureID, upgradePipeline); err != nil {
+			return nil, 0, err
+		}
+	}
+	o.StopFeatureSessions(featureID)
+	return o.rewindWithRequestLocked(featureID, request)
 }
 
 func (o *Orchestrator) currentRunNumber(featureID string) int {
@@ -448,8 +482,14 @@ func (o *Orchestrator) fireFeatureRewoundHook(featureID string, request feature.
 }
 
 // CleanWorktree delegates to Lifecycle.CleanWorktree for TUI clean-worktree
-// actions.
+// actions. The relationship guard ensures cleanup is never performed on an
+// active child or while a parent has an active child.
 func (o *Orchestrator) CleanWorktree(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationCleanup); err != nil {
+		return err
+	}
 	return o.deps.Lifecycle.CleanWorktree(featureID)
 }
 
@@ -467,6 +507,8 @@ func (o *Orchestrator) SaveFeatureSummary(featureID, summary string) error {
 // feature Done. Used by mergeLocalCmd for non-publishable features. Errors
 // are surfaced per-repo so the TUI can show a diagnostic.
 func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationMerge); err != nil {
 		return err
 	}
@@ -953,6 +995,8 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// (only paired config and discard are allowed). For children, the guard
 	// allows restart; the existing checkChildExecution gate then enforces
 	// capability and integration-resumable routing.
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationRestart); err != nil {
 		return RestartOutcome{}, err
 	}
@@ -989,7 +1033,7 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// already-approved Final Review — on restart. A closed child whose
 	// cleanup tail never settled re-enters only that tail.
 	if f.IntegrationResumable() {
-		if err := o.RunChildIntegration(featureID); err != nil {
+		if err := o.runChildIntegrationLocked(featureID); err != nil {
 			return RestartOutcome{}, err
 		}
 		// Reload to check whether conflict resolution invalidated the

@@ -973,7 +973,12 @@ func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.Fea
 }
 
 func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
-	if err := t.orch.InterruptFeature(featureID); err != nil {
+	if err := t.orch.WithRelationshipReadLock(func() error {
+		if err := t.orch.RelationshipGuard(featureID, orchestrator.MutationStop); err != nil {
+			return err
+		}
+		return t.orch.InterruptFeature(featureID)
+	}); err != nil {
 		return serverruntime.FeatureStopResponse{}, err
 	}
 	return serverruntime.FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
@@ -1064,56 +1069,74 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 	// Detect parent/child relationship and route to paired config update
 	// when the addressed feature is either a parent with an active child
 	// or the active child itself. The submitted pipeline must match the
-	// addressed record's pipeline.
+	// addressed record's pipeline. The detect + update window is wrapped
+	// in the relationship read lock so a concurrent child creation cannot
+	// interleave between detection and the write.
 	if t.orch != nil {
-		parentID, _, paired := t.orch.DetectPairedConfigTarget(featureID)
-		if paired {
-			if err := t.orch.UpdatePairedFeatureConfig(parentID, feature.PairedConfigInput{
+		var configErr error
+		var configResp serverruntime.FeatureConfigUpdateResponse
+		configErr = t.orch.WithRelationshipReadLock(func() error {
+			parentID, _, paired, dErr := t.orch.DetectPairedConfigTarget(featureID)
+			if dErr != nil {
+				return fmt.Errorf("detecting paired config target: %w", dErr)
+			}
+			if paired {
+				if err := t.orch.UpdatePairedFeatureConfig(parentID, feature.PairedConfigInput{
+					Models:              req.Models,
+					Effort:              req.Effort,
+					Inquireness:         feature.Inquireness(req.Inquireness),
+					Checkpoints:         req.Checkpoints,
+					InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
+					AutomaticReviewMode: automaticReviewMode,
+				}, feature.PipelineProfile(req.Pipeline), featureID); err != nil {
+					return err
+				}
+				f, err := t.store.Load(featureID)
+				if err != nil {
+					return err
+				}
+				pipeline := req.Pipeline
+				if pipeline == "" {
+					pipeline = f.EffectivePipeline()
+				}
+				if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+					return err
+				}
+				configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
+				return nil
+			}
+			if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
 				Models:              req.Models,
 				Effort:              req.Effort,
 				Inquireness:         feature.Inquireness(req.Inquireness),
 				Checkpoints:         req.Checkpoints,
 				InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
 				AutomaticReviewMode: automaticReviewMode,
-			}, feature.PipelineProfile(req.Pipeline), featureID); err != nil {
-				return serverruntime.FeatureConfigUpdateResponse{}, err
+			}); err != nil {
+				return err
 			}
 			f, err := t.store.Load(featureID)
 			if err != nil {
-				return serverruntime.FeatureConfigUpdateResponse{}, err
+				return err
 			}
 			pipeline := req.Pipeline
 			if pipeline == "" {
 				pipeline = f.EffectivePipeline()
 			}
 			if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
-				return serverruntime.FeatureConfigUpdateResponse{}, err
+				return err
 			}
-			return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
+			configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
+			return nil
+		})
+		if configErr != nil {
+			return serverruntime.FeatureConfigUpdateResponse{}, configErr
+		}
+		if configResp.Result != "" {
+			return configResp, nil
 		}
 	}
-	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
-		Models:              req.Models,
-		Effort:              req.Effort,
-		Inquireness:         feature.Inquireness(req.Inquireness),
-		Checkpoints:         req.Checkpoints,
-		InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
-		AutomaticReviewMode: automaticReviewMode,
-	}); err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
-	}
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
-	}
-	pipeline := req.Pipeline
-	if pipeline == "" {
-		pipeline = f.EffectivePipeline()
-	}
-	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
-	}
-	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
+	return serverruntime.FeatureConfigUpdateResponse{}, errors.New("orchestrator is not available")
 }
 
 func (t *serverMutationTarget) NeedUserInputDecision(featureID string, req serverruntime.NeedUserInputDecisionRequest) (serverruntime.NeedUserInputDecisionResponse, error) {
@@ -1538,17 +1561,10 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 		resp.Result = resultFailed
 		return resp, errors.New("orchestrator is not available")
 	}
-	if req.UpgradePipeline != "" {
-		if err := t.orch.UpgradePipeline(featureID, req.UpgradePipeline); err != nil {
-			resp.Result = resultFailed
-			return resp, err
-		}
-	}
-	t.orch.StopFeatureSessions(featureID)
-	warnings, effectiveTarget, err := t.orch.RewindWithRequest(featureID, feature.RewindRequest{
+	warnings, effectiveTarget, err := t.orch.RewindWithUpgrade(featureID, feature.RewindRequest{
 		TargetPhase:  targetPhase,
 		RoadmapPhase: req.RoadmapPhase,
-	})
+	}, feature.PipelineProfile(req.UpgradePipeline))
 	if effectiveTarget != 0 || strings.EqualFold(req.TargetPhase, phaseNameResearch) {
 		resp.EffectivePhase = effectiveTarget.DirName()
 	}
@@ -1621,9 +1637,20 @@ func (t *serverMutationTarget) RefactorFeature(featureID string, req serverrunti
 	if err != nil {
 		return resp, err
 	}
-	child, err := creator.CreateRefactorChild(featureID, spec)
-	if err != nil {
-		return resp, err
+	var child *feature.Feature
+	if t.orch != nil {
+		if wErr := t.orch.WithRelationshipWriteLock(func() error {
+			var cErr error
+			child, cErr = creator.CreateRefactorChild(featureID, spec)
+			return cErr
+		}); wErr != nil {
+			return resp, wErr
+		}
+	} else {
+		child, err = creator.CreateRefactorChild(featureID, spec)
+		if err != nil {
+			return resp, err
+		}
 	}
 	// Setup intent is queued durably on creation; run it asynchronously so the
 	// response returns with the child identifier immediately. RunSetupAsync
@@ -1703,39 +1730,49 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
-	comments := reviewCommentDTOsToPorts(req.Repo, req.Comments)
-	if len(comments) == 0 {
-		var err error
-		comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
-		if err != nil {
-			resp.Result = resultFailed
-			return resp, err
-		}
-	} else {
-		resp.Source = "provided"
-	}
-	comments = threadedReviewComments(comments)
-	if len(comments) == 0 {
-		resp.Result = "no_comments"
-		return resp, fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
-	}
-	git.SortReviewCommentsChronologically(comments)
-	resp.CommentCount = len(comments)
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	sessionID, err := t.orch.StartRepoCycleImplement(featureID, req.Repo, feature.CycleReviewComments, "")
+	sessionID, err := t.orch.StartRepoCycleImplementWithPreparation(
+		featureID,
+		req.Repo,
+		feature.CycleReviewComments,
+		"",
+		func() error {
+			comments := reviewCommentDTOsToPorts(req.Repo, req.Comments)
+			if len(comments) == 0 {
+				var err error
+				comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
+				if err != nil {
+					resp.Result = resultFailed
+					return err
+				}
+			} else {
+				resp.Source = "provided"
+			}
+			comments = threadedReviewComments(comments)
+			if len(comments) == 0 {
+				resp.Result = "no_comments"
+				return fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
+			}
+			git.SortReviewCommentsChronologically(comments)
+			resp.CommentCount = len(comments)
+			f, err := t.store.Load(featureID)
+			if err != nil {
+				resp.Result = resultFailed
+				return err
+			}
+			if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
+				resp.Result = resultFailed
+				return err
+			}
+			return nil
+		},
+	)
 	if sessionID != "" {
 		resp.SessionID = sessionID
 	}
 	if err != nil {
-		resp.Result = resultFailed
+		if resp.Result == "" {
+			resp.Result = resultFailed
+		}
 		return resp, err
 	}
 	resp.Result = resultStarted

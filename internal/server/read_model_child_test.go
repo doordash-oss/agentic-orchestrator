@@ -105,13 +105,14 @@ func TestChildFeatureExcludedFromTopLevelListButDetailWorks(t *testing.T) {
 		t.Fatalf("child detail setup_complete present while setup is queued: %+v", featureBody)
 	}
 	// The restricted child catalog (capability-gated execution entries plus
-	// setup-retry/cleanup/delete) must serialize.
+	// setup-retry and discard) must serialize. Child cleanup and
+	// single-record delete are unavailable while the relationship is active.
 	actions := featureBody["actions"].([]any)
 	ids := map[string]bool{}
 	for _, raw := range actions {
 		ids[raw.(map[string]any)["id"].(string)] = true
 	}
-	want := map[string]bool{actionStart: true, actionResume: true, actionRestart: true, actionRetry: true, actionDiscard: true, actionCleanup: true, actionDelete: true}
+	want := map[string]bool{actionStart: true, actionResume: true, actionRestart: true, actionRetry: true, actionDiscard: true}
 	if len(actions) != len(want) {
 		t.Fatalf("child detail actions = %v, want %v", ids, want)
 	}

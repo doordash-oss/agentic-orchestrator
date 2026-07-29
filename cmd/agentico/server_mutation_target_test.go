@@ -1753,6 +1753,56 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	}
 }
 
+func TestServerMutationTargetReviewCommentsChildCreationWinnerDoesNotStage(t *testing.T) {
+	target, store, parent := newReviewCommentsActionTarget(t)
+	reviewer := target.reviewer.(*fakeReviewCommentOperator)
+	fetchStarted := make(chan struct{}, 1)
+	reviewer.fetchStarted = fetchStarted
+
+	resultCh := make(chan error, 1)
+	if err := target.orch.WithRelationshipWriteLock(func() error {
+		go func() {
+			_, err := target.StartReviewComments(parent.ID, serverruntime.ReviewCommentsActionRequest{
+				Repo: testRepoAName,
+				Mode: reviewCommentsModeAddressAll,
+			})
+			resultCh <- err
+		}()
+
+		select {
+		case <-fetchStarted:
+		case <-time.After(20 * time.Millisecond):
+		}
+
+		child := &feature.Feature{
+			ID:       "review-comments-active-child",
+			Slug:     "review-comments-active-child",
+			Status:   feature.StatusImplementing,
+			Pipeline: feature.PipelineMedium,
+			Parent: &feature.ChildRelationship{
+				ParentID: parent.ID,
+				Kind:     feature.ChildKindRefactor,
+			},
+		}
+		return store.Save(child)
+	}); err != nil {
+		t.Fatalf("create active child under relationship lock: %v", err)
+	}
+
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, feature.ErrParentMutationLocked) {
+			t.Fatalf("StartReviewComments() error = %v; want ErrParentMutationLocked", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartReviewComments() did not return after child creation completed")
+	}
+
+	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, parent, testRepoAName); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("LoadReviewCommentsForRepo() error = %v; want os.ErrNotExist after rejected parent mutation", err)
+	}
+}
+
 func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testing.T) {
 	t.Run("cleanup cycles", func(t *testing.T) {
 		target, store, f, _ := newCleanupActionTarget(t)
@@ -1944,12 +1994,19 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 }
 
 type fakeReviewCommentOperator struct {
-	comments   []ports.ReviewComment
-	fetchCalls int
+	comments     []ports.ReviewComment
+	fetchCalls   int
+	fetchStarted chan struct{}
 }
 
 func (f *fakeReviewCommentOperator) FetchPRComments(string, string) ([]ports.ReviewComment, error) {
 	f.fetchCalls++
+	if f.fetchStarted != nil {
+		select {
+		case f.fetchStarted <- struct{}{}:
+		default:
+		}
+	}
 	out := make([]ports.ReviewComment, len(f.comments))
 	copy(out, f.comments)
 	return out, nil

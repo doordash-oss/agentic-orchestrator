@@ -37,6 +37,11 @@ func (o *Orchestrator) StartFeatureRebase(featureID string) error {
 	if o.deps.Lifecycle == nil {
 		return errors.New("feature lifecycle not configured")
 	}
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationDelivery); err != nil {
+		return err
+	}
 	o.clearFeatureRebaseStopRequest(featureID)
 	if err := o.deps.Lifecycle.StartFeatureRebaseOperation(featureID); err != nil {
 		return fmt.Errorf("start feature rebase operation: %w", err)

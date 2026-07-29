@@ -36,13 +36,15 @@ import (
 // mid-cleanup, the next startup's cleanup pass reconciles any still-present
 // orphans before scan proceeds.
 //
-// Integration reconciliation runs before the general PID/session recovery scan:
-// it classifies every transaction journal target ref against its journaled
-// old and candidate SHAs, finishes fully applied transactions, rolls back
-// provable partials, and preserves unclassifiable externally moved state as
-// integration attention. Reconciliation errors follow the existing fail-closed
-// startup ordering so session recovery never acts on an unreconciled
-// transaction.
+// Integration reconciliation runs after discard-intent reconciliation so
+// a child with a durable discard intent is rolled back and closed before
+// ordinary integration can mark the journal applied or publish the parent.
+// It then classifies every transaction journal target ref against its
+// journaled old and candidate SHAs, finishes fully applied transactions,
+// rolls back provable partials, and preserves unclassifiable externally
+// moved state as integration attention. Reconciliation errors follow the
+// existing fail-closed startup ordering so session recovery never acts on
+// an unreconciled transaction.
 func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
 	if o.deps.Recovery == nil {
 		return nil, errors.New("recovery operator not configured")
@@ -86,17 +88,21 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 			return nil, fmt.Errorf("reconcile pending config updates: %w", err)
 		}
 	}
+	// Reconcile discard intents before integration transactions so a
+	// child with a durable discard intent is rolled back, closed, and
+	// cleaned up before ordinary integration reconciliation can mark the
+	// journal applied and close the child as completed. Discard must
+	// converge through rollback/closure/cleanup in that order so
+	// integration never observes a child that should already be discarded.
+	if err := o.ReconcileDiscardIntents(); err != nil {
+		return nil, fmt.Errorf("reconcile discard intents: %w", err)
+	}
 	// Reconcile interrupted integration transactions before ordinary session
 	// recovery observes or relaunches sessions.
 	if o.deps.Store != nil {
 		if err := o.ReconcileIntegrationTransactions(); err != nil {
 			return nil, fmt.Errorf("reconcile integration transactions: %w", err)
 		}
-	}
-	// Reconcile discard intents before ordinary session recovery so
-	// interrupted discards resume from the durable step.
-	if err := o.ReconcileDiscardIntents(); err != nil {
-		return nil, fmt.Errorf("reconcile discard intents: %w", err)
 	}
 	items, err := o.deps.Recovery.ScanForRecovery(ctx)
 	if err != nil {
@@ -306,6 +312,15 @@ func (o *Orchestrator) ReconcileIntegrationTransactions() error {
 // reconcileOneIntegration reconciles a single feature's integration journal.
 func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 	if f == nil || !f.IsChild() {
+		return nil
+	}
+	// A child with a durable discard intent is owned by the discard
+	// flow. ReconcileDiscardIntents (which runs before this pass in
+	// ScanRecovery) resumes the discard through rollback/closure/cleanup.
+	// Integration reconciliation must not close or publish a child that
+	// has a discard intent — even if the journal is all-at-candidate —
+	// because the discard path converges through a different outcome.
+	if f.IsDiscarding() {
 		return nil
 	}
 	journal := f.Parent.Transaction

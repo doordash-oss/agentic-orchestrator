@@ -382,7 +382,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 // parent action is locked because an active child exists.
 var disabledParentHasActiveChild = ActionDisabledReasonDTO{
 	Code:    "active_child_present",
-	Message: "parent mutations are locked while a child is active; only paired config editing and discard are available",
+	Message: "parent mutations are locked while a child is active; only paired config editing is available",
 }
 
 func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []ActionDTO {
@@ -445,8 +445,8 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	canRefactor := status == feature.StatusPublished || status == feature.StatusCodeReady
 
 	// While a child is active, parent mutations are locked except for
-	// paired config editing and discard. The action catalog agrees with
-	// the authoritative relationship guard enforced at the mutation layer.
+	// paired config editing. The action catalog agrees with the
+	// authoritative relationship guard enforced at the mutation layer.
 	if hasActiveChild {
 		canStart = false
 		canStop = false
@@ -557,10 +557,12 @@ func childCapabilityDisabledReason(err error) ActionDisabledReasonDTO {
 
 // childActionCatalogDTOs builds the restricted child catalog: ordinary
 // start/resume/restart execution entries gated by the same capability check
-// the mutations enforce, plus setup-retry, cleanup, and delete. Child
-// delivery actions (publish, merge, rewind, refactor, mark-done, post-publish
-// cycles) are never offered: a child's work reaches the parent only through
-// integration.
+// the mutations enforce, plus setup-retry and discard. Child delivery actions
+// (publish, merge, rewind, refactor, mark-done, post-publish cycles) are never
+// offered: a child's work reaches the parent only through integration. Child
+// cleanup and single-record delete are also unavailable while the relationship
+// is active; the authoritative RelationshipGuard enforces the same policy at
+// the mutation layer.
 func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, activeCycle bool,
 	action func(string, bool, ActionScopeDTO, []ActionInputDTO, ...ActionDisabledReasonDTO) ActionDTO,
 	disabledStatusReason func(feature.Status) ActionDisabledReasonDTO) []ActionDTO {
@@ -598,11 +600,14 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"})),
 		action(actionRestart, canRestart, featureScope, nil, restartReason),
 		action(actionRetry, childSetupFailed(f), featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
-		action(actionDiscard, f.IsActiveChild() && stopped, featureScope, nil, ActionDisabledReasonDTO{Code: "not_active", Message: "discard is only available for active children"}),
-		action(actionCleanup, stopped, featureScope, []ActionInputDTO{
-			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
-		}, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"}),
-		action(actionDelete, stopped, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"}),
+		// Discard must be available for every active child — running,
+		// paused, failed, interrupted, review-gated, input-blocked, and
+		// already-discarding — because the durable discard state machine
+		// itself records intent, stops sessions, and waits for
+		// quiescence. Gating it on "stopped" would hide the primary
+		// abandon flow exactly when a running child needs it. Repeated
+		// requests converge on the same idempotent outcome.
+		action(actionDiscard, f.IsActiveChild(), featureScope, nil, ActionDisabledReasonDTO{Code: "not_active", Message: "discard is only available for active children"}),
 	}
 }
 

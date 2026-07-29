@@ -157,8 +157,8 @@ func TestUpdatePairedConfigChildAddressPreservesParentPublishMode(t *testing.T) 
 	}
 
 	// Address the child with a config that sets ManualPublish=false.
-	// The parent is publishable; the child is not. Normalization should
-	// preserve the parent's ManualPublish meaning.
+	// Checkpoints persist as the canonical paired value without per-record
+	// pipeline filtering; the parent's ManualPublish is set from the input.
 	input := feature.PairedConfigInput{
 		Checkpoints: feature.Checkpoints{ManualPublish: false},
 	}
@@ -174,9 +174,59 @@ func TestUpdatePairedConfigChildAddressPreservesParentPublishMode(t *testing.T) 
 	if loadedParent.Checkpoints.ManualPublish {
 		t.Fatalf("parent ManualPublish should be false")
 	}
-	// Child is not publishable; normalization should not set ManualPublish
-	// differently based on the parent's publishability.
-	_ = loadedChild // child's normalization uses its own publishability
+	// Child's checkpoints are the same canonical value as the parent's.
+	if loadedChild.Checkpoints.ManualPublish != loadedParent.Checkpoints.ManualPublish {
+		t.Fatalf("child ManualPublish should match parent (canonical paired value)")
+	}
+}
+
+func TestUpdatePairedConfigCheckpointsPersistIdentically(t *testing.T) {
+	t.Parallel()
+	mgr := newChildTestManager(t, map[string]string{"/wt/repo": "aaaa"}, cleanEverywhere())
+	parent := &feature.Feature{
+		ID:       "p-cp",
+		Slug:     "p-cp",
+		Status:   feature.StatusPublished,
+		Pipeline: feature.PipelineMoonshot,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "main", BaseBranch: "main", Publishable: boolPtr(true)},
+		},
+	}
+	saveChildTestParent(t, mgr, parent)
+
+	child, err := mgr.CreateRefactorChild("p-cp", feature.RefactorChildSpec{
+		Name:     "Child CP",
+		Pipeline: feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("CreateRefactorChild: %v", err)
+	}
+
+	// Set checkpoints with gates that may not be applicable to both
+	// pipelines. They must persist identically without filtering.
+	input := feature.PairedConfigInput{
+		Checkpoints: feature.Checkpoints{
+			InquiryReview:   true,
+			ResearchReview:  true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
+		},
+	}
+	if _, err := mgr.Store.UpdatePairedConfig("p-cp", input, feature.PipelineMoonshot, "p-cp"); err != nil {
+		t.Fatalf("UpdatePairedConfig: %v", err)
+	}
+
+	loadedParent, _ := mgr.Store.Load("p-cp")
+	loadedChild, _ := mgr.Store.Load(child.ID)
+
+	if loadedParent.Checkpoints != loadedChild.Checkpoints {
+		t.Fatalf("checkpoints diverged: parent=%+v child=%+v", loadedParent.Checkpoints, loadedChild.Checkpoints)
+	}
+	if loadedParent.Checkpoints != input.Checkpoints {
+		t.Fatalf("parent checkpoints not canonical: got %+v want %+v", loadedParent.Checkpoints, input.Checkpoints)
+	}
 }
 
 func TestReconcilePendingConfigUpdatesRollsForward(t *testing.T) {
@@ -205,7 +255,7 @@ func TestReconcilePendingConfigUpdatesRollsForward(t *testing.T) {
 	// Simulate a crash: write a pending config intent directly on the parent.
 	mgr.Store.Modify("p-recon", func(f *feature.Feature) error {
 		f.PendingConfigUpdate = &feature.PairedConfigIntent{
-			ChildID:   child.ID,
+			ChildID: child.ID,
 			Input: feature.PairedConfigInput{
 				Models: config.ModelConfig{Implementation: "reconciled"},
 			},
@@ -242,5 +292,78 @@ func TestReconcilePendingConfigUpdatesRollsForward(t *testing.T) {
 	}
 	if len(reconciled) != 0 {
 		t.Fatalf("second reconcile should be no-op, got %v", reconciled)
+	}
+}
+
+// TestUpdatePairedConfigParentSaveFailureRevertsChild verifies that when the
+// child save succeeds but the parent save fails, the child is reverted to its
+// pre-update config so both records converge to all-old rather than exposing
+// a split pair. The pending intent is not left on the parent because the
+// revert makes reconciliation unnecessary.
+func TestUpdatePairedConfigParentSaveFailureRevertsChild(t *testing.T) {
+	t.Parallel()
+	mgr := newChildTestManager(t, map[string]string{"/wt/repo": "aaaa"}, cleanEverywhere())
+	parent := &feature.Feature{
+		ID:       "p-fail",
+		Slug:     "p-fail",
+		Status:   feature.StatusPublished,
+		Pipeline: feature.PipelineMoonshot,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "main", BaseBranch: "main"},
+		},
+		Models:      config.ModelConfig{Implementation: "old-model"},
+		Effort:      config.EffortConfig{Planning: "low"},
+		Inquireness: feature.InquirenessMedium,
+	}
+	saveChildTestParent(t, mgr, parent)
+
+	child, err := mgr.CreateRefactorChild("p-fail", feature.RefactorChildSpec{
+		Name:     "Child Fail",
+		Pipeline: feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("CreateRefactorChild: %v", err)
+	}
+
+	// Install a save hook that fails on the 3rd saveUnlocked call.
+	// Call sequence inside UpdatePairedConfig:
+	//   1: saveUnlocked(parent) — writes intent
+	//   2: saveUnlocked(child)  — writes new config
+	//   3: saveUnlocked(parent)  — writes new config + clears intent → FAIL
+	mgr.Store.SetSaveHook(&feature.StoreSaveHook{
+		FailOnCall: 3,
+	})
+	defer mgr.Store.ResetSaveHook()
+
+	input := feature.PairedConfigInput{
+		Models:              config.ModelConfig{Implementation: "new-model"},
+		Effort:              config.EffortConfig{Planning: "high"},
+		Inquireness:         feature.InquirenessHigh,
+	}
+	_, err = mgr.Store.UpdatePairedConfig("p-fail", input, feature.PipelineMoonshot, "p-fail")
+	if err == nil {
+		t.Fatal("expected error from UpdatePairedConfig when parent save fails")
+	}
+
+	// Both records should have the OLD config (all-old, not split).
+	loadedParent, _ := mgr.Store.Load("p-fail")
+	loadedChild, _ := mgr.Store.Load(child.ID)
+
+	if loadedParent.Models.Implementation != "old-model" {
+		t.Fatalf("parent model = %v, want old-model (reverted to all-old)", loadedParent.Models.Implementation)
+	}
+	if loadedChild.Models.Implementation != "old-model" {
+		t.Fatalf("child model = %v, want old-model (reverted to all-old, not split)", loadedChild.Models.Implementation)
+	}
+	if loadedParent.Effort.Planning != "low" {
+		t.Fatalf("parent effort = %v, want low (reverted)", loadedParent.Effort.Planning)
+	}
+	if loadedChild.Effort.Planning != "low" {
+		t.Fatalf("child effort = %v, want low (reverted)", loadedChild.Effort.Planning)
+	}
+
+	// The pending intent should be cleared since both records are at old.
+	if loadedParent.PendingConfigUpdate != nil {
+		t.Fatalf("parent still has pending config intent after revert to all-old")
 	}
 }

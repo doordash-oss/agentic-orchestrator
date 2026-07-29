@@ -228,6 +228,18 @@ type Orchestrator struct {
 	eventCh chan ports.Event
 	mu      sync.RWMutex
 
+	// relationshipMu serializes relationship-aware guard checks with
+	// child creation. Mutation guard callers acquire a read lock for the
+	// guard check and the entire operation; child creation acquires the
+	// write lock. This closes the time-of-check/time-of-use gap where a
+	// standalone RelationshipGuard read could pass, then CreateChildLocked
+	// creates a child, then the mutation lands on a parent that now has
+	// an active child. The guard check and child creation are mutually
+	// exclusive: either the mutation guard sees no child and completes
+	// before child creation starts, or child creation completes first and
+	// the guard sees the child and rejects.
+	relationshipMu sync.RWMutex
+
 	supervisor *phaseSupervisor
 
 	// doneCh is closed by Shutdown to signal all emitters and consumers to
@@ -521,6 +533,11 @@ func (o *Orchestrator) emitShutdownStarted() {
 // Children hit the checkChildExecution capability gate first: only
 // setup-complete, active, single-repository Medium children may execute.
 func (o *Orchestrator) StartFeature(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationStart); err != nil {
+		return err
+	}
 	if err := o.checkChildExecution(featureID, false); err != nil {
 		return err
 	}
@@ -1503,6 +1520,12 @@ func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeat
 // take the cycle-active early-return path — minimum mutation, emit
 // PhaseCompleted, return. Cycle-specific handlers own cycle coordination.
 func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error {
+	// Fence late completion callbacks from mutating a child whose
+	// relationship is closed (discarded or completed) or whose discard
+	// intent is in flight. The discard flow owns the terminal transition.
+	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && isTerminalForCompletion(f) {
+		return nil
+	}
 	switch input.Phase {
 	case feature.PhaseKnowledgeBase:
 		return o.onKBCompleted(featureID, input)
@@ -1533,8 +1556,29 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
 	}
+	if f == nil {
+		return nil
+	}
 	if f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed {
 		return nil
+	}
+	// A child whose relationship is closed (discarded or completed) or
+	// has a discard intent in flight must not be mutated by late review
+	// callbacks. The discard flow owns the terminal transition.
+	if isTerminalForCompletion(f) {
+		return nil
+	}
+
+	// Enforce the relationship mutation lock before clearing gate fields
+	// or dispatching a new phase. A review-decision on a parent with an
+	// active child can restart the parent pipeline (e.g. CodeReady ->
+	// ImplementReady); it must be rejected with parent_mutation_locked
+	// just like start/restart/publish. A child resolving its own review
+	// gate is an ordinary execution control and is allowed.
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationReviewDecision); err != nil {
+		return err
 	}
 
 	if d.IsRewind && d.Decision == "proceed" {
@@ -2002,6 +2046,16 @@ type PublishOptions struct {
 // selected repos when Repos is non-empty. Title and Body override generated PR
 // metadata for interactive publish flows that already reviewed those fields.
 func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	return o.publishWithOptionsLocked(featureID, opts)
+}
+
+// publishWithOptionsLocked is the lock-held publish entry point. Callers
+// must hold the relationship read lock. This avoids a nested RLock deadlock
+// when auto-publish is invoked from settleChildClosureTail, which already
+// runs under the relationship read lock held by RunChildIntegration.
+func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOptions) error {
 	if err := o.RelationshipGuard(featureID, MutationPublish); err != nil {
 		return err
 	}
@@ -2161,6 +2215,8 @@ func (o *Orchestrator) StopFeatureSessions(featureID string) {
 // lifecycle. Synchronous (caller learns the outcome via the returned error);
 // no ports.Event is emitted, matching the TUI's legacy delete semantics.
 func (o *Orchestrator) Delete(featureID string) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationDelete); err != nil {
 		return err
 	}

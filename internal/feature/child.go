@@ -49,8 +49,9 @@ var (
 	// set (ordinary execution controls, input handling, paired Review
 	// editing, typed discard).
 	ErrChildMutationRestricted = errors.New("child mutation is restricted")
-	// ErrCascadeDeleteNotAvailable: parent Delete is not available until
-	// Phase 6 supplies the complete cascade operation.
+	// ErrCascadeDeleteNotAvailable: parent Delete is not available while
+	// a child is active. A complete recoverable cascade operation is
+	// required before parent deletion can be allowed.
 	ErrCascadeDeleteNotAvailable = errors.New("cascade delete is not available while a child is active")
 )
 

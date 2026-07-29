@@ -76,15 +76,35 @@ func (o *Orchestrator) checkChildExecution(featureID string, allowClosedRestart 
 // approved.
 var ErrChildIntegrationRefused = errors.New("child integration refused")
 
+// ErrChildDiscardInProgress is returned when an integration or closure
+// attempt is rejected because the child has a durable discard intent.
+var ErrChildDiscardInProgress = errors.New("child discard in progress")
+
 // RunChildIntegration carries an approved child through local integration,
-// closure, cleanup, and the parent's publish decision.
+// closure, cleanup, and the parent's publish decision. It acquires the
+// relationship read lock for the entire integration so a concurrent
+// DiscardChild (which holds the write lock to record its intent) cannot
+// interleave. If a discard intent is already durable on the child, the
+// integration is refused.
 func (o *Orchestrator) RunChildIntegration(childID string) error {
+	return o.WithRelationshipReadLock(func() error {
+		return o.runChildIntegrationLocked(childID)
+	})
+}
+
+// runChildIntegrationLocked is the lock-held integration entry point.
+// Callers must hold the relationship read lock. RestartPhase, which already
+// holds the read lock, calls this directly to avoid a recursive RLock.
+func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
 	child, err := o.deps.Lifecycle.Get(childID)
 	if err != nil {
 		return fmt.Errorf("load child: %w", err)
 	}
 	if child == nil || !child.IsChild() {
 		return fmt.Errorf("%w: feature is not a child feature", ErrChildIntegrationRefused)
+	}
+	if child.IsDiscarding() {
+		return fmt.Errorf("%w: child %s has discard in progress", ErrChildDiscardInProgress, child.ID)
 	}
 	if child.Parent.CloseOutcome != "" {
 		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
@@ -320,6 +340,9 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 	if err != nil {
 		return fmt.Errorf("reload child for closure: %w", err)
 	}
+	if child.IsDiscarding() {
+		return fmt.Errorf("%w: refusing to close child %s as completed while discard is in progress", ErrChildDiscardInProgress, childID)
+	}
 	journal := child.Parent.Transaction
 	if journal == nil {
 		return fmt.Errorf("transaction journal missing during closure")
@@ -424,7 +447,7 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		return fmt.Errorf("reload parent: %w", err)
 	}
 	if parent.IsPublishable() && parent.Checkpoints.AutoPublish() {
-		if err := o.Publish(parentID); err != nil {
+		if err := o.publishWithOptionsLocked(parentID, PublishOptions{}); err != nil {
 			o.emitEvent(ports.Event{
 				Type:      ports.RepoStatusChanged,
 				FeatureID: parentID,

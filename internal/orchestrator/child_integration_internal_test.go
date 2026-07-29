@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -958,5 +959,251 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	}
 	if child.IntegrationResumable() {
 		t.Fatal("child still resumable after the closure tail settled")
+	}
+}
+
+// TestRunChildIntegrationRefusesWithDiscardIntent proves that when a child
+// has a durable discard intent, RunChildIntegration refuses to proceed and
+// never moves the parent to CodeReady or records a merged transaction.
+func TestRunChildIntegrationRefusesWithDiscardIntent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
+
+	// Pre-seed a discard intent on the child so RunChildIntegration sees it.
+	if err := fx.store.Modify(fx.child.ID, func(f *feature.Feature) error {
+		f.DiscardIntent = &feature.DiscardIntent{
+			RequestedAt: time.Now(),
+			Step:        feature.DiscardStepIntentRecorded,
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed discard intent: %v", err)
+	}
+
+	o := fx.orchestrator()
+	err := o.RunChildIntegration(fx.child.ID)
+	if err == nil {
+		t.Fatal("RunChildIntegration succeeded with discard intent; should refuse")
+	}
+	if !errors.Is(err, ErrChildDiscardInProgress) {
+		t.Fatalf("RunChildIntegration error = %v, want ErrChildDiscardInProgress", err)
+	}
+
+	parent, child := fx.reload()
+	if parent.Status == feature.StatusCodeReady {
+		t.Fatal("parent moved to CodeReady despite discard intent")
+	}
+	if child.Parent.Transaction != nil && child.Parent.Transaction.Phase == feature.TransactionPhaseMerged {
+		t.Fatal("transaction merged despite discard intent")
+	}
+	if child.Parent.CloseOutcome == feature.ChildCloseOutcomeCompleted {
+		t.Fatal("child closed as Completed despite discard intent")
+	}
+}
+
+// TestConcurrentDiscardAndIntegrationSerialization verifies that the
+// relationship lock serializes discard and integration so that a discard
+// request racing with an in-flight integration can never produce a parent
+// CodeReady, a merged transaction, or a publication from the discard path.
+// One of the two operations wins the lock; the loser observes the durable
+// outcome and refuses. If discard wins, the parent must NOT be CodeReady.
+// If integration wins, the child is Completed and discard fails.
+func TestConcurrentDiscardAndIntegrationSerialization(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
+	o := fx.orchestrator()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var integErr, discardErr error
+	start := make(chan struct{})
+
+	go func() {
+		defer wg.Done()
+		<-start
+		integErr = o.RunChildIntegration(fx.child.ID)
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		discardErr = o.DiscardChild(fx.child.ID)
+	}()
+
+	close(start)
+	wg.Wait()
+
+	parent, child := fx.reload()
+
+	// Exactly one of the two should succeed.
+	integOK := integErr == nil
+	discardOK := discardErr == nil
+	if integOK && discardOK {
+		t.Fatal("both integration and discard succeeded; lock serialization failed")
+	}
+	if !integOK && !discardOK {
+		t.Fatalf("both failed: integration=%v, discard=%v", integErr, discardErr)
+	}
+
+	if discardOK {
+		// Discard won: parent must NOT be CodeReady, no merged transaction,
+		// no publish, child must be Discarded.
+		if parent.Status == feature.StatusCodeReady {
+			t.Fatal("parent moved to CodeReady from discard path")
+		}
+		if child.Parent.Transaction != nil && child.Parent.Transaction.Phase == feature.TransactionPhaseMerged {
+			t.Fatal("transaction merged from discard path")
+		}
+		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeDiscarded {
+			t.Fatalf("child close outcome = %q, want discarded", child.Parent.CloseOutcome)
+		}
+		if integErr == nil {
+			t.Fatal("integration should have failed when discard won")
+		}
+		if !errors.Is(integErr, ErrChildDiscardInProgress) {
+			t.Fatalf("integration error = %v, want ErrChildDiscardInProgress", integErr)
+		}
+	}
+
+	if integOK {
+		// Integration won: child must be Completed, parent CodeReady,
+		// discard must have failed.
+		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+			t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+		}
+		if parent.Status != feature.StatusCodeReady {
+			t.Fatalf("parent status = %s, want CodeReady", parent.Status)
+		}
+		if discardErr == nil {
+			t.Fatal("discard should have failed when integration won")
+		}
+	}
+}
+
+// TestDiscardChildRefusesAfterIntegrationCompleted verifies that once
+// integration has closed the child as Completed, a subsequent discard
+// request is rejected rather than overwriting the close outcome.
+func TestDiscardChildRefusesAfterIntegrationCompleted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
+	o := fx.orchestrator()
+
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("RunChildIntegration: %v", err)
+	}
+
+	parent, child := fx.reload()
+	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+	}
+	if parent.Status != feature.StatusCodeReady {
+		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
+	}
+
+	err := o.DiscardChild(fx.child.ID)
+	if err == nil {
+		t.Fatal("DiscardChild succeeded after completion; should refuse")
+	}
+
+	// State must be unchanged after the refused discard.
+	parent2, child2 := fx.reload()
+	if child2.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+		t.Fatalf("child close outcome changed to %q after refused discard", child2.Parent.CloseOutcome)
+	}
+	if parent2.Status != feature.StatusCodeReady {
+		t.Fatalf("parent status changed to %s after refused discard", parent2.Status)
+	}
+}
+
+// TestConcurrentDiscardAndIntegrationAutoPublish verifies that auto-publish
+// (parent with ManualPublish=false) does not deadlock when a concurrent
+// discard request arrives while integration holds the relationship read lock.
+// RunChildIntegration holds the read lock for the entire integration; when
+// the child is Completed and auto-publish is configured, settleChildClosureTail
+// publishes the parent. Previously, Publish took the relationship read lock
+// again, which deadlocked when a concurrent DiscardChild writer was waiting.
+// This test uses an auto-publish parent and runs integration + discard
+// concurrently to exercise the nested-lock path.
+func TestConcurrentDiscardAndIntegrationAutoPublish(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git integration test")
+	}
+	// manualPublish=false → parent.Checkpoints.AutoPublish() == true.
+	fx := newChildIntegrationFixture(t, feature.StatusPublished, false)
+	o := fx.orchestrator()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var integErr, discardErr error
+	start := make(chan struct{})
+
+	go func() {
+		defer wg.Done()
+		<-start
+		integErr = o.RunChildIntegration(fx.child.ID)
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		discardErr = o.DiscardChild(fx.child.ID)
+	}()
+
+	close(start)
+	wg.Wait()
+
+	parent, child := fx.reload()
+
+	// Exactly one of the two should succeed.
+	integOK := integErr == nil
+	discardOK := discardErr == nil
+	if integOK && discardOK {
+		t.Fatal("both integration and discard succeeded; lock serialization failed")
+	}
+	if !integOK && !discardOK {
+		t.Fatalf("both failed: integration=%v, discard=%v", integErr, discardErr)
+	}
+
+	if discardOK {
+		// Discard won: parent must NOT be CodeReady, no merged transaction,
+		// no publish, child must be Discarded.
+		if parent.Status == feature.StatusCodeReady {
+			t.Fatal("parent moved to CodeReady from discard path")
+		}
+		if child.Parent.Transaction != nil && child.Parent.Transaction.Phase == feature.TransactionPhaseMerged {
+			t.Fatal("transaction merged from discard path")
+		}
+		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeDiscarded {
+			t.Fatalf("child close outcome = %q, want discarded", child.Parent.CloseOutcome)
+		}
+		if integErr == nil {
+			t.Fatal("integration should have failed when discard won")
+		}
+		if !errors.Is(integErr, ErrChildDiscardInProgress) {
+			t.Fatalf("integration error = %v, want ErrChildDiscardInProgress", integErr)
+		}
+	}
+
+	if integOK {
+		// Integration won: child must be Completed, parent CodeReady,
+		// discard must have failed. The auto-publish path ran without
+		// deadlocking under the relationship read lock.
+		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+			t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
+		}
+		if parent.Status != feature.StatusCodeReady {
+			t.Fatalf("parent status = %s, want CodeReady", parent.Status)
+		}
+		if discardErr == nil {
+			t.Fatal("discard should have failed when integration won")
+		}
 	}
 }

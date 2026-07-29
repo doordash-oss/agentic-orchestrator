@@ -26,7 +26,7 @@ import (
 // DiscardChild implements the durable, idempotent child discard state machine.
 // It persists discard intent before requesting any stop, stops and joins
 // every child session and phase helper, resolves pending attention, establishes
-// integration safety (Task 5), closes the relationship with outcome Discarded,
+// integration safety, closes the relationship with outcome Discarded,
 // and then enters the retryable cleanup tail. Repeated or concurrent requests
 // converge on the same outcome and close timestamp.
 func (o *Orchestrator) DiscardChild(childID string) error {
@@ -45,20 +45,25 @@ func (o *Orchestrator) DiscardChild(childID string) error {
 		return o.resumeDiscard(childID)
 	}
 
-	// Step 1: Record durable intent if not already present.
+	// Step 1: Record durable intent if not already present. The write lock
+	// serializes with any in-flight integration (RunChildIntegration holds
+	// the read lock) so a discard request cannot interleave with an
+	// integration that is already in progress.
 	if child.DiscardIntent == nil {
-		if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-			if f.DiscardIntent != nil {
+		if err := o.WithRelationshipWriteLock(func() error {
+			return o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+				if f.DiscardIntent != nil {
+					return nil
+				}
+				if f.Parent.CloseOutcome != "" {
+					return fmt.Errorf("child already closed: %s", f.Parent.CloseOutcome)
+				}
+				f.DiscardIntent = &feature.DiscardIntent{
+					RequestedAt: time.Now(),
+					Step:        feature.DiscardStepIntentRecorded,
+				}
 				return nil
-			}
-			if f.Parent.CloseOutcome != "" {
-				return fmt.Errorf("child already closed: %s", f.Parent.CloseOutcome)
-			}
-			f.DiscardIntent = &feature.DiscardIntent{
-				RequestedAt: time.Now(),
-				Step:        feature.DiscardStepIntentRecorded,
-			}
-			return nil
+			})
 		}); err != nil {
 			return fmt.Errorf("recording discard intent: %w", err)
 		}
@@ -109,16 +114,22 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 		step = feature.DiscardStepSessionsQuiesced
 	}
 
-	// Step 4: Resolve pending attention.
+	// Step 4: Resolve pending attention. Only advance the durable
+	// step once the attention-clearing save has succeeded, otherwise
+	// the durable step name would overstate reality and leave prompts
+	// uncleared while the child continues toward Discarded.
 	if step == feature.DiscardStepSessionsQuiesced {
-		o.resolveChildAttention(childID)
+		if err := o.resolveChildAttention(childID); err != nil {
+			return fmt.Errorf("resolving child attention during discard: %w", err)
+		}
 		if err := o.setDiscardStep(childID, feature.DiscardStepAttentionResolved); err != nil {
 			return err
 		}
 		step = feature.DiscardStepAttentionResolved
 	}
 
-	// Step 5: Integration safety (Task 5).
+	// Step 5: Integration safety — classify parent refs and roll back
+	// provably child-applied candidates.
 	if step == feature.DiscardStepAttentionResolved {
 		safe, err := o.ensureDiscardRefSafety(childID)
 		if err != nil {
@@ -167,7 +178,31 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 		if err != nil {
 			return fmt.Errorf("reload child for cleanup: %w", err)
 		}
-		o.cleanupChildResourcesPerRepo(child)
+		warnings := o.cleanupChildResourcesPerRepo(child)
+		// Durably record per-repo cleanup warnings on the transaction
+		// journal so they remain visible and retryable after restart.
+		if child.Parent.Transaction != nil {
+			for _, repo := range child.Repos {
+				warning := warnings[repo.Name]
+				if err := o.recordTransactionCleanupWarning(childID, repo.Name, warning); err != nil {
+					return fmt.Errorf("record discard cleanup warning for %s: %w", repo.Name, err)
+				}
+			}
+		}
+		// Only advance to cleanup_done when every repo's disposable
+		// worktree has been removed. A failed cleanup must remain
+		// durably visible (worktree path still set, warning recorded)
+		// and retryable through ReconcileDiscardIntents so the parent
+		// can launch a new child while the older cleanup tail retries.
+		reloaded, reloadErr := o.deps.Lifecycle.Get(childID)
+		if reloadErr != nil {
+			return fmt.Errorf("reload child after cleanup: %w", reloadErr)
+		}
+		if reloaded.AnyChildWorktreePending() {
+			// Cleanup incomplete — leave the step at DiscardStepClosed
+			// so startup reconciliation resumes the cleanup tail.
+			return fmt.Errorf("discard cleanup for child %s incomplete; %d worktree(s) still pending", childID, countPendingWorktrees(reloaded))
+		}
 		if err := o.setDiscardStep(childID, feature.DiscardStepCleanupDone); err != nil {
 			return err
 		}
@@ -189,19 +224,25 @@ func (o *Orchestrator) setDiscardStep(childID string, step feature.DiscardStep) 
 
 // resolveChildAttention settles pending questions, permissions, help, gates,
 // and input markers so no prompt or completion callback can mutate the child
-// after discard.
-func (o *Orchestrator) resolveChildAttention(childID string) {
+// after discard. It returns an error if the durable attention-clearing save
+// fails so the caller does not advance the discard state machine past a
+// failed update.
+func (o *Orchestrator) resolveChildAttention(childID string) error {
 	// Clear permission queue entries for this feature.
-	if o.deps.Store != nil {
-		_ = o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-			f.PermissionsQueue = nil
-			f.HelpQueue = nil
-			f.PendingNeedUserInputPath = ""
-			f.PendingReviewPhase = nil
-			f.PendingRewindReviewRoadmapPhase = nil
-			return nil
-		})
+	if o.deps.Store == nil {
+		return nil
 	}
+	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+		f.PermissionsQueue = nil
+		f.HelpQueue = nil
+		f.PendingNeedUserInputPath = ""
+		f.PendingReviewPhase = nil
+		f.PendingRewindReviewRoadmapPhase = nil
+		return nil
+	}); err != nil {
+		return fmt.Errorf("clearing pending attention for discard: %w", err)
+	}
+	return nil
 }
 
 // ensureDiscardRefSafety classifies parent refs against recorded anchors and
@@ -255,11 +296,20 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 	}
 
 	allSafe := true
+	inspectedRefs := false
 	for i := range journal.Entries {
 		entry := &journal.Entries[i]
-		if entry.ApplyState != feature.RepoApplyApplied {
+		// Already rolled back — nothing to do.
+		if entry.ApplyState == feature.RepoApplyRolledBack {
 			continue
 		}
+		// Entries that are not yet durably marked applied may still have
+		// their ref at the candidate: the apply CAS succeeds before the
+		// entry is persisted as RepoApplyApplied, so a crash between the
+		// CAS and the persist leaves the ref at the candidate while the
+		// entry's ApplyState is still empty or "applying". We must inspect
+		// the actual ref for every entry that is not already rolled back.
+		inspectedRefs = true
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
 			entry.Diagnostics = fmt.Sprintf("parent no longer has repository %s", entry.Repo)
@@ -278,7 +328,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 		if current == entry.CandidateSHA {
 			// Ref still at candidate — CAS rollback to anchor.
 			if err := cas.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
-				entry.Diagnostics = fmt.Sprintf("rollback CAS failed for %s: %v", ref, err)
+				entry.Diagnostics = fmt.Sprintf("repo %s rollback CAS failed for %s: %v", entry.Repo, ref, err)
 				allSafe = false
 				continue
 			}
@@ -289,7 +339,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 				parentWorktree = parentRepo.Path
 			}
 			if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.ParentAnchorSHA); err != nil {
-				entry.Diagnostics = fmt.Sprintf("syncing parent worktree for %s after rollback: %v", entry.Repo, err)
+				entry.Diagnostics = fmt.Sprintf("repo %s syncing parent worktree for %s after rollback: %v", entry.Repo, entry.Repo, err)
 				allSafe = false
 				continue
 			}
@@ -298,14 +348,14 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 			entry.ApplyState = feature.RepoApplyRolledBack
 		} else {
 			// Externally moved — cannot overwrite.
-			entry.Diagnostics = fmt.Sprintf("ref %s externally moved: anchor %s candidate %s observed %s",
-				ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)
+			entry.Diagnostics = fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
+				entry.Repo, ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)
 			allSafe = false
 		}
 	}
 
 	// Persist the updated journal.
-	if journal.Phase == feature.TransactionPhaseAttention || journal.AnyApplied() {
+	if inspectedRefs || journal.Phase == feature.TransactionPhaseAttention {
 		if allSafe {
 			journal.Phase = feature.TransactionPhaseRolledBack
 		} else {
@@ -318,6 +368,22 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 	}
 
 	return allSafe, nil
+}
+
+// countPendingWorktrees returns the number of child repos whose disposable
+// worktree path is still recorded, meaning per-repo cleanup has not durably
+// completed.
+func countPendingWorktrees(f *feature.Feature) int {
+	if f == nil {
+		return 0
+	}
+	n := 0
+	for i := range f.Repos {
+		if f.Repos[i].WorktreePath != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // ReconcileDiscardIntents processes discard intents at startup before

@@ -65,6 +65,10 @@ func IsPartialLoadError(err error) bool {
 type Store struct {
 	BaseDir string
 	mu      sync.Mutex // serializes writes while reads use atomic file commits
+
+	// testSaveInterceptor is a test-only hook consulted by saveUnlocked to
+	// inject failures. The concrete wiring lives in export_test.go.
+	testSaveInterceptor func(f *Feature) error
 }
 
 func NewStore(baseDir string) *Store {
@@ -99,6 +103,53 @@ func (s *Store) Modify(id string, fn func(f *Feature) error) error {
 	return s.saveUnlocked(f)
 }
 
+// RelationshipGuardFunc evaluates whether a mutation is allowed given the
+// loaded feature and its active child (nil when the feature is a child or no
+// active child exists). Return an error to reject the mutation. The feature
+// and activeChild are loaded under the store mutex; do not call other Store
+// methods from within.
+type RelationshipGuardFunc func(f *Feature, activeChild *Feature) error
+
+// ModifyGuarded atomically loads a feature, runs the relationship guard
+// function under the store mutex (using the same activeChildOfUnlocked scan
+// as CreateChildLocked), and — if the guard passes — applies the mutation
+// function and saves. This closes the time-of-check/time-of-use gap between a
+// standalone RelationshipGuard call and a subsequent Store.Modify: child
+// creation (CreateChildLocked) holds the same mutex, so no child can appear
+// between the guard check and the mutation.
+func (s *Store) ModifyGuarded(
+	id string,
+	guard RelationshipGuardFunc,
+	fn func(f *Feature) error,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	f, err := s.loadUnlocked(id)
+	if err != nil {
+		return err
+	}
+
+	var activeChild *Feature
+	if !f.IsChild() {
+		activeChild, err = s.activeChildOfUnlocked(id)
+		if err != nil {
+			return fmt.Errorf("checking active child during guarded modify: %w", err)
+		}
+	}
+
+	if guard != nil {
+		if err := guard(f, activeChild); err != nil {
+			return err
+		}
+	}
+
+	if err := fn(f); err != nil {
+		return err
+	}
+	return s.saveUnlocked(f)
+}
+
 // saveUnlocked writes a feature and (if populated and not sealed) its active
 // run without acquiring the mutex. Uses atomic write (temp file + rename) for
 // both files so readers never see a partial file.
@@ -107,6 +158,11 @@ func (s *Store) Modify(id string, fn func(f *Feature) error) error {
 // companion Run so the split-persistence layout stays coherent with call
 // sites that keep reading/writing `f.X` directly.
 func (s *Store) saveUnlocked(f *Feature) error {
+	if s.testSaveInterceptor != nil {
+		if err := s.testSaveInterceptor(f); err != nil {
+			return err
+		}
+	}
 	dir := filepath.Join(s.BaseDir, f.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating feature directory: %w", err)

@@ -135,6 +135,7 @@ func (e PermissionAnswerRequestDecision) Valid() bool {
 const (
 	FeatureActionCleanup            FeatureAction = "cleanup"
 	FeatureActionDelete             FeatureAction = "delete"
+	FeatureActionDiscard            FeatureAction = "discard"
 	FeatureActionMarkDone           FeatureAction = "mark-done"
 	FeatureActionMerge              FeatureAction = "merge"
 	FeatureActionNeedUserInput      FeatureAction = "need-user-input"
@@ -158,6 +159,8 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionCleanup:
 		return true
 	case FeatureActionDelete:
+		return true
+	case FeatureActionDiscard:
 		return true
 	case FeatureActionMarkDone:
 		return true
@@ -312,6 +315,7 @@ func (e RunFeatureActionParamsXAgenticoClient) Valid() bool {
 const (
 	RunFeatureActionParamsActionCleanup            RunFeatureActionParamsAction = "cleanup"
 	RunFeatureActionParamsActionDelete             RunFeatureActionParamsAction = "delete"
+	RunFeatureActionParamsActionDiscard            RunFeatureActionParamsAction = "discard"
 	RunFeatureActionParamsActionMarkDone           RunFeatureActionParamsAction = "mark-done"
 	RunFeatureActionParamsActionMerge              RunFeatureActionParamsAction = "merge"
 	RunFeatureActionParamsActionNeedUserInput      RunFeatureActionParamsAction = "need-user-input"
@@ -335,6 +339,8 @@ func (e RunFeatureActionParamsAction) Valid() bool {
 	case RunFeatureActionParamsActionCleanup:
 		return true
 	case RunFeatureActionParamsActionDelete:
+		return true
+	case RunFeatureActionParamsActionDiscard:
 		return true
 	case RunFeatureActionParamsActionMarkDone:
 		return true
@@ -390,6 +396,7 @@ func (e RunFeatureSubactionParamsXAgenticoClient) Valid() bool {
 const (
 	RunFeatureSubactionParamsActionCleanup            RunFeatureSubactionParamsAction = "cleanup"
 	RunFeatureSubactionParamsActionDelete             RunFeatureSubactionParamsAction = "delete"
+	RunFeatureSubactionParamsActionDiscard            RunFeatureSubactionParamsAction = "discard"
 	RunFeatureSubactionParamsActionMarkDone           RunFeatureSubactionParamsAction = "mark-done"
 	RunFeatureSubactionParamsActionMerge              RunFeatureSubactionParamsAction = "merge"
 	RunFeatureSubactionParamsActionNeedUserInput      RunFeatureSubactionParamsAction = "need-user-input"
@@ -413,6 +420,8 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 	case RunFeatureSubactionParamsActionCleanup:
 		return true
 	case RunFeatureSubactionParamsActionDelete:
+		return true
+	case RunFeatureSubactionParamsActionDiscard:
 		return true
 	case RunFeatureSubactionParamsActionMarkDone:
 		return true
@@ -658,6 +667,7 @@ type ActionResponse struct {
 	CleanupFeatureResponse        CleanupFeatureResponse        `json:"cleanup_feature_response,omitempty"`
 	CreateFeatureResponse         CreateFeatureResponse         `json:"create_feature_response,omitempty"`
 	DeleteFeatureResponse         DeleteFeatureResponse         `json:"delete_feature_response,omitempty"`
+	DiscardChildResponse          DiscardChildResponse          `json:"discard_child_response,omitempty"`
 	FeatureConfigUpdateResponse   FeatureConfigUpdateResponse   `json:"feature_config_update_response,omitempty"`
 	FeatureRestartResponse        FeatureRestartResponse        `json:"feature_restart_response,omitempty"`
 	FeatureStartResponse          FeatureStartResponse          `json:"feature_start_response,omitempty"`
@@ -876,6 +886,14 @@ type Cycle struct {
 
 // DeleteFeatureResponse defines model for DeleteFeatureResponse.
 type DeleteFeatureResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
+}
+
+// DiscardChildResponse defines model for DiscardChildResponse.
+type DiscardChildResponse struct {
 	APIVersion string       `json:"api_version"`
 	FeatureID  string       `json:"feature_id"`
 	Meta       ResponseMeta `json:"meta,omitempty"`

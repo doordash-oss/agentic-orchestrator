@@ -53,6 +53,39 @@ func (o *Orchestrator) StartRepoCycleImplement(
 	cycleType feature.RepoCycleType,
 	planContent string,
 ) (string, error) {
+	return o.StartRepoCycleImplementWithPreparation(featureID, repoName, cycleType, planContent, nil)
+}
+
+// StartRepoCycleImplementWithPreparation runs prepare and starts a per-repo
+// cycle under one relationship read lock. Adapters use this boundary when
+// cycle preparation mutates durable state that must not land after a
+// concurrent child creation wins the relationship write lock.
+func (o *Orchestrator) StartRepoCycleImplementWithPreparation(
+	featureID, repoName string,
+	cycleType feature.RepoCycleType,
+	planContent string,
+	prepare func() error,
+) (string, error) {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationDelivery); err != nil {
+		return "", err
+	}
+	if prepare != nil {
+		if err := prepare(); err != nil {
+			return "", err
+		}
+	}
+	return o.startRepoCycleImplementLocked(featureID, repoName, cycleType, planContent)
+}
+
+// startRepoCycleImplementLocked starts a per-repo cycle while the caller holds
+// the relationship read lock.
+func (o *Orchestrator) startRepoCycleImplementLocked(
+	featureID, repoName string,
+	cycleType feature.RepoCycleType,
+	planContent string,
+) (string, error) {
 	if cycleType == feature.CycleReviewComments {
 		// The repoName from the TUI is purely a hint — the loop aggregates
 		// unaddressed comments across every Feature.Repos PR. planContent is

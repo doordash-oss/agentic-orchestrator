@@ -61,23 +61,17 @@ type PairedConfigResult struct {
 }
 
 // applyPairedConfig writes the Review configuration axes from input onto the
-// feature, normalizing checkpoints against the feature's own pipeline and
-// publishability. Pipeline identity is never touched.
+// feature. Checkpoints are persisted as the single canonical paired value
+// without per-record pipeline filtering; each pipeline ignores inapplicable
+// gates at execution time. Pipeline identity is never touched.
 func applyPairedConfig(f *Feature, input PairedConfigInput) ConfigSnapshot {
 	f.Models = input.Models
 	f.Effort = input.Effort
 	f.Inquireness = input.Inquireness
-	f.Checkpoints = f.Pipeline.NormalizeCheckpoints(input.Checkpoints, f.IsPublishable())
+	f.Checkpoints = input.Checkpoints
 	f.InputNotifications = PersistInputNotificationsMode(input.InputNotifications)
 	f.AutomaticReviewMode = PersistAutomaticReviewMode(input.AutomaticReviewMode)
-	return ConfigSnapshot{
-		Models:              f.Models,
-		Effort:              f.Effort,
-		Inquireness:         f.Inquireness,
-		Checkpoints:         f.Checkpoints,
-		InputNotifications:  NormalizeInputNotificationsMode(f.InputNotifications),
-		AutomaticReviewMode: NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
-	}
+	return configSnapshotOf(f)
 }
 
 // configSnapshotOf captures the current Review configuration axes.
@@ -92,13 +86,31 @@ func configSnapshotOf(f *Feature) ConfigSnapshot {
 	}
 }
 
-// UpdatePairedConfig atomically applies a paired Review configuration update
+// configSnapshotToInput converts a ConfigSnapshot back to a
+// PairedConfigInput so a failed paired update can revert both records to
+// their pre-update state (all-old) instead of exposing a split pair.
+func configSnapshotToInput(snap ConfigSnapshot) PairedConfigInput {
+	return PairedConfigInput{
+		Models:              snap.Models,
+		Effort:              snap.Effort,
+		Inquireness:         snap.Inquireness,
+		Checkpoints:         snap.Checkpoints,
+		InputNotifications:  snap.InputNotifications,
+		AutomaticReviewMode: snap.AutomaticReviewMode,
+	}
+}
+
+// UpdatePairedConfig applies a serialized paired Review configuration update
 // to both the parent and its active child under the Store write lock. The
 // submitted pipeline must match the addressed record's pipeline; a mismatch
 // returns ErrPipelineMismatch without changing either record. Durable intent
 // is written before the first record changes so startup reconciliation can
 // roll an interrupted update forward exactly once. A racing child close or
 // discard serializes to an all-old or all-new result under the same lock.
+// If the child write succeeds but the parent write fails, the child is
+// reverted to its pre-update config so both records converge to all-old
+// rather than exposing a split pair; the intent is only re-armed if the
+// revert itself fails.
 func (s *Store) UpdatePairedConfig(
 	parentID string,
 	input PairedConfigInput,
@@ -153,11 +165,13 @@ func (s *Store) UpdatePairedConfig(
 	}
 
 	// Step 2: Apply to child.
-	applyPairedConfig(child, input)
+	childAfter := applyPairedConfig(child, input)
 	if err := s.saveUnlocked(child); err != nil {
 		// Clear the intent so the parent is not left with a stale intent.
 		parent.PendingConfigUpdate = nil
-		_ = s.saveUnlocked(parent)
+		if clearErr := s.saveUnlocked(parent); clearErr != nil {
+			return nil, fmt.Errorf("saving child config: %w (also failed clearing intent: %v)", err, clearErr)
+		}
 		return nil, fmt.Errorf("saving child config: %w", err)
 	}
 
@@ -165,10 +179,39 @@ func (s *Store) UpdatePairedConfig(
 	parentAfter := applyPairedConfig(parent, input)
 	parent.PendingConfigUpdate = nil
 	if err := s.saveUnlocked(parent); err != nil {
-		return nil, fmt.Errorf("saving parent config: %w", err)
+		// The child already has the new config but the parent save failed.
+		// Rather than exposing a split pair, revert the child to its
+		// pre-update config so both records converge to all-old. If the
+		// revert succeeds, no reconciliation intent is needed. If the
+		// revert also fails, re-arm the intent for startup reconciliation
+		// and surface both errors.
+		revertInput := configSnapshotToInput(childBefore)
+		applyPairedConfig(child, revertInput)
+		if revertErr := s.saveUnlocked(child); revertErr != nil {
+			// Could not revert the child — re-arm intent so startup
+			// reconciliation rolls the parent forward.
+			parent.PendingConfigUpdate = intent
+			if rearmErr := s.saveUnlocked(parent); rearmErr != nil {
+				return nil, fmt.Errorf("saving parent config: %w (also failed reverting child: %v and re-arming intent: %v)", err, revertErr, rearmErr)
+			}
+			return nil, fmt.Errorf("saving parent config: %w (child revert failed: %v; reconciliation pending)", err, revertErr)
+		}
+		// Child reverted to old config. Revert parent in memory and clear
+		// the intent so disk matches the all-old state.
+		applyPairedConfig(parent, configSnapshotToInput(parentBefore))
+		parent.PendingConfigUpdate = nil
+		if rearmErr := s.saveUnlocked(parent); rearmErr != nil {
+			// Parent save still failing — re-arm intent for startup.
+			parent.PendingConfigUpdate = intent
+			if rearmSaveErr := s.saveUnlocked(parent); rearmSaveErr != nil {
+				return nil, fmt.Errorf("saving parent config: %w (child reverted but parent re-save failed: %v; re-arming intent also failed: %v)", err, rearmErr, rearmSaveErr)
+			}
+			return nil, fmt.Errorf("saving parent config: %w (child reverted but parent re-save failed: %v; reconciliation pending)", err, rearmErr)
+		}
+		return nil, fmt.Errorf("saving parent config: %w (both records reverted to prior config)", err)
 	}
 
-	changed := !reflect.DeepEqual(parentBefore, parentAfter) || !reflect.DeepEqual(childBefore, parentAfter)
+	changed := !reflect.DeepEqual(parentBefore, parentAfter) || !reflect.DeepEqual(childBefore, childAfter)
 
 	return &PairedConfigResult{
 		ParentID: parentID,

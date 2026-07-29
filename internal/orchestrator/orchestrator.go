@@ -432,7 +432,6 @@ func (o *Orchestrator) SetRunMultiRepoFinalReviewFn(fn func(
 }
 
 // CreateFeature delegates to FeatureLifecycle.Create, fires the
-// OnFeatureCreated hook, and emits a FeatureCreated event.
 func (o *Orchestrator) CreateFeature(
 	name, description string, repos []string,
 	models config.ModelConfig, exitCriteria, inquireness string,

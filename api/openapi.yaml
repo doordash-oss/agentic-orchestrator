@@ -181,10 +181,8 @@ paths:
         retains the restart action only); 409 `child_execution_blocked`
         while setup is queued, running, or failed; 409
         `child_profile_unsupported` for Large/Moonshot children (child
-        knowledge-base isolation is not yet available); 409
-        `child_repo_count_unsupported` for children with more than one
-        repository. Capability rejections never invalidate or close the
-        child record.
+        knowledge-base isolation is not yet available). Capability
+        rejections never invalidate or close the child record.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/FeatureAction"
@@ -2570,38 +2568,8 @@ components:
               format: date-time
               description: Relationship close timestamp; only set on closed child features.
               x-go-type-skip-optional-pointer: false
-            integration:
-              $ref: "#/components/schemas/ChildIntegration"
-            dirty:
-              type: array
-              description: >-
-                Categorized parent-worktree diagnostics recorded when a dirty
-                preflight blocked child integration.
-              items:
-                $ref: "#/components/schemas/ChildDirtyDiagnostics"
-    ChildIntegration:
-      type: object
-      description: >-
-        Durable single-repository child-to-parent integration record: the
-        attempt anchors, the resulting no-fast-forward merge HEAD once
-        durable, structured retry attention, and any non-fatal cleanup
-        warning.
-      properties:
-        parent_branch:
-          type: string
-        parent_anchor_sha:
-          type: string
-        child_head_sha:
-          type: string
-        merge_head:
-          type: string
-        phase:
-          type: string
-          description: attention while a retryable failure is parked; merged once the boundary is durable.
-        attention:
-          type: string
-        cleanup_warning:
-          type: string
+            transaction:
+              $ref: "#/components/schemas/TransactionJournal"
     ChildDirtyDiagnostics:
       type: object
       properties:
@@ -2627,6 +2595,61 @@ components:
           type: integer
         untracked_total:
           type: integer
+    TransactionJournal:
+      type: object
+      description: >-
+        Ordered per-repository transaction journal for multi-repository
+        child-to-parent integration.
+      properties:
+        phase:
+          type: string
+          description: >-
+            Aggregate transaction phase: preparing, prepared, applying,
+            applied, rolling_back, rolled_back, attention, or merged.
+        attention:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepoTransactionEntry"
+    RepoTransactionEntry:
+      type: object
+      properties:
+        repo:
+          type: string
+        parent_branch:
+          type: string
+        parent_anchor_sha:
+          type: string
+        expected_ref_sha:
+          type: string
+        child_head_sha:
+          type: string
+        candidate_sha:
+          type: string
+        merge_head:
+          type: string
+        prep_state:
+          type: string
+        apply_state:
+          type: string
+        observed_sha:
+          type: string
+        conflict_files:
+          type: array
+          items:
+            type: string
+        dirty:
+          type: array
+          description: >-
+            Categorized parent-worktree diagnostics recorded when a dirty
+            preflight blocked preparation for this repository.
+          items:
+            $ref: "#/components/schemas/ChildDirtyDiagnostics"
+        cleanup_warning:
+          type: string
+        diagnostics:
+          type: string
     Usage:
       type: object
       properties:

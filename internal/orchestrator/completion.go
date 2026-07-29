@@ -1129,7 +1129,7 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 	// explicit local-integration stage instead of CodeReady, publication, or
 	// any child delivery path.
 	if f.IsChild() {
-		return o.runChildIntegration(featureID)
+		return o.RunChildIntegration(featureID)
 	}
 
 	if !f.IsPublishable() || !f.Checkpoints.AutoPublish() {

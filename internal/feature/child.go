@@ -140,10 +140,10 @@ type ChildRelationship struct {
 	CloseOutcome string `yaml:"close_outcome,omitempty"`
 	// ClosedAt is the relationship close timestamp, set with CloseOutcome.
 	ClosedAt *time.Time `yaml:"closed_at,omitempty"`
-	// Integration is the durable single-repository integration record. It is
-	// populated when a successful final review hands the child into local
-	// integration instead of delivery, and updated across restart retries.
-	Integration *ChildIntegration `yaml:"integration,omitempty"`
+	// Transaction is the ordered per-repository transaction journal for
+	// child-to-parent integration. It is the sole integration record,
+	// used for both single-repository and multi-repository children.
+	Transaction *TransactionJournal `yaml:"transaction,omitempty"`
 	// Bases captures the exact parent tip per repository at launch time.
 	Bases []ChildRepoBase `yaml:"bases,omitempty"`
 }
@@ -167,25 +167,48 @@ func (f *Feature) IsActiveChild() bool {
 // cleanup never settled, so the disposable worktree path or a cleanup
 // warning is still durable on the record.
 func (f *Feature) IntegrationResumable() bool {
-	if !f.IsChild() || f.Parent.Integration == nil || f.Parent.Integration.Phase == "" {
+	if !f.IsChild() {
 		return false
 	}
-	if f.IsActiveChild() {
-		return true
-	}
-	if f.Parent.CloseOutcome != ChildCloseOutcomeCompleted || f.Parent.Integration.MergeHEAD == "" {
+	if f.Parent.Transaction == nil || f.Parent.Transaction.Phase == "" {
 		return false
 	}
-	return f.Parent.Integration.CleanupWarning != "" || f.ChildWorktreePending()
+	phase := f.Parent.Transaction.Phase
+	if phase == TransactionPhaseMerged {
+		return f.IsActiveChild() || f.hasUnsettledClosureTail()
+	}
+	return f.IsActiveChild()
 }
 
-// ChildWorktreePending reports whether the disposable child worktree path is
-// still recorded, meaning cleanup has not durably completed.
-func (f *Feature) ChildWorktreePending() bool {
-	if f == nil || len(f.Repos) == 0 {
+// hasUnsettledClosureTail reports whether any disposable child worktree path
+// or cleanup warning is still durable on the record.
+func (f *Feature) hasUnsettledClosureTail() bool {
+	if f.Parent.CloseOutcome != ChildCloseOutcomeCompleted {
 		return false
 	}
-	return f.Repos[0].WorktreePath != ""
+	if t := f.Parent.Transaction; t != nil {
+		for i := range t.Entries {
+			if t.Entries[i].CleanupWarning != "" {
+				return true
+			}
+		}
+	}
+	return f.AnyChildWorktreePending()
+}
+
+// AnyChildWorktreePending reports whether any child repository's disposable
+// worktree path is still recorded, meaning per-repo cleanup has not durably
+// completed for at least one repository.
+func (f *Feature) AnyChildWorktreePending() bool {
+	if f == nil {
+		return false
+	}
+	for i := range f.Repos {
+		if f.Repos[i].WorktreePath != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // BaseSHA returns the captured launch tip for the named repository, or "".

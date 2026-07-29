@@ -24,15 +24,15 @@ import (
 )
 
 // This file owns the child execution and integration seam: a setup-complete
-// Medium single-repository child runs the ordinary Plan/Implement/Review
-// pipeline, and a successful final review enters an explicit local-
-// integration stage instead of any child delivery path. A durable
-// no-fast-forward merge boundary on the recorded parent branch closes the
-// child, moves the parent to CodeReady, cleans disposable child resources,
-// and only then evaluates the parent's current publish configuration — the
-// child's Completed close and the parent's CodeReady transition are durable
-// before publication begins, so a failed push or pull request never reopens
-// the child or undoes the local merge.
+// Medium child runs the ordinary Plan/Implement/Review pipeline, and a
+// successful final review enters an explicit local-integration stage instead
+// of any child delivery path. A durable no-fast-forward merge boundary on
+// the recorded parent branch closes the child, moves the parent to CodeReady,
+// cleans disposable child resources, and only then evaluates the parent's
+// current publish configuration — the child's Completed close and the
+// parent's CodeReady transition are durable before publication begins, so a
+// failed push or pull request never reopens the child or undoes the local
+// merge.
 
 // childHeadReader is the exact-HEAD lookup integration requires; it is
 // satisfied by *git.WorktreeManager and asserted structurally so tests can
@@ -41,27 +41,15 @@ type childHeadReader interface {
 	CurrentHeadSHA(worktreePath string) (string, error)
 }
 
-// childBranchReader reports the branch checked out in a worktree; satisfied
-// by *git.WorktreeManager.
-type childBranchReader interface {
-	CurrentBranch(worktreePath string) string
-}
-
-// childMerger creates the explicit two-parent no-fast-forward merge boundary
-// inside the parent worktree; satisfied by *git.WorktreeManager.
-type childMerger interface {
-	MergeNoFF(worktreePath, ref, message string) error
-}
-
 // checkChildExecution is the fail-closed capability gate for child feature
 // execution. Queued, setting-up, and failed-setup children stay reachable
 // only through RunSetup / RetrySetup; setup-complete children must satisfy
-// the supported execution shape (active Medium, exactly one repository); a
-// child whose relationship has settled can never replay pipeline phases —
-// with allowClosedRestart the gate widens only for a Completed child whose
-// impermanent closure tail is genuinely resumable (Restart's sole route
-// back into settleChildClosureTail). Feature-lookup failures propagate so
-// the gate can never be silently skipped.
+// the supported execution shape (active Medium); a child whose relationship
+// has settled can never replay pipeline phases — with allowClosedRestart the
+// gate widens only for a Completed child whose impermanent closure tail is
+// genuinely resumable (Restart's sole route back into
+// settleChildClosureTail). Feature-lookup failures propagate so the gate
+// can never be silently skipped.
 func (o *Orchestrator) checkChildExecution(featureID string, allowClosedRestart bool) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -84,26 +72,13 @@ func (o *Orchestrator) checkChildExecution(featureID string, allowClosedRestart 
 
 // ErrChildIntegrationRefused marks the durable refusal conditions under
 // which integration never mutates the parent: closed relationship, parent
-// record or repository mismatch, more than one child repository, or a final
-// review that is not durably approved.
+// record or repository mismatch, or a final review that is not durably
+// approved.
 var ErrChildIntegrationRefused = errors.New("child integration refused")
 
-// runChildIntegration carries an approved child through local integration,
-// closure, cleanup, and the parent's publish decision. Every step is
-// idempotent: the anchors and merge HEAD are durable on the child record, so
-// a Restart after any failure replays exactly the unfinished steps and never
-// reruns Plan, Implement, or an approved Final Review.
-//
-// Retryable preflight/merge failures are recorded as structured integration
-// attention on the child (parent ref untouched) and reported through
-// integration events; the function returns nil for those so the completion
-// pipeline never marks the child failed. Durable refusals and internal
-// persistence errors are returned to the caller.
-//
-// A child whose relationship is already closed re-enters only the impermanent
-// closure tail (cleanup-warning settlement and the publish handoff); the
-// merge and closure themselves are never replayed.
-func (o *Orchestrator) runChildIntegration(childID string) error {
+// RunChildIntegration carries an approved child through local integration,
+// closure, cleanup, and the parent's publish decision.
+func (o *Orchestrator) RunChildIntegration(childID string) error {
 	child, err := o.deps.Lifecycle.Get(childID)
 	if err != nil {
 		return fmt.Errorf("load child: %w", err)
@@ -112,14 +87,13 @@ func (o *Orchestrator) runChildIntegration(childID string) error {
 		return fmt.Errorf("%w: feature is not a child feature", ErrChildIntegrationRefused)
 	}
 	if child.Parent.CloseOutcome != "" {
-		// The relationship is settled: the merge and closure are durable and
-		// must never replay. Only a completed relationship with a recorded
-		// merge may resume its impermanent closure tail.
-		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted ||
-			child.Parent.Integration == nil || child.Parent.Integration.MergeHEAD == "" {
+		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 			return fmt.Errorf("%w: child relationship %s already closed (%s)", ErrChildIntegrationRefused, child.ID, child.Parent.CloseOutcome)
 		}
-		return o.settleChildClosureTail(childID, child.Parent.ParentID)
+		if child.Parent.Transaction != nil && child.Parent.Transaction.Phase == feature.TransactionPhaseMerged {
+			return o.settleChildClosureTail(childID, child.Parent.ParentID)
+		}
+		return fmt.Errorf("%w: child relationship %s already closed (%s)", ErrChildIntegrationRefused, child.ID, child.Parent.CloseOutcome)
 	}
 	if err := validateChildForIntegration(child); err != nil {
 		return err
@@ -128,86 +102,17 @@ func (o *Orchestrator) runChildIntegration(childID string) error {
 	if err != nil {
 		return fmt.Errorf("%w: parent %s unreadable: %v", ErrChildIntegrationRefused, child.Parent.ParentID, err)
 	}
-	if err := validateParentForIntegration(child, parent); err != nil {
-		return err
-	}
-
-	childRepo := child.Repos[0]
-	childWorktree := childRepo.WorktreePath
-	if childWorktree == "" {
-		childWorktree = childRepo.Path
-	}
-	parentRepo := featureRepoByName(parent, childRepo.Name)
-	parentWorktree := parentRepo.WorktreePath
-	if parentWorktree == "" {
-		parentWorktree = parentRepo.Path
-	}
-
-	integration := child.Parent.Integration
-	if integration == nil || integration.ChildHeadSHA == "" {
-		integration, err = o.captureChildIntegrationAnchors(child, parentRepo, childWorktree, parentWorktree)
-		if err != nil {
-			return err
-		}
-	}
-
-	if integration.MergeHEAD == "" {
-		// Recheck the parent worktree with the same staged, unstaged, and
-		// untracked cleanliness contract used at launch, immediately before
-		// any merge. A dirty parent leaves its ref unchanged and parks the
-		// child at integration attention.
-		dirty, err := o.childIntegrationDirty(parentWorktree, parentRepo.Name)
-		if err != nil {
-			return err
-		}
-		if len(dirty) > 0 {
-			return o.recordChildIntegrationAttention(child, "parent worktree has uncommitted changes", dirty)
-		}
-		if err := o.mergeChildIntoParent(child, integration, parentWorktree); err != nil {
-			return o.recordChildIntegrationAttention(child, err.Error(), nil)
-		}
-		mergeHEAD, err := o.childHeadSHA(parentWorktree)
-		if err != nil {
-			return fmt.Errorf("capture parent merge head: %w", err)
-		}
-		if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-			f.Parent.Integration.MergeHEAD = mergeHEAD
-			f.Parent.Integration.Phase = feature.ChildIntegrationPhaseMerged
-			f.Parent.Integration.Attention = ""
-			f.Parent.Integration.Dirty = nil
-			return nil
-		}); err != nil {
-			return fmt.Errorf("record integration merge head: %w", err)
-		}
-	}
-
-	return o.closeChildAfterMerge(childID, parent.ID)
+	return o.runTransactionIntegration(childID, child, parent)
 }
 
 // validateChildForIntegration enforces the durable preconditions under which
 // local integration may touch an open child relationship.
 func validateChildForIntegration(child *feature.Feature) error {
-	if len(child.Repos) != 1 {
-		return fmt.Errorf("%w: child %s has %d repositories; multi-repository integration is not available", ErrChildIntegrationRefused, child.ID, len(child.Repos))
+	if len(child.Repos) == 0 {
+		return fmt.Errorf("%w: child %s has no repositories", ErrChildIntegrationRefused, child.ID)
 	}
 	if child.Status != feature.StatusReviewPassed {
 		return fmt.Errorf("%w: final review is not durably approved for child %s (status %s)", ErrChildIntegrationRefused, child.ID, child.Status)
-	}
-	return nil
-}
-
-// validateParentForIntegration confirms the persisted relationship still
-// describes the parent record and its single shared repository.
-func validateParentForIntegration(child, parent *feature.Feature) error {
-	if parent == nil || parent.IsChild() {
-		return fmt.Errorf("%w: parent record %s no longer matches the relationship", ErrChildIntegrationRefused, child.Parent.ParentID)
-	}
-	parentRepo := featureRepoByName(parent, child.Repos[0].Name)
-	if parentRepo == nil {
-		return fmt.Errorf("%w: parent %s no longer has repository %s", ErrChildIntegrationRefused, parent.ID, child.Repos[0].Name)
-	}
-	if parentRepo.Path != child.Repos[0].Path {
-		return fmt.Errorf("%w: repository %s path changed since launch (%s != %s)", ErrChildIntegrationRefused, child.Repos[0].Name, parentRepo.Path, child.Repos[0].Path)
 	}
 	return nil
 }
@@ -224,130 +129,247 @@ func featureRepoByName(f *feature.Feature, name string) *feature.FeatureRepo {
 	return nil
 }
 
-// captureChildIntegrationAnchors commits every remaining child change and
-// durably records the resulting full child HEAD plus the current parent
-// anchor BEFORE the parent branch is touched.
-func (o *Orchestrator) captureChildIntegrationAnchors(child *feature.Feature, parentRepo *feature.FeatureRepo, childWorktree, parentWorktree string) (*feature.ChildIntegration, error) {
-	if o.deps.Publisher == nil {
-		return nil, fmt.Errorf("child integration: publisher not configured")
+// runTransactionIntegration drives the transactional integration path:
+// prepare candidates, apply them, and close the child. It is idempotent —
+// a restart replays only the unfinished steps.
+//
+// When the journal is in the attention phase, the restart logic checks
+// whether the child head has changed since final-review approval. If the
+// child code changed, final review is invalidated and the child is routed
+// back through review. If only parent tips changed, candidates are rebuilt
+// while preserving the still-valid approval.
+func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *feature.Feature) error {
+	if err := validateTransactionParent(child, parent); err != nil {
+		return err
 	}
-	childHEAD, err := o.deps.Publisher.CommitAllAndGetHead(childWorktree, fmt.Sprintf("Integration commit for refactor child %s", child.ID))
-	if err != nil {
-		return nil, fmt.Errorf("commit child changes: %w", err)
-	}
-	anchor, err := o.childHeadSHA(parentWorktree)
-	if err != nil {
-		return nil, fmt.Errorf("capture parent anchor: %w", err)
-	}
-	integration := &feature.ChildIntegration{
-		ParentBranch:    parentRepo.Branch,
-		ParentAnchorSHA: anchor,
-		ChildHeadSHA:    childHEAD,
-		Phase:           feature.ChildIntegrationPhasePending,
-	}
-	if err := o.deps.Store.Modify(child.ID, func(f *feature.Feature) error {
-		f.Parent.Integration = integration
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("record integration anchors: %w", err)
-	}
-	return integration, nil
-}
 
-// childIntegrationDirty returns categorized parent-worktree diagnostics. A
-// missing or failing inspection fails closed: integration must never merge
-// into an unverified parent.
-func (o *Orchestrator) childIntegrationDirty(parentWorktree, repoName string) ([]feature.RepoDirtyDiagnostics, error) {
-	if o.deps.Cleanliness == nil {
-		return nil, fmt.Errorf("child integration: cleanliness inspection is not configured")
-	}
-	report, err := o.deps.Cleanliness.InspectCleanliness(parentWorktree, feature.DefaultDirtyPathLimit)
-	if err != nil {
-		return nil, fmt.Errorf("inspecting parent worktree %s: %w", repoName, err)
-	}
-	if !report.Dirty() {
-		return nil, nil
-	}
-	return []feature.RepoDirtyDiagnostics{{
-		Repo:           repoName,
-		Path:           parentWorktree,
-		Staged:         report.Staged,
-		Unstaged:       report.Unstaged,
-		Untracked:      report.Untracked,
-		StagedTotal:    report.StagedTotal,
-		UnstagedTotal:  report.UnstagedTotal,
-		UntrackedTotal: report.UntrackedTotal,
-	}}, nil
-}
+	journal := child.Parent.Transaction
 
-// mergeChildIntoParent creates the explicit no-fast-forward boundary on the
-// recorded parent branch. The parent worktree must still have the recorded
-// parent branch checked out, and the merge applies the recorded child head
-// SHA — never the mutable child branch name — so the durable attempt always
-// describes exactly the commits integrated. The merge helper aborts any
-// recorded in-progress merge, so the parent ref stays at its pre-integration
-// anchor on failure.
-func (o *Orchestrator) mergeChildIntoParent(child *feature.Feature, integration *feature.ChildIntegration, parentWorktree string) error {
-	branches, ok := o.deps.Worktrees.(childBranchReader)
-	if !ok {
-		return fmt.Errorf("child integration: branch inspection is not configured")
+	// If the journal has candidates prepared against an old parent-tip
+	// vector, check whether the parent tips have moved. If they moved
+	// cleanly and child code did not change, rebuild the candidate vector.
+	// If child code changed, invalidate final review.
+	if journal != nil && journal.AllCandidatesPrepared() && !journal.AllApplied() {
+		currentTips, err := o.transactionParentTipVector(parent, journal)
+		if err != nil {
+			return err
+		}
+		if transactionNeedsRebuild(journal, currentTips) {
+			changed, err := o.commitAndCompareChildHeads(child, journal)
+			if err != nil {
+				return err
+			}
+			if changed {
+				return o.invalidateFinalReview(childID, journal)
+			}
+			journal = nil
+		}
 	}
-	merger, ok := o.deps.Worktrees.(childMerger)
-	if !ok {
-		return fmt.Errorf("child integration: merge capability is not configured")
+
+	// If the journal is in attention due to a conflict, check whether the
+	// child head changed since the reviewed head. If so, invalidate final
+	// review.
+	if journal != nil && journal.Phase == feature.TransactionPhaseAttention {
+		changed, err := o.commitAndCompareChildHeads(child, journal)
+		if err != nil {
+			return err
+		}
+		if changed {
+			return o.invalidateFinalReview(childID, journal)
+		}
 	}
-	if current := branches.CurrentBranch(parentWorktree); current != integration.ParentBranch {
-		return fmt.Errorf("parent worktree %s has branch %q checked out; integration requires the recorded parent branch %q", parentWorktree, current, integration.ParentBranch)
+
+	// If the journal is in preparing phase, candidate staging was
+	// interrupted by a crash. If all candidates are durable, advance
+	// to prepared; otherwise re-prepare from scratch (safe because
+	// parent refs are never touched during preparation and child
+	// commits are idempotent).
+	if journal != nil && journal.Phase == feature.TransactionPhasePreparing {
+		if journal.AllCandidatesPrepared() {
+			journal.Phase = feature.TransactionPhasePrepared
+			if err := o.persistTransaction(childID, journal); err != nil {
+				return fmt.Errorf("recording prepared after interrupted staging: %w", err)
+			}
+		} else {
+			journal = nil
+		}
 	}
-	message := fmt.Sprintf("Merge refactor child %s into %s", child.ID, integration.ParentBranch)
-	if err := merger.MergeNoFF(parentWorktree, integration.ChildHeadSHA, message); err != nil {
-		return fmt.Errorf("merge child head %s into %s: %w", integration.ChildHeadSHA, integration.ParentBranch, err)
+
+	// If the journal was rolled back, all refs are back at their anchors.
+	// Clear it and re-prepare from scratch.
+	if journal != nil && journal.Phase == feature.TransactionPhaseRolledBack {
+		journal = nil
 	}
+
+	// If the journal was interrupted during rollback, resume it.
+	// rollbackTransaction is idempotent: it skips entries already
+	// rolled back (syncing their worktrees) and re-attempts only the
+	// remaining applied entries. On completion the journal transitions
+	// to rolled_back or attention.
+	if journal != nil && journal.Phase == feature.TransactionPhaseRollingBack {
+		if err := o.rollbackTransaction(child, parent, journal, -1); err != nil {
+			return err
+		}
+		var err error
+		child, err = o.deps.Lifecycle.Get(childID)
+		if err != nil {
+			return fmt.Errorf("reload child after rollback resume: %w", err)
+		}
+		journal = child.Parent.Transaction
+	}
+
+	// Step: prepare candidates (if not already prepared).
+	if journal == nil || journal.Phase == "" || journal.Phase == feature.TransactionPhaseAttention {
+		var err error
+		journal, err = o.prepareTransactionCandidates(child, parent)
+		if err != nil {
+			return err
+		}
+		if journal == nil {
+			return nil
+		}
+	}
+
+	// Step: apply candidates (if prepared or an apply was interrupted
+	// by a crash that left the journal in the applying phase).
+	// applyTransactionCandidates is idempotent — it skips entries that
+	// are already applied and re-attempts pending ones.
+	if journal.Phase == feature.TransactionPhasePrepared || journal.Phase == feature.TransactionPhaseApplying {
+		if err := o.applyTransactionCandidates(child, parent, journal); err != nil {
+			return err
+		}
+		var err error
+		child, err = o.deps.Lifecycle.Get(childID)
+		if err != nil {
+			return fmt.Errorf("reload child after apply: %w", err)
+		}
+		journal = child.Parent.Transaction
+	}
+
+	// Step: confirm all refs at candidates and close.
+	if journal != nil && journal.Phase == feature.TransactionPhaseApplied {
+		return o.closeTransactionAfterApply(childID, parent.ID)
+	}
+
 	return nil
 }
 
-// recordChildIntegrationAttention parks the child at the retryable
-// integration boundary with structured diagnostics and notifies consumers.
-// The child stays active and approved; replay is Restart's job.
-func (o *Orchestrator) recordChildIntegrationAttention(child *feature.Feature, attention string, dirty []feature.RepoDirtyDiagnostics) error {
-	if err := o.deps.Store.Modify(child.ID, func(f *feature.Feature) error {
-		if f.Parent.Integration == nil {
-			f.Parent.Integration = &feature.ChildIntegration{}
+// commitAndCompareChildHeads commits remaining child changes in every
+// repository and returns true if any child head differs from the
+// corresponding journal entry's recorded ChildHeadSHA. This detects whether
+// child code changed since final-review approval, requiring review
+// invalidation. An inspection failure is returned as an error so the caller
+// can propagate a contextual error instead of silently treating a broken
+// worktree as "unchanged."
+func (o *Orchestrator) commitAndCompareChildHeads(child *feature.Feature, journal *feature.TransactionJournal) (bool, error) {
+	if o.deps.Publisher == nil || journal == nil {
+		return false, nil
+	}
+	for i := range child.Repos {
+		childWorktree := child.Repos[i].WorktreePath
+		if childWorktree == "" {
+			childWorktree = child.Repos[i].Path
 		}
-		f.Parent.Integration.Phase = feature.ChildIntegrationPhaseAttention
-		f.Parent.Integration.Attention = attention
-		f.Parent.Integration.Dirty = dirty
-		f.LastError = attention
+		currentHead, err := o.deps.Publisher.CommitAllAndGetHead(childWorktree, fmt.Sprintf("Integration commit for refactor child %s repo %s", child.ID, child.Repos[i].Name))
+		if err != nil {
+			return false, fmt.Errorf("committing child changes for repo %s: %w", child.Repos[i].Name, err)
+		}
+		entry := journal.EntryByRepo(child.Repos[i].Name)
+		if entry != nil && entry.ChildHeadSHA != "" && currentHead != entry.ChildHeadSHA {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// invalidateFinalReview clears the transaction journal and resets the child
+// to StatusReviewPassed with CurrentPhase=PhaseFinalReview so the pipeline
+// routes it back through final review — not Plan or Implement — before a
+// fresh transaction can be prepared.
+func (o *Orchestrator) invalidateFinalReview(childID string, journal *feature.TransactionJournal) error {
+	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+		f.Parent.Transaction = nil
+		f.Status = feature.StatusReviewPassed
+		f.CurrentPhase = feature.PhaseFinalReview
+		f.LastError = ""
+		f.FailureType = ""
 		return nil
 	}); err != nil {
-		return fmt.Errorf("record integration attention: %w", err)
+		return fmt.Errorf("invalidating final review: %w", err)
 	}
 	o.emitEvent(ports.Event{
-		Type:             ports.RepoStatusChanged,
-		FeatureID:        child.ID,
-		RelatedFeatureID: child.Parent.ParentID,
-		RepoName:         child.Repos[0].Name,
-		Message:          "child integration needs attention: " + attention,
+		Type:      ports.RepoStatusChanged,
+		FeatureID: childID,
+		Message:   "child integration conflict changed child code; final review invalidated",
 	})
 	return nil
 }
 
-// closeChildAfterMerge performs the recoverable relationship transition: the
-// parent moves to CodeReady first so a failure there leaves the child open
-// and the whole transition retryable, then the child's Completed outcome and
-// close timestamp are persisted. Every step is idempotent; repeated entry is
-// a no-op for finished steps.
-func (o *Orchestrator) closeChildAfterMerge(childID, parentID string) error {
+// closeTransactionAfterApply completes the transaction closure only after
+// every parent ref is confirmed at its candidate commit. It marks the parent
+// CodeReady and the child Completed, then persists the merged phase, and
+// finally settles the closure tail (per-repo cleanup and publish handoff).
+//
+// Crash safety: the merged phase is persisted AFTER both the parent CodeReady
+// and child Completed transitions are durable, so a crash before the merged
+// write leaves the journal in the applied phase — startup reconciliation
+// sees all refs at candidates and finishes closure exactly once.
+// Idempotent: repeated entry is a no-op for finished steps.
+func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) error {
+	child, err := o.deps.Lifecycle.Get(childID)
+	if err != nil {
+		return fmt.Errorf("reload child for closure: %w", err)
+	}
+	journal := child.Parent.Transaction
+	if journal == nil {
+		return fmt.Errorf("transaction journal missing during closure")
+	}
+
+	// Confirm every parent ref is at its candidate commit.
+	cas, ok := o.deps.Worktrees.(refCASOperator)
+	if !ok {
+		return fmt.Errorf("transaction: ref CAS operations are not configured")
+	}
 	parent, err := o.deps.Lifecycle.Get(parentID)
 	if err != nil {
-		return fmt.Errorf("reload parent: %w", err)
+		return fmt.Errorf("reload parent for closure: %w", err)
 	}
+	for i := range journal.Entries {
+		entry := &journal.Entries[i]
+		parentRepo := featureRepoByName(parent, entry.Repo)
+		if parentRepo == nil {
+			return fmt.Errorf("parent no longer has repository %s during closure", entry.Repo)
+		}
+		ref := "refs/heads/" + entry.ParentBranch
+		current, err := cas.RefSHA(parentRepo.Path, ref)
+		if err != nil {
+			return fmt.Errorf("confirming ref %s during closure: %w", ref, err)
+		}
+		if current != entry.CandidateSHA {
+			return fmt.Errorf("ref %s is at %s, expected candidate %s; closure impossible", ref, current, entry.CandidateSHA)
+		}
+		entry.MergeHEAD = entry.CandidateSHA
+		// Ensure the parent worktree is synced to the candidate. A crash
+		// between the apply-progress write and the worktree sync can leave
+		// the worktree at the old tree even though the ref is at the
+		// candidate. This is idempotent when the worktree is already current.
+		parentWorktree := parentRepo.WorktreePath
+		if parentWorktree == "" {
+			parentWorktree = parentRepo.Path
+		}
+		if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.CandidateSHA); err != nil {
+			return fmt.Errorf("syncing parent worktree for repo %s during closure: %w", entry.Repo, err)
+		}
+	}
+
+	// Parent → CodeReady first (failure leaves child open, retryable).
 	if parent.Status != feature.StatusCodeReady {
 		if err := o.deps.Lifecycle.MarkCodeReady(parentID); err != nil {
 			return fmt.Errorf("mark parent code ready: %w", err)
 		}
 	}
 
+	// Child → Completed.
 	now := time.Now()
 	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		if f.Parent.CloseOutcome != "" {
@@ -361,27 +383,34 @@ func (o *Orchestrator) closeChildAfterMerge(childID, parentID string) error {
 		return fmt.Errorf("close child relationship: %w", err)
 	}
 
+	// Persist the merged phase AFTER both transitions are durable.
+	journal.Phase = feature.TransactionPhaseMerged
+	if err := o.persistTransaction(childID, journal); err != nil {
+		return fmt.Errorf("recording merged transaction: %w", err)
+	}
+
 	return o.settleChildClosureTail(childID, parentID)
 }
 
 // settleChildClosureTail is the impermanent (fully retryable) end of the
-// integration boundary: cleanup disposable child resources, durably record
-// the cleanup outcome, and only then hand delivery back to the parent's
-// current publish configuration. It is safe to re-enter on a closed child —
-// the merge and closure are never touched here. Any storage failure is
-// returned so callers never observe a settled closure tail whose durable
-// state was not written.
+// integration boundary: cleanup disposable child resources per-repository,
+// durably record the cleanup outcome, and only then hand delivery back to
+// the parent's current publish configuration. It is safe to re-enter on a
+// closed child — the merge and closure are never touched here. Any storage
+// failure is returned so callers never observe a settled closure tail whose
+// durable state was not written.
 func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	child, err := o.deps.Lifecycle.Get(childID)
 	if err != nil {
 		return fmt.Errorf("reload child: %w", err)
 	}
 
-	// Cleanup failure records a warning and never reopens the child or
-	// undoes the merge; the retry path clears it idempotently.
-	warning := o.cleanupChildResources(child)
-	if err := o.recordCleanupWarning(childID, warning); err != nil {
-		return fmt.Errorf("record cleanup warning: %w", err)
+	warnings := o.cleanupChildResourcesPerRepo(child)
+	for _, repo := range child.Repos {
+		warning := warnings[repo.Name]
+		if err := o.recordTransactionCleanupWarning(childID, repo.Name, warning); err != nil {
+			return fmt.Errorf("record cleanup warning for %s: %w", repo.Name, err)
+		}
 	}
 	o.emitEvent(ports.Event{
 		Type:             ports.RepoStatusChanged,
@@ -390,10 +419,6 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		Message:          "refactor child integrated and closed",
 	})
 
-	// Hand delivery back to the parent: manual publish stays CodeReady with
-	// its ordinary flow; auto-publish reuses the normal per-repository
-	// publication path. Push or pull-request failure leaves the parent
-	// CodeReady and the child Completed.
 	parent, err := o.deps.Lifecycle.Get(parentID)
 	if err != nil {
 		return fmt.Errorf("reload parent: %w", err)
@@ -410,13 +435,18 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	return nil
 }
 
-// recordCleanupWarning durably records the outcome of a cleanup pass (empty
-// clears a previous warning) so a cleanup failure stays visible and retryable
-// across restarts.
-func (o *Orchestrator) recordCleanupWarning(childID, warning string) error {
+// recordTransactionCleanupWarning durably records the outcome of a per-repo
+// cleanup pass on the transaction journal (empty clears a previous warning
+// for that repo).
+func (o *Orchestrator) recordTransactionCleanupWarning(childID, repoName, warning string) error {
 	return o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-		if f.Parent.Integration != nil {
-			f.Parent.Integration.CleanupWarning = warning
+		if f.Parent.Transaction != nil {
+			for i := range f.Parent.Transaction.Entries {
+				if f.Parent.Transaction.Entries[i].Repo == repoName {
+					f.Parent.Transaction.Entries[i].CleanupWarning = warning
+					return nil
+				}
+			}
 		}
 		return nil
 	})
@@ -429,38 +459,47 @@ type worktreeRefRemover interface {
 	RemoveRef(worktreePath, mainRepo, branch string) error
 }
 
-// cleanupChildResources removes the disposable child worktree and ephemeral
-// branch once merge and closure are durable. It is idempotent: a cleared
-// WorktreePath means the cleanup already succeeded, and the path stays
-// recorded until both the worktree and the branch are confirmed gone so a
-// retry can converge. The parent branch and the integrated commits are
-// never touched.
-func (o *Orchestrator) cleanupChildResources(child *feature.Feature) string {
-	repo := child.Repos[0]
-	if repo.WorktreePath == "" {
-		return ""
-	}
+// cleanupChildResourcesPerRepo removes the disposable child worktree and
+// ephemeral branch for every repository independently. Each repo's cleanup
+// is attempted separately; a failure for one repo records a warning without
+// blocking cleanup of the others. Returns a map of repo name to warning
+// string (empty warnings are omitted).
+func (o *Orchestrator) cleanupChildResourcesPerRepo(child *feature.Feature) map[string]string {
+	warnings := make(map[string]string)
 	if o.deps.Worktrees == nil {
-		return "worktree cleanup is not configured"
-	}
-	var err error
-	if rr, ok := o.deps.Worktrees.(worktreeRefRemover); ok {
-		err = rr.RemoveRef(repo.WorktreePath, repo.Path, repo.Branch)
-	} else {
-		err = o.deps.Worktrees.Remove(repo.WorktreePath, true)
-	}
-	if err != nil {
-		return fmt.Sprintf("removing child worktree %s: %v", repo.WorktreePath, err)
-	}
-	if err := o.deps.Store.Modify(child.ID, func(f *feature.Feature) error {
-		for i := range f.Repos {
-			f.Repos[i].WorktreePath = ""
+		for _, repo := range child.Repos {
+			if repo.WorktreePath != "" {
+				warnings[repo.Name] = "worktree cleanup is not configured"
+			}
 		}
-		return nil
-	}); err != nil {
-		return fmt.Sprintf("clearing child worktree path: %v", err)
+		return warnings
 	}
-	return ""
+	for _, repo := range child.Repos {
+		if repo.WorktreePath == "" {
+			continue
+		}
+		var err error
+		if rr, ok := o.deps.Worktrees.(worktreeRefRemover); ok {
+			err = rr.RemoveRef(repo.WorktreePath, repo.Path, repo.Branch)
+		} else {
+			err = o.deps.Worktrees.Remove(repo.WorktreePath, true)
+		}
+		if err != nil {
+			warnings[repo.Name] = fmt.Sprintf("removing child worktree %s: %v", repo.WorktreePath, err)
+			continue
+		}
+		if storeErr := o.deps.Store.Modify(child.ID, func(f *feature.Feature) error {
+			for i := range f.Repos {
+				if f.Repos[i].Name == repo.Name {
+					f.Repos[i].WorktreePath = ""
+				}
+			}
+			return nil
+		}); storeErr != nil {
+			warnings[repo.Name] = fmt.Sprintf("clearing child worktree path for %s: %v", repo.Name, storeErr)
+		}
+	}
+	return warnings
 }
 
 // childHeadSHA reads the full HEAD of a worktree through the structural

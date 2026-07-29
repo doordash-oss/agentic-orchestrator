@@ -176,14 +176,16 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	if active, ok := child1Detail["active"].(bool); ok && active {
 		t.Fatalf("child1 detail active = %v, want false/absent (closed)", child1Detail["active"])
 	}
-	integ := child1Detail["integration"].(map[string]any)
-	if integ["merge_head"] != mergeHEAD {
-		t.Fatalf("child1 detail integration.merge_head = %v, want parent tip %s", integ["merge_head"], mergeHEAD)
+	tx := child1Detail["transaction"].(map[string]any)
+	entries := tx["entries"].([]any)
+	entry := entries[0].(map[string]any)
+	if entry["merge_head"] != mergeHEAD {
+		t.Fatalf("child1 detail transaction.merge_head = %v, want parent tip %s", entry["merge_head"], mergeHEAD)
 	}
-	if integ["child_head_sha"] == "" || integ["parent_anchor_sha"] == "" || integ["parent_branch"] != "feature/journey-parent" {
-		t.Fatalf("child1 integration anchors = %+v, want recorded", integ)
+	if entry["child_head_sha"] == "" || entry["parent_anchor_sha"] == "" || entry["parent_branch"] != "feature/journey-parent" {
+		t.Fatalf("child1 transaction anchors = %+v, want recorded", entry)
 	}
-	if warning, _ := integ["cleanup_warning"].(string); warning != "" {
+	if warning, _ := entry["cleanup_warning"].(string); warning != "" {
 		t.Fatalf("child1 unexpected cleanup warning = %v", warning)
 	}
 
@@ -241,9 +243,9 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 		t.Fatalf("reload parent: %v", err)
 	}
 	originTip := journeyGit(t, repoDir, "ls-remote", "origin", "feature/journey-parent")
-	if !strings.Contains(originTip, child2.Parent.Integration.MergeHEAD) {
+	if !strings.Contains(originTip, child2.Parent.Transaction.Entries[0].MergeHEAD) {
 		t.Fatalf("origin feature/journey-parent = %q, want pushed merge head %s (parent status %s, checkpoints %+v, repo state %+v)",
-			originTip, child2.Parent.Integration.MergeHEAD, parentState.Status, parentState.Checkpoints, parentState.RepoStates["repoA"])
+			originTip, child2.Parent.Transaction.Entries[0].MergeHEAD, parentState.Status, parentState.Checkpoints, parentState.RepoStates["repoA"])
 	}
 	parent2, err := store.Load(parent.ID)
 	if err != nil {

@@ -998,7 +998,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), feature.ChildCapabilityProfileUnsupported)
 	})
 
-	t.Run("multi-repo child reports unsupported_repo_count", func(t *testing.T) {
+	t.Run("multi-repo child no longer restricted by repo count", func(t *testing.T) {
 		t.Parallel()
 		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
 		f.Pipeline = feature.PipelineMedium
@@ -1007,9 +1007,12 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 		actions := actionCatalogDTOs(f)
 		assertNoDeliveryActions(t, actions)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), feature.ChildCapabilityRepoCountUnsupported)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), feature.ChildCapabilityRepoCountUnsupported)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), feature.ChildCapabilityRepoCountUnsupported)
+		// Multi-repo children are now supported — start should not be
+		// disabled by repo count.
+		startAction := actionDTOByID(t, actions, actionStart)
+		if !startAction.Enabled {
+			t.Fatalf("start action disabled for multi-repo child; multi-repo restriction should be retired: %+v", startAction.DisabledReasons)
+		}
 	})
 
 	t.Run("settled closed child refuses execution", func(t *testing.T) {
@@ -1022,12 +1025,14 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			Kind:         feature.ChildKindRefactor,
 			CloseOutcome: feature.ChildCloseOutcomeCompleted,
 			ClosedAt:     &closed,
-			Integration: &feature.ChildIntegration{
-				ParentBranch:    "main",
-				ParentAnchorSHA: "aaaa1111",
-				ChildHeadSHA:    "bbbb2222",
-				MergeHEAD:       "cccc3333",
-				Phase:           feature.ChildIntegrationPhaseMerged,
+			Transaction: &feature.TransactionJournal{
+				Phase: feature.TransactionPhaseMerged,
+				Entries: []feature.RepoTransactionEntry{{
+					ParentBranch:    "main",
+					ParentAnchorSHA: "aaaa1111",
+					ChildHeadSHA:    "bbbb2222",
+					MergeHEAD:       "cccc3333",
+				}},
 			},
 		}
 
@@ -1048,13 +1053,15 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			Kind:         feature.ChildKindRefactor,
 			CloseOutcome: feature.ChildCloseOutcomeCompleted,
 			ClosedAt:     &closed,
-			Integration: &feature.ChildIntegration{
-				ParentBranch:    "main",
-				ParentAnchorSHA: "aaaa1111",
-				ChildHeadSHA:    "bbbb2222",
-				MergeHEAD:       "cccc3333",
-				Phase:           feature.ChildIntegrationPhaseMerged,
-				CleanupWarning:  "worktree busy",
+			Transaction: &feature.TransactionJournal{
+				Phase: feature.TransactionPhaseMerged,
+				Entries: []feature.RepoTransactionEntry{{
+					ParentBranch:    "main",
+					ParentAnchorSHA: "aaaa1111",
+					ChildHeadSHA:    "bbbb2222",
+					MergeHEAD:       "cccc3333",
+					CleanupWarning:  "worktree busy",
+				}},
 			},
 		}
 

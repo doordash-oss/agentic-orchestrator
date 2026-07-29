@@ -803,19 +803,6 @@ type ChildDirtyDiagnostics struct {
 	UntrackedTotal int      `json:"untracked_total,omitempty"`
 }
 
-// ChildIntegration Durable single-repository child-to-parent integration record: the attempt anchors, the resulting no-fast-forward merge HEAD once durable, structured retry attention, and any non-fatal cleanup warning.
-type ChildIntegration struct {
-	Attention       string `json:"attention,omitempty"`
-	ChildHeadSha    string `json:"child_head_sha,omitempty"`
-	CleanupWarning  string `json:"cleanup_warning,omitempty"`
-	MergeHead       string `json:"merge_head,omitempty"`
-	ParentAnchorSha string `json:"parent_anchor_sha,omitempty"`
-	ParentBranch    string `json:"parent_branch,omitempty"`
-
-	// Phase attention while a retryable failure is parked; merged once the boundary is durable.
-	Phase string `json:"phase,omitempty"`
-}
-
 // ChildRepoBase defines model for ChildRepoBase.
 type ChildRepoBase struct {
 	ParentBranch string `json:"parent_branch,omitempty"`
@@ -991,24 +978,18 @@ type FeatureDetail struct {
 	CloseOutcome string `json:"close_outcome,omitempty"`
 
 	// ClosedAt Relationship close timestamp; only set on closed child features.
-	ClosedAt     *time.Time `json:"closed_at,omitempty"`
-	Cost         Cost       `json:"cost"`
-	CreatedAt    time.Time  `json:"created_at"`
-	CurrentPhase string     `json:"current_phase"`
-	Cycle        *Cycle     `json:"cycle,omitempty"`
-	Description  string     `json:"description,omitempty"`
-
-	// Dirty Categorized parent-worktree diagnostics recorded when a dirty preflight blocked child integration.
-	Dirty          []ChildDirtyDiagnostics `json:"dirty,omitempty"`
-	Failure        *Failure                `json:"failure,omitempty"`
-	HistoricalRuns []RunSummary            `json:"historical_runs"`
-	ID             string                  `json:"id"`
-
-	// Integration Durable single-repository child-to-parent integration record: the attempt anchors, the resulting no-fast-forward merge HEAD once durable, structured retry attention, and any non-fatal cleanup warning.
-	Integration   ChildIntegration   `json:"integration,omitempty"`
-	Models        ModelDefaults      `json:"models"`
-	Name          string             `json:"name"`
-	NeedUserInput *NeedUserInputGate `json:"need_user_input,omitempty"`
+	ClosedAt       *time.Time         `json:"closed_at,omitempty"`
+	Cost           Cost               `json:"cost"`
+	CreatedAt      time.Time          `json:"created_at"`
+	CurrentPhase   string             `json:"current_phase"`
+	Cycle          *Cycle             `json:"cycle,omitempty"`
+	Description    string             `json:"description,omitempty"`
+	Failure        *Failure           `json:"failure,omitempty"`
+	HistoricalRuns []RunSummary       `json:"historical_runs"`
+	ID             string             `json:"id"`
+	Models         ModelDefaults      `json:"models"`
+	Name           string             `json:"name"`
+	NeedUserInput  *NeedUserInputGate `json:"need_user_input,omitempty"`
 
 	// ParentID Launch parent id; only set on child features.
 	ParentID string `json:"parent_id,omitempty"`
@@ -1024,11 +1005,14 @@ type FeatureDetail struct {
 	RunCount   int             `json:"run_count"`
 
 	// SetupComplete True when the child's active run setup finished; only set on child features.
-	SetupComplete     bool               `json:"setup_complete,omitempty"`
-	Slug              string             `json:"slug"`
-	Status            string             `json:"status"`
-	Summary           string             `json:"summary,omitempty"`
-	Timing            Timing             `json:"timing"`
+	SetupComplete bool   `json:"setup_complete,omitempty"`
+	Slug          string `json:"slug"`
+	Status        string `json:"status"`
+	Summary       string `json:"summary,omitempty"`
+	Timing        Timing `json:"timing"`
+
+	// Transaction Ordered per-repository transaction journal for multi-repository child-to-parent integration.
+	Transaction       TransactionJournal `json:"transaction,omitempty"`
 	VerificationItems []VerificationItem `json:"verification_items,omitempty"`
 	Warnings          []Warning          `json:"warnings,omitempty"`
 }
@@ -1420,6 +1404,26 @@ type RepoStatus struct {
 	Touched       bool     `json:"touched"`
 }
 
+// RepoTransactionEntry defines model for RepoTransactionEntry.
+type RepoTransactionEntry struct {
+	ApplyState     string   `json:"apply_state,omitempty"`
+	CandidateSha   string   `json:"candidate_sha,omitempty"`
+	ChildHeadSha   string   `json:"child_head_sha,omitempty"`
+	CleanupWarning string   `json:"cleanup_warning,omitempty"`
+	ConflictFiles  []string `json:"conflict_files,omitempty"`
+	Diagnostics    string   `json:"diagnostics,omitempty"`
+
+	// Dirty Categorized parent-worktree diagnostics recorded when a dirty preflight blocked preparation for this repository.
+	Dirty           []ChildDirtyDiagnostics `json:"dirty,omitempty"`
+	ExpectedRefSha  string                  `json:"expected_ref_sha,omitempty"`
+	MergeHead       string                  `json:"merge_head,omitempty"`
+	ObservedSha     string                  `json:"observed_sha,omitempty"`
+	ParentAnchorSha string                  `json:"parent_anchor_sha,omitempty"`
+	ParentBranch    string                  `json:"parent_branch,omitempty"`
+	PrepState       string                  `json:"prep_state,omitempty"`
+	Repo            string                  `json:"repo,omitempty"`
+}
+
 // Resource defines model for Resource.
 type Resource struct {
 	FeatureID string `json:"feature_id,omitempty"`
@@ -1761,6 +1765,15 @@ type Timing struct {
 type ToolCall struct {
 	Prompt  string `json:"prompt,omitempty"`
 	Summary string `json:"summary,omitempty"`
+}
+
+// TransactionJournal Ordered per-repository transaction journal for multi-repository child-to-parent integration.
+type TransactionJournal struct {
+	Attention string                 `json:"attention,omitempty"`
+	Entries   []RepoTransactionEntry `json:"entries,omitempty"`
+
+	// Phase Aggregate transaction phase: preparing, prepared, applying, applied, rolling_back, rolled_back, attention, or merged.
+	Phase string `json:"phase,omitempty"`
 }
 
 // TranscriptMessage defines model for TranscriptMessage.

@@ -216,8 +216,23 @@ func waitForJourneyChildClosed(t *testing.T, baseURL string, store *feature.Stor
 		}
 		current, err := store.Load(childID)
 		if err == nil && len(current.Repos) > 0 {
-			if current.Repos[0].WorktreePath == "" ||
-				(current.Parent.Integration != nil && current.Parent.Integration.CleanupWarning != "") {
+			allCleared := true
+			for _, repo := range current.Repos {
+				if repo.WorktreePath != "" {
+					allCleared = false
+					break
+				}
+			}
+			hasWarning := false
+			if current.Parent.Transaction != nil {
+				for _, e := range current.Parent.Transaction.Entries {
+					if e.CleanupWarning != "" {
+						hasWarning = true
+						break
+					}
+				}
+			}
+			if allCleared || hasWarning {
 				return
 			}
 		}

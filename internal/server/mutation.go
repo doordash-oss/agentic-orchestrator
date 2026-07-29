@@ -54,7 +54,6 @@ const (
 	errCodeParentWorktreesDirty           = "parent_worktrees_dirty"
 	errCodeChildExecutionBlocked          = "child_execution_blocked"
 	errCodeChildProfileUnsupported        = "child_profile_unsupported"
-	errCodeChildRepoCountUnsupported      = "child_repo_count_unsupported"
 	errCodeChildRelationshipClosed        = "child_relationship_closed"
 )
 
@@ -443,13 +442,10 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 		switch capability.Reason {
 		case feature.ChildCapabilityProfileUnsupported:
 			code = errCodeChildProfileUnsupported
-		case feature.ChildCapabilityRepoCountUnsupported:
-			code = errCodeChildRepoCountUnsupported
 		}
 		writeAPIError(w, http.StatusConflict, code, capability.Error(), map[string]any{
 			"feature_id": capability.FeatureID,
 			"profile":    string(capability.Profile),
-			"repo_count": capability.RepoCount,
 		})
 	case errors.Is(err, feature.ErrRefactorParentNotFound):
 		writeAPIError(w, http.StatusNotFound, errCodeRefactorParentNotFound, err.Error(), nil)

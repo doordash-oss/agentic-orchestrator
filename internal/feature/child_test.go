@@ -850,13 +850,12 @@ func TestChildExecutionCapability(t *testing.T) {
 		}
 	})
 
-	t.Run("multi-repo medium child gets the distinct typed error", func(t *testing.T) {
+	t.Run("multi-repo medium child no longer restricted by repo count", func(t *testing.T) {
 		f := &feature.Feature{ID: "c", Pipeline: feature.PipelineMedium, Repos: twoRepos,
 			Parent: &feature.ChildRelationship{ParentID: "p", Kind: feature.ChildKindRefactor}}
 		err := f.ChildExecutionCapability()
-		var capErr *feature.ChildCapabilityError
-		if !errors.As(err, &capErr) || capErr.Reason != feature.ChildCapabilityRepoCountUnsupported || capErr.RepoCount != 2 {
-			t.Fatalf("error = %v, want typed unsupported_repo_count(2)", err)
+		if err != nil {
+			t.Fatalf("multi-repo medium child error = %v, want nil (repo-count restriction retired)", err)
 		}
 	})
 }
@@ -901,15 +900,17 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 			Kind:         feature.ChildKindRefactor,
 			CloseOutcome: feature.ChildCloseOutcomeCompleted,
 			ClosedAt:     &closed,
-			Integration: &feature.ChildIntegration{
-				ParentBranch:    "feature/parent",
-				ParentAnchorSHA: "aaaa1111",
-				ChildHeadSHA:    "bbbb2222",
-				MergeHEAD:       "cccc3333",
-				Phase:           feature.ChildIntegrationPhaseMerged,
-				CleanupWarning:  "worktree busy",
-				Dirty: []feature.RepoDirtyDiagnostics{{
-					Repo: "repoA", Path: "/tmp/a", Untracked: []string{"stray.txt"}, UntrackedTotal: 1,
+			Transaction: &feature.TransactionJournal{
+				Phase: feature.TransactionPhaseMerged,
+				Entries: []feature.RepoTransactionEntry{{
+					ParentBranch:    "feature/parent",
+					ParentAnchorSHA: "aaaa1111",
+					ChildHeadSHA:    "bbbb2222",
+					MergeHEAD:       "cccc3333",
+					CleanupWarning:  "worktree busy",
+					Dirty: []feature.RepoDirtyDiagnostics{{
+						Repo: "repoA", Path: "/tmp/a", Untracked: []string{"stray.txt"}, UntrackedTotal: 1,
+					}},
 				}},
 			},
 		},
@@ -925,14 +926,21 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 	if got.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted || got.Parent.ClosedAt == nil || !got.Parent.ClosedAt.Equal(closed) {
 		t.Fatalf("closure = %q %v, want completed at %v", got.Parent.CloseOutcome, got.Parent.ClosedAt, closed)
 	}
-	integ := got.Parent.Integration
-	if integ == nil || integ.ParentBranch != "feature/parent" || integ.ParentAnchorSHA != "aaaa1111" ||
-		integ.ChildHeadSHA != "bbbb2222" || integ.MergeHEAD != "cccc3333" ||
-		integ.Phase != feature.ChildIntegrationPhaseMerged || integ.CleanupWarning != "worktree busy" {
-		t.Fatalf("integration record = %+v, want full round-trip", integ)
+	tx := got.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseMerged {
+		t.Fatalf("transaction phase = %+v, want merged", tx)
 	}
-	if len(integ.Dirty) != 1 || integ.Dirty[0].UntrackedTotal != 1 || integ.Dirty[0].Untracked[0] != "stray.txt" {
-		t.Fatalf("dirty diagnostics = %+v, want round-trip", integ.Dirty)
+	if len(tx.Entries) != 1 {
+		t.Fatalf("transaction entries = %d, want 1", len(tx.Entries))
+	}
+	entry := tx.Entries[0]
+	if entry.ParentBranch != "feature/parent" || entry.ParentAnchorSHA != "aaaa1111" ||
+		entry.ChildHeadSHA != "bbbb2222" || entry.MergeHEAD != "cccc3333" ||
+		entry.CleanupWarning != "worktree busy" {
+		t.Fatalf("transaction entry = %+v, want full round-trip", entry)
+	}
+	if len(entry.Dirty) != 1 || entry.Dirty[0].UntrackedTotal != 1 || entry.Dirty[0].Untracked[0] != "stray.txt" {
+		t.Fatalf("dirty diagnostics = %+v, want round-trip", entry.Dirty)
 	}
 }
 
@@ -941,7 +949,7 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 // unfinished closure tail (pending worktree path or cleanup warning) once
 // the relationship is closed.
 func TestIntegrationResumable(t *testing.T) {
-	mk := func(closeOutcome string, integ *feature.ChildIntegration, worktree string) *feature.Feature {
+	mk := func(closeOutcome string, tx *feature.TransactionJournal, worktree string) *feature.Feature {
 		return &feature.Feature{
 			ID:     "c",
 			Status: feature.StatusReviewPassed,
@@ -950,11 +958,11 @@ func TestIntegrationResumable(t *testing.T) {
 				ParentID:     "p",
 				Kind:         feature.ChildKindRefactor,
 				CloseOutcome: closeOutcome,
-				Integration:  integ,
+				Transaction:  tx,
 			},
 		}
 	}
-	merged := &feature.ChildIntegration{Phase: feature.ChildIntegrationPhaseMerged, MergeHEAD: "cccc3333"}
+	merged := &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333"}}}
 	for _, tc := range []struct {
 		name string
 		f    *feature.Feature
@@ -962,13 +970,13 @@ func TestIntegrationResumable(t *testing.T) {
 	}{
 		{"non-child", &feature.Feature{ID: "t"}, false},
 		{"active without integration", mk("", nil, "/tmp/wt"), false},
-		{"active phase pending", mk("", &feature.ChildIntegration{Phase: feature.ChildIntegrationPhasePending}, "/tmp/wt"), true},
-		{"active phase attention", mk("", &feature.ChildIntegration{Phase: feature.ChildIntegrationPhaseAttention}, "/tmp/wt"), true},
+		{"active phase pending", mk("", &feature.TransactionJournal{Phase: feature.TransactionPhasePreparing}, "/tmp/wt"), true},
+		{"active phase attention", mk("", &feature.TransactionJournal{Phase: feature.TransactionPhaseAttention}, "/tmp/wt"), true},
 		{"active phase merged", mk("", merged, "/tmp/wt"), true},
 		{"closed completed settled", mk(feature.ChildCloseOutcomeCompleted, merged, ""), false},
-		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.ChildIntegration{Phase: feature.ChildIntegrationPhaseMerged, MergeHEAD: "cccc3333", CleanupWarning: "worktree busy"}, ""), true},
+		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", CleanupWarning: "worktree busy"}}}, ""), true},
 		{"closed completed with pending worktree", mk(feature.ChildCloseOutcomeCompleted, merged, "/tmp/wt"), true},
-		{"closed completed without merge head", mk(feature.ChildCloseOutcomeCompleted, &feature.ChildIntegration{Phase: feature.ChildIntegrationPhasePending}, ""), false},
+		{"closed completed without merge head", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhasePreparing}, ""), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.f.IntegrationResumable(); got != tc.want {

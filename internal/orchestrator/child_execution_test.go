@@ -101,12 +101,14 @@ func closedCompletedChild(cleanupPending bool) *feature.Feature {
 	child.Status = feature.StatusReviewPassed
 	child.Parent.CloseOutcome = feature.ChildCloseOutcomeCompleted
 	child.Parent.ClosedAt = &closed
-	child.Parent.Integration = &feature.ChildIntegration{
-		ParentBranch:    "main",
-		ParentAnchorSHA: "aaaa1111",
-		ChildHeadSHA:    "bbbb2222",
-		MergeHEAD:       "cccc3333",
-		Phase:           feature.ChildIntegrationPhaseMerged,
+	child.Parent.Transaction = &feature.TransactionJournal{
+		Phase: feature.TransactionPhaseMerged,
+		Entries: []feature.RepoTransactionEntry{{
+			ParentBranch:    "main",
+			ParentAnchorSHA: "aaaa1111",
+			ChildHeadSHA:    "bbbb2222",
+			MergeHEAD:       "cccc3333",
+		}},
 	}
 	if !cleanupPending {
 		child.Repos[0].WorktreePath = ""
@@ -294,13 +296,22 @@ func TestOrchestrator_ChildCapabilityGate(t *testing.T) {
 		refuteLifecycleCall(t, lc, "RetrySetup")
 	})
 
+	t.Run("eligible medium multi-repo child starts", func(t *testing.T) {
+		child := multiRepoChild()
+		lc := lifecycleForFeature(child)
+		store := newFeatureStore(child)
+		o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+		if err := o.StartFeature(child.ID); err != nil {
+			t.Fatalf("StartFeature() error = %v, want nil for eligible multi-repo child", err)
+		}
+	})
+
 	capabilityChildren := []struct {
 		name       string
 		f          *feature.Feature
 		wantReason string
 	}{
 		{"large child", largeProfileChild(), feature.ChildCapabilityProfileUnsupported},
-		{"multi-repo child", multiRepoChild(), feature.ChildCapabilityRepoCountUnsupported},
 	}
 	for _, tc := range capabilityChildren {
 		t.Run("start/"+tc.name, func(t *testing.T) {

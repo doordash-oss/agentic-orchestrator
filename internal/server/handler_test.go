@@ -997,19 +997,8 @@ func TestStartActionChildCapabilityErrors(t *testing.T) {
 				FeatureID: "child-9",
 				Reason:    feature.ChildCapabilityProfileUnsupported,
 				Profile:   feature.PipelineLarge,
-				RepoCount: 1,
 			},
 			wantCode: errCodeChildProfileUnsupported,
-		},
-		{
-			name: "unsupported repo count",
-			err: &feature.ChildCapabilityError{
-				FeatureID: "child-9",
-				Reason:    feature.ChildCapabilityRepoCountUnsupported,
-				Profile:   feature.PipelineMedium,
-				RepoCount: 3,
-			},
-			wantCode: errCodeChildRepoCountUnsupported,
 		},
 		{
 			name:     "settled closed child",

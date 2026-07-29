@@ -130,27 +130,41 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 				ParentBranch: base.ParentBranch,
 			})
 		}
-		if integ := f.Parent.Integration; integ != nil {
-			detail.Integration = ChildIntegration{
-				ParentBranch:    integ.ParentBranch,
-				ParentAnchorSha: integ.ParentAnchorSHA,
-				ChildHeadSha:    integ.ChildHeadSHA,
-				MergeHead:       integ.MergeHEAD,
-				Phase:           integ.Phase,
-				Attention:       integ.Attention,
-				CleanupWarning:  integ.CleanupWarning,
+		// Project the transaction journal for child integration.
+		if tx := f.Parent.Transaction; tx != nil {
+			detail.Transaction = TransactionJournal{
+				Phase:     string(tx.Phase),
+				Attention: tx.Attention,
 			}
-			for _, d := range integ.Dirty {
-				detail.Dirty = append(detail.Dirty, ChildDirtyDiagnostics{
-					Repo:           d.Repo,
-					Path:           d.Path,
-					Staged:         d.Staged,
-					Unstaged:       d.Unstaged,
-					Untracked:      d.Untracked,
-					StagedTotal:    d.StagedTotal,
-					UnstagedTotal:  d.UnstagedTotal,
-					UntrackedTotal: d.UntrackedTotal,
-				})
+			for _, e := range tx.Entries {
+				entry := RepoTransactionEntry{
+					Repo:            e.Repo,
+					ParentBranch:    e.ParentBranch,
+					ParentAnchorSha: e.ParentAnchorSHA,
+					ExpectedRefSha:  e.ExpectedRefSHA,
+					ChildHeadSha:    e.ChildHeadSHA,
+					CandidateSha:    e.CandidateSHA,
+					MergeHead:       e.MergeHEAD,
+					PrepState:       string(e.PrepState),
+					ApplyState:      string(e.ApplyState),
+					ObservedSha:     e.ObservedSHA,
+					ConflictFiles:   e.ConflictFiles,
+					CleanupWarning:  e.CleanupWarning,
+					Diagnostics:     e.Diagnostics,
+				}
+				for _, d := range e.Dirty {
+					entry.Dirty = append(entry.Dirty, ChildDirtyDiagnostics{
+						Repo:           d.Repo,
+						Path:           d.Path,
+						Staged:         d.Staged,
+						Unstaged:       d.Unstaged,
+						Untracked:      d.Untracked,
+						StagedTotal:    d.StagedTotal,
+						UnstagedTotal:  d.UnstagedTotal,
+						UntrackedTotal: d.UntrackedTotal,
+					})
+				}
+				detail.Transaction.Entries = append(detail.Transaction.Entries, entry)
 			}
 		}
 	} else {
@@ -487,7 +501,7 @@ func childExecutionBlockReason(f *feature.Feature) error {
 
 // childCapabilityDisabledReason maps a child execution block to the stable
 // disabled-reason code echoed by the action catalog: relationship_closed,
-// setup_incomplete, unsupported_profile, or unsupported_repo_count.
+// setup_incomplete, or unsupported_profile.
 func childCapabilityDisabledReason(err error) ActionDisabledReasonDTO {
 	var capErr *feature.ChildCapabilityError
 	switch {

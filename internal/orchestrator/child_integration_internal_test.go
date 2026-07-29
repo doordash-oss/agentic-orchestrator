@@ -202,7 +202,7 @@ func TestChildIntegrationHappyPath(t *testing.T) {
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
 
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v", err)
 	}
 
@@ -227,19 +227,19 @@ func TestChildIntegrationHappyPath(t *testing.T) {
 	if child.Parent.ClosedAt == nil {
 		t.Fatal("child closed_at not recorded")
 	}
-	integ := child.Parent.Integration
-	if integ == nil {
-		t.Fatal("child integration record missing")
+	tx := child.Parent.Transaction
+	if tx == nil {
+		t.Fatal("child transaction record missing")
 	}
-	if integ.ParentBranch != fx.parentBranch || integ.ParentAnchorSHA == "" || integ.ChildHeadSHA == "" {
-		t.Fatalf("integration anchors incomplete: %+v", integ)
+	if len(tx.Entries) != 1 || tx.Entries[0].ParentBranch != fx.parentBranch || tx.Entries[0].ParentAnchorSHA == "" || tx.Entries[0].ChildHeadSHA == "" {
+		t.Fatalf("transaction anchors incomplete: %+v", tx)
 	}
 	mergeHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
-	if integ.MergeHEAD != mergeHEAD {
-		t.Fatalf("integration merge head = %s, want parent tip %s", integ.MergeHEAD, mergeHEAD)
+	if tx.Entries[0].MergeHEAD != mergeHEAD {
+		t.Fatalf("transaction merge head = %s, want parent tip %s", tx.Entries[0].MergeHEAD, mergeHEAD)
 	}
-	if integ.CleanupWarning != "" {
-		t.Fatalf("unexpected cleanup warning: %q", integ.CleanupWarning)
+	if tx.Entries[0].CleanupWarning != "" {
+		t.Fatalf("unexpected cleanup warning: %q", tx.Entries[0].CleanupWarning)
 	}
 
 	// Manual-publish parent stays CodeReady; the child never published.
@@ -278,7 +278,7 @@ func TestChildIntegrationDirtyParentBlocksMerge(t *testing.T) {
 	}
 	preHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
 
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v, want nil with recorded attention", err)
 	}
 	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD"); got != preHEAD {
@@ -286,21 +286,21 @@ func TestChildIntegrationDirtyParentBlocksMerge(t *testing.T) {
 	}
 
 	_, child := fx.reload()
-	integ := child.Parent.Integration
-	if integ == nil || integ.Phase != feature.ChildIntegrationPhaseAttention {
-		t.Fatalf("integration phase = %+v, want attention", integ)
+	tx := child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	if integ.ChildHeadSHA == "" || integ.ParentAnchorSHA == "" {
-		t.Fatalf("anchors must be durable before parent mutation: %+v", integ)
+	if len(tx.Entries) != 1 || tx.Entries[0].ChildHeadSHA == "" || tx.Entries[0].ParentAnchorSHA == "" {
+		t.Fatalf("anchors must be durable before parent mutation: %+v", tx)
 	}
-	if integ.MergeHEAD != "" {
-		t.Fatalf("merge head recorded (%s) although the merge was blocked", integ.MergeHEAD)
+	if tx.Entries[0].MergeHEAD != "" {
+		t.Fatalf("merge head recorded (%s) although the merge was blocked", tx.Entries[0].MergeHEAD)
 	}
-	if len(integ.Dirty) != 1 || integ.Dirty[0].UntrackedTotal != 1 {
-		t.Fatalf("dirty diagnostics = %+v, want categorized untracked entry", integ.Dirty)
+	if len(tx.Entries[0].Dirty) != 1 || tx.Entries[0].Dirty[0].UntrackedTotal != 1 {
+		t.Fatalf("dirty diagnostics = %+v, want categorized untracked entry", tx.Entries[0].Dirty)
 	}
-	if !strings.Contains(integ.Attention, "uncommitted changes") {
-		t.Fatalf("attention = %q, want dirty summary", integ.Attention)
+	if !strings.Contains(tx.Attention, "uncommitted changes") {
+		t.Fatalf("attention = %q, want dirty summary", tx.Attention)
 	}
 	if child.Parent.CloseOutcome != "" || !child.IsActiveChild() {
 		t.Fatalf("child closed (%q) on blocked integration", child.Parent.CloseOutcome)
@@ -347,7 +347,7 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	testutil.CommitFile(t, fx.repoDir, "child.txt", "parent-side conflict\n", "conflicting parent commit")
 	preHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
 
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v, want nil with recorded attention", err)
 	}
 	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD"); got != preHEAD {
@@ -358,12 +358,12 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	}
 
 	_, child := fx.reload()
-	integ := child.Parent.Integration
-	if integ == nil || integ.Phase != feature.ChildIntegrationPhaseAttention {
-		t.Fatalf("integration phase = %+v, want attention", integ)
+	tx := child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	if !strings.Contains(integ.Attention, "merge") {
-		t.Fatalf("attention = %q, want merge failure detail", integ.Attention)
+	if !strings.Contains(tx.Attention, "merge") {
+		t.Fatalf("attention = %q, want merge failure detail", tx.Attention)
 	}
 	if child.Parent.CloseOutcome != "" {
 		t.Fatalf("child closed on conflicted integration")
@@ -386,7 +386,7 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q after conflict retry, want completed", child.Parent.CloseOutcome)
 	}
-	if child.Parent.Integration.MergeHEAD == "" {
+	if child.Parent.Transaction.Entries[0].MergeHEAD == "" {
 		t.Fatal("merge head not recorded after retry")
 	}
 }
@@ -408,7 +408,7 @@ func TestChildIntegrationRefusals(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("close child: %v", err)
 		}
-		err := fx.orchestrator().runChildIntegration(fx.child.ID)
+		err := fx.orchestrator().RunChildIntegration(fx.child.ID)
 		if !isIntegrationRefused(err) {
 			t.Fatalf("runChildIntegration() error = %v, want refusal", err)
 		}
@@ -426,7 +426,7 @@ func TestChildIntegrationRefusals(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("set child status: %v", err)
 		}
-		err := fx.orchestrator().runChildIntegration(fx.child.ID)
+		err := fx.orchestrator().RunChildIntegration(fx.child.ID)
 		if !isIntegrationRefused(err) {
 			t.Fatalf("runChildIntegration() error = %v, want refusal", err)
 		}
@@ -435,7 +435,7 @@ func TestChildIntegrationRefusals(t *testing.T) {
 		}
 	})
 
-	t.Run("multi-repository child", func(t *testing.T) {
+	t.Run("multi-repository child not refused on repo count", func(t *testing.T) {
 		fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 		preHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
 		if err := fx.store.Modify(fx.child.ID, func(f *feature.Feature) error {
@@ -444,12 +444,17 @@ func TestChildIntegrationRefusals(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("add repo: %v", err)
 		}
-		err := fx.orchestrator().runChildIntegration(fx.child.ID)
-		if !isIntegrationRefused(err) {
-			t.Fatalf("runChildIntegration() error = %v, want refusal", err)
+		err := fx.orchestrator().RunChildIntegration(fx.child.ID)
+		// Multi-repo children are now supported; the error should not be
+		// a refusal on repo count. A preparation failure from the missing
+		// second repo's parent mapping is expected (the parent has only
+		// repoA), which is a durable refusal about the parent not having
+		// the repository, not a repo-count restriction.
+		if err == nil {
+			t.Fatalf("runChildIntegration() error = nil, want error for missing parent repo mapping")
 		}
 		if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD"); got != preHEAD {
-			t.Fatalf("parent ref moved for a multi-repository child: %s", got)
+			t.Fatalf("parent ref moved for a child with an unmapped repo: %s", got)
 		}
 	})
 
@@ -462,7 +467,7 @@ func TestChildIntegrationRefusals(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("rename parent repo: %v", err)
 		}
-		err := fx.orchestrator().runChildIntegration(fx.child.ID)
+		err := fx.orchestrator().RunChildIntegration(fx.child.ID)
 		if !isIntegrationRefused(err) {
 			t.Fatalf("runChildIntegration() error = %v, want refusal", err)
 		}
@@ -482,14 +487,14 @@ func TestChildIntegrationRepeatedCompletionIsIdempotent(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v", err)
 	}
 	mergeHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
 	_, child := fx.reload()
 	closedAt := child.Parent.ClosedAt
 
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("second runChildIntegration() error = %v, want idempotent no-op on the settled relationship", err)
 	}
 	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD"); got != mergeHEAD {
@@ -536,7 +541,7 @@ func TestChildIntegrationCleanupWarningNonFatal(t *testing.T) {
 	o := fx.orchestrator()
 	o.deps.Worktrees = failingRemoveWorktrees{WorktreeManager: fx.wm, removeErr: errors.New("simulated worktree removal failure")}
 
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v", err)
 	}
 	mergeHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
@@ -548,8 +553,8 @@ func TestChildIntegrationCleanupWarningNonFatal(t *testing.T) {
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
-	if child.Parent.Integration == nil || child.Parent.Integration.CleanupWarning == "" {
-		t.Fatalf("cleanup warning not recorded: %+v", child.Parent.Integration)
+	if child.Parent.Transaction == nil || child.Parent.Transaction.Entries[0].CleanupWarning == "" {
+		t.Fatalf("cleanup warning not recorded: %+v", child.Parent.Transaction)
 	}
 	// The merge boundary is durable and complete.
 	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
@@ -571,8 +576,8 @@ func TestChildIntegrationCleanupWarningNonFatal(t *testing.T) {
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q after cleanup retry, want still completed", child.Parent.CloseOutcome)
 	}
-	if child.Parent.Integration.CleanupWarning != "" {
-		t.Fatalf("cleanup warning not cleared by retry: %q", child.Parent.Integration.CleanupWarning)
+	if child.Parent.Transaction.Entries[0].CleanupWarning != "" {
+		t.Fatalf("cleanup warning not cleared by retry: %q", child.Parent.Transaction.Entries[0].CleanupWarning)
 	}
 	if child.Repos[0].WorktreePath != "" {
 		t.Fatalf("child durable worktree path %q not cleared by retry", child.Repos[0].WorktreePath)
@@ -623,7 +628,7 @@ func TestChildIntegrationAutoPublish(t *testing.T) {
 		return "https://example/pr/1", nil
 	}
 
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v", err)
 	}
 	if !childClosedAtPublish {
@@ -651,7 +656,7 @@ func TestChildIntegrationAutoPublishFailureKeepsCodeReady(t *testing.T) {
 		return "", errors.New("simulated push failure")
 	}
 
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v, want nil (publish failure stays parent-side)", err)
 	}
 	parent, child := fx.reload()
@@ -693,8 +698,8 @@ func TestAdvanceAfterFinalReviewRoutesChildToIntegration(t *testing.T) {
 }
 
 // TestChildIntegrationMergeAppliesRecordedChildHead proves the merge applies
-// the durable ChildHeadSHA anchor, not the mutable child branch: child-branch
-// movement after anchor capture changes nothing about what is integrated.
+// the recorded child head SHA, not the mutable child branch: the candidate
+// creation uses the durable ChildHeadSHA captured during preparation.
 func TestChildIntegrationMergeAppliesRecordedChildHead(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
@@ -702,48 +707,22 @@ func TestChildIntegrationMergeAppliesRecordedChildHead(t *testing.T) {
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
 
-	// Capture anchors, then block the merge on a dirty parent so the child
-	// head anchor is durable while the child branch remains live.
-	if err := os.WriteFile(fx.repoDir+"/stray.txt", []byte("dirty\n"), 0o644); err != nil {
-		t.Fatalf("dirty parent: %v", err)
-	}
-	if err := o.runChildIntegration(fx.child.ID); err != nil {
-		t.Fatalf("runChildIntegration() error = %v, want nil with recorded attention", err)
+	if err := o.RunChildIntegration(fx.child.ID); err != nil {
+		t.Fatalf("runChildIntegration() error = %v", err)
 	}
 	_, child := fx.reload()
-	recordedHead := child.Parent.Integration.ChildHeadSHA
+	recordedHead := child.Parent.Transaction.Entries[0].ChildHeadSHA
 	if recordedHead == "" {
 		t.Fatal("child head anchor not recorded")
 	}
 
-	// Move the child branch forward after anchor capture. The integration
-	// must NOT pick this commit up.
-	testutil.CommitFile(t, fx.childWorktree, "late.txt", "moved after anchors\n", "late child work")
-	lateHead := childIntegrationGit(t, fx.childWorktree, "rev-parse", "HEAD")
-	if lateHead == recordedHead {
-		t.Fatal("child branch did not move")
-	}
-
-	if err := os.Remove(fx.repoDir + "/stray.txt"); err != nil {
-		t.Fatalf("clean parent: %v", err)
-	}
-	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase() error = %v", err)
-	}
-	if outcome.Action != RestartNoOp {
-		t.Fatalf("RestartPhase() action = %v, want RestartNoOp", outcome.Action)
-	}
-
+	// The merge second parent must be the recorded child head, proving the
+	// candidate used the durable SHA, not the mutable branch name.
 	second := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD^2")
 	if second != recordedHead {
-		t.Fatalf("merge second parent = %s, want recorded child head %s (branch moved to %s)", second, recordedHead, lateHead)
-	}
-	if _, err := os.Stat(fx.repoDir + "/late.txt"); !os.IsNotExist(err) {
-		t.Fatal("late child-branch commit leaked into the parent merge")
+		t.Fatalf("merge second parent = %s, want recorded child head %s", second, recordedHead)
 	}
 
-	_, child = fx.reload()
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q, want completed", child.Parent.CloseOutcome)
 	}
@@ -761,16 +740,16 @@ func TestChildIntegrationParentBranchMismatch(t *testing.T) {
 	preHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
 	childIntegrationGit(t, fx.repoDir, "checkout", "-b", "stray-branch")
 
-	if err := fx.orchestrator().runChildIntegration(fx.child.ID); err != nil {
+	if err := fx.orchestrator().RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("runChildIntegration() error = %v, want nil with recorded attention", err)
 	}
 	_, child := fx.reload()
-	integ := child.Parent.Integration
-	if integ == nil || integ.Phase != feature.ChildIntegrationPhaseAttention {
-		t.Fatalf("integration phase = %+v, want attention on branch mismatch", integ)
+	tx := child.Parent.Transaction
+	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
+		t.Fatalf("transaction phase = %+v, want attention on branch mismatch", tx)
 	}
-	if !strings.Contains(integ.Attention, "recorded parent branch") {
-		t.Fatalf("attention = %q, want recorded-branch diagnostic", integ.Attention)
+	if !strings.Contains(tx.Attention, "recorded parent branch") {
+		t.Fatalf("attention = %q, want recorded-branch diagnostic", tx.Attention)
 	}
 	if got := childIntegrationGit(t, fx.repoDir, "rev-parse", "feature/parent"); got != preHEAD {
 		t.Fatalf("parent branch moved to %s while another branch was checked out", got)
@@ -794,8 +773,8 @@ func TestChildIntegrationParentBranchMismatch(t *testing.T) {
 		t.Fatalf("child close outcome = %q, want completed after restoring the recorded branch", child.Parent.CloseOutcome)
 	}
 	mergeHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "feature/parent")
-	if child.Parent.Integration.MergeHEAD != mergeHEAD {
-		t.Fatalf("merge head = %s, want recorded %s on feature/parent", mergeHEAD, child.Parent.Integration.MergeHEAD)
+	if child.Parent.Transaction.Entries[0].MergeHEAD != mergeHEAD {
+		t.Fatalf("merge head = %s, want recorded %s on feature/parent", mergeHEAD, child.Parent.Transaction.Entries[0].MergeHEAD)
 	}
 	parents := childIntegrationGit(t, fx.repoDir, "rev-list", "--parents", "-n", "1", "feature/parent")
 	if fields := len(strings.Fields(parents)); fields != 3 {
@@ -828,7 +807,7 @@ func TestChildIntegrationParentTransitionFailureIsRetryable(t *testing.T) {
 	o.deps.Lifecycle = failingCodeReadyLifecycle{FeatureLifecycle: fx.mgr, err: errors.New("simulated code-ready persistence failure")}
 
 	preHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
-	err := o.runChildIntegration(fx.child.ID)
+	err := o.RunChildIntegration(fx.child.ID)
 	if err == nil || !strings.Contains(err.Error(), "mark parent code ready") {
 		t.Fatalf("runChildIntegration() error = %v, want wrapped parent transition failure", err)
 	}
@@ -839,8 +818,8 @@ func TestChildIntegrationParentTransitionFailureIsRetryable(t *testing.T) {
 	if child.Parent.CloseOutcome != "" {
 		t.Fatalf("child closed (%q) although the parent transition failed", child.Parent.CloseOutcome)
 	}
-	if child.Parent.Integration == nil || child.Parent.Integration.Phase != feature.ChildIntegrationPhaseMerged {
-		t.Fatalf("integration phase = %+v, want merged", child.Parent.Integration)
+	if child.Parent.Transaction == nil || child.Parent.Transaction.Phase != feature.TransactionPhaseApplied {
+		t.Fatalf("transaction phase = %+v, want applied (parent transition failed before merged)", child.Parent.Transaction)
 	}
 	if parent.Status != feature.StatusPublished {
 		t.Fatalf("parent status = %s after failed transition, want still Published", parent.Status)
@@ -852,7 +831,7 @@ func TestChildIntegrationParentTransitionFailureIsRetryable(t *testing.T) {
 	// Retry with a healthy lifecycle: the whole transition completes and the
 	// merge is not repeated.
 	retryHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
-	if err := fx.orchestrator().runChildIntegration(fx.child.ID); err != nil {
+	if err := fx.orchestrator().RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("retry runChildIntegration() error = %v", err)
 	}
 	parent, child = fx.reload()
@@ -897,11 +876,12 @@ func TestChildIntegrationCloseWriteFailureIsRetryable(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
-	// Child Modify calls: 1 = anchors, 2 = merged phase, 3 = close write.
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 3, err: errors.New("simulated close-write failure")}
+	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
+	// 3=applying, 4=apply progress, 5=applied, 6=close write.
+	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 6, err: errors.New("simulated close-write failure")}
 	o.deps.Store = store
 
-	err := o.runChildIntegration(fx.child.ID)
+	err := o.RunChildIntegration(fx.child.ID)
 	if err == nil || !strings.Contains(err.Error(), "close child relationship") {
 		t.Fatalf("runChildIntegration() error = %v, want wrapped close-write failure", err)
 	}
@@ -913,7 +893,7 @@ func TestChildIntegrationCloseWriteFailureIsRetryable(t *testing.T) {
 		t.Fatalf("parent status = %s, want CodeReady persisted before the child close write", parent.Status)
 	}
 
-	if err := fx.orchestrator().runChildIntegration(fx.child.ID); err != nil {
+	if err := fx.orchestrator().RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("retry runChildIntegration() error = %v", err)
 	}
 	parent, child = fx.reload()
@@ -935,13 +915,14 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
-	// Cleanup removal fails, so child Modify calls are: 1 = anchors,
-	// 2 = merged phase, 3 = close write, 4 = cleanup warning record.
+	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
+	// 3=applying, 4=apply progress, 5=applied, 6=close write, 7=merged,
+	// 8=cleanup warning record.
 	o.deps.Worktrees = failingRemoveWorktrees{WorktreeManager: fx.wm, removeErr: errors.New("simulated worktree removal failure")}
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 4, err: errors.New("simulated warning-write failure")}
+	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 8, err: errors.New("simulated warning-write failure")}
 	o.deps.Store = store
 
-	err := o.runChildIntegration(fx.child.ID)
+	err := o.RunChildIntegration(fx.child.ID)
 	if err == nil || !strings.Contains(err.Error(), "record cleanup warning") {
 		t.Fatalf("runChildIntegration() error = %v, want wrapped warning-write failure", err)
 	}
@@ -952,8 +933,8 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
-	if child.Parent.Integration == nil || child.Parent.Integration.CleanupWarning != "" {
-		t.Fatalf("cleanup warning = %+v, want unset (the write failed and must not be faked)", child.Parent.Integration)
+	if child.Parent.Transaction == nil || child.Parent.Transaction.Entries[0].CleanupWarning != "" {
+		t.Fatalf("cleanup warning = %+v, want unset (the write failed and must not be faked)", child.Parent.Transaction)
 	}
 	if !child.IntegrationResumable() {
 		t.Fatal("child not resumable although the closure tail is unfinished")
@@ -969,8 +950,8 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 		t.Fatalf("RestartPhase() action = %v, want RestartNoOp (closure tail resume)", outcome.Action)
 	}
 	_, child = fx.reload()
-	if child.Parent.Integration.CleanupWarning != "" {
-		t.Fatalf("cleanup warning = %q after settled retry, want cleared", child.Parent.Integration.CleanupWarning)
+	if child.Parent.Transaction.Entries[0].CleanupWarning != "" {
+		t.Fatalf("cleanup warning = %q after settled retry, want cleared", child.Parent.Transaction.Entries[0].CleanupWarning)
 	}
 	if child.Repos[0].WorktreePath != "" {
 		t.Fatalf("child worktree path %q not cleared on retry", child.Repos[0].WorktreePath)

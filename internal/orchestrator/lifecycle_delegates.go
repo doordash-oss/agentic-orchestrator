@@ -967,8 +967,24 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// already-approved Final Review — on restart. A closed child whose
 	// cleanup tail never settled re-enters only that tail.
 	if f.IntegrationResumable() {
-		if err := o.runChildIntegration(featureID); err != nil {
+		if err := o.RunChildIntegration(featureID); err != nil {
 			return RestartOutcome{}, err
+		}
+		// Reload to check whether conflict resolution invalidated the
+		// final-review approval and routed the child back through Final
+		// Review. When the child code changed during resolution,
+		// invalidateFinalReview clears the journal and sets
+		// StatusReviewPassed + CurrentPhase=PhaseFinalReview. RestartPhase
+		// must dispatch Final Review so the pipeline reruns it without
+		// replaying Plan or Implement.
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return RestartOutcome{}, fmt.Errorf("reload after integration: %w", err)
+		}
+		if f.IsChild() && f.Parent.Transaction == nil &&
+			f.Status == feature.StatusReviewPassed &&
+			f.CurrentPhase == feature.PhaseFinalReview {
+			return RestartOutcome{Action: RestartDispatchPhase, Phase: feature.PhaseFinalReview}, nil
 		}
 		return RestartOutcome{Action: RestartNoOp}, nil
 	}

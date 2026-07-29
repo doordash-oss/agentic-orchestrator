@@ -10,6 +10,7 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
   FeatureActionRequestSchema,
+  GateResumeRequestSchema,
   ChatStartRequestSchema,
   SessionIdSchema,
   SessionTranscriptRequestSchema,
@@ -45,6 +46,19 @@ describe('IPC channel registry', () => {
 });
 
 describe('operational IPC schemas', () => {
+  it('accepts only the gate target when resuming and rejects legacy decisions', () => {
+    const target = {
+      featureId: 'abcd1234',
+      repoName: 'repo-a',
+      cycleType: 'review-comments',
+    };
+
+    expect(GateResumeRequestSchema.parse(target)).toStrictEqual(target);
+    for (const decision of ['resume', 'abort']) {
+      expect(GateResumeRequestSchema.safeParse({ ...target, decision }).success).toBe(false);
+    }
+  });
+
   it('allows only audited feature action catalogue entries', () => {
     expect(
       FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'start' }),

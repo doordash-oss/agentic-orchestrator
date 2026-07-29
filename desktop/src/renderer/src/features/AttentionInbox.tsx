@@ -149,7 +149,6 @@ export function AttentionInbox({
         setOpen(true);
       }
       if (event.key === 'Escape' && open) {
-        if (document.querySelector('[data-attention-confirm="true"]') !== null) return;
         setOpen(false);
         bell.current?.focus();
       }

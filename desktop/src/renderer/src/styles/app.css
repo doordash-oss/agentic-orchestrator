@@ -2607,8 +2607,7 @@ body {
   font-size: 11px;
 }
 
-.attention-detail__actions,
-.attention-confirm__actions {
+.attention-detail__actions {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
@@ -2638,11 +2637,6 @@ body {
   border-color: var(--color-danger);
 }
 
-.attention-button--danger {
-  color: var(--color-danger);
-  border-color: var(--color-danger);
-}
-
 .attention-button:disabled {
   color: var(--color-muted);
   background: transparent;
@@ -2664,40 +2658,6 @@ body {
   border-radius: var(--radius);
   padding: var(--space-2);
   font: inherit;
-}
-
-.attention-confirm__backdrop {
-  position: fixed;
-  z-index: 30;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: var(--space-4);
-  background: var(--color-scrim);
-}
-
-.attention-confirm {
-  width: min(420px, 100%);
-  border: 1px solid var(--color-danger);
-  border-radius: var(--radius);
-  padding: var(--space-5);
-  background: var(--color-panel);
-  box-shadow: 0 18px 60px color-mix(in srgb, var(--color-bg) 70%, transparent);
-}
-
-.attention-confirm__eyebrow {
-  margin: 0;
-  color: var(--color-danger);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.attention-confirm h3 {
-  margin: var(--space-2) 0 var(--space-3);
-  font-family: var(--font-display);
-  font-size: 22px;
 }
 
 .sr-only {

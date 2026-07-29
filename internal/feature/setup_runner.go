@@ -338,6 +338,22 @@ func (m *Manager) reuseExpectedWorktree(task SetupTask) error {
 			return fmt.Errorf("expected worktree path %s is on branch %q, want %q", task.Path, branch, task.Branch)
 		}
 	}
+	// When the task pinned an exact launch tip, only reuse the worktree when
+	// its HEAD still sits at the persisted SHA; any drift fails safely
+	// instead of silently reusing a worktree at the wrong commit.
+	if task.ExactSHA != "" {
+		resolver, err := m.headSHAReader()
+		if err != nil {
+			return fmt.Errorf("cannot verify exact base %s for expected worktree path %s: %w", task.ExactSHA, task.Path, err)
+		}
+		head, err := resolver.CurrentHeadSHA(task.Path)
+		if err != nil {
+			return fmt.Errorf("checking HEAD for expected worktree path %s: %w", task.Path, err)
+		}
+		if !strings.EqualFold(head, task.ExactSHA) {
+			return fmt.Errorf("expected worktree path %s is at commit %s, want exact base %s", task.Path, head, task.ExactSHA)
+		}
+	}
 	return nil
 }
 
@@ -480,11 +496,23 @@ func (m *Manager) ReconcileAbandonedSetups() ([]string, error) {
 }
 
 func (m *Manager) failAbandonedSetup(featureID, msg string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
+	_, err := m.FailActiveSetup(featureID, msg)
+	return err
+}
+
+// FailActiveSetup durably fails a still-running setup, parking the feature in
+// Failed/FailureWorktreeSetup so it is retryable through RetrySetup. It is a
+// no-op (marked=false) once setup has reached a terminal state, so callers
+// that clean up after a setup runner error never clobber a failure the
+// runner already recorded — the runner owns task-level diagnostics whenever
+// it got far enough to persist them.
+func (m *Manager) FailActiveSetup(featureID, msg string) (marked bool, err error) {
+	err = m.Store.Modify(featureID, func(f *Feature) error {
 		setup := f.Run().Setup
 		if setup == nil || setup.Status != SetupStatusRunning {
 			return nil
 		}
+		marked = true
 		now := time.Now()
 		setup.Status = SetupStatusFailed
 		setup.CompletedAt = &now
@@ -504,6 +532,7 @@ func (m *Manager) failAbandonedSetup(featureID, msg string) error {
 		f.LastError = msg
 		return nil
 	})
+	return marked, err
 }
 
 func setupAttemptLogPath(store *Store, f *Feature, attempt int) string {

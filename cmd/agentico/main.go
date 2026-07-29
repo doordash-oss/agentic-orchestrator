@@ -85,6 +85,7 @@ const (
 	resultUpdated  = "updated"
 	resultSent     = "sent"
 	resultRetried  = "retried"
+	resultCreated  = "created"
 
 	dispatchNone = "none"
 
@@ -892,6 +893,7 @@ type serverMutationTarget struct {
 	mu              sync.Mutex
 	orch            *orchestrator.Orchestrator
 	rebaseStarter   featureRebaseStarter
+	childCreator    featureRefactorChildCreator
 	cfg             *config.Config
 	configPath      string
 	store           *feature.Store
@@ -904,6 +906,12 @@ type serverMutationTarget struct {
 
 type featureRebaseStarter interface {
 	StartFeatureRebase(featureID string) error
+}
+
+// featureRefactorChildCreator is the narrow feature.Manager surface the
+// refactor action needs to atomically create and persist a refactor child.
+type featureRefactorChildCreator interface {
+	CreateRefactorChild(parentID string, spec feature.RefactorChildSpec) (*feature.Feature, error)
 }
 
 type gitFreshnessProvider struct{}
@@ -1569,6 +1577,35 @@ func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.R
 		return resp, err
 	}
 	resp.Result = resultStarted
+	return resp, nil
+}
+
+func (t *serverMutationTarget) RefactorFeature(featureID string, req serverruntime.RefactorFeatureRequest) (serverruntime.RefactorFeatureResponse, error) {
+	resp := serverruntime.RefactorFeatureResponse{ParentID: featureID, Result: resultFailed}
+	creator := t.childCreator
+	if creator == nil {
+		return resp, errors.New("feature manager is not available")
+	}
+	spec, err := serverruntime.RefactorChildSpecFromRequest(req)
+	if err != nil {
+		return resp, err
+	}
+	child, err := creator.CreateRefactorChild(featureID, spec)
+	if err != nil {
+		return resp, err
+	}
+	// Setup intent is queued durably on creation; run it asynchronously so the
+	// response returns with the child identifier immediately. RunSetupAsync
+	// keeps the goroutine orchestrator-owned: its terminal errors are recorded
+	// durably and signalled, and RunSetup serializes per feature with an
+	// in-process lock. The orchestrator parks setup-complete children at
+	// Created without starting the pipeline.
+	if t.orch != nil {
+		t.orch.RefactorChildCreated(child)
+		t.orch.RunSetupAsync(child.ID)
+	}
+	resp.FeatureID = child.ID
+	resp.Result = resultCreated
 	return resp, nil
 }
 
@@ -2840,6 +2877,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Mutations: &serverMutationTarget{
 			orch:            boot.orchestrator,
 			rebaseStarter:   boot.orchestrator,
+			childCreator:    boot.featureManager,
 			cfg:             boot.cfg,
 			configPath:      boot.runtime.Config,
 			store:           boot.featureManager.Store,

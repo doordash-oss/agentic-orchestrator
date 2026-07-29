@@ -361,6 +361,12 @@ func (c *Client) StartRebase(ctx context.Context, featureID string, req RebaseAc
 	return out, err
 }
 
+func (c *Client) RefactorFeature(ctx context.Context, featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
+	var out RefactorFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor), nil, req, &out, true)
+	return out, err
+}
+
 func (c *Client) FetchReviewComments(ctx context.Context, featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error) {
 	var out ReviewCommentsFetchResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewComments)+"/fetch", nil, req, &out, true)

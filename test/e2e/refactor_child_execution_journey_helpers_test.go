@@ -1,0 +1,263 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package e2e
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+)
+
+const journeyRoadmapText = `# Roadmap
+
+## Phase 1: Child integration slice
+
+### Goal
+
+Land the child work and integrate it into the parent.
+
+### Scope
+
+One small change.
+`
+
+var journeyPhasePlanText = "# Phase 1 Plan\n\n" +
+	"## Overview\nShip the child slice.\n\n" +
+	"## Tasks\n\n" +
+	"### Task 1: Produce the child artifact\n\n" +
+	"**Repo:** repoA\n\n" +
+	"#### What to build\nWrite the child output file.\n\n" +
+	"#### Acceptance criteria\n- [ ] The child artifact exists in the worktree.\n\n" +
+	"#### Blocked by\nNone - can start immediately\n\n" +
+	"## Success Criteria\n\n" +
+	"### Automated Verification\n- [ ] Artifact present: `test -f child-output.txt`\n\n" +
+	"### Manual Verification\n- [ ] None required: internal test fixture.\n\n" +
+	"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n\n" +
+	"### Behavioral Evidence\n- [ ] None required: automated tests provide the artifact.\n"
+
+// journeyCleanliness adapts the git cleanliness report to the feature view,
+// mirroring the production module wiring.
+func journeyCleanliness(wm *git.WorktreeManager) feature.CleanlinessOps {
+	return feature.CleanlinessFunc(func(worktreePath string, maxPerCategory int) (*feature.RepoCleanliness, error) {
+		report, err := wm.InspectCleanliness(worktreePath, maxPerCategory)
+		if report == nil || err != nil {
+			return nil, err
+		}
+		return &feature.RepoCleanliness{
+			Staged:         report.Staged,
+			Unstaged:       report.Unstaged,
+			Untracked:      report.Untracked,
+			StagedTotal:    report.StagedTotal,
+			UnstagedTotal:  report.UnstagedTotal,
+			UntrackedTotal: report.UntrackedTotal,
+		}, nil
+	})
+}
+
+// journeyChildPhaseRunner wires scripted plan sessions plus stubbed
+// implement and final-review kernels so the journey exercises the real
+// orchestrator/server wiring without launching provider CLIs. The implement
+// stub writes one artifact into the child worktree, which integration must
+// carry into the parent.
+func journeyChildPhaseRunner(t *testing.T, sm *session.Manager, store *feature.Store, stateDir string) *agent.PhaseRunner {
+	t.Helper()
+	scriptsDir := t.TempDir()
+
+	pr := agent.NewPhaseRunner(sm, store, stateDir)
+	pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		// MarkerPath is <artifactDir>/attempt-NN/phase_complete; the phase
+		// artifact belongs one level up in <artifactDir>. Utility sessions
+		// (e.g. PR description generation during auto-publish) carry no
+		// marker and just need a text response.
+		artifactDir := filepath.Dir(filepath.Dir(opts.MarkerPath))
+		var script string
+		switch {
+		case opts.MarkerPath == "":
+			script = testutil.WriteScript(t, scriptsDir, "description.sh", testutil.JSONLInit+"\n"+
+				`read -r _agentic_init`+"\n"+
+				testutil.JSONLAssistant("TITLE: Child integration\n\nBODY: Integrated the refactor child.")+"\n"+
+				testutil.JSONLSuccess+"\n")
+		case strings.Contains(opts.MarkerPath, "roadmap"):
+			script = testutil.WriteScript(t, scriptsDir, "roadmap.sh", testutil.JSONLInit+"\n"+
+				`read -r _agentic_init`+"\n"+
+				fmt.Sprintf("cat > %q <<'ROADMAP_EOF'\n%s\nROADMAP_EOF", filepath.Join(artifactDir, "roadmap.md"), journeyRoadmapText)+"\n"+
+				fmt.Sprintf("touch %q", opts.MarkerPath)+"\n"+
+				testutil.JSONLSuccess+"\n")
+		default:
+			script = testutil.WriteScript(t, scriptsDir, "phase-plan.sh", testutil.JSONLInit+"\n"+
+				`read -r _agentic_init`+"\n"+
+				fmt.Sprintf("cat > %q <<'PLAN_EOF'\n%s\nPLAN_EOF", filepath.Join(artifactDir, "plan.md"), journeyPhasePlanText)+"\n"+
+				fmt.Sprintf("touch %q", opts.MarkerPath)+"\n"+
+				testutil.JSONLSuccess+"\n")
+		}
+		return []string{"bash", script}, nil, &ports.SessionOpts{
+			PIDDir:        opts.PIDDir,
+			PermHandler:   opts.PermHandler,
+			InitialPrompt: opts.Prompt,
+			RepoName:      opts.RepoName,
+		}, nil
+	}
+	pr.RunImplementFn = func(c agent.ImplementConfig, _ ports.SessionManager) (*agent.LoopResult, error) {
+		// Stand in for the implement kernel: leave one real change in the
+		// child worktree for the integration boundary to commit and merge.
+		for _, repo := range c.Feature.Repos {
+			wt := repo.WorktreePath
+			if wt == "" {
+				wt = repo.Path
+			}
+			if err := os.WriteFile(filepath.Join(wt, "child-output.txt"), []byte("child work\n"), 0o644); err != nil {
+				return nil, fmt.Errorf("write child output: %w", err)
+			}
+		}
+		return &agent.LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil
+	}
+	pr.RunFinalReviewFn = func(c agent.OrchestratorConfig, _ ports.SessionManager) (*agent.FeatureFinalReviewResult, error) {
+		repos := c.Feature.TouchedRepos()
+		if err := agent.AtomicPhaseStamp(c.FeatureStore, agent.AtomicPhaseStampInput{
+			FeatureID: c.Feature.ID,
+			Repos:     repos,
+			Outcome:   agent.PhaseOutcomeFinalReviewPassed,
+		}); err != nil {
+			return nil, err
+		}
+		return &agent.FeatureFinalReviewResult{
+			FinalStatus: "review_passed",
+			Iterations:  1,
+			Repos:       repos,
+		}, nil
+	}
+	return pr
+}
+
+// postAction runs one feature action through the raw action route and fails
+// on a non-200 response.
+func postAction(t *testing.T, baseURL, featureID, action, body string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost,
+		baseURL+"/api/v1/features/"+featureID+"/actions/"+action, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST action %s: %v", action, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST action %s status = %d; body: %s", action, resp.StatusCode, payload)
+	}
+}
+
+// waitForJourneyGate polls until the child is parked at the plan-review gate
+// for the given roadmap phase.
+func waitForJourneyGate(t *testing.T, baseURL, childID string, wantRoadmapPhase float64) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	var last map[string]any
+	for time.Now().Before(deadline) {
+		body := journeyFeatureBody(baseURL, childID)
+		if body != nil {
+			last = body
+			if body["status"] == feature.StatusPlanNeedsReview.String() {
+				if phase, ok := body["current_roadmap_phase"].(float64); !ok || phase == wantRoadmapPhase {
+					return
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	lastJSON, _ := json.Marshal(last)
+	t.Fatalf("child %s never reached plan-review gate for roadmap phase %v; last: %s", childID, wantRoadmapPhase, lastJSON)
+}
+
+// waitForJourneyChildClosed polls until the child relationship is durably
+// closed AND the closure tail (cleanup or its recorded warning) has settled,
+// so follow-on assertions never race the post-close work.
+func waitForJourneyChildClosed(t *testing.T, baseURL string, store *feature.Store, childID string) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	var last map[string]any
+	for time.Now().Before(deadline) {
+		body := journeyFeatureBody(baseURL, childID)
+		if body != nil {
+			last = body
+		}
+		if body == nil || body["close_outcome"] != feature.ChildCloseOutcomeCompleted {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		current, err := store.Load(childID)
+		if err == nil && len(current.Repos) > 0 {
+			if current.Repos[0].WorktreePath == "" ||
+				(current.Parent.Integration != nil && current.Parent.Integration.CleanupWarning != "") {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	lastJSON, _ := json.Marshal(last)
+	t.Fatalf("child %s never closed (or cleanup never settled); last: %s", childID, lastJSON)
+}
+
+// waitForParentPublishOutcome polls until the parent's per-repo publication
+// state records a terminal result (PR URL on success, LastError on failure).
+func waitForParentPublishOutcome(t *testing.T, store *feature.Store, parentID string) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		parent, err := store.Load(parentID)
+		if err == nil {
+			if st := parent.RepoStates["repoA"]; st != nil && (st.PRURL != "" || st.LastError != "") {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	parent, _ := store.Load(parentID)
+	t.Fatalf("parent %s publication never settled: %+v", parentID, parent.RepoStates)
+}
+
+func journeyFeatureBody(baseURL, featureID string) map[string]any {
+	resp, err := http.Get(baseURL + "/api/v1/features/" + featureID)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var detail map[string]any
+	if json.NewDecoder(resp.Body).Decode(&detail) != nil {
+		return nil
+	}
+	body, _ := detail["feature"].(map[string]any)
+	return body
+}

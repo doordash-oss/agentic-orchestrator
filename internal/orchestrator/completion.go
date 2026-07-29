@@ -1125,6 +1125,13 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 		return fmt.Errorf("final review did not complete successfully: %s", errMsg)
 	}
 
+	// Child features never deliver: a successful final review enters the
+	// explicit local-integration stage instead of CodeReady, publication, or
+	// any child delivery path.
+	if f.IsChild() {
+		return o.runChildIntegration(featureID)
+	}
+
 	if !f.IsPublishable() || !f.Checkpoints.AutoPublish() {
 		if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
 			return fmt.Errorf("mark code ready: %w", err)

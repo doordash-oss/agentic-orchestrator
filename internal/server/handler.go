@@ -204,9 +204,25 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "list features", nil)
 		return
 	}
+	// Child features never appear in the top-level list; instead the single
+	// loaded slice indexes at most one active child per parent (creation
+	// enforces uniqueness; first match wins defensively) so the parent's
+	// summary can expose it without a per-feature store round trip.
+	activeChildByParent := map[string]*feature.Feature{}
+	for _, f := range features {
+		if f.IsActiveChild() {
+			if _, exists := activeChildByParent[f.Parent.ParentID]; !exists {
+				activeChildByParent[f.Parent.ParentID] = f
+			}
+		}
+	}
 	summaries := make([]FeatureSummary, 0, len(features))
 	for _, f := range features {
+		if f.IsChild() {
+			continue
+		}
 		summary := summarizeFeature(f)
+		summary.ActiveChild = activeChildSummaryDTO(activeChildByParent[f.ID])
 		summary.Warnings = append(summary.Warnings, effortDriftWarnings(f, h.registry)...)
 		summaries = append(summaries, summary)
 	}
@@ -279,7 +295,11 @@ func (h *apiHandler) handleFeatureDetail(w http.ResponseWriter, r *http.Request,
 		writeStoreError(w, err, featureID)
 		return
 	}
-	detail := h.featureDetailDTO(f)
+	detail, err := h.featureDetailDTO(f)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "build feature detail", nil)
+		return
+	}
 	revision := revisionForAny(detail)
 	detail.Revision = revision
 	detail.CacheRevalidate = "etag"

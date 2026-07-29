@@ -70,10 +70,15 @@ const (
 type Event struct {
 	Type      EventType
 	FeatureID string
-	Feature   *feature.Feature // non-nil for FeatureCreated
-	Phase     feature.Phase    // set for phase-related events
-	Error     error            // set for failure events
-	Message   string           // human-readable detail
+	// RelatedFeatureID carries the launch parent id on child-feature events
+	// (creation and setup lifecycle) so consumers can correlate a child event
+	// with the parent whose projection it also changes. Empty on top-level
+	// feature events; zero-value-safe for all existing emit sites.
+	RelatedFeatureID string
+	Feature          *feature.Feature // non-nil for FeatureCreated
+	Phase            feature.Phase    // set for phase-related events
+	Error            error            // set for failure events
+	Message          string           // human-readable detail
 
 	RunNumber   int
 	Attempt     int

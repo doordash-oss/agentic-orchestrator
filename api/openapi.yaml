@@ -173,6 +173,18 @@ paths:
     post:
       operationId: runFeatureAction
       summary: Run a named feature action.
+      description: >-
+        Executes the named action. Child-feature execution actions (start,
+        resume, retry, restart) enforce the child capability gate: 409
+        `child_relationship_closed` for a child whose relationship has
+        settled (a Completed child with a genuinely resumable cleanup tail
+        retains the restart action only); 409 `child_execution_blocked`
+        while setup is queued, running, or failed; 409
+        `child_profile_unsupported` for Large/Moonshot children (child
+        knowledge-base isolation is not yet available); 409
+        `child_repo_count_unsupported` for children with more than one
+        repository. Capability rejections never invalidate or close the
+        child record.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/FeatureAction"
@@ -182,8 +194,53 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
+        "201":
+          description: Refactor child launched. Only the refactor action returns 201; its typed contract is documented as the refactorFeature operation at /api/v1/features/{feature_id}/actions/refactor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefactorFeatureResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the refactor action. The server routes the
+  # refactor launch through the dynamic /actions/{action} dispatch, so the
+  # served URL is exactly /api/v1/features/{feature_id}/actions/refactor;
+  # this operation pins the typed request/response surface to that URL.
+  /api/v1/features/{feature_id}/actions/refactor:
+    post:
+      operationId: refactorFeature
+      summary: Launch a refactor child feature from the typed wizard brief.
+      description: >-
+        Served at the same URL as `runFeatureAction` with action `refactor`.
+        Failure machine codes: 404 `parent_not_found`; 409 `parent_is_child`,
+        `parent_status_ineligible`, `active_child_exists`, and
+        `parent_worktrees_dirty` (which also carries per-repository
+        diagnostics under `error.target.repos`).
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefactorFeatureRequest"
+      responses:
+        "201":
+          description: Refactor child launched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefactorFeatureResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/features/{feature_id}/actions/{action}/{subaction}:
     post:
@@ -588,6 +645,7 @@ components:
           - mark-done
           - cleanup
           - delete
+          - refactor
     FeatureSubaction:
       name: subaction
       in: path
@@ -857,6 +915,11 @@ components:
           type: string
         feature_id:
           type: string
+        related_feature_id:
+          type: string
+          description: >-
+            Parent feature id when this event belongs to a child feature (e.g.
+            a refactor child); empty for top-level feature events.
         phase:
           type: string
     SSEEvent:
@@ -1474,6 +1537,65 @@ components:
               type: string
             session_id:
               type: string
+    RefactorFeatureRequest:
+      # Bound by the refactorFeature operation at
+      # /api/v1/features/{feature_id}/actions/refactor; oapi-codegen emits the
+      # Go binding (internal/server/serverapi.gen.go).
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        images:
+          type: array
+          items:
+            type: string
+        attachments:
+          type: array
+          items:
+            type: string
+        pipeline:
+          type: string
+          x-go-type: feature.PipelineProfile
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        checkpoints:
+          x-go-type: feature.Checkpoints
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        effort:
+          $ref: "#/components/schemas/EffortConfig"
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        risk_level:
+          type: string
+          x-go-type: feature.RiskLevel
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+        exit_criteria:
+          type: string
+        inquireness:
+          type: string
+          enum: [none, medium, high]
+          x-go-type: feature.Inquireness
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+            name: feature
+    RefactorFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [parent_id]
+          properties:
+            parent_id:
+              type: string
     ReviewComment:
       type: object
       required: [id]
@@ -2037,6 +2159,42 @@ components:
           type: integer
         current_phase_status:
           type: string
+    ChildRepoBase:
+      type: object
+      required: [repo, sha]
+      properties:
+        repo:
+          type: string
+        sha:
+          type: string
+        parent_branch:
+          type: string
+    ActiveChildSummary:
+      type: object
+      required: [id, name, kind, state]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+        pipeline:
+          type: string
+        status:
+          type: string
+          description: Durable lifecycle status of the active child.
+        setup_status:
+          type: string
+          description: Setup status of the child's active run (queued/running/done/failed).
+        state:
+          type: string
+          description: >-
+            Derived relationship state: setting_up while worktree setup is in
+            flight or failed, setup_complete once setup has finished.
+        last_error:
+          type: string
+          description: Setup failure message when the child's setup failed.
     FeatureSummary:
       type: object
       required:
@@ -2084,6 +2242,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Warning"
+        active_child:
+          $ref: "#/components/schemas/ActiveChildSummary"
+          x-go-type-skip-optional-pointer: false
     ModelDefaults:
       x-go-type: config.ModelConfig
       x-go-type-import:
@@ -2378,6 +2539,94 @@ components:
               type: string
             cache_revalidate:
               type: string
+            parent_id:
+              type: string
+              description: Launch parent id; only set on child features.
+            parent_kind:
+              type: string
+              description: Child relationship kind (e.g. refactor); only set on child features.
+            active:
+              type: boolean
+              description: >-
+                True while a child feature's relationship is open (no close
+                outcome recorded). Only set on child features.
+            bases:
+              type: array
+              description: Exact per-repository parent tips captured at child launch.
+              items:
+                $ref: "#/components/schemas/ChildRepoBase"
+            setup_complete:
+              type: boolean
+              description: >-
+                True when the child's active run setup finished; only set on
+                child features.
+            close_outcome:
+              type: string
+              description: >-
+                Recorded relationship close outcome (e.g. completed); only
+                set on closed child features.
+            closed_at:
+              type: string
+              format: date-time
+              description: Relationship close timestamp; only set on closed child features.
+              x-go-type-skip-optional-pointer: false
+            integration:
+              $ref: "#/components/schemas/ChildIntegration"
+            dirty:
+              type: array
+              description: >-
+                Categorized parent-worktree diagnostics recorded when a dirty
+                preflight blocked child integration.
+              items:
+                $ref: "#/components/schemas/ChildDirtyDiagnostics"
+    ChildIntegration:
+      type: object
+      description: >-
+        Durable single-repository child-to-parent integration record: the
+        attempt anchors, the resulting no-fast-forward merge HEAD once
+        durable, structured retry attention, and any non-fatal cleanup
+        warning.
+      properties:
+        parent_branch:
+          type: string
+        parent_anchor_sha:
+          type: string
+        child_head_sha:
+          type: string
+        merge_head:
+          type: string
+        phase:
+          type: string
+          description: attention while a retryable failure is parked; merged once the boundary is durable.
+        attention:
+          type: string
+        cleanup_warning:
+          type: string
+    ChildDirtyDiagnostics:
+      type: object
+      properties:
+        repo:
+          type: string
+        path:
+          type: string
+        staged:
+          type: array
+          items:
+            type: string
+        unstaged:
+          type: array
+          items:
+            type: string
+        untracked:
+          type: array
+          items:
+            type: string
+        staged_total:
+          type: integer
+        unstaged_total:
+          type: integer
+        untracked_total:
+          type: integer
     Usage:
       type: object
       properties:

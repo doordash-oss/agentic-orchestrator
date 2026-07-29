@@ -18,6 +18,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"sort"
@@ -85,6 +87,7 @@ const (
 	actionPauseStop      = "pause-stop"
 	actionPublish        = "publish"
 	actionRebase         = "rebase"
+	actionRefactor       = "refactor"
 	actionRestart        = "restart"
 	actionResume         = "resume"
 	actionStart          = "start"
@@ -100,7 +103,7 @@ func revisionForAny(v any) string {
 	return hex.EncodeToString(sum[:12])
 }
 
-func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
+func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, error) {
 	active := runSummaryDTO(f.Run(), f)
 	historyRunNumbers := boundedHistoricalRunNumbers(f.ActiveRun, f.RunCount, maxFeatureDetailHistoricalRuns)
 	history := make([]RunSummaryDTO, 0, len(historyRunNumbers))
@@ -113,6 +116,52 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		}
 	}
 	detail := featureDetailFromSummary(summarizeFeature(f))
+	if f.IsChild() {
+		detail.ParentID = f.Parent.ParentID
+		detail.ParentKind = f.Parent.Kind
+		detail.Active = f.IsActiveChild()
+		detail.SetupComplete = childSetupComplete(f)
+		detail.CloseOutcome = f.Parent.CloseOutcome
+		detail.ClosedAt = f.Parent.ClosedAt
+		for _, base := range f.Parent.Bases {
+			detail.Bases = append(detail.Bases, ChildRepoBase{
+				Repo:         base.Repo,
+				Sha:          base.SHA,
+				ParentBranch: base.ParentBranch,
+			})
+		}
+		if integ := f.Parent.Integration; integ != nil {
+			detail.Integration = ChildIntegration{
+				ParentBranch:    integ.ParentBranch,
+				ParentAnchorSha: integ.ParentAnchorSHA,
+				ChildHeadSha:    integ.ChildHeadSHA,
+				MergeHead:       integ.MergeHEAD,
+				Phase:           integ.Phase,
+				Attention:       integ.Attention,
+				CleanupWarning:  integ.CleanupWarning,
+			}
+			for _, d := range integ.Dirty {
+				detail.Dirty = append(detail.Dirty, ChildDirtyDiagnostics{
+					Repo:           d.Repo,
+					Path:           d.Path,
+					Staged:         d.Staged,
+					Unstaged:       d.Unstaged,
+					Untracked:      d.Untracked,
+					StagedTotal:    d.StagedTotal,
+					UnstagedTotal:  d.UnstagedTotal,
+					UntrackedTotal: d.UntrackedTotal,
+				})
+			}
+		}
+	} else {
+		child, err := h.activeChildOf(f.ID)
+		if err != nil {
+			return FeatureDetailDTO{}, err
+		}
+		if child != nil {
+			detail.ActiveChild = activeChildSummaryDTO(child)
+		}
+	}
 	detail.Description = safeDisplayText(f.Description, 500)
 	detail.Summary = safeDisplayText(f.Summary, 500)
 	detail.Pipeline = string(f.Pipeline)
@@ -153,7 +202,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		detail.NeedUserInput = &gate
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
-	return detail
+	return detail, nil
 }
 
 func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
@@ -171,7 +220,68 @@ func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
 		Checkpoints:  summary.Checkpoints,
 		Progress:     summary.Progress,
 		Warnings:     summary.Warnings,
+		ActiveChild:  summary.ActiveChild,
 	}
+}
+
+// activeChildOf returns the unique active child of the given parent, or nil.
+// Creation enforces at most one open child relationship per parent; the first
+// match wins defensively. One List per request mirrors the detail handler's
+// existing per-request store access pattern. Listing failures propagate so a
+// broken store never masquerades as "no active child" in a parent projection.
+func (h *apiHandler) activeChildOf(parentID string) (*feature.Feature, error) {
+	if h.features == nil || parentID == "" {
+		return nil, nil
+	}
+	features, _, err := listFeatures(h.features)
+	if err != nil {
+		return nil, fmt.Errorf("listing features for active-child lookup: %w", err)
+	}
+	for _, f := range features {
+		if f.IsActiveChild() && f.Parent.ParentID == parentID {
+			return f, nil
+		}
+	}
+	return nil, nil
+}
+
+// childSetupComplete reports whether the child's active-run setup finished.
+func childSetupComplete(f *feature.Feature) bool {
+	if f == nil || f.Run() == nil {
+		return false
+	}
+	setup := f.Run().Setup
+	return setup != nil && setup.Status == feature.SetupStatusDone
+}
+
+// activeChildSummaryDTO projects a child feature into the compact summary a
+// parent surfaces. Nil-safe: nil yields nil (no active child).
+func activeChildSummaryDTO(child *feature.Feature) *ActiveChildSummary {
+	if child == nil {
+		return nil
+	}
+	dto := &ActiveChildSummary{
+		ID:       child.ID,
+		Name:     child.Name,
+		Kind:     child.Parent.Kind,
+		Pipeline: string(child.EffectivePipeline()),
+		Status:   child.Status.String(),
+		State:    "setting_up",
+	}
+	if setup := child.Run().Setup; setup != nil {
+		dto.SetupStatus = string(setup.Status)
+		if setup.Status == feature.SetupStatusFailed {
+			dto.LastError = safeDisplayText(setup.LastError, 240)
+			if dto.LastError == "" {
+				dto.LastError = safeDisplayText(child.LastError, 240)
+			}
+		}
+	}
+	if childSetupComplete(child) {
+		dto.State = "setup_complete"
+		dto.LastError = ""
+	}
+	return dto
 }
 
 func activeCycleDTO(f *feature.Feature) *CycleDTO {
@@ -280,6 +390,10 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	featureScope := ActionScopeDTO{Type: entityFeature}
 	repoRequired := ActionScopeDTO{Type: entityFeature, RepoSelection: "required"}
 
+	if f.IsChild() {
+		return childActionCatalogDTOs(f, status, running, activeCycle, action, disabledStatusReason)
+	}
+
 	canStart := !running && !activeCycle && (status == feature.StatusCreated ||
 		status == feature.StatusInquireReady ||
 		status == feature.StatusPlanReady ||
@@ -300,6 +414,9 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
 	canDelete := !running
+	// Only Published or CodeReady top-level parents can launch a refactor
+	// child, mirroring the launch validation in feature.CreateRefactorChild.
+	canRefactor := status == feature.StatusPublished || status == feature.StatusCodeReady
 
 	return []ActionDTO{
 		action(actionStart, canStart, featureScope, nil, disabledStatusReason(status)),
@@ -318,12 +435,120 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 			{Name: "repo", Kind: actionInputKindString, Required: true},
 			{Name: "mode", Kind: actionInputKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
 		}, postPublishCycleDisabledReason(f, actionReviewComments)),
+		action(actionRefactor, canRefactor, featureScope, nil, disabledStatusReason(status)),
 		action(actionRetry, canRetry, featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
 		action(actionMarkDone, canMarkDone, featureScope, nil, ActionDisabledReasonDTO{Code: "not_complete", Message: "feature is not ready to mark done"}),
 		action(actionCleanup, canCleanup, featureScope, []ActionInputDTO{
 			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
 		}, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"}),
 		action(actionDelete, canDelete, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"}),
+	}
+}
+
+// childSetupFailed reports whether the child feature carries a failed
+// worktree setup that the setup retry action can rerun. Mirrors the
+// isFailedSetupFeature predicate used by the retry mutation.
+func childSetupFailed(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	setup := f.Run().Setup
+	return f.Status == feature.StatusFailed &&
+		f.FailureType == feature.FailureWorktreeSetup &&
+		setup != nil &&
+		setup.Status == feature.SetupStatusFailed
+}
+
+// disabledChildSetupIncomplete is the ActionDisabledReasonDTO.Code used when
+// a child cannot execute because setup is queued, running, or failed.
+const disabledChildSetupIncomplete = "setup_incomplete"
+
+// disabledChildRelationshipClosed is the ActionDisabledReasonDTO.Code used
+// when a child cannot execute because its relationship has settled.
+const disabledChildRelationshipClosed = "relationship_closed"
+
+// childExecutionBlockReason returns the error that currently blocks child
+// execution: the settled-relationship block on a closed child, the
+// setup-state block while setup is incomplete, or the typed capability
+// rejection for an unsupported profile or repository count. Nil means the
+// child may run through the ordinary Medium pipeline.
+func childExecutionBlockReason(f *feature.Feature) error {
+	if f == nil || !f.IsChild() {
+		return nil
+	}
+	if !f.IsActiveChild() {
+		return feature.ErrChildExecutionClosed
+	}
+	if !f.ChildSetupComplete() {
+		return feature.ErrChildExecutionBlocked
+	}
+	return f.ChildExecutionCapability()
+}
+
+// childCapabilityDisabledReason maps a child execution block to the stable
+// disabled-reason code echoed by the action catalog: relationship_closed,
+// setup_incomplete, unsupported_profile, or unsupported_repo_count.
+func childCapabilityDisabledReason(err error) ActionDisabledReasonDTO {
+	var capErr *feature.ChildCapabilityError
+	switch {
+	case errors.Is(err, feature.ErrChildExecutionClosed):
+		return ActionDisabledReasonDTO{Code: disabledChildRelationshipClosed, Message: "the child relationship is closed; the settled child cannot execute"}
+	case errors.As(err, &capErr):
+		return ActionDisabledReasonDTO{Code: capErr.Reason, Message: capErr.Error()}
+	case errors.Is(err, feature.ErrChildExecutionBlocked):
+		return ActionDisabledReasonDTO{Code: disabledChildSetupIncomplete, Message: "child setup is queued, running, or failed; only setup and setup-retry are available"}
+	default:
+		return ActionDisabledReasonDTO{Code: disabledStatusNotAllowed, Message: err.Error()}
+	}
+}
+
+// childActionCatalogDTOs builds the restricted child catalog: ordinary
+// start/resume/restart execution entries gated by the same capability check
+// the mutations enforce, plus setup-retry, cleanup, and delete. Child
+// delivery actions (publish, merge, rewind, refactor, mark-done, post-publish
+// cycles) are never offered: a child's work reaches the parent only through
+// integration.
+func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, activeCycle bool,
+	action func(string, bool, ActionScopeDTO, []ActionInputDTO, ...ActionDisabledReasonDTO) ActionDTO,
+	disabledStatusReason func(feature.Status) ActionDisabledReasonDTO) []ActionDTO {
+
+	featureScope := ActionScopeDTO{Type: entityFeature}
+	blockErr := childExecutionBlockReason(f)
+	blockedReason := func(fallback ActionDisabledReasonDTO) ActionDisabledReasonDTO {
+		if blockErr != nil {
+			return childCapabilityDisabledReason(blockErr)
+		}
+		return fallback
+	}
+	runnable := blockErr == nil
+	// A settled child keeps exactly one execution route: Restart, and only
+	// while its impermanent closure tail is genuinely resumable. The
+	// mutation gate enforces the same widened rule.
+	closedResumableTail := f.IsChild() && !f.IsActiveChild() && f.IntegrationResumable() && !running
+	restartStopped := ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"}
+	restartReason := blockedReason(restartStopped)
+	if closedResumableTail {
+		restartReason = restartStopped
+	}
+	stopped := !running && !activeCycle
+	canStart := runnable && stopped && (status == feature.StatusCreated ||
+		status == feature.StatusPlanReady ||
+		status == feature.StatusImplementReady ||
+		status == feature.StatusReviewPassed)
+	canResume := runnable && (status == feature.StatusInterrupted ||
+		status == feature.StatusNeedUserInput ||
+		f.PendingNeedUserInputPath != "")
+	canRestart := (runnable || closedResumableTail) && !running
+
+	return []ActionDTO{
+		action(actionStart, canStart, featureScope, nil, blockedReason(disabledStatusReason(status))),
+		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"})),
+		action(actionRestart, canRestart, featureScope, nil, restartReason),
+		action(actionRetry, childSetupFailed(f), featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
+		action(actionCleanup, stopped, featureScope, []ActionInputDTO{
+			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
+		}, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"}),
+		action(actionDelete, stopped, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"}),
 	}
 }
 

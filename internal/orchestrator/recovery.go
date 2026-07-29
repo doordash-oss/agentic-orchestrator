@@ -48,6 +48,16 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 			return nil, fmt.Errorf("cleanup orphan runs: %w", err)
 		}
 	}
+	// Roll interrupted child creations forward before abandoned-setup
+	// reconciliation: a rebuilt child is left in SettingUpWorktrees with a
+	// running setup intent, which the pass below then marks retryable.
+	if reconciler, ok := o.deps.Store.(interface {
+		ReconcilePendingChildCreations() ([]string, error)
+	}); ok {
+		if _, err := reconciler.ReconcilePendingChildCreations(); err != nil {
+			return nil, fmt.Errorf("reconcile pending child creations: %w", err)
+		}
+	}
 	if reconciler, ok := o.deps.Lifecycle.(interface {
 		ReconcileAbandonedSetups() ([]string, error)
 	}); ok {

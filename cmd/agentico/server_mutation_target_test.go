@@ -473,6 +473,179 @@ func (f *fakeFeatureRebaseStarter) StartFeatureRebase(featureID string) error {
 	return f.err
 }
 
+// TestServerMutationTargetStartFeatureBlocksChildren exercises the start /
+// resume backend path (serverMutationTarget.StartFeature fronts both routes)
+// end-to-end through the real orchestrator and store: a child whose setup is
+// queued, running, or failed returns ErrChildExecutionBlocked and never
+// reports "started", while a setup-complete but unsupported-profile child
+// surfaces the typed temporary capability error.
+func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
+	newChildTarget := func(t *testing.T, mutate func(*feature.Feature)) (serverMutationTarget, string) {
+		t.Helper()
+		runtimeDir := t.TempDir()
+		cfg := config.NewDefault()
+		cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+		store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+		manager := feature.NewManager(store, cfg)
+		child := &feature.Feature{
+			ID:        "child-blocked",
+			Slug:      "child-blocked",
+			Status:    feature.StatusCreated,
+			ActiveRun: 1,
+			RunCount:  1,
+			Pipeline:  feature.PipelineMedium,
+			Repos: []feature.FeatureRepo{{
+				Name:       testRepoAName,
+				Path:       filepath.Join(runtimeDir, testRepoAName),
+				Branch:     "feature/child-blocked",
+				BaseBranch: "main",
+			}},
+			Parent: &feature.ChildRelationship{ParentID: "p-1", Kind: feature.ChildKindRefactor},
+		}
+		mutate(child)
+		if err := store.Save(child); err != nil {
+			t.Fatalf("save child: %v", err)
+		}
+		orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+		return serverMutationTarget{orch: orch, store: store}, child.ID
+	}
+
+	t.Run("queued child", func(t *testing.T) {
+		target, childID := newChildTarget(t, func(f *feature.Feature) {
+			f.Status = feature.StatusSettingUpWorktrees
+		})
+		resp, err := target.StartFeature(childID)
+		if !errors.Is(err, feature.ErrChildExecutionBlocked) {
+			t.Fatalf("StartFeature() error = %v; want ErrChildExecutionBlocked", err)
+		}
+		if resp.Result == resultStarted {
+			t.Fatalf("StartFeature() response = %+v; must not report started for a child mid-setup", resp)
+		}
+	})
+
+	t.Run("failed-setup child", func(t *testing.T) {
+		target, childID := newChildTarget(t, func(f *feature.Feature) {
+			f.Status = feature.StatusFailed
+			// SetRun syncs run->shadows, so stamp shadow fields after it.
+			f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+			f.FailureType = feature.FailureWorktreeSetup
+		})
+		resp, err := target.StartFeature(childID)
+		if !errors.Is(err, feature.ErrChildExecutionBlocked) {
+			t.Fatalf("StartFeature() error = %v; want ErrChildExecutionBlocked", err)
+		}
+		if resp.Result == resultStarted {
+			t.Fatalf("StartFeature() response = %+v; must not report started for a failed-setup child", resp)
+		}
+	})
+
+	t.Run("large-profile child returns typed capability error", func(t *testing.T) {
+		target, childID := newChildTarget(t, func(f *feature.Feature) {
+			f.Pipeline = feature.PipelineLarge
+		})
+		resp, err := target.StartFeature(childID)
+		var capErr *feature.ChildCapabilityError
+		if !errors.As(err, &capErr) || capErr.Reason != feature.ChildCapabilityProfileUnsupported {
+			t.Fatalf("StartFeature() error = %v; want ChildCapabilityError(unsupported_profile)", err)
+		}
+		if resp.Result == resultStarted {
+			t.Fatalf("StartFeature() response = %+v; must not report started for an unsupported child", resp)
+		}
+	})
+}
+
+// TestServerMutationTargetRefactorFeatureMapsBriefToSpec verifies the typed
+// wizard brief maps onto a RefactorChildSpec and that the response carries
+// the child identifier; setup dispatch stays asynchronous and is not driven
+// by this unit-level target (orch is nil).
+func TestServerMutationTargetRefactorFeatureMapsBriefToSpec(t *testing.T) {
+	creator := &fakeRefactorChildCreator{child: &feature.Feature{ID: "child-1"}}
+	target := serverMutationTarget{childCreator: creator}
+
+	resp, err := target.RefactorFeature("parent-1", serverruntime.RefactorFeatureRequest{
+		Name:         "Rework auth",
+		Description:  "split the auth package",
+		Images:       []string{"~/shots/login.png"},
+		Attachments:  []string{"~/docs/auth.md"},
+		Pipeline:     feature.PipelineLarge,
+		Checkpoints:  feature.Checkpoints{InquiryReview: true},
+		Effort:       config.EffortConfig{Planning: "high"},
+		Models:       config.ModelConfig{Planning: testModelClaudeSonnet},
+		RiskLevel:    feature.RiskLow,
+		ExitCriteria: "build passes",
+		Inquireness:  feature.InquirenessHigh,
+	})
+	if err != nil {
+		t.Fatalf("RefactorFeature() error = %v", err)
+	}
+	if resp.FeatureID != "child-1" || resp.ParentID != "parent-1" || resp.Result != resultCreated {
+		t.Fatalf("RefactorFeature() response = %+v; want child-1 under parent-1 created", resp)
+	}
+	if creator.parentID != "parent-1" {
+		t.Fatalf("CreateRefactorChild parentID = %q, want parent-1", creator.parentID)
+	}
+	spec := creator.spec
+	if spec.Name != "Rework auth" || spec.Description != "split the auth package" {
+		t.Fatalf("spec name/description = %q/%q", spec.Name, spec.Description)
+	}
+	if spec.Pipeline != feature.PipelineLarge || spec.RiskLevel != feature.RiskLow {
+		t.Fatalf("spec pipeline/risk = %q/%q, want large/low", spec.Pipeline, spec.RiskLevel)
+	}
+	if !spec.Checkpoints.InquiryReview {
+		t.Fatalf("spec checkpoints = %+v, want inquiry review", spec.Checkpoints)
+	}
+	if spec.Effort.Planning != "high" || spec.Models.Planning != testModelClaudeSonnet {
+		t.Fatalf("spec effort/models planning = %q/%q", spec.Effort.Planning, spec.Models.Planning)
+	}
+	if spec.ExitCriteria != "build passes" || spec.Inquireness != feature.InquirenessHigh {
+		t.Fatalf("spec exit criteria/inquireness = %q/%q", spec.ExitCriteria, spec.Inquireness)
+	}
+	if len(spec.Images) != 1 || len(spec.Attachments) != 1 {
+		t.Fatalf("spec images/attachments = %v/%v, want one each", spec.Images, spec.Attachments)
+	}
+}
+
+// TestServerMutationTargetRefactorFeatureInheritsEmptyPipeline verifies an
+// empty pipeline brief leaves the spec pipeline unset so the child inherits
+// the parent profile.
+func TestServerMutationTargetRefactorFeatureInheritsEmptyPipeline(t *testing.T) {
+	creator := &fakeRefactorChildCreator{child: &feature.Feature{ID: "child-2"}}
+	target := serverMutationTarget{childCreator: creator}
+
+	if _, err := target.RefactorFeature("parent-1", serverruntime.RefactorFeatureRequest{Name: "Rework auth"}); err != nil {
+		t.Fatalf("RefactorFeature() error = %v", err)
+	}
+	if creator.spec.Pipeline != "" {
+		t.Fatalf("spec pipeline = %q; want empty so the child inherits", creator.spec.Pipeline)
+	}
+}
+
+func TestServerMutationTargetRefactorFeatureSurfacesLaunchErrors(t *testing.T) {
+	creator := &fakeRefactorChildCreator{err: &feature.ParentWorktreesDirtyError{
+		Repos: []feature.RepoDirtyDiagnostics{{Repo: testRepoAName}},
+	}}
+	target := serverMutationTarget{childCreator: creator}
+
+	_, err := target.RefactorFeature("parent-1", serverruntime.RefactorFeatureRequest{Name: "Rework auth"})
+	var dirty *feature.ParentWorktreesDirtyError
+	if !errors.As(err, &dirty) {
+		t.Fatalf("RefactorFeature() error = %v, want ParentWorktreesDirtyError", err)
+	}
+}
+
+type fakeRefactorChildCreator struct {
+	parentID string
+	spec     feature.RefactorChildSpec
+	child    *feature.Feature
+	err      error
+}
+
+func (f *fakeRefactorChildCreator) CreateRefactorChild(parentID string, spec feature.RefactorChildSpec) (*feature.Feature, error) {
+	f.parentID = parentID
+	f.spec = spec
+	return f.child, f.err
+}
+
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
 	sess := &mutationTargetSessionView{
 		id:        testSessionHelpID,

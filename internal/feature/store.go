@@ -581,15 +581,193 @@ func (s *Store) CleanupOrphanRuns(id string) ([]int, error) {
 	return deleted, nil
 }
 
+// CreateChildLocked atomically validates and persists a parent-child
+// relationship under a single Store.mu hold. Sequence:
+//  1. Load the parent plus any active child (derived by scanning stored
+//     feature records for child-owned Parent links).
+//  2. Call fn(parent, activeChild) — nil activeChild when none exists. fn
+//     validates the launch, mutates the parent (e.g. applying the submitted
+//     Review configuration), and returns the child plus its durable
+//     creation intent. Error aborts without writing anything.
+//  3. Persist the parent WITH the pending intent stamped (durable intent).
+//  4. Persist the child (feature.yaml + first run.yaml, atomically).
+//  5. Clear the intent and persist the parent again.
+//
+// A crash between steps 3 and 5 leaves the intent on the parent;
+// ReconcilePendingChildCreations rolls the creation forward exactly once.
+// Concurrent launches under the same parent serialize on Store.mu, so
+// exactly one winner observes activeChild == nil.
+//
+// The fn closure must NOT call any other Store method (mu is not
+// reentrant).
+func (s *Store) CreateChildLocked(
+	parentID string,
+	fn func(parent *Feature, activeChild *Feature) (child *Feature, intent *ChildCreationIntent, err error),
+) (*Feature, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	parent, err := s.loadUnlocked(parentID)
+	if err != nil {
+		return nil, err
+	}
+	activeChild, err := s.activeChildOfUnlocked(parentID)
+	if err != nil {
+		return nil, err
+	}
+	child, intent, err := fn(parent, activeChild)
+	if err != nil {
+		return nil, err
+	}
+	if child == nil || intent == nil {
+		return nil, fmt.Errorf("create-child closure must return a child and an intent")
+	}
+	if child.ID == "" || intent.ChildID != child.ID {
+		return nil, fmt.Errorf("create-child intent %q does not match child %q", intent.ChildID, child.ID)
+	}
+
+	parent.PendingChild = intent
+	if err := s.saveUnlocked(parent); err != nil {
+		return nil, fmt.Errorf("saving parent with child intent: %w", err)
+	}
+	if err := s.saveUnlocked(child); err != nil {
+		return nil, fmt.Errorf("saving child: %w", err)
+	}
+	parent.PendingChild = nil
+	if err := s.saveUnlocked(parent); err != nil {
+		return nil, fmt.Errorf("clearing child intent on parent: %w", err)
+	}
+	return child, nil
+}
+
+// activeChildOfUnlocked scans stored feature records for the child that
+// links back to parentID with an empty close outcome. Callers hold s.mu.
+func (s *Store) activeChildOfUnlocked(parentID string) (*Feature, error) {
+	entries, err := os.ReadDir(s.BaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing features directory: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == parentID {
+			continue
+		}
+		f, err := s.loadUnlocked(e.Name())
+		if err != nil {
+			// Fail closed: this is the creation-integrity boundary. The
+			// parent pointer is child-owned and only discovered by loading
+			// each record, so an unreadable candidate could be an active
+			// child we cannot see — skipping it would allow a second
+			// active child. (List keeps its partial-load tolerance; only
+			// the creation path is strict.)
+			return nil, fmt.Errorf("classifying feature record %q during active-child scan: %w", e.Name(), err)
+		}
+		if f.Parent != nil && f.Parent.ParentID == parentID && f.Parent.CloseOutcome == "" {
+			return f, nil
+		}
+	}
+	return nil, nil
+}
+
+// ReconcilePendingChildCreations rolls interrupted child creations forward
+// exactly once. For every feature carrying a PendingChild intent: when the
+// child already loads cleanly the intent is simply cleared (creation
+// finished before the crash); otherwise the child is rebuilt from the
+// durable intent — preserving the selected parent configuration captured at
+// launch — and then the intent is cleared. Returns the parent IDs whose
+// intents were resolved. Idempotent; a second run finds no intents.
+//
+// The intent scan reads each parent's feature.yaml directly: the durable
+// intent is owned by the parent's feature record, so unrelated run state
+// must never gate (or silently swallow) startup recovery. An unreadable
+// feature record is surfaced as a contextual load error instead of being
+// skipped, because skipping could let a submitted child remain neither
+// materialized nor diagnosed. Intents are cleared by rewriting feature.yaml
+// alone, so a parent whose active run.yaml is missing still reconciles.
+//
+// Intended to run at startup before abandoned-setup reconciliation so a
+// rebuilt child (left in SettingUpWorktrees with a running setup intent) is
+// then marked retryable-with-diagnostics by ReconcileAbandonedSetups in the
+// correct order.
+func (s *Store) ReconcilePendingChildCreations() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.BaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing features directory: %w", err)
+	}
+	var reconciled []string
+	var errs []error
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.BaseDir, e.Name(), "feature.yaml"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("reading feature record %q during pending-child scan: %w", e.Name(), err))
+			continue
+		}
+		var parent Feature
+		if err := yaml.Unmarshal(data, &parent); err != nil {
+			errs = append(errs, fmt.Errorf("parsing feature record %q during pending-child scan: %w", e.Name(), err))
+			continue
+		}
+		if parent.PendingChild == nil {
+			continue
+		}
+		intent := parent.PendingChild
+		if _, err := s.loadUnlocked(intent.ChildID); err != nil {
+			child := intent.Child
+			if child.ID == "" || child.ID != intent.ChildID {
+				errs = append(errs, fmt.Errorf("parent %s: child intent %q is incomplete; cannot roll forward", parent.ID, intent.ChildID))
+				continue
+			}
+			run := &Run{RunNumber: 1, Setup: intent.Setup}
+			if len(child.Repos) > 0 {
+				run.RepoStates = make(map[string]*RepoState, len(child.Repos))
+				for _, fr := range child.Repos {
+					run.RepoStates[fr.Name] = &RepoState{}
+				}
+			}
+			child.ActiveRun = 1
+			child.RunCount = 1
+			child.SetRun(run)
+			if err := s.saveUnlocked(&child); err != nil {
+				errs = append(errs, fmt.Errorf("parent %s: rebuilding child %s: %w", parent.ID, intent.ChildID, err))
+				continue
+			}
+		}
+		parent.PendingChild = nil
+		if err := s.writeFeatureYAMLUnlocked(parent.ID, &parent); err != nil {
+			errs = append(errs, fmt.Errorf("clearing child intent on parent %s: %w", parent.ID, err))
+			continue
+		}
+		reconciled = append(reconciled, parent.ID)
+	}
+	if len(errs) > 0 {
+		return reconciled, errors.Join(errs...)
+	}
+	return reconciled, nil
+}
+
 // writeFeatureYAMLUnlocked writes ONLY feature.yaml atomically via temp-file
 // + rename (matching saveUnlocked's pattern). Unlike saveUnlocked, it does
 // NOT call syncShadowsToRun, does NOT fabricate a missing f.run, and does
 // NOT persist the active run's run.yaml — those side effects are unsafe
 // when f was unmarshaled directly from feature.yaml (no shadows populated,
 // no run loaded). Used by CleanupOrphanRuns to reconcile ActiveRun / RunCount
-// after deletions without risking a stale shadow value leaking into
-// feature.yaml or a fabricated Run overwriting a sealed run.yaml. Callers
-// hold s.mu.
+// and by ReconcilePendingChildCreations to clear a pending-child intent,
+// without risking a stale shadow value leaking into feature.yaml or a
+// fabricated Run overwriting a sealed run.yaml. Callers hold s.mu.
 func (s *Store) writeFeatureYAMLUnlocked(id string, f *Feature) error {
 	dir := filepath.Join(s.BaseDir, id)
 	data, err := yaml.Marshal(f)

@@ -75,6 +75,7 @@ type APIClient interface {
 	RewindFeature(context.Context, string, server.RewindFeatureRequest) (server.RewindFeatureResponse, error)
 	RetryFeature(context.Context, string) (server.RetryFeatureResponse, error)
 	StartRebase(context.Context, string, server.RebaseActionRequest) (server.RebaseStartResponse, error)
+	RefactorFeature(context.Context, string, server.RefactorFeatureRequest) (server.RefactorFeatureResponse, error)
 	MarkDone(context.Context, string) (server.MarkDoneResponse, error)
 	CleanupFeature(context.Context, string, server.CleanupActionRequest) (server.CleanupFeatureResponse, error)
 	UpdateFeatureConfig(context.Context, string, server.FeatureConfigMutationRequest) (server.FeatureConfigUpdateResponse, error)

@@ -187,6 +187,10 @@ type Deps struct {
 	CmdRunner   ports.CommandRunner
 	Recovery    ports.RecoveryOperator
 	PhaseRunner *agent.PhaseRunner // concrete — not behind a port interface
+	// Cleanliness inspects parent worktrees at child-integration preflight
+	// with the same staged/unstaged/untracked contract used at launch.
+	// Nil fails integration closed rather than silently skipping the check.
+	Cleanliness feature.CleanlinessOps
 }
 
 // PhaseStartOutcome enumerates the possible results of starting a phase.
@@ -450,6 +454,22 @@ func (o *Orchestrator) CreateFeature(
 	return f, nil
 }
 
+// RefactorChildCreated emits the FeatureCreated event for a durable refactor
+// child. Child creation goes through feature.Manager.CreateRefactorChild (not
+// Orchestrator.CreateFeature), so the mutation target reports the launch here;
+// FeatureID is the child and RelatedFeatureID the launch parent.
+func (o *Orchestrator) RefactorChildCreated(child *feature.Feature) {
+	if child == nil || !child.IsChild() {
+		return
+	}
+	o.emitEvent(ports.Event{
+		Type:             ports.FeatureCreated,
+		FeatureID:        child.ID,
+		Feature:          child,
+		RelatedFeatureID: child.Parent.ParentID,
+	})
+}
+
 // emitEvent sends an event on the channel. Non-blocking for non-critical events.
 // Also drops events when shutdown has been signalled, so late emitters do not
 // enqueue work consumers will never read.
@@ -499,7 +519,12 @@ func (o *Orchestrator) emitShutdownStarted() {
 // StatusCreated, CurrentPhase for resumed features), handles the
 // medium-pipeline Created → PlanReady pre-transition, fires
 // OnFeatureStarted, emits FeatureStarted, and delegates to startPhase.
+// Children hit the checkChildExecution capability gate first: only
+// setup-complete, active, single-repository Medium children may execute.
 func (o *Orchestrator) StartFeature(featureID string) error {
+	if err := o.checkChildExecution(featureID, false); err != nil {
+		return err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature: %w", err)

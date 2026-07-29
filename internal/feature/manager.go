@@ -61,11 +61,12 @@ type PRCloser interface {
 }
 
 type Manager struct {
-	Store     *Store
-	Config    *config.Config
-	Worktrees WorktreeOps // optional; nil skips worktree creation
-	Branches  BranchOps   // optional; nil skips branch lookups during Create/Rewind
-	PRs       PRCloser    // optional; nil skips PR close on rewind
+	Store       *Store
+	Config      *config.Config
+	Worktrees   WorktreeOps    // optional; nil skips worktree creation
+	Branches    BranchOps      // optional; nil skips branch lookups during Create/Rewind
+	PRs         PRCloser       // optional; nil skips PR close on rewind
+	Cleanliness CleanlinessOps // required for child launches; nil fails CreateRefactorChild explicitly
 
 	setupMu    sync.Mutex
 	setupLocks map[string]struct{}

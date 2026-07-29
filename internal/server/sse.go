@@ -521,7 +521,7 @@ func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
 	if ev.Phase == feature.Phase(0) && phase == feature.PhaseResearch.String() {
 		phase = ""
 	}
-	resource := ResourceDTO{Type: resourceType, FeatureID: ev.FeatureID, Phase: phase}
+	resource := ResourceDTO{Type: resourceType, FeatureID: ev.FeatureID, RelatedFeatureID: ev.RelatedFeatureID, Phase: phase}
 	var dto SSEEventDTO
 	if kind == sseEventSessionOutputActivity {
 		dto = SSEEventDTO{

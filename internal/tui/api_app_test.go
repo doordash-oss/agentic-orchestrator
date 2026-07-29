@@ -8849,6 +8849,11 @@ func (f *fakeTUIAPIClient) StartRebase(_ context.Context, featureID string, req 
 	return server.RebaseStartResponse{FeatureID: f.startRebaseAccepted.featureID(featureID), Result: f.startRebaseAccepted.result("started"), CycleType: f.startRebaseAccepted.CycleType}, f.startRebaseErr
 }
 
+func (f *fakeTUIAPIClient) RefactorFeature(_ context.Context, featureID string, req server.RefactorFeatureRequest) (server.RefactorFeatureResponse, error) {
+	f.calls = append(f.calls, "RefactorFeature")
+	return server.RefactorFeatureResponse{FeatureID: featureID, ParentID: featureID, Result: "created"}, nil
+}
+
 func (f *fakeTUIAPIClient) RewindFeature(_ context.Context, featureID string, req server.RewindFeatureRequest) (server.RewindFeatureResponse, error) {
 	f.calls = append(f.calls, "RewindFeature")
 	f.rewindFeatureIDs = append(f.rewindFeatureIDs, featureID)

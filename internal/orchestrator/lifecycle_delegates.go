@@ -297,6 +297,9 @@ func (o *Orchestrator) ClearRepoCycles(featureID string) error {
 // the plan can't be read (best-effort recovery — the next orchestrator
 // cycle's PhaseScope call will revalidate before launching the loop).
 func (o *Orchestrator) RetryPhase(featureID string) error {
+	if err := o.checkChildExecution(featureID, false); err != nil {
+		return err
+	}
 	repoNames := o.phaseDeclaredRepos(featureID)
 	return o.deps.Lifecycle.RetryPhase(featureID, repoNames)
 }
@@ -945,6 +948,11 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		}
 	}
 
+	// Restart is the one execution entrypoint allowed to re-enter a settled
+	// child, and only for a Completed child whose closure tail is resumable.
+	if err := o.checkChildExecution(featureID, true); err != nil {
+		return RestartOutcome{}, err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return RestartOutcome{}, fmt.Errorf("load feature: %w", err)
@@ -953,6 +961,17 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// Stop any active sessions before mutating state so orphaned agents do not
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
+
+	// A child with resumable integration state replays the integration
+	// boundary or its durable closure tail — never Plan, Implement, or an
+	// already-approved Final Review — on restart. A closed child whose
+	// cleanup tail never settled re-enters only that tail.
+	if f.IntegrationResumable() {
+		if err := o.runChildIntegration(featureID); err != nil {
+			return RestartOutcome{}, err
+		}
+		return RestartOutcome{Action: RestartNoOp}, nil
+	}
 
 	// Clear failure context on restart; extend iteration caps if exhausted.
 	// ExtendFailedPhaseBudget is a no-op on non-Failed features so this is

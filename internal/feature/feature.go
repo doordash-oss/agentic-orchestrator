@@ -718,6 +718,17 @@ type Feature struct {
 	AutomaticReviewEnabled bool                  `yaml:"-"`
 	AutomaticReviewSource  AutomaticReviewSource `yaml:"-"`
 
+	// Parent links this feature to its launch parent (child-owned
+	// relationship identity). Nil for top-level features. Parent-to-child
+	// lookup and active-child classification are derived by scanning stored
+	// feature records — the parent never persists a child pointer or list.
+	Parent *ChildRelationship `yaml:"parent,omitempty"`
+	// PendingChild is the durable intent for an in-flight child creation on
+	// this (parent) feature. Present only between the atomic intent commit
+	// and child materialization; startup reconciliation rolls an interrupted
+	// creation forward from it.
+	PendingChild *ChildCreationIntent `yaml:"pending_child,omitempty"`
+
 	TraceID       string `yaml:"trace_id,omitempty"`        // observability correlation; derived from ID if absent
 	FeatureSpanID string `yaml:"feature_span_id,omitempty"` // persisted feature-level span ID so all phases share a common parent
 
@@ -1016,7 +1027,7 @@ var validTransitions = map[Status][]Status{
 	StatusFinalReviewing:      {StatusCodeReady, StatusReviewPassed, StatusFailed, StatusInterrupted},
 	StatusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},
 	StatusCodeReady:           {StatusPublished, StatusDone, StatusFailed, StatusImplementReady, StatusInquiring},
-	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady},
+	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady, StatusCodeReady},
 	StatusDone:                {},
 	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
 	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	config "github.com/doordash-oss/agentic-orchestrator/internal/config"
+	feature "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 const (
@@ -141,6 +142,7 @@ const (
 	FeatureActionPauseStop          FeatureAction = "pause-stop"
 	FeatureActionPublish            FeatureAction = "publish"
 	FeatureActionRebase             FeatureAction = "rebase"
+	FeatureActionRefactor           FeatureAction = "refactor"
 	FeatureActionRestart            FeatureAction = "restart"
 	FeatureActionResume             FeatureAction = "resume"
 	FeatureActionRetry              FeatureAction = "retry"
@@ -170,6 +172,8 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionPublish:
 		return true
 	case FeatureActionRebase:
+		return true
+	case FeatureActionRefactor:
 		return true
 	case FeatureActionRestart:
 		return true
@@ -274,6 +278,21 @@ func (e CreateFeatureParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for RefactorFeatureParamsXAgenticoClient.
+const (
+	RefactorFeatureParamsXAgenticoClientLocal RefactorFeatureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RefactorFeatureParamsXAgenticoClient enum.
+func (e RefactorFeatureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RefactorFeatureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RunFeatureActionParamsXAgenticoClient.
 const (
 	RunFeatureActionParamsXAgenticoClientLocal RunFeatureActionParamsXAgenticoClient = "local"
@@ -300,6 +319,7 @@ const (
 	RunFeatureActionParamsActionPauseStop          RunFeatureActionParamsAction = "pause-stop"
 	RunFeatureActionParamsActionPublish            RunFeatureActionParamsAction = "publish"
 	RunFeatureActionParamsActionRebase             RunFeatureActionParamsAction = "rebase"
+	RunFeatureActionParamsActionRefactor           RunFeatureActionParamsAction = "refactor"
 	RunFeatureActionParamsActionRestart            RunFeatureActionParamsAction = "restart"
 	RunFeatureActionParamsActionResume             RunFeatureActionParamsAction = "resume"
 	RunFeatureActionParamsActionRetry              RunFeatureActionParamsAction = "retry"
@@ -329,6 +349,8 @@ func (e RunFeatureActionParamsAction) Valid() bool {
 	case RunFeatureActionParamsActionPublish:
 		return true
 	case RunFeatureActionParamsActionRebase:
+		return true
+	case RunFeatureActionParamsActionRefactor:
 		return true
 	case RunFeatureActionParamsActionRestart:
 		return true
@@ -375,6 +397,7 @@ const (
 	RunFeatureSubactionParamsActionPauseStop          RunFeatureSubactionParamsAction = "pause-stop"
 	RunFeatureSubactionParamsActionPublish            RunFeatureSubactionParamsAction = "publish"
 	RunFeatureSubactionParamsActionRebase             RunFeatureSubactionParamsAction = "rebase"
+	RunFeatureSubactionParamsActionRefactor           RunFeatureSubactionParamsAction = "refactor"
 	RunFeatureSubactionParamsActionRestart            RunFeatureSubactionParamsAction = "restart"
 	RunFeatureSubactionParamsActionResume             RunFeatureSubactionParamsAction = "resume"
 	RunFeatureSubactionParamsActionRetry              RunFeatureSubactionParamsAction = "retry"
@@ -404,6 +427,8 @@ func (e RunFeatureSubactionParamsAction) Valid() bool {
 	case RunFeatureSubactionParamsActionPublish:
 		return true
 	case RunFeatureSubactionParamsActionRebase:
+		return true
+	case RunFeatureSubactionParamsActionRefactor:
 		return true
 	case RunFeatureSubactionParamsActionRestart:
 		return true
@@ -585,13 +610,13 @@ func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 
 // Defines values for ShutdownRuntimeParamsXAgenticoClient.
 const (
-	ShutdownRuntimeParamsXAgenticoClientLocal ShutdownRuntimeParamsXAgenticoClient = "local"
+	Local ShutdownRuntimeParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the ShutdownRuntimeParamsXAgenticoClient enum.
 func (e ShutdownRuntimeParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case ShutdownRuntimeParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -669,6 +694,26 @@ type ActionScope struct {
 	Type          string `json:"type"`
 }
 
+// ActiveChildSummary defines model for ActiveChildSummary.
+type ActiveChildSummary struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+
+	// LastError Setup failure message when the child's setup failed.
+	LastError string `json:"last_error,omitempty"`
+	Name      string `json:"name"`
+	Pipeline  string `json:"pipeline,omitempty"`
+
+	// SetupStatus Setup status of the child's active run (queued/running/done/failed).
+	SetupStatus string `json:"setup_status,omitempty"`
+
+	// State Derived relationship state: setting_up while worktree setup is in flight or failed, setup_complete once setup has finished.
+	State string `json:"state"`
+
+	// Status Durable lifecycle status of the active child.
+	Status string `json:"status,omitempty"`
+}
+
 // Artifact defines model for Artifact.
 type Artifact struct {
 	Category         string    `json:"category"`
@@ -744,6 +789,38 @@ type Checkpoints struct {
 	PhasePlanReview bool `json:"phase_plan_review"`
 	ResearchReview  bool `json:"research_review"`
 	RoadmapReview   bool `json:"roadmap_review"`
+}
+
+// ChildDirtyDiagnostics defines model for ChildDirtyDiagnostics.
+type ChildDirtyDiagnostics struct {
+	Path           string   `json:"path,omitempty"`
+	Repo           string   `json:"repo,omitempty"`
+	Staged         []string `json:"staged,omitempty"`
+	StagedTotal    int      `json:"staged_total,omitempty"`
+	Unstaged       []string `json:"unstaged,omitempty"`
+	UnstagedTotal  int      `json:"unstaged_total,omitempty"`
+	Untracked      []string `json:"untracked,omitempty"`
+	UntrackedTotal int      `json:"untracked_total,omitempty"`
+}
+
+// ChildIntegration Durable single-repository child-to-parent integration record: the attempt anchors, the resulting no-fast-forward merge HEAD once durable, structured retry attention, and any non-fatal cleanup warning.
+type ChildIntegration struct {
+	Attention       string `json:"attention,omitempty"`
+	ChildHeadSha    string `json:"child_head_sha,omitempty"`
+	CleanupWarning  string `json:"cleanup_warning,omitempty"`
+	MergeHead       string `json:"merge_head,omitempty"`
+	ParentAnchorSha string `json:"parent_anchor_sha,omitempty"`
+	ParentBranch    string `json:"parent_branch,omitempty"`
+
+	// Phase attention while a retryable failure is parked; merged once the boundary is durable.
+	Phase string `json:"phase,omitempty"`
+}
+
+// ChildRepoBase defines model for ChildRepoBase.
+type ChildRepoBase struct {
+	ParentBranch string `json:"parent_branch,omitempty"`
+	Repo         string `json:"repo"`
+	Sha          string `json:"sha"`
 }
 
 // CleanupFeatureResponse defines model for CleanupFeatureResponse.
@@ -896,36 +973,64 @@ type FeatureDefaults struct {
 
 // FeatureDetail defines model for FeatureDetail.
 type FeatureDetail struct {
-	Actions           []Action             `json:"actions"`
-	ActiveRun         int                  `json:"active_run"`
-	ActiveRunDetail   *RunSummary          `json:"active_run_detail,omitempty"`
-	AutomaticReview   AutomaticReviewState `json:"automatic_review"`
-	CacheRevalidate   string               `json:"cache_revalidate"`
-	Checkpoints       Checkpoints          `json:"checkpoints"`
-	Cost              Cost                 `json:"cost"`
-	CreatedAt         time.Time            `json:"created_at"`
-	CurrentPhase      string               `json:"current_phase"`
-	Cycle             *Cycle               `json:"cycle,omitempty"`
-	Description       string               `json:"description,omitempty"`
-	Failure           *Failure             `json:"failure,omitempty"`
-	HistoricalRuns    []RunSummary         `json:"historical_runs"`
-	ID                string               `json:"id"`
-	Models            ModelDefaults        `json:"models"`
-	Name              string               `json:"name"`
-	NeedUserInput     *NeedUserInputGate   `json:"need_user_input,omitempty"`
-	Pipeline          string               `json:"pipeline,omitempty"`
-	Progress          FeatureProgress      `json:"progress"`
-	RepoStatus        []RepoStatus         `json:"repo_status"`
-	Repos             []string             `json:"repos"`
-	ReviewGate        ReviewGate           `json:"review_gate"`
-	Revision          string               `json:"revision"`
-	RunCount          int                  `json:"run_count"`
-	Slug              string               `json:"slug"`
-	Status            string               `json:"status"`
-	Summary           string               `json:"summary,omitempty"`
-	Timing            Timing               `json:"timing"`
-	VerificationItems []VerificationItem   `json:"verification_items,omitempty"`
-	Warnings          []Warning            `json:"warnings,omitempty"`
+	Actions []Action `json:"actions"`
+
+	// Active True while a child feature's relationship is open (no close outcome recorded). Only set on child features.
+	Active          bool                 `json:"active,omitempty"`
+	ActiveChild     *ActiveChildSummary  `json:"active_child,omitempty"`
+	ActiveRun       int                  `json:"active_run"`
+	ActiveRunDetail *RunSummary          `json:"active_run_detail,omitempty"`
+	AutomaticReview AutomaticReviewState `json:"automatic_review"`
+
+	// Bases Exact per-repository parent tips captured at child launch.
+	Bases           []ChildRepoBase `json:"bases,omitempty"`
+	CacheRevalidate string          `json:"cache_revalidate"`
+	Checkpoints     Checkpoints     `json:"checkpoints"`
+
+	// CloseOutcome Recorded relationship close outcome (e.g. completed); only set on closed child features.
+	CloseOutcome string `json:"close_outcome,omitempty"`
+
+	// ClosedAt Relationship close timestamp; only set on closed child features.
+	ClosedAt     *time.Time `json:"closed_at,omitempty"`
+	Cost         Cost       `json:"cost"`
+	CreatedAt    time.Time  `json:"created_at"`
+	CurrentPhase string     `json:"current_phase"`
+	Cycle        *Cycle     `json:"cycle,omitempty"`
+	Description  string     `json:"description,omitempty"`
+
+	// Dirty Categorized parent-worktree diagnostics recorded when a dirty preflight blocked child integration.
+	Dirty          []ChildDirtyDiagnostics `json:"dirty,omitempty"`
+	Failure        *Failure                `json:"failure,omitempty"`
+	HistoricalRuns []RunSummary            `json:"historical_runs"`
+	ID             string                  `json:"id"`
+
+	// Integration Durable single-repository child-to-parent integration record: the attempt anchors, the resulting no-fast-forward merge HEAD once durable, structured retry attention, and any non-fatal cleanup warning.
+	Integration   ChildIntegration   `json:"integration,omitempty"`
+	Models        ModelDefaults      `json:"models"`
+	Name          string             `json:"name"`
+	NeedUserInput *NeedUserInputGate `json:"need_user_input,omitempty"`
+
+	// ParentID Launch parent id; only set on child features.
+	ParentID string `json:"parent_id,omitempty"`
+
+	// ParentKind Child relationship kind (e.g. refactor); only set on child features.
+	ParentKind string          `json:"parent_kind,omitempty"`
+	Pipeline   string          `json:"pipeline,omitempty"`
+	Progress   FeatureProgress `json:"progress"`
+	RepoStatus []RepoStatus    `json:"repo_status"`
+	Repos      []string        `json:"repos"`
+	ReviewGate ReviewGate      `json:"review_gate"`
+	Revision   string          `json:"revision"`
+	RunCount   int             `json:"run_count"`
+
+	// SetupComplete True when the child's active run setup finished; only set on child features.
+	SetupComplete     bool               `json:"setup_complete,omitempty"`
+	Slug              string             `json:"slug"`
+	Status            string             `json:"status"`
+	Summary           string             `json:"summary,omitempty"`
+	Timing            Timing             `json:"timing"`
+	VerificationItems []VerificationItem `json:"verification_items,omitempty"`
+	Warnings          []Warning          `json:"warnings,omitempty"`
 }
 
 // FeatureDetailResponse defines model for FeatureDetailResponse.
@@ -983,19 +1088,20 @@ type FeatureStopResponse struct {
 
 // FeatureSummary defines model for FeatureSummary.
 type FeatureSummary struct {
-	ActiveRun    int             `json:"active_run"`
-	Checkpoints  Checkpoints     `json:"checkpoints"`
-	CreatedAt    time.Time       `json:"created_at"`
-	CurrentPhase string          `json:"current_phase"`
-	Cycle        *Cycle          `json:"cycle,omitempty"`
-	ID           string          `json:"id"`
-	Name         string          `json:"name"`
-	Progress     FeatureProgress `json:"progress"`
-	Repos        []string        `json:"repos"`
-	RunCount     int             `json:"run_count"`
-	Slug         string          `json:"slug"`
-	Status       string          `json:"status"`
-	Warnings     []Warning       `json:"warnings,omitempty"`
+	ActiveChild  *ActiveChildSummary `json:"active_child,omitempty"`
+	ActiveRun    int                 `json:"active_run"`
+	Checkpoints  Checkpoints         `json:"checkpoints"`
+	CreatedAt    time.Time           `json:"created_at"`
+	CurrentPhase string              `json:"current_phase"`
+	Cycle        *Cycle              `json:"cycle,omitempty"`
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	Progress     FeatureProgress     `json:"progress"`
+	Repos        []string            `json:"repos"`
+	RunCount     int                 `json:"run_count"`
+	Slug         string              `json:"slug"`
+	Status       string              `json:"status"`
+	Warnings     []Warning           `json:"warnings,omitempty"`
 }
 
 // FileChange defines model for FileChange.
@@ -1275,6 +1381,30 @@ type RecoverySnapshotResponse struct {
 	SnapshotID string         `json:"snapshot_id"`
 }
 
+// RefactorFeatureRequest defines model for RefactorFeatureRequest.
+type RefactorFeatureRequest struct {
+	Attachments  []string                `json:"attachments,omitempty"`
+	Checkpoints  feature.Checkpoints     `json:"checkpoints,omitempty"`
+	Description  string                  `json:"description,omitempty"`
+	Effort       EffortConfig            `json:"effort,omitempty"`
+	ExitCriteria string                  `json:"exit_criteria,omitempty"`
+	Images       []string                `json:"images,omitempty"`
+	Inquireness  feature.Inquireness     `json:"inquireness,omitempty"`
+	Models       ModelDefaults           `json:"models,omitempty"`
+	Name         string                  `json:"name"`
+	Pipeline     feature.PipelineProfile `json:"pipeline,omitempty"`
+	RiskLevel    feature.RiskLevel       `json:"risk_level,omitempty"`
+}
+
+// RefactorFeatureResponse defines model for RefactorFeatureResponse.
+type RefactorFeatureResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	ParentID   string       `json:"parent_id"`
+	Result     string       `json:"result"`
+}
+
 // RepoStatus defines model for RepoStatus.
 type RepoStatus struct {
 	ConflictFiles []string `json:"conflict_files,omitempty"`
@@ -1295,7 +1425,10 @@ type Resource struct {
 	FeatureID string `json:"feature_id,omitempty"`
 	ID        string `json:"id,omitempty"`
 	Phase     string `json:"phase,omitempty"`
-	Type      string `json:"type"`
+
+	// RelatedFeatureID Parent feature id when this event belongs to a child feature (e.g. a refactor child); empty for top-level feature events.
+	RelatedFeatureID string `json:"related_feature_id,omitempty"`
+	Type             string `json:"type"`
 }
 
 // ResponseMeta defines model for ResponseMeta.
@@ -1765,6 +1898,15 @@ type CreateFeatureParams struct {
 // CreateFeatureParamsXAgenticoClient defines parameters for CreateFeature.
 type CreateFeatureParamsXAgenticoClient string
 
+// RefactorFeatureParams defines parameters for RefactorFeature.
+type RefactorFeatureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RefactorFeatureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RefactorFeatureParamsXAgenticoClient defines parameters for RefactorFeature.
+type RefactorFeatureParamsXAgenticoClient string
+
 // RunFeatureActionJSONBody defines parameters for RunFeatureAction.
 type RunFeatureActionJSONBody map[string]interface{}
 
@@ -1941,6 +2083,9 @@ type PutRuntimeConfigJSONRequestBody PutRuntimeConfigJSONBody
 
 // CreateFeatureJSONRequestBody defines body for CreateFeature for application/json ContentType.
 type CreateFeatureJSONRequestBody CreateFeatureJSONBody
+
+// RefactorFeatureJSONRequestBody defines body for RefactorFeature for application/json ContentType.
+type RefactorFeatureJSONRequestBody = RefactorFeatureRequest
 
 // RunFeatureActionJSONRequestBody defines body for RunFeatureAction for application/json ContentType.
 type RunFeatureActionJSONRequestBody RunFeatureActionJSONBody

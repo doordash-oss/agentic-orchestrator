@@ -83,7 +83,7 @@ func TestSynthesizeVerificationNeedUserInputGateWithContextBoundsDisplayWithoutD
 	results := make([]VerificationCheckResult, 0, 101)
 	itemIDs := make([]string, 0, 101)
 	for i := 0; i < 101; i++ {
-		itemID := fmt.Sprintf("check-%03d", i)
+		itemID := fmt.Sprintf("check-%03d", 100-i)
 		capabilities := make([]TestingContractCapability, 0, 21)
 		for capability := 0; capability < 21; capability++ {
 			capabilities = append(capabilities, TestingContractCapability{
@@ -112,6 +112,13 @@ func TestSynthesizeVerificationNeedUserInputGateWithContextBoundsDisplayWithoutD
 	if got := len(rec.VerificationDecision.ItemIDs); got != 101 {
 		t.Fatalf("trusted decision item IDs = %d, want all 101", got)
 	}
+	if !reflect.DeepEqual(rec.VerificationDecision.ItemIDs, itemIDs) {
+		t.Fatalf(
+			"trusted decision item IDs = %v, want exact input order %v",
+			rec.VerificationDecision.ItemIDs,
+			itemIDs,
+		)
+	}
 	if rec.Verification == nil {
 		t.Fatal("verification context = nil, want bounded display context")
 	}
@@ -122,6 +129,22 @@ func TestSynthesizeVerificationNeedUserInputGateWithContextBoundsDisplayWithoutD
 		if got := len(blocker.Capabilities); got != 20 {
 			t.Fatalf("blocker %d capabilities = %d, want 20", i, got)
 		}
+	}
+}
+
+func TestBoundNeedUserInputVerificationStringExactUTF16Limits(t *testing.T) {
+	for _, limit := range []int{200, 500, 64 * 1024} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			exact := strings.Repeat("a", limit)
+			if got := BoundNeedUserInputVerificationString(exact, limit); got != exact {
+				t.Fatalf("exact-limit value changed: got length %d, want %d", len(got), limit)
+			}
+			over := strings.Repeat("a", limit+1)
+			want := strings.Repeat("a", limit-1) + "…"
+			if got := BoundNeedUserInputVerificationString(over, limit); got != want {
+				t.Fatalf("one-over value = %q, want exact bounded ellipsis result", got)
+			}
+		})
 	}
 }
 

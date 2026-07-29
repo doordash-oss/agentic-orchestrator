@@ -44,6 +44,42 @@ describe('serverRequest', () => {
     ]);
   });
 
+  it('accepts the largest bounded verification prompt snapshot below the transport limit', async () => {
+    const text = 'x'.repeat(64 * 1024);
+    const body = {
+      api_version: 'v1',
+      ask_user_questions: [],
+      help_queue: [],
+      need_user_inputs: [
+        {
+          feature_id: 'feature-1',
+          open: true,
+          summary: text,
+          questions: [{ index: 1, prompt: text, answer: text }],
+          verification: {
+            blockers: Array.from({ length: 3 }, (_, index) => ({
+              item_id: `item-${index}`,
+              name: text,
+              command: text,
+              reason: text,
+              capabilities: [],
+              remediation: text,
+            })),
+            allowed_actions: ['WAIVE', 'RETRY_AFTER_AUTH'],
+          },
+        },
+      ],
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
+    expect(bytes).toBeLessThanOrEqual(1024 * 1024);
+
+    await expect(
+      serverRequest(transportReturning({ status: 200, body }), '/api/v1/prompts', undefined, {
+        remedyByCode: REMEDIES,
+      }),
+    ).resolves.toBe(body);
+  });
+
   it('throws the mapped SafeErrorException on non-2xx statuses', async () => {
     const failure = await serverRequest(
       transportReturning({

@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AttentionItem } from '../../../shared/ipc';
+import type { AttentionItem, VerificationGateAction } from '../../../shared/ipc';
 import {
   hasStructuredVerificationDecision,
   NeedUserInputVerificationDecision,
@@ -73,6 +73,13 @@ describe('NeedUserInputVerificationDecision', () => {
       ...gate,
       verification: { ...gate.verification!, allowedActions: [] },
     };
+    const withPartialActions = {
+      ...gate,
+      verification: {
+        ...gate.verification!,
+        allowedActions: ['WAIVE'] satisfies VerificationGateAction[],
+      },
+    };
     const multipleQuestions = {
       ...gate,
       questions: [...gate.questions, { index: 2, prompt: 'Another question?', answer: '' }],
@@ -80,6 +87,7 @@ describe('NeedUserInputVerificationDecision', () => {
 
     expect(hasStructuredVerificationDecision(withoutBlockers)).toBe(false);
     expect(hasStructuredVerificationDecision(withoutActions)).toBe(false);
+    expect(hasStructuredVerificationDecision(withPartialActions)).toBe(false);
     expect(hasStructuredVerificationDecision(multipleQuestions)).toBe(false);
   });
 });

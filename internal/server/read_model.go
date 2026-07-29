@@ -1023,17 +1023,33 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 	if !rec.WaitingSince.IsZero() {
 		dto.WaitingSince = rec.WaitingSince
 	}
-	dto.Summary = strings.TrimSpace(rec.Summary)
-	dto.Questions = make([]NeedUserInputQuestionDTO, 0, len(rec.Questions))
+	dto.Summary = agent.BoundNeedUserInputVerificationString(
+		strings.TrimSpace(rec.Summary),
+		agent.NeedUserInputVerificationContextTextMaxLength,
+	)
+	dto.Questions = make(
+		[]NeedUserInputQuestionDTO,
+		0,
+		min(len(rec.Questions), agent.NeedUserInputGateMaxQuestions),
+	)
 	for _, q := range rec.Questions {
+		if len(dto.Questions) == agent.NeedUserInputGateMaxQuestions {
+			break
+		}
 		prompt := strings.TrimSpace(q.Prompt)
 		if prompt == "" {
 			continue
 		}
 		dto.Questions = append(dto.Questions, NeedUserInputQuestionDTO{
-			Index:  q.Index,
-			Prompt: prompt,
-			Answer: strings.TrimSpace(q.Answer),
+			Index: q.Index,
+			Prompt: agent.BoundNeedUserInputVerificationString(
+				prompt,
+				agent.NeedUserInputVerificationContextTextMaxLength,
+			),
+			Answer: agent.BoundNeedUserInputVerificationString(
+				strings.TrimSpace(q.Answer),
+				agent.NeedUserInputVerificationContextTextMaxLength,
+			),
 		})
 	}
 	if rec.Verification != nil && rec.VerificationDecision != nil && len(rec.Verification.Blockers) > 0 {
@@ -1047,6 +1063,10 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 		for _, blocker := range rec.Verification.Blockers {
 			if len(verification.Blockers) == agent.NeedUserInputVerificationMaxBlockers {
 				break
+			}
+			itemID := strings.TrimSpace(blocker.ItemID)
+			if itemID == "" {
+				continue
 			}
 			capabilities := make(
 				[]string,
@@ -1072,7 +1092,7 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 			}
 			verification.Blockers = append(verification.Blockers, NeedUserInputVerificationBlocker{
 				ItemID: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.ItemID),
+					itemID,
 					agent.NeedUserInputVerificationItemIDMaxLength,
 				),
 				Name: agent.BoundNeedUserInputVerificationString(
@@ -1112,7 +1132,75 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 		}
 		dto.Verification = &verification
 	}
+	boundNeedUserInputGateDisplay(&dto)
 	return dto
+}
+
+// A JSON string can expand to six bytes per UTF-16 code unit when control
+// characters are escaped. Reserve three quarters of the gate budget for all
+// questionnaire fields so every projected question remains answerable.
+const needUserInputQuestionJSONExpansion = 6
+
+func boundNeedUserInputGateDisplay(dto *NeedInputGateDTO) {
+	if len(dto.Questions) > 0 {
+		questionTextLimit := (agent.NeedUserInputGateDisplayMaxBytes * 3 / 4) /
+			(len(dto.Questions) * 2 * needUserInputQuestionJSONExpansion)
+		questionTextLimit = max(1, min(
+			questionTextLimit,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		))
+		for i := range dto.Questions {
+			dto.Questions[i].Prompt = agent.BoundNeedUserInputVerificationString(
+				dto.Questions[i].Prompt,
+				questionTextLimit,
+			)
+			dto.Questions[i].Answer = agent.BoundNeedUserInputVerificationString(
+				dto.Questions[i].Answer,
+				questionTextLimit,
+			)
+		}
+	}
+	if needUserInputGateFitsDisplayBudget(*dto) {
+		return
+	}
+	if dto.Verification != nil {
+		for i := range dto.Verification.Blockers {
+			dto.Verification.Blockers[i].Capabilities = nil
+		}
+		if needUserInputGateFitsDisplayBudget(*dto) {
+			return
+		}
+	}
+	dto.Summary = ""
+	if needUserInputGateFitsDisplayBudget(*dto) {
+		return
+	}
+	if dto.Verification == nil {
+		return
+	}
+
+	blockers := dto.Verification.Blockers
+	low, high, best := 1, len(blockers), 0
+	for low <= high {
+		mid := low + (high-low)/2
+		dto.Verification.Blockers = blockers[:mid]
+		if needUserInputGateFitsDisplayBudget(*dto) {
+			best = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+	if best > 0 {
+		dto.Verification.Blockers = blockers[:best]
+		return
+	}
+	dto.Verification = nil
+}
+
+func needUserInputGateFitsDisplayBudget(dto NeedInputGateDTO) bool {
+	data, err := json.Marshal(dto)
+	return err == nil && len(data) <= agent.NeedUserInputGateDisplayMaxBytes
 }
 
 type orderedControlRequest struct {

@@ -97,7 +97,7 @@ describe('parseServerJson', () => {
                 remediation: 'Choose a supported action or answer the generic prompt.',
               },
             ],
-            allowed_actions: ['WAIVE', 'REQUEST_ADMIN_ESCALATION'],
+            allowed_actions: ['WAIVE', 'x'.repeat(50)],
           },
         },
       ],
@@ -106,7 +106,7 @@ describe('parseServerJson', () => {
     const parsed = parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema);
     expect(parsed.need_user_inputs[0]?.verification?.allowed_actions).toEqual([
       'WAIVE',
-      'REQUEST_ADMIN_ESCALATION',
+      'x'.repeat(50),
     ]);
 
     promptFixture.need_user_inputs[0]!.verification.allowed_actions = ['x'.repeat(51)];

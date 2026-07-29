@@ -809,10 +809,10 @@ func TestNeedUserInputGateDTOBoundsLegacyVerificationContext(t *testing.T) {
 			Capabilities: capabilities,
 			Remediation:  "Grant access and retry.",
 		}
+		if i == 1 {
+			blocker.ItemID = " \t "
+		}
 		if i == 0 {
-			for capability := range capabilities {
-				capabilities[capability] = strings.Repeat("😀", 64*1024+1)
-			}
 			blocker = agent.NeedUserInputVerificationBlocker{
 				ItemID:       strings.Repeat("😀", 201),
 				Name:         strings.Repeat("😀", 64*1024+1),
@@ -847,12 +847,17 @@ func TestNeedUserInputGateDTOBoundsLegacyVerificationContext(t *testing.T) {
 		t.Fatal("verification = nil, want bounded verification context")
 	}
 	if got := len(dto.Verification.Blockers); got != 100 {
-		t.Fatalf("blockers = %d, want 100", got)
+		t.Fatalf("valid blockers = %d, want 100 after omitting whitespace item ID", got)
 	}
 	if got := len(dto.Verification.AllowedActions); got != 2 {
 		t.Fatalf("allowed actions = %d, want two deduplicated supported actions", got)
 	}
 	blocker := dto.Verification.Blockers[0]
+	for i, projected := range dto.Verification.Blockers {
+		if strings.TrimSpace(projected.ItemID) == "" {
+			t.Fatalf("blocker %d has empty projected item ID", i)
+		}
+	}
 	assertBoundedUTF8 := func(name, value string, maxLength int) {
 		t.Helper()
 		if !utf8.ValidString(value) {
@@ -878,9 +883,96 @@ func TestNeedUserInputGateDTOBoundsLegacyVerificationContext(t *testing.T) {
 	if got := len(blocker.Capabilities); got != 20 {
 		t.Fatalf("capabilities = %d, want 20", got)
 	}
-	assertBoundedUTF8("capability", blocker.Capabilities[0], 64*1024)
 	if _, err := json.Marshal(dto); err != nil {
 		t.Fatalf("Marshal(bounded gate DTO) error = %v", err)
+	}
+}
+
+func TestPromptSnapshotBoundsAggregateNeedUserInputGateDisplay(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	largeText := strings.Repeat("\x01", 64*1024)
+	questions := make([]agent.NeedUserInputQuestion, 40)
+	for i := range questions {
+		questions[i] = agent.NeedUserInputQuestion{
+			Index: i + 1, Prompt: largeText, Answer: largeText,
+		}
+	}
+	blockers := make([]agent.NeedUserInputVerificationBlocker, 4)
+	for i := range blockers {
+		capabilities := make([]string, 20)
+		for capability := range capabilities {
+			capabilities[capability] = largeText
+		}
+		blockers[i] = agent.NeedUserInputVerificationBlocker{
+			ItemID:       fmt.Sprintf("oversized-%d", i),
+			Name:         largeText,
+			RepoName:     repoNameSelf,
+			Command:      largeText,
+			Reason:       largeText,
+			Capabilities: capabilities,
+			Remediation:  largeText,
+		}
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   largeText,
+		Iteration: 1,
+		Questions: questions,
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: blockers,
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ItemIDs: []string{"oversized-0", "oversized-1", "oversized-2", "oversized-3"},
+			AllowedActions: []string{
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationRetryAfterAuth,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.PendingNeedUserInputPath = gatePath
+	f.CurrentIteration = 1
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	request := httptest.NewRequest(http.MethodGet, apiPathPrompts, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", apiPathPrompts, response.Code)
+	}
+	if got := response.Body.Len(); got >= 2*1024*1024 {
+		t.Fatalf("prompt snapshot bytes = %d, want comfortably below desktop's 5 MiB limit", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal(prompt snapshot) error = %v", err)
+	}
+	gates := payload["need_user_inputs"].([]any)
+	if len(gates) != 1 {
+		t.Fatalf("need_user_inputs = %d, want one gate", len(gates))
+	}
+	projectedGate := gates[0].(map[string]any)
+	encodedGate, err := json.Marshal(projectedGate)
+	if err != nil {
+		t.Fatalf("Marshal(projected gate) error = %v", err)
+	}
+	if got := len(encodedGate); got > 1024*1024 {
+		t.Fatalf("projected gate bytes = %d, want at most deterministic 1 MiB budget", got)
+	}
+	projectedQuestions := projectedGate["questions"].([]any)
+	if len(projectedQuestions) != len(questions) {
+		t.Fatalf("projected questions = %d, want all %d resolvable questions", len(projectedQuestions), len(questions))
+	}
+	for i, raw := range projectedQuestions {
+		if strings.TrimSpace(raw.(map[string]any)["prompt"].(string)) == "" {
+			t.Fatalf("projected question %d has empty prompt", i)
+		}
 	}
 }
 

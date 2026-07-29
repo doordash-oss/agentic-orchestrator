@@ -3352,11 +3352,13 @@ components:
           type: integer
         summary:
           type: string
+          maxLength: 65536
         waiting_since:
           type: string
           format: date-time
         questions:
           type: array
+          maxItems: 100
           items:
             $ref: "#/components/schemas/NeedUserInputQuestion"
         verification:
@@ -3385,6 +3387,7 @@ components:
       properties:
         item_id:
           type: string
+          minLength: 1
           maxLength: 200
           x-go-name: ItemID
         name:
@@ -3415,8 +3418,10 @@ components:
           type: integer
         prompt:
           type: string
+          maxLength: 65536
         answer:
           type: string
+          maxLength: 65536
     RepoStatus:
       type: object
       required: [name, touched, publishable]

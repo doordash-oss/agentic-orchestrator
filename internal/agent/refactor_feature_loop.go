@@ -74,12 +74,13 @@ type RefactorFeatureLoopConfig struct {
 	// Feature.RefactorPrompt.
 	Prompt string
 
-	Model               string
-	ReviewModel         string
-	PlanningModel       string // model for the refactor-plan step (defaults to Model when empty)
-	MaxIterations       int
-	MaxConsecFails      int
-	MaxConsecNoProgress int
+	Model                string
+	ReviewModel          string
+	PlanningModel        string // model for the refactor-plan step (defaults to Model when empty)
+	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	MaxIterations        int
+	MaxConsecFails       int
+	MaxConsecNoProgress  int
 
 	KBInfos []KBInfo
 
@@ -265,6 +266,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				Prompt:                     promptWithRevisionFeedback(prompt, planRevisionFeedback),
 				PlanningModel:              cfg.PlanningModel,
 				ImplementModel:             cfg.Model,
+				ResolveSessionConfig:       cfg.ResolveSessionConfig,
 				DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 				PermissionCache:            cfg.PermissionCache,
 				BuildSession:               cfg.BuildSession,
@@ -472,6 +474,7 @@ planRevisionLoop:
 			ExitCriteria:               refactorExitCriteria(cfg.Feature),
 			Model:                      cfg.Model,
 			ReviewModel:                cfg.ReviewModel,
+			ResolveSessionConfig:       cfg.ResolveSessionConfig,
 			ArtifactDir:                artifactDir,
 			StateDir:                   stateDir,
 			RunDir:                     runDir,
@@ -691,6 +694,7 @@ type refactorPlanStepInput struct {
 	Prompt                     string
 	PlanningModel              string
 	ImplementModel             string // fallback when PlanningModel is empty
+	ResolveSessionConfig       func(llm.PhaseRole) (SessionRuntimeConfig, error)
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
 	BuildSession               func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
@@ -722,13 +726,24 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 	if model == "" {
 		model = in.ImplementModel
 	}
+	effectiveEffort := in.PlanningEffectiveEffort
+	effortSource := in.PlanningEffortSource
+	asking := ""
+	if in.ResolveSessionConfig != nil {
+		sessionConfig, err := in.ResolveSessionConfig(llm.PhasePlanning)
+		if err != nil {
+			return "", fmt.Errorf("resolving refactor-plan session configuration: %w", err)
+		}
+		model = sessionConfig.Model
+		effectiveEffort = sessionConfig.EffectiveEffort
+		effortSource = sessionConfig.EffortSource
+		asking = sessionConfig.AskingClause
+	} else if in.AskingClauseForModel != nil {
+		asking = in.AskingClauseForModel(model)
+	}
 
 	prompt := buildRefactorPlanPrompt(in.Feature, in.Workspace, in.Prompt, in.SkillsDir, in.GuidelinesDir, in.KBInfos)
 
-	asking := ""
-	if in.AskingClauseForModel != nil {
-		asking = in.AskingClauseForModel(model)
-	}
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          RefactorPlanRoleSpec(),
 		IterationDir:  in.ArtifactDir,
@@ -745,8 +760,8 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 	}
 
 	planEffort := in.EffortLevel
-	if in.PlanningEffectiveEffort != "" {
-		planEffort = in.PlanningEffectiveEffort
+	if effectiveEffort != "" {
+		planEffort = effectiveEffort
 	}
 	cmd, env, sessOpts, err := in.BuildSession(BuildSessionOpts{
 		Model:                          model,
@@ -766,9 +781,9 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		return "", fmt.Errorf("building refactor-plan session: %w", err)
 	}
 	sessOpts = enableTurnContinuation(sessOpts)
-	if in.PlanningEffectiveEffort != "" {
-		sessOpts.EffectiveEffort = in.PlanningEffectiveEffort
-		sessOpts.EffortSource = in.PlanningEffortSource
+	if effectiveEffort != "" {
+		sessOpts.EffectiveEffort = effectiveEffort
+		sessOpts.EffortSource = effortSource
 	}
 	sessOpts.RunNumber = in.Feature.ActiveRun
 	WriteDebugPrompts(in.ArtifactDir, sessOpts.DebugSystemPrompt, prompt)

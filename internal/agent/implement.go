@@ -45,9 +45,14 @@ type ImplementConfig struct {
 	ExitCriteria        string
 	Model               string
 	ReviewModel         string
-	ArtifactDir         string // base dir for iteration artifacts
-	StateDir            string // feature state directory for PID files
-	RunDir              string // active run directory granted to the agent; empty derives from Feature.ActiveRun
+	// ResolveSessionConfig reloads the persisted feature configuration when a
+	// new provider session is about to start. The currently running session
+	// keeps its snapshot; later implementation iterations and review batches
+	// receive edits made while the loop is active.
+	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	ArtifactDir          string // base dir for iteration artifacts
+	StateDir             string // feature state directory for PID files
+	RunDir               string // active run directory granted to the agent; empty derives from Feature.ActiveRun
 	// SessionIDPrefix namespaces cycle sessions beneath the feature ID. For
 	// example "rebase-2" yields "<featureID>-rebase-2-impl-01".
 	SessionIDPrefix string
@@ -160,6 +165,35 @@ type ImplementConfig struct {
 	// Moonshot, multi-repo orchestration, repo-scoped cycles, and refactor loops
 	// keep per-iteration review enabled.
 	SkipIterationReview bool
+}
+
+// SessionRuntimeConfig is the role-specific configuration snapshot used to
+// build one newly-created provider session.
+type SessionRuntimeConfig struct {
+	Model           string
+	EffectiveEffort llm.EffortLevel
+	EffortSource    llm.EffortSource
+	AskingClause    string
+}
+
+func resolveImplementSessionConfig(cfg ImplementConfig, role llm.PhaseRole) (SessionRuntimeConfig, error) {
+	if cfg.ResolveSessionConfig != nil {
+		return cfg.ResolveSessionConfig(role)
+	}
+	if role == llm.PhaseReview {
+		return SessionRuntimeConfig{
+			Model:           cfg.ReviewModel,
+			EffectiveEffort: cfg.ReviewEffectiveEffort,
+			EffortSource:    cfg.ReviewEffortSource,
+			AskingClause:    cfg.AskingClause,
+		}, nil
+	}
+	return SessionRuntimeConfig{
+		Model:           cfg.Model,
+		EffectiveEffort: cfg.EffectiveEffort,
+		EffortSource:    cfg.EffortSource,
+		AskingClause:    cfg.AskingClause,
+	}, nil
 }
 
 // LoopResult represents the outcome of the full implementation loop.
@@ -338,6 +372,11 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				return nil, prepareErr
 			}
 		} else {
+			sessionConfig, resolveErr := resolveImplementSessionConfig(cfg, llm.PhaseImplementation)
+			if resolveErr != nil {
+				return nil, fmt.Errorf("resolving session configuration for iteration %d: %w", i, resolveErr)
+			}
+
 			// Read help answers from the latest feature state
 			helpAnswers := ""
 			if cfg.FeatureStore != nil {
@@ -395,7 +434,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				SkillsDir:     cfg.SkillsDir,
 				GuidelinesDir: cfg.GuidelinesDir,
 				KBInfos:       cfg.KBInfos,
-				AskingClause:  cfg.AskingClause,
+				AskingClause:  sessionConfig.AskingClause,
 				Frontend:      cfg.Feature != nil && cfg.Feature.RoadmapPhaseFrontend(cfg.Feature.CurrentRoadmapPhase),
 			})
 
@@ -422,7 +461,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			dirs := append([]string{runDir}, cfg.AdditionalDirs...)
 			implBuildOpts := BuildSessionOpts{
-				Model:                          cfg.Model,
+				Model:                          sessionConfig.Model,
 				Prompt:                         prompt,
 				SystemPrompt:                   implProtocol,
 				AdditionalDirs:                 dirs,
@@ -436,8 +475,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				SystemPromptHasUsefulResources: true,
 				CompletionProtocol:             true,
 			}
-			if cfg.EffectiveEffort != "" {
-				implBuildOpts.EffortLevel = cfg.EffectiveEffort
+			if sessionConfig.EffectiveEffort != "" {
+				implBuildOpts.EffortLevel = sessionConfig.EffectiveEffort
 			}
 			command, env, sessOpts, buildErr := cfg.BuildSession(implBuildOpts)
 			if buildErr != nil {
@@ -451,9 +490,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 
 			sessOpts = enableTurnContinuation(sessOpts)
-			if cfg.EffectiveEffort != "" {
-				sessOpts.EffectiveEffort = cfg.EffectiveEffort
-				sessOpts.EffortSource = cfg.EffortSource
+			if sessionConfig.EffectiveEffort != "" {
+				sessOpts.EffectiveEffort = sessionConfig.EffectiveEffort
+				sessOpts.EffortSource = sessionConfig.EffortSource
 			}
 			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 			// Merge iteration-specific fields into session opts
@@ -497,7 +536,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if sessOpts != nil {
 				implProvider = sessOpts.ProviderName
 			}
-			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
+			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, sessionConfig.Model, cfg.RepoName, string(sessionConfig.EffectiveEffort), string(sessionConfig.EffortSource))
 			implTracker := &ContextReadTracker{
 				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 				SkillsDir:     cfg.SkillsDir,
@@ -603,7 +642,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						sess, sessOpts = resumeSess, resumeOpts
 						sessionID = resumeSessionID
 						implSessionCtx = iterCtx.Child()
-						cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
+						cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, sessionConfig.Model, cfg.RepoName, string(sessionConfig.EffectiveEffort), string(sessionConfig.EffortSource))
 						implTracker.Install(sess, implSessionCtx, "implement", sessionID)
 
 						waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
@@ -877,7 +916,16 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			reviewCtx := iterCtx.Child()
 			cfg.Observer.ReviewStarted(reviewCtx, i)
 			reviewStart := time.Now()
-			reviewStatus, feedback, reviewErr := runReviewGate(cfg, sm, i, iterDir, parsed, reviewCtx)
+			reviewSessionConfig, resolveErr := resolveImplementSessionConfig(cfg, llm.PhaseReview)
+			if resolveErr != nil {
+				return nil, fmt.Errorf("resolving review session configuration for iteration %d: %w", i, resolveErr)
+			}
+			reviewCfg := cfg
+			reviewCfg.ReviewModel = reviewSessionConfig.Model
+			reviewCfg.ReviewEffectiveEffort = reviewSessionConfig.EffectiveEffort
+			reviewCfg.ReviewEffortSource = reviewSessionConfig.EffortSource
+			reviewCfg.AskingClause = reviewSessionConfig.AskingClause
+			reviewStatus, feedback, reviewErr := runReviewGate(reviewCfg, sm, i, iterDir, parsed, reviewCtx)
 			cfg.Observer.ReviewCompleted(reviewCtx, i, reviewStatus.String(), time.Since(reviewStart))
 
 			// Clear the reviewing flag

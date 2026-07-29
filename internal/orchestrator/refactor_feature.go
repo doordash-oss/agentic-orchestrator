@@ -153,6 +153,7 @@ func (o *Orchestrator) startFeatureRefactor(
 		Model:                      f.Models.Implementation,
 		ReviewModel:                f.Models.Review,
 		PlanningModel:              f.Models.Planning,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              f.MaxIterations,
 		MaxConsecFails:             3,
 		MaxConsecNoProgress:        3,

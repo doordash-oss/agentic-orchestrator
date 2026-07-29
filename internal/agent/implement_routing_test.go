@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -184,6 +185,96 @@ fi
 		if meta.ReviewStatus != "skipped_retry" {
 			t.Errorf("iter %d ReviewStatus = %q, want skipped_retry", n, meta.ReviewStatus)
 		}
+	}
+}
+
+func TestImplementLoop_NextIterationUsesLatestSessionConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-session-config")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	oldModelScript := testutil.WriteScript(t, scriptsDir, "old-model.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementRetryArtifacts(artifactDir)+"\n"+testutil.JSONLRetry+"\n")
+	newModelScript := testutil.WriteScript(t, scriptsDir, "new-model.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	buildSession, captured := capturingBuildSessionByModel(map[string]string{
+		"old-model": oldModelScript,
+		"new-model": newModelScript,
+	})
+	current := SessionRuntimeConfig{
+		Model:           "old-model",
+		EffectiveEffort: llm.EffortMedium,
+		EffortSource:    llm.EffortSourceExplicit,
+		AskingClause:    "old asking clause",
+	}
+	buildCalls := 0
+	buildWithConfigChange := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildCalls++
+		command, env, sessionOpts, err := buildSession(opts)
+		if buildCalls == 1 {
+			current = SessionRuntimeConfig{
+				Model:           "new-model",
+				EffectiveEffort: llm.EffortHigh,
+				EffortSource:    llm.EffortSourceExplicit,
+				AskingClause:    "new asking clause",
+			}
+		}
+		return command, env, sessionOpts, err
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature:             newTestFeature(t, workDir),
+		WorkDir:             workDir,
+		PlanPath:            writePlanFile(t, artifactDir, "Session config refresh test"),
+		MaxIterations:       2,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "Relevant tests pass",
+		Model:               "old-model",
+		ReviewModel:         "review-model",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		BuildSession:        buildWithConfigChange,
+		ResolveSessionConfig: func(role llm.PhaseRole) (SessionRuntimeConfig, error) {
+			if role != llm.PhaseImplementation {
+				t.Fatalf("ResolveSessionConfig role = %q, want implementation", role)
+			}
+			return current, nil
+		},
+		SkipIterationReview: true,
+	}
+
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want review_passed on iteration 2", result)
+	}
+	if len(*captured) != 2 {
+		t.Fatalf("BuildSession calls = %d, want 2", len(*captured))
+	}
+	if (*captured)[0].Model != "old-model" || (*captured)[1].Model != "new-model" {
+		t.Fatalf("BuildSession models = [%q, %q], want [old-model, new-model]", (*captured)[0].Model, (*captured)[1].Model)
+	}
+	if (*captured)[0].EffortLevel != llm.EffortMedium || (*captured)[1].EffortLevel != llm.EffortHigh {
+		t.Fatalf("BuildSession efforts = [%q, %q], want [medium, high]", (*captured)[0].EffortLevel, (*captured)[1].EffortLevel)
+	}
+	if !strings.Contains((*captured)[0].SystemPrompt, "old asking clause") ||
+		!strings.Contains((*captured)[1].SystemPrompt, "new asking clause") {
+		t.Fatalf("system prompts did not use the session-bound asking clauses")
 	}
 }
 

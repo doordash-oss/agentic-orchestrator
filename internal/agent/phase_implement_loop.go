@@ -146,6 +146,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		ExitCriteria:               cfg.Feature.ExitCriteria,
 		Model:                      cfg.Model,
 		ReviewModel:                cfg.ReviewModel,
+		ResolveSessionConfig:       cfg.ResolveSessionConfig,
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
 		RunDir:                     runDir,

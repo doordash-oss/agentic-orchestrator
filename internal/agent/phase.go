@@ -145,6 +145,32 @@ func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRo
 	return pr.resolveEffortForRoleWithPipeline(f, role, model, "")
 }
 
+// SessionRuntimeConfigResolver returns a role-aware resolver that reloads the
+// persisted feature before each newly-created provider session.
+func (pr *PhaseRunner) SessionRuntimeConfigResolver(featureID string) func(llm.PhaseRole) (SessionRuntimeConfig, error) {
+	if pr.FeatureStore == nil || strings.TrimSpace(featureID) == "" {
+		return nil
+	}
+	return func(role llm.PhaseRole) (SessionRuntimeConfig, error) {
+		latest, err := pr.FeatureStore.Load(featureID)
+		if err != nil {
+			return SessionRuntimeConfig{}, fmt.Errorf("load feature %s: %w", featureID, err)
+		}
+		field := llm.ConfigFieldForRole(role)
+		if field == "" {
+			return SessionRuntimeConfig{}, fmt.Errorf("unsupported session role %q", role)
+		}
+		model := pr.modelForRole(config.ModelConfigFieldByName(latest.Models, field), role)
+		effort, effortSource := pr.resolveEffortForRole(latest, role, model)
+		return SessionRuntimeConfig{
+			Model:           model,
+			EffectiveEffort: effort,
+			EffortSource:    effortSource,
+			AskingClause:    pr.askingQuestionsClauseForModel(model),
+		}, nil
+	}
+}
+
 // resolveEffortForRoleWithPipeline is the shared resolver for both primary and
 // secondary session launches. When pipelineOverride is a valid PipelineProfile,
 // it supplies the Auto baseline for this launch only — used by refactor
@@ -851,6 +877,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		ExitCriteria:               f.ExitCriteria,
 		Model:                      implementationModel,
 		ReviewModel:                reviewModel,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		ArtifactDir:                pr.resolveImplementArtifactDir(f),
 		StateDir:                   filepath.Join(pr.StateDir, f.ID),
 		RunDir:                     ActiveRunDir(pr.StateDir, f),
@@ -916,6 +943,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		Config:                     pr.Config,
 		Model:                      implementationModel,
 		ReviewModel:                reviewModel,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,
@@ -985,6 +1013,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,
@@ -1046,6 +1075,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,

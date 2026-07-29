@@ -57,11 +57,12 @@ type OrchestratorConfig struct {
 	// Resolved model and loop-limit values. These should be populated by the
 	// caller (RunMultiRepoImplementation) using the same resolution logic as
 	// the single-repo path (feature-level overrides → config defaults → fallbacks).
-	Model               string
-	ReviewModel         string
-	MaxIterations       int
-	MaxConsecFails      int
-	MaxConsecNoProgress int
+	Model                string
+	ReviewModel          string
+	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	MaxIterations        int
+	MaxConsecFails       int
+	MaxConsecNoProgress  int
 
 	KBInfos []KBInfo
 
@@ -134,6 +135,26 @@ type OrchestratorConfig struct {
 	// OnVerificationProgress is called after each persisted harness
 	// verification status transition so API clients can refresh live state.
 	OnVerificationProgress func(featureID string)
+}
+
+func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole) (SessionRuntimeConfig, error) {
+	if cfg.ResolveSessionConfig != nil {
+		return cfg.ResolveSessionConfig(role)
+	}
+	if role == llm.PhaseReview {
+		return SessionRuntimeConfig{
+			Model:           cfg.ReviewModel,
+			EffectiveEffort: cfg.ReviewEffectiveEffort,
+			EffortSource:    cfg.ReviewEffortSource,
+			AskingClause:    cfg.AskingClause,
+		}, nil
+	}
+	return SessionRuntimeConfig{
+		Model:           cfg.Model,
+		EffectiveEffort: cfg.ImplEffectiveEffort,
+		EffortSource:    cfg.ImplEffortSource,
+		AskingClause:    cfg.AskingClause,
+	}, nil
 }
 
 // OrchestratorResult is the aggregate outcome of multi-repo implementation.

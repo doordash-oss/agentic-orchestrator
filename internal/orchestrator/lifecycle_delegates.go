@@ -562,12 +562,6 @@ type UpdateFeatureConfigInput struct {
 	AutomaticReviewMode feature.AutomaticReviewMode
 }
 
-// ErrFeatureNotQuiescent is kept for compatibility with older callers that
-// matched the former idle-only edit rejection. UpdateFeatureConfig no longer
-// returns it: feature-level config edits are persisted for any feature state,
-// and active sessions pick them up on the next phase or restart.
-var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
-
 // UpdateFeatureConfig atomically writes the editable config axes. Same
 // idiom as ApplyRefactorPipeline — Store.Modify handles locking + atomic
 // write. On success, emits ports.Event{Type: FeatureConfigChanged}
@@ -575,7 +569,7 @@ var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 // observer writes a feature.config_changed audit entry.
 //
 // Re-entrancy: A second call with identical inputs against an already-
-// updated feature re-writes the same three fields to the same values, emits a
+// updated feature re-writes the same editable fields to the same values, emits a
 // second audit + event, and returns nil. This is acceptable — the audit trail
 // explicitly records "no semantic change" via before == after.
 // Crash recovery: Store.Modify performs an atomic unique-temp + rename,

@@ -249,6 +249,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		ExitCriteria:               f.ExitCriteria,
 		Model:                      implModel,
 		ReviewModel:                f.Models.Review,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(featureID),
 		ArtifactDir:                cycleBaseDir,
 		StateDir:                   filepath.Join(baseDir, featureID),
 		RunDir:                     agent.ActiveRunDir(baseDir, f),

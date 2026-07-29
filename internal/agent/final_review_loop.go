@@ -504,11 +504,21 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 // worktree. The reviewer reads the cumulative diff across all repos and
 // writes review-feedback.md at iterDir.
 func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (ReviewStatus, string, error) {
+	sessionConfig, err := resolveOrchestratorSessionConfig(s.cfg, llm.PhaseReview)
+	if err != nil {
+		return ReviewFailed, "", fmt.Errorf("resolving final review session configuration for iteration %d: %w", iteration, err)
+	}
+	cfg := s.cfg
+	cfg.ReviewModel = sessionConfig.Model
+	cfg.ReviewEffectiveEffort = sessionConfig.EffectiveEffort
+	cfg.ReviewEffortSource = sessionConfig.EffortSource
+	cfg.AskingClause = sessionConfig.AskingClause
+
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	_ = os.Remove(feedbackPath)
 	RemoveCompletionReceipt(iterDir)
 
-	status, feedback, err := s.runFinalReviewAxes(iteration, iterDir)
+	status, feedback, err := s.runFinalReviewAxes(iteration, iterDir, cfg)
 	if err != nil {
 		return status, feedback, err
 	}
@@ -518,8 +528,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	return status, feedback, nil
 }
 
-func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir string) (ReviewStatus, string, error) {
-	cfg := s.cfg
+func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir string, cfg OrchestratorConfig) (ReviewStatus, string, error) {
 	if err := RecordReadOnlyRepoBaseline(context.Background(), cfg.CommandRunner, cfg.Feature, iterDir); err != nil {
 		return ReviewFailed, "", fmt.Errorf("record final review axes read-only repo baseline: %w", err)
 	}
@@ -554,7 +563,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 		axisStart := time.Now()
 		cfg.Observer.ValidatorStarted(axisCtx, axis.Name)
 
-		status, feedback, err := s.runFinalReviewAxis(iteration, iterDir, axis, axisCtx)
+		status, feedback, err := s.runFinalReviewAxis(iteration, iterDir, axis, axisCtx, cfg)
 		results[i] = reviewAxisResult{Axis: axis.Name, Status: status, Feedback: feedback, Error: err}
 
 		verdict := status.String()
@@ -583,8 +592,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 	return status, feedback, err
 }
 
-func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir string, axis implementationReviewAxis, parentCtx observe.SpanContext) (ReviewStatus, string, error) {
-	cfg := s.cfg
+func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, cfg OrchestratorConfig) (ReviewStatus, string, error) {
 	axisSlug := implementationReviewAxisSlug(axis.Name)
 	axisDir := filepath.Join(iterDir, axisSlug)
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
@@ -707,6 +715,14 @@ func (s *featureFinalReviewLoopState) previousAggregateFeedback(iteration int) s
 // fix agent can address review findings in any repo.
 func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback string) (string, error) {
 	cfg := s.cfg
+	sessionConfig, err := resolveOrchestratorSessionConfig(cfg, llm.PhaseImplementation)
+	if err != nil {
+		return "", fmt.Errorf("resolving final review fix session configuration for iteration %d: %w", iteration, err)
+	}
+	cfg.Model = sessionConfig.Model
+	cfg.ImplEffectiveEffort = sessionConfig.EffectiveEffort
+	cfg.ImplEffortSource = sessionConfig.EffortSource
+	cfg.AskingClause = sessionConfig.AskingClause
 
 	feedbackPath := filepath.Join(iterDir, "review-feedback.md")
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{

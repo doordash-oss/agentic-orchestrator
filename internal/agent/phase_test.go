@@ -3056,6 +3056,65 @@ func TestBuildSessionReadsLatestFeatureAutomaticReviewMode(t *testing.T) {
 	}
 }
 
+func TestSessionRuntimeConfigResolverReadsLatestFeatureModel(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	f := &feature.Feature{
+		ID:       "feature-latest-session-model",
+		Name:     "Latest Session Model",
+		Slug:     "latest-session-model",
+		Status:   feature.StatusImplementing,
+		Pipeline: feature.PipelineMoonshot,
+		Models: config.ModelConfig{
+			Implementation: "opencode:old-model",
+			Review:         "codex:old-review",
+		},
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	pr := NewPhaseRunner(nil, store, dir)
+	resolve := pr.SessionRuntimeConfigResolver(f.ID)
+	if resolve == nil {
+		t.Fatal("SessionRuntimeConfigResolver() = nil")
+	}
+
+	initial, err := resolve(llm.PhaseImplementation)
+	if err != nil {
+		t.Fatalf("initial resolve: %v", err)
+	}
+	if initial.Model != "opencode:old-model" {
+		t.Fatalf("initial model = %q, want opencode:old-model", initial.Model)
+	}
+
+	if err := store.Modify(f.ID, func(current *feature.Feature) error {
+		current.Models.Implementation = "opencode:new-model"
+		current.Models.Review = "claude:new-review"
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+
+	implementation, err := resolve(llm.PhaseImplementation)
+	if err != nil {
+		t.Fatalf("updated implementation resolve: %v", err)
+	}
+	review, err := resolve(llm.PhaseReview)
+	if err != nil {
+		t.Fatalf("updated review resolve: %v", err)
+	}
+	if implementation.Model != "opencode:new-model" {
+		t.Errorf("updated implementation model = %q, want opencode:new-model", implementation.Model)
+	}
+	if review.Model != "claude:new-review" {
+		t.Errorf("updated review model = %q, want claude:new-review", review.Model)
+	}
+}
+
 func TestBuildSessionCrashResumeSnapshotPrecedesFeatureMode(t *testing.T) {
 	t.Parallel()
 

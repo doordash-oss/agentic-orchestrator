@@ -82,11 +82,12 @@ type RebaseLoopConfig struct {
 	// rebase; BehindRepos remains target/conflict subset.
 	WorkspaceRepos []string
 
-	Model               string
-	ReviewModel         string
-	MaxIterations       int
-	MaxConsecFails      int
-	MaxConsecNoProgress int
+	Model                string
+	ReviewModel          string
+	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	MaxIterations        int
+	MaxConsecFails       int
+	MaxConsecNoProgress  int
 
 	KBInfos []KBInfo
 
@@ -301,6 +302,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		ExitCriteria:               rebaseExitCriteria(cfg.Feature),
 		Model:                      cfg.Model,
 		ReviewModel:                cfg.ReviewModel,
+		ResolveSessionConfig:       cfg.ResolveSessionConfig,
 		ArtifactDir:                artifactDir,
 		SessionIDPrefix:            fmt.Sprintf("rebase-%d", rebaseCount),
 		StateDir:                   stateDir,

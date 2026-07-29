@@ -669,6 +669,7 @@ func (o *Orchestrator) rebaseLoopConfigForFeature(
 		WorkspaceRepos:             featureRepoNamesInOrder(f),
 		Model:                      f.Models.Implementation,
 		ReviewModel:                f.Models.Review,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              f.MaxIterations,
 		MaxConsecFails:             3,
 		MaxConsecNoProgress:        3,

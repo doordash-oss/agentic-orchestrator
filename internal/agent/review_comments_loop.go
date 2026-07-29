@@ -92,11 +92,12 @@ type ReviewCommentsLoopConfig struct {
 	// staged for the AtomicPhaseStamp.
 	RepoTargets []ReviewCommentsRepoTarget
 
-	Model               string
-	ReviewModel         string
-	MaxIterations       int
-	MaxConsecFails      int
-	MaxConsecNoProgress int
+	Model                string
+	ReviewModel          string
+	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	MaxIterations        int
+	MaxConsecFails       int
+	MaxConsecNoProgress  int
 
 	KBInfos []KBInfo
 
@@ -284,6 +285,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		ExitCriteria:               reviewCommentsExitCriteria(resolutionsPath),
 		Model:                      cfg.Model,
 		ReviewModel:                cfg.ReviewModel,
+		ResolveSessionConfig:       cfg.ResolveSessionConfig,
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
 		RunDir:                     runDir,

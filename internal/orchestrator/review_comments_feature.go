@@ -104,6 +104,7 @@ func (o *Orchestrator) startFeatureReviewComments(
 		RepoTargets:                targets,
 		Model:                      f.Models.Implementation,
 		ReviewModel:                f.Models.Review,
+		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              f.MaxIterations,
 		MaxConsecFails:             3,
 		MaxConsecNoProgress:        3,

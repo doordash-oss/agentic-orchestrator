@@ -15,6 +15,9 @@
 - Do not expose the testing-contract path, capability probe command, stdout path, stderr path, or run-artifact path through the server API or Electron IPC.
 - Preserve the textarea questionnaire for generic gates and gate artifacts written before this feature.
 - Persist a selected verification action through the existing gate-draft endpoint and resume through the existing gate-decision endpoint.
+- Remove the unused gate-specific Abort capability end-to-end. Stop is the
+  supported user escape path; no renderer, IPC, server, orchestrator, test, or
+  documentation surface may continue to advertise a gate abort decision.
 - Preserve all unrelated worktree edits; stage only the files named by the task being committed.
 - Run **Fast suite** before handoff, plus **E2E smoke shell**, **Isolated integration**, **E2E Go**, `go vet ./...`, and `go build ./...`.
 
@@ -903,10 +906,333 @@ git commit -m "Protect contextual gate resolution end to end"
 
 ---
 
-### Task 7: Full Verification and Handoff Evidence
+### Task 7: Remove the Gate-Abort Backend Contract
 
 **Files:**
-- Modify only if a verification command reveals a defect in the files owned by Tasks 1–6.
+- Modify: `internal/orchestrator/orchestrator.go`
+- Modify: `internal/orchestrator/need_user_input.go`
+- Modify: `internal/orchestrator/need_user_input_test.go`
+- Modify: `internal/orchestrator/rebase_feature_internal_test.go`
+- Modify: `internal/orchestrator/completion_need_user_input_test.go`
+- Modify: `internal/orchestrator/recovery.go`
+- Modify: `internal/orchestrator/completion.go`
+- Modify: `internal/feature/feature.go`
+- Modify: `internal/server/mutation.go`
+- Modify: `internal/server/client.go`
+- Modify: `cmd/agentico/main.go`
+- Modify: `api/openapi.yaml`
+- Regenerate: `internal/server/serverapi.gen.go`
+- Regenerate: `desktop/src/shared/api/schema.gen.ts`
+
+**Interfaces:**
+- Replaces: `NeedUserInputDecision`, `HandleNeedUserInputDecision`,
+  `NeedUserInputDecisionRequest`, and `NeedUserInputDecisionResponse`.
+- Produces:
+  - `NeedUserInputResume`
+  - `ResumeNeedUserInput`
+  - `NeedUserInputResumeRequest`
+  - `NeedUserInputResumeResponse`
+
+- [ ] **Step 1: Make resume-only tests fail on the new API**
+
+Rename existing resume tests and calls to use:
+
+```go
+orchestrator.NeedUserInputResume{RepoName: "repo-a"}
+o.ResumeNeedUserInput(featureID, target)
+```
+
+Delete tests whose only behavior is gate-specific abort:
+
+- `TestHandleNeedUserInputDecision_SharedGateAbortFailsAllRepos`
+- `TestHandleNeedUserInputDecision_SingleRepoGateAbortLeavesSiblingUnchanged`
+- `TestHandleNeedUserInputDecisionAbortsFeatureRebaseCycle`
+
+Keep and rename every resume, stale-target, trusted-waiver, rollback, and
+off-feature trust-boundary test.
+
+- [ ] **Step 2: Run orchestrator tests and verify RED**
+
+Run:
+
+```bash
+go test ./internal/orchestrator -run 'NeedUserInput|FeatureRebaseCycle' -count=1
+```
+
+Expected: compile failure because the resume-only type and method do not exist.
+
+- [ ] **Step 3: Remove abort from the orchestrator**
+
+Replace `NeedUserInputDecision` with:
+
+```go
+type NeedUserInputResume struct {
+	RepoName  string
+	CycleType feature.RepoCycleType
+}
+```
+
+Rename the public handler and its three scoped helpers from `Decision` to
+`Resume`. Remove every `switch` on `Decision`, every `"abort"` branch, abort
+fallback summary, terminal-failure event, and `resume|abort` error. Preserve
+the current resume body, trusted waiver application, rollback behavior, scope
+routing, and diagnostic cycle type.
+
+Remove `feature.FailureNeedUserInput`, which exists only for the deleted abort
+failure path. Update comments in `recovery.go`, `completion.go`, and
+`agent/orchestrator.go` that call this a resume/abort decision.
+
+- [ ] **Step 4: Make the server action resume-only**
+
+Rename the mutation target interface method and request/response types:
+
+```go
+ResumeNeedUserInput(featureID string, req NeedUserInputResumeRequest) (NeedUserInputResumeResponse, error)
+
+type NeedUserInputResumeRequest struct {
+	RepoName  string `json:"repo_name,omitempty"`
+	CycleType string `json:"cycle_type,omitempty"`
+}
+```
+
+The `actionNeedUserInput` handler must decode the target, perform no decision
+validation, call `ResumeNeedUserInput`, and return result `"resumed"`.
+
+Rename `Client.NeedUserInputDecision` to `Client.ResumeNeedUserInput`. In
+`cmd/agentico/main.go`, call `orch.ResumeNeedUserInput` and remove the decision
+field from both input and output.
+
+- [ ] **Step 5: Rename the OpenAPI response and regenerate**
+
+Rename:
+
+```yaml
+need_user_input_decision_response
+NeedUserInputDecisionResponse
+```
+
+to:
+
+```yaml
+need_user_input_resume_response
+NeedUserInputResumeResponse
+```
+
+The response composes only `ActionBaseResponse` and `FeatureActionResult`; it
+has no `decision` property. Run:
+
+```bash
+make generate-openapi
+npm run generate:api
+```
+
+Because these files contain pre-existing user work, stage only the abort-removal
+hunks and leave provider-refresh hunks unstaged.
+
+- [ ] **Step 6: Run backend checks and verify GREEN**
+
+Run:
+
+```bash
+go test ./internal/orchestrator ./internal/server ./cmd/agentico -count=1
+go test ./internal/server -run TestGeneratedOpenAPIIsCurrent -count=1
+npm run check:api-drift --workspace desktop
+go vet ./...
+go build ./...
+```
+
+Expected: PASS and `rg` finds no gate-abort branch or failure classification:
+
+```bash
+rg -n 'FailureNeedUserInput|NeedUserInputDecision|resume\\|abort|case "abort"' internal cmd api
+```
+
+Expected: no matches except historical design/plan documents.
+
+- [ ] **Step 7: Commit the backend cleanup**
+
+Stage only Task 7 hunks and commit:
+
+```bash
+git commit -m "Retire gate-specific abort semantics"
+```
+
+---
+
+### Task 8: Remove Gate Abort From Desktop Contracts and UI
+
+**Files:**
+- Modify: `desktop/src/shared/ipc.ts`
+- Modify: `desktop/src/main/attention.ts`
+- Modify: `desktop/src/main/ipcHandlers.ts`
+- Modify: `desktop/src/renderer/src/features/NeedUserInputModal.tsx`
+- Modify: `desktop/src/renderer/src/features/NeedUserInputModal.test.tsx`
+- Modify: `desktop/src/renderer/src/features/AttentionInbox.tsx`
+- Modify: `desktop/src/renderer/src/features/AttentionInbox.test.tsx`
+
+**Interfaces:**
+- Consumes: backend resume-only `/actions/need-user-input`.
+- Produces: `GateResumeRequestSchema` and `GateResumeRequest`, with no
+  `decision` field.
+
+- [ ] **Step 1: Write failing resume-only renderer and IPC tests**
+
+Rename `GateResolutionRequestSchema` to `GateResumeRequestSchema` and change
+parent test expectations to:
+
+```ts
+expect(mock.api.resolveGate).toHaveBeenCalledWith({
+  featureId: gate.featureId,
+  repoName: 'repo-a',
+  cycleType: 'review-comments',
+});
+```
+
+Replace the Attention inbox abort test with:
+
+```ts
+expect(screen.queryByRole('button', { name: 'Abort gate' })).not.toBeInTheDocument();
+expect(screen.queryByRole('dialog', { name: 'Confirm abort' })).not.toBeInTheDocument();
+```
+
+- [ ] **Step 2: Run renderer tests and verify RED**
+
+Run:
+
+```bash
+npm run test --workspace desktop -- src/renderer/src/features/NeedUserInputModal.test.tsx src/renderer/src/features/AttentionInbox.test.tsx
+```
+
+Expected: failures because requests still include `decision: 'resume'` and the
+inbox still exposes Abort.
+
+- [ ] **Step 3: Make the IPC request resume-only**
+
+Define:
+
+```ts
+export const GateResumeRequestSchema = GateTargetSchema;
+export type GateResumeRequest = z.output<typeof GateResumeRequestSchema>;
+```
+
+Use it for the existing `attentionResolveGate` channel and `resolveGate`
+method. Retaining the channel/method name avoids unrelated preload/security
+surface churn; the request itself no longer admits an abort branch.
+
+Update `AttentionService.resolveGate` to send only `repo_name` and
+`cycle_type`. Update `ipcHandlers.ts` imports/signatures accordingly.
+
+- [ ] **Step 4: Remove the dead abort UI**
+
+Delete `confirmingAbort`, `abortButtonRef`, abort-confirm focus/Escape effects,
+the `"Abort gate"` button, confirmation dialog, scope-warning copy, and abort
+mutation from `AttentionInbox.tsx`. Keep retry/waive drafting, Resume, jump,
+and legacy textarea behavior unchanged.
+
+Remove `decision: 'resume'` from modal and inbox resume requests. No Abort
+control is added to `NeedUserInputModal`; Stop remains the feature-level
+escape path.
+
+- [ ] **Step 5: Run desktop checks and verify GREEN**
+
+Run:
+
+```bash
+npm run test --workspace desktop -- src/renderer/src/features/NeedUserInputVerificationDecision.test.tsx src/renderer/src/features/NeedUserInputModal.test.tsx src/renderer/src/features/AttentionInbox.test.tsx
+npm run typecheck --workspace desktop
+npm run test --workspace desktop
+```
+
+Expected: PASS, and:
+
+```bash
+rg -n \"Abort gate|Confirm abort|decision: 'abort'|z.enum\\(\\['resume', 'abort'\\]\\)\" desktop/src
+```
+
+Expected: no matches.
+
+- [ ] **Step 6: Commit the desktop cleanup**
+
+Stage only Task 8 hunks—`ipc.ts` and `ipcHandlers.ts` have pre-existing user
+changes—and commit:
+
+```bash
+git commit -m "Use Stop instead of gate-specific abort"
+```
+
+---
+
+### Task 9: Finalize Packaged Coverage and Documentation
+
+**Files:**
+- Modify: `desktop/test/e2e/journeys/attention-resolution.spec.ts`
+- Modify: `docs/desktop/parity-matrix.md`
+
+**Interfaces:**
+- Consumes: structured resume-only modal and the existing feature Stop action.
+- Produces: deterministic packaged coverage with no direct abort mutation.
+
+- [ ] **Step 1: Remove interrupted fix-round residue**
+
+Before editing, discard only the uncommitted changes made by the interrupted
+Task 6 fix round in these two files. Preserve committed Task 6 work at
+`2e7e8182`; neither file had pre-existing user edits before that fix round.
+
+- [ ] **Step 2: Make modal routing deterministic**
+
+Remove the non-waiting `isVisible()` branch from `openGateDialogByScope`.
+After dismissing an auto-opened dialog, await its absence and await the Home
+tab's selected state before opening the target gate. After clicking the
+semantic inbox row, await the expected `"Agent needs your input"` dialog
+directly.
+
+- [ ] **Step 3: Replace abort cleanup with Stop**
+
+Delete direct `decision: 'abort'` cleanup calls and all stale feature/cycle
+abort assertions. After proving both cycle-scoped generic textarea fixtures,
+navigate to the feature cockpit and invoke the existing Stop action to end the
+fixture. Assert the feature reaches its stopped/interrupted state and pending
+gate attention clears according to the existing Stop contract. Do not add a
+gate-specific Abort control.
+
+- [ ] **Step 4: Update the parity matrix narrowly**
+
+Edit only the NEED_USER_INPUT evidence row. Remove the packaged
+scope-correct-abort claim and state that packaged coverage proves structured
+blocker context, explicit retry/waive choice, durable relaunch, generic
+textarea fallback, and Stop as the supported escape path. Do not run Prettier
+over the entire Markdown table.
+
+- [ ] **Step 5: Run packaged and static checks**
+
+Run:
+
+```bash
+npm run test:e2e:packaged --workspace desktop -- test/e2e/journeys/attention-resolution.spec.ts --grep "packaged inbox renders and drafts a real NEED_USER_INPUT gate"
+npx prettier --check desktop/test/e2e/journeys/attention-resolution.spec.ts
+npm run typecheck --workspace desktop
+```
+
+Expected: the target packaged journey passes. Run the exact full-file command
+and record unchanged setup/help failures separately if they reproduce:
+
+```bash
+npm run test:e2e:packaged --workspace desktop -- test/e2e/journeys/attention-resolution.spec.ts
+```
+
+- [ ] **Step 6: Commit packaged cleanup**
+
+```bash
+git add desktop/test/e2e/journeys/attention-resolution.spec.ts docs/desktop/parity-matrix.md
+git commit -m "Finish the resume-only gate journey"
+```
+
+---
+
+### Task 10: Full Verification and Handoff Evidence
+
+**Files:**
+- Modify only if a verification command reveals a defect in the files owned by Tasks 1–9.
 
 **Interfaces:**
 - Consumes: all completed tasks.
@@ -983,6 +1309,9 @@ Report:
 
 - blocker context now shown in modal and inbox;
 - explicit retry and waiver controls;
+- gate-specific Abort removed from the orchestrator, server API, Electron IPC,
+  renderer, tests, generated contracts, and documentation;
+- Stop retained as the supported run-termination path;
 - legacy questionnaire fallback;
 - commits created by each task;
 - **Fast suite**, **E2E smoke shell**, **Isolated integration**, and **E2E Go** results;

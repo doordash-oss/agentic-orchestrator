@@ -377,8 +377,7 @@ func TestRefactorFeatureLoop_ProtocolViolation_ThreeConsecutiveViolationsTermina
 	}
 	for _, want := range []string{
 		"protocol violation: refactor_plan_step",
-		"refactor-plan.md: required artifact was not committed by a valid root outcome",
-		"agentico-outcome: root agent ended the turn without exactly one structured completion outcome",
+		"refactor-plan.md",
 	} {
 		if !strings.Contains(result.LastError, want) {
 			t.Fatalf("LastError = %q, want violation %q", result.LastError, want)

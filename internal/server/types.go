@@ -52,6 +52,10 @@ type Options struct {
 	DomainEvents         <-chan ports.Event
 	Mutations            MutationTarget
 	RequestShutdown      func()
+	// PersistProviderModelCatalog writes a successfully discovered provider
+	// catalog before the server installs it in memory. Nil keeps live refreshes
+	// in memory only.
+	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
 	// InitGitRepository overrides the git-init implementation used by the
 	// workspace repository-initialization endpoint. Nil means the default
 	// git adapter (internal/git.InitRepository).
@@ -67,17 +71,18 @@ type HandlerOptions struct {
 	// DisableHostValidation turns off the loopback Host-header check. Host
 	// validation defaults to ON — only tests exercising something other
 	// than host validation itself should set this to true.
-	DisableHostValidation bool
-	Features              FeatureLister
-	FeatureStore          FeatureReader
-	Freshness             RepoFreshnessProvider
-	Config                *config.Config
-	Registry              *llm.Registry
-	Sessions              ports.SessionManager
-	Events                <-chan interface{}
-	DomainEvents          <-chan ports.Event
-	Mutations             MutationTarget
-	RequestShutdown       func()
+	DisableHostValidation       bool
+	Features                    FeatureLister
+	FeatureStore                FeatureReader
+	Freshness                   RepoFreshnessProvider
+	Config                      *config.Config
+	Registry                    *llm.Registry
+	Sessions                    ports.SessionManager
+	Events                      <-chan interface{}
+	DomainEvents                <-chan ports.Event
+	Mutations                   MutationTarget
+	RequestShutdown             func()
+	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
 	// InitGitRepository overrides the git-init implementation used by the
 	// workspace repository-initialization endpoint. Nil means the default
 	// git adapter (internal/git.InitRepository).

@@ -74,6 +74,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	var sawReviewCreateTrustedHeader bool
 	var sawReviewSaveTrustedHeader bool
 	var sawReviewDecisionTrustedHeader bool
+	var sawProviderRefreshTrustedHeader bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case routeGetHealth:
@@ -88,6 +89,16 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			writeJSON(w, http.StatusOK, FeatureConfigResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID})
 		case "GET /api/v1/catalog/models":
 			writeJSON(w, http.StatusOK, ModelCatalogResponse{APIVersion: APIVersion, ProviderOrder: []string{providerCodex}})
+		case "POST /api/v1/catalog/models/refresh":
+			sawProviderRefreshTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+			var req ProviderModelRefreshRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode provider refresh request: %v", err)
+			}
+			if req.Provider != "claude" {
+				t.Errorf("provider refresh = %q; want claude", req.Provider)
+			}
+			writeJSON(w, http.StatusOK, ProviderModelRefreshResponse{APIVersion: APIVersion})
 		case routeGetPrompts:
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
 		case "GET /api/v1/permissions":
@@ -237,6 +248,12 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	}
 	if _, err := client.ModelCatalog(ctx); err != nil {
 		t.Fatalf("ModelCatalog() error = %v", err)
+	}
+	if _, err := client.RefreshProviderModels(ctx, "claude"); err != nil {
+		t.Fatalf("RefreshProviderModels() error = %v", err)
+	}
+	if !sawProviderRefreshTrustedHeader {
+		t.Fatal("RefreshProviderModels() omitted trusted mutation header")
 	}
 	if _, err := client.Prompts(ctx); err != nil {
 		t.Fatalf("Prompts() error = %v", err)

@@ -163,6 +163,22 @@ func (c *Client) ModelCatalog(ctx context.Context) (ModelCatalogResponse, error)
 	return out, err
 }
 
+// RefreshProviderModels re-probes one provider and refreshes only its model
+// catalog.
+func (c *Client) RefreshProviderModels(ctx context.Context, provider string) (ProviderModelRefreshResponse, error) {
+	var out ProviderModelRefreshResponse
+	err := c.doJSON(
+		ctx,
+		http.MethodPost,
+		apiPathCatalogRefresh,
+		nil,
+		ProviderModelRefreshRequest{Provider: provider},
+		&out,
+		true,
+	)
+	return out, err
+}
+
 // Readiness reads the consolidated runtime readiness snapshot.
 func (c *Client) Readiness(ctx context.Context) (ReadinessResponse, error) {
 	var out ReadinessResponse

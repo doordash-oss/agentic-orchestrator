@@ -313,6 +313,26 @@ func TestDiscoverProviderCatalogsWritesVersionedCacheOnMiss(t *testing.T) {
 	}
 }
 
+func TestPersistRefreshedProviderModelCatalogUsesNormalizedVersion(t *testing.T) {
+	cacheRoot := t.TempDir()
+	provider := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "claude", hasCLI: true},
+		versionInfo:  "Claude Code v2.1.220",
+	}
+	models := []llm.ModelInfo{{ID: "claude-new", Category: "capable"}}
+
+	if err := persistRefreshedProviderModelCatalog(cacheRoot, provider, models); err != nil {
+		t.Fatalf("persistRefreshedProviderModelCatalog() error: %v", err)
+	}
+	cached, err := loadProviderCatalogCache(cacheRoot, "claude", "2.1.220")
+	if err != nil {
+		t.Fatalf("loadProviderCatalogCache() error: %v", err)
+	}
+	if len(cached) != 1 || cached[0].ID != "claude-new" {
+		t.Fatalf("cached models = %+v; want claude-new", cached)
+	}
+}
+
 func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
 	cacheRoot := t.TempDir()
 	path := providerCatalogCachePath(cacheRoot, "corrupt", "4.0.0")

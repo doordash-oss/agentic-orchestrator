@@ -176,6 +176,7 @@ function makeServices(): IpcServices {
     getWorkspaceDefaults: vi.fn(() => Promise.reject(new Error('unused'))),
     updateWorkspaceDefaults: vi.fn(() => Promise.reject(new Error('unused'))),
     getModelCatalogue: vi.fn(() => Promise.reject(new Error('unused'))),
+    refreshProviderModels: vi.fn(() => Promise.reject(new Error('unused'))),
     listRuns: vi.fn(() => Promise.reject(new Error('unused'))),
     getRun: vi.fn(() => Promise.reject(new Error('unused'))),
     listRunSessions: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -301,6 +302,18 @@ describe('registerIpcHandlers', () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
     expect(services.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe provider names before invoking model refresh', async () => {
+    const { handlers, services } = register();
+    const result = (await handlers.get(IPC_CHANNELS.configProviderModelsRefresh)!(
+      goodEvent,
+      '../claude',
+    )) as { ok: boolean; error?: { code: string } };
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
+    expect(services.refreshProviderModels).not.toHaveBeenCalled();
   });
 
   it('validates local draft requests before calling the owner-only store', async () => {

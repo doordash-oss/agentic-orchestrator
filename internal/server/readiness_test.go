@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -41,6 +43,32 @@ type readinessProbeProvider struct {
 
 func (p *readinessProbeProvider) CheckReadiness(_ context.Context) llm.ProviderReadiness {
 	return p.status()
+}
+
+type refreshableProvider struct {
+	*readinessProbeProvider
+	mu             sync.RWMutex
+	catalog        []llm.ModelInfo
+	discovered     []llm.ModelInfo
+	discoveryError error
+	discoveries    atomic.Int32
+}
+
+func (p *refreshableProvider) ModelCatalog() []llm.ModelInfo {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return append([]llm.ModelInfo(nil), p.catalog...)
+}
+
+func (p *refreshableProvider) SetModelCatalog(models []llm.ModelInfo) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.catalog = append([]llm.ModelInfo(nil), models...)
+}
+
+func (p *refreshableProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	p.discoveries.Add(1)
+	return append([]llm.ModelInfo(nil), p.discovered...), p.discoveryError
 }
 
 // versionGatedProvider wraps the shared MockProvider and opts into strict
@@ -559,5 +587,216 @@ func TestReadinessRefreshRequiresTrustedClientHeader(t *testing.T) {
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("refresh without trusted header status = %d; want 403", w.Code)
+	}
+}
+
+func TestProviderModelRefreshReprobesOnlySelectedProviderAndReplacesItsCatalog(t *testing.T) {
+	t.Parallel()
+
+	var claudeProbes atomic.Int32
+	var codexProbes atomic.Int32
+	claude := &refreshableProvider{
+		readinessProbeProvider: &readinessProbeProvider{
+			MockProvider: &mocks.MockProvider{
+				ProviderName:      "claude",
+				CLIDetected:       true,
+				VersionInfoResult: "2.1.220",
+			},
+			status: func() llm.ProviderReadiness {
+				claudeProbes.Add(1)
+				return llm.ProviderReadiness{Ready: true}
+			},
+		},
+		catalog:    []llm.ModelInfo{{ID: "claude-old", Category: "balanced"}},
+		discovered: []llm.ModelInfo{{ID: "claude-new", Category: "capable"}},
+	}
+	codex := &refreshableProvider{
+		readinessProbeProvider: &readinessProbeProvider{
+			MockProvider: &mocks.MockProvider{
+				ProviderName:      "codex",
+				CLIDetected:       true,
+				VersionInfoResult: "0.145.0",
+			},
+			status: func() llm.ProviderReadiness {
+				codexProbes.Add(1)
+				return llm.ProviderReadiness{Ready: true}
+			},
+		},
+		catalog:    []llm.ModelInfo{{ID: "codex-current", Category: "capable"}},
+		discovered: []llm.ModelInfo{{ID: "codex-unrequested", Category: "capable"}},
+	}
+	handler := NewHandler(HandlerOptions{
+		Registry:              newReadinessRegistry(claude, codex),
+		Mutations:             &createFeatureRecorder{},
+		DisableHostValidation: true,
+	})
+	_ = getReadinessSnapshot(t, handler)
+
+	w := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
+		"provider": "claude",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d body=%s; want 200", w.Code, w.Body.String())
+	}
+	var body struct {
+		Readiness ReadinessResponse    `json:"readiness"`
+		Catalog   ModelCatalogResponse `json:"catalog"`
+	}
+	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
+		t.Fatalf("decode refresh response: %v", err)
+	}
+	if got := claudeProbes.Load(); got != 2 {
+		t.Fatalf("Claude readiness probes = %d; want initial + selected refresh", got)
+	}
+	if got := codexProbes.Load(); got != 1 {
+		t.Fatalf("Codex readiness probes = %d; want initial probe only", got)
+	}
+	if got := body.Catalog.ProviderModels["claude"]; len(got) != 1 || got[0].ID != "claude-new" {
+		t.Fatalf("Claude refreshed models = %+v; want claude-new", got)
+	}
+	if got := body.Catalog.ProviderModels["codex"]; len(got) != 1 || got[0].ID != "codex-current" {
+		t.Fatalf("Codex models = %+v; want unchanged codex-current", got)
+	}
+	if entry := providerEntry(t, body.Readiness, "claude"); !entry.Ready {
+		t.Fatalf("Claude readiness = %+v; want ready", entry)
+	}
+}
+
+func TestProviderModelRefreshFailurePreservesPreviousCatalog(t *testing.T) {
+	t.Parallel()
+
+	provider := &refreshableProvider{
+		readinessProbeProvider: &readinessProbeProvider{
+			MockProvider: &mocks.MockProvider{
+				ProviderName:      "claude",
+				CLIDetected:       true,
+				VersionInfoResult: "2.1.220",
+			},
+			status: staticReadiness(llm.ProviderReadiness{Ready: true}),
+		},
+		catalog:        []llm.ModelInfo{{ID: "claude-stable", Category: "capable"}},
+		discoveryError: errors.New("provider CLI failed"),
+	}
+	handler := NewHandler(HandlerOptions{
+		Registry:              newReadinessRegistry(provider),
+		Mutations:             &createFeatureRecorder{},
+		DisableHostValidation: true,
+	})
+	_ = getReadinessSnapshot(t, handler)
+
+	w := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
+		"provider": "claude",
+	})
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("refresh status = %d body=%s; want 502", w.Code, w.Body.String())
+	}
+	if got := provider.ModelCatalog(); len(got) != 1 || got[0].ID != "claude-stable" {
+		t.Fatalf("catalog after failed refresh = %+v; want prior claude-stable", got)
+	}
+}
+
+func TestProviderModelRefreshCacheFailurePreservesPreviousCatalog(t *testing.T) {
+	t.Parallel()
+
+	provider := &refreshableProvider{
+		readinessProbeProvider: &readinessProbeProvider{
+			MockProvider: &mocks.MockProvider{
+				ProviderName:      "claude",
+				CLIDetected:       true,
+				VersionInfoResult: "2.1.220",
+			},
+			status: staticReadiness(llm.ProviderReadiness{Ready: true}),
+		},
+		catalog:    []llm.ModelInfo{{ID: "claude-stable", Category: "capable"}},
+		discovered: []llm.ModelInfo{{ID: "claude-new", Category: "capable"}},
+	}
+	handler := NewHandler(HandlerOptions{
+		Registry:              newReadinessRegistry(provider),
+		Mutations:             &createFeatureRecorder{},
+		DisableHostValidation: true,
+		PersistProviderModelCatalog: func(llm.LLMProvider, []llm.ModelInfo) error {
+			return errors.New("disk full")
+		},
+	})
+	_ = getReadinessSnapshot(t, handler)
+
+	w := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
+		"provider": "claude",
+	})
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("refresh status = %d body=%s; want 502", w.Code, w.Body.String())
+	}
+	if got := provider.ModelCatalog(); len(got) != 1 || got[0].ID != "claude-stable" {
+		t.Fatalf("catalog after cache failure = %+v; want prior claude-stable", got)
+	}
+}
+
+func TestProviderModelRefreshRejectsInvalidProviderName(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{
+		Registry:              newReadinessRegistry(),
+		Mutations:             &createFeatureRecorder{},
+		DisableHostValidation: true,
+	})
+	w := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
+		"provider": "../claude",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("refresh status = %d body=%s; want 400", w.Code, w.Body.String())
+	}
+}
+
+func TestProviderModelRefreshHandlesUnknownUnreadyAndUnsupportedProviders(t *testing.T) {
+	t.Parallel()
+
+	unready := &refreshableProvider{
+		readinessProbeProvider: &readinessProbeProvider{
+			MockProvider: &mocks.MockProvider{ProviderName: "unready", CLIDetected: true},
+			status: staticReadiness(llm.ProviderReadiness{
+				Ready:  false,
+				Detail: "not authenticated",
+				Remedy: "Run unready login",
+			}),
+		},
+		discovered: []llm.ModelInfo{{ID: "must-not-discover"}},
+	}
+	unsupported := &readinessProbeProvider{
+		MockProvider: &mocks.MockProvider{
+			ProviderName: "unsupported",
+			CLIDetected:  true,
+			Models:       []string{"fallback"},
+		},
+		status: staticReadiness(llm.ProviderReadiness{Ready: true}),
+	}
+	handler := NewHandler(HandlerOptions{
+		Registry:              newReadinessRegistry(unready, unsupported),
+		Mutations:             &createFeatureRecorder{},
+		DisableHostValidation: true,
+	})
+	_ = getReadinessSnapshot(t, handler)
+
+	unknown := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
+		"provider": "unknown",
+	})
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown provider status = %d; want 404", unknown.Code)
+	}
+
+	notReady := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
+		"provider": "unready",
+	})
+	if notReady.Code != http.StatusOK {
+		t.Fatalf("unready provider status = %d body=%s; want 200 readiness response", notReady.Code, notReady.Body.String())
+	}
+	if got := unready.discoveries.Load(); got != 0 {
+		t.Fatalf("unready provider discovery calls = %d; want 0", got)
+	}
+
+	cannotRefresh := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
+		"provider": "unsupported",
+	})
+	if cannotRefresh.Code != http.StatusConflict {
+		t.Fatalf("unsupported provider status = %d body=%s; want 409", cannotRefresh.Code, cannotRefresh.Body.String())
 	}
 }

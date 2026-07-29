@@ -68,6 +68,7 @@ import {
   type FeatureConfigUpdateRequest,
   type WorkspaceDefaults,
   type ModelCatalogue,
+  type ProviderModelRefreshResult,
   type RunListRequest,
   type RunListResult,
   type RunGetRequest,
@@ -171,6 +172,7 @@ export interface IpcServices {
   getWorkspaceDefaults(): Promise<WorkspaceDefaults>;
   updateWorkspaceDefaults(defaults: WorkspaceDefaults): Promise<WorkspaceDefaults>;
   getModelCatalogue(): Promise<ModelCatalogue>;
+  refreshProviderModels(provider: string): Promise<ProviderModelRefreshResult>;
   listRuns(request: RunListRequest): Promise<RunListResult>;
   getRun(request: RunGetRequest): Promise<RunDetailView>;
   listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
@@ -341,6 +343,8 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.configDefaultsUpdate]: (_event, defaults: WorkspaceDefaults) =>
       services.updateWorkspaceDefaults(defaults),
     [IPC_CHANNELS.configModelCatalogue]: () => services.getModelCatalogue(),
+    [IPC_CHANNELS.configProviderModelsRefresh]: (_event, provider: string) =>
+      services.refreshProviderModels(provider),
     [IPC_CHANNELS.runsList]: (_event, request: RunListRequest) => services.listRuns(request),
     [IPC_CHANNELS.runsGet]: (_event, request: RunGetRequest) => services.getRun(request),
     [IPC_CHANNELS.runSessionsList]: (_event, request: RunGetRequest) =>

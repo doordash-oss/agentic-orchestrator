@@ -819,6 +819,7 @@ if (!hasSingleInstanceLock) {
       getWorkspaceDefaults: () => configService.getWorkspaceDefaults(),
       updateWorkspaceDefaults: (defaults) => configService.updateWorkspaceDefaults(defaults),
       getModelCatalogue: () => configService.getModelCatalogue(),
+      refreshProviderModels: (provider) => configService.refreshProviderModels(provider),
       listRuns: (request) => runHistory.listRuns(request),
       getRun: (request) => runHistory.getRun(request),
       listRunSessions: (request) => runHistory.listRunSessions(request),

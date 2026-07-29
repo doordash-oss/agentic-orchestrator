@@ -40,6 +40,26 @@ describe('FileChangeCard', () => {
     expect(added).toHaveLength(2);
   });
 
+  it('renders raw created markdown bullet content as additions', () => {
+    render(
+      <FileChangeCard
+        change={{
+          path: 'phase-06/implement/progress.md',
+          operation: 'write',
+          detail:
+            '## Iteration Handoff\n\n### Completed this iteration\n- Extracted helper\n- Added regression coverage',
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText('Created phase-06/implement/progress.md')).toBeVisible();
+    expect(screen.getByText('+5')).toBeVisible();
+    expect(screen.queryByText('−2')).not.toBeInTheDocument();
+    const diff = screen.getByRole('region', { name: 'Diff for phase-06/implement/progress.md' });
+    expect(diff.querySelectorAll('[data-kind="added"]')).toHaveLength(5);
+    expect(diff.querySelectorAll('[data-kind="removed"]')).toHaveLength(0);
+  });
+
   it('caps oversized diffs and reports the hidden remainder', () => {
     const detail = Array.from({ length: 40 }, (_, i) => `+ line ${i + 1}`).join('\n');
     render(<FileChangeCard change={{ path: 'big.txt', operation: 'write', detail }} />);

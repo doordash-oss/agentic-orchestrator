@@ -1297,6 +1297,18 @@ function makeMockApi(
         phaseDefaults: { planning: 'demo:planner' },
         phaseProviderModels: {},
       }),
+    refreshProviderModels: () =>
+      Promise.resolve({
+        readiness: READY_SNAPSHOT,
+        catalogue: {
+          providerOrder: ['demo'],
+          providerModels: {
+            demo: [{ id: 'demo:planner', displayName: 'Demo Planner' }],
+          },
+          phaseDefaults: { planning: 'demo:planner' },
+          phaseProviderModels: {},
+        },
+      }),
     listRuns: ({ page, pageSize }) => {
       const ps = pageSize ?? 20;
       const p = page ?? 1;

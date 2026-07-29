@@ -148,6 +148,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getWorkspaceDefaults: vi.fn(() => Promise.reject(new Error('unused'))),
     updateWorkspaceDefaults: vi.fn(() => Promise.reject(new Error('unused'))),
     getModelCatalogue: vi.fn(() => Promise.reject(new Error('unused'))),
+    refreshProviderModels: vi.fn(() => Promise.reject(new Error('unused'))),
     listRuns: vi.fn(() => Promise.reject(new Error('unused'))),
     getRun: vi.fn(() => Promise.reject(new Error('unused'))),
     listRunSessions: vi.fn(() => Promise.reject(new Error('unused'))),

@@ -460,6 +460,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/models/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-probe one provider and refresh its model catalog.
+         * @description Re-runs readiness for the named provider and, when ready, discovers and atomically installs only that provider's current model catalog.
+         */
+        post: operations["refreshProviderModels"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/readiness": {
         parameters: {
             query?: never;
@@ -1007,6 +1027,13 @@ export interface components {
                     [key: string]: string[];
                 };
             };
+        };
+        ProviderModelRefreshRequest: {
+            provider: string;
+        };
+        ProviderModelRefreshResponse: components["schemas"]["JSONResponse"] & {
+            readiness: components["schemas"]["ReadinessResponse"];
+            catalog: components["schemas"]["ModelCatalogResponse"];
         };
         PromptSnapshotResponse: components["schemas"]["JSONResponse"] & {
             ask_user_questions: components["schemas"]["ControlRequest"][];
@@ -1996,6 +2023,15 @@ export interface components {
                 "application/json": components["schemas"]["ModelCatalogResponse"];
             };
         };
+        /** @description Refreshed provider readiness and model catalog. */
+        ProviderModelRefreshResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ProviderModelRefreshResponse"];
+            };
+        };
         /** @description Pending prompt snapshot. */
         PromptSnapshotResponse: {
             headers: {
@@ -2310,6 +2346,11 @@ export interface components {
                 "application/json": {
                     [key: string]: unknown;
                 };
+            };
+        };
+        ProviderModelRefreshRequest: {
+            content: {
+                "application/json": components["schemas"]["ProviderModelRefreshRequest"];
             };
         };
     };
@@ -2871,6 +2912,26 @@ export interface operations {
         responses: {
             200: components["responses"]["ModelCatalogResponse"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    refreshProviderModels: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ProviderModelRefreshRequest"];
+        responses: {
+            200: components["responses"]["ProviderModelRefreshResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+            502: components["responses"]["ErrorResponse"];
         };
     };
     getReadiness: {

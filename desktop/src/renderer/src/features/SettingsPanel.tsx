@@ -16,6 +16,7 @@ import type {
   RoutedRequest,
   SessionSummary,
   Settings,
+  ModelCatalogue,
   DiagnosticsSnapshot,
   UpdateState,
 } from '../../../shared/ipc';
@@ -42,7 +43,8 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
   const [addingRoot, setAddingRoot] = useState(false);
   const [removingRoot, setRemovingRoot] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
-  const [rechecking, setRechecking] = useState(false);
+  const [refreshingProviders, setRefreshingProviders] = useState<Set<string>>(() => new Set());
+  const [modelCatalogue, setModelCatalogue] = useState<ModelCatalogue | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [showInstallNowPrompt, setShowInstallNowPrompt] = useState(false);
@@ -236,17 +238,23 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
     }
   }, []);
 
-  const handleRecheckProvider = useCallback(async () => {
+  const handleRecheckProvider = useCallback(async (provider: string) => {
     try {
-      setRechecking(true);
-      await window.agentico.refreshReadiness();
-      refresh();
+      setRefreshingProviders((current) => new Set(current).add(provider));
+      const result = await window.agentico.refreshProviderModels(provider);
+      setReadiness(result.readiness);
+      setModelCatalogue(result.catalogue);
+      setError(null);
     } catch (e: unknown) {
       setError(parseIpcError(e).message);
     } finally {
-      setRechecking(false);
+      setRefreshingProviders((current) => {
+        const next = new Set(current);
+        next.delete(provider);
+        return next;
+      });
     }
-  }, [refresh]);
+  }, []);
 
   const handlePickRuntimePath = useCallback(async () => {
     try {
@@ -465,7 +473,7 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
           type="button"
           className="setup-wizard__action"
           onClick={() => void handleAddRoot()}
-          disabled={addingRoot || rechecking}
+          disabled={addingRoot || refreshingProviders.size > 0}
         >
           {addingRoot ? 'Adding…' : 'Add workspace root'}
         </button>
@@ -474,8 +482,8 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
       <section className="settings-panel__section" aria-label="Provider readiness">
         <h2 className="settings-panel__section-title">Providers</h2>
         <p className="settings-panel__section-desc">
-          Provider readiness determines which workflow actions are available. Unready providers show
-          a cause and a recheck action.
+          Provider readiness determines which workflow actions are available. Recheck a provider to
+          refresh its readiness and available models.
         </p>
         {providers.length === 0 ? (
           <p className="settings-panel__provider-empty">No providers registered.</p>
@@ -506,16 +514,14 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
                 {p.installed && p.version && (
                   <p className="settings-panel__provider-version">v{p.version}</p>
                 )}
-                {!p.ready && (
-                  <button
-                    type="button"
-                    className="setup-wizard__action"
-                    onClick={() => void handleRecheckProvider()}
-                    disabled={rechecking}
-                  >
-                    {rechecking ? 'Rechecking…' : 'Recheck'}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="setup-wizard__action"
+                  onClick={() => void handleRecheckProvider(p.name)}
+                  disabled={refreshingProviders.has(p.name)}
+                >
+                  {refreshingProviders.has(p.name) ? 'Rechecking…' : 'Recheck'}
+                </button>
               </li>
             ))}
           </ul>
@@ -782,7 +788,7 @@ export function SettingsPanel({ routeRequest = null }: { routeRequest?: RoutedRe
           Default models per phase, inquireness, and gates for new work. Features can override each
           setting in their own configuration.
         </p>
-        <WorkspaceDefaultsPanel />
+        <WorkspaceDefaultsPanel catalogue={modelCatalogue} />
       </section>
 
       {showPrompt && hasPendingRestart && !restarting && (

@@ -139,11 +139,36 @@ function diffLineKind(line: string): DiffLineKind {
   return 'context';
 }
 
+function isCreateOperation(operation: string | undefined): boolean {
+  switch (operation?.trim().toLocaleLowerCase()) {
+    case 'add':
+    case 'create':
+    case 'write':
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isSyntheticReplacement(lines: string[]): boolean {
+  return (
+    lines.some((line) => line.trim() !== '') &&
+    lines.every((line) => line.startsWith('+') || line.startsWith('-'))
+  );
+}
+
 function visibleDiff(change: FileChange): string[] {
   const detail = change.detail?.trim();
   if (detail === undefined || detail === '') return [];
   if (/^Captured from (?:tool usage|tool activity|provider file change)\.$/.test(detail)) return [];
   const lines = detail.split('\n');
+  if (
+    change.hasDiffPatch !== true &&
+    isCreateOperation(change.operation) &&
+    !isSyntheticReplacement(lines)
+  ) {
+    return lines.map((line) => `+ ${line}`);
+  }
   const looksLikeDiff =
     change.hasDiffPatch === true ||
     lines.some((line) => line.startsWith('+') || line.startsWith('-') || line.startsWith('@@'));

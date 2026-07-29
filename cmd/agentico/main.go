@@ -828,6 +828,21 @@ func discoverModelCatalog(ctx context.Context, discoverer llm.CatalogDiscoverer,
 	return models, nil
 }
 
+func persistRefreshedProviderModelCatalog(cacheRoot string, provider llm.LLMProvider, models []llm.ModelInfo) error {
+	if cacheRoot == "" {
+		return nil
+	}
+	rawVersion, err := provider.VersionInfo()
+	if err != nil {
+		return nil
+	}
+	version, err := clirun.ParseVersionOutput([]byte(rawVersion))
+	if err != nil || !cacheableVersion(version) {
+		return nil
+	}
+	return saveProviderCatalogCache(cacheRoot, provider.Name(), version, models)
+}
+
 func showProviderStartupNotices(w io.Writer, notices []string, delay time.Duration) {
 	if len(notices) == 0 {
 		return
@@ -2882,6 +2897,9 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			reviewer:        &git.ReviewCommentAdapter{},
 		},
 		RequestShutdown: requestShutdown,
+		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
+			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
+		},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)

@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -723,6 +724,13 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
+	resp := h.modelCatalogSnapshot()
+	revision := revisionForAny(resp)
+	resp.Meta = h.responseMeta(revision)
+	h.writeRevisionedJSON(w, r, revision, resp)
+}
+
+func (h *apiHandler) modelCatalogSnapshot() ModelCatalogResponse {
 	resp := ModelCatalogResponse{
 		APIVersion:          APIVersion,
 		ProviderModels:      map[string][]ModelDTO{},
@@ -750,9 +758,77 @@ func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) 
 			resp.PhaseProviderModels[string(role)] = h.registry.EligibleModelsForPhase(role)
 		}
 	}
+	return resp
+}
+
+func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if !h.requireTrustedMutation(w, r) {
+		return
+	}
+	var req ProviderModelRefreshRequest
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	if len(req.Provider) > 100 || !validEntityID(req.Provider) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid provider name", nil)
+		return
+	}
+	if h.registry == nil || h.registry.ByName(req.Provider) == nil {
+		writeAPIError(w, http.StatusNotFound, "provider_not_found", "provider is not registered", nil)
+		return
+	}
+
+	h.providerRefreshMu.Lock()
+	defer h.providerRefreshMu.Unlock()
+
+	// Ensure a complete cached snapshot exists before replacing one entry.
+	h.providerReadinessStatuses(r.Context(), false)
+	status, _ := h.refreshProviderReadiness(r.Context(), req.Provider)
+	if status.Ready {
+		provider := h.registry.ByName(req.Provider)
+		discoverer, canDiscover := provider.(llm.CatalogDiscoverer)
+		enricher, canEnrich := provider.(llm.CatalogEnricher)
+		if !canDiscover || !canEnrich {
+			writeAPIError(w, http.StatusConflict, "provider_model_refresh_unsupported", "provider does not support model refresh", nil)
+			return
+		}
+		discoveryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		models, err := discoverer.DiscoverModelCatalog(discoveryCtx)
+		cancel()
+		if err != nil {
+			writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider model refresh failed", nil)
+			return
+		}
+		if len(models) == 0 {
+			writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider returned no models", nil)
+			return
+		}
+		if h.persistProviderModels != nil {
+			if err := h.persistProviderModels(provider, models); err != nil {
+				writeAPIError(w, http.StatusBadGateway, "provider_model_refresh_failed", "provider model catalog could not be persisted", nil)
+				return
+			}
+		}
+		enricher.SetModelCatalog(models)
+	}
+
+	readiness := h.readinessSnapshot(r.Context(), false)
+	readinessRevision := revisionForAny(readiness)
+	readiness.Meta = h.responseMeta(readinessRevision)
+	catalog := h.modelCatalogSnapshot()
+	catalogRevision := revisionForAny(catalog)
+	catalog.Meta = h.responseMeta(catalogRevision)
+	resp := ProviderModelRefreshResponse{
+		APIVersion: APIVersion,
+		Readiness:  readiness,
+		Catalog:    catalog,
+	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {

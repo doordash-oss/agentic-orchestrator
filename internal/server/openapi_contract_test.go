@@ -277,6 +277,8 @@ func topLevelPatternForPath(path string) string {
 		return apiPathConfigRuntime
 	case path == apiPathCatalogModels:
 		return apiPathCatalogModels
+	case path == apiPathCatalogRefresh:
+		return apiPathCatalogRefresh
 	case path == apiPathReadiness:
 		return apiPathReadiness
 	case path == apiPathReadinessRefresh:
@@ -361,6 +363,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: "patch", path: apiPathConfigRuntime, mutation: true},
 		{method: "put", path: apiPathConfigRuntime, mutation: true},
 		{method: httpMethodGet, path: apiPathCatalogModels},
+		{method: httpMethodPost, path: apiPathCatalogRefresh, mutation: true},
 		{method: httpMethodGet, path: apiPathReadiness},
 		{method: httpMethodPost, path: apiPathReadinessRefresh, mutation: true},
 		{method: httpMethodPost, path: apiPathWorkspaceRepositoriesInit, mutation: true},

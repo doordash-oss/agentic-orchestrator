@@ -51,12 +51,12 @@ export class SetupService {
 
   async getReadiness(): Promise<ReadinessSnapshot> {
     const body = await this.api('/api/v1/readiness');
-    return toSnapshot(validateWithSchema(body, ReadinessResponseSchema));
+    return toReadinessSnapshot(validateWithSchema(body, ReadinessResponseSchema));
   }
 
   async refreshReadiness(): Promise<ReadinessSnapshot> {
     const body = await this.api('/api/v1/readiness/refresh', { method: 'POST', body: {} });
-    return toSnapshot(validateWithSchema(body, ReadinessResponseSchema));
+    return toReadinessSnapshot(validateWithSchema(body, ReadinessResponseSchema));
   }
 
   async pickWorkspaceDirectory(): Promise<PickedDirectory> {
@@ -180,7 +180,7 @@ export class SetupService {
 }
 
 /** Maps the validated server readiness response to the renderer-facing shape. */
-function toSnapshot(server: ReadinessResponse): ReadinessSnapshot {
+export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapshot {
   return {
     ready: server.ready,
     ...(server.probed_at === undefined ? {} : { probedAt: server.probed_at }),

@@ -219,6 +219,7 @@ export interface AgenticoMock {
     getWorkspaceDefaults: ReturnType<typeof vi.fn>;
     updateWorkspaceDefaults: ReturnType<typeof vi.fn>;
     getModelCatalogue: ReturnType<typeof vi.fn>;
+    refreshProviderModels: ReturnType<typeof vi.fn>;
     listRuns: ReturnType<typeof vi.fn>;
     getRun: ReturnType<typeof vi.fn>;
     listRunSessions: ReturnType<typeof vi.fn>;
@@ -412,6 +413,17 @@ export function installAgenticoMock(
         providerModels: {},
         phaseDefaults: {},
         phaseProviderModels: {},
+      }),
+    ),
+    refreshProviderModels: vi.fn(() =>
+      Promise.resolve({
+        readiness,
+        catalogue: {
+          providerOrder: [],
+          providerModels: {},
+          phaseDefaults: {},
+          phaseProviderModels: {},
+        },
       }),
     ),
     listRuns: vi.fn(() =>

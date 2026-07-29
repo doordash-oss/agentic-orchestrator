@@ -52,6 +52,7 @@ type apiHandler struct {
 	broker                *eventBroker
 	mutations             MutationTarget
 	requestShutdown       func()
+	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
 	initGitRepository     func(path string) error
 
@@ -64,6 +65,7 @@ type apiHandler struct {
 	readinessMu       sync.Mutex
 	providerReadiness []ProviderReadiness
 	readinessProbedAt time.Time
+	providerRefreshMu sync.Mutex
 	creationMu        sync.Mutex
 	creationResults   map[string]creationResult
 }
@@ -103,6 +105,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		broker:                newEventBroker(opts.Events, opts.DomainEvents),
 		mutations:             opts.Mutations,
 		requestShutdown:       opts.RequestShutdown,
+		persistProviderModels: opts.PersistProviderModelCatalog,
 		disableHostValidation: opts.DisableHostValidation,
 		initGitRepository:     opts.InitGitRepository,
 		reviewSessionLocks:    newReviewSessionLockSet(),
@@ -126,6 +129,7 @@ const (
 	apiPathFeatures         = "/api/v1/features"
 	apiPathConfigRuntime    = "/api/v1/config/runtime"
 	apiPathCatalogModels    = "/api/v1/catalog/models"
+	apiPathCatalogRefresh   = "/api/v1/catalog/models/refresh"
 	apiPathReadiness        = "/api/v1/readiness"
 	apiPathReadinessRefresh = "/api/v1/readiness/refresh"
 	apiPathPrompts          = "/api/v1/prompts"
@@ -161,6 +165,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathFeatures + "/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
+	{apiPathCatalogRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleProviderModelRefreshRoute }},
 	{apiPathReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleReadiness) }},
 	{apiPathReadinessRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleReadinessRefreshRoute }},
 	{apiPathWorkspaceRepositoriesInit, func(h *apiHandler) http.HandlerFunc { return h.handleWorkspaceRepositoryInitRoute }},

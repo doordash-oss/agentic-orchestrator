@@ -79,6 +79,7 @@ export const IPC_CHANNELS = {
   configDefaultsGet: 'agentico:config:defaults-get',
   configDefaultsUpdate: 'agentico:config:defaults-update',
   configModelCatalogue: 'agentico:config:model-catalogue',
+  configProviderModelsRefresh: 'agentico:config:provider-models-refresh',
   runsList: 'agentico:runs:list',
   runsGet: 'agentico:runs:get',
   runSessionsList: 'agentico:runs:sessions-list',
@@ -2273,6 +2274,18 @@ export const ModelCatalogueSchema = z.strictObject({
 });
 export type ModelCatalogue = z.output<typeof ModelCatalogueSchema>;
 
+export const ProviderNameSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[a-zA-Z0-9._-]+$/);
+
+export const ProviderModelRefreshResultSchema = z.strictObject({
+  readiness: ReadinessSnapshotSchema,
+  catalogue: ModelCatalogueSchema,
+});
+export type ProviderModelRefreshResult = z.output<typeof ProviderModelRefreshResultSchema>;
+
 // --- Per-channel contracts ---------------------------------------------------
 
 export interface IpcContract {
@@ -2484,6 +2497,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([]),
     response: ModelCatalogueSchema,
   },
+  [IPC_CHANNELS.configProviderModelsRefresh]: {
+    request: z.tuple([ProviderNameSchema]),
+    response: ProviderModelRefreshResultSchema,
+  },
   [IPC_CHANNELS.runsList]: {
     request: z.tuple([RunListRequestSchema]),
     response: RunListResultSchema,
@@ -2676,6 +2693,7 @@ export interface AgenticoApi {
   getWorkspaceDefaults(): Promise<WorkspaceDefaults>;
   updateWorkspaceDefaults(defaults: WorkspaceDefaults): Promise<WorkspaceDefaults>;
   getModelCatalogue(): Promise<ModelCatalogue>;
+  refreshProviderModels(provider: string): Promise<ProviderModelRefreshResult>;
   listRuns(request: RunListRequest): Promise<RunListResult>;
   getRun(request: RunGetRequest): Promise<RunDetailView>;
   listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;

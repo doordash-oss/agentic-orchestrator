@@ -71,6 +71,7 @@ describe('preload surface', () => {
         'getWorkspaceDefaults',
         'updateWorkspaceDefaults',
         'getModelCatalogue',
+        'refreshProviderModels',
         'refreshReadiness',
         'resolveGate',
         'retryConnection',
@@ -170,6 +171,36 @@ describe('preload surface', () => {
     };
     invoke.mockResolvedValueOnce({ unexpected: true });
     await expect(api.getSettings()).rejects.toThrow(/E_IPC_PROTOCOL/);
+  });
+
+  it('forwards provider-scoped model refreshes over the dedicated channel', async () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      refreshProviderModels(provider: string): Promise<unknown>;
+    };
+    invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        readiness: {
+          ready: true,
+          providers: [],
+          models: { available: true },
+          configuration: { valid: true },
+          workspaceRoots: [],
+          repositories: [],
+          issues: [],
+        },
+        catalogue: {
+          providerOrder: [],
+          providerModels: {},
+          phaseDefaults: {},
+          phaseProviderModels: {},
+        },
+      },
+    });
+
+    await api.refreshProviderModels('claude');
+
+    expect(invoke).toHaveBeenCalledWith('agentico:config:provider-models-refresh', 'claude');
   });
 
   it('validates pushed connection events and supports unsubscribe', () => {

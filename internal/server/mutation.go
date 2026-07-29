@@ -523,6 +523,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathReadinessRefresh:
 		return []string{http.MethodPost}, true
+	case apiPathCatalogRefresh:
+		return []string{http.MethodPost}, true
 	case apiPathWorkspaceRepositoriesInit:
 		return []string{http.MethodPost}, true
 	case apiPathShutdown:

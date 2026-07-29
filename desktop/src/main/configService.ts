@@ -6,6 +6,7 @@
  * paths or sees snake_case server shapes.
  */
 import { z } from 'zod';
+import { ReadinessResponseSchema } from '../shared/api/parse';
 import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import {
   FeatureConfigUpdateRequestSchema,
@@ -18,9 +19,11 @@ import {
   type ModelCatalogue,
   type PhaseEffort,
   type PhaseModels,
+  type ProviderModelRefreshResult,
   type WorkspaceDefaults,
 } from '../shared/ipc';
 import { serverRequest, type ServerTransport } from './serverClient';
+import { toReadinessSnapshot } from './setup';
 
 const REMEDIES = {
   remedyByCode: {
@@ -108,6 +111,12 @@ const ModelCatalogResponseSchema = z.object({
   provider_models: z.record(z.string(), z.array(ServerModelInfoSchema)).optional(),
   phase_defaults: ServerModelsSchema.optional(),
   phase_provider_models: z.record(z.string(), z.record(z.string(), z.array(z.string()))).optional(),
+});
+
+const ProviderModelRefreshResponseSchema = z.object({
+  api_version: z.string(),
+  readiness: ReadinessResponseSchema,
+  catalog: ModelCatalogResponseSchema,
 });
 
 const ActionResponseSchema = z.object({ api_version: z.string() });
@@ -328,35 +337,55 @@ export class ConfigService {
     const body = await serverRequest(this.transport, '/api/v1/catalog/models', undefined, REMEDIES);
     const parsed = ModelCatalogResponseSchema.safeParse(body);
     if (!parsed.success) throw new Error('E_MODEL_CATALOGUE: invalid server response');
+    return toModelCatalogue(parsed.data);
+  }
+
+  async refreshProviderModels(provider: string): Promise<ProviderModelRefreshResult> {
+    const body = await serverRequest(
+      this.transport,
+      '/api/v1/catalog/models/refresh',
+      { method: 'POST', body: { provider } },
+      REMEDIES,
+    );
+    const parsed = ProviderModelRefreshResponseSchema.safeParse(body);
+    if (!parsed.success) throw new Error('E_PROVIDER_MODEL_REFRESH: invalid server response');
     assertCompatibleApiVersion(parsed.data.api_version);
-    const providerModels: ModelCatalogue['providerModels'] = {};
-    for (const [provider, models] of Object.entries(parsed.data.provider_models ?? {})) {
-      providerModels[provider] = models.map((m) => ({
-        id: m.id,
-        ...(m.display_name === undefined || m.display_name === ''
-          ? {}
-          : { displayName: m.display_name }),
-        ...(m.aliases === undefined
-          ? {}
-          : { aliases: m.aliases.filter((alias) => alias.trim() !== '') }),
-        ...(m.category === undefined || m.category === '' ? {} : { category: m.category }),
-        ...(m.context_window === undefined || m.context_window <= 0
-          ? {}
-          : { contextWindow: m.context_window }),
-        ...(m.effort_capabilities === undefined
-          ? {}
-          : {
-              effortCapabilities: m.effort_capabilities.filter((value): value is EffortLevel =>
-                EFFORT_LEVELS.has(value as EffortLevel),
-              ),
-            }),
-      }));
-    }
     return {
-      providerOrder: parsed.data.provider_order ?? [],
-      providerModels,
-      phaseDefaults: toPhaseModels(parsed.data.phase_defaults ?? {}),
-      phaseProviderModels: parsed.data.phase_provider_models ?? {},
+      readiness: toReadinessSnapshot(parsed.data.readiness),
+      catalogue: toModelCatalogue(parsed.data.catalog),
     };
   }
+}
+
+function toModelCatalogue(data: z.output<typeof ModelCatalogResponseSchema>): ModelCatalogue {
+  assertCompatibleApiVersion(data.api_version);
+  const providerModels: ModelCatalogue['providerModels'] = {};
+  for (const [provider, models] of Object.entries(data.provider_models ?? {})) {
+    providerModels[provider] = models.map((m) => ({
+      id: m.id,
+      ...(m.display_name === undefined || m.display_name === ''
+        ? {}
+        : { displayName: m.display_name }),
+      ...(m.aliases === undefined
+        ? {}
+        : { aliases: m.aliases.filter((alias) => alias.trim() !== '') }),
+      ...(m.category === undefined || m.category === '' ? {} : { category: m.category }),
+      ...(m.context_window === undefined || m.context_window <= 0
+        ? {}
+        : { contextWindow: m.context_window }),
+      ...(m.effort_capabilities === undefined
+        ? {}
+        : {
+            effortCapabilities: m.effort_capabilities.filter((value): value is EffortLevel =>
+              EFFORT_LEVELS.has(value as EffortLevel),
+            ),
+          }),
+    }));
+  }
+  return {
+    providerOrder: data.provider_order ?? [],
+    providerModels,
+    phaseDefaults: toPhaseModels(data.phase_defaults ?? {}),
+    phaseProviderModels: data.phase_provider_models ?? {},
+  };
 }

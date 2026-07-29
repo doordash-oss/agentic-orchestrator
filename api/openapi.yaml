@@ -510,6 +510,31 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/catalog/models/refresh:
+    post:
+      operationId: refreshProviderModels
+      summary: Re-probe one provider and refresh its model catalog.
+      description: >-
+        Re-runs readiness for the named provider and, when ready, discovers and
+        atomically installs only that provider's current model catalog.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/ProviderModelRefreshRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ProviderModelRefreshResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/readiness:
     get:
       operationId: getReadiness
@@ -980,6 +1005,12 @@ components:
           schema:
             type: object
             additionalProperties: true
+    ProviderModelRefreshRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProviderModelRefreshRequest"
 
   responses:
     HealthResponse:
@@ -1031,6 +1062,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ModelCatalogResponse"
+    ProviderModelRefreshResponse:
+      description: Refreshed provider readiness and model catalog.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProviderModelRefreshResponse"
     PromptSnapshotResponse:
       description: Pending prompt snapshot.
       content:
@@ -1763,6 +1800,26 @@ components:
                   type: array
                   items:
                     type: string
+    ProviderModelRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: "^[a-zA-Z0-9._-]+$"
+    ProviderModelRefreshResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [readiness, catalog]
+          properties:
+            readiness:
+              $ref: "#/components/schemas/ReadinessResponse"
+            catalog:
+              $ref: "#/components/schemas/ModelCatalogResponse"
     PromptSnapshotResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

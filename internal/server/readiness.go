@@ -150,6 +150,54 @@ func (h *apiHandler) providerReadinessStatuses(ctx context.Context, force bool) 
 	return append([]ProviderReadiness(nil), probes...), h.readinessProbedAt
 }
 
+// refreshProviderReadiness re-probes one named provider while preserving the
+// cached status of every other provider. Callers initialize the cache through
+// providerReadinessStatuses before invoking it.
+func (h *apiHandler) refreshProviderReadiness(ctx context.Context, providerName string) (ProviderReadiness, bool) {
+	if h.registry == nil {
+		return ProviderReadiness{}, false
+	}
+	provider := h.registry.ByName(providerName)
+	if provider == nil {
+		return ProviderReadiness{}, false
+	}
+
+	h.readinessMu.Lock()
+	defer h.readinessMu.Unlock()
+
+	refreshed := probeProviderReadiness(ctx, provider)
+	probes := append([]ProviderReadiness(nil), h.providerReadiness...)
+	replaced := false
+	for i := range probes {
+		if probes[i].Name == providerName {
+			probes[i] = refreshed
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		probes = append(probes, refreshed)
+	}
+
+	changed := !reflect.DeepEqual(probes, h.providerReadiness)
+	h.providerReadiness = probes
+	h.readinessProbedAt = time.Now().UTC()
+
+	ready := make([]llm.LLMProvider, 0, len(probes))
+	for _, status := range probes {
+		if status.Ready {
+			if candidate := h.registry.ByName(status.Name); candidate != nil {
+				ready = append(ready, candidate)
+			}
+		}
+	}
+	h.registry.RestrictToProviders(ready)
+	if changed && h.broker != nil {
+		h.broker.publish(snapshotRequiredEventDTO(sseEventLifecycleUpdated, ResourceDTO{Type: resourceTypeRuntime}))
+	}
+	return refreshed, true
+}
+
 // probeProviderReadiness classifies one provider against the readiness
 // taxonomy: missing executable, unsupported version, unauthenticated, or
 // ready. Detail/remedy text is bounded and never includes credentials — the

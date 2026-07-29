@@ -178,4 +178,56 @@ describe('ConfigService effort routing', () => {
       'max',
     ]);
   });
+
+  it('refreshes one provider and converts the combined readiness and catalogue response', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        readiness: {
+          api_version: 'v1',
+          ready: true,
+          providers: [
+            {
+              name: 'claude',
+              installed: true,
+              version: '2.1.220',
+              ready: true,
+            },
+          ],
+          models: { available: true, models: ['claude-new'] },
+          configuration: { valid: true },
+          workspace: { roots: [], repositories: [] },
+          issues: [],
+        },
+        catalog: {
+          api_version: 'v1',
+          provider_order: ['claude'],
+          provider_models: {
+            claude: [{ id: 'claude-new', display_name: 'Claude New', category: 'capable' }],
+          },
+          phase_defaults: { implementation: 'claude-new' },
+          phase_provider_models: { implementation: { claude: ['claude-new'] } },
+        },
+      },
+    }));
+
+    const result = await service.refreshProviderModels('claude');
+
+    expect(calls).toEqual([
+      {
+        path: '/api/v1/catalog/models/refresh',
+        init: { method: 'POST', body: { provider: 'claude' } },
+      },
+    ]);
+    expect(result.readiness.providers[0]).toEqual({
+      name: 'claude',
+      installed: true,
+      version: '2.1.220',
+      ready: true,
+    });
+    expect(result.catalogue.providerModels.claude).toEqual([
+      { id: 'claude-new', displayName: 'Claude New', category: 'capable' },
+    ]);
+  });
 });

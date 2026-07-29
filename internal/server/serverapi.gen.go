@@ -418,6 +418,21 @@ func (e TrustedMutationHeader) Valid() bool {
 	}
 }
 
+// Defines values for RefreshProviderModelsParamsXAgenticoClient.
+const (
+	RefreshProviderModelsParamsXAgenticoClientLocal RefreshProviderModelsParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RefreshProviderModelsParamsXAgenticoClient enum.
+func (e RefreshProviderModelsParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RefreshProviderModelsParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PatchRuntimeConfigParamsXAgenticoClient.
 const (
 	PatchRuntimeConfigParamsXAgenticoClientLocal PatchRuntimeConfigParamsXAgenticoClient = "local"
@@ -846,13 +861,13 @@ func (e ShutdownRuntimeParamsXAgenticoClient) Valid() bool {
 
 // Defines values for InitWorkspaceRepositoryParamsXAgenticoClient.
 const (
-	InitWorkspaceRepositoryParamsXAgenticoClientLocal InitWorkspaceRepositoryParamsXAgenticoClient = "local"
+	Local InitWorkspaceRepositoryParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the InitWorkspaceRepositoryParamsXAgenticoClient enum.
 func (e InitWorkspaceRepositoryParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case InitWorkspaceRepositoryParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -1637,6 +1652,19 @@ type PromptSnapshotResponse struct {
 	HelpQueue        []HelpQueue         `json:"help_queue"`
 	Meta             ResponseMeta        `json:"meta,omitempty"`
 	NeedUserInputs   []NeedUserInputGate `json:"need_user_inputs"`
+}
+
+// ProviderModelRefreshRequest defines model for ProviderModelRefreshRequest.
+type ProviderModelRefreshRequest struct {
+	Provider string `json:"provider"`
+}
+
+// ProviderModelRefreshResponse defines model for ProviderModelRefreshResponse.
+type ProviderModelRefreshResponse struct {
+	APIVersion string               `json:"api_version"`
+	Catalog    ModelCatalogResponse `json:"catalog"`
+	Meta       ResponseMeta         `json:"meta,omitempty"`
+	Readiness  ReadinessResponse    `json:"readiness"`
 }
 
 // ProviderReadiness defines model for ProviderReadiness.
@@ -2598,6 +2626,15 @@ type bearerAuthContextKey string
 // sSEAccessTokenContextKey is the context key for sseAccessToken security scheme
 type sSEAccessTokenContextKey string
 
+// RefreshProviderModelsParams defines parameters for RefreshProviderModels.
+type RefreshProviderModelsParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RefreshProviderModelsParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RefreshProviderModelsParamsXAgenticoClient defines parameters for RefreshProviderModels.
+type RefreshProviderModelsParamsXAgenticoClient string
+
 // PatchRuntimeConfigJSONBody defines parameters for PatchRuntimeConfig.
 type PatchRuntimeConfigJSONBody map[string]interface{}
 
@@ -2885,6 +2922,9 @@ type InitWorkspaceRepositoryParams struct {
 
 // InitWorkspaceRepositoryParamsXAgenticoClient defines parameters for InitWorkspaceRepository.
 type InitWorkspaceRepositoryParamsXAgenticoClient string
+
+// RefreshProviderModelsJSONRequestBody defines body for RefreshProviderModels for application/json ContentType.
+type RefreshProviderModelsJSONRequestBody = ProviderModelRefreshRequest
 
 // PatchRuntimeConfigJSONRequestBody defines body for PatchRuntimeConfig for application/json ContentType.
 type PatchRuntimeConfigJSONRequestBody PatchRuntimeConfigJSONBody

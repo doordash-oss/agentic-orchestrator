@@ -210,6 +210,8 @@ const api: AgenticoApi = {
   updateWorkspaceDefaults: (defaults: WorkspaceDefaults) =>
     call(IPC_CHANNELS.configDefaultsUpdate, defaults),
   getModelCatalogue: () => call(IPC_CHANNELS.configModelCatalogue),
+  refreshProviderModels: (provider: string) =>
+    call(IPC_CHANNELS.configProviderModelsRefresh, provider),
   listRuns: (request: RunListRequest) => call(IPC_CHANNELS.runsList, request),
   getRun: (request: RunGetRequest) => call(IPC_CHANNELS.runsGet, request),
   listRunSessions: (request: RunGetRequest) => call(IPC_CHANNELS.runSessionsList, request),

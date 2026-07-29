@@ -780,8 +780,13 @@ const WORKSPACE_AUTOMATIC_REVIEW_OPTIONS = [
   { value: 'enabled', label: 'Enabled' },
 ] as const;
 
-export function WorkspaceDefaultsPanel() {
-  const catalogue = useModelCatalogue();
+export function WorkspaceDefaultsPanel({
+  catalogue: catalogueOverride,
+}: {
+  catalogue?: ModelCatalogue | null;
+} = {}) {
+  const loadedCatalogue = useModelCatalogue();
+  const catalogue = catalogueOverride ?? loadedCatalogue;
   const [state, setState] = useState<
     LoadState<{ baseline: WorkspaceDefaults; draft: WorkspaceDefaults }>
   >({ phase: 'loading' });

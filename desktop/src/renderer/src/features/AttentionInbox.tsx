@@ -12,7 +12,12 @@ import {
   ATTENTION_SUBMITTED_NOTICE,
   type AttentionActionResult,
   type AttentionItem,
+  type VerificationGateAction,
 } from '../../../shared/ipc';
+import {
+  hasStructuredVerificationDecision,
+  NeedUserInputVerificationDecision,
+} from './NeedUserInputVerificationDecision';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 
 interface QuestionAnswerDraft {
@@ -562,40 +567,72 @@ export function AttentionDetail({
 
   if (item.kind === 'gate') {
     const gateDraft = gateDraftFor(item, drafts.gates[detailKey]);
-    const complete = item.questions.every((q) => (gateDraft[q.index] ?? '').trim() !== '');
+    const structuredVerification = hasStructuredVerificationDecision(item);
+    const verificationQuestion = structuredVerification ? item.questions[0] : undefined;
+    const selectedVerificationAction =
+      verificationQuestion === undefined
+        ? ''
+        : ((gateDraft[verificationQuestion.index] ?? '') as VerificationGateAction | '');
+    const complete = structuredVerification
+      ? selectedVerificationAction === 'RETRY_AFTER_AUTH' || selectedVerificationAction === 'WAIVE'
+      : item.questions.every((q) => (gateDraft[q.index] ?? '').trim() !== '');
     return (
       <div className="attention-detail">
         <AttentionContextMeta item={item} />
         <p className="attention-detail__summary">{item.summary ?? 'Input required'}</p>
-        {item.questions.map((question) => (
-          <label key={question.index} className="attention-gate-question">
-            <span>
-              {question.index}. {question.prompt}
-            </span>
-            <textarea
-              value={gateDraft[question.index] ?? ''}
-              onChange={(event) => {
-                const value = event.target.value;
-                setDrafts((current) => ({
-                  ...current,
-                  gates: {
-                    ...current.gates,
-                    [detailKey]: {
-                      ...gateDraftFor(item, current.gates[detailKey]),
-                      [question.index]: value,
+        {structuredVerification && verificationQuestion !== undefined ? (
+          <NeedUserInputVerificationDecision
+            item={item}
+            selectedAction={selectedVerificationAction}
+            idPrefix={detailKey}
+            onSelect={(action) => {
+              const nextDraft = {
+                ...gateDraft,
+                [verificationQuestion.index]: action,
+              };
+              setDrafts((current) => ({
+                ...current,
+                gates: {
+                  ...current.gates,
+                  [detailKey]: nextDraft,
+                },
+              }));
+              void saveDraft?.(() => saveGateDraftForItem(item, nextDraft), {
+                successNotice: 'Draft saved.',
+              }).catch(() => undefined);
+            }}
+          />
+        ) : (
+          item.questions.map((question) => (
+            <label key={question.index} className="attention-gate-question">
+              <span>
+                {question.index}. {question.prompt}
+              </span>
+              <textarea
+                value={gateDraft[question.index] ?? ''}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setDrafts((current) => ({
+                    ...current,
+                    gates: {
+                      ...current.gates,
+                      [detailKey]: {
+                        ...gateDraftFor(item, current.gates[detailKey]),
+                        [question.index]: value,
+                      },
                     },
-                  },
-                }));
-              }}
-              onBlur={() => {
-                void saveDraft?.(() => saveGateDraftForItem(item, gateDraft), {
-                  successNotice: 'Draft saved.',
-                }).catch(() => undefined);
-              }}
-            />
-          </label>
-        ))}
-        {!complete ? (
+                  }));
+                }}
+                onBlur={() => {
+                  void saveDraft?.(() => saveGateDraftForItem(item, gateDraft), {
+                    successNotice: 'Draft saved.',
+                  }).catch(() => undefined);
+                }}
+              />
+            </label>
+          ))
+        )}
+        {!structuredVerification && !complete ? (
           <p className="attention-detail__hint" id={`${detailKey}-resume-hint`}>
             Answer every question before resuming.
           </p>
@@ -604,7 +641,9 @@ export function AttentionDetail({
           <button
             className="attention-button attention-button--primary"
             disabled={busy || !complete}
-            aria-describedby={!complete ? `${detailKey}-resume-hint` : undefined}
+            aria-describedby={
+              !structuredVerification && !complete ? `${detailKey}-resume-hint` : undefined
+            }
             onClick={() =>
               submit(async () => {
                 if (saveDraft !== undefined) {
@@ -621,7 +660,11 @@ export function AttentionDetail({
               })
             }
           >
-            Resume
+            {structuredVerification
+              ? selectedVerificationAction === 'WAIVE'
+                ? 'Waive and resume'
+                : 'Retry verification'
+              : 'Resume'}
           </button>
           <button
             ref={abortButtonRef}

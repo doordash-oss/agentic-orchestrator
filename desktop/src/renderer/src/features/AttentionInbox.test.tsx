@@ -1,9 +1,16 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem } from '../../../shared/ipc';
-import { AttentionInbox, emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
+import {
+  AttentionDetail,
+  AttentionInbox,
+  emptyAttentionDrafts,
+  type AttentionAction,
+  type AttentionDrafts,
+} from './AttentionInbox';
+import { installAgenticoMock } from '../test/agenticoMock';
 
 afterEach(cleanup);
 
@@ -27,6 +34,31 @@ const reviewItem: AttentionItem = {
   phase: 'plan',
 };
 
+const gateItem: Extract<AttentionItem, { kind: 'gate' }> = {
+  kind: 'gate',
+  id: 'verification-gate-1',
+  featureId: 'abcd1234ef567890',
+  waitingSince: '2026-07-29T00:00:00Z',
+  repoName: 'repo-a',
+  cycleType: 'review-comments',
+  summary: 'Verification could not finish.',
+  questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
+  verification: {
+    blockers: [
+      {
+        itemId: 'deploy',
+        name: 'Deployment smoke test',
+        repoName: 'repo-a',
+        command: 'make deploy-smoke',
+        reason: 'missing declared capability "Okta session"',
+        capabilities: ['Okta session'],
+        remediation: 'Make Okta session available, then retry verification.',
+      },
+    ],
+    allowedActions: ['WAIVE', 'RETRY_AFTER_AUTH'],
+  },
+};
+
 function Harness({ items, onJump }: { items: AttentionItem[]; onJump: ReturnType<typeof vi.fn> }) {
   const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   return (
@@ -37,6 +69,29 @@ function Harness({ items, onJump }: { items: AttentionItem[]; onJump: ReturnType
       drafts={drafts}
       setDrafts={setDrafts}
       onJump={onJump}
+    />
+  );
+}
+
+function GateDetailHarness({
+  item = gateItem,
+}: {
+  item?: Extract<AttentionItem, { kind: 'gate' }>;
+}): React.ReactElement {
+  const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+  const run = (action: AttentionAction): void => {
+    void action();
+  };
+  return (
+    <AttentionDetail
+      item={item}
+      busy={false}
+      submit={run}
+      saveDraft={async (action) => {
+        await action();
+      }}
+      drafts={drafts}
+      setDrafts={setDrafts}
     />
   );
 }
@@ -106,5 +161,84 @@ describe('AttentionInbox navigation', () => {
     expect(rows[1]).toHaveFocus();
     await user.keyboard('{ArrowUp}');
     expect(rows[0]).toHaveFocus();
+  });
+});
+
+describe('AttentionInbox gate detail', () => {
+  it('persists retry immediately and resumes through the exact cycle route', async () => {
+    const mock = installAgenticoMock();
+    mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
+    mock.api.resolveGate.mockResolvedValue({ result: 'resumed' });
+    const user = userEvent.setup();
+    render(<GateDetailHarness />);
+
+    expect(screen.getByRole('heading', { name: 'Deployment smoke test' })).toBeVisible();
+    expect(screen.getByText('missing declared capability "Okta session"')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retry verification' })).toBeDisabled();
+
+    await user.click(screen.getByRole('radio', { name: /retry verification/ }));
+    await waitFor(() =>
+      expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
+        featureId: gateItem.featureId,
+        repoName: 'repo-a',
+        cycleType: 'review-comments',
+        answers: { [gateItem.questions[0]!.prompt]: 'RETRY_AFTER_AUTH' },
+      }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Retry verification' }));
+    await waitFor(() =>
+      expect(mock.api.resolveGate).toHaveBeenCalledWith({
+        featureId: gateItem.featureId,
+        repoName: 'repo-a',
+        cycleType: 'review-comments',
+        decision: 'resume',
+      }),
+    );
+  });
+
+  it('uses the warning waiver label and preserves scoped abort routing', async () => {
+    const mock = installAgenticoMock();
+    mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
+    mock.api.resolveGate.mockResolvedValue({ result: 'aborted' });
+    const user = userEvent.setup();
+    render(<GateDetailHarness />);
+
+    await user.click(screen.getByRole('radio', { name: /Waive blocked checks/ }));
+    expect(screen.getByRole('button', { name: 'Waive and resume' })).toBeEnabled();
+    await waitFor(() =>
+      expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
+        featureId: gateItem.featureId,
+        repoName: 'repo-a',
+        cycleType: 'review-comments',
+        answers: { [gateItem.questions[0]!.prompt]: 'WAIVE' },
+      }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Abort gate' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm abort' }));
+    await waitFor(() =>
+      expect(mock.api.resolveGate).toHaveBeenCalledWith({
+        featureId: gateItem.featureId,
+        repoName: 'repo-a',
+        cycleType: 'review-comments',
+        decision: 'abort',
+      }),
+    );
+  });
+
+  it('keeps legacy gate textareas and the resume action', () => {
+    installAgenticoMock();
+    const legacyGate = {
+      ...gateItem,
+      id: 'legacy-gate-1',
+      questions: [{ index: 1, prompt: 'Deployment window?', answer: '' }],
+      verification: undefined,
+    };
+
+    render(<GateDetailHarness item={legacyGate} />);
+
+    expect(screen.getByLabelText(/Deployment window/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
   });
 });

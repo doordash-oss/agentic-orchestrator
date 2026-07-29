@@ -1,7 +1,11 @@
 import { useCallback, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import type { AttentionItem } from '../../../shared/ipc';
+import type { AttentionItem, VerificationGateAction } from '../../../shared/ipc';
 import { useModalDismiss } from '../components/useModalDismiss';
 import type { AttentionDrafts } from './AttentionInbox';
+import {
+  hasStructuredVerificationDecision,
+  NeedUserInputVerificationDecision,
+} from './NeedUserInputVerificationDecision';
 import { parseIpcError } from '../wizard/ipcError';
 
 export type AttentionGate = Extract<AttentionItem, { kind: 'gate' }>;
@@ -39,24 +43,33 @@ export function NeedUserInputModal({
   draftRef.current = draft;
   const answerLaterRef = useRef(onAnswerLater);
   answerLaterRef.current = onAnswerLater;
-  const complete = item.questions.every((question) => (draft[question.index] ?? '').trim() !== '');
+  const structuredVerification = hasStructuredVerificationDecision(item);
+  const verificationQuestion = structuredVerification ? item.questions[0] : undefined;
+  const selectedVerificationAction =
+    verificationQuestion === undefined
+      ? ''
+      : ((draft[verificationQuestion.index] ?? '') as VerificationGateAction | '');
+  const complete = structuredVerification
+    ? selectedVerificationAction === 'RETRY_AFTER_AUTH' || selectedVerificationAction === 'WAIVE'
+    : item.questions.every((question) => (draft[question.index] ?? '').trim() !== '');
 
-  const saveDraft = useCallback(async (): Promise<void> => {
-    const currentItem = itemRef.current;
-    const currentDraft = draftRef.current;
-    if (currentItem.questions.length === 0) return;
-    await window.agentico.saveGateDraft({
-      featureId: currentItem.featureId,
-      ...(currentItem.repoName === undefined ? {} : { repoName: currentItem.repoName }),
-      ...(currentItem.cycleType === undefined ? {} : { cycleType: currentItem.cycleType }),
-      answers: Object.fromEntries(
-        currentItem.questions.map((question) => [
-          question.prompt,
-          currentDraft[question.index] ?? '',
-        ]),
-      ),
-    });
-  }, []);
+  const saveDraft = useCallback(
+    async (currentItem = itemRef.current, currentDraft = draftRef.current): Promise<void> => {
+      if (currentItem.questions.length === 0) return;
+      await window.agentico.saveGateDraft({
+        featureId: currentItem.featureId,
+        ...(currentItem.repoName === undefined ? {} : { repoName: currentItem.repoName }),
+        ...(currentItem.cycleType === undefined ? {} : { cycleType: currentItem.cycleType }),
+        answers: Object.fromEntries(
+          currentItem.questions.map((question) => [
+            question.prompt,
+            currentDraft[question.index] ?? '',
+          ]),
+        ),
+      });
+    },
+    [],
+  );
 
   const answerLater = useCallback(() => {
     void saveDraft().catch(() => undefined);
@@ -98,43 +111,70 @@ export function NeedUserInputModal({
       >
         <header className="need-input-modal__header">
           <p className="post-workspace__eyebrow">Agent paused · Input required</p>
-          <h2 id={`${detailKey}-title`}>Agent needs your input</h2>
+          <h2 id={`${detailKey}-title`}>
+            {structuredVerification ? 'Verification needs your input' : 'Agent needs your input'}
+          </h2>
           <p>
-            {item.summary ??
-              'Answer the questions below, then resume the agent from the same checkpoint.'}
+            {structuredVerification
+              ? `${item.verification!.blockers.length} required check(s) could not run.`
+              : (item.summary ??
+                'Answer the questions below, then resume the agent from the same checkpoint.')}
           </p>
         </header>
 
         <div className="need-input-modal__questions">
-          {item.questions.map((question) => (
-            <label key={question.index} className="need-input-modal__question">
-              <span>
-                <small>Question {question.index}</small>
-                <strong>{question.prompt}</strong>
-              </span>
-              <textarea
-                autoFocus={question.index === item.questions[0]?.index}
-                value={draft[question.index] ?? ''}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setDrafts((current) => ({
-                    ...current,
-                    gates: {
-                      ...current.gates,
-                      [detailKey]: {
-                        ...draft,
-                        [question.index]: value,
+          {structuredVerification && verificationQuestion !== undefined ? (
+            <NeedUserInputVerificationDecision
+              item={item}
+              selectedAction={selectedVerificationAction}
+              idPrefix={detailKey}
+              onSelect={(action) => {
+                const nextDraft = {
+                  ...draft,
+                  [verificationQuestion.index]: action,
+                };
+                draftRef.current = nextDraft;
+                setDrafts((current) => ({
+                  ...current,
+                  gates: {
+                    ...current.gates,
+                    [detailKey]: nextDraft,
+                  },
+                }));
+                void saveDraft(item, nextDraft).catch(() => undefined);
+              }}
+            />
+          ) : (
+            item.questions.map((question) => (
+              <label key={question.index} className="need-input-modal__question">
+                <span>
+                  <small>Question {question.index}</small>
+                  <strong>{question.prompt}</strong>
+                </span>
+                <textarea
+                  autoFocus={question.index === item.questions[0]?.index}
+                  value={draft[question.index] ?? ''}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setDrafts((current) => ({
+                      ...current,
+                      gates: {
+                        ...current.gates,
+                        [detailKey]: {
+                          ...draft,
+                          [question.index]: value,
+                        },
                       },
-                    },
-                  }));
-                }}
-                onBlur={() => void saveDraft().catch(() => undefined)}
-              />
-            </label>
-          ))}
+                    }));
+                  }}
+                  onBlur={() => void saveDraft().catch(() => undefined)}
+                />
+              </label>
+            ))
+          )}
         </div>
 
-        {!complete ? (
+        {!structuredVerification && !complete ? (
           <p id={`${detailKey}-hint`} className="need-input-modal__hint">
             Answer every question before resuming.
           </p>
@@ -153,10 +193,18 @@ export function NeedUserInputModal({
             type="button"
             className="need-input-modal__primary"
             disabled={!complete || busy || submitting}
-            aria-describedby={!complete ? `${detailKey}-hint` : undefined}
+            aria-describedby={
+              !structuredVerification && !complete ? `${detailKey}-hint` : undefined
+            }
             onClick={() => void resume()}
           >
-            {submitting || busy ? 'Resuming…' : 'Resume agent'}
+            {submitting || busy
+              ? 'Resuming…'
+              : structuredVerification
+                ? selectedVerificationAction === 'WAIVE'
+                  ? 'Waive and resume'
+                  : 'Retry verification'
+                : 'Resume agent'}
           </button>
         </footer>
       </div>

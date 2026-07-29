@@ -287,9 +287,6 @@ const (
 	FailureProtocolViolation = "protocol_violation"
 	FailureInfrastructure    = "infrastructure"
 	FailureWorktreeSetup     = "worktree_setup"
-	// FailureNeedUserInput marks a feature failure caused by the user aborting
-	// a harness-created verification capability gate.
-	FailureNeedUserInput = "need_user_input"
 )
 
 type Status int

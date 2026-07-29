@@ -168,7 +168,7 @@ type OrchestratorResult struct {
 	PausedRepos []string
 	// NeedUserInputPath is the absolute path to the persisted gate artifact
 	// when FinalStatus == "need_user_input". The orchestrator stores this on
-	// Feature.PendingNeedUserInputPath so the resume/abort decision handler
+	// Feature.PendingNeedUserInputPath so the resume handler
 	// can read the questionnaire and answers.
 	NeedUserInputPath string
 	LastError         string

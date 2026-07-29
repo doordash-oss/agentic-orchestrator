@@ -2038,8 +2038,8 @@ components:
               $ref: "#/components/schemas/ReviewDecisionResponse"
             feature_config_update_response:
               $ref: "#/components/schemas/FeatureConfigUpdateResponse"
-            need_user_input_decision_response:
-              $ref: "#/components/schemas/NeedUserInputDecisionResponse"
+            need_user_input_resume_response:
+              $ref: "#/components/schemas/NeedUserInputResumeResponse"
             need_user_input_draft_response:
               $ref: "#/components/schemas/NeedUserInputDraftResponse"
             permission_answer_response:
@@ -2186,15 +2186,10 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-    NeedUserInputDecisionResponse:
+    NeedUserInputResumeResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [decision]
-          properties:
-            decision:
-              type: string
     NeedUserInputDraftResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"

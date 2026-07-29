@@ -328,8 +328,8 @@ func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req 
 	return out, err
 }
 
-func (c *Client) NeedUserInputDecision(ctx context.Context, featureID string, req NeedUserInputDecisionRequest) (NeedUserInputDecisionResponse, error) {
-	var out NeedUserInputDecisionResponse
+func (c *Client) ResumeNeedUserInput(ctx context.Context, featureID string, req NeedUserInputResumeRequest) (NeedUserInputResumeResponse, error) {
+	var out NeedUserInputResumeResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionNeedUserInput), nil, req, &out, true)
 	return out, err
 }

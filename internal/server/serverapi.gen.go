@@ -899,29 +899,29 @@ type ActionResponse struct {
 	FeatureRestartResponse      FeatureRestartResponse      `json:"feature_restart_response,omitempty"`
 
 	// FeatureSetupResponse Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state.
-	FeatureSetupResponse          FeatureSetupResponse          `json:"feature_setup_response,omitempty"`
-	FeatureStartResponse          FeatureStartResponse          `json:"feature_start_response,omitempty"`
-	FeatureStopResponse           FeatureStopResponse           `json:"feature_stop_response,omitempty"`
-	HelpSendResponse              HelpSendResponse              `json:"help_send_response,omitempty"`
-	MarkDoneResponse              MarkDoneResponse              `json:"mark_done_response,omitempty"`
-	MergeFeatureResponse          MergeFeatureResponse          `json:"merge_feature_response,omitempty"`
-	Meta                          ResponseMeta                  `json:"meta,omitempty"`
-	NeedUserInputDecisionResponse NeedUserInputDecisionResponse `json:"need_user_input_decision_response,omitempty"`
-	NeedUserInputDraftResponse    NeedUserInputDraftResponse    `json:"need_user_input_draft_response,omitempty"`
-	PermissionAnswerResponse      PermissionAnswerResponse      `json:"permission_answer_response,omitempty"`
-	PublishDescriptionResponse    PublishDescriptionResponse    `json:"publish_description_response,omitempty"`
-	PublishFeatureResponse        PublishFeatureResponse        `json:"publish_feature_response,omitempty"`
-	RebaseStartResponse           RebaseStartResponse           `json:"rebase_start_response,omitempty"`
-	RecoveryActionResponse        RecoveryActionResponse        `json:"recovery_action_response,omitempty"`
-	RefactorRestartResponse       RefactorRestartResponse       `json:"refactor_restart_response,omitempty"`
-	RefactorStartResponse         RefactorStartResponse         `json:"refactor_start_response,omitempty"`
-	RetryFeatureResponse          RetryFeatureResponse          `json:"retry_feature_response,omitempty"`
-	ReviewCommentsFetchResponse   ReviewCommentsFetchResponse   `json:"review_comments_fetch_response,omitempty"`
-	ReviewCommentsStartResponse   ReviewCommentsStartResponse   `json:"review_comments_start_response,omitempty"`
-	ReviewDecisionResponse        ReviewDecisionResponse        `json:"review_decision_response,omitempty"`
-	RewindFeatureResponse         RewindFeatureResponse         `json:"rewind_feature_response,omitempty"`
-	RuntimeConfigUpdateResponse   RuntimeConfigUpdateResponse   `json:"runtime_config_update_response,omitempty"`
-	ShutdownResponse              ShutdownResponse              `json:"shutdown_response,omitempty"`
+	FeatureSetupResponse        FeatureSetupResponse        `json:"feature_setup_response,omitempty"`
+	FeatureStartResponse        FeatureStartResponse        `json:"feature_start_response,omitempty"`
+	FeatureStopResponse         FeatureStopResponse         `json:"feature_stop_response,omitempty"`
+	HelpSendResponse            HelpSendResponse            `json:"help_send_response,omitempty"`
+	MarkDoneResponse            MarkDoneResponse            `json:"mark_done_response,omitempty"`
+	MergeFeatureResponse        MergeFeatureResponse        `json:"merge_feature_response,omitempty"`
+	Meta                        ResponseMeta                `json:"meta,omitempty"`
+	NeedUserInputDraftResponse  NeedUserInputDraftResponse  `json:"need_user_input_draft_response,omitempty"`
+	NeedUserInputResumeResponse NeedUserInputResumeResponse `json:"need_user_input_resume_response,omitempty"`
+	PermissionAnswerResponse    PermissionAnswerResponse    `json:"permission_answer_response,omitempty"`
+	PublishDescriptionResponse  PublishDescriptionResponse  `json:"publish_description_response,omitempty"`
+	PublishFeatureResponse      PublishFeatureResponse      `json:"publish_feature_response,omitempty"`
+	RebaseStartResponse         RebaseStartResponse         `json:"rebase_start_response,omitempty"`
+	RecoveryActionResponse      RecoveryActionResponse      `json:"recovery_action_response,omitempty"`
+	RefactorRestartResponse     RefactorRestartResponse     `json:"refactor_restart_response,omitempty"`
+	RefactorStartResponse       RefactorStartResponse       `json:"refactor_start_response,omitempty"`
+	RetryFeatureResponse        RetryFeatureResponse        `json:"retry_feature_response,omitempty"`
+	ReviewCommentsFetchResponse ReviewCommentsFetchResponse `json:"review_comments_fetch_response,omitempty"`
+	ReviewCommentsStartResponse ReviewCommentsStartResponse `json:"review_comments_start_response,omitempty"`
+	ReviewDecisionResponse      ReviewDecisionResponse      `json:"review_decision_response,omitempty"`
+	RewindFeatureResponse       RewindFeatureResponse       `json:"rewind_feature_response,omitempty"`
+	RuntimeConfigUpdateResponse RuntimeConfigUpdateResponse `json:"runtime_config_update_response,omitempty"`
+	ShutdownResponse            ShutdownResponse            `json:"shutdown_response,omitempty"`
 }
 
 // ActionResult defines model for ActionResult.
@@ -1510,15 +1510,6 @@ type ModelReadiness struct {
 	Models    []string        `json:"models,omitempty"`
 }
 
-// NeedUserInputDecisionResponse defines model for NeedUserInputDecisionResponse.
-type NeedUserInputDecisionResponse struct {
-	APIVersion string       `json:"api_version"`
-	Decision   string       `json:"decision"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-}
-
 // NeedUserInputDraftResponse defines model for NeedUserInputDraftResponse.
 type NeedUserInputDraftResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -1547,6 +1538,14 @@ type NeedUserInputQuestion struct {
 	Answer string `json:"answer,omitempty"`
 	Index  int    `json:"index,omitempty"`
 	Prompt string `json:"prompt,omitempty"`
+}
+
+// NeedUserInputResumeResponse defines model for NeedUserInputResumeResponse.
+type NeedUserInputResumeResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
 }
 
 // NeedUserInputVerification defines model for NeedUserInputVerification.

@@ -1116,7 +1116,7 @@ export interface components {
             feature_restart_response?: components["schemas"]["FeatureRestartResponse"];
             review_decision_response?: components["schemas"]["ReviewDecisionResponse"];
             feature_config_update_response?: components["schemas"]["FeatureConfigUpdateResponse"];
-            need_user_input_decision_response?: components["schemas"]["NeedUserInputDecisionResponse"];
+            need_user_input_resume_response?: components["schemas"]["NeedUserInputResumeResponse"];
             need_user_input_draft_response?: components["schemas"]["NeedUserInputDraftResponse"];
             permission_answer_response?: components["schemas"]["PermissionAnswerResponse"];
             ask_user_answer_response?: components["schemas"]["AskUserAnswerResponse"];
@@ -1178,9 +1178,7 @@ export interface components {
             decision: string;
         };
         FeatureConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
-        NeedUserInputDecisionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            decision: string;
-        };
+        NeedUserInputResumeResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         NeedUserInputDraftResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         PermissionAnswerResponse: components["schemas"]["ActionBaseResponse"] & {
             session_id: string;

@@ -1071,7 +1071,7 @@ func TestExecuteRecovery_Resume_NeedUserInputCycle_DoesNotRelaunch(t *testing.T)
 	}
 	for _, c := range lc.Calls {
 		if strings.HasPrefix(c.Method, "Start") {
-			t.Errorf("lifecycle %q was called; a need-user-input cycle must NOT relaunch — the gate decision contract resumes it after answers", c.Method)
+			t.Errorf("lifecycle %q was called; a need-user-input cycle must NOT relaunch — the gate resume contract resumes it after answers", c.Method)
 		}
 	}
 }

@@ -108,22 +108,20 @@ type PhaseCompletionInput struct {
 	MultiRepoResult *agent.OrchestratorResult
 }
 
-// NeedUserInputDecision describes the user's choice at a need-user-input gate.
+// NeedUserInputResume identifies the paused need-user-input gate to resume.
 // Scope selection is derived from a combination of fields plus persisted
-// state on the feature (see HandleNeedUserInputDecision):
+// state on the feature (see ResumeNeedUserInput):
 //   - empty RepoName → feature-scoped (single-repo mainline implement)
 //   - RepoName set + RepoCycleState[RepoName].Status == RepoCycleNeedUserInput
 //     on the persisted feature → cycle-scoped (post-publish)
 //   - otherwise → repo-scoped (multi-repo mainline implement)
-type NeedUserInputDecision struct {
-	// Decision is "resume" or "abort". Any other value is rejected.
-	Decision string
-	// RepoName, when set, identifies the repo whose gate this decision
+type NeedUserInputResume struct {
+	// RepoName, when set, identifies the repo whose gate this resume
 	// targets in a multi-repo run. Empty for single-repo / feature-scoped
 	// gates.
 	RepoName string
 	// CycleType is the post-publish cycle the UI believed it was acting on
-	// when the user pressed Resume / Abort. Diagnostic only — restart
+	// when the user pressed Resume. Diagnostic only — restart
 	// dispatch reads the persisted RepoCycleState to decide which launcher
 	// to call.
 	CycleType feature.RepoCycleType

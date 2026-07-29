@@ -1203,15 +1203,14 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
 }
 
-func (t *serverMutationTarget) NeedUserInputDecision(featureID string, req serverruntime.NeedUserInputDecisionRequest) (serverruntime.NeedUserInputDecisionResponse, error) {
-	if err := t.orch.HandleNeedUserInputDecision(featureID, orchestrator.NeedUserInputDecision{
-		Decision:  req.Decision,
+func (t *serverMutationTarget) ResumeNeedUserInput(featureID string, req serverruntime.NeedUserInputResumeRequest) (serverruntime.NeedUserInputResumeResponse, error) {
+	if err := t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{
 		RepoName:  req.RepoName,
 		CycleType: feature.RepoCycleType(req.CycleType),
 	}); err != nil {
-		return serverruntime.NeedUserInputDecisionResponse{}, err
+		return serverruntime.NeedUserInputResumeResponse{}, err
 	}
-	return serverruntime.NeedUserInputDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "decided"}, nil
+	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
 }
 
 func (t *serverMutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.NeedUserInputDraftResponse, error) {

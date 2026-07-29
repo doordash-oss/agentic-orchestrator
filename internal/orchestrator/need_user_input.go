@@ -65,7 +65,7 @@ func (o *Orchestrator) onSingleRepoNeedUserInput(featureID string, result *agent
 	return nil
 }
 
-// HandleNeedUserInputDecision processes a gate decision ("resume" or "abort").
+// ResumeNeedUserInput resumes a paused need-user-input gate.
 // Routing:
 //   - non-empty RepoName + matching RepoCycleState[RepoName].Status ==
 //     RepoCycleNeedUserInput → cycle-scoped gate (post-publish).
@@ -76,29 +76,27 @@ func (o *Orchestrator) onSingleRepoNeedUserInput(featureID string, result *agent
 //
 // Feature-scoped resume re-dispatches the entire implement phase;
 // cycle-scoped resume relaunches only the affected paused cycle through its
-// original starter. Abort routes through the shared markFailedWithEvent
-// path (feature-scoped) or FailRepoCycle (cycle-scoped); the parent feature
-// stays Published when a cycle is aborted.
-func (o *Orchestrator) HandleNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
+// original starter.
+func (o *Orchestrator) ResumeNeedUserInput(featureID string, d NeedUserInputResume) error {
 	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && f != nil &&
 		f.ActiveCycle != nil &&
 		featureRebaseActiveCycleType(f) == feature.CycleRebase &&
 		f.ActiveCycle.Status == feature.RepoCycleNeedUserInput {
-		return o.handleRebaseCycleNeedUserInputDecision(featureID, d)
+		return o.resumeRebaseCycleNeedUserInput(featureID, d)
 	}
 	if d.RepoName != "" {
 		f, err := o.deps.Lifecycle.Get(featureID)
 		if err == nil && f != nil {
 			if rc, ok := f.RepoCycles[d.RepoName]; ok && rc != nil &&
 				rc.Status == feature.RepoCycleNeedUserInput {
-				return o.handleRepoCycleNeedUserInputDecision(featureID, d)
+				return o.resumeRepoCycleNeedUserInput(featureID, d)
 			}
 		}
 	}
-	return o.handleFeatureNeedUserInputDecision(featureID, d)
+	return o.resumeFeatureNeedUserInput(featureID, d)
 }
 
-func (o *Orchestrator) handleRebaseCycleNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
+func (o *Orchestrator) resumeRebaseCycleNeedUserInput(featureID string, d NeedUserInputResume) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
@@ -112,71 +110,49 @@ func (o *Orchestrator) handleRebaseCycleNeedUserInputDecision(featureID string, 
 		return errors.New("no pending need-user-input gate path on rebase cycle")
 	}
 
-	switch d.Decision {
-	case "resume":
-		rec, err := agent.ReadNeedUserInputRecord(gatePath)
-		if err != nil {
-			return fmt.Errorf("read gate artifact: %w", err)
-		}
-		if !rec.AllAnswered() {
-			return errors.New("cannot resume: every question must have a non-empty answer before resume")
-		}
-		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
-			return err
-		}
-		outcomes := featureRebaseOutcomesFromOperation(o, f)
-		conflicted := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusConflict)
-		targets := rebaseTargetsFromHarnessOutcomes(f.PRURLs(), conflicted)
-		if _, err := o.rebaseLoopConfigForFeature(f, targets, true); err != nil {
-			return fmt.Errorf("relaunch rebase cycle: %w", err)
-		}
-		now := time.Now()
-		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			if ff.ActiveCycle == nil || featureRebaseActiveCycleType(ff) != feature.CycleRebase {
-				return errors.New("rebase cycle vanished during resume")
-			}
-			ff.ActiveCycle.Status = feature.RepoCycleRunning
-			ff.ActiveCycle.PendingNeedUserInputPath = ""
-			ff.ActiveCycle.LastError = ""
-			ff.ActiveTimingKey = fmt.Sprintf("rebase-%d", ff.ActiveCycle.Count)
-			ff.ActivePhaseStart = &now
-			return nil
-		}); err != nil {
-			return fmt.Errorf("clear rebase gate: %w", err)
-		}
-		o.clearFeatureRebaseStopRequest(featureID)
-		o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
-		o.cycleWG.Go(func() {
-			current, loadErr := o.deps.Lifecycle.Get(featureID)
-			if loadErr != nil || current == nil || current.RebaseOperation == nil {
-				_ = o.restoreRebaseNeedUserInputGate(featureID, gatePath, f.ActiveCycle.Iteration, f.ActiveCycle.LastError)
-				return
-			}
-			currentOutcomes := featureRebaseOutcomesFromOperation(o, current)
-			currentConflicted := harnessRebaseOutcomesWithStatus(currentOutcomes, feature.RebaseRepoStatusConflict)
-			o.startCoordinatedSmartRebase(featureID, currentOutcomes, currentConflicted, true)
-		})
-		return nil
-	case "abort":
-		summary := ""
-		if rec, err := agent.ReadNeedUserInputRecord(gatePath); err == nil {
-			summary = rec.Summary
-		}
-		if summary == "" {
-			summary = "user aborted at need-user-input gate for rebase cycle"
-		}
-		if err := o.deps.Lifecycle.FailFeatureRebaseCycle(featureID, summary); err != nil {
-			return err
-		}
-		o.emitEvent(ports.Event{
-			Type:      ports.CycleProgress,
-			FeatureID: featureID,
-			Error:     errors.New(summary),
-		})
-		return nil
-	default:
-		return fmt.Errorf("unknown need-user-input decision %q (want resume|abort)", d.Decision)
+	rec, err := agent.ReadNeedUserInputRecord(gatePath)
+	if err != nil {
+		return fmt.Errorf("read gate artifact: %w", err)
 	}
+	if !rec.AllAnswered() {
+		return errors.New("cannot resume: every question must have a non-empty answer before resume")
+	}
+	if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+		return err
+	}
+	outcomes := featureRebaseOutcomesFromOperation(o, f)
+	conflicted := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusConflict)
+	targets := rebaseTargetsFromHarnessOutcomes(f.PRURLs(), conflicted)
+	if _, err := o.rebaseLoopConfigForFeature(f, targets, true); err != nil {
+		return fmt.Errorf("relaunch rebase cycle: %w", err)
+	}
+	now := time.Now()
+	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		if ff.ActiveCycle == nil || featureRebaseActiveCycleType(ff) != feature.CycleRebase {
+			return errors.New("rebase cycle vanished during resume")
+		}
+		ff.ActiveCycle.Status = feature.RepoCycleRunning
+		ff.ActiveCycle.PendingNeedUserInputPath = ""
+		ff.ActiveCycle.LastError = ""
+		ff.ActiveTimingKey = fmt.Sprintf("rebase-%d", ff.ActiveCycle.Count)
+		ff.ActivePhaseStart = &now
+		return nil
+	}); err != nil {
+		return fmt.Errorf("clear rebase gate: %w", err)
+	}
+	o.clearFeatureRebaseStopRequest(featureID)
+	o.emitEvent(ports.Event{Type: ports.CycleProgress, FeatureID: featureID})
+	o.cycleWG.Go(func() {
+		current, loadErr := o.deps.Lifecycle.Get(featureID)
+		if loadErr != nil || current == nil || current.RebaseOperation == nil {
+			_ = o.restoreRebaseNeedUserInputGate(featureID, gatePath, f.ActiveCycle.Iteration, f.ActiveCycle.LastError)
+			return
+		}
+		currentOutcomes := featureRebaseOutcomesFromOperation(o, current)
+		currentConflicted := harnessRebaseOutcomesWithStatus(currentOutcomes, feature.RebaseRepoStatusConflict)
+		o.startCoordinatedSmartRebase(featureID, currentOutcomes, currentConflicted, true)
+	})
+	return nil
 }
 
 func (o *Orchestrator) restoreRebaseNeedUserInputGate(featureID, gatePath string, iteration int, summary string) error {
@@ -291,13 +267,11 @@ func reposSharingGate(f *feature.Feature, gatePath string) []string {
 	return out
 }
 
-// handleRepoCycleNeedUserInputDecision handles a cycle-scoped need-user-input
-// decision. A shared multi-repo gate (review-comments / refactor) pauses every
+// resumeRepoCycleNeedUserInput handles a cycle-scoped need-user-input resume.
+// A shared multi-repo gate (review-comments / refactor) pauses every
 // participating repo on the same PendingNeedUserInputPath; resume must clear
-// ALL repos sharing that gate and relaunch one aggregate cycle, while abort
-// fails exactly those repos. Sibling repos paused on a DIFFERENT gate are
-// untouched. The parent feature stays StatusPublished throughout.
-func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
+// ALL repos sharing that gate and relaunch one aggregate cycle.
+func (o *Orchestrator) resumeRepoCycleNeedUserInput(featureID string, d NeedUserInputResume) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
@@ -323,99 +297,69 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 		gateRepos = []string{d.RepoName}
 	}
 
-	switch d.Decision {
-	case "resume":
-		rec, err := agent.ReadNeedUserInputRecord(gatePath)
-		if err != nil {
-			return fmt.Errorf("read gate artifact: %w", err)
+	rec, err := agent.ReadNeedUserInputRecord(gatePath)
+	if err != nil {
+		return fmt.Errorf("read gate artifact: %w", err)
+	}
+	if !rec.AllAnswered() {
+		return errors.New("cannot resume: every question must have a non-empty answer before resume")
+	}
+	if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+		return err
+	}
+	// Clear the paused-gate fields on ALL repos sharing the gate,
+	// preserving Count, PlanPath, and Type so the restart seam
+	// reuses the existing cycle record. Set status back to Running
+	// so HasActiveRepoCycles still treats the cycle as in-flight
+	// while the restart launches.
+	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		for _, name := range gateRepos {
+			cycle, ok := ff.RepoCycles[name]
+			if !ok || cycle == nil {
+				return fmt.Errorf("repo %q vanished from repo_cycles mid-resume", name)
+			}
+			cycle.Status = feature.RepoCycleRunning
+			cycle.PendingNeedUserInputPath = ""
+			cycle.LastError = ""
 		}
-		if !rec.AllAnswered() {
-			return errors.New("cannot resume: every question must have a non-empty answer before resume")
+		if ff.PendingNeedUserInputPath == gatePath {
+			ff.PendingNeedUserInputPath = ""
 		}
-		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
-			return err
-		}
-		// Clear the paused-gate fields on ALL repos sharing the gate,
-		// preserving Count, PlanPath, and Type so the restart seam
-		// reuses the existing cycle record. Set status back to Running
-		// so HasActiveRepoCycles still treats the cycle as in-flight
-		// while the restart launches.
-		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		return nil
+	}); err != nil {
+		return fmt.Errorf("clear cycle gate: %w", err)
+	}
+	// Relaunch one aggregate cycle. restartPausedRepoCycle dispatches
+	// based on the persisted cycle type; for a shared gate the first
+	// gate repo's cycle type is representative (all participants share
+	// the same cycle dispatch).
+	if err := o.restartPausedRepoCycle(featureID, gateRepos[0]); err != nil {
+		// Roll back: restore the paused gate on ALL sharing repos so
+		// the user can retry from the same paused state.
+		if rbErr := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 			for _, name := range gateRepos {
 				cycle, ok := ff.RepoCycles[name]
 				if !ok || cycle == nil {
-					return fmt.Errorf("repo %q vanished from repo_cycles mid-resume", name)
+					return fmt.Errorf("repo %q vanished during rollback", name)
 				}
-				cycle.Status = feature.RepoCycleRunning
-				cycle.PendingNeedUserInputPath = ""
-				cycle.LastError = ""
-			}
-			if ff.PendingNeedUserInputPath == gatePath {
-				ff.PendingNeedUserInputPath = ""
+				cycle.Status = feature.RepoCycleNeedUserInput
+				cycle.PendingNeedUserInputPath = gatePath
 			}
 			return nil
-		}); err != nil {
-			return fmt.Errorf("clear cycle gate: %w", err)
+		}); rbErr != nil {
+			return fmt.Errorf("relaunch cycle: %w (rollback to gate also failed: %v)", err, rbErr)
 		}
-		// Relaunch one aggregate cycle. restartPausedRepoCycle dispatches
-		// based on the persisted cycle type; for a shared gate the first
-		// gate repo's cycle type is representative (all participants share
-		// the same cycle dispatch).
-		if err := o.restartPausedRepoCycle(featureID, gateRepos[0]); err != nil {
-			// Roll back: restore the paused gate on ALL sharing repos so
-			// the user can retry or abort from the same paused state.
-			if rbErr := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-				for _, name := range gateRepos {
-					cycle, ok := ff.RepoCycles[name]
-					if !ok || cycle == nil {
-						return fmt.Errorf("repo %q vanished during rollback", name)
-					}
-					cycle.Status = feature.RepoCycleNeedUserInput
-					cycle.PendingNeedUserInputPath = gatePath
-				}
-				return nil
-			}); rbErr != nil {
-				return fmt.Errorf("relaunch cycle: %w (rollback to gate also failed: %v)", err, rbErr)
-			}
-			return fmt.Errorf("relaunch cycle: %w", err)
-		}
-		return nil
-	case "abort":
-		summary := ""
-		if rec, err := agent.ReadNeedUserInputRecord(gatePath); err == nil {
-			summary = rec.Summary
-		}
-		if summary == "" {
-			summary = fmt.Sprintf("user aborted at need-user-input gate for cycle on repo %s", d.RepoName)
-		}
-		// FailRepoCycle clears the gate path and, for refactor cycles, the
-		// feature-level RefactorPrompt. Fail every repo that shares the
-		// gate; the parent feature stays Published and siblings on other
-		// gates keep running.
-		for _, name := range gateRepos {
-			if err := o.deps.Lifecycle.FailRepoCycle(featureID, name, summary); err != nil {
-				return err
-			}
-		}
-		_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			if ff.PendingNeedUserInputPath == gatePath {
-				ff.PendingNeedUserInputPath = ""
-			}
-			return nil
-		})
-		return nil
-	default:
-		return fmt.Errorf("unknown need-user-input decision %q (want resume|abort)", d.Decision)
+		return fmt.Errorf("relaunch cycle: %w", err)
 	}
+	return nil
 }
 
-// handleFeatureNeedUserInputDecision implements the original single-repo /
-// feature-scoped gate flow. Resume validates answers, clears the pending
+// resumeFeatureNeedUserInput implements the single-repo / feature-scoped gate
+// flow. Resume validates answers, clears the pending
 // gate pointer, transitions the feature back to StatusImplementing, and
 // re-dispatches the paused implementation. Harness verification capability
 // gates resume the same implementation iteration.
-// Abort routes through markFailedWithEvent(FailureNeedUserInput).
-func (o *Orchestrator) handleFeatureNeedUserInputDecision(featureID string, d NeedUserInputDecision) error {
+func (o *Orchestrator) resumeFeatureNeedUserInput(featureID string, d NeedUserInputResume) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
@@ -428,77 +372,45 @@ func (o *Orchestrator) handleFeatureNeedUserInputDecision(featureID string, d Ne
 		return errors.New("no pending need-user-input gate path on feature")
 	}
 
-	switch d.Decision {
-	case "resume":
-		rec, err := agent.ReadNeedUserInputRecord(gatePath)
-		if err != nil {
-			return fmt.Errorf("read gate artifact: %w", err)
-		}
-		if !rec.AllAnswered() {
-			return errors.New("cannot resume: every question must have a non-empty answer before resume")
-		}
-		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
-			return err
-		}
-		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			ff.PendingNeedUserInputPath = ""
-			return ff.Transition(feature.StatusImplementing)
-		}); err != nil {
-			return fmt.Errorf("clear gate + transition implementing: %w", err)
-		}
-		// Re-dispatch the implement phase. startImplement has multiple
-		// synchronous failure exits before the engine actually launches
-		// (plan resolution, repo-impl init, multi-repo dispatch, etc.) —
-		// if any of those fail after the transition above, the feature
-		// would be stranded in StatusImplementing with no pending gate
-		// path, losing both the questionnaire and any retry/abort affordance.
-		// Roll the transition back so the user can retry or abort from
-		// the same paused state.
-		if _, _, err := o.startPhase(featureID, feature.PhaseImplement); err != nil {
-			if rbErr := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-				ff.PendingNeedUserInputPath = gatePath
-				if ff.Status == feature.StatusImplementing {
-					if tErr := ff.Transition(feature.StatusNeedUserInput); tErr != nil {
-						return tErr
-					}
-				}
-				return nil
-			}); rbErr != nil {
-				return fmt.Errorf("dispatch implement: %w (rollback to gate also failed: %v)", err, rbErr)
-			}
-			return fmt.Errorf("dispatch implement: %w", err)
-		}
-		return nil
-	case "abort":
-		summary := ""
-		if rec, err := agent.ReadNeedUserInputRecord(gatePath); err == nil {
-			summary = rec.Summary
-		}
-		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			ff.PendingNeedUserInputPath = ""
-			return nil
-		}); err != nil {
-			return fmt.Errorf("clear gate path: %w", err)
-		}
-		errMsg := summary
-		if errMsg == "" {
-			errMsg = "user aborted at need-user-input gate"
-		}
-		// Abort is the gate's terminal exit — the implement phase ends in
-		// failure, so emit PhaseCompleted(err) before markFailedWithEvent.
-		// This matches every other orchestrator failure handler
-		// (onKBCompleted on KB failure, onArtifactPhaseCompleted on session
-		// crash, onPlanLoopDone on missing result) so downstream observers
-		// that listen for PhaseCompleted as the implement-phase boundary
-		// (observe-summary, lifecycle hooks) see a consistent end-of-phase
-		// signal across every terminal failure mode. Gate ENTRY (the pause
-		// itself) deliberately suppresses PhaseCompleted because the phase
-		// is paused, not terminal — see onSingleRepoNeedUserInput.
-		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureNeedUserInput, errMsg)
-	default:
-		return fmt.Errorf("unknown need-user-input decision %q (want resume|abort)", d.Decision)
+	rec, err := agent.ReadNeedUserInputRecord(gatePath)
+	if err != nil {
+		return fmt.Errorf("read gate artifact: %w", err)
 	}
+	if !rec.AllAnswered() {
+		return errors.New("cannot resume: every question must have a non-empty answer before resume")
+	}
+	if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+		return err
+	}
+	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		ff.PendingNeedUserInputPath = ""
+		return ff.Transition(feature.StatusImplementing)
+	}); err != nil {
+		return fmt.Errorf("clear gate + transition implementing: %w", err)
+	}
+	// Re-dispatch the implement phase. startImplement has multiple
+	// synchronous failure exits before the engine actually launches
+	// (plan resolution, repo-impl init, multi-repo dispatch, etc.) —
+	// if any of those fail after the transition above, the feature
+	// would be stranded in StatusImplementing with no pending gate
+	// path, losing both the questionnaire and its retry affordance.
+	// Roll the transition back so the user can retry from the same
+	// paused state.
+	if _, _, err := o.startPhase(featureID, feature.PhaseImplement); err != nil {
+		if rbErr := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+			ff.PendingNeedUserInputPath = gatePath
+			if ff.Status == feature.StatusImplementing {
+				if tErr := ff.Transition(feature.StatusNeedUserInput); tErr != nil {
+					return tErr
+				}
+			}
+			return nil
+		}); rbErr != nil {
+			return fmt.Errorf("dispatch implement: %w (rollback to gate also failed: %v)", err, rbErr)
+		}
+		return fmt.Errorf("dispatch implement: %w", err)
+	}
+	return nil
 }
 
 func (o *Orchestrator) applyTrustedVerificationDecision(featureID, gatePath string, rec agent.NeedUserInputRecord) error {

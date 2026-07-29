@@ -792,7 +792,7 @@ func TestResumeFeatureRebaseRestoresInterruptedSmartCycle(t *testing.T) {
 	}
 }
 
-func TestHandleNeedUserInputDecisionResumesFeatureRebaseCycle(t *testing.T) {
+func TestResumeNeedUserInputResumesFeatureRebaseCycle(t *testing.T) {
 	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName})
 	fixture.orch.deps.PhaseRunner = &agent.PhaseRunner{StateDir: fixture.store.BaseDir}
 	if err := fixture.manager.StartFeatureRebaseOperation(fixture.featureID); err != nil {
@@ -832,10 +832,8 @@ func TestHandleNeedUserInputDecisionResumesFeatureRebaseCycle(t *testing.T) {
 	}
 	fixture.setFinalReviewPassed(nil)
 
-	if err := fixture.orch.HandleNeedUserInputDecision(fixture.featureID, NeedUserInputDecision{
-		Decision: "resume",
-	}); err != nil {
-		t.Fatalf("HandleNeedUserInputDecision: %v", err)
+	if err := fixture.orch.ResumeNeedUserInput(fixture.featureID, NeedUserInputResume{}); err != nil {
+		t.Fatalf("ResumeNeedUserInput: %v", err)
 	}
 	fixture.wait()
 
@@ -851,56 +849,7 @@ func TestHandleNeedUserInputDecisionResumesFeatureRebaseCycle(t *testing.T) {
 	}
 }
 
-func TestHandleNeedUserInputDecisionAbortsFeatureRebaseCycle(t *testing.T) {
-	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName})
-	if err := fixture.manager.StartFeatureRebaseOperation(fixture.featureID); err != nil {
-		t.Fatalf("StartFeatureRebaseOperation: %v", err)
-	}
-	if err := fixture.manager.MarkFeatureRebaseStage(fixture.featureID, feature.RebaseStageSmartRebase); err != nil {
-		t.Fatalf("MarkFeatureRebaseStage: %v", err)
-	}
-	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-		Summary:   "User declined the required resolution.",
-		Iteration: 1,
-		Questions: []agent.NeedUserInputQuestion{{
-			Index:  1,
-			Prompt: "Continue?",
-		}},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord: %v", err)
-	}
-	if err := fixture.manager.MarkFeatureRebaseNeedUserInput(
-		fixture.featureID,
-		gatePath,
-		1,
-		"User declined the required resolution.",
-	); err != nil {
-		t.Fatalf("MarkFeatureRebaseNeedUserInput: %v", err)
-	}
-
-	if err := fixture.orch.HandleNeedUserInputDecision(fixture.featureID, NeedUserInputDecision{
-		Decision: "abort",
-	}); err != nil {
-		t.Fatalf("HandleNeedUserInputDecision: %v", err)
-	}
-
-	loaded := fixture.load()
-	if loaded.Status != feature.StatusPublished {
-		t.Fatalf("Status = %q, want Published", loaded.Status)
-	}
-	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleFailed {
-		t.Fatalf("ActiveCycle = %+v, want retained failed rebase", loaded.ActiveCycle)
-	}
-	if loaded.ActiveCycle.PendingNeedUserInputPath != "" {
-		t.Fatalf("PendingNeedUserInputPath = %q, want cleared", loaded.ActiveCycle.PendingNeedUserInputPath)
-	}
-	if loaded.RebaseOperation == nil || loaded.RebaseOperation.Stage != feature.RebaseStageSmartRebase {
-		t.Fatalf("RebaseOperation = %+v, want retained smart-rebase operation", loaded.RebaseOperation)
-	}
-}
-
-func TestHandleNeedUserInputDecisionKeepsRebaseGateWhenRelaunchCannotDispatch(t *testing.T) {
+func TestResumeNeedUserInputKeepsRebaseGateWhenRelaunchCannotDispatch(t *testing.T) {
 	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{apiRepoName})
 	if err := fixture.manager.StartFeatureRebaseOperation(fixture.featureID); err != nil {
 		t.Fatalf("StartFeatureRebaseOperation: %v", err)
@@ -918,11 +867,9 @@ func TestHandleNeedUserInputDecisionKeepsRebaseGateWhenRelaunchCannotDispatch(t 
 		t.Fatalf("MarkFeatureRebaseNeedUserInput: %v", err)
 	}
 
-	err := fixture.orch.HandleNeedUserInputDecision(fixture.featureID, NeedUserInputDecision{
-		Decision: "resume",
-	})
+	err := fixture.orch.ResumeNeedUserInput(fixture.featureID, NeedUserInputResume{})
 	if err == nil || !strings.Contains(err.Error(), "phase runner not configured") {
-		t.Fatalf("HandleNeedUserInputDecision error = %v, want dispatch configuration failure", err)
+		t.Fatalf("ResumeNeedUserInput error = %v, want dispatch configuration failure", err)
 	}
 	loaded := fixture.load()
 	if loaded.ActiveCycle == nil || loaded.ActiveCycle.Status != feature.RepoCycleNeedUserInput {

@@ -706,7 +706,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		// Under SchemaVersionCurrent = 4 the NEED_USER_INPUT gate is
 		// feature-scoped (Feature.PendingNeedUserInputPath). Persist the
 		// gate path and transition the feature into StatusNeedUserInput so
-		// the decision dispatcher (handleFeatureNeedUserInputDecision)
+		// the resume dispatcher (resumeFeatureNeedUserInput)
 		// finds it paused. Do NOT emit PhaseCompleted — the phase is
 		// paused, not done — and surface NeedUserInputRequired so clients can
 		// open the questionnaire.

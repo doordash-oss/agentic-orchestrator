@@ -187,12 +187,12 @@ func (o *Orchestrator) ExecuteRecovery(
 		// RepoCycleNeedUserInput item is deliberately NOT restarted here:
 		// its gate has its own shared-gate-clearing, answer-validating,
 		// single-dispatch machinery in
-		// handleRepoCycleNeedUserInputDecision, and a per-repo
+		// resumeRepoCycleNeedUserInput, and a per-repo
 		// restartPausedRepoCycle would bypass that gate transition
 		// (clearing the paused state without answers and dispatching once
 		// per repo instead of once per gate). Recovery Resume for a
 		// need-user-input cycle is routed through the existing
-		// questionnaire decision contract, not this relaunch path. Only
+		// questionnaire resume contract, not this relaunch path. Only
 		// RepoCycleInterrupted items — cycles stopped mid-flight with no
 		// gate to clear — restart here.
 		if item.RepoName != "" && hasInterruptedCycle(item.Feature, item.RepoName) {
@@ -241,8 +241,8 @@ func (o *Orchestrator) ExecuteRecovery(
 // need-user-input gate to clear. Recovery Resume restarts these through the
 // cycle-type-specific seam. A RepoCycleNeedUserInput state is intentionally
 // excluded: those gates have their own shared-gate-clearing, answer-validating
-// single-dispatch path (handleRepoCycleNeedUserInputDecision), and a per-repo
-// restart here would bypass that transition. Both the gate-decision path and
+// single-dispatch path (resumeRepoCycleNeedUserInput), and a per-repo
+// restart here would bypass that transition. Both the gate-resume path and
 // this recovery path now encode "repos sharing a gate are one dispatch"
 // identically — the gate path via reposSharingGate, this path by admitting only
 // gate-less interrupted cycles.
@@ -259,7 +259,7 @@ func hasInterruptedCycle(f *feature.Feature, repoName string) bool {
 
 // hasNeedUserInputCycle returns true when the feature has a RepoCycleState for
 // repoName that is paused on a need-user-input gate. Recovery does not
-// relaunch these — the gate decision contract resumes them after answers.
+// relaunch these — the gate resume contract resumes them after answers.
 func hasNeedUserInputCycle(f *feature.Feature, repoName string) bool {
 	if f == nil || repoName == "" || f.RepoCycles == nil {
 		return false

@@ -113,7 +113,7 @@ type MutationTarget interface {
 	RestartFeature(featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error)
 	ReviewDecision(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error)
 	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error)
-	NeedUserInputDecision(featureID string, req NeedUserInputDecisionRequest) (NeedUserInputDecisionResponse, error)
+	ResumeNeedUserInput(featureID string, req NeedUserInputResumeRequest) (NeedUserInputResumeResponse, error)
 	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error)
 	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
@@ -212,8 +212,7 @@ type FeatureConfigMutationRequest struct {
 	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`
 }
 
-type NeedUserInputDecisionRequest struct {
-	Decision  string `json:"decision"`
+type NeedUserInputResumeRequest struct {
 	RepoName  string `json:"repo_name,omitempty"`
 	CycleType string `json:"cycle_type,omitempty"`
 }
@@ -816,20 +815,16 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		if subaction != "" {
 			return false
 		}
-		var req NeedUserInputDecisionRequest
+		var req NeedUserInputResumeRequest
 		if !decodeMutationJSON(w, r, &req) {
 			return true
 		}
-		if req.Decision != actionResume && req.Decision != "abort" {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "decision must be resume or abort", nil)
-			return true
-		}
-		resp, err := h.mutations.NeedUserInputDecision(featureID, req)
+		resp, err := h.mutations.ResumeNeedUserInput(featureID, req)
 		if err != nil {
 			writeMutationError(w, err)
 			return true
 		}
-		defaultActionFields(&resp, featureID, "decided")
+		defaultActionFields(&resp, featureID, "resumed")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionNeedInputDraft:
 		if subaction != "" {

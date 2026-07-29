@@ -25,6 +25,71 @@ function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, 'id'>
 }
 
 describe('computeCohort', () => {
+  it('hydrates terminal and active sessions from only the current iteration', () => {
+    const cohort = computeCohort(
+      EMPTY_COHORT,
+      [
+        session({ id: 'old-craft', iteration: 1, label: 'Craft', status: 'completed' }),
+        session({
+          id: 'implementer',
+          iteration: 2,
+          kind: 'repo-impl',
+          label: 'Implement',
+          status: 'completed',
+        }),
+        session({ id: 'craft', iteration: 2, label: 'Craft', status: 'completed' }),
+        session({
+          id: 'functionality',
+          iteration: 2,
+          label: 'Functionality/Evidence',
+          status: 'failed',
+        }),
+        session({
+          id: 'cleanliness',
+          iteration: 2,
+          label: 'Cleanliness',
+          status: 'running',
+        }),
+      ],
+      'implement',
+      2,
+      ['Craft', 'Functionality/Evidence', 'Cleanliness'],
+    );
+
+    expect(cohort.sessionIds).toEqual(['craft', 'functionality', 'cleanliness']);
+    expect(cohort.iteration).toBe(2);
+  });
+
+  it('replaces a terminal cohort when the current iteration changes', () => {
+    const cohort = computeCohort(
+      { sessionIds: ['old-craft'], phase: 'implement', iteration: 1 },
+      [
+        session({ id: 'old-craft', iteration: 1, status: 'completed' }),
+        session({ id: 'new-cleanliness', iteration: 2, status: 'running' }),
+      ],
+      'implement',
+      2,
+      ['Cleanliness'],
+    );
+
+    expect(cohort.sessionIds).toEqual(['new-cleanliness']);
+    expect(cohort.iteration).toBe(2);
+  });
+
+  it('falls back to active sessions when current iteration metadata is unavailable', () => {
+    const cohort = computeCohort(
+      EMPTY_COHORT,
+      [
+        session({ id: 'terminal', status: 'completed' }),
+        session({ id: 'active', status: 'running' }),
+      ],
+      'implement',
+    );
+
+    expect(cohort.sessionIds).toEqual(['active']);
+    expect(cohort.iteration).toBeUndefined();
+  });
+
   it('starts with every active non-chat session and ignores chat', () => {
     const cohort = computeCohort(
       EMPTY_COHORT,

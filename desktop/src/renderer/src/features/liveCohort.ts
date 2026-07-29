@@ -32,6 +32,8 @@ export interface CohortMembership {
   sessionIds: string[];
   /** Feature phase this cohort was captured at; a change resets retention. */
   phase: string;
+  /** Run iteration this cohort belongs to; a change resets retention. */
+  iteration?: number;
 }
 
 export const EMPTY_COHORT: CohortMembership = { sessionIds: [], phase: '' };
@@ -40,6 +42,7 @@ export const EMPTY_COHORT: CohortMembership = { sessionIds: [], phase: '' };
  * Resolve the current concurrent cohort from the run's sessions.
  *
  * - Starts with every active non-chat session in the run.
+ * - Restores current-iteration terminal review peers during hydration.
  * - Retains completed members until the feature phase changes.
  * - Replaces the cohort when the retained batch is fully terminal and a
  *   disjoint active batch begins (e.g. a review retry).
@@ -48,6 +51,8 @@ export function computeCohort(
   previous: CohortMembership,
   runSessions: readonly SessionSummary[],
   currentPhase: string,
+  currentIteration?: number,
+  currentReviewAxes?: readonly string[],
 ): CohortMembership {
   const candidates = runSessions.filter((session) => !isChatSession(session));
   const byId = new Map(candidates.map((session) => [session.id, session]));
@@ -56,8 +61,25 @@ export function computeCohort(
     .map((session) => session.id);
 
   const allIds = candidates.map((session) => session.id);
+  const currentReviewAxisSet = new Set(currentReviewAxes ?? []);
+  const currentReviewIds =
+    currentIteration === undefined || currentReviewAxisSet.size === 0
+      ? []
+      : candidates
+          .filter(
+            (session) =>
+              session.kind === 'validator' &&
+              session.iteration === currentIteration &&
+              session.label !== undefined &&
+              currentReviewAxisSet.has(session.label),
+          )
+          .map((session) => session.id);
+  const boundaryChanged =
+    currentPhase.trim() !== previous.phase.trim() || currentIteration !== previous.iteration;
   let memberIds: string[];
-  if (currentPhase.trim() !== previous.phase.trim()) {
+  if (currentReviewIds.length > 0) {
+    memberIds = currentReviewIds;
+  } else if (boundaryChanged || previous.sessionIds.length === 0) {
     // Fresh phase: the active batch, or the whole set for an already-terminal run.
     memberIds = activeIds.length > 0 ? activeIds : allIds;
   } else {
@@ -76,7 +98,11 @@ export function computeCohort(
   const ordered = orderRunSessions(memberIds.map((id) => byId.get(id)!)).map(
     (session) => session.id,
   );
-  return { sessionIds: ordered, phase: currentPhase };
+  return {
+    sessionIds: ordered,
+    phase: currentPhase,
+    ...(currentIteration === undefined ? {} : { iteration: currentIteration }),
+  };
 }
 
 /** Preserve the selected tab while it survives; otherwise prefer an active agent. */

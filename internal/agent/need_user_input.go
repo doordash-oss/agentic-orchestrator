@@ -30,11 +30,30 @@ import (
 // verification capability blocker. Root-agent questions use the live
 // AskUserQuestion control protocol instead.
 type NeedUserInputRecord struct {
-	Summary              string                        `yaml:"summary"`
-	Questions            []NeedUserInputQuestion       `yaml:"questions"`
-	Iteration            int                           `yaml:"iteration"`
-	WaitingSince         time.Time                     `yaml:"waiting_since,omitempty"`
-	VerificationDecision *NeedUserVerificationDecision `yaml:"verification_decision,omitempty"`
+	Summary              string                            `yaml:"summary"`
+	Questions            []NeedUserInputQuestion           `yaml:"questions"`
+	Iteration            int                               `yaml:"iteration"`
+	WaitingSince         time.Time                         `yaml:"waiting_since,omitempty"`
+	VerificationDecision *NeedUserVerificationDecision     `yaml:"verification_decision,omitempty"`
+	Verification         *NeedUserInputVerificationContext `yaml:"verification,omitempty"`
+}
+
+// NeedUserInputVerificationContext is the persisted, sanitized explanation
+// of verification blockers attached to a harness-owned gate artifact.
+type NeedUserInputVerificationContext struct {
+	Blockers []NeedUserInputVerificationBlocker `yaml:"blockers"`
+}
+
+// NeedUserInputVerificationBlocker describes one blocked verification item
+// without exposing executable probes or contract paths.
+type NeedUserInputVerificationBlocker struct {
+	ItemID       string   `yaml:"item_id"`
+	Name         string   `yaml:"name"`
+	RepoName     string   `yaml:"repo_name,omitempty"`
+	Command      string   `yaml:"command"`
+	Reason       string   `yaml:"reason"`
+	Capabilities []string `yaml:"capabilities,omitempty"`
+	Remediation  string   `yaml:"remediation"`
 }
 
 // NeedUserVerificationDecision is harness-authored decision context. It binds
@@ -81,6 +100,54 @@ func SynthesizeVerificationNeedUserInputGate(contractPath string, revision int, 
 			AllowedActions: []string{NeedUserVerificationWaive, NeedUserVerificationRetryAfterAuth},
 		},
 	}
+}
+
+// SynthesizeVerificationNeedUserInputGateWithContext creates a same-iteration
+// pause with sanitized, user-actionable descriptions of blocked checks.
+func SynthesizeVerificationNeedUserInputGateWithContext(contractPath string, contract *TestingContract, report *VerificationReport, itemIDs []string, iteration int) NeedUserInputRecord {
+	rec := SynthesizeVerificationNeedUserInputGate(contractPath, contract.Revision, itemIDs, iteration)
+	itemsByID := make(map[string]TestingContractItem, len(contract.Items))
+	for _, item := range contract.Items {
+		itemsByID[item.ID] = item
+	}
+	resultsByID := make(map[string]VerificationCheckResult, len(report.Results))
+	for _, result := range report.Results {
+		resultsByID[result.ItemID] = result
+	}
+
+	blockers := make([]NeedUserInputVerificationBlocker, 0, len(rec.VerificationDecision.ItemIDs))
+	for _, itemID := range rec.VerificationDecision.ItemIDs {
+		item := itemsByID[itemID]
+		result := resultsByID[itemID]
+		name := item.Name
+		if name == "" {
+			name = itemID
+		}
+		capabilities := make([]string, 0, len(item.Capabilities))
+		for _, capability := range item.Capabilities {
+			capabilities = append(capabilities, capability.Name)
+		}
+		blockers = append(blockers, NeedUserInputVerificationBlocker{
+			ItemID:       itemID,
+			Name:         name,
+			RepoName:     item.Repo,
+			Command:      item.Command,
+			Reason:       result.BlockedReason,
+			Capabilities: capabilities,
+			Remediation:  verificationBlockerRemediation(result.BlockedReason, capabilities),
+		})
+	}
+	if len(blockers) > 0 {
+		rec.Verification = &NeedUserInputVerificationContext{Blockers: blockers}
+	}
+	return rec
+}
+
+func verificationBlockerRemediation(reason string, capabilities []string) string {
+	if strings.Contains(reason, "missing declared capability") {
+		return fmt.Sprintf("Make %s available, then retry verification.", strings.Join(capabilities, ", "))
+	}
+	return "Resolve the environment limitation described above, then retry verification."
 }
 
 // ApplyNeedUserVerificationDecision applies a user-authorized waiver, or

@@ -812,7 +812,13 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			if harnessVerification != nil && len(harnessVerification.BlockedItems) > 0 {
 				gatePath := NeedUserInputPath(iterDir)
-				rec := SynthesizeVerificationNeedUserInputGate(testingContractPath, harnessVerification.Report.ContractRevision, harnessVerification.BlockedItems, i)
+				rec := SynthesizeVerificationNeedUserInputGateWithContext(
+					testingContractPath,
+					verificationContract,
+					harnessVerification.Report,
+					harnessVerification.BlockedItems,
+					i,
+				)
 				if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
 					return nil, fmt.Errorf("persisting verification capability gate: %w", err)
 				}

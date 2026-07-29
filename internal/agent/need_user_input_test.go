@@ -15,10 +15,75 @@
 package agent
 
 import (
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestSynthesizeVerificationNeedUserInputGateWithContextExplainsBlockedChecks(t *testing.T) {
+	contract := &TestingContract{
+		Version:  1,
+		Revision: 4,
+		Items: []TestingContractItem{
+			{
+				ID: "deploy", Name: "Deploy smoke test", Repo: "api",
+				Command:      "make deploy-smoke",
+				Capabilities: []TestingContractCapability{{Name: "Okta session", Probe: "okta auth status"}},
+			},
+			{
+				ID: "codesign", Name: "Package signature", Command: "make package-verify",
+			},
+		},
+	}
+	report := &VerificationReport{
+		ContractRevision: 4,
+		Results: []VerificationCheckResult{
+			{
+				ItemID: "deploy", Status: VerificationStatusBlocked,
+				BlockedReason: `missing declared capability "Okta session"`,
+			},
+			{
+				ItemID: "codesign", Status: VerificationStatusBlocked,
+				BlockedReason: "host keychain denied access to the signing identity",
+			},
+		},
+	}
+
+	rec := SynthesizeVerificationNeedUserInputGateWithContext(
+		"/private/testing-contract.yaml", contract, report,
+		[]string{"codesign", "deploy"}, 3,
+	)
+
+	if rec.Verification == nil || len(rec.Verification.Blockers) != 2 {
+		t.Fatalf("verification context = %+v, want two blockers", rec.Verification)
+	}
+	if got := rec.Verification.Blockers[0]; got.ItemID != "codesign" ||
+		got.Name != "Package signature" ||
+		got.Reason != "host keychain denied access to the signing identity" ||
+		!strings.Contains(got.Remediation, "environment limitation") {
+		t.Fatalf("first blocker = %+v", got)
+	}
+	if got := rec.Verification.Blockers[1]; got.ItemID != "deploy" ||
+		got.RepoName != "api" ||
+		got.Command != "make deploy-smoke" ||
+		!reflect.DeepEqual(got.Capabilities, []string{"Okta session"}) ||
+		!strings.Contains(got.Remediation, "Okta session") {
+		t.Fatalf("second blocker = %+v", got)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", rec.Verification), "okta auth status") ||
+		strings.Contains(fmt.Sprintf("%+v", rec.Verification), "/private/") {
+		t.Fatalf("verification context leaked a probe or contract path: %+v", rec.Verification)
+	}
+}
+
+func TestSynthesizeVerificationNeedUserInputGateWithoutContextRemainsLegacyCompatible(t *testing.T) {
+	rec := SynthesizeVerificationNeedUserInputGate("/tmp/testing-contract.yaml", 1, []string{"item"}, 1)
+	if rec.Verification != nil {
+		t.Fatalf("legacy synthesis verification = %+v, want nil", rec.Verification)
+	}
+}
 
 func TestApplyNeedUserVerificationDecisionPersistsWaiver(t *testing.T) {
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")

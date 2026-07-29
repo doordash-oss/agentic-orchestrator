@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -2527,6 +2528,15 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 	}
 	if rec.VerificationDecision == nil || len(rec.VerificationDecision.ItemIDs) != 1 {
 		t.Fatalf("gate record = %+v, want structured verification decision", rec)
+	}
+	if rec.Verification == nil || len(rec.Verification.Blockers) != 1 {
+		t.Fatalf("gate verification context = %+v, want one blocker", rec.Verification)
+	}
+	blocker := rec.Verification.Blockers[0]
+	if blocker.Name != "Protected" ||
+		blocker.Reason != `missing declared capability "Okta session"` ||
+		!reflect.DeepEqual(blocker.Capabilities, []string{"Okta session"}) {
+		t.Fatalf("gate blocker = %+v", blocker)
 	}
 	rec.Questions[0].Answer = NeedUserVerificationWaive
 	if err := ApplyNeedUserVerificationDecision(rec); err != nil {

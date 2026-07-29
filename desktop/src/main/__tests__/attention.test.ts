@@ -37,6 +37,97 @@ describe('AttentionService mutations', () => {
 });
 
 describe('AttentionService review items', () => {
+  it('normalizes supported verification actions and ignores unknown future actions', async () => {
+    const service = new AttentionService({
+      apiRequest: (path) => {
+        const body =
+          path === '/api/v1/prompts'
+            ? {
+                api_version: 'v1',
+                ask_user_questions: [],
+                help_queue: [],
+                need_user_inputs: [
+                  {
+                    feature_id: 'feature-1',
+                    repo_name: 'unknown-action',
+                    open: true,
+                    questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
+                    verification: {
+                      blockers: [
+                        {
+                          item_id: 'deploy',
+                          name: 'Deployment smoke test',
+                          command: 'make deploy-smoke',
+                          reason: 'a newer server needs another decision',
+                          capabilities: [],
+                          remediation: 'Choose a supported action or answer the generic prompt.',
+                        },
+                      ],
+                      allowed_actions: [' waive ', 'REQUEST_ADMIN_ESCALATION'],
+                    },
+                  },
+                  {
+                    feature_id: 'feature-1',
+                    repo_name: 'supported-actions',
+                    open: true,
+                    questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
+                    verification: {
+                      blockers: [
+                        {
+                          item_id: 'codesign',
+                          name: 'Package signature',
+                          command: 'make package-verify',
+                          reason: 'keychain access is unavailable',
+                          capabilities: [],
+                          remediation: 'Grant access or waive the blocked check.',
+                        },
+                      ],
+                      allowed_actions: [' retry_after_auth ', 'WAIVE'],
+                    },
+                  },
+                ],
+              }
+            : path === '/api/v1/permissions'
+              ? { api_version: 'v1', requests: [] }
+              : {
+                  api_version: 'v1',
+                  features: [
+                    {
+                      id: 'feature-1',
+                      name: 'Active feature',
+                      slug: 'active-feature',
+                      status: 'NeedUserInput',
+                      current_phase: 'implement',
+                      repos: ['unknown-action', 'supported-actions'],
+                      created_at: '2026-07-16T10:00:00Z',
+                      active_run: 1,
+                      run_count: 1,
+                      progress: {},
+                    },
+                  ],
+                };
+        return Promise.resolve({ status: 200, body });
+      },
+    } satisfies ServerTransport);
+
+    const snapshot = await service.getSnapshot();
+    const unknownActionGate = snapshot.items.find(
+      (item) => item.kind === 'gate' && item.repoName === 'unknown-action',
+    );
+    const supportedActionsGate = snapshot.items.find(
+      (item) => item.kind === 'gate' && item.repoName === 'supported-actions',
+    );
+    if (unknownActionGate?.kind !== 'gate' || supportedActionsGate?.kind !== 'gate') {
+      throw new Error('expected both verification gates');
+    }
+
+    expect(unknownActionGate.verification?.allowedActions).toEqual(['WAIVE']);
+    expect(supportedActionsGate.verification?.allowedActions).toEqual([
+      'RETRY_AFTER_AUTH',
+      'WAIVE',
+    ]);
+  });
+
   it('omits feature-scoped attention whose feature is no longer listed', async () => {
     const service = new AttentionService({
       apiRequest: (path) => {

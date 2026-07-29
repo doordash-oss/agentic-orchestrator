@@ -11,6 +11,7 @@ import {
   GateResumeRequestSchema,
   HelpAnswerRequestSchema,
   PermissionDecisionRequestSchema,
+  VerificationGateActionSchema,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   isPendingReviewStatus,
   reviewKindLabel,
@@ -22,6 +23,7 @@ import {
   type GateResumeRequest,
   type HelpAnswerRequest,
   type PermissionDecisionRequest,
+  type VerificationGateAction,
 } from '../shared/ipc';
 import { SafeErrorException } from '../shared/errors';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
@@ -35,6 +37,15 @@ const REMEDIES = {
   },
 };
 const fallbackTime = '1970-01-01T00:00:00.000Z';
+
+function supportedVerificationActions(actions: string[]): VerificationGateAction[] {
+  const supported = new Set<VerificationGateAction>();
+  for (const action of actions) {
+    const parsed = VerificationGateActionSchema.safeParse(action.trim().toUpperCase());
+    if (parsed.success) supported.add(parsed.data);
+  }
+  return [...supported];
+}
 
 /** Server-owned blocking prompts, translated once in the main process. */
 export class AttentionService {
@@ -142,7 +153,7 @@ export class AttentionService {
                     capabilities: blocker.capabilities,
                     remediation: blocker.remediation,
                   })),
-                  allowedActions: gate.verification.allowed_actions,
+                  allowedActions: supportedVerificationActions(gate.verification.allowed_actions),
                 },
               }),
           questions: (gate.questions ?? []).map((question, index) => ({

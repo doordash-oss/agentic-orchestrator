@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"gopkg.in/yaml.v3"
 )
@@ -71,6 +72,17 @@ const (
 	NeedUserVerificationRetryAfterAuth = "RETRY_AFTER_AUTH"
 )
 
+// Verification gate context limits match the public API and desktop IPC
+// contracts. Trusted decision ItemIDs are intentionally not bounded by these
+// display-only limits.
+const (
+	NeedUserInputVerificationMaxBlockers          = 100
+	NeedUserInputVerificationMaxCapabilities      = 20
+	NeedUserInputVerificationItemIDMaxLength      = 200
+	NeedUserInputVerificationRepoNameMaxLength    = 500
+	NeedUserInputVerificationContextTextMaxLength = 64 * 1024
+)
+
 // NeedUserInputQuestion is one prompt-and-answer pair the user fills in
 // before resuming.
 type NeedUserInputQuestion struct {
@@ -115,32 +127,102 @@ func SynthesizeVerificationNeedUserInputGateWithContext(contractPath string, con
 		resultsByID[result.ItemID] = result
 	}
 
-	blockers := make([]NeedUserInputVerificationBlocker, 0, len(rec.VerificationDecision.ItemIDs))
+	blockers := make(
+		[]NeedUserInputVerificationBlocker,
+		0,
+		min(len(rec.VerificationDecision.ItemIDs), NeedUserInputVerificationMaxBlockers),
+	)
 	for _, itemID := range rec.VerificationDecision.ItemIDs {
+		if len(blockers) == NeedUserInputVerificationMaxBlockers {
+			break
+		}
 		item := itemsByID[itemID]
 		result := resultsByID[itemID]
 		name := item.Name
 		if name == "" {
 			name = itemID
 		}
-		capabilities := make([]string, 0, len(item.Capabilities))
+		capabilities := make(
+			[]string,
+			0,
+			min(len(item.Capabilities), NeedUserInputVerificationMaxCapabilities),
+		)
 		for _, capability := range item.Capabilities {
-			capabilities = append(capabilities, capability.Name)
+			if len(capabilities) == NeedUserInputVerificationMaxCapabilities {
+				break
+			}
+			capabilities = append(
+				capabilities,
+				BoundNeedUserInputVerificationString(
+					capability.Name,
+					NeedUserInputVerificationContextTextMaxLength,
+				),
+			)
 		}
 		blockers = append(blockers, NeedUserInputVerificationBlocker{
-			ItemID:       itemID,
-			Name:         name,
-			RepoName:     item.Repo,
-			Command:      item.Command,
-			Reason:       result.BlockedReason,
+			ItemID: BoundNeedUserInputVerificationString(
+				itemID,
+				NeedUserInputVerificationItemIDMaxLength,
+			),
+			Name: BoundNeedUserInputVerificationString(
+				name,
+				NeedUserInputVerificationContextTextMaxLength,
+			),
+			RepoName: BoundNeedUserInputVerificationString(
+				item.Repo,
+				NeedUserInputVerificationRepoNameMaxLength,
+			),
+			Command: BoundNeedUserInputVerificationString(
+				item.Command,
+				NeedUserInputVerificationContextTextMaxLength,
+			),
+			Reason: BoundNeedUserInputVerificationString(
+				result.BlockedReason,
+				NeedUserInputVerificationContextTextMaxLength,
+			),
 			Capabilities: capabilities,
-			Remediation:  verificationBlockerRemediation(result.BlockedReason, capabilities),
+			Remediation: BoundNeedUserInputVerificationString(
+				verificationBlockerRemediation(result.BlockedReason, capabilities),
+				NeedUserInputVerificationContextTextMaxLength,
+			),
 		})
 	}
 	if len(blockers) > 0 {
 		rec.Verification = &NeedUserInputVerificationContext{Blockers: blockers}
 	}
 	return rec
+}
+
+// BoundNeedUserInputVerificationString returns valid UTF-8 whose UTF-16 code
+// unit count does not exceed maxLength, matching JavaScript string validation.
+// A truncated value includes its ellipsis within that limit.
+func BoundNeedUserInputVerificationString(value string, maxLength int) string {
+	if maxLength <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	length := 0
+	for _, r := range runes {
+		length += utf16.RuneLen(r)
+	}
+	if length <= maxLength {
+		return string(runes)
+	}
+	if maxLength == 1 {
+		return "…"
+	}
+	limit := maxLength - 1
+	length = 0
+	end := 0
+	for i, r := range runes {
+		runeLength := utf16.RuneLen(r)
+		if length+runeLength > limit {
+			break
+		}
+		length += runeLength
+		end = i + 1
+	}
+	return string(runes[:end]) + "…"
 }
 
 func verificationBlockerRemediation(reason string, capabilities []string) string {

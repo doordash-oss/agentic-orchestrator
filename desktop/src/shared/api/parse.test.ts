@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { HealthResponseSchema, parseServerJson } from './parse';
+import { HealthResponseSchema, parseServerJson, PromptSnapshotResponseSchema } from './parse';
 import { SafeErrorException } from '../errors';
 import { MAX_PAYLOAD_BYTES } from '../sanitize';
 
@@ -75,5 +75,44 @@ describe('parseServerJson', () => {
     const schema = z.object({ n: z.number() });
     expect(parseServerJson('{"n": 4}', schema)).toEqual({ n: 4 });
     expect(failure(() => parseServerJson('{"n": "4"}', schema)).code).toBe('E_SCHEMA_MISMATCH');
+  });
+
+  it('accepts bounded unknown verification actions but rejects unbounded ones', () => {
+    const promptFixture = {
+      api_version: 'v1',
+      ask_user_questions: [],
+      help_queue: [],
+      need_user_inputs: [
+        {
+          feature_id: 'feature-1',
+          open: true,
+          verification: {
+            blockers: [
+              {
+                item_id: 'deploy',
+                name: 'Deployment smoke test',
+                command: 'make deploy-smoke',
+                reason: 'a newer server needs another decision',
+                capabilities: [],
+                remediation: 'Choose a supported action or answer the generic prompt.',
+              },
+            ],
+            allowed_actions: ['WAIVE', 'REQUEST_ADMIN_ESCALATION'],
+          },
+        },
+      ],
+    };
+
+    const parsed = parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema);
+    expect(parsed.need_user_inputs[0]?.verification?.allowed_actions).toEqual([
+      'WAIVE',
+      'REQUEST_ADMIN_ESCALATION',
+    ]);
+
+    promptFixture.need_user_inputs[0]!.verification.allowed_actions = ['x'.repeat(51)];
+    expect(
+      failure(() => parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema))
+        .code,
+    ).toBe('E_SCHEMA_MISMATCH');
   });
 });

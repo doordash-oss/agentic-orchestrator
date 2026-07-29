@@ -232,7 +232,7 @@ const ServerNeedUserInputVerificationBlockerSchema = z.object({
 });
 const ServerNeedUserInputVerificationSchema = z.object({
   blockers: z.array(ServerNeedUserInputVerificationBlockerSchema).max(100),
-  allowed_actions: z.array(z.enum(['WAIVE', 'RETRY_AFTER_AUTH'])).max(2),
+  allowed_actions: z.array(z.string().max(50)).max(2),
 });
 export const ServerNeedUserInputGateSchema = z.object({
   feature_id: AttentionIDSchema.optional(),

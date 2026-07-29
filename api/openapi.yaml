@@ -3385,22 +3385,29 @@ components:
       properties:
         item_id:
           type: string
+          maxLength: 200
           x-go-name: ItemID
         name:
           type: string
+          maxLength: 65536
         repo_name:
           type: string
+          maxLength: 500
         command:
           type: string
+          maxLength: 65536
         reason:
           type: string
+          maxLength: 65536
         capabilities:
           type: array
           maxItems: 20
           items:
             type: string
+            maxLength: 65536
         remediation:
           type: string
+          maxLength: 65536
     NeedUserInputQuestion:
       type: object
       properties:

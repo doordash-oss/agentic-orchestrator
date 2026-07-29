@@ -1038,33 +1038,76 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 	}
 	if rec.Verification != nil && rec.VerificationDecision != nil && len(rec.Verification.Blockers) > 0 {
 		verification := NeedUserInputVerification{
-			Blockers: make([]NeedUserInputVerificationBlocker, 0, len(rec.Verification.Blockers)),
+			Blockers: make(
+				[]NeedUserInputVerificationBlocker,
+				0,
+				min(len(rec.Verification.Blockers), agent.NeedUserInputVerificationMaxBlockers),
+			),
 		}
 		for _, blocker := range rec.Verification.Blockers {
-			capabilities := make([]string, 0, len(blocker.Capabilities))
+			if len(verification.Blockers) == agent.NeedUserInputVerificationMaxBlockers {
+				break
+			}
+			capabilities := make(
+				[]string,
+				0,
+				min(
+					len(blocker.Capabilities),
+					agent.NeedUserInputVerificationMaxCapabilities,
+				),
+			)
 			for _, capability := range blocker.Capabilities {
 				if capability = strings.TrimSpace(capability); capability != "" {
-					capabilities = append(capabilities, capability)
+					capabilities = append(
+						capabilities,
+						agent.BoundNeedUserInputVerificationString(
+							capability,
+							agent.NeedUserInputVerificationContextTextMaxLength,
+						),
+					)
+					if len(capabilities) == agent.NeedUserInputVerificationMaxCapabilities {
+						break
+					}
 				}
 			}
 			verification.Blockers = append(verification.Blockers, NeedUserInputVerificationBlocker{
-				ItemID:       blocker.ItemID,
-				Name:         strings.TrimSpace(blocker.Name),
-				RepoName:     strings.TrimSpace(blocker.RepoName),
-				Command:      strings.TrimSpace(blocker.Command),
-				Reason:       strings.TrimSpace(blocker.Reason),
+				ItemID: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.ItemID),
+					agent.NeedUserInputVerificationItemIDMaxLength,
+				),
+				Name: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.Name),
+					agent.NeedUserInputVerificationContextTextMaxLength,
+				),
+				RepoName: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.RepoName),
+					agent.NeedUserInputVerificationRepoNameMaxLength,
+				),
+				Command: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.Command),
+					agent.NeedUserInputVerificationContextTextMaxLength,
+				),
+				Reason: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.Reason),
+					agent.NeedUserInputVerificationContextTextMaxLength,
+				),
 				Capabilities: capabilities,
-				Remediation:  strings.TrimSpace(blocker.Remediation),
+				Remediation: agent.BoundNeedUserInputVerificationString(
+					strings.TrimSpace(blocker.Remediation),
+					agent.NeedUserInputVerificationContextTextMaxLength,
+				),
 			})
 		}
+		seenActions := make(map[NeedUserInputVerificationAction]struct{}, 2)
 		for _, action := range rec.VerificationDecision.AllowedActions {
 			normalized := strings.ToUpper(strings.TrimSpace(action))
 			switch normalized {
 			case agent.NeedUserVerificationWaive, agent.NeedUserVerificationRetryAfterAuth:
-				verification.AllowedActions = append(
-					verification.AllowedActions,
-					NeedUserInputVerificationAction(normalized),
-				)
+				candidate := NeedUserInputVerificationAction(normalized)
+				if _, exists := seenActions[candidate]; !exists {
+					seenActions[candidate] = struct{}{}
+					verification.AllowedActions = append(verification.AllowedActions, candidate)
+				}
 			}
 		}
 		dto.Verification = &verification

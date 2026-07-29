@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -785,6 +788,99 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 				t.Fatalf("gate leaked %q: %s", forbidden, encoded)
 			}
 		}
+	}
+}
+
+func TestNeedUserInputGateDTOBoundsLegacyVerificationContext(t *testing.T) {
+	t.Parallel()
+	gatePath := filepath.Join(t.TempDir(), "need-user-input.yaml")
+	blockers := make([]agent.NeedUserInputVerificationBlocker, 0, 101)
+	for i := 0; i < 101; i++ {
+		capabilities := make([]string, 21)
+		for capability := range capabilities {
+			capabilities[capability] = "ordinary capability"
+		}
+		blocker := agent.NeedUserInputVerificationBlocker{
+			ItemID:       fmt.Sprintf("item-%03d", i),
+			Name:         "Ordinary check",
+			RepoName:     "repo",
+			Command:      "make verify",
+			Reason:       "missing capability",
+			Capabilities: capabilities,
+			Remediation:  "Grant access and retry.",
+		}
+		if i == 0 {
+			for capability := range capabilities {
+				capabilities[capability] = strings.Repeat("😀", 64*1024+1)
+			}
+			blocker = agent.NeedUserInputVerificationBlocker{
+				ItemID:       strings.Repeat("😀", 201),
+				Name:         strings.Repeat("😀", 64*1024+1),
+				RepoName:     strings.Repeat("😀", 501),
+				Command:      strings.Repeat("😀", 64*1024+1),
+				Reason:       strings.Repeat("😀", 64*1024+1),
+				Capabilities: capabilities,
+				Remediation:  strings.Repeat("😀", 64*1024+1),
+			}
+		}
+		blockers = append(blockers, blocker)
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Continue?"}},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: blockers,
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			AllowedActions: []string{
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationRetryAfterAuth,
+				"FUTURE_ACTION",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+
+	dto := needUserInputGateDTO("feature-1", entityFeature, "", "", 1, "", gatePath)
+	if dto.Verification == nil {
+		t.Fatal("verification = nil, want bounded verification context")
+	}
+	if got := len(dto.Verification.Blockers); got != 100 {
+		t.Fatalf("blockers = %d, want 100", got)
+	}
+	if got := len(dto.Verification.AllowedActions); got != 2 {
+		t.Fatalf("allowed actions = %d, want two deduplicated supported actions", got)
+	}
+	blocker := dto.Verification.Blockers[0]
+	assertBoundedUTF8 := func(name, value string, maxLength int) {
+		t.Helper()
+		if !utf8.ValidString(value) {
+			t.Fatalf("%s is not valid UTF-8", name)
+		}
+		utf16Length := 0
+		for _, r := range value {
+			utf16Length += utf16.RuneLen(r)
+		}
+		if utf16Length > maxLength {
+			t.Fatalf("%s UTF-16 length = %d, want at most %d", name, utf16Length, maxLength)
+		}
+		if !strings.HasSuffix(value, "…") {
+			t.Fatalf("%s = %q, want truncation ellipsis", name, value)
+		}
+	}
+	assertBoundedUTF8("item_id", blocker.ItemID, 200)
+	assertBoundedUTF8("repo_name", blocker.RepoName, 500)
+	assertBoundedUTF8("name", blocker.Name, 64*1024)
+	assertBoundedUTF8("command", blocker.Command, 64*1024)
+	assertBoundedUTF8("reason", blocker.Reason, 64*1024)
+	assertBoundedUTF8("remediation", blocker.Remediation, 64*1024)
+	if got := len(blocker.Capabilities); got != 20 {
+		t.Fatalf("capabilities = %d, want 20", got)
+	}
+	assertBoundedUTF8("capability", blocker.Capabilities[0], 64*1024)
+	if _, err := json.Marshal(dto); err != nil {
+		t.Fatalf("Marshal(bounded gate DTO) error = %v", err)
 	}
 }
 

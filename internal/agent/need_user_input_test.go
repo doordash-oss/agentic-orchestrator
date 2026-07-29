@@ -78,6 +78,53 @@ func TestSynthesizeVerificationNeedUserInputGateWithContextExplainsBlockedChecks
 	}
 }
 
+func TestSynthesizeVerificationNeedUserInputGateWithContextBoundsDisplayWithoutDroppingDecisionItems(t *testing.T) {
+	items := make([]TestingContractItem, 0, 101)
+	results := make([]VerificationCheckResult, 0, 101)
+	itemIDs := make([]string, 0, 101)
+	for i := 0; i < 101; i++ {
+		itemID := fmt.Sprintf("check-%03d", i)
+		capabilities := make([]TestingContractCapability, 0, 21)
+		for capability := 0; capability < 21; capability++ {
+			capabilities = append(capabilities, TestingContractCapability{
+				Name: fmt.Sprintf("capability-%02d", capability),
+			})
+		}
+		items = append(items, TestingContractItem{
+			ID: itemID, Name: "Boundary check", Command: "make verify",
+			Capabilities: capabilities,
+		})
+		results = append(results, VerificationCheckResult{
+			ItemID: itemID, Status: VerificationStatusBlocked,
+			BlockedReason: "missing declared capability",
+		})
+		itemIDs = append(itemIDs, itemID)
+	}
+
+	rec := SynthesizeVerificationNeedUserInputGateWithContext(
+		"/private/testing-contract.yaml",
+		&TestingContract{Version: 1, Revision: 4, Items: items},
+		&VerificationReport{ContractRevision: 4, Results: results},
+		itemIDs,
+		3,
+	)
+
+	if got := len(rec.VerificationDecision.ItemIDs); got != 101 {
+		t.Fatalf("trusted decision item IDs = %d, want all 101", got)
+	}
+	if rec.Verification == nil {
+		t.Fatal("verification context = nil, want bounded display context")
+	}
+	if got := len(rec.Verification.Blockers); got != 100 {
+		t.Fatalf("display blockers = %d, want 100", got)
+	}
+	for i, blocker := range rec.Verification.Blockers {
+		if got := len(blocker.Capabilities); got != 20 {
+			t.Fatalf("blocker %d capabilities = %d, want 20", i, got)
+		}
+	}
+}
+
 func TestSynthesizeVerificationNeedUserInputGateWithoutContextRemainsLegacyCompatible(t *testing.T) {
 	rec := SynthesizeVerificationNeedUserInputGate("/tmp/testing-contract.yaml", 1, []string{"item"}, 1)
 	if rec.Verification != nil {

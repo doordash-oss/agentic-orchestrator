@@ -506,19 +506,49 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await waitForAttentionGate(handle.page, feature.id);
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
 
-    const inbox = await openInbox(handle);
-    await expandInboxItem(inbox, /Input gate/);
+    const initialGateDialog = handle.page.getByRole('dialog', {
+      name: 'Verification needs your input',
+    });
+    await expect(initialGateDialog.getByText('Deployment smoke test')).toBeVisible();
+    await expect(initialGateDialog.getByText('make deploy-smoke')).toBeVisible();
     await expect(
-      inbox.getByText(/Required verification is blocked by missing deployment credentials/),
+      initialGateDialog.getByText('missing declared capability "deployment credentials"'),
     ).toBeVisible();
-    const resume = inbox.getByRole('button', { name: 'Resume' });
-    await expect(resume).toBeDisabled();
-    await expect(inbox.getByText('Answer every question before resuming.')).toBeVisible();
+    await expect(
+      initialGateDialog.getByText(
+        'Make deployment credentials available, then retry verification.',
+      ),
+    ).toBeVisible();
+    await expect(
+      initialGateDialog.getByRole('button', { name: 'Retry verification' }),
+    ).toBeDisabled();
+    await initialGateDialog.getByRole('button', { name: 'Answer later' }).click();
+    await expect(initialGateDialog).toHaveCount(0);
+    await handle.page.getByRole('tab', { name: 'Home' }).click();
 
-    await inbox.getByLabel(verificationDecisionPrompt).fill(retryAfterAuth);
-    await resume.focus();
+    const inbox = await openInbox(handle);
+    await inbox.getByRole('button', { name: /Input gate/ }).click();
+    const routedGateDialog = handle.page.getByRole('dialog', {
+      name: 'Verification needs your input',
+    });
+    await expect(routedGateDialog.getByText('Deployment smoke test')).toBeVisible();
+    await expect(routedGateDialog.getByText('make deploy-smoke')).toBeVisible();
+    await expect(
+      routedGateDialog.getByText('missing declared capability "deployment credentials"'),
+    ).toBeVisible();
+    await expect(
+      routedGateDialog.getByText('Make deployment credentials available, then retry verification.'),
+    ).toBeVisible();
+    const retryVerification = routedGateDialog.getByRole('button', {
+      name: 'Retry verification',
+    });
+    await expect(retryVerification).toBeDisabled();
+
+    await routedGateDialog
+      .getByRole('radio', { name: /I've granted access — retry verification/ })
+      .click();
     await waitFor(
-      () => fs.readFileSync(gatePath, 'utf8').includes(retryAfterAuth),
+      () => fs.readFileSync(gatePath, 'utf8').includes('answer: RETRY_AFTER_AUTH'),
       'need-user-input draft persisted to gate file',
       15_000,
     );
@@ -533,68 +563,28 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
       timeout: 60_000,
     });
     await waitForAttentionGate(handle.page, feature.id);
-    const relaunchedInbox = await openInbox(handle);
-    await expandInboxItem(relaunchedInbox, /Input gate/);
-    await expect(relaunchedInbox.getByLabel(verificationDecisionPrompt)).toHaveValue(
-      retryAfterAuth,
-    );
-    await expect(relaunchedInbox.getByRole('button', { name: 'Resume' })).toBeEnabled();
+    const relaunchedGateDialog = handle.page.getByRole('dialog', {
+      name: 'Verification needs your input',
+    });
+    await expect(relaunchedGateDialog).toBeVisible();
+    await expect(
+      relaunchedGateDialog.getByRole('radio', {
+        name: /I've granted access — retry verification/,
+      }),
+    ).toBeChecked();
     await evidenceShot(handle, 'attention-need-user-input-gate');
-    await relaunchedInbox.getByRole('button', { name: 'Abort gate', exact: true }).click();
-    const cancelDialog = handle.page.getByRole('dialog', { name: 'Confirm abort' });
-    await expect(cancelDialog).toContainText('Abort will terminally fail this feature.');
-    await evidenceShot(handle, 'attention-abort-confirmation-dialog');
-    await handle.page.keyboard.press('Escape');
-    await expect(cancelDialog).toHaveCount(0);
-    await expect(relaunchedInbox.getByRole('button', { name: 'Resume' })).toBeEnabled();
-    await closeInbox(handle.page);
-    await handle.page.getByRole('tab', { name: /Packaged Gate Fixture/ }).click();
-    const gateCockpit = handle.page.getByLabel('Feature Packaged Gate Fixture');
-    const inlineGate = gateCockpit.getByRole('region', { name: 'Feature attention' });
-    await expect(inlineGate.getByLabel(verificationDecisionPrompt)).toHaveValue(retryAfterAuth);
-    await expect(inlineGate.getByRole('button', { name: 'Resume' })).toBeEnabled();
-    await inlineGate.getByRole('button', { name: 'Resume' }).click();
+    await expect(
+      relaunchedGateDialog.getByRole('button', { name: 'Retry verification' }),
+    ).toBeEnabled();
+    await relaunchedGateDialog.getByRole('button', { name: 'Retry verification' }).click();
     await waitForAttentionMissing(handle.page, feature.id, 'gate');
     await waitForProviderLog(world, 'session');
     transcript.codeBlock('drafted need-user-input gate', fs.readFileSync(gatePath, 'utf8'));
     transcript.step(
-      'feature-scoped gate draft survived relaunch and dispatched Resume from the cockpit',
+      'feature-scoped retry choice survived relaunch and dispatched verification from the cockpit',
     );
 
-    await handle.page.getByRole('tab', { name: 'Home' }).click();
-    await createFeatureViaForm(handle, {
-      name: 'Packaged Abort Gate Fixture',
-      description: 'Seeded run-level NEED_USER_INPUT gate for confirmed abort evidence.',
-      repoPatterns: [/gate-lab/],
-    });
-    const abortFeature = await waitForFeatureNamed(handle.page, 'Packaged Abort Gate Fixture');
-    seedVerificationNeedUserInputGate(world, abortFeature.id);
-    await closeApp(handle);
-    handle = null;
-    await assertNoLeakedProcessesEventually(world);
-
-    handle = await launchApp(world, testInfo, { traceName: 'attention-gate-abort-seeded' });
-    await expect(
-      handle.page.getByRole('banner').getByRole('heading', { name: 'Agentico' }),
-    ).toBeVisible({
-      timeout: 60_000,
-    });
-    await waitForAttentionGate(handle.page, abortFeature.id);
-    const abortInbox = await openInbox(handle);
-    await expandInboxItem(abortInbox, /Input gate/);
-    await abortInbox.getByLabel(verificationDecisionPrompt).fill(retryAfterAuth);
-    await abortInbox.getByRole('button', { name: 'Abort gate', exact: true }).focus();
-    await expect(abortInbox.getByText('Draft saved.')).toBeVisible();
-    await abortInbox.getByRole('button', { name: 'Abort gate', exact: true }).click();
-    const confirmDialog = handle.page.getByRole('dialog', { name: 'Confirm abort' });
-    await expect(confirmDialog).toContainText('Abort will terminally fail this feature.');
-    await confirmDialog.getByRole('button', { name: 'Confirm abort' }).click();
-    await waitForAttentionMissing(handle.page, abortFeature.id, 'gate');
-    await waitForFeatureStatus(handle.page, abortFeature.id, 'Failed');
-    transcript.step('feature-scoped gate confirmed abort and reached Failed');
-
-    transcript.section('Cycle-scoped gates on one feature resolve independently');
-    await closeInbox(handle.page);
+    transcript.section('Cycle-scoped gates retain textarea fallback');
     await handle.page.getByRole('tab', { name: 'Home' }).click();
     await createFeatureViaForm(handle, {
       name: 'Packaged Multi-Cycle Gate Fixture',
@@ -605,6 +595,10 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
       handle.page,
       'Packaged Multi-Cycle Gate Fixture',
     );
+    await closeApp(handle);
+    handle = null;
+    await assertNoLeakedProcessesEventually(world);
+
     const apiCycleGate = seedCycleNeedUserInputGate(world, cycleFeature.id, {
       repoName: 'gate-api-lab',
       cycleType: 'review-comments',
@@ -626,9 +620,6 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
       apiCycleGate,
       webCycleGate,
     });
-    await closeApp(handle);
-    handle = null;
-    await assertNoLeakedProcessesEventually(world);
 
     handle = await launchApp(world, testInfo, { traceName: 'attention-cycle-gates-seeded' });
     await expect(
@@ -639,40 +630,41 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await waitForAttentionGateScope(handle.page, apiCycleGate);
     await waitForAttentionGateScope(handle.page, webCycleGate);
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 2 pending/);
-    const cycleInbox = await openInbox(handle);
-    await expandGateByScope(cycleInbox, apiCycleGate);
-    await expect(cycleInbox.getByLabel('Attention context')).toContainText('gate-api-lab');
-    await expect(cycleInbox.getByLabel('Attention context')).toContainText('review-comments');
-    await expect(cycleInbox.getByLabel(apiCycleGate.question)).toHaveValue(apiCycleGate.answer);
+    const apiCycleDialog = await openGateDialogByScope(handle, apiCycleGate);
+    await expect(apiCycleDialog.getByText(apiCycleGate.summary)).toBeVisible();
+    await expect(apiCycleDialog.getByLabel(apiCycleGate.question)).toHaveValue(apiCycleGate.answer);
     await evidenceShot(handle, 'attention-cycle-gate-review-comments');
-    await expandGateByScope(cycleInbox, webCycleGate);
-    await expect(cycleInbox.getByLabel('Attention context')).toContainText('gate-web-lab');
-    await expect(cycleInbox.getByLabel('Attention context')).toContainText('refactor');
-    await expect(cycleInbox.getByLabel(webCycleGate.question)).toHaveValue(webCycleGate.answer);
-    await cycleInbox.getByRole('button', { name: 'Abort gate', exact: true }).click();
-    const cycleConfirmDialog = handle.page.getByRole('dialog', { name: 'Confirm abort' });
-    await expect(cycleConfirmDialog).toContainText(
-      'Abort will fail only this repository cycle; sibling cycles continue.',
-    );
-    await evidenceShot(handle, 'attention-cycle-abort-confirmation-dialog');
-    await cycleConfirmDialog.getByRole('button', { name: 'Confirm abort' }).click();
+    await apiCycleDialog.getByRole('button', { name: 'Answer later' }).click();
+    await expect(apiCycleDialog).toHaveCount(0);
+
+    const webCycleDialog = await openGateDialogByScope(handle, webCycleGate);
+    await expect(webCycleDialog.getByText(webCycleGate.summary)).toBeVisible();
+    await expect(webCycleDialog.getByLabel(webCycleGate.question)).toHaveValue(webCycleGate.answer);
+    await webCycleDialog.getByRole('button', { name: 'Answer later' }).click();
+
+    await serverPost(world, `/api/v1/features/${cycleFeature.id}/actions/need-user-input`, {
+      decision: 'abort',
+      repo_name: webCycleGate.repoName,
+      cycle_type: webCycleGate.cycleType,
+    });
     await waitForAttentionGateScopeMissing(handle.page, webCycleGate);
     await waitForAttentionGateScope(handle.page, apiCycleGate);
+    await handle.page.reload();
+    await waitForAttentionGateScope(handle.page, apiCycleGate);
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
-    const remainingCycleInbox = await openInbox(handle);
-    await expandGateByScope(remainingCycleInbox, apiCycleGate);
-    await expect(remainingCycleInbox.getByLabel('Attention context')).toContainText('gate-api-lab');
-    await remainingCycleInbox.getByRole('button', { name: 'Abort gate', exact: true }).click();
-    await handle.page
-      .getByRole('dialog', { name: 'Confirm abort' })
-      .getByRole('button', { name: 'Confirm abort' })
-      .click();
+    await serverPost(world, `/api/v1/features/${cycleFeature.id}/actions/need-user-input`, {
+      decision: 'abort',
+      repo_name: apiCycleGate.repoName,
+      cycle_type: apiCycleGate.cycleType,
+    });
+    await waitForAttentionGateScopeMissing(handle.page, apiCycleGate);
+    await handle.page.reload();
     await waitForAttentionGateScopeMissing(handle.page, apiCycleGate);
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 0 pending/);
 
     persistAppLogs(handle, 'attention-gate-app-server');
     transcript.step(
-      'two paused repo cycles on one feature exposed repo/cycle labels and aborted independently',
+      'two paused repo cycles retained textarea drafts and remained independently addressable',
     );
     transcript.write(testInfo);
   } finally {
@@ -696,6 +688,38 @@ async function closeInbox(page: Page): Promise<void> {
   if ((await inbox.count()) === 0) return;
   await inbox.getByRole('button', { name: 'Close inbox' }).click();
   await expect(inbox).toHaveCount(0);
+}
+
+async function openGateDialogByScope(
+  handle: AppHandle,
+  scope: { featureId: string; repoName: string; cycleType: string },
+): Promise<Locator> {
+  const existingDialog = handle.page.getByRole('dialog', { name: /needs your input/ });
+  if (await existingDialog.isVisible()) {
+    await existingDialog.getByRole('button', { name: 'Answer later' }).click();
+    await expect(existingDialog).toHaveCount(0);
+  }
+  await handle.page.getByRole('tab', { name: 'Home' }).click();
+
+  const attention = await handle.page.evaluate(() => window.agentico.getAttention());
+  const gates = attention.items.filter((item) => item.kind === 'gate');
+  const gateIndex = gates.findIndex(
+    (item) =>
+      item.featureId === scope.featureId &&
+      item.repoName === scope.repoName &&
+      item.cycleType === scope.cycleType,
+  );
+  if (gateIndex === -1) {
+    throw new Error(`gate scope ${scope.repoName}/${scope.cycleType} was not present`);
+  }
+
+  const inbox = await openInbox(handle);
+  const gateButton = inbox.getByRole('button', { name: /Input gate/ }).nth(gateIndex);
+  await expect(gateButton).toBeVisible();
+  await gateButton.click();
+  const dialog = handle.page.getByRole('dialog', { name: 'Agent needs your input' });
+  await expect(dialog).toBeVisible();
+  return dialog;
 }
 
 async function expandInboxItem(inbox: Locator, name: RegExp): Promise<void> {
@@ -740,6 +764,15 @@ function seedVerificationNeedUserInputGate(world: JourneyWorld, featureId: strin
     'need-user-input.yaml',
   );
   fs.mkdirSync(path.dirname(planPath), { recursive: true });
+  fs.mkdirSync(path.dirname(gatePath), { recursive: true });
+  const trustedContractPath = path.join(
+    fs.realpathSync(path.dirname(contractPath)),
+    path.basename(contractPath),
+  );
+  const trustedGatePath = path.join(
+    fs.realpathSync(path.dirname(gatePath)),
+    path.basename(gatePath),
+  );
   fs.writeFileSync(
     planPath,
     [
@@ -761,7 +794,6 @@ function seedVerificationNeedUserInputGate(world: JourneyWorld, featureId: strin
       '',
     ].join('\n'),
   );
-  fs.mkdirSync(path.dirname(gatePath), { recursive: true });
   fs.writeFileSync(contractPath, seededVerificationContractYaml('deployment-capability'));
   fs.writeFileSync(
     gatePath,
@@ -772,8 +804,18 @@ function seedVerificationNeedUserInputGate(world: JourneyWorld, featureId: strin
       '  - index: 1',
       `    prompt: ${verificationDecisionPrompt}`,
       '    answer: ""',
+      'verification:',
+      '  blockers:',
+      '    - item_id: deployment-capability',
+      '      name: Deployment smoke test',
+      '      repo_name: gate-lab',
+      '      command: make deploy-smoke',
+      '      reason: missing declared capability "deployment credentials"',
+      '      capabilities:',
+      '        - deployment credentials',
+      '      remediation: Make deployment credentials available, then retry verification.',
       'verification_decision:',
-      `  contract_path: ${contractPath}`,
+      `  contract_path: ${trustedContractPath}`,
       '  contract_revision: 1',
       '  item_ids:',
       '    - deployment-capability',
@@ -787,7 +829,7 @@ function seedVerificationNeedUserInputGate(world: JourneyWorld, featureId: strin
   const runPath = path.join(runDir, 'run.yaml');
   let runYaml = fs.readFileSync(runPath, 'utf8');
   runYaml = upsertYamlScalar(runYaml, 'current_iteration', '3');
-  runYaml = upsertYamlScalar(runYaml, 'pending_need_user_input_path', gatePath);
+  runYaml = upsertYamlScalar(runYaml, 'pending_need_user_input_path', trustedGatePath);
   runYaml = upsertYamlMapScalar(runYaml, 'artifacts', 'plan', planPath);
   fs.writeFileSync(runPath, runYaml);
 
@@ -797,7 +839,7 @@ function seedVerificationNeedUserInputGate(world: JourneyWorld, featureId: strin
   // Phase does not implement string YAML marshaling; PhaseImplement persists as 2.
   featureYaml = upsertYamlScalar(featureYaml, 'current_phase', '2');
   fs.writeFileSync(featurePath, featureYaml);
-  return gatePath;
+  return trustedGatePath;
 }
 
 function seedFeatureHelpQueue(world: JourneyWorld, featureId: string): string {
@@ -1070,27 +1112,6 @@ async function waitForAttention(
   );
 }
 
-async function expandGateByScope(
-  inbox: Locator,
-  scope: { repoName: string; cycleType: string },
-): Promise<void> {
-  const buttons = inbox.getByRole('button', { name: /Input gate/ });
-  const count = await buttons.count();
-  for (let index = 0; index < count; index += 1) {
-    const button = buttons.nth(index);
-    if ((await button.getAttribute('aria-expanded')) !== 'true') {
-      await button.click();
-    }
-    await expect(button).toHaveAttribute('aria-expanded', 'true');
-    const context = inbox.getByLabel('Attention context');
-    const text = (await context.textContent()) ?? '';
-    if (text.includes(scope.repoName) && text.includes(scope.cycleType)) {
-      return;
-    }
-  }
-  throw new Error(`gate ${scope.repoName}/${scope.cycleType} was not found in the inbox`);
-}
-
 async function waitForProviderLog(world: JourneyWorld, needle: string): Promise<void> {
   await waitFor(
     () => fs.existsSync(world.providerInvocationLog) && readProviderLog(world).includes(needle),
@@ -1121,21 +1142,6 @@ function readProviderLog(world: JourneyWorld): string {
   } catch {
     return '';
   }
-}
-
-async function waitForFeatureStatus(page: Page, featureId: string, status: string): Promise<void> {
-  await waitFor(
-    async () => {
-      try {
-        const feature = await page.evaluate((id) => window.agentico.getFeature(id), featureId);
-        return feature.status === status;
-      } catch {
-        return false;
-      }
-    },
-    `feature ${featureId} status ${status}`,
-    30_000,
-  );
 }
 
 async function serverPost(

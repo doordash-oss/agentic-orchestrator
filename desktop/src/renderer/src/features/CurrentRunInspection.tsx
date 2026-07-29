@@ -213,7 +213,21 @@ export function CurrentRunInspection({
   const requestRef = useRef(0);
   const catalogueRequestRef = useRef(0);
 
-  const live = useCohortTranscripts(featureId, runNumber, currentPhase, shouldStream);
+  const currentReviewAxes = useMemo(
+    () =>
+      reviewGate.reviewingGate
+        ? orderedReviewStatuses(reviewGate.validatorStatuses).map(([name]) => name)
+        : undefined,
+    [reviewGate.reviewingGate, reviewGate.validatorStatuses],
+  );
+  const live = useCohortTranscripts(
+    featureId,
+    runNumber,
+    currentPhase,
+    shouldStream,
+    currentIteration,
+    currentReviewAxes,
+  );
   const presentedCohort =
     presentation === 'cycle'
       ? focusCurrentCycleSession(live.cohort, live.selectedId, cycle)

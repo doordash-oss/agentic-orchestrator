@@ -968,6 +968,83 @@ describe('CurrentRunInspection', () => {
     expect(screen.queryByText('Security review underway.')).not.toBeInTheDocument();
   });
 
+  it('restores only the current review batch after initial hydration', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Reviewing implementation',
+      contextPercentage: 37,
+      totalSeconds: 100,
+      totalUsd: 1.5,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 8,
+      sessions: [
+        validator({ id: 'old-craft', label: 'Craft', iteration: 1, status: 'completed' }),
+        validator({ id: 'craft', label: 'Craft', iteration: 2, status: 'completed' }),
+        validator({
+          id: 'functionality',
+          label: 'Functionality/Evidence',
+          iteration: 2,
+          status: 'failed',
+        }),
+        validator({
+          id: 'cleanliness',
+          label: 'Cleanliness',
+          iteration: 2,
+          status: 'running',
+        }),
+      ],
+    });
+    mock.api.getSessionTranscript.mockImplementation(({ sessionId }: { sessionId: string }) =>
+      Promise.resolve({
+        sessionId,
+        cursor: { total: 1, start: 0, end: 1 },
+        messages: [
+          {
+            index: 0,
+            role: 'assistant',
+            type: 'text',
+            text: `${sessionId} transcript`,
+          },
+        ],
+      }),
+    );
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        currentIteration={2}
+        reviewGate={{
+          reviewingGate: true,
+          reviewFixing: false,
+          validatingPlan: false,
+          validatorStatuses: {
+            Craft: 'APPROVED',
+            'Functionality/Evidence': 'CHANGES_REQUESTED',
+            Cleanliness: 'running',
+          },
+        }}
+      />,
+    );
+
+    const tabs = await screen.findAllByRole('tab');
+    expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual([
+      'Craft — completed',
+      'Functionality/Evidence — failed',
+      'Cleanliness — running',
+    ]);
+    expect(screen.queryByText('old-craft transcript')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Craft — completed' }));
+    expect(await screen.findByText('craft transcript')).toBeVisible();
+  });
+
   it('groups the roster by role and walks agents with arrow keys', async () => {
     const user = userEvent.setup();
     const mock = installAgenticoMock();

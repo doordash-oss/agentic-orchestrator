@@ -28,6 +28,8 @@ export function useCohortTranscripts(
   runNumber: number,
   currentPhase: string,
   shouldStream: boolean,
+  currentIteration?: number,
+  currentReviewAxes?: readonly string[],
 ): CohortTranscripts {
   const [runSessions, setRunSessions] = useState<SessionSummary[]>([]);
   const [membership, setMembership] = useState(EMPTY_COHORT);
@@ -67,16 +69,23 @@ export function useCohortTranscripts(
   // Fold the discovered sessions into a stable, retention-aware cohort.
   useEffect(() => {
     setMembership((previous) => {
-      const next = computeCohort(previous, runSessions, currentPhase);
+      const next = computeCohort(
+        previous,
+        runSessions,
+        currentPhase,
+        currentIteration,
+        currentReviewAxes,
+      );
       if (
         membershipKey(next.sessionIds) === membershipKey(previous.sessionIds) &&
-        next.phase === previous.phase
+        next.phase === previous.phase &&
+        next.iteration === previous.iteration
       ) {
         return previous;
       }
       return next;
     });
-  }, [runSessions, currentPhase]);
+  }, [runSessions, currentPhase, currentIteration, currentReviewAxes]);
 
   const cohort = useMemo(
     () =>

@@ -1135,8 +1135,12 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 		if prompt == "" {
 			continue
 		}
+		questionIndex := q.Index
+		if questionIndex <= 0 {
+			questionIndex = len(dto.Questions) + 1
+		}
 		dto.Questions = append(dto.Questions, NeedUserInputQuestionDTO{
-			Index: q.Index,
+			Index: questionIndex,
 			Prompt: agent.BoundNeedUserInputVerificationString(
 				prompt,
 				agent.NeedUserInputVerificationContextTextMaxLength,

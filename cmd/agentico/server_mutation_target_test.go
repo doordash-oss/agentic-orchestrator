@@ -698,7 +698,7 @@ func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPr
 		Iteration: 3,
 		Questions: []agent.NeedUserInputQuestion{
 			{Index: 1, Prompt: "Which database should back search?"},
-			{Index: 2, Prompt: "How should rollout be staged?"},
+			{Prompt: "How should rollout be staged?"},
 		},
 	}
 	if err := agent.WriteNeedUserInputRecord(gatePath, original); err != nil {

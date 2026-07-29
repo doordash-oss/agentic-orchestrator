@@ -674,7 +674,7 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 		Iteration: 3,
 		Questions: []agent.NeedUserInputQuestion{
 			{Index: 1, Prompt: "Which database should implementation use?", Answer: "Postgres"},
-			{Index: 2, Prompt: "Should we migrate existing data?", Answer: ""},
+			{Prompt: "Should we migrate existing data?", Answer: ""},
 		},
 		Verification: &agent.NeedUserInputVerificationContext{
 			Blockers: []agent.NeedUserInputVerificationBlocker{{
@@ -738,6 +738,10 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 		firstDetailQuestion["prompt"] != "Which database should implementation use?" ||
 		firstDetailQuestion["answer"] != "Postgres" {
 		t.Fatalf("detail gate first question = %+v", firstDetailQuestion)
+	}
+	secondDetailQuestion := detailQuestions[1].(map[string]any)
+	if secondDetailQuestion["index"] != float64(2) {
+		t.Fatalf("detail gate second question index = %v; want ordinal fallback 2", secondDetailQuestion["index"])
 	}
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)

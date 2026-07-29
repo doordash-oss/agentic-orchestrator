@@ -257,6 +257,7 @@ describe('AttentionService review items', () => {
         expect.objectContaining({
           kind: 'gate',
           id: 'feature-1::',
+          questions: [{ index: 1, prompt: 'active gate', answer: '' }],
           verification: {
             blockers: [
               {

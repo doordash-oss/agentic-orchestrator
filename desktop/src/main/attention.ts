@@ -157,7 +157,7 @@ export class AttentionService {
                 },
               }),
           questions: (gate.questions ?? []).map((question, index) => ({
-            index: question.index ?? index,
+            index: question.index !== undefined && question.index > 0 ? question.index : index + 1,
             prompt: question.prompt ?? `Question ${index + 1}`,
             answer: question.answer ?? '',
           })),

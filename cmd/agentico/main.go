@@ -2458,6 +2458,10 @@ func applyNeedUserInputDraftAnswers(rec *agent.NeedUserInputRecord, answers map[
 		if q.Index > 0 {
 			questionByKey[strconv.Itoa(q.Index)] = q
 			questionByKey[fmt.Sprintf("q%d", q.Index)] = q
+		} else {
+			ordinal := i + 1
+			questionByKey[strconv.Itoa(ordinal)] = q
+			questionByKey[fmt.Sprintf("q%d", ordinal)] = q
 		}
 		if prompt := strings.TrimSpace(q.Prompt); prompt != "" {
 			questionByKey[prompt] = q

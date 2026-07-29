@@ -103,7 +103,6 @@ describe('NeedUserInputModal', () => {
         featureId: gate.featureId,
         repoName: 'repo-a',
         cycleType: 'review-comments',
-        decision: 'resume',
       }),
     );
     expect(onResolved).toHaveBeenCalledOnce();
@@ -139,7 +138,6 @@ describe('NeedUserInputModal', () => {
         featureId: verificationGate.featureId,
         repoName: 'repo-a',
         cycleType: 'review-comments',
-        decision: 'resume',
       }),
     );
     expect(onResolved).toHaveBeenCalledOnce();

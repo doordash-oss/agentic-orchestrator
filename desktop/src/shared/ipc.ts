@@ -1513,10 +1513,8 @@ export const GateDraftRequestSchema = GateTargetSchema.extend({
     .refine((answers) => Object.keys(answers).length > 0),
 });
 export type GateDraftRequest = z.output<typeof GateDraftRequestSchema>;
-export const GateResolutionRequestSchema = GateTargetSchema.extend({
-  decision: z.enum(['resume', 'abort']),
-});
-export type GateResolutionRequest = z.output<typeof GateResolutionRequestSchema>;
+export const GateResumeRequestSchema = GateTargetSchema;
+export type GateResumeRequest = z.output<typeof GateResumeRequestSchema>;
 export const AttentionActionResultSchema = z.strictObject({
   result: z.string().max(500),
   alreadyResolved: z.boolean().optional(),
@@ -2383,7 +2381,7 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     response: AttentionActionResultSchema,
   },
   [IPC_CHANNELS.attentionResolveGate]: {
-    request: z.tuple([GateResolutionRequestSchema]),
+    request: z.tuple([GateResumeRequestSchema]),
     response: AttentionActionResultSchema,
   },
   [IPC_CHANNELS.chatStart]: {
@@ -2650,7 +2648,7 @@ export interface AgenticoApi {
   answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult>;
   sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult>;
   saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
-  resolveGate(request: GateResolutionRequest): Promise<AttentionActionResult>;
+  resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
   startChat(request: ChatStartRequest): Promise<ChatActionResult>;
   endChat(): Promise<ChatActionResult>;
   listSessions(): Promise<SessionSummary[]>;

@@ -192,15 +192,13 @@ describe('AttentionInbox gate detail', () => {
         featureId: gateItem.featureId,
         repoName: 'repo-a',
         cycleType: 'review-comments',
-        decision: 'resume',
       }),
     );
   });
 
-  it('uses the warning waiver label and preserves scoped abort routing', async () => {
+  it('uses the warning waiver label without exposing gate-specific abort controls', async () => {
     const mock = installAgenticoMock();
     mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
-    mock.api.resolveGate.mockResolvedValue({ result: 'aborted' });
     const user = userEvent.setup();
     render(<GateDetailHarness />);
 
@@ -217,16 +215,8 @@ describe('AttentionInbox gate detail', () => {
       }),
     );
 
-    await user.click(screen.getByRole('button', { name: 'Abort gate' }));
-    await user.click(screen.getByRole('button', { name: 'Confirm abort' }));
-    await waitFor(() =>
-      expect(mock.api.resolveGate).toHaveBeenCalledWith({
-        featureId: gateItem.featureId,
-        repoName: 'repo-a',
-        cycleType: 'review-comments',
-        decision: 'abort',
-      }),
-    );
+    expect(screen.queryByRole('button', { name: 'Abort gate' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Confirm abort' })).not.toBeInTheDocument();
   });
 
   it('keeps legacy gate textareas and the resume action', () => {

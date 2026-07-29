@@ -8,7 +8,7 @@ import {
   AskUserAnswerRequestSchema,
   AttentionSnapshotSchema,
   GateDraftRequestSchema,
-  GateResolutionRequestSchema,
+  GateResumeRequestSchema,
   HelpAnswerRequestSchema,
   PermissionDecisionRequestSchema,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
@@ -19,7 +19,7 @@ import {
   type AttentionSnapshot,
   type AskUserAnswerRequest,
   type GateDraftRequest,
-  type GateResolutionRequest,
+  type GateResumeRequest,
   type HelpAnswerRequest,
   type PermissionDecisionRequest,
 } from '../shared/ipc';
@@ -220,10 +220,9 @@ export class AttentionService {
       answers: input.answers,
     });
   }
-  async resolveGate(request: GateResolutionRequest): Promise<AttentionActionResult> {
-    const input = validateWithSchema(request, GateResolutionRequestSchema);
+  async resolveGate(request: GateResumeRequest): Promise<AttentionActionResult> {
+    const input = validateWithSchema(request, GateResumeRequestSchema);
     return this.mutate(`/api/v1/features/${input.featureId}/actions/need-user-input`, {
-      decision: input.decision,
       ...(input.repoName === undefined ? {} : { repo_name: input.repoName }),
       ...(input.cycleType === undefined ? {} : { cycle_type: input.cycleType }),
     });

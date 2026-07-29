@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -348,28 +347,9 @@ export function AttentionDetail({
   drafts: AttentionDrafts;
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
 }) {
-  const [confirmingAbort, setConfirmingAbort] = useState(false);
-  const abortButtonRef = useRef<HTMLButtonElement>(null);
   const detailKey = `${item.kind}:${item.id}`;
   const helpText = drafts.help[detailKey] ?? '';
   const questionDraft = drafts.questions[detailKey] ?? {};
-
-  const closeAbortConfirm = useCallback(() => {
-    setConfirmingAbort(false);
-    abortButtonRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    if (!confirmingAbort) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeAbortConfirm();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [closeAbortConfirm, confirmingAbort]);
 
   if (item.kind === 'permission')
     return (
@@ -660,7 +640,6 @@ export function AttentionDetail({
                   featureId: item.featureId,
                   ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
                   ...(item.cycleType === undefined ? {} : { cycleType: item.cycleType }),
-                  decision: 'resume',
                 });
               })
             }
@@ -671,61 +650,8 @@ export function AttentionDetail({
                 : 'Retry verification'
               : 'Resume'}
           </button>
-          <button
-            ref={abortButtonRef}
-            className="attention-button attention-button--danger"
-            disabled={busy}
-            onClick={() => setConfirmingAbort(true)}
-          >
-            Abort gate
-          </button>
           <AttentionJumpAction item={item} onJump={onJump} />
         </div>
-        {confirmingAbort ? (
-          <div className="attention-confirm__backdrop" data-attention-confirm="true">
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby={`${detailKey}-abort-title`}
-              className="attention-confirm"
-            >
-              <p className="attention-confirm__eyebrow">Abort gate</p>
-              <h3 id={`${detailKey}-abort-title`}>Confirm abort</h3>
-              <p>
-                {item.repoName === undefined
-                  ? 'Abort will terminally fail this feature.'
-                  : 'Abort will fail only this repository cycle; sibling cycles continue.'}
-              </p>
-              <div className="attention-confirm__actions">
-                <button
-                  className="attention-button"
-                  type="button"
-                  onClick={closeAbortConfirm}
-                  autoFocus
-                >
-                  Keep working
-                </button>
-                <button
-                  className="attention-button attention-button--danger"
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    submit(() =>
-                      window.agentico.resolveGate({
-                        featureId: item.featureId,
-                        ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
-                        ...(item.cycleType === undefined ? {} : { cycleType: item.cycleType }),
-                        decision: 'abort',
-                      }),
-                    )
-                  }
-                >
-                  Confirm abort
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
       </div>
     );
   }

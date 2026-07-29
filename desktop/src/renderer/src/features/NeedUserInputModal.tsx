@@ -95,7 +95,6 @@ export function NeedUserInputModal({
         featureId: item.featureId,
         ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
         ...(item.cycleType === undefined ? {} : { cycleType: item.cycleType }),
-        decision: 'resume',
       });
       await onResolved();
     } catch (cause) {

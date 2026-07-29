@@ -48,7 +48,7 @@ import {
   type AskUserAnswerRequest,
   type HelpAnswerRequest,
   type GateDraftRequest,
-  type GateResolutionRequest,
+  type GateResumeRequest,
   type AttentionActionResult,
   type ChatActionResult,
   type ChatStartRequest,
@@ -155,7 +155,7 @@ export interface IpcServices {
   answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult>;
   sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult>;
   saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
-  resolveGate(request: GateResolutionRequest): Promise<AttentionActionResult>;
+  resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
   startChat(request: ChatStartRequest): Promise<ChatActionResult>;
   endChat(): Promise<ChatActionResult>;
   loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): LocalReviewDraft | null;
@@ -287,7 +287,7 @@ export function registerIpcHandlers(
       services.sendHelp(request),
     [IPC_CHANNELS.attentionSaveGateDraft]: (_event, request: GateDraftRequest) =>
       services.saveGateDraft(request),
-    [IPC_CHANNELS.attentionResolveGate]: (_event, request: GateResolutionRequest) =>
+    [IPC_CHANNELS.attentionResolveGate]: (_event, request: GateResumeRequest) =>
       services.resolveGate(request),
     [IPC_CHANNELS.chatStart]: (_event, request: ChatStartRequest) => services.startChat(request),
     [IPC_CHANNELS.chatEnd]: () => services.endChat(),

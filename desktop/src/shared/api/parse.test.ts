@@ -153,4 +153,42 @@ describe('parseServerJson', () => {
         .code,
     ).toBe('E_SCHEMA_MISMATCH');
   });
+
+  it('accepts generic verification fallback only with an empty action array', () => {
+    const fallbackFixture = {
+      api_version: 'v1',
+      ask_user_questions: [],
+      help_queue: [],
+      need_user_inputs: [
+        {
+          feature_id: 'feature-1',
+          open: true,
+          questions: [{ index: 1, prompt: 'Choose an action.', answer: '' }],
+          verification: {
+            blockers: [
+              {
+                item_id: 'future-action',
+                name: 'Future verification check',
+                command: 'make verify',
+                reason: 'the server did not recognize a legacy action',
+                capabilities: [],
+                remediation: 'Answer the generic prompt.',
+              },
+            ],
+            allowed_actions: [],
+          },
+        },
+      ],
+    };
+
+    expect(
+      parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema)
+        .need_user_inputs[0]?.verification?.allowed_actions,
+    ).toEqual([]);
+    fallbackFixture.need_user_inputs[0]!.verification.allowed_actions = null as never;
+    expect(
+      failure(() => parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema))
+        .code,
+    ).toBe('E_SCHEMA_MISMATCH');
+  });
 });

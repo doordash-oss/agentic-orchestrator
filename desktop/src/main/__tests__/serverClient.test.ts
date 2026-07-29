@@ -81,6 +81,38 @@ describe('serverRequest', () => {
     ).resolves.toBe(body);
   });
 
+  it('maps a bounded irreducible prompt snapshot error without exposing an oversized success', async () => {
+    const body = {
+      api_version: 'v1',
+      error: {
+        code: 'prompt_snapshot_too_large',
+        message: 'pending prompt snapshot exceeds the safe response limit',
+        status: 500,
+      },
+    };
+    expect(new TextEncoder().encode(JSON.stringify(body)).byteLength).toBeLessThan(1024);
+
+    const failure = await serverRequest(
+      transportReturning({ status: 500, body }),
+      '/api/v1/prompts',
+      undefined,
+      {
+        remedyByCode: {
+          prompt_snapshot_too_large:
+            'Stop obsolete runs or resolve pending input gates from another client, then retry.',
+        },
+      },
+    ).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(SafeErrorException);
+    expect((failure as SafeErrorException).safe).toEqual({
+      code: 'prompt_snapshot_too_large',
+      message: 'pending prompt snapshot exceeds the safe response limit',
+      remediation:
+        'Stop obsolete runs or resolve pending input gates from another client, then retry.',
+    });
+  });
+
   it('throws the mapped SafeErrorException on non-2xx statuses', async () => {
     const failure = await serverRequest(
       transportReturning({

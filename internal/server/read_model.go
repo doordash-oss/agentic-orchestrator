@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"sort"
@@ -33,7 +34,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-const maxFeatureDetailHistoricalRuns = 5
+const (
+	maxFeatureDetailHistoricalRuns = 5
+	promptSnapshotTooLargeCode     = "prompt_snapshot_too_large"
+)
+
+var errNeedUserInputGateCollectionTooLarge = errors.New("pending prompt snapshot exceeds the safe response limit")
 
 // Tool names as reported by the LLM control protocol; shared across
 // read_model.go, session_model.go, sse.go and their tests.
@@ -834,7 +840,17 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
 	asks, perms := h.pendingControls()
 	_ = perms
-	help, gates := h.featureQueues()
+	help, gates, err := h.featureQueues()
+	if err != nil {
+		writeAPIError(
+			w,
+			http.StatusInternalServerError,
+			promptSnapshotTooLargeCode,
+			errNeedUserInputGateCollectionTooLarge.Error(),
+			nil,
+		)
+		return
+	}
 	resp := PromptSnapshotResponse{
 		APIVersion:       APIVersion,
 		AskUserQuestions: asks,
@@ -1002,7 +1018,7 @@ func (h *apiHandler) pendingControls() ([]ControlRequestDTO, []ControlRequestDTO
 	return dtosOf(asks, dto), dtosOf(perms, dto)
 }
 
-func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
+func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO, error) {
 	features, _, _ := listFeatures(h.features)
 	var help []orderedHelpQueue
 	var gates []orderedNeedInputGate
@@ -1062,9 +1078,11 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 	}
 	sortOrderedHelpQueue(help)
 	sortOrderedNeedInputGates(gates)
-	boundNeedUserInputGateCollection(gates)
+	if err := boundNeedUserInputGateCollection(gates); err != nil {
+		return nil, nil, err
+	}
 	return dtosOf(help, func(w orderedHelpQueue) HelpQueueDTO { return w.dto }),
-		dtosOf(gates, func(w orderedNeedInputGate) NeedInputGateDTO { return w.dto })
+		dtosOf(gates, func(w orderedNeedInputGate) NeedInputGateDTO { return w.dto }), nil
 }
 
 func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
@@ -1136,6 +1154,7 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 				0,
 				min(len(rec.Verification.Blockers), agent.NeedUserInputVerificationMaxBlockers),
 			),
+			AllowedActions: []NeedUserInputVerificationAction{},
 		}
 		for _, blocker := range rec.Verification.Blockers {
 			if len(verification.Blockers) == agent.NeedUserInputVerificationMaxBlockers {
@@ -1280,7 +1299,7 @@ func needUserInputGateFitsDisplayBudget(dto NeedInputGateDTO) bool {
 	return err == nil && len(data) <= agent.NeedUserInputGateDisplayMaxBytes
 }
 
-func boundNeedUserInputGateCollection(gates []orderedNeedInputGate) {
+func boundNeedUserInputGateCollection(gates []orderedNeedInputGate) error {
 	questionCount := 0
 	for i := range gates {
 		questionCount += len(gates[i].dto.Questions)
@@ -1308,7 +1327,7 @@ func boundNeedUserInputGateCollection(gates []orderedNeedInputGate) {
 		}
 	}
 	if needUserInputGateCollectionFitsBudget(gates) {
-		return
+		return nil
 	}
 	for i := range gates {
 		if gates[i].dto.Verification == nil {
@@ -1319,13 +1338,13 @@ func boundNeedUserInputGateCollection(gates []orderedNeedInputGate) {
 		}
 	}
 	if needUserInputGateCollectionFitsBudget(gates) {
-		return
+		return nil
 	}
 	for i := range gates {
 		gates[i].dto.Summary = ""
 	}
 	if needUserInputGateCollectionFitsBudget(gates) {
-		return
+		return nil
 	}
 	for i := len(gates) - 1; i >= 0; i-- {
 		if gates[i].dto.Verification == nil {
@@ -1333,9 +1352,10 @@ func boundNeedUserInputGateCollection(gates []orderedNeedInputGate) {
 		}
 		gates[i].dto.Verification = nil
 		if needUserInputGateCollectionFitsBudget(gates) {
-			return
+			return nil
 		}
 	}
+	return errNeedUserInputGateCollectionTooLarge
 }
 
 func needUserInputGateCollectionFitsBudget(gates []orderedNeedInputGate) bool {

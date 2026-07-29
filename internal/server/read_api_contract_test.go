@@ -1023,6 +1023,44 @@ func TestPromptSnapshotCapabilityFallbackKeepsRequiredArrayShape(t *testing.T) {
 	}
 }
 
+func TestPromptSnapshotUnknownVerificationActionsKeepRequiredArrayShape(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Choose an action."}},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID: "future-action", Name: "Future verification check",
+				Command: "make verify", Reason: "a legacy server wrote an unknown action",
+				Capabilities: []string{}, Remediation: "Answer the generic prompt.",
+			}},
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ItemIDs:        []string{"future-action"},
+			AllowedActions: []string{"REQUEST_ADMIN_ESCALATION"},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	payload := getJSONMap(t, NewHandler(baseReadHandlerOptions(store)), apiPathPrompts)
+	gate := payload["need_user_inputs"].([]any)[0].(map[string]any)
+	verification := gate["verification"].(map[string]any)
+	actions, ok := verification["allowed_actions"].([]any)
+	if !ok {
+		t.Fatalf("allowed_actions JSON = %#v, want required array", verification["allowed_actions"])
+	}
+	if len(actions) != 0 {
+		t.Fatalf("allowed_actions = %#v, want empty array for unknown legacy actions", actions)
+	}
+}
+
 func TestPromptSnapshotBoundsNeedUserInputCollectionAcrossManyGates(t *testing.T) {
 	t.Parallel()
 	store, base := seedReadFeature(t)
@@ -1104,6 +1142,62 @@ func TestPromptSnapshotBoundsNeedUserInputCollectionAcrossManyGates(t *testing.T
 		if len(questions) != 1 || strings.TrimSpace(questions[0].(map[string]any)["prompt"].(string)) == "" {
 			t.Fatalf("gate %d questions = %#v, want preserved resolvable questionnaire", i, questions)
 		}
+	}
+}
+
+func TestPromptSnapshotRejectsIrreducibleQuestionnaireCollection(t *testing.T) {
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	questions := make([]agent.NeedUserInputQuestion, agent.NeedUserInputGateMaxQuestions)
+	for i := range questions {
+		questions[i] = agent.NeedUserInputQuestion{Index: i + 1, Prompt: "x", Answer: "x"}
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Questions: questions,
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.RepoCycles = make(map[string]*feature.RepoCycleState, 1000)
+	repoSuffix := strings.Repeat("r", 495)
+	for i := 0; i < 1000; i++ {
+		repoName := fmt.Sprintf("%04d-%s", i, repoSuffix)
+		f.RepoCycles[repoName] = &feature.RepoCycleState{
+			Type:                     feature.CycleReviewComments,
+			Status:                   feature.RepoCycleNeedUserInput,
+			Iteration:                1,
+			PendingNeedUserInputPath: gatePath,
+		}
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, apiPathPrompts, nil)
+	response := httptest.NewRecorder()
+	NewHandler(baseReadHandlerOptions(store)).ServeHTTP(response, request)
+	if response.Code >= 200 && response.Code < 300 {
+		t.Fatalf(
+			"GET %s emitted oversized success: status = %d, bytes = %d",
+			apiPathPrompts,
+			response.Code,
+			response.Body.Len(),
+		)
+	}
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("GET %s status = %d, want 500", apiPathPrompts, response.Code)
+	}
+	if response.Body.Len() > 1024 {
+		t.Fatalf("error response bytes = %d, want bounded body", response.Body.Len())
+	}
+	var payload ErrorResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal(error response) error = %v", err)
+	}
+	if payload.Error.Code != "prompt_snapshot_too_large" {
+		t.Fatalf("error code = %q, want prompt_snapshot_too_large", payload.Error.Code)
+	}
+	if payload.Error.Status != http.StatusInternalServerError {
+		t.Fatalf("error status = %d, want 500", payload.Error.Status)
 	}
 }
 

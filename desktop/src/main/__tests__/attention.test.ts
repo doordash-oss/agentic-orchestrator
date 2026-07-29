@@ -37,7 +37,7 @@ describe('AttentionService mutations', () => {
 });
 
 describe('AttentionService review items', () => {
-  it('normalizes supported verification actions and ignores unknown future actions', async () => {
+  it('normalizes supported actions and keeps all-unknown actions on generic fallback', async () => {
     const service = new AttentionService({
       apiRequest: (path) => {
         const body =
@@ -63,7 +63,7 @@ describe('AttentionService review items', () => {
                           remediation: 'Choose a supported action or answer the generic prompt.',
                         },
                       ],
-                      allowed_actions: [' waive ', 'REQUEST_ADMIN_ESCALATION'],
+                      allowed_actions: ['REQUEST_ADMIN_ESCALATION', 'ASK_OWNER'],
                     },
                   },
                   {
@@ -121,7 +121,7 @@ describe('AttentionService review items', () => {
       throw new Error('expected both verification gates');
     }
 
-    expect(unknownActionGate.verification?.allowedActions).toEqual(['WAIVE']);
+    expect(unknownActionGate.verification?.allowedActions).toEqual([]);
     expect(supportedActionsGate.verification?.allowedActions).toEqual([
       'RETRY_AFTER_AUTH',
       'WAIVE',

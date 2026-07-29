@@ -2974,6 +2974,7 @@ export interface operations {
         responses: {
             200: components["responses"]["PromptSnapshotResponse"];
             401: components["responses"]["Unauthorized"];
+            500: components["responses"]["ErrorResponse"];
         };
     };
     answerAskUserPrompt: {

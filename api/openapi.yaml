@@ -580,6 +580,8 @@ paths:
           $ref: "#/components/responses/PromptSnapshotResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/prompts/ask-user/answer:
     post:

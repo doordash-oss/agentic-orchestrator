@@ -1317,3 +1317,205 @@ Report:
 - **Fast suite**, **E2E smoke shell**, **Isolated integration**, and **E2E Go** results;
 - `go vet ./...`, `go build ./...`, desktop test/check/build, and packaged journey results;
 - **Race regression skipped:** no concurrency-sensitive behavior was introduced.
+
+---
+
+## Final-Review Amendment
+
+The whole-implementation review found two cross-layer gaps not exercised by
+the cycle-scoped packaged fixture: Stop did not clear feature-scoped gate
+state, and trusted artifact context was not bounded to the API/desktop
+contract. The same review found stale abort-themed manager wording and a
+forward-compatibility mismatch for unknown future actions. Tasks 11–13 close
+those findings before handoff.
+
+### Task 11: Make Stop Retire Every Gate Scope
+
+**Files:**
+- Modify: `internal/orchestrator/orchestrator.go`
+- Modify: `internal/orchestrator/orchestrator_interrupt_test.go`
+- Modify: `internal/server/read_api_contract_test.go`
+- Modify: `internal/feature/manager.go`
+- Modify: `internal/feature/manager_test.go`
+- Modify: `desktop/test/e2e/journeys/attention-resolution.spec.ts`
+
+**Interfaces:**
+- Consumes: feature-level Stop and feature-, cycle-, and rebase-scoped gate
+  state.
+- Produces: terminal `Interrupted` state with no actionable gate attention.
+
+- [ ] **Step 1: Write failing feature-gate Stop tests**
+
+Extend `TestOrchestrator_InterruptFeature` with a non-empty
+`PendingNeedUserInputPath` and assert Stop clears it while preserving KB state.
+Add a read-model regression proving an interrupted feature with stale legacy
+gate state is not published as an actionable gate.
+
+- [ ] **Step 2: Run focused Go tests and verify RED**
+
+Run:
+
+```bash
+go test ./internal/orchestrator -run InterruptFeature -count=1
+go test ./internal/server -run 'NeedUserInput|PromptSnapshot' -count=1
+```
+
+Expected: failures because Stop retains the feature gate path and the read
+model emits any non-empty path regardless of status.
+
+- [ ] **Step 3: Clear and suppress stopped feature gates**
+
+When `InterruptFeature` clears pending help and permission flags, also clear
+`PendingNeedUserInputPath`. As defense against legacy on-disk state, publish a
+feature-scoped gate only while the feature status is
+`feature.StatusNeedUserInput`. Preserve active-cycle Stop behavior, restart
+semantics, session ordering, KB state, and interruption events.
+
+- [ ] **Step 4: Remove stale abort-themed manager remnants**
+
+Keep generic `FailRepoCycle` and `FailFeatureRebaseCycle` cleanup coverage, but
+rename comments, test names, fixture errors, and assertions so they describe
+cycle failure cleanup rather than a user abort journey. Do not weaken the
+generic failure behavior.
+
+- [ ] **Step 5: Add packaged feature-scoped Stop coverage**
+
+Extend the packaged NEED_USER_INPUT journey with a real feature-scoped gate.
+Use the existing feature Stop UI, assert the feature becomes `Interrupted`,
+the feature-scoped gate disappears, attention reaches zero, and the cleared
+state survives reload. Keep the existing cycle-scoped Stop proof.
+
+- [ ] **Step 6: Verify and commit**
+
+Run:
+
+```bash
+go test ./internal/orchestrator ./internal/server ./internal/feature -count=1
+npm run test:e2e:packaged --workspace desktop -- test/e2e/journeys/attention-resolution.spec.ts --grep "packaged inbox renders and drafts a real NEED_USER_INPUT gate"
+npx prettier --check desktop/test/e2e/journeys/attention-resolution.spec.ts
+make test-fast
+```
+
+Expected: PASS, with no gate-abort wording outside explicit negative
+retirement tests. Commit:
+
+```bash
+git commit -m "Clear feature gates when stopping"
+```
+
+---
+
+### Task 12: Bound and Future-Proof Verification Context
+
+**Files:**
+- Modify: `internal/agent/need_user_input.go`
+- Modify: `internal/agent/need_user_input_test.go`
+- Modify: `internal/server/read_model.go`
+- Modify: `internal/server/read_api_contract_test.go`
+- Modify: `api/openapi.yaml`
+- Modify: `desktop/src/shared/api/parse.ts`
+- Modify: `desktop/src/shared/api/parse.test.ts`
+- Modify: `desktop/src/main/attention.ts`
+- Modify: `desktop/src/main/__tests__/attention.test.ts`
+
+**Interfaces:**
+- Consumes: trusted gate artifacts and attached/newer server prompt snapshots.
+- Produces: payloads that always fit the public/desktop limits, with unknown
+  future verification actions ignored before renderer validation.
+
+- [ ] **Step 1: Write failing boundary and compatibility tests**
+
+Add tests proving:
+
+- synthesis retains all trusted decision item IDs but exposes at most 100
+  blocker cards and 20 capabilities per blocker;
+- an oversized persisted artifact is serialized with at most 100 blockers, 20
+  capabilities, 200 characters for `item_id`, 500 for `repo_name`, and 64 KiB
+  for each user-facing context string;
+- the desktop prompt parser accepts bounded unknown action strings;
+- the main-process mapper filters unknown actions, preserves supported actions,
+  and therefore lets the existing renderer guard use generic fallback unless
+  both supported actions remain.
+
+- [ ] **Step 2: Run focused tests and verify RED**
+
+Run:
+
+```bash
+go test ./internal/agent ./internal/server -run 'Verification|NeedUserInput' -count=1
+npm run test --workspace desktop -- src/shared/api/parse.test.ts src/main/__tests__/attention.test.ts
+```
+
+Expected: count/length assertions fail and the desktop parser rejects an
+unknown action.
+
+- [ ] **Step 3: Enforce bounded synthesis and serialization**
+
+Define one documented set of gate-context limits matching the public/desktop
+contract. Bound synthesized display context without truncating the trusted
+`VerificationDecision.ItemIDs` used for waiver semantics. Apply the same
+limits defensively in `needUserInputGateDTO` for legacy or externally edited
+artifacts. Ensure truncation never emits invalid UTF-8 and never exceeds the
+declared limit after an ellipsis.
+
+Add matching `maxLength` declarations for verification blocker strings in
+OpenAPI while preserving `maxItems: 100`, `maxItems: 20`, and
+`maxItems: 2`.
+
+- [ ] **Step 4: Ignore unknown future actions safely**
+
+At the server-response parser, accept a bounded list of bounded strings rather
+than rejecting unknown enum values. In `AttentionService`, normalize,
+deduplicate, and retain only `WAIVE` and `RETRY_AFTER_AUTH` before validating
+the renderer IPC snapshot. The existing structured-decision guard must fall
+back to the generic questionnaire unless both supported actions are present.
+
+- [ ] **Step 5: Verify and commit**
+
+Run:
+
+```bash
+go test ./internal/agent ./internal/server -count=1
+npm run test --workspace desktop -- src/shared/api/parse.test.ts src/main/__tests__/attention.test.ts src/renderer/src/features/NeedUserInputVerificationDecision.test.tsx
+npm run check --workspace desktop
+go test ./internal/server -run TestGeneratedOpenAPIIsCurrent -count=1
+npm run check:api-drift --workspace desktop
+make test-fast
+```
+
+Expected: PASS. Because `api/openapi.yaml` contains pre-existing user changes,
+stage only Task 12 hunks. Commit:
+
+```bash
+git commit -m "Bound verification gate context"
+```
+
+---
+
+### Task 13: Reverify and Re-review the Complete Cleanup
+
+**Files:**
+- Modify only if verification or re-review reveals a defect owned by Tasks
+  1–12.
+
+- [ ] **Step 1: Rerun the affected packaged and source checks**
+
+Run the full Task 10 verification matrix plus the focused packaged
+NEED_USER_INPUT journey.
+
+- [ ] **Step 2: Audit the retirement boundary**
+
+Confirm no gate-abort runtime, contract, UI, E2E, manager comment, or
+abort-themed positive test remains. Preserve only negative tests proving old
+payload/UI keys are rejected or absent.
+
+- [ ] **Step 3: Request whole-implementation re-review**
+
+Provide the original final-review findings and the Task 11–12 fix ranges to a
+fresh reviewer. Resolve every Critical or Important finding before handoff.
+
+- [ ] **Step 4: Prepare final evidence**
+
+Report every verification tier, the focused packaged result, any known
+unchanged full-file packaged failures, all implementation/fix commits, and the
+pre-existing uncommitted user-change set.

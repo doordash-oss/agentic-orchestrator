@@ -334,6 +334,25 @@ describe('CurrentRunInspection', () => {
         },
       ],
     });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 2,
+      sessions: [
+        validator({ id: 'craft', label: 'Craft', iteration: 2, status: 'completed' }),
+        validator({
+          id: 'functionality',
+          label: 'Functionality/Evidence',
+          iteration: 2,
+          status: 'running',
+        }),
+        validator({
+          id: 'cleanliness',
+          label: 'Cleanliness',
+          iteration: 2,
+          status: 'failed',
+        }),
+        validator({ id: 'design', label: 'Design', iteration: 2, status: 'running' }),
+      ],
+    });
     mock.api.getRunArtifactContent.mockResolvedValue({
       id: 'phase-plan',
       offset: 0,
@@ -356,6 +375,7 @@ describe('CurrentRunInspection', () => {
         featureId="abcd1234ef567890"
         runNumber={2}
         currentPhase="Implement"
+        currentIteration={2}
         reviewGate={{
           reviewingGate: true,
           reviewFixing: true,
@@ -372,9 +392,9 @@ describe('CurrentRunInspection', () => {
 
     expect(await screen.findByText('Running implementation')).toBeVisible();
     expect(screen.getByText('42%')).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Reviewing implementation' })).toBeVisible();
-    expect(screen.getByText('Fix pass active')).toBeVisible();
-    expect(screen.getByLabelText('Review axes')).toHaveTextContent('Craft✓Func⟳Clean✕Design⟳');
+    expect(await screen.findByRole('tablist', { name: 'Live agents' })).toBeVisible();
+    expect(screen.queryByLabelText('Review gate')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
     const artifactsToggle = screen.getByRole('button', { name: 'Run artifacts (6)' });
     const logsToggle = screen.getByRole('button', { name: 'Bounded logs (1)' });
     expect(artifactsToggle).toHaveAttribute('aria-expanded', 'false');
@@ -1353,14 +1373,13 @@ describe('CurrentRunInspection', () => {
       />,
     );
 
-    // Counts: 2 of 4 have a verdict (passed + failed); 1 failure.
+    const progress = await screen.findByLabelText('Verification progress');
+    expect(progress).toHaveTextContent('go test ./...');
+    expect(progress).toHaveTextContent('npm run build');
+    expect(screen.queryByLabelText('Verification commands')).not.toBeInTheDocument();
     expect(
-      await screen.findByRole('heading', { name: 'Verifying implementation · 2/4' }),
-    ).toBeVisible();
-    const commands = screen.getByLabelText('Verification commands');
-    expect(commands).toHaveTextContent('go test ./...✓');
-    expect(commands).toHaveTextContent('npm run build⟳');
-    expect(commands).toHaveTextContent('e2e smoke✕');
+      screen.queryByRole('heading', { name: 'Verifying implementation · 2/4' }),
+    ).not.toBeInTheDocument();
 
     // The stale context reading is suppressed while verifying.
     expect(screen.queryByText('42%')).not.toBeInTheDocument();
@@ -1390,11 +1409,82 @@ describe('CurrentRunInspection', () => {
     expect(overlay).not.toHaveTextContent('42%');
   });
 
-  it('keeps the review gate when an active reviewing gate coincides with a stale verifying marker', async () => {
+  it('keeps live reviewer tabs when an active gate coincides with a stale verifying marker', async () => {
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
       activity: 'Running implementation',
+      contextPercentage: 42,
+      totalSeconds: 73,
+      totalUsd: 0.12,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 8,
+      sessions: [
+        validator({
+          id: 'craft',
+          label: 'Craft',
+          iteration: 2,
+          status: 'completed',
+        }),
+        validator({
+          id: 'functionality',
+          label: 'Functionality/Evidence',
+          iteration: 2,
+          status: 'completed',
+        }),
+        validator({
+          id: 'cleanliness',
+          label: 'Cleanliness',
+          iteration: 2,
+          status: 'running',
+        }),
+        validator({
+          id: 'design',
+          label: 'Design',
+          iteration: 2,
+          status: 'running',
+        }),
+      ],
+    });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        currentIteration={2}
+        phaseStatus="verifying"
+        reviewGate={{
+          reviewingGate: true,
+          reviewFixing: false,
+          validatingPlan: false,
+          validatorStatuses: {
+            Craft: 'APPROVED',
+            'Functionality/Evidence': 'APPROVED',
+            Cleanliness: 'running',
+            Design: 'running',
+          },
+        }}
+        verificationItems={[{ name: 'go test', state: 'running' }]}
+      />,
+    );
+
+    expect(await screen.findByRole('tablist', { name: 'Live agents' })).toBeVisible();
+    expect(
+      screen.queryByRole('heading', { name: /Verifying implementation/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Review gate')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
+  });
+
+  it('keeps the review summary in sealed record presentation', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Run complete',
       contextPercentage: 42,
       totalSeconds: 73,
       totalUsd: 0.12,
@@ -1408,21 +1498,18 @@ describe('CurrentRunInspection', () => {
         featureId="abcd1234ef567890"
         runNumber={8}
         currentPhase="Implement"
-        phaseStatus="verifying"
         reviewGate={{
           reviewingGate: true,
           reviewFixing: false,
           validatingPlan: false,
           validatorStatuses: { Craft: 'APPROVED' },
         }}
-        verificationItems={[{ name: 'go test', state: 'running' }]}
+        presentation="record"
+        shouldStream={false}
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Reviewing implementation' })).toBeVisible();
-    expect(
-      screen.queryByRole('heading', { name: /Verifying implementation/ }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Review axes')).toBeVisible();
+    expect(await screen.findByLabelText('Review gate')).toBeVisible();
+    expect(screen.getByLabelText('Review axes')).toHaveTextContent('Craft✓');
   });
 });

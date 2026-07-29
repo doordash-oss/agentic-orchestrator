@@ -528,16 +528,18 @@ export function CurrentRunInspection({
 
       {initialLoading && presentation === 'record' ? null : (
         <>
-          {verifying && verificationItems !== undefined ? (
-            <VerificationSummary items={verificationItems} />
-          ) : (
-            <ReviewGateSummary
-              gate={reviewGate}
-              currentPhase={currentPhase}
-              currentRoadmapPhase={currentRoadmapPhase}
-              cyclePhase={cycle?.phase}
-            />
-          )}
+          {presentation === 'record' ? (
+            verifying && verificationItems !== undefined ? (
+              <VerificationSummary items={verificationItems} />
+            ) : (
+              <ReviewGateSummary
+                gate={reviewGate}
+                currentPhase={currentPhase}
+                currentRoadmapPhase={currentRoadmapPhase}
+                cyclePhase={cycle?.phase}
+              />
+            )
+          ) : null}
 
           <div className="current-inspection__archive">
             <div className="current-inspection__resources">

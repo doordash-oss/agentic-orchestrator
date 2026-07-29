@@ -941,7 +941,7 @@ function seedVerificationNeedUserInputGate(
       '  blockers:',
       '    - item_id: deployment-capability',
       '      name: Deployment smoke test',
-      '      repo_name: gate-lab',
+      `      repo_name: ${repoName}`,
       '      command: make deploy-smoke',
       '      reason: missing declared capability "deployment credentials"',
       '      capabilities:',

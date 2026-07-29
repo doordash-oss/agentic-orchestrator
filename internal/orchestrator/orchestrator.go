@@ -1269,9 +1269,9 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
 
-// InterruptFeature stops all sessions for a feature and clears pending help
-// and permission queue flags. Normal phase work and post-publish repo
-// cycles transition the feature to StatusInterrupted.
+// InterruptFeature stops all sessions for a feature and clears pending help,
+// permission, and feature-scoped input gate state. Normal phase work and
+// post-publish repo cycles transition the feature to StatusInterrupted.
 // Does NOT clear KBStatus — preserve per-repo KB tracking for resume.
 //
 // Ordering matters: the Interrupted transition is committed BEFORE sessions

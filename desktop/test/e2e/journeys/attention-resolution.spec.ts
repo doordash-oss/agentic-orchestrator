@@ -630,41 +630,85 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     await waitForAttentionGateScope(handle.page, apiCycleGate);
     await waitForAttentionGateScope(handle.page, webCycleGate);
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 2 pending/);
+    const initialCycleDialog = handle.page.getByRole('dialog', {
+      name: 'Agent needs your input',
+    });
+    await expect(initialCycleDialog).toBeVisible();
+    await initialCycleDialog.getByRole('button', { name: 'Answer later' }).click();
+    await expect(initialCycleDialog).toHaveCount(0);
+    const homeTab = handle.page.getByRole('tab', { name: 'Home' });
+    await homeTab.click();
+    await expect(homeTab).toHaveAttribute('aria-selected', 'true');
+
     const apiCycleDialog = await openGateDialogByScope(handle, apiCycleGate);
     await expect(apiCycleDialog.getByText(apiCycleGate.summary)).toBeVisible();
     await expect(apiCycleDialog.getByLabel(apiCycleGate.question)).toHaveValue(apiCycleGate.answer);
     await evidenceShot(handle, 'attention-cycle-gate-review-comments');
     await apiCycleDialog.getByRole('button', { name: 'Answer later' }).click();
     await expect(apiCycleDialog).toHaveCount(0);
+    await homeTab.click();
+    await expect(homeTab).toHaveAttribute('aria-selected', 'true');
 
     const webCycleDialog = await openGateDialogByScope(handle, webCycleGate);
     await expect(webCycleDialog.getByText(webCycleGate.summary)).toBeVisible();
     await expect(webCycleDialog.getByLabel(webCycleGate.question)).toHaveValue(webCycleGate.answer);
     await webCycleDialog.getByRole('button', { name: 'Answer later' }).click();
+    const defaultCycleDialog = handle.page.getByRole('dialog', {
+      name: 'Agent needs your input',
+    });
+    await expect(defaultCycleDialog.getByText(apiCycleGate.summary)).toBeVisible();
+    await defaultCycleDialog.getByRole('button', { name: 'Answer later' }).click();
+    await expect(defaultCycleDialog).toHaveCount(0);
 
-    await serverPost(world, `/api/v1/features/${cycleFeature.id}/actions/need-user-input`, {
-      decision: 'abort',
-      repo_name: webCycleGate.repoName,
-      cycle_type: webCycleGate.cycleType,
+    transcript.section('Stop is the supported escape path');
+    const cycleFeatureTab = handle.page.getByRole('tab', {
+      name: 'Packaged Multi-Cycle Gate Fixture',
     });
+    await cycleFeatureTab.click();
+    await expect(cycleFeatureTab).toHaveAttribute('aria-selected', 'true');
+    const cycleCockpit = handle.page.getByLabel('Feature Packaged Multi-Cycle Gate Fixture');
+    const stopButton = cycleCockpit.getByRole('button', { name: 'Stop cycle' });
+    await expect(stopButton).toBeEnabled();
+    await stopButton.click();
+    const stopDialog = handle.page.getByRole('dialog', {
+      name: 'Stop Packaged Multi-Cycle Gate Fixture?',
+    });
+    await expect(stopDialog).toBeVisible();
+    await stopDialog.getByRole('button', { name: 'Confirm stop' }).click();
+    await expect(stopDialog).toHaveCount(0);
+
+    await waitFor(
+      async () => {
+        const snapshot = await handle!.page.evaluate(
+          (featureId) => window.agentico.getFeature(featureId),
+          cycleFeature.id,
+        );
+        return snapshot.status.toLowerCase() === 'interrupted';
+      },
+      'cycle feature to reach the authoritative interrupted state after Stop',
+      60_000,
+    );
+    await waitForAttentionGateScopeMissing(handle.page, apiCycleGate);
     await waitForAttentionGateScopeMissing(handle.page, webCycleGate);
-    await waitForAttentionGateScope(handle.page, apiCycleGate);
-    await handle.page.reload();
-    await waitForAttentionGateScope(handle.page, apiCycleGate);
-    await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
-    await serverPost(world, `/api/v1/features/${cycleFeature.id}/actions/need-user-input`, {
-      decision: 'abort',
-      repo_name: apiCycleGate.repoName,
-      cycle_type: apiCycleGate.cycleType,
-    });
-    await waitForAttentionGateScopeMissing(handle.page, apiCycleGate);
     await handle.page.reload();
     await waitForAttentionGateScopeMissing(handle.page, apiCycleGate);
+    await waitForAttentionGateScopeMissing(handle.page, webCycleGate);
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 0 pending/);
+    const interrupted = await handle.page.evaluate(
+      (featureId) => window.agentico.getFeature(featureId),
+      cycleFeature.id,
+    );
+    expect(interrupted.status.toLowerCase()).toBe('interrupted');
+    await expect(
+      handle.page
+        .getByLabel('Feature Packaged Multi-Cycle Gate Fixture')
+        .getByText(interrupted.status, { exact: true })
+        .first(),
+    ).toBeVisible();
 
     persistAppLogs(handle, 'attention-gate-app-server');
     transcript.step(
-      'two paused repo cycles retained textarea drafts and remained independently addressable',
+      'two paused repo cycles retained textarea drafts, then Stop interrupted the feature and cleared pending gate attention',
     );
     transcript.write(testInfo);
   } finally {
@@ -694,12 +738,10 @@ async function openGateDialogByScope(
   handle: AppHandle,
   scope: { featureId: string; repoName: string; cycleType: string },
 ): Promise<Locator> {
-  const existingDialog = handle.page.getByRole('dialog', { name: /needs your input/ });
-  if (await existingDialog.isVisible()) {
-    await existingDialog.getByRole('button', { name: 'Answer later' }).click();
-    await expect(existingDialog).toHaveCount(0);
-  }
-  await handle.page.getByRole('tab', { name: 'Home' }).click();
+  await expect(handle.page.getByRole('tab', { name: 'Home' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
 
   const attention = await handle.page.evaluate(() => window.agentico.getAttention());
   const gates = attention.items.filter((item) => item.kind === 'gate');

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -82,6 +83,9 @@ const (
 	NeedUserInputVerificationContextTextMaxLength = 64 * 1024
 	NeedUserInputGateMaxQuestions                 = 100
 	NeedUserInputGateDisplayMaxBytes              = 1024 * 1024
+	// NeedUserInputGateCollectionMaxBytes leaves two MiB of the desktop's
+	// five-MiB response limit for response metadata and the other prompt queues.
+	NeedUserInputGateCollectionMaxBytes = 3 * 1024 * 1024
 )
 
 // NeedUserInputQuestion is one prompt-and-answer pair the user fills in
@@ -100,6 +104,7 @@ const NeedUserInputArtifactName = "need-user-input.yaml"
 // declared capability failures found by the deterministic executor.
 func SynthesizeVerificationNeedUserInputGate(contractPath string, revision int, itemIDs []string, iteration int) NeedUserInputRecord {
 	ids := append([]string(nil), itemIDs...)
+	sort.Strings(ids)
 	return NeedUserInputRecord{
 		Summary: fmt.Sprintf("Required verification is blocked for %d item(s) by a missing capability or environment limitation.", len(ids)),
 		Questions: []NeedUserInputQuestion{{

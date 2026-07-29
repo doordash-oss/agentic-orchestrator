@@ -986,6 +986,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 	}
 	sortOrderedHelpQueue(help)
 	sortOrderedNeedInputGates(gates)
+	boundNeedUserInputGateCollection(gates)
 	return dtosOf(help, func(w orderedHelpQueue) HelpQueueDTO { return w.dto }),
 		dtosOf(gates, func(w orderedNeedInputGate) NeedInputGateDTO { return w.dto })
 }
@@ -1165,7 +1166,7 @@ func boundNeedUserInputGateDisplay(dto *NeedInputGateDTO) {
 	}
 	if dto.Verification != nil {
 		for i := range dto.Verification.Blockers {
-			dto.Verification.Blockers[i].Capabilities = nil
+			dto.Verification.Blockers[i].Capabilities = []string{}
 		}
 		if needUserInputGateFitsDisplayBudget(*dto) {
 			return
@@ -1201,6 +1202,73 @@ func boundNeedUserInputGateDisplay(dto *NeedInputGateDTO) {
 func needUserInputGateFitsDisplayBudget(dto NeedInputGateDTO) bool {
 	data, err := json.Marshal(dto)
 	return err == nil && len(data) <= agent.NeedUserInputGateDisplayMaxBytes
+}
+
+func boundNeedUserInputGateCollection(gates []orderedNeedInputGate) {
+	questionCount := 0
+	for i := range gates {
+		questionCount += len(gates[i].dto.Questions)
+	}
+	if questionCount > 0 {
+		questionTextLimit := (agent.NeedUserInputGateCollectionMaxBytes * 3 / 4) /
+			(questionCount * 2 * needUserInputQuestionJSONExpansion)
+		questionTextLimit = max(1, min(
+			questionTextLimit,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		))
+		for i := range gates {
+			for question := range gates[i].dto.Questions {
+				gates[i].dto.Questions[question].Prompt =
+					agent.BoundNeedUserInputVerificationString(
+						gates[i].dto.Questions[question].Prompt,
+						questionTextLimit,
+					)
+				gates[i].dto.Questions[question].Answer =
+					agent.BoundNeedUserInputVerificationString(
+						gates[i].dto.Questions[question].Answer,
+						questionTextLimit,
+					)
+			}
+		}
+	}
+	if needUserInputGateCollectionFitsBudget(gates) {
+		return
+	}
+	for i := range gates {
+		if gates[i].dto.Verification == nil {
+			continue
+		}
+		for blocker := range gates[i].dto.Verification.Blockers {
+			gates[i].dto.Verification.Blockers[blocker].Capabilities = []string{}
+		}
+	}
+	if needUserInputGateCollectionFitsBudget(gates) {
+		return
+	}
+	for i := range gates {
+		gates[i].dto.Summary = ""
+	}
+	if needUserInputGateCollectionFitsBudget(gates) {
+		return
+	}
+	for i := len(gates) - 1; i >= 0; i-- {
+		if gates[i].dto.Verification == nil {
+			continue
+		}
+		gates[i].dto.Verification = nil
+		if needUserInputGateCollectionFitsBudget(gates) {
+			return
+		}
+	}
+}
+
+func needUserInputGateCollectionFitsBudget(gates []orderedNeedInputGate) bool {
+	dtos := make([]NeedInputGateDTO, len(gates))
+	for i := range gates {
+		dtos[i] = gates[i].dto
+	}
+	data, err := json.Marshal(dtos)
+	return err == nil && len(data) <= agent.NeedUserInputGateCollectionMaxBytes
 }
 
 type orderedControlRequest struct {

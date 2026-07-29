@@ -976,6 +976,137 @@ func TestPromptSnapshotBoundsAggregateNeedUserInputGateDisplay(t *testing.T) {
 	}
 }
 
+func TestPromptSnapshotCapabilityFallbackKeepsRequiredArrayShape(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	largeCapability := strings.Repeat("x", 64*1024)
+	capabilities := make([]string, 20)
+	for i := range capabilities {
+		capabilities[i] = largeCapability
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Choose an action."}},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID: "capability-heavy", Name: "Capability-heavy check",
+				Command: "make verify", Reason: "missing access",
+				Capabilities: capabilities, Remediation: "Grant access and retry.",
+			}},
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ItemIDs: []string{"capability-heavy"},
+			AllowedActions: []string{
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationRetryAfterAuth,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	payload := getJSONMap(t, NewHandler(baseReadHandlerOptions(store)), apiPathPrompts)
+	gate := payload["need_user_inputs"].([]any)[0].(map[string]any)
+	verification := gate["verification"].(map[string]any)
+	blocker := verification["blockers"].([]any)[0].(map[string]any)
+	projected, ok := blocker["capabilities"].([]any)
+	if !ok {
+		t.Fatalf("capabilities JSON = %#v, want required array", blocker["capabilities"])
+	}
+	if len(projected) != 0 {
+		t.Fatalf("capabilities length = %d, want empty aggregate-fallback array", len(projected))
+	}
+}
+
+func TestPromptSnapshotBoundsNeedUserInputCollectionAcrossManyGates(t *testing.T) {
+	t.Parallel()
+	store, base := seedReadFeature(t)
+	features := []*feature.Feature{base}
+	for i := 1; i < 6; i++ {
+		features = append(features, cloneFeatureForReadTest(
+			t,
+			store,
+			base,
+			fmt.Sprintf("budget-gate-%02d", i),
+			fmt.Sprintf("Budget gate %d", i),
+		))
+	}
+	largeText := strings.Repeat("x", 64*1024)
+	for i, f := range features {
+		gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+		blockers := make([]agent.NeedUserInputVerificationBlocker, 3)
+		for blocker := range blockers {
+			blockers[blocker] = agent.NeedUserInputVerificationBlocker{
+				ItemID: fmt.Sprintf("gate-%d-blocker-%d", i, blocker),
+				Name:   largeText, Command: largeText, Reason: largeText,
+				Capabilities: []string{}, Remediation: largeText,
+			}
+		}
+		if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+			Summary: largeText,
+			Questions: []agent.NeedUserInputQuestion{{
+				Index: 1, Prompt: largeText, Answer: largeText,
+			}},
+			Verification: &agent.NeedUserInputVerificationContext{Blockers: blockers},
+			VerificationDecision: &agent.NeedUserVerificationDecision{
+				ItemIDs: []string{
+					fmt.Sprintf("gate-%d-blocker-0", i),
+					fmt.Sprintf("gate-%d-blocker-1", i),
+					fmt.Sprintf("gate-%d-blocker-2", i),
+				},
+				AllowedActions: []string{
+					agent.NeedUserVerificationWaive,
+					agent.NeedUserVerificationRetryAfterAuth,
+				},
+			},
+		}); err != nil {
+			t.Fatalf("WriteNeedUserInputRecord(%s) error = %v", f.ID, err)
+		}
+		f.Status = feature.StatusNeedUserInput
+		f.PendingNeedUserInputPath = gatePath
+		if err := store.Save(f); err != nil {
+			t.Fatalf("Save(%s) error = %v", f.ID, err)
+		}
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	request := httptest.NewRequest(http.MethodGet, apiPathPrompts, nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", apiPathPrompts, response.Code)
+	}
+	if got := response.Body.Len(); got >= 4*1024*1024 {
+		t.Fatalf("multi-gate prompt snapshot bytes = %d, want 2 MiB transport headroom", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal(prompt snapshot) error = %v", err)
+	}
+	gates := payload["need_user_inputs"].([]any)
+	if len(gates) != len(features) {
+		t.Fatalf("need_user_inputs = %d, want all %d actionable gates", len(gates), len(features))
+	}
+	encodedGates, err := json.Marshal(gates)
+	if err != nil {
+		t.Fatalf("Marshal(need_user_inputs) error = %v", err)
+	}
+	if got := len(encodedGates); got > 3*1024*1024 {
+		t.Fatalf("need_user_inputs bytes = %d, want at most deterministic 3 MiB budget", got)
+	}
+	for i, raw := range gates {
+		questions := raw.(map[string]any)["questions"].([]any)
+		if len(questions) != 1 || strings.TrimSpace(questions[0].(map[string]any)["prompt"].(string)) == "" {
+			t.Fatalf("gate %d questions = %#v, want preserved resolvable questionnaire", i, questions)
+		}
+	}
+}
+
 func TestInterruptedFeatureDoesNotExposeStaleNeedUserInputGate(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

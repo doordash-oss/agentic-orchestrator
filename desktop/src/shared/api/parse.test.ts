@@ -115,4 +115,42 @@ describe('parseServerJson', () => {
         .code,
     ).toBe('E_SCHEMA_MISMATCH');
   });
+
+  it('accepts aggregate-fallback blockers only with an empty capability array', () => {
+    const fallbackFixture = {
+      api_version: 'v1',
+      ask_user_questions: [],
+      help_queue: [],
+      need_user_inputs: [
+        {
+          feature_id: 'feature-1',
+          open: true,
+          questions: [{ index: 1, prompt: 'Choose an action.', answer: '' }],
+          verification: {
+            blockers: [
+              {
+                item_id: 'capability-heavy',
+                name: 'Capability-heavy check',
+                command: 'make verify',
+                reason: 'missing access',
+                capabilities: [],
+                remediation: 'Grant access and retry.',
+              },
+            ],
+            allowed_actions: ['WAIVE', 'RETRY_AFTER_AUTH'],
+          },
+        },
+      ],
+    };
+
+    expect(
+      parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema)
+        .need_user_inputs[0]?.verification?.blockers[0]?.capabilities,
+    ).toEqual([]);
+    fallbackFixture.need_user_inputs[0]!.verification.blockers[0]!.capabilities = null as never;
+    expect(
+      failure(() => parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema))
+        .code,
+    ).toBe('E_SCHEMA_MISMATCH');
+  });
 });

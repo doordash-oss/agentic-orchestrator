@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -112,11 +113,13 @@ func TestSynthesizeVerificationNeedUserInputGateWithContextBoundsDisplayWithoutD
 	if got := len(rec.VerificationDecision.ItemIDs); got != 101 {
 		t.Fatalf("trusted decision item IDs = %d, want all 101", got)
 	}
-	if !reflect.DeepEqual(rec.VerificationDecision.ItemIDs, itemIDs) {
+	wantItemIDs := append([]string(nil), itemIDs...)
+	sort.Strings(wantItemIDs)
+	if !reflect.DeepEqual(rec.VerificationDecision.ItemIDs, wantItemIDs) {
 		t.Fatalf(
-			"trusted decision item IDs = %v, want exact input order %v",
+			"trusted decision item IDs = %v, want canonical complete order %v",
 			rec.VerificationDecision.ItemIDs,
-			itemIDs,
+			wantItemIDs,
 		)
 	}
 	if rec.Verification == nil {

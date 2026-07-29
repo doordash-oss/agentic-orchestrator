@@ -221,6 +221,19 @@ export const ServerHelpQueueSchema = z.object({
   pending: z.boolean(),
   time: z.string().max(100).optional(),
 });
+const ServerNeedUserInputVerificationBlockerSchema = z.object({
+  item_id: AttentionIDSchema,
+  name: AttentionTextSchema,
+  repo_name: z.string().max(500).optional(),
+  command: AttentionTextSchema,
+  reason: AttentionTextSchema,
+  capabilities: z.array(AttentionTextSchema).max(20),
+  remediation: AttentionTextSchema,
+});
+const ServerNeedUserInputVerificationSchema = z.object({
+  blockers: z.array(ServerNeedUserInputVerificationBlockerSchema).max(100),
+  allowed_actions: z.array(z.enum(['WAIVE', 'RETRY_AFTER_AUTH'])).max(2),
+});
 export const ServerNeedUserInputGateSchema = z.object({
   feature_id: AttentionIDSchema.optional(),
   open: z.boolean(),
@@ -239,6 +252,7 @@ export const ServerNeedUserInputGateSchema = z.object({
     )
     .max(100)
     .optional(),
+  verification: ServerNeedUserInputVerificationSchema.optional(),
   waiting_since: z.string().max(100).optional(),
 });
 export const PromptSnapshotResponseSchema = z.object({
@@ -425,6 +439,7 @@ export const ServerNeedUserInputGateDetailSchema = z.object({
       }),
     )
     .optional(),
+  verification: ServerNeedUserInputVerificationSchema.optional(),
 });
 export type ServerNeedUserInputGateDetail = z.output<typeof ServerNeedUserInputGateDetailSchema>;
 
@@ -1166,6 +1181,11 @@ type NeedUserInputGateDTO = components['schemas']['NeedUserInputGate'];
 const _needUserInputGateSubset = (value: NeedUserInputGateDTO): ServerNeedUserInputGateDetail =>
   value;
 void _needUserInputGateSubset;
+type NeedUserInputVerificationDTO = components['schemas']['NeedUserInputVerification'];
+const _needUserInputVerificationSubset = (
+  value: NeedUserInputVerificationDTO,
+): z.output<typeof ServerNeedUserInputVerificationSchema> => value;
+void _needUserInputVerificationSubset;
 type RewindPreviewDTO = components['schemas']['RewindPreviewResponse'];
 const _rewindPreviewSubset = (value: RewindPreviewDTO): RewindPreviewResponse => value;
 void _rewindPreviewSubset;

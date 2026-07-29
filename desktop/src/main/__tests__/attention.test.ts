@@ -83,6 +83,20 @@ describe('AttentionService review items', () => {
                     feature_id: 'feature-1',
                     open: true,
                     questions: [{ prompt: 'active gate' }],
+                    verification: {
+                      blockers: [
+                        {
+                          item_id: 'deploy',
+                          name: 'Deployment smoke test',
+                          repo_name: 'repo-a',
+                          command: 'make deploy-smoke',
+                          reason: 'missing declared capability "Okta session"',
+                          capabilities: ['Okta session'],
+                          remediation: 'Make Okta session available, then retry verification.',
+                        },
+                      ],
+                      allowed_actions: ['WAIVE', 'RETRY_AFTER_AUTH'],
+                    },
                   },
                 ],
               }
@@ -147,6 +161,28 @@ describe('AttentionService review items', () => {
     expect(ids).not.toContain('missing-feature::');
     expect(ids).not.toContain('missing-feature:session-1');
     expect(ids).not.toContain('perm-orphan');
+    expect(snapshot.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'gate',
+          id: 'feature-1::',
+          verification: {
+            blockers: [
+              {
+                itemId: 'deploy',
+                name: 'Deployment smoke test',
+                repoName: 'repo-a',
+                command: 'make deploy-smoke',
+                reason: 'missing declared capability "Okta session"',
+                capabilities: ['Okta session'],
+                remediation: 'Make Okta session available, then retry verification.',
+              },
+            ],
+            allowedActions: ['WAIVE', 'RETRY_AFTER_AUTH'],
+          },
+        }),
+      ]),
+    );
   });
 
   it('derives one stable inbox item from each authoritative pending review', async () => {

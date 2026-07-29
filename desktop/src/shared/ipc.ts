@@ -1409,6 +1409,8 @@ export const AttentionHelpSchema = z.strictObject({
   waitingSince: z.string().max(100),
   prompt: AttentionTextSchema,
 });
+export const VerificationGateActionSchema = z.enum(['WAIVE', 'RETRY_AFTER_AUTH']);
+export type VerificationGateAction = z.output<typeof VerificationGateActionSchema>;
 export const AttentionGateSchema = z.strictObject({
   kind: z.literal('gate'),
   id: z.string().min(1).max(1000),
@@ -1428,6 +1430,24 @@ export const AttentionGateSchema = z.strictObject({
       }),
     )
     .max(100),
+  verification: z
+    .strictObject({
+      blockers: z
+        .array(
+          z.strictObject({
+            itemId: AttentionIDSchema,
+            name: AttentionTextSchema,
+            repoName: z.string().max(500).optional(),
+            command: AttentionTextSchema,
+            reason: AttentionTextSchema,
+            capabilities: z.array(AttentionTextSchema).max(20),
+            remediation: AttentionTextSchema,
+          }),
+        )
+        .max(100),
+      allowedActions: z.array(VerificationGateActionSchema).max(2),
+    })
+    .optional(),
 });
 /** A review is actionable only in the cockpit; the inbox is a deliberate jump. */
 export const AttentionReviewSchema = z.strictObject({

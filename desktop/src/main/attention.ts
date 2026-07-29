@@ -129,6 +129,22 @@ export class AttentionService {
           ...(gate.cycle_type === undefined ? {} : { cycleType: gate.cycle_type }),
           ...(gate.iteration === undefined ? {} : { iteration: gate.iteration }),
           ...(gate.summary === undefined ? {} : { summary: gate.summary }),
+          ...(gate.verification === undefined
+            ? {}
+            : {
+                verification: {
+                  blockers: gate.verification.blockers.map((blocker) => ({
+                    itemId: blocker.item_id,
+                    name: blocker.name,
+                    ...(blocker.repo_name === undefined ? {} : { repoName: blocker.repo_name }),
+                    command: blocker.command,
+                    reason: blocker.reason,
+                    capabilities: blocker.capabilities,
+                    remediation: blocker.remediation,
+                  })),
+                  allowedActions: gate.verification.allowed_actions,
+                },
+              }),
           questions: (gate.questions ?? []).map((question, index) => ({
             index: question.index ?? index,
             prompt: question.prompt ?? `Question ${index + 1}`,

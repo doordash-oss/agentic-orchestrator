@@ -193,6 +193,24 @@ func (e FeatureConfigInquireness) Valid() bool {
 	}
 }
 
+// Defines values for NeedUserInputVerificationAction.
+const (
+	RETRYAFTERAUTH NeedUserInputVerificationAction = "RETRY_AFTER_AUTH"
+	WAIVE          NeedUserInputVerificationAction = "WAIVE"
+)
+
+// Valid indicates whether the value is a known member of the NeedUserInputVerificationAction enum.
+func (e NeedUserInputVerificationAction) Valid() bool {
+	switch e {
+	case RETRYAFTERAUTH:
+		return true
+	case WAIVE:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PermissionAnswerRequestDecision.
 const (
 	AllowOnce     PermissionAnswerRequestDecision = "allow_once"
@@ -1511,16 +1529,17 @@ type NeedUserInputDraftResponse struct {
 
 // NeedUserInputGate defines model for NeedUserInputGate.
 type NeedUserInputGate struct {
-	CycleType          string                  `json:"cycle_type,omitempty"`
-	FeatureID          string                  `json:"feature_id,omitempty"`
-	InputNotifications string                  `json:"input_notifications,omitempty"`
-	Iteration          int                     `json:"iteration,omitempty"`
-	Open               bool                    `json:"open"`
-	Questions          []NeedUserInputQuestion `json:"questions,omitempty"`
-	RepoName           string                  `json:"repo_name,omitempty"`
-	Scope              string                  `json:"scope,omitempty"`
-	Summary            string                  `json:"summary,omitempty"`
-	WaitingSince       time.Time               `json:"waiting_since"`
+	CycleType          string                     `json:"cycle_type,omitempty"`
+	FeatureID          string                     `json:"feature_id,omitempty"`
+	InputNotifications string                     `json:"input_notifications,omitempty"`
+	Iteration          int                        `json:"iteration,omitempty"`
+	Open               bool                       `json:"open"`
+	Questions          []NeedUserInputQuestion    `json:"questions,omitempty"`
+	RepoName           string                     `json:"repo_name,omitempty"`
+	Scope              string                     `json:"scope,omitempty"`
+	Summary            string                     `json:"summary,omitempty"`
+	Verification       *NeedUserInputVerification `json:"verification,omitempty"`
+	WaitingSince       time.Time                  `json:"waiting_since"`
 }
 
 // NeedUserInputQuestion defines model for NeedUserInputQuestion.
@@ -1528,6 +1547,26 @@ type NeedUserInputQuestion struct {
 	Answer string `json:"answer,omitempty"`
 	Index  int    `json:"index,omitempty"`
 	Prompt string `json:"prompt,omitempty"`
+}
+
+// NeedUserInputVerification defines model for NeedUserInputVerification.
+type NeedUserInputVerification struct {
+	AllowedActions []NeedUserInputVerificationAction  `json:"allowed_actions"`
+	Blockers       []NeedUserInputVerificationBlocker `json:"blockers"`
+}
+
+// NeedUserInputVerificationAction defines model for NeedUserInputVerificationAction.
+type NeedUserInputVerificationAction string
+
+// NeedUserInputVerificationBlocker defines model for NeedUserInputVerificationBlocker.
+type NeedUserInputVerificationBlocker struct {
+	Capabilities []string `json:"capabilities"`
+	Command      string   `json:"command"`
+	ItemID       string   `json:"item_id"`
+	Name         string   `json:"name"`
+	Reason       string   `json:"reason"`
+	Remediation  string   `json:"remediation"`
+	RepoName     string   `json:"repo_name,omitempty"`
 }
 
 // NotificationConfig defines model for NotificationConfig.

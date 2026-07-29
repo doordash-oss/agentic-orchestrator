@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -671,6 +672,24 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 			{Index: 1, Prompt: "Which database should implementation use?", Answer: "Postgres"},
 			{Index: 2, Prompt: "Should we migrate existing data?", Answer: ""},
 		},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID: "deploy", Name: "Deployment smoke test", RepoName: repoNameSelf,
+				Command:      "make deploy-smoke",
+				Reason:       `missing declared capability "Okta session"`,
+				Capabilities: []string{"Okta session"},
+				Remediation:  "Make Okta session available, then retry verification.",
+			}},
+		},
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ContractPath:     "/private/must-not-leak/testing-contract.yaml",
+			ContractRevision: 3,
+			ItemIDs:          []string{"deploy"},
+			AllowedActions: []string{
+				agent.NeedUserVerificationWaive,
+				agent.NeedUserVerificationRetryAfterAuth,
+			},
+		},
 	}); err != nil {
 		t.Fatalf("WriteNeedUserInputRecord(feature gate) error = %v", err)
 	}
@@ -721,13 +740,18 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 	if len(gates) != 2 {
 		t.Fatalf("need_user_inputs length = %d; want feature and cycle gates", len(gates))
 	}
-	var cycleGate map[string]any
+	var featureGate, cycleGate map[string]any
 	for _, raw := range gates {
 		gate := raw.(map[string]any)
+		if gate["scope"] == entityFeature && gate["repo_name"] == nil {
+			featureGate = gate
+		}
 		if gate["repo_name"] == repoNameSelf && gate["cycle_type"] == string(feature.CycleReviewComments) {
 			cycleGate = gate
-			break
 		}
+	}
+	if featureGate == nil {
+		t.Fatalf("need_user_inputs = %+v; want feature gate", gates)
 	}
 	if cycleGate == nil {
 		t.Fatalf("need_user_inputs = %+v; want gate with repo/cycle routing", gates)
@@ -735,6 +759,30 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 	cycleQuestions := cycleGate["questions"].([]any)
 	if len(cycleQuestions) != 1 || cycleQuestions[0].(map[string]any)["answer"] != "Reply now" {
 		t.Fatalf("cycle gate questions = %+v", cycleQuestions)
+	}
+	for source, gate := range map[string]map[string]any{
+		"detail": detailGate,
+		"prompt": featureGate,
+	} {
+		verification, ok := gate["verification"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s gate verification = %+v", source, gate["verification"])
+		}
+		if !reflect.DeepEqual(verification["allowed_actions"], []any{"WAIVE", "RETRY_AFTER_AUTH"}) {
+			t.Fatalf("allowed actions = %+v", verification["allowed_actions"])
+		}
+		blocker := verification["blockers"].([]any)[0].(map[string]any)
+		if blocker["name"] != "Deployment smoke test" ||
+			blocker["reason"] != `missing declared capability "Okta session"` ||
+			blocker["remediation"] != "Make Okta session available, then retry verification." {
+			t.Fatalf("blocker = %+v", blocker)
+		}
+		encoded, _ := json.Marshal(gate)
+		for _, forbidden := range []string{"contract_path", "probe", "stdout", "/private/must-not-leak"} {
+			if strings.Contains(string(encoded), forbidden) {
+				t.Fatalf("gate leaked %q: %s", forbidden, encoded)
+			}
+		}
 	}
 }
 

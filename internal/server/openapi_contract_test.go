@@ -158,6 +158,12 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	assertSchemaProperties(t, spec, "ResponseMeta", "revision", "generated_at", "as_of_seq")
 	assertSchemaProperties(t, spec, "SSEEvent", "seq", "epoch", "kind", "resource", "resource_version", "snapshot_required")
 	assertSchemaProperties(t, spec, "Resource", "type", "id", "feature_id", "phase")
+	assertSchemaProperties(t, spec, "NeedUserInputGate", "verification")
+	assertSchemaProperties(t, spec, "NeedUserInputVerification", "blockers", "allowed_actions")
+	assertSchemaProperties(
+		t, spec, "NeedUserInputVerificationBlocker",
+		"item_id", "name", "repo_name", "command", "reason", "capabilities", "remediation",
+	)
 }
 
 func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {

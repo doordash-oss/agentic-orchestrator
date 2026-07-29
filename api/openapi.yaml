@@ -3364,6 +3364,48 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NeedUserInputQuestion"
+        verification:
+          $ref: "#/components/schemas/NeedUserInputVerification"
+          x-go-type-skip-optional-pointer: false
+    NeedUserInputVerification:
+      type: object
+      required: [blockers, allowed_actions]
+      properties:
+        blockers:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/NeedUserInputVerificationBlocker"
+        allowed_actions:
+          type: array
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/NeedUserInputVerificationAction"
+    NeedUserInputVerificationAction:
+      type: string
+      enum: [WAIVE, RETRY_AFTER_AUTH]
+    NeedUserInputVerificationBlocker:
+      type: object
+      required: [item_id, name, command, reason, capabilities, remediation]
+      properties:
+        item_id:
+          type: string
+          x-go-name: ItemID
+        name:
+          type: string
+        repo_name:
+          type: string
+        command:
+          type: string
+        reason:
+          type: string
+        capabilities:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+        remediation:
+          type: string
     NeedUserInputQuestion:
       type: object
       properties:

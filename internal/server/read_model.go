@@ -1036,6 +1036,39 @@ func needUserInputGateDTO(featureID, scope, repoName string, cycleType feature.R
 			Answer: strings.TrimSpace(q.Answer),
 		})
 	}
+	if rec.Verification != nil && rec.VerificationDecision != nil && len(rec.Verification.Blockers) > 0 {
+		verification := NeedUserInputVerification{
+			Blockers: make([]NeedUserInputVerificationBlocker, 0, len(rec.Verification.Blockers)),
+		}
+		for _, blocker := range rec.Verification.Blockers {
+			capabilities := make([]string, 0, len(blocker.Capabilities))
+			for _, capability := range blocker.Capabilities {
+				if capability = strings.TrimSpace(capability); capability != "" {
+					capabilities = append(capabilities, capability)
+				}
+			}
+			verification.Blockers = append(verification.Blockers, NeedUserInputVerificationBlocker{
+				ItemID:       blocker.ItemID,
+				Name:         strings.TrimSpace(blocker.Name),
+				RepoName:     strings.TrimSpace(blocker.RepoName),
+				Command:      strings.TrimSpace(blocker.Command),
+				Reason:       strings.TrimSpace(blocker.Reason),
+				Capabilities: capabilities,
+				Remediation:  strings.TrimSpace(blocker.Remediation),
+			})
+		}
+		for _, action := range rec.VerificationDecision.AllowedActions {
+			normalized := strings.ToUpper(strings.TrimSpace(action))
+			switch normalized {
+			case agent.NeedUserVerificationWaive, agent.NeedUserVerificationRetryAfterAuth:
+				verification.AllowedActions = append(
+					verification.AllowedActions,
+					NeedUserInputVerificationAction(normalized),
+				)
+			}
+		}
+		dto.Verification = &verification
+	}
 	return dto
 }
 

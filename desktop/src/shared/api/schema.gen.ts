@@ -1713,6 +1713,22 @@ export interface components {
             /** Format: date-time */
             waiting_since: string;
             questions?: components["schemas"]["NeedUserInputQuestion"][];
+            verification?: components["schemas"]["NeedUserInputVerification"];
+        };
+        NeedUserInputVerification: {
+            blockers: components["schemas"]["NeedUserInputVerificationBlocker"][];
+            allowed_actions: components["schemas"]["NeedUserInputVerificationAction"][];
+        };
+        /** @enum {string} */
+        NeedUserInputVerificationAction: "WAIVE" | "RETRY_AFTER_AUTH";
+        NeedUserInputVerificationBlocker: {
+            item_id: string;
+            name: string;
+            repo_name?: string;
+            command: string;
+            reason: string;
+            capabilities: string[];
+            remediation: string;
         };
         NeedUserInputQuestion: {
             index?: number;

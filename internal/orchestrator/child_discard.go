@@ -37,14 +37,14 @@ func (o *Orchestrator) DiscardChild(childID string) error {
 	if child == nil || !child.IsChild() {
 		return fmt.Errorf("feature %s is not a child", childID)
 	}
-	if child.Parent.CloseOutcome == feature.ChildCloseOutcomeCompleted {
-		return fmt.Errorf("child %s already completed; cannot discard", childID)
+	if !child.IsActiveChild() {
+		return fmt.Errorf("%w: discard is not permitted on closed child %s", feature.ErrChildRelationshipClosed, childID)
 	}
-	if child.Parent.CloseOutcome == feature.ChildCloseOutcomeDiscarded {
-		// Already discarded — resume from the durable step.
-		return o.resumeDiscard(childID)
+	if owned, err := o.cascadeOwnsRelationship(child.Parent.ParentID); err != nil {
+		return err
+	} else if owned {
+		return fmt.Errorf("%w: parent %s cascade owns child %s", feature.ErrParentMutationLocked, child.Parent.ParentID, childID)
 	}
-
 	// Step 1: Record durable intent if not already present. The write lock
 	// serializes with any in-flight integration (RunChildIntegration holds
 	// the read lock) so a discard request cannot interleave with an
@@ -149,12 +149,10 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 	// Step 6: Close the relationship with outcome Discarded.
 	if step == feature.DiscardStepRefsSafe {
 		now := time.Now()
+		if err := o.closeChildRelationship(childID, feature.ChildCloseOutcomeDiscarded, now); err != nil {
+			return fmt.Errorf("closing child as discarded: %w", err)
+		}
 		if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-			if f.Parent.CloseOutcome != "" {
-				return nil
-			}
-			f.Parent.CloseOutcome = feature.ChildCloseOutcomeDiscarded
-			f.Parent.ClosedAt = &now
 			f.DiscardIntent.ClosedAt = &now
 			f.DiscardIntent.Step = feature.DiscardStepClosed
 			f.LastError = ""
@@ -164,10 +162,11 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 			return fmt.Errorf("closing child as discarded: %w", err)
 		}
 		o.emitEvent(ports.Event{
-			Type:             ports.RepoStatusChanged,
-			FeatureID:        childID,
-			RelatedFeatureID: child.Parent.ParentID,
-			Message:          "refactor child discarded",
+			Type:      ports.RelationshipClosed,
+			FeatureID: childID,
+			ParentID:  child.Parent.ParentID,
+			ChildID:   childID,
+			Message:   "refactor child discarded",
 		})
 		step = feature.DiscardStepClosed
 	}
@@ -213,13 +212,28 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 
 // setDiscardStep durably records the discard step.
 func (o *Orchestrator) setDiscardStep(childID string, step feature.DiscardStep) error {
-	return o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+	var parentID string
+	var changed bool
+	err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		if f.DiscardIntent == nil {
 			return fmt.Errorf("discard intent missing")
 		}
+		parentID = f.Parent.ParentID
+		changed = f.DiscardIntent.Step != step
 		f.DiscardIntent.Step = step
 		return nil
 	})
+	if err != nil || !changed {
+		return err
+	}
+	o.emitEvent(ports.Event{
+		Type:      ports.RelationshipDiscardProgress,
+		FeatureID: childID,
+		ParentID:  parentID,
+		ChildID:   childID,
+		Message:   "discard advanced to " + string(step),
+	})
+	return nil
 }
 
 // resolveChildAttention settles pending questions, permissions, help, gates,
@@ -408,6 +422,12 @@ func (o *Orchestrator) ReconcileDiscardIntents() error {
 	var errs []error
 	for _, f := range features {
 		if f != nil && f.IsChild() && f.DiscardIntent != nil && f.DiscardIntent.Step != feature.DiscardStepCleanupDone {
+			if owned, err := o.cascadeOwnsRelationship(f.Parent.ParentID); err != nil {
+				errs = append(errs, fmt.Errorf("discard reconcile %s ownership: %w", f.ID, err))
+				continue
+			} else if owned {
+				continue
+			}
 			if err := o.resumeDiscard(f.ID); err != nil {
 				errs = append(errs, fmt.Errorf("discard reconcile %s: %w", f.ID, err))
 			}
@@ -420,6 +440,12 @@ func (o *Orchestrator) ReconcileDiscardIntents() error {
 			continue
 		}
 		if f != nil && f.IsChild() && f.DiscardIntent != nil && f.DiscardIntent.Step != feature.DiscardStepCleanupDone {
+			if owned, ownershipErr := o.cascadeOwnsRelationship(f.Parent.ParentID); ownershipErr != nil {
+				errs = append(errs, fmt.Errorf("discard reconcile %s ownership: %w", id, ownershipErr))
+				continue
+			} else if owned {
+				continue
+			}
 			if err := o.resumeDiscard(id); err != nil {
 				errs = append(errs, fmt.Errorf("discard reconcile %s: %w", id, err))
 			}

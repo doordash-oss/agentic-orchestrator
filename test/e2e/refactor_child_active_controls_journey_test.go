@@ -223,7 +223,6 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		{"publish", `{}`},
 		{"mark-done", `{}`},
 		{"cleanup", `{}`},
-		{"delete", `{}`},
 		{"pause-stop", `{}`},
 		// A review-decision on a terminal parent (Published) with an
 		// active child can restart the parent pipeline (CodeReady ->
@@ -249,7 +248,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		am := a.(map[string]any)
 		actionByID[am["id"].(string)] = am
 	}
-	for _, lockedID := range []string{"start", "publish", "mark-done", "cleanup", "delete", "refactor"} {
+	for _, lockedID := range []string{"start", "publish", "mark-done", "cleanup", "refactor"} {
 		a, ok := actionByID[lockedID]
 		if !ok {
 			t.Fatalf("parent catalog missing action %q", lockedID)
@@ -265,6 +264,10 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		if first["code"] != "active_child_present" {
 			t.Fatalf("parent action %q disabled code = %v, want active_child_present", lockedID, first["code"])
 		}
+	}
+	deleteAction, ok := actionByID["delete"]
+	if !ok || deleteAction["enabled"] != true {
+		t.Fatalf("parent delete action = %+v, want enabled cascade delete", deleteAction)
 	}
 
 	// Verify the child catalog does NOT include cleanup or delete.
@@ -473,10 +476,11 @@ func (t *journeyMutationTarget) CleanupFeature(featureID string, req server.Clea
 }
 
 func (t *journeyMutationTarget) DeleteFeature(featureID string) (server.DeleteFeatureResponse, error) {
-	if err := t.orch.Delete(featureID); err != nil {
-		return server.DeleteFeatureResponse{FeatureID: featureID, Result: "failed"}, err
+	result, err := t.orch.DeleteCascade(featureID)
+	if err != nil {
+		return server.DeleteFeatureResponse{FeatureID: featureID}, err
 	}
-	return server.DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
+	return server.DeleteFeatureResponse{FeatureID: result.ParentID, OperationID: result.OperationID, Status: result.Status, Diagnostics: result.Diagnostics}, nil
 }
 
 // --- helpers ------------------------------------------------------------------

@@ -64,21 +64,34 @@ const (
 	// graceful shutdown. SSE consumers use it as a metadata-only signal to
 	// refresh authoritative REST snapshots during reconnect.
 	RuntimeShutdownStarted
+	// RelationshipChildCreated fires after a direct child is durably visible.
+	RelationshipChildCreated
+	// RelationshipIntegrationChanged fires after durable integration state changes.
+	RelationshipIntegrationChanged
+	// RelationshipClosed fires after the child outcome and close time are durable.
+	RelationshipClosed
+	// RelationshipDiscardProgress fires after durable discard progress changes.
+	RelationshipDiscardProgress
+	// RelationshipCascadeProgress fires after a cascade durably settles into
+	// cleanup_pending or attention_required while both records remain visible.
+	RelationshipCascadeProgress
+	// RelationshipCascadeDeleted fires after cascade completion removed both records.
+	RelationshipCascadeDeleted
 )
 
 // Event is a typed domain event emitted by the orchestrator.
 type Event struct {
 	Type      EventType
 	FeatureID string
-	// RelatedFeatureID carries the launch parent id on child-feature events
-	// (creation and setup lifecycle) so consumers can correlate a child event
-	// with the parent whose projection it also changes. Empty on top-level
-	// feature events; zero-value-safe for all existing emit sites.
-	RelatedFeatureID string
-	Feature          *feature.Feature // non-nil for FeatureCreated
-	Phase            feature.Phase    // set for phase-related events
-	Error            error            // set for failure events
-	Message          string           // human-readable detail
+	// ParentID and ChildID are both required on relationship event types.
+	// They identify one relationship resource whose parent/child read models
+	// must refresh as a single client bundle.
+	ParentID string
+	ChildID  string
+	Feature  *feature.Feature // non-nil for FeatureCreated
+	Phase    feature.Phase    // set for phase-related events
+	Error    error            // set for failure events
+	Message  string           // human-readable detail
 
 	RunNumber   int
 	Attempt     int

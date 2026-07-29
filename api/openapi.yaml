@@ -176,9 +176,9 @@ paths:
       description: >-
         Executes the named action. Child-feature execution actions (start,
         resume, retry, restart) enforce the child capability gate: 409
-        `child_relationship_closed` for a child whose relationship has
-        settled (a Completed child with a genuinely resumable cleanup tail
-        retains the restart action only); 409 `child_execution_blocked`
+        `relationship_closed` for a child whose relationship has settled;
+        automatic reconciliation owns any remaining cleanup tail. A 409
+        `child_execution_blocked`
         while setup is queued, running, or failed; 409
         `child_profile_unsupported` for Large/Moonshot children (child
         knowledge-base isolation is not yet available). Capability
@@ -914,11 +914,20 @@ components:
           type: string
         feature_id:
           type: string
-        related_feature_id:
+        parent_id:
           type: string
           description: >-
-            Parent feature id when this event belongs to a child feature (e.g.
-            a refactor child); empty for top-level feature events.
+            Parent feature id for a relationship lifecycle event.
+        child_id:
+          type: string
+          description: >-
+            Direct child feature id for a relationship lifecycle event.
+        relationship_deleted:
+          type: boolean
+          description: >-
+            True only when a completed cascade removed both relationship
+            records. Clients refresh the top-level list and evict both detail
+            snapshots instead of treating their absence as a stream failure.
         phase:
           type: string
     SSEEvent:
@@ -1672,7 +1681,46 @@ components:
     DeleteFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [feature_id, operation_id, status]
+          properties:
+            feature_id:
+              type: string
+            operation_id:
+              type: string
+            status:
+              type: string
+              enum: [completed, cleanup_pending, attention_required]
+              x-go-type: feature.CascadeDeleteStatus
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            diagnostics:
+              type: array
+              items:
+                $ref: "#/components/schemas/CascadeDiagnostic"
+    CascadeDiagnostic:
+      x-go-type: feature.CascadeDiagnostic
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+        name: feature
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        repo:
+          type: string
+        ref:
+          type: string
+        anchor_sha:
+          type: string
+        candidate_sha:
+          type: string
+        observed_sha:
+          type: string
     DiscardChildResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -2174,9 +2222,39 @@ components:
           type: string
         parent_branch:
           type: string
-    ActiveChildSummary:
+    RelationshipAttention:
       type: object
-      required: [id, name, kind, state]
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        repo:
+          type: string
+    RelationshipCleanupWarning:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        repo:
+          type: string
+    RelationshipChild:
+      type: object
+      required:
+        - id
+        - name
+        - kind
+        - display_token
+        - display_state
+        - pipeline
+        - status
+        - started_at
+        - cost
+        - integration_state
+        - attention
+        - cleanup_warnings
       properties:
         id:
           type: string
@@ -2186,17 +2264,46 @@ components:
           type: string
         pipeline:
           type: string
+        display_token:
+          type: string
+          description: Stable, non-positional token suitable for compact UI labels.
+        display_state:
+          type: string
+          description: >-
+            Human-readable relationship state. Closed children use exactly
+            "Closed — Completed" or "Closed — Discarded".
         status:
           type: string
-          description: Durable lifecycle status of the active child.
+          description: Stored child lifecycle status; closure never rewrites it.
         setup_status:
           type: string
           description: Setup status of the child's active run (queued/running/done/failed).
-        state:
+        relationship_state:
           type: string
           description: >-
-            Derived relationship state: setting_up while worktree setup is in
-            flight or failed, setup_complete once setup has finished.
+            Stable machine state: setting_up, active, completed, or discarded.
+        outcome:
+          type: string
+          enum: [completed, discarded]
+        started_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        cost:
+          $ref: "#/components/schemas/Cost"
+        integration_state:
+          type: string
+        attention:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelationshipAttention"
+        cleanup_warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelationshipCleanupWarning"
         last_error:
           type: string
           description: Setup failure message when the child's setup failed.
@@ -2248,8 +2355,13 @@ components:
           items:
             $ref: "#/components/schemas/Warning"
         active_child:
-          $ref: "#/components/schemas/ActiveChildSummary"
+          $ref: "#/components/schemas/RelationshipChild"
           x-go-type-skip-optional-pointer: false
+        child_history:
+          type: array
+          description: Complete closed-child history in authoritative store order.
+          items:
+            $ref: "#/components/schemas/RelationshipChild"
     ModelDefaults:
       x-go-type: config.ModelConfig
       x-go-type-import:
@@ -2577,6 +2689,9 @@ components:
               x-go-type-skip-optional-pointer: false
             transaction:
               $ref: "#/components/schemas/TransactionJournal"
+            relationship:
+              $ref: "#/components/schemas/RelationshipChild"
+              x-go-type-skip-optional-pointer: false
     ChildDirtyDiagnostics:
       type: object
       properties:

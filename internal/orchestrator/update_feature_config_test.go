@@ -15,7 +15,9 @@
 package orchestrator_test
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -25,6 +27,45 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
+
+// TestUpdateFeatureConfig_ClosedChildRejectsWithoutMutation verifies that the
+// serialized configuration mutation boundary keeps settled relationship
+// history immutable even when a caller bypasses action discovery.
+func TestUpdateFeatureConfig_ClosedChildRejectsWithoutMutation(t *testing.T) {
+	closedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	f := &feature.Feature{
+		ID:          "closed-child",
+		Status:      feature.StatusDone,
+		Pipeline:    feature.PipelineMedium,
+		Models:      config.ModelConfig{Research: "old-research"},
+		Inquireness: feature.InquirenessMedium,
+		Checkpoints: feature.Checkpoints{RoadmapReview: true},
+		Parent: &feature.ChildRelationship{
+			ParentID:     "parent",
+			Kind:         feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted,
+			ClosedAt:     &closedAt,
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	err := o.UpdateFeatureConfig(f.ID, orchestrator.UpdateFeatureConfigInput{
+		Models:      config.ModelConfig{Research: "new-research"},
+		Inquireness: feature.InquirenessHigh,
+		Checkpoints: feature.Checkpoints{ManualPublish: true},
+	})
+	if !errors.Is(err, feature.ErrChildRelationshipClosed) {
+		t.Fatalf("UpdateFeatureConfig() error = %v, want ErrChildRelationshipClosed", err)
+	}
+	if f.Models.Research != "old-research" || f.Inquireness != feature.InquirenessMedium || f.Checkpoints != (feature.Checkpoints{RoadmapReview: true}) {
+		t.Fatalf("closed child config mutated: models=%+v inquireness=%q checkpoints=%+v", f.Models, f.Inquireness, f.Checkpoints)
+	}
+	if events := drainEvents(o); len(events) != 0 {
+		t.Fatalf("rejected config mutation emitted events: %+v", events)
+	}
+}
 
 // TestUpdateFeatureConfig_QuiescentWritesAllAxes verifies that calling
 // UpdateFeatureConfig on a quiescent feature overwrites every editable feature

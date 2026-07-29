@@ -619,12 +619,13 @@ type apiEventErrorMsg struct {
 }
 
 type apiMutationResultMsg struct {
-	kind      string
-	featureID string
-	repoName  string
-	cycleType string
-	requestID string
-	err       error
+	kind           string
+	featureID      string
+	repoName       string
+	cycleType      string
+	requestID      string
+	deleteResponse *server.DeleteFeatureResponse
+	err            error
 }
 
 type apiRuntimeConfigMutationMsg struct {
@@ -1146,6 +1147,15 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.kind == mutationKindFeatureReviewComments {
 			m.reviewComments = nil
+		}
+		if msg.kind == mutationKindFeatureDelete && msg.deleteResponse != nil &&
+			msg.deleteResponse.Status != feature.CascadeDeleteCompleted {
+			m.statusMessage = apiCascadeDeleteStatusMessage(*msg.deleteResponse)
+			m.rebuildPresentation(m.selectedFeature)
+			if msg.featureID != "" {
+				return m, m.fetchFeatureDetailCmd(msg.featureID)
+			}
+			return m, nil
 		}
 		if msg.kind == mutationKindFeatureDelete {
 			m.removeFeatureState(msg.featureID)
@@ -3804,6 +3814,19 @@ func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 	if snapshot.Feature != nil {
 		m.storeFeatureDetail(*snapshot.Feature)
 		m.upsertFeatureSummary(apiFeatureDetailSummary(snapshot.Feature.Feature))
+	}
+	if snapshot.Relationship != nil {
+		relationship := snapshot.Relationship
+		if relationship.EvictParentID != "" || relationship.EvictChildID != "" {
+			m.removeFeatureState(relationship.EvictParentID)
+			m.removeFeatureState(relationship.EvictChildID)
+		} else {
+			m.storeFeatureDetail(relationship.Parent)
+			m.upsertFeatureSummary(apiFeatureDetailSummary(relationship.Parent.Feature))
+			if relationship.Child != nil {
+				m.storeFeatureDetail(*relationship.Child)
+			}
+		}
 	}
 	if snapshot.Session != nil {
 		m.storeSessionDetail(*snapshot.Session)
@@ -7018,6 +7041,7 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 			args = argsOpt[0]
 		}
 		var err error
+		var deleteResponse *server.DeleteFeatureResponse
 		switch kind {
 		case mutationKindFeaturePublish:
 			_, err = m.client.PublishFeature(ctx, featureID, server.PublishFeatureRequest{
@@ -7057,14 +7081,17 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 		case mutationKindFeatureStop:
 			_, err = m.client.StopFeature(ctx, featureID)
 		case mutationKindFeatureDelete:
-			_, err = m.client.DeleteFeature(ctx, featureID)
+			response, deleteErr := m.client.DeleteFeature(ctx, featureID)
+			deleteResponse = &response
+			err = deleteErr
 		default:
 			err = fmt.Errorf("unsupported feature action %s", kind)
 		}
 		return apiMutationResultMsg{
-			kind:      kind,
-			featureID: featureID,
-			err:       err,
+			kind:           kind,
+			featureID:      featureID,
+			deleteResponse: deleteResponse,
+			err:            err,
 		}
 	}
 }
@@ -8955,6 +8982,44 @@ func apiMutationSuccessMessage(kind string) string {
 	default:
 		return "Completed " + apiMutationKindLabel(kind)
 	}
+}
+
+func apiCascadeDeleteStatusMessage(response server.DeleteFeatureResponse) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Delete %s", response.Status)
+	for i, diagnostic := range response.Diagnostics {
+		if i == 0 {
+			b.WriteString(": ")
+		} else {
+			b.WriteString("; ")
+		}
+		if diagnostic.Code != "" {
+			b.WriteString(diagnostic.Code)
+		}
+		if diagnostic.Message != "" {
+			if diagnostic.Code != "" {
+				b.WriteString(": ")
+			}
+			b.WriteString(diagnostic.Message)
+		}
+		fields := []struct {
+			name  string
+			value string
+		}{
+			{name: "repo", value: diagnostic.Repo},
+			{name: "ref", value: diagnostic.Ref},
+			{name: "anchor", value: diagnostic.AnchorSHA},
+			{name: "candidate", value: diagnostic.CandidateSHA},
+			{name: "observed", value: diagnostic.ObservedSHA},
+		}
+		for _, field := range fields {
+			if field.value != "" {
+				fmt.Fprintf(&b, " %s=%s", field.name, field.value)
+			}
+		}
+	}
+	b.WriteString("; retry Delete to continue")
+	return b.String()
 }
 
 func apiMutationRefreshesFeatureDetail(kind string) bool {

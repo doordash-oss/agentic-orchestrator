@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -69,6 +70,14 @@ type Store struct {
 	// testSaveInterceptor is a test-only hook consulted by saveUnlocked to
 	// inject failures. The concrete wiring lives in export_test.go.
 	testSaveInterceptor func(f *Feature) error
+}
+
+// RelationshipChildren is the complete child-owned relationship view for a
+// parent. Active is nil when no child is open. Closed contains every settled
+// child in deterministic history order.
+type RelationshipChildren struct {
+	Active *Feature
+	Closed []*Feature
 }
 
 func NewStore(baseDir string) *Store {
@@ -129,6 +138,9 @@ func (s *Store) ModifyGuarded(
 	if err != nil {
 		return err
 	}
+	if f.IsChild() && !f.IsActiveChild() {
+		return ErrChildRelationshipClosed
+	}
 
 	var activeChild *Feature
 	if !f.IsChild() {
@@ -148,6 +160,129 @@ func (s *Store) ModifyGuarded(
 		return err
 	}
 	return s.saveUnlocked(f)
+}
+
+// RelationshipChildren returns the unique active child and complete closed
+// history derived from child-owned Parent links. It fails closed if any stored
+// record cannot be loaded or carries an invalid relationship lifecycle state.
+func (s *Store) RelationshipChildren(parentID string) (*RelationshipChildren, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.relationshipChildrenUnlocked(parentID)
+}
+
+// CloseChild atomically settles an active child relationship exactly once.
+// Retrying the same outcome is a no-op and preserves the original timestamp;
+// a different outcome is rejected as a mutation of closed history.
+func (s *Store) CloseChild(childID, outcome string, closedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if outcome != ChildCloseOutcomeCompleted && outcome != ChildCloseOutcomeDiscarded {
+		return &ChildRelationshipError{ChildID: childID, Reason: fmt.Sprintf("unknown close outcome %q", outcome)}
+	}
+	if closedAt.IsZero() {
+		return &ChildRelationshipError{ChildID: childID, Reason: fmt.Sprintf("%s child has no valid close timestamp", outcome)}
+	}
+	child, err := s.loadUnlocked(childID)
+	if err != nil {
+		return err
+	}
+	if !child.IsChild() {
+		return &ChildRelationshipError{ChildID: childID, Reason: "feature is not a child"}
+	}
+	if err := validateChildRelationship(child); err != nil {
+		return err
+	}
+	if !child.IsActiveChild() {
+		if child.Parent.CloseOutcome == outcome {
+			return nil
+		}
+		return ErrChildRelationshipClosed
+	}
+	child.Parent.CloseOutcome = outcome
+	timestamp := closedAt
+	child.Parent.ClosedAt = &timestamp
+	return s.saveUnlocked(child)
+}
+
+func (s *Store) relationshipChildrenUnlocked(parentID string) (*RelationshipChildren, error) {
+	result, err := s.validatedRelationshipChildrenUnlocked(parentID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(result.Closed, func(i, j int) bool {
+		left, right := result.Closed[i], result.Closed[j]
+		if !left.Parent.ClosedAt.Equal(*right.Parent.ClosedAt) {
+			return left.Parent.ClosedAt.After(*right.Parent.ClosedAt)
+		}
+		if !left.Created.Equal(right.Created) {
+			return left.Created.After(right.Created)
+		}
+		return left.ID < right.ID
+	})
+	return result, nil
+}
+
+// validatedRelationshipChildrenUnlocked discovers the complete relationship
+// while enforcing the same fail-closed invariants for every caller. Callers
+// may apply a projection-specific ordering only after validation succeeds.
+func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*RelationshipChildren, error) {
+	entries, err := os.ReadDir(s.BaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &RelationshipChildren{}, nil
+		}
+		return nil, fmt.Errorf("listing features directory: %w", err)
+	}
+
+	result := &RelationshipChildren{}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == parentID {
+			continue
+		}
+		child, err := s.loadUnlocked(entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
+		}
+		if child.Parent == nil || child.Parent.ParentID != parentID {
+			continue
+		}
+		if err := validateChildRelationship(child); err != nil {
+			return nil, err
+		}
+		if child.IsActiveChild() {
+			if result.Active != nil {
+				return nil, &ChildRelationshipError{
+					ChildID: child.ID,
+					Reason:  fmt.Sprintf("parent %s has multiple active children %s and %s", parentID, result.Active.ID, child.ID),
+				}
+			}
+			result.Active = child
+			continue
+		}
+		result.Closed = append(result.Closed, child)
+	}
+	return result, nil
+}
+
+func validateChildRelationship(child *Feature) error {
+	outcome := child.Parent.CloseOutcome
+	closedAt := child.Parent.ClosedAt
+	switch outcome {
+	case "":
+		if closedAt != nil {
+			return &ChildRelationshipError{ChildID: child.ID, Reason: "active child has a close timestamp"}
+		}
+	case ChildCloseOutcomeCompleted, ChildCloseOutcomeDiscarded:
+		if closedAt == nil || closedAt.IsZero() {
+			return &ChildRelationshipError{ChildID: child.ID, Reason: fmt.Sprintf("%s child has no valid close timestamp", outcome)}
+		}
+	default:
+		return &ChildRelationshipError{ChildID: child.ID, Reason: fmt.Sprintf("unknown close outcome %q", outcome)}
+	}
+	return nil
 }
 
 // saveUnlocked writes a feature and (if populated and not sealed) its active
@@ -699,32 +834,11 @@ func (s *Store) CreateChildLocked(
 // activeChildOfUnlocked scans stored feature records for the child that
 // links back to parentID with an empty close outcome. Callers hold s.mu.
 func (s *Store) activeChildOfUnlocked(parentID string) (*Feature, error) {
-	entries, err := os.ReadDir(s.BaseDir)
+	children, err := s.relationshipChildrenUnlocked(parentID)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("listing features directory: %w", err)
+		return nil, err
 	}
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == parentID {
-			continue
-		}
-		f, err := s.loadUnlocked(e.Name())
-		if err != nil {
-			// Fail closed: this is the creation-integrity boundary. The
-			// parent pointer is child-owned and only discovered by loading
-			// each record, so an unreadable candidate could be an active
-			// child we cannot see — skipping it would allow a second
-			// active child. (List keeps its partial-load tolerance; only
-			// the creation path is strict.)
-			return nil, fmt.Errorf("classifying feature record %q during active-child scan: %w", e.Name(), err)
-		}
-		if f.Parent != nil && f.Parent.ParentID == parentID && f.Parent.CloseOutcome == "" {
-			return f, nil
-		}
-	}
-	return nil, nil
+	return children.Active, nil
 }
 
 // ReconcilePendingChildCreations rolls interrupted child creations forward

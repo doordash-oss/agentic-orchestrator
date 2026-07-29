@@ -105,6 +105,7 @@ func revisionForAny(v any) string {
 }
 
 func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, error) {
+	var activeRelationshipChild *feature.Feature
 	active := runSummaryDTO(f.Run(), f)
 	historyRunNumbers := boundedHistoricalRunNumbers(f.ActiveRun, f.RunCount, maxFeatureDetailHistoricalRuns)
 	history := make([]RunSummaryDTO, 0, len(historyRunNumbers))
@@ -168,14 +169,16 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 				detail.Transaction.Entries = append(detail.Transaction.Entries, entry)
 			}
 		}
+		relationship := relationshipChildDTO(f)
+		detail.Relationship = relationship
 	} else {
-		child, err := h.activeChildOf(f.ID)
+		children, err := h.relationshipChildrenOf(f.ID, nil)
 		if err != nil {
 			return FeatureDetailDTO{}, err
 		}
-		if child != nil {
-			detail.ActiveChild = activeChildSummaryDTO(child)
-		}
+		detail.ActiveChild = relationshipChildDTO(children.Active)
+		detail.ChildHistory = relationshipChildDTOs(children.Closed)
+		activeRelationshipChild = children.Active
 	}
 	detail.Description = safeDisplayText(f.Description, 500)
 	detail.Summary = safeDisplayText(f.Summary, 500)
@@ -205,6 +208,18 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
 	}
 	detail.Actions = actionCatalogDTOsWithChildGuard(f, detail.ActiveChild != nil)
+	if childHasIntegrationAttention(activeRelationshipChild) {
+		appendDisabledReason(detail.Actions, ActionDisabledReasonDTO{
+			Code:    "integration_attention",
+			Message: "the active child relationship requires integration attention",
+		}, actionDelete)
+	}
+	if !f.IsChild() && detail.ActiveChild == nil && h.parentHasLocalChanges(f) {
+		disableAction(detail.Actions, actionRefactor, ActionDisabledReasonDTO{
+			Code:    "dirty_parent",
+			Message: "parent repositories must be clean before launching a refactor child",
+		})
+	}
 	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {
 		detail.Failure = &FailureDTO{
@@ -218,6 +233,46 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
 	return detail, nil
+}
+
+func childHasIntegrationAttention(child *feature.Feature) bool {
+	if child == nil || child.Parent == nil || child.Parent.Transaction == nil {
+		return false
+	}
+	tx := child.Parent.Transaction
+	return tx.Phase == feature.TransactionPhaseAttention || tx.Attention != "" || tx.AnyApplyAttention()
+}
+
+func appendDisabledReason(actions []ActionDTO, reason ActionDisabledReasonDTO, excludedActionID string) {
+	for i := range actions {
+		if actions[i].Enabled || actions[i].ID == excludedActionID {
+			continue
+		}
+		actions[i].DisabledReasons = append(actions[i].DisabledReasons, reason)
+	}
+}
+
+func (h *apiHandler) parentHasLocalChanges(f *feature.Feature) bool {
+	if h.freshness == nil || f == nil {
+		return false
+	}
+	for _, repo := range f.Repos {
+		if h.freshness.Freshness(f, repo) == RepoFreshnessLocalChanges {
+			return true
+		}
+	}
+	return false
+}
+
+func disableAction(actions []ActionDTO, actionID string, reason ActionDisabledReasonDTO) {
+	for i := range actions {
+		if actions[i].ID != actionID || !actions[i].Enabled {
+			continue
+		}
+		actions[i].Enabled = false
+		actions[i].DisabledReasons = []ActionDisabledReasonDTO{reason}
+		return
+	}
 }
 
 func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
@@ -236,28 +291,56 @@ func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
 		Progress:     summary.Progress,
 		Warnings:     summary.Warnings,
 		ActiveChild:  summary.ActiveChild,
+		ChildHistory: summary.ChildHistory,
 	}
 }
 
-// activeChildOf returns the unique active child of the given parent, or nil.
-// Creation enforces at most one open child relationship per parent; the first
-// match wins defensively. One List per request mirrors the detail handler's
-// existing per-request store access pattern. Listing failures propagate so a
-// broken store never masquerades as "no active child" in a parent projection.
-func (h *apiHandler) activeChildOf(parentID string) (*feature.Feature, error) {
-	if h.features == nil || parentID == "" {
-		return nil, nil
+func (h *apiHandler) relationshipChildrenOf(parentID string, loaded []*feature.Feature) (*feature.RelationshipChildren, error) {
+	if parentID == "" {
+		return &feature.RelationshipChildren{}, nil
 	}
-	features, _, err := listFeatures(h.features)
-	if err != nil {
-		return nil, fmt.Errorf("listing features for active-child lookup: %w", err)
+	if reader, ok := h.store.(RelationshipReader); ok {
+		children, err := reader.RelationshipChildren(parentID)
+		if err != nil {
+			return nil, fmt.Errorf("reading children of parent %s: %w", parentID, err)
+		}
+		return children, nil
 	}
-	for _, f := range features {
-		if f.IsActiveChild() && f.Parent.ParentID == parentID {
-			return f, nil
+	if loaded == nil {
+		var err error
+		loaded, _, err = listFeatures(h.features)
+		if err != nil {
+			return nil, fmt.Errorf("listing features for relationship lookup: %w", err)
 		}
 	}
-	return nil, nil
+	children := &feature.RelationshipChildren{}
+	for _, candidate := range loaded {
+		if candidate == nil || !candidate.IsChild() || candidate.Parent.ParentID != parentID {
+			continue
+		}
+		if candidate.IsActiveChild() {
+			if children.Active != nil {
+				return nil, fmt.Errorf("parent %s has multiple active children", parentID)
+			}
+			children.Active = candidate
+			continue
+		}
+		children.Closed = append(children.Closed, candidate)
+	}
+	sort.Slice(children.Closed, func(i, j int) bool {
+		left, right := children.Closed[i], children.Closed[j]
+		if left.Parent.ClosedAt == nil || right.Parent.ClosedAt == nil {
+			return left.ID < right.ID
+		}
+		if !left.Parent.ClosedAt.Equal(*right.Parent.ClosedAt) {
+			return left.Parent.ClosedAt.After(*right.Parent.ClosedAt)
+		}
+		if !left.Created.Equal(right.Created) {
+			return left.Created.After(right.Created)
+		}
+		return left.ID < right.ID
+	})
+	return children, nil
 }
 
 // childSetupComplete reports whether the child's active-run setup finished.
@@ -269,19 +352,28 @@ func childSetupComplete(f *feature.Feature) bool {
 	return setup != nil && setup.Status == feature.SetupStatusDone
 }
 
-// activeChildSummaryDTO projects a child feature into the compact summary a
-// parent surfaces. Nil-safe: nil yields nil (no active child).
-func activeChildSummaryDTO(child *feature.Feature) *ActiveChildSummary {
+func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	if child == nil {
 		return nil
 	}
-	dto := &ActiveChildSummary{
-		ID:       child.ID,
-		Name:     child.Name,
-		Kind:     child.Parent.Kind,
-		Pipeline: string(child.EffectivePipeline()),
-		Status:   child.Status.String(),
-		State:    "setting_up",
+	startedAt := child.Created
+	if child.StartedAt != nil {
+		startedAt = *child.StartedAt
+	}
+	dto := &RelationshipChild{
+		ID:                child.ID,
+		Name:              child.Name,
+		Kind:              child.Parent.Kind,
+		DisplayToken:      child.Parent.Kind + ":" + child.ID,
+		DisplayState:      "Active — " + child.Status.String(),
+		Pipeline:          string(child.EffectivePipeline()),
+		Status:            child.Status.String(),
+		RelationshipState: "setting_up",
+		StartedAt:         startedAt,
+		Cost:              costDTO(child),
+		IntegrationState:  "pending",
+		Attention:         []RelationshipAttention{},
+		CleanupWarnings:   []RelationshipCleanupWarning{},
 	}
 	if setup := child.Run().Setup; setup != nil {
 		dto.SetupStatus = string(setup.Status)
@@ -293,10 +385,71 @@ func activeChildSummaryDTO(child *feature.Feature) *ActiveChildSummary {
 		}
 	}
 	if childSetupComplete(child) {
-		dto.State = "setup_complete"
+		dto.RelationshipState = "active"
 		dto.LastError = ""
 	}
+	if child.Parent.CloseOutcome != "" {
+		dto.Outcome = RelationshipChildOutcome(child.Parent.CloseOutcome)
+		dto.ClosedAt = child.Parent.ClosedAt
+		dto.RelationshipState = child.Parent.CloseOutcome
+		switch child.Parent.CloseOutcome {
+		case feature.ChildCloseOutcomeCompleted:
+			dto.DisplayState = "Closed — Completed"
+		case feature.ChildCloseOutcomeDiscarded:
+			dto.DisplayState = "Closed — Discarded"
+		}
+	}
+	if tx := child.Parent.Transaction; tx != nil {
+		if tx.Phase != "" {
+			dto.IntegrationState = string(tx.Phase)
+		}
+		if tx.Attention != "" {
+			dto.Attention = append(dto.Attention, RelationshipAttention{
+				Code:    "integration_attention",
+				Message: safeDisplayText(tx.Attention, 240),
+			})
+		}
+		for _, entry := range tx.Entries {
+			if len(entry.Dirty) > 0 {
+				dto.Attention = append(dto.Attention, RelationshipAttention{
+					Code:    "dirty_parent",
+					Message: "parent repository has uncommitted changes",
+					Repo:    entry.Repo,
+				})
+			}
+			if len(entry.ConflictFiles) > 0 {
+				dto.Attention = append(dto.Attention, RelationshipAttention{
+					Code:    "integration_conflict",
+					Message: "integration has unresolved conflicts",
+					Repo:    entry.Repo,
+				})
+			}
+			if entry.Diagnostics != "" {
+				dto.Attention = append(dto.Attention, RelationshipAttention{
+					Code:    "integration_attention",
+					Message: safeDisplayText(entry.Diagnostics, 240),
+					Repo:    entry.Repo,
+				})
+			}
+			if entry.CleanupWarning != "" {
+				dto.CleanupWarnings = append(dto.CleanupWarnings, RelationshipCleanupWarning{
+					Message: safeDisplayText(entry.CleanupWarning, 240),
+					Repo:    entry.Repo,
+				})
+			}
+		}
+	}
 	return dto
+}
+
+func relationshipChildDTOs(children []*feature.Feature) []RelationshipChild {
+	out := make([]RelationshipChild, 0, len(children))
+	for _, child := range children {
+		if dto := relationshipChildDTO(child); dto != nil {
+			out = append(out, *dto)
+		}
+	}
+	return out
 }
 
 func activeCycleDTO(f *feature.Feature) *CycleDTO {
@@ -382,7 +535,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 // parent action is locked because an active child exists.
 var disabledParentHasActiveChild = ActionDisabledReasonDTO{
 	Code:    "active_child_present",
-	Message: "parent mutations are locked while a child is active; only paired config editing is available",
+	Message: "parent mutations are locked while a child is active; only paired config editing and cascade delete are available",
 }
 
 func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []ActionDTO {
@@ -439,7 +592,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	canRetry := status == feature.StatusFailed
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
-	canDelete := !running
+	canDelete := true
 	// Only Published or CodeReady top-level parents can launch a refactor
 	// child, mirroring the launch validation in feature.CreateRefactorChild.
 	canRefactor := status == feature.StatusPublished || status == feature.StatusCodeReady
@@ -459,7 +612,6 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		canRetry = false
 		canMarkDone = false
 		canCleanup = false
-		canDelete = false
 		canRefactor = false
 	}
 
@@ -494,7 +646,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		action(actionCleanup, canCleanup, featureScope, []ActionInputDTO{
 			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
 		}, childGuardReason(canCleanup, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"})...),
-		action(actionDelete, canDelete, featureScope, nil, childGuardReason(canDelete, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"})...),
+		action(actionDelete, canDelete, featureScope, nil),
 	}
 }
 
@@ -568,6 +720,20 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 	disabledStatusReason func(feature.Status) ActionDisabledReasonDTO) []ActionDTO {
 
 	featureScope := ActionScopeDTO{Type: entityFeature}
+	if !f.IsActiveChild() {
+		closed := ActionDisabledReasonDTO{
+			Code:    disabledChildRelationshipClosed,
+			Message: "the child relationship is closed; automatic reconciliation owns any remaining cleanup",
+		}
+		return []ActionDTO{
+			action(actionStart, false, featureScope, nil, closed),
+			action(actionPauseStop, false, featureScope, nil, closed),
+			action(actionResume, false, featureScope, nil, closed),
+			action(actionRestart, false, featureScope, nil, closed),
+			action(actionRetry, false, featureScope, nil, closed),
+			action(actionDiscard, false, featureScope, nil, closed),
+		}
+	}
 	blockErr := childExecutionBlockReason(f)
 	blockedReason := func(fallback ActionDisabledReasonDTO) ActionDisabledReasonDTO {
 		if blockErr != nil {
@@ -576,27 +742,22 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running, 
 		return fallback
 	}
 	runnable := blockErr == nil
-	// A settled child keeps exactly one execution route: Restart, and only
-	// while its impermanent closure tail is genuinely resumable. The
-	// mutation gate enforces the same widened rule.
-	closedResumableTail := f.IsChild() && !f.IsActiveChild() && f.IntegrationResumable() && !running
 	restartStopped := ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"}
 	restartReason := blockedReason(restartStopped)
-	if closedResumableTail {
-		restartReason = restartStopped
-	}
 	stopped := !running && !activeCycle
 	canStart := runnable && stopped && (status == feature.StatusCreated ||
 		status == feature.StatusPlanReady ||
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
+	canStop := runnable && (running || activeCycle)
 	canResume := runnable && (status == feature.StatusInterrupted ||
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != "")
-	canRestart := (runnable || closedResumableTail) && !running
+	canRestart := runnable && !running
 
 	return []ActionDTO{
 		action(actionStart, canStart, featureScope, nil, blockedReason(disabledStatusReason(status))),
+		action(actionPauseStop, canStop, featureScope, nil, blockedReason(ActionDisabledReasonDTO{Code: "not_running", Message: "child has no active work to pause or stop"})),
 		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"})),
 		action(actionRestart, canRestart, featureScope, nil, restartReason),
 		action(actionRetry, childSetupFailed(f), featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),

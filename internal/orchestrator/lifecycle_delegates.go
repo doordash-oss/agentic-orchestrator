@@ -305,7 +305,7 @@ func (o *Orchestrator) RetryPhase(featureID string) error {
 	if err := o.RelationshipGuard(featureID, MutationRetry); err != nil {
 		return err
 	}
-	if err := o.checkChildExecution(featureID, false); err != nil {
+	if err := o.checkChildExecution(featureID); err != nil {
 		return err
 	}
 	repoNames := o.phaseDeclaredRepos(featureID)
@@ -663,6 +663,9 @@ var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeatureConfigInput) error {
 	var before, after feature.ConfigSnapshot
 	err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if f.IsChild() && !f.IsActiveChild() {
+			return feature.ErrChildRelationshipClosed
+		}
 		before = feature.ConfigSnapshot{
 			Models:              f.Models,
 			Effort:              f.Effort,
@@ -991,10 +994,9 @@ type RestartOutcome struct {
 // is Plan). Pass 0 to skip the bump. The defaults (10 / 2) live in the TUI so
 // the port surface stays free of config plumbing.
 func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPlanIterationsDelta int) (RestartOutcome, error) {
-	// The relationship guard rejects parent restart while a child is active
-	// (only paired config and discard are allowed). For children, the guard
-	// allows restart; the existing checkChildExecution gate then enforces
-	// capability and integration-resumable routing.
+	// The relationship guard rejects parent restart while a child is active.
+	// For children, checkChildExecution enforces active relationship and
+	// execution capability before any state changes.
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationRestart); err != nil {
@@ -1014,9 +1016,7 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		}
 	}
 
-	// Restart is the one execution entrypoint allowed to re-enter a settled
-	// child, and only for a Completed child whose closure tail is resumable.
-	if err := o.checkChildExecution(featureID, true); err != nil {
+	if err := o.checkChildExecution(featureID); err != nil {
 		return RestartOutcome{}, err
 	}
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -1028,10 +1028,9 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
 
-	// A child with resumable integration state replays the integration
-	// boundary or its durable closure tail — never Plan, Implement, or an
-	// already-approved Final Review — on restart. A closed child whose
-	// cleanup tail never settled re-enters only that tail.
+	// An active child with resumable integration state replays the integration
+	// boundary — never Plan, Implement, or an already-approved Final Review.
+	// Closed cleanup tails are owned exclusively by automatic reconciliation.
 	if f.IntegrationResumable() {
 		if err := o.runChildIntegrationLocked(featureID); err != nil {
 			return RestartOutcome{}, err

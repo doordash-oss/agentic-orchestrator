@@ -3121,6 +3121,75 @@ func TestAPIAppModelAppliesResourceTargetedRefreshSnapshot(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelAppliesRelationshipRefreshBundle(t *testing.T) {
+	t.Parallel()
+
+	parentSummary := server.FeatureSummary{
+		ID: "parent", Name: "Parent", Slug: "parent", Status: testFeatureStatusCreated, CreatedAt: time.Now(),
+	}
+	app := newTestAPIAppModel(t, &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{parentSummary}},
+		detail:   server.FeatureDetailResponse{Feature: apiTestFeatureDetail(parentSummary)},
+	})
+	parentDetail := server.FeatureDetailResponse{
+		Feature: apiTestFeatureDetail(server.FeatureSummary{
+			ID: "parent", Name: "Parent refreshed", Slug: "parent", Status: testFeatureStatusImplementing, CreatedAt: parentSummary.CreatedAt,
+		}),
+	}
+	childDetail := server.FeatureDetailResponse{
+		Feature: apiTestFeatureDetail(server.FeatureSummary{
+			ID: "child", Name: "Child", Slug: "child", Status: testFeatureStatusImplementing, CreatedAt: parentSummary.CreatedAt,
+		}),
+	}
+
+	app.ApplyRefreshSnapshot(server.RefreshSnapshot{
+		Relationship: &server.RelationshipRefreshBundle{Parent: parentDetail, Child: &childDetail},
+	})
+
+	if got := app.featureDetails["parent"].Feature.Name; got != "Parent refreshed" {
+		t.Fatalf("parent detail name = %q, want refreshed relationship snapshot", got)
+	}
+	if got := app.featureDetails["child"].Feature.ID; got != "child" {
+		t.Fatalf("child detail ID = %q, want child relationship snapshot", got)
+	}
+	if len(app.featureList.Features) != 1 || app.featureList.Features[0].ID != "parent" {
+		t.Fatalf("top-level features = %+v, want refreshed parent only", app.featureList.Features)
+	}
+}
+
+func TestAPIAppModelAppliesCascadeRelationshipEviction(t *testing.T) {
+	t.Parallel()
+
+	parentSummary := server.FeatureSummary{
+		ID: "parent", Name: "Parent", Slug: "parent", Status: testFeatureStatusCreated, CreatedAt: time.Now(),
+	}
+	app := newTestAPIAppModel(t, &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{parentSummary}},
+		detail:   server.FeatureDetailResponse{Feature: apiTestFeatureDetail(parentSummary)},
+	})
+	app.featureDetails["child"] = server.FeatureDetailResponse{
+		Feature: apiTestFeatureDetail(server.FeatureSummary{ID: "child", Name: "Child", Slug: "child"}),
+	}
+
+	app.ApplyRefreshSnapshot(server.RefreshSnapshot{
+		Features: &server.FeatureListResponse{},
+		Relationship: &server.RelationshipRefreshBundle{
+			EvictParentID: "parent",
+			EvictChildID:  "child",
+		},
+	})
+
+	if _, ok := app.featureDetails["parent"]; ok {
+		t.Fatal("parent detail retained after cascade relationship eviction")
+	}
+	if _, ok := app.featureDetails["child"]; ok {
+		t.Fatal("child detail retained after cascade relationship eviction")
+	}
+	if len(app.featureList.Features) != 0 {
+		t.Fatalf("top-level features = %+v, want empty cascade refresh", app.featureList.Features)
+	}
+}
+
 func TestAPIAppModelIgnoresStaleAttentionForInterruptedFeature(t *testing.T) {
 	t.Parallel()
 
@@ -7464,6 +7533,96 @@ func TestAPIAppModelDeleteEvictsFeatureBeforeRefresh(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelDeleteRetainsRelationshipForNonTerminalCascade(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 7, 29, 9, 0, 0, 0, time.UTC)
+	parent := server.FeatureSummary{
+		ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork,
+		Status: testFeatureStatusCreated, CurrentPhase: testPhaseNameImplement, CreatedAt: created,
+	}
+	child := server.FeatureSummary{
+		ID: testFeatureIDNext, Name: "Refactor child", Slug: "refactor-child",
+		Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: created.Add(time.Minute),
+	}
+	tests := []struct {
+		name        string
+		status      feature.CascadeDeleteStatus
+		diagnostic  feature.CascadeDiagnostic
+		wantMessage string
+	}{
+		{
+			name:   "cleanup pending",
+			status: feature.CascadeDeleteCleanupPending,
+			diagnostic: feature.CascadeDiagnostic{
+				Code: "worktree_cleanup_failed", Message: "remove child worktree: device busy", Repo: testRepoNameOrchestrator,
+			},
+			wantMessage: "worktree_cleanup_failed",
+		},
+		{
+			name:   "attention required",
+			status: feature.CascadeDeleteAttentionRequired,
+			diagnostic: feature.CascadeDiagnostic{
+				Code: "ref_moved", Message: "candidate ref moved externally", Repo: testRepoNameOrchestrator,
+				Ref: "refs/heads/feature", AnchorSHA: "anchor", CandidateSHA: "candidate", ObservedSHA: "observed",
+			},
+			wantMessage: "observed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := &fakeTUIAPIClient{
+				features: server.FeatureListResponse{Features: []server.FeatureSummary{parent}},
+				detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(parent, server.FeatureDetailDTO{
+					Actions: []server.ActionDTO{
+						{ID: actionIDDelete, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
+					},
+				})},
+				deleteResponse: server.DeleteFeatureResponse{
+					FeatureID: parent.ID, OperationID: "cascade:" + parent.ID,
+					Status: tt.status, Diagnostics: []server.CascadeDiagnostic{tt.diagnostic},
+				},
+			}
+			app := newTestAPIAppModel(t, client)
+			app.featureDetails[child.ID] = server.FeatureDetailResponse{Feature: apiTestFeatureDetail(child)}
+
+			model, cmd := app.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+			if cmd != nil {
+				t.Fatal("Update(d) returned command before confirmation")
+			}
+			model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+			if cmd == nil {
+				t.Fatal("Update(y) returned nil command, want delete mutation")
+			}
+			model, refreshCmd := model.(APIAppModel).Update(cmd())
+			updated := model.(APIAppModel)
+
+			if refreshCmd == nil {
+				t.Fatal("delete result returned nil command, want retained parent refresh")
+			}
+			if _, ok := updated.featureDetails[parent.ID]; !ok {
+				t.Fatal("parent detail evicted for non-terminal cascade")
+			}
+			if _, ok := updated.featureDetails[child.ID]; !ok {
+				t.Fatal("child detail evicted for non-terminal cascade")
+			}
+			if len(updated.featureList.Features) != 1 || updated.featureList.Features[0].ID != parent.ID {
+				t.Fatalf("feature list = %+v, want retained parent", updated.featureList.Features)
+			}
+			if updated.selectedFeature != parent.ID {
+				t.Fatalf("selected feature = %q, want retained parent %q", updated.selectedFeature, parent.ID)
+			}
+			if !strings.Contains(updated.statusMessage, string(tt.status)) ||
+				!strings.Contains(updated.statusMessage, tt.wantMessage) {
+				t.Fatalf("status message = %q, want status %q and diagnostic %q", updated.statusMessage, tt.status, tt.wantMessage)
+			}
+		})
+	}
+}
+
 func TestAPIAppModelIgnoresStaleDetailErrorForRemovedFeature(t *testing.T) {
 	t.Parallel()
 
@@ -8523,6 +8682,7 @@ type fakeTUIAPIClient struct {
 	stopErr                        error
 	stopFeatureIDs                 []string
 	deleteAccepted                 apiTestActionResponse
+	deleteResponse                 server.DeleteFeatureResponse
 	deleteErr                      error
 	deleteFeatureIDs               []string
 	publishAccepted                apiTestActionResponse
@@ -8795,7 +8955,15 @@ func (f *fakeTUIAPIClient) StopFeature(_ context.Context, featureID string) (ser
 func (f *fakeTUIAPIClient) DeleteFeature(_ context.Context, featureID string) (server.DeleteFeatureResponse, error) {
 	f.calls = append(f.calls, "DeleteFeature")
 	f.deleteFeatureIDs = append(f.deleteFeatureIDs, featureID)
-	return server.DeleteFeatureResponse{FeatureID: f.deleteAccepted.featureID(featureID), Result: f.deleteAccepted.result("deleted")}, f.deleteErr
+	if f.deleteResponse.Status != "" {
+		return f.deleteResponse, f.deleteErr
+	}
+	status := feature.CascadeDeleteCompleted
+	switch accepted := feature.CascadeDeleteStatus(f.deleteAccepted.result("")); accepted {
+	case feature.CascadeDeleteCompleted, feature.CascadeDeleteCleanupPending, feature.CascadeDeleteAttentionRequired:
+		status = accepted
+	}
+	return server.DeleteFeatureResponse{FeatureID: f.deleteAccepted.featureID(featureID), OperationID: "cascade:" + featureID, Status: status}, f.deleteErr
 }
 
 func (f *fakeTUIAPIClient) PublishFeature(_ context.Context, featureID string, req server.PublishFeatureRequest) (server.PublishFeatureResponse, error) {

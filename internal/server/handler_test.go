@@ -758,6 +758,15 @@ func (t *startBlockedMutationTarget) StartFeature(string) (FeatureStartResponse,
 	return FeatureStartResponse{}, t.err
 }
 
+type deleteBlockedMutationTarget struct {
+	MutationTarget
+	err error
+}
+
+func (t *deleteBlockedMutationTarget) DeleteFeature(string) (DeleteFeatureResponse, error) {
+	return DeleteFeatureResponse{}, t.err
+}
+
 type refactorMutationTarget struct {
 	MutationTarget
 	received []RefactorFeatureRequest
@@ -1033,5 +1042,35 @@ func TestStartActionChildCapabilityErrors(t *testing.T) {
 				t.Fatalf("error code = %q; want %q", body.Error.Code, tc.wantCode)
 			}
 		})
+	}
+}
+
+func TestDeleteActionClosedChildReturnsRelationshipConflict(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{
+		Mutations: &deleteBlockedMutationTarget{
+			err: fmt.Errorf("%w: delete is not permitted", feature.ErrChildRelationshipClosed),
+		},
+		DisableHostValidation: true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/child-9/actions/delete", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", contentTypeJSON)
+	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	var body ErrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != errCodeChildRelationshipClosed {
+		t.Fatalf("error code = %q, want %q", body.Error.Code, errCodeChildRelationshipClosed)
 	}
 }

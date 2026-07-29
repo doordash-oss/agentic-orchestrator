@@ -14,18 +14,12 @@
 
 package feature
 
-import (
-	"errors"
-	"fmt"
-)
+import "fmt"
 
 // ErrChildExecutionClosed rejects execution of a child whose relationship
-// has settled: the closed record stays inspectable, but starting, resuming,
-// or retrying pipeline phases would rerun work whose integration outcome is
-// already durable (and whose disposable worktree may be gone). The only
-// re-entry is the narrowly scoped Restart route for a Completed child whose
-// impermanent closure tail is genuinely resumable (IntegrationResumable).
-var ErrChildExecutionClosed = errors.New("child relationship is closed")
+// has settled. It aliases the relationship mutation sentinel so execution
+// and serialized direct mutations expose the same stable closed error.
+var ErrChildExecutionClosed = ErrChildRelationshipClosed
 
 // Child execution capability reasons. Reason values are stable identifiers
 // surfaced through the API so clients can distinguish a temporary profile

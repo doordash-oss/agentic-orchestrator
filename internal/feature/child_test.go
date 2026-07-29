@@ -146,11 +146,17 @@ func TestCreateRefactorChildRejectsIneligibleParents(t *testing.T) {
 
 	t.Run("closed child does not block", func(t *testing.T) {
 		saveChildTestParent(t, mgr, &feature.Feature{ID: "p-free", Slug: "p-free", Status: feature.StatusCodeReady})
+		closedAt := time.Now()
 		saveChildTestParent(t, mgr, &feature.Feature{
 			ID:     "c-closed",
 			Slug:   "c-closed",
 			Status: feature.StatusDone,
-			Parent: &feature.ChildRelationship{ParentID: "p-free", Kind: feature.ChildKindRefactor, CloseOutcome: "merged"},
+			Parent: &feature.ChildRelationship{
+				ParentID:     "p-free",
+				Kind:         feature.ChildKindRefactor,
+				CloseOutcome: feature.ChildCloseOutcomeCompleted,
+				ClosedAt:     &closedAt,
+			},
 		})
 		if _, err := mgr.CreateRefactorChild("p-free", childTestSpec()); err != nil {
 			t.Fatalf("create with closed child: %v", err)
@@ -1125,9 +1131,8 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 }
 
 // TestIntegrationResumable pins which durable integration states a Restart
-// replays: any recorded phase while the relationship is open, and only the
-// unfinished closure tail (pending worktree path or cleanup warning) once
-// the relationship is closed.
+// replays: any recorded phase while the relationship is open, and no state
+// after closure because automatic reconciliation owns cleanup tails.
 func TestIntegrationResumable(t *testing.T) {
 	mk := func(closeOutcome string, tx *feature.TransactionJournal, worktree string) *feature.Feature {
 		return &feature.Feature{
@@ -1154,8 +1159,8 @@ func TestIntegrationResumable(t *testing.T) {
 		{"active phase attention", mk("", &feature.TransactionJournal{Phase: feature.TransactionPhaseAttention}, "/tmp/wt"), true},
 		{"active phase merged", mk("", merged, "/tmp/wt"), true},
 		{"closed completed settled", mk(feature.ChildCloseOutcomeCompleted, merged, ""), false},
-		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", CleanupWarning: "worktree busy"}}}, ""), true},
-		{"closed completed with pending worktree", mk(feature.ChildCloseOutcomeCompleted, merged, "/tmp/wt"), true},
+		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", CleanupWarning: "worktree busy"}}}, ""), false},
+		{"closed completed with pending worktree", mk(feature.ChildCloseOutcomeCompleted, merged, "/tmp/wt"), false},
 		{"closed completed without merge head", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhasePreparing}, ""), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

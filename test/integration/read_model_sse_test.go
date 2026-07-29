@@ -122,7 +122,7 @@ func TestReadModelSSEBackpressureConcurrentPolling(t *testing.T) {
 // refactor child (queued setup) and pins the relationship projections:
 // children are excluded from the top-level list, parents carry active_child,
 // child detail exposes the parent linkage, and SSE frames correlate child
-// events to the parent via related_feature_id.
+// events to the parent via the relationship parent/child identifiers.
 func TestAPIChildFeatureProjectionAndSSE(t *testing.T) {
 	store := feature.NewStore(t.TempDir())
 	now := time.Now().UTC().Truncate(time.Second)
@@ -164,7 +164,7 @@ func TestAPIChildFeatureProjectionAndSSE(t *testing.T) {
 		t.Fatalf("top-level list = %+v, want only the parent", summaries)
 	}
 	activeChild := summaries[0].(map[string]any)["active_child"].(map[string]any)
-	if activeChild["id"] != child.ID || activeChild["state"] != "setting_up" || activeChild["setup_status"] != string(feature.SetupStatusQueued) {
+	if activeChild["id"] != child.ID || activeChild["relationship_state"] != "setting_up" || activeChild["setup_status"] != string(feature.SetupStatusQueued) {
 		t.Fatalf("parent summary active_child = %+v, want setting_up child", activeChild)
 	}
 
@@ -189,10 +189,10 @@ func TestAPIChildFeatureProjectionAndSSE(t *testing.T) {
 	resp, reader := openIntegrationSSE(t, srv)
 	defer resp.Body.Close()
 	readIntegrationSSEBlock(t, reader, "connected")
-	eventCh <- ports.Event{Type: ports.SetupProgress, FeatureID: child.ID, RelatedFeatureID: parent.ID}
+	eventCh <- ports.Event{Type: ports.RelationshipIntegrationChanged, FeatureID: child.ID, ParentID: parent.ID, ChildID: child.ID}
 	block := readIntegrationSSEBlock(t, reader, "lifecycle.updated")
-	if !strings.Contains(block, `"feature_id":"`+child.ID+`"`) || !strings.Contains(block, `"related_feature_id":"`+parent.ID+`"`) {
-		t.Fatalf("child SSE frame = %s; want feature_id and related_feature_id", block)
+	if !strings.Contains(block, `"parent_id":"`+parent.ID+`"`) || !strings.Contains(block, `"child_id":"`+child.ID+`"`) {
+		t.Fatalf("child SSE frame = %s; want parent_id and child_id", block)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestAPIChildFeatureNeverLeaksIntoTopLevelList(t *testing.T) {
 	}{
 		{"queued setup", feature.StatusSettingUpWorktrees, feature.SetupStatusQueued, "", "setting_up", false},
 		{"failed setup", feature.StatusFailed, feature.SetupStatusFailed, "git worktree add failed", "setting_up", true},
-		{"setup complete", feature.StatusCreated, feature.SetupStatusDone, "", "setup_complete", false},
+		{"setup complete", feature.StatusCreated, feature.SetupStatusDone, "", "active", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,8 +254,8 @@ func TestAPIChildFeatureNeverLeaksIntoTopLevelList(t *testing.T) {
 			if !ok {
 				t.Fatalf("parent summary active_child missing in %+v", summaries[0])
 			}
-			if activeChild["state"] != tc.wantState {
-				t.Fatalf("active_child.state = %v, want %s", activeChild["state"], tc.wantState)
+			if activeChild["relationship_state"] != tc.wantState {
+				t.Fatalf("active_child.relationship_state = %v, want %s", activeChild["relationship_state"], tc.wantState)
 			}
 			if tc.wantErrMsg && activeChild["last_error"] != tc.setupErr {
 				t.Fatalf("active_child.last_error = %v, want %q", activeChild["last_error"], tc.setupErr)

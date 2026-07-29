@@ -563,14 +563,10 @@ func TestChildIntegrationCleanupWarningNonFatal(t *testing.T) {
 		t.Fatalf("parent merge commit parents = %q, want two parents", parents)
 	}
 
-	// Retry through the production restart entrypoint: a completed child
-	// with an unsettled closure tail re-enters only that tail.
-	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase() error = %v", err)
-	}
-	if outcome.Action != RestartNoOp {
-		t.Fatalf("RestartPhase() action = %v, want RestartNoOp (closure tail resume)", outcome.Action)
+	// Automatic reconciliation owns the post-close cleanup tail. Closed
+	// children never regain a user-visible Restart path.
+	if err := fx.orchestrator().ReconcileIntegrationTransactions(); err != nil {
+		t.Fatalf("ReconcileIntegrationTransactions() error = %v", err)
 	}
 
 	parent, child = fx.reload()
@@ -917,10 +913,10 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
 	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
-	// 3=applying, 4=apply progress, 5=applied, 6=close write, 7=merged,
-	// 8=cleanup warning record.
+	// 3=applying, 4=apply progress, 5=applied, 6=close write,
+	// 7=clear closure error, 8=merged, 9=cleanup warning record.
 	o.deps.Worktrees = failingRemoveWorktrees{WorktreeManager: fx.wm, removeErr: errors.New("simulated worktree removal failure")}
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 8, err: errors.New("simulated warning-write failure")}
+	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 9, err: errors.New("simulated warning-write failure")}
 	o.deps.Store = store
 
 	err := o.RunChildIntegration(fx.child.ID)
@@ -937,18 +933,14 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	if child.Parent.Transaction == nil || child.Parent.Transaction.Entries[0].CleanupWarning != "" {
 		t.Fatalf("cleanup warning = %+v, want unset (the write failed and must not be faked)", child.Parent.Transaction)
 	}
-	if !child.IntegrationResumable() {
-		t.Fatal("child not resumable although the closure tail is unfinished")
+	if child.IntegrationResumable() {
+		t.Fatal("closed child must never become user-restartable")
 	}
 
-	// Restart re-enters only the closure tail with a healthy store and
-	// worktree manager: cleanup settles and the warning state is durable.
-	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase() error = %v", err)
-	}
-	if outcome.Action != RestartNoOp {
-		t.Fatalf("RestartPhase() action = %v, want RestartNoOp (closure tail resume)", outcome.Action)
+	// Startup reconciliation re-enters only the closure tail with a healthy
+	// store and worktree manager.
+	if err := fx.orchestrator().ReconcileIntegrationTransactions(); err != nil {
+		t.Fatalf("ReconcileIntegrationTransactions() error = %v", err)
 	}
 	_, child = fx.reload()
 	if child.Parent.Transaction.Entries[0].CleanupWarning != "" {

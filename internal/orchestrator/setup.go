@@ -142,11 +142,12 @@ func (o *Orchestrator) emitSetupEvent(ev feature.SetupEvent) {
 		o.hooks.OnSetupEvent(ev)
 	}
 	pe := setupPortsEvent(ev)
-	// Setup events for a child feature carry the parent id so consumers can
+	// Setup events for a child feature carry both ids so consumers can
 	// correlate both projections; the lookup is cheap at setup-event rates.
 	// The parent's persisted lifecycle is never touched.
 	if f, err := o.deps.Lifecycle.Get(ev.FeatureID); err == nil && f.IsChild() {
-		pe.RelatedFeatureID = f.Parent.ParentID
+		pe.ParentID = f.Parent.ParentID
+		pe.ChildID = f.ID
 	}
 	if pe.Type == ports.SetupFailed {
 		o.emitEventBlocking(pe)

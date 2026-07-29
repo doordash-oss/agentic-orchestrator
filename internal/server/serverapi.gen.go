@@ -131,6 +131,24 @@ func (e PermissionAnswerRequestDecision) Valid() bool {
 	}
 }
 
+// Defines values for RelationshipChildOutcome.
+const (
+	Completed RelationshipChildOutcome = "completed"
+	Discarded RelationshipChildOutcome = "discarded"
+)
+
+// Valid indicates whether the value is a known member of the RelationshipChildOutcome enum.
+func (e RelationshipChildOutcome) Valid() bool {
+	switch e {
+	case Completed:
+		return true
+	case Discarded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureAction.
 const (
 	FeatureActionCleanup            FeatureAction = "cleanup"
@@ -704,26 +722,6 @@ type ActionScope struct {
 	Type          string `json:"type"`
 }
 
-// ActiveChildSummary defines model for ActiveChildSummary.
-type ActiveChildSummary struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
-
-	// LastError Setup failure message when the child's setup failed.
-	LastError string `json:"last_error,omitempty"`
-	Name      string `json:"name"`
-	Pipeline  string `json:"pipeline,omitempty"`
-
-	// SetupStatus Setup status of the child's active run (queued/running/done/failed).
-	SetupStatus string `json:"setup_status,omitempty"`
-
-	// State Derived relationship state: setting_up while worktree setup is in flight or failed, setup_complete once setup has finished.
-	State string `json:"state"`
-
-	// Status Durable lifecycle status of the active child.
-	Status string `json:"status,omitempty"`
-}
-
 // Artifact defines model for Artifact.
 type Artifact struct {
 	Category         string    `json:"category"`
@@ -781,6 +779,9 @@ type AutomaticReviewStateMode string
 
 // AutomaticReviewStateSource defines model for AutomaticReviewState.Source.
 type AutomaticReviewStateSource string
+
+// CascadeDiagnostic defines model for CascadeDiagnostic.
+type CascadeDiagnostic = feature.CascadeDiagnostic
 
 // ChatStartResponse defines model for ChatStartResponse.
 type ChatStartResponse struct {
@@ -886,10 +887,12 @@ type Cycle struct {
 
 // DeleteFeatureResponse defines model for DeleteFeatureResponse.
 type DeleteFeatureResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
+	APIVersion  string                      `json:"api_version"`
+	Diagnostics []CascadeDiagnostic         `json:"diagnostics,omitempty"`
+	FeatureID   string                      `json:"feature_id"`
+	Meta        ResponseMeta                `json:"meta,omitempty"`
+	OperationID string                      `json:"operation_id"`
+	Status      feature.CascadeDeleteStatus `json:"status"`
 }
 
 // DiscardChildResponse defines model for DiscardChildResponse.
@@ -982,7 +985,7 @@ type FeatureDetail struct {
 
 	// Active True while a child feature's relationship is open (no close outcome recorded). Only set on child features.
 	Active          bool                 `json:"active,omitempty"`
-	ActiveChild     *ActiveChildSummary  `json:"active_child,omitempty"`
+	ActiveChild     *RelationshipChild   `json:"active_child,omitempty"`
 	ActiveRun       int                  `json:"active_run"`
 	ActiveRunDetail *RunSummary          `json:"active_run_detail,omitempty"`
 	AutomaticReview AutomaticReviewState `json:"automatic_review"`
@@ -991,6 +994,9 @@ type FeatureDetail struct {
 	Bases           []ChildRepoBase `json:"bases,omitempty"`
 	CacheRevalidate string          `json:"cache_revalidate"`
 	Checkpoints     Checkpoints     `json:"checkpoints"`
+
+	// ChildHistory Complete closed-child history in authoritative store order.
+	ChildHistory []RelationshipChild `json:"child_history,omitempty"`
 
 	// CloseOutcome Recorded relationship close outcome (e.g. completed); only set on closed child features.
 	CloseOutcome string `json:"close_outcome,omitempty"`
@@ -1013,14 +1019,15 @@ type FeatureDetail struct {
 	ParentID string `json:"parent_id,omitempty"`
 
 	// ParentKind Child relationship kind (e.g. refactor); only set on child features.
-	ParentKind string          `json:"parent_kind,omitempty"`
-	Pipeline   string          `json:"pipeline,omitempty"`
-	Progress   FeatureProgress `json:"progress"`
-	RepoStatus []RepoStatus    `json:"repo_status"`
-	Repos      []string        `json:"repos"`
-	ReviewGate ReviewGate      `json:"review_gate"`
-	Revision   string          `json:"revision"`
-	RunCount   int             `json:"run_count"`
+	ParentKind   string             `json:"parent_kind,omitempty"`
+	Pipeline     string             `json:"pipeline,omitempty"`
+	Progress     FeatureProgress    `json:"progress"`
+	Relationship *RelationshipChild `json:"relationship,omitempty"`
+	RepoStatus   []RepoStatus       `json:"repo_status"`
+	Repos        []string           `json:"repos"`
+	ReviewGate   ReviewGate         `json:"review_gate"`
+	Revision     string             `json:"revision"`
+	RunCount     int                `json:"run_count"`
 
 	// SetupComplete True when the child's active run setup finished; only set on child features.
 	SetupComplete bool   `json:"setup_complete,omitempty"`
@@ -1090,9 +1097,12 @@ type FeatureStopResponse struct {
 
 // FeatureSummary defines model for FeatureSummary.
 type FeatureSummary struct {
-	ActiveChild  *ActiveChildSummary `json:"active_child,omitempty"`
-	ActiveRun    int                 `json:"active_run"`
-	Checkpoints  Checkpoints         `json:"checkpoints"`
+	ActiveChild *RelationshipChild `json:"active_child,omitempty"`
+	ActiveRun   int                `json:"active_run"`
+	Checkpoints Checkpoints        `json:"checkpoints"`
+
+	// ChildHistory Complete closed-child history in authoritative store order.
+	ChildHistory []RelationshipChild `json:"child_history,omitempty"`
 	CreatedAt    time.Time           `json:"created_at"`
 	CurrentPhase string              `json:"current_phase"`
 	Cycle        *Cycle              `json:"cycle,omitempty"`
@@ -1407,6 +1417,55 @@ type RefactorFeatureResponse struct {
 	Result     string       `json:"result"`
 }
 
+// RelationshipAttention defines model for RelationshipAttention.
+type RelationshipAttention struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Repo    string `json:"repo,omitempty"`
+}
+
+// RelationshipChild defines model for RelationshipChild.
+type RelationshipChild struct {
+	Attention       []RelationshipAttention      `json:"attention"`
+	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
+	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
+	Cost            Cost                         `json:"cost"`
+
+	// DisplayState Human-readable relationship state. Closed children use exactly "Closed — Completed" or "Closed — Discarded".
+	DisplayState string `json:"display_state"`
+
+	// DisplayToken Stable, non-positional token suitable for compact UI labels.
+	DisplayToken     string `json:"display_token"`
+	ID               string `json:"id"`
+	IntegrationState string `json:"integration_state"`
+	Kind             string `json:"kind"`
+
+	// LastError Setup failure message when the child's setup failed.
+	LastError string                   `json:"last_error,omitempty"`
+	Name      string                   `json:"name"`
+	Outcome   RelationshipChildOutcome `json:"outcome,omitempty"`
+	Pipeline  string                   `json:"pipeline"`
+
+	// RelationshipState Stable machine state: setting_up, active, completed, or discarded.
+	RelationshipState string `json:"relationship_state,omitempty"`
+
+	// SetupStatus Setup status of the child's active run (queued/running/done/failed).
+	SetupStatus string    `json:"setup_status,omitempty"`
+	StartedAt   time.Time `json:"started_at"`
+
+	// Status Stored child lifecycle status; closure never rewrites it.
+	Status string `json:"status"`
+}
+
+// RelationshipChildOutcome defines model for RelationshipChild.Outcome.
+type RelationshipChildOutcome string
+
+// RelationshipCleanupWarning defines model for RelationshipCleanupWarning.
+type RelationshipCleanupWarning struct {
+	Message string `json:"message"`
+	Repo    string `json:"repo,omitempty"`
+}
+
 // RepoStatus defines model for RepoStatus.
 type RepoStatus struct {
 	ConflictFiles []string `json:"conflict_files,omitempty"`
@@ -1444,13 +1503,18 @@ type RepoTransactionEntry struct {
 
 // Resource defines model for Resource.
 type Resource struct {
+	// ChildID Direct child feature id for a relationship lifecycle event.
+	ChildID   string `json:"child_id,omitempty"`
 	FeatureID string `json:"feature_id,omitempty"`
 	ID        string `json:"id,omitempty"`
-	Phase     string `json:"phase,omitempty"`
 
-	// RelatedFeatureID Parent feature id when this event belongs to a child feature (e.g. a refactor child); empty for top-level feature events.
-	RelatedFeatureID string `json:"related_feature_id,omitempty"`
-	Type             string `json:"type"`
+	// ParentID Parent feature id for a relationship lifecycle event.
+	ParentID string `json:"parent_id,omitempty"`
+	Phase    string `json:"phase,omitempty"`
+
+	// RelationshipDeleted True only when a completed cascade removed both relationship records. Clients refresh the top-level list and evict both detail snapshots instead of treating their absence as a stream failure.
+	RelationshipDeleted bool   `json:"relationship_deleted,omitempty"`
+	Type                string `json:"type"`
 }
 
 // ResponseMeta defines model for ResponseMeta.

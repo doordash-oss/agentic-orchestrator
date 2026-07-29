@@ -93,7 +93,7 @@ func failedSetupChild() *feature.Feature {
 // closedCompletedChild returns a settled Completed Medium single-repository
 // child parked at ReviewPassed — the state a child keeps after its work
 // merged into the parent. cleanupPending controls whether the disposable
-// worktree path is still durable (a resumable closure tail) or cleared.
+// worktree path is still durable for automatic reconciliation or cleared.
 func closedCompletedChild(cleanupPending bool) *feature.Feature {
 	closed := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	child := setupCompleteChild()
@@ -122,9 +122,8 @@ func closedCompletedChild(cleanupPending bool) *feature.Feature {
 // replay pipeline phases again — its disposable worktree may already be
 // gone. The refusal is the stable typed ErrChildExecutionClosed, never a
 // capability or setup error, and it leaves the closed record untouched. The
-// only surviving execution route is Restart for a Completed child whose
-// cleanup tail is genuinely resumable (covered end-to-end by the real-git
-// cleanup-warning retry test); start and retry stay refused even then.
+// Automatic reconciliation owns any unfinished cleanup tail; all user
+// execution routes stay refused.
 func TestOrchestrator_ClosedChildExecutionRefused(t *testing.T) {
 	children := []struct {
 		name string

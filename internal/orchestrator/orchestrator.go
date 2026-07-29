@@ -465,19 +465,19 @@ func (o *Orchestrator) CreateFeature(
 	return f, nil
 }
 
-// RefactorChildCreated emits the FeatureCreated event for a durable refactor
+// RefactorChildCreated emits the relationship-created event for a durable refactor
 // child. Child creation goes through feature.Manager.CreateRefactorChild (not
-// Orchestrator.CreateFeature), so the mutation target reports the launch here;
-// FeatureID is the child and RelatedFeatureID the launch parent.
+// Orchestrator.CreateFeature), so the mutation target reports the launch here.
 func (o *Orchestrator) RefactorChildCreated(child *feature.Feature) {
 	if child == nil || !child.IsChild() {
 		return
 	}
 	o.emitEvent(ports.Event{
-		Type:             ports.FeatureCreated,
-		FeatureID:        child.ID,
-		Feature:          child,
-		RelatedFeatureID: child.Parent.ParentID,
+		Type:      ports.RelationshipChildCreated,
+		FeatureID: child.ID,
+		ParentID:  child.Parent.ParentID,
+		ChildID:   child.ID,
+		Feature:   child,
 	})
 }
 
@@ -538,7 +538,7 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 	if err := o.RelationshipGuard(featureID, MutationStart); err != nil {
 		return err
 	}
-	if err := o.checkChildExecution(featureID, false); err != nil {
+	if err := o.checkChildExecution(featureID); err != nil {
 		return err
 	}
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -2211,18 +2211,9 @@ func (o *Orchestrator) StopFeatureSessions(featureID string) {
 	}
 }
 
-// Delete stops any active sessions for the feature and removes it via the
-// lifecycle. Synchronous (caller learns the outcome via the returned error);
-// no ports.Event is emitted, matching the TUI's legacy delete semantics.
+// Delete executes the durable relationship cascade. The error-only wrapper is
+// retained for callers that do not consume the typed convergent result.
 func (o *Orchestrator) Delete(featureID string) error {
-	o.relationshipMu.RLock()
-	defer o.relationshipMu.RUnlock()
-	if err := o.RelationshipGuard(featureID, MutationDelete); err != nil {
-		return err
-	}
-	o.StopFeatureSessions(featureID)
-	if err := o.deps.Lifecycle.Delete(featureID); err != nil {
-		return fmt.Errorf("deleting feature: %w", err)
-	}
-	return nil
+	_, err := o.DeleteCascade(featureID)
+	return err
 }

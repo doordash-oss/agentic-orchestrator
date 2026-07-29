@@ -129,11 +129,11 @@ const routeSegmentConfig = "config"
 // scoped resources (ResourceDTO.Type, ActionScopeDTO.Type, etc).
 const entityFeature = "feature"
 
-// resourceTypeSession and resourceTypeRuntime are the other ResourceDTO.Type
-// discriminator values, alongside entityFeature.
+// Resource type discriminators used by SSE refresh routing.
 const (
-	resourceTypeSession = "session"
-	resourceTypeRuntime = "runtime"
+	resourceTypeSession      = "session"
+	resourceTypeRuntime      = "runtime"
+	resourceTypeRelationship = "relationship"
 )
 
 var topLevelServerRoutes = []topLevelRoute{
@@ -204,25 +204,19 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "list features", nil)
 		return
 	}
-	// Child features never appear in the top-level list; instead the single
-	// loaded slice indexes at most one active child per parent (creation
-	// enforces uniqueness; first match wins defensively) so the parent's
-	// summary can expose it without a per-feature store round trip.
-	activeChildByParent := map[string]*feature.Feature{}
-	for _, f := range features {
-		if f.IsActiveChild() {
-			if _, exists := activeChildByParent[f.Parent.ParentID]; !exists {
-				activeChildByParent[f.Parent.ParentID] = f
-			}
-		}
-	}
 	summaries := make([]FeatureSummary, 0, len(features))
 	for _, f := range features {
 		if f.IsChild() {
 			continue
 		}
 		summary := summarizeFeature(f)
-		summary.ActiveChild = activeChildSummaryDTO(activeChildByParent[f.ID])
+		children, relationshipErr := h.relationshipChildrenOf(f.ID, features)
+		if relationshipErr != nil {
+			writeAPIError(w, http.StatusInternalServerError, "relationship_read_failed", "read relationship history", map[string]any{"parent_id": f.ID})
+			return
+		}
+		summary.ActiveChild = relationshipChildDTO(children.Active)
+		summary.ChildHistory = relationshipChildDTOs(children.Closed)
 		summary.Warnings = append(summary.Warnings, effortDriftWarnings(f, h.registry)...)
 		summaries = append(summaries, summary)
 	}

@@ -54,7 +54,7 @@ const (
 	errCodeParentWorktreesDirty           = "parent_worktrees_dirty"
 	errCodeChildExecutionBlocked          = "child_execution_blocked"
 	errCodeChildProfileUnsupported        = "child_profile_unsupported"
-	errCodeChildRelationshipClosed        = "child_relationship_closed"
+	errCodeChildRelationshipClosed        = "relationship_closed"
 	errCodeParentMutationLocked           = "parent_mutation_locked"
 	errCodeChildMutationRestricted        = "child_mutation_restricted"
 	errCodeCascadeDeleteNotAvailable      = "cascade_delete_not_available"
@@ -444,6 +444,8 @@ func writeMutationError(w http.ResponseWriter, err error) {
 // guard rejection.
 func writeRelationshipGuardError(w http.ResponseWriter, err error) bool {
 	switch {
+	case errors.Is(err, feature.ErrChildRelationshipClosed):
+		writeAPIError(w, http.StatusConflict, errCodeChildRelationshipClosed, err.Error(), nil)
 	case errors.Is(err, feature.ErrParentMutationLocked):
 		writeAPIError(w, http.StatusConflict, errCodeParentMutationLocked, err.Error(), nil)
 	case errors.Is(err, feature.ErrChildMutationRestricted):

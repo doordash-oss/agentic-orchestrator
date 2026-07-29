@@ -15,8 +15,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1410,6 +1413,78 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	}
 }
 
+func TestServerMutationTargetClosedChildConfigReturnsRelationshipClosed(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	cfg := config.NewDefault()
+	closedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	child := &feature.Feature{
+		ID:          "closed-child",
+		Name:        "Closed child",
+		Slug:        "closed-child",
+		Status:      feature.StatusDone,
+		Pipeline:    feature.PipelineMedium,
+		Models:      config.ModelConfig{Research: "old-research"},
+		Inquireness: feature.InquirenessMedium,
+		Checkpoints: feature.Checkpoints{RoadmapReview: true},
+		Parent: &feature.ChildRelationship{
+			ParentID:     "parent",
+			Kind:         feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted,
+			ClosedAt:     &closedAt,
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save closed child: %v", err)
+	}
+	manager := feature.NewManager(store, cfg)
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		cfg:   cfg,
+		store: store,
+	}
+	handler := serverruntime.NewHandler(serverruntime.HandlerOptions{
+		DisableHostValidation: true,
+		Features:              store,
+		FeatureStore:          store,
+		Config:                cfg,
+		Mutations:             &target,
+	})
+	body, err := json.Marshal(serverruntime.FeatureConfigMutationRequest{
+		Models:      config.ModelConfig{Research: "new-research"},
+		Inquireness: testInquirenessHigh,
+		Pipeline:    feature.PipelineMedium,
+		Checkpoints: feature.Checkpoints{ManualPublish: true},
+	})
+	if err != nil {
+		t.Fatalf("Marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/"+child.ID+"/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var response serverruntime.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+	if response.Error.Code != "relationship_closed" {
+		t.Fatalf("error code = %q, want relationship_closed", response.Error.Code)
+	}
+	loaded, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load closed child: %v", err)
+	}
+	if loaded.Models.Research != "old-research" || loaded.Inquireness != feature.InquirenessMedium || loaded.Checkpoints != (feature.Checkpoints{RoadmapReview: true}) {
+		t.Fatalf("closed child config mutated: models=%+v inquireness=%q checkpoints=%+v", loaded.Models, loaded.Inquireness, loaded.Checkpoints)
+	}
+}
+
 func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata(t *testing.T) {
 	target, manager, store, f := newPublishActionTarget(t)
 	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
@@ -1852,7 +1927,7 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if err != nil {
 			t.Fatalf("DeleteFeature() error = %v", err)
 		}
-		if result.FeatureID != f.ID || result.Result != "deleted" {
+		if result.FeatureID != f.ID || result.Status != feature.CascadeDeleteCompleted {
 			t.Fatalf("DeleteFeature() result = %+v; want deleted feature", result)
 		}
 		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != testRepoAWorktreePath || !worktrees.removeCalls[0].deleteBranch {
@@ -1989,7 +2064,7 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 	if err != nil {
 		t.Fatalf("Load prepared feature: %v", err)
 	}
-	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Worktrees: worktrees}, orchestrator.Hooks{})
 	return serverMutationTarget{orch: orch, store: store}, store, loaded, worktrees
 }
 
@@ -2063,6 +2138,12 @@ func (f *fakeWorktreeOperator) Remove(path string, deleteBranch bool) error {
 	return nil
 }
 
+func (f *fakeWorktreeOperator) List() ([]ports.WorktreeInfo, error) { return nil, nil }
+
+func (f *fakeWorktreeOperator) DetectStale([]string) ([]ports.WorktreeInfo, error) {
+	return nil, nil
+}
+
 func (f *fakeWorktreeOperator) ResetToBase(string, string) error {
 	return nil
 }
@@ -2073,6 +2154,10 @@ func (f *fakeWorktreeOperator) ResetToBaseLocal(string, string) error {
 
 func (f *fakeWorktreeOperator) ResetToCommit(string, string) error {
 	return nil
+}
+
+func (f *fakeWorktreeOperator) HasUncommittedChanges(string) (bool, error) {
+	return false, nil
 }
 
 func mutationTargetOrchestrator(sessions ports.SessionManager) *orchestrator.Orchestrator {

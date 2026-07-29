@@ -45,12 +45,9 @@ type childHeadReader interface {
 // execution. Queued, setting-up, and failed-setup children stay reachable
 // only through RunSetup / RetrySetup; setup-complete children must satisfy
 // the supported execution shape (active Medium); a child whose relationship
-// has settled can never replay pipeline phases — with allowClosedRestart the
-// gate widens only for a Completed child whose impermanent closure tail is
-// genuinely resumable (Restart's sole route back into
-// settleChildClosureTail). Feature-lookup failures propagate so the gate
-// can never be silently skipped.
-func (o *Orchestrator) checkChildExecution(featureID string, allowClosedRestart bool) error {
+// has settled can never replay pipeline phases. Feature-lookup failures
+// propagate so the gate can never be silently skipped.
+func (o *Orchestrator) checkChildExecution(featureID string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature: %w", err)
@@ -59,9 +56,6 @@ func (o *Orchestrator) checkChildExecution(featureID string, allowClosedRestart 
 		return nil
 	}
 	if !f.IsActiveChild() {
-		if allowClosedRestart && f.IntegrationResumable() {
-			return nil
-		}
 		return fmt.Errorf("%w: %s", feature.ErrChildExecutionClosed, featureID)
 	}
 	if !f.ChildSetupComplete() {
@@ -102,6 +96,11 @@ func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
 	}
 	if child == nil || !child.IsChild() {
 		return fmt.Errorf("%w: feature is not a child feature", ErrChildIntegrationRefused)
+	}
+	if owned, ownershipErr := o.cascadeOwnsRelationship(child.Parent.ParentID); ownershipErr != nil {
+		return ownershipErr
+	} else if owned {
+		return fmt.Errorf("%w: cascade delete owns child %s", feature.ErrParentMutationLocked, child.ID)
 	}
 	if child.IsDiscarding() {
 		return fmt.Errorf("%w: child %s has discard in progress", ErrChildDiscardInProgress, child.ID)
@@ -394,16 +393,14 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 
 	// Child → Completed.
 	now := time.Now()
+	if err := o.closeChildRelationship(childID, feature.ChildCloseOutcomeCompleted, now); err != nil {
+		return fmt.Errorf("close child relationship: %w", err)
+	}
 	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
-		if f.Parent.CloseOutcome != "" {
-			return nil
-		}
-		f.Parent.CloseOutcome = feature.ChildCloseOutcomeCompleted
-		f.Parent.ClosedAt = &now
 		f.LastError = ""
 		return nil
 	}); err != nil {
-		return fmt.Errorf("close child relationship: %w", err)
+		return fmt.Errorf("clear child relationship error: %w", err)
 	}
 
 	// Persist the merged phase AFTER both transitions are durable.
@@ -436,10 +433,11 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		}
 	}
 	o.emitEvent(ports.Event{
-		Type:             ports.RepoStatusChanged,
-		FeatureID:        childID,
-		RelatedFeatureID: parentID,
-		Message:          "refactor child integrated and closed",
+		Type:      ports.RelationshipClosed,
+		FeatureID: childID,
+		ParentID:  parentID,
+		ChildID:   childID,
+		Message:   "refactor child integrated and closed",
 	})
 
 	parent, err := o.deps.Lifecycle.Get(parentID)

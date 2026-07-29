@@ -923,7 +923,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 	publishable := true
 
 	deliveryActions := []string{
-		actionPauseStop, actionPublish, actionMerge, actionRewind,
+		actionPublish, actionMerge, actionRewind,
 		actionRebase, actionReviewComments, actionRefactor, actionMarkDone,
 	}
 
@@ -1043,7 +1043,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), disabledChildRelationshipClosed)
 	})
 
-	t.Run("closed child with resumable cleanup tail keeps restart only", func(t *testing.T) {
+	t.Run("closed child cleanup tail remains automatic", func(t *testing.T) {
 		t.Parallel()
 		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable, nil)
 		f.Pipeline = feature.PipelineMedium
@@ -1067,11 +1067,8 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 		actions := actionCatalogDTOs(f)
 		assertNoDeliveryActions(t, actions)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildRelationshipClosed)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), disabledChildRelationshipClosed)
-		restart := actionDTOByID(t, actions, actionRestart)
-		if !restart.Enabled {
-			t.Fatalf("restart disabled = %+v; want enabled for a resumable closure tail", restart.DisabledReasons)
+		for _, action := range actions {
+			assertDisabledCode(t, action, disabledChildRelationshipClosed)
 		}
 	})
 
@@ -1198,7 +1195,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				disabledCode string
 			}{
 				actionCleanup: {disabledCode: feature.RepoCycleRunning},
-				actionDelete:  {disabledCode: feature.RepoCycleRunning},
+				actionDelete:  {enabled: true},
 			},
 		},
 		{

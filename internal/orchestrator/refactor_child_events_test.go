@@ -36,7 +36,7 @@ func drainOrchestratorEvent(t *testing.T, o *Orchestrator) ports.Event {
 
 // TestRefactorChildCreatedEmitsCorrelatedEvent pins the child-creation emit
 // point: the SSE-facing event carries the child id as FeatureID and the
-// launch parent as RelatedFeatureID.
+// launch parent and child as one relationship identity.
 func TestRefactorChildCreatedEmitsCorrelatedEvent(t *testing.T) {
 	t.Parallel()
 	child := &feature.Feature{
@@ -50,8 +50,8 @@ func TestRefactorChildCreatedEmitsCorrelatedEvent(t *testing.T) {
 
 	o.RefactorChildCreated(child)
 	ev := drainOrchestratorEvent(t, o)
-	if ev.Type != ports.FeatureCreated || ev.FeatureID != child.ID || ev.RelatedFeatureID != "parent-1" || ev.Feature != child {
-		t.Fatalf("event = %+v, want FeatureCreated for child correlated to parent", ev)
+	if ev.Type != ports.RelationshipChildCreated || ev.FeatureID != child.ID || ev.ParentID != "parent-1" || ev.ChildID != child.ID || ev.Feature != child {
+		t.Fatalf("event = %+v, want relationship-created event for child correlated to parent", ev)
 	}
 
 	// Nil and top-level features must not emit anything.
@@ -65,7 +65,7 @@ func TestRefactorChildCreatedEmitsCorrelatedEvent(t *testing.T) {
 }
 
 // TestEmitSetupEventStampsParentOnChildEvents pins the setup-lifecycle
-// correlation: child setup events carry RelatedFeatureID; top-level events
+// correlation: child setup events carry both relationship identifiers; top-level events
 // stay zero-value-safe; the parent's persisted lifecycle is never touched.
 func TestEmitSetupEventStampsParentOnChildEvents(t *testing.T) {
 	t.Parallel()
@@ -80,7 +80,7 @@ func TestEmitSetupEventStampsParentOnChildEvents(t *testing.T) {
 
 	o.emitSetupEvent(feature.SetupEvent{Kind: feature.SetupEventStarted, FeatureID: child.ID})
 	ev := drainOrchestratorEvent(t, o)
-	if ev.Type != ports.SetupStarted || ev.FeatureID != child.ID || ev.RelatedFeatureID != "parent-1" {
+	if ev.Type != ports.SetupStarted || ev.FeatureID != child.ID || ev.ParentID != "parent-1" || ev.ChildID != child.ID {
 		t.Fatalf("child setup event = %+v, want SetupStarted correlated to parent", ev)
 	}
 }
@@ -94,7 +94,7 @@ func TestEmitSetupEventTopLevelHasNoRelatedFeature(t *testing.T) {
 
 	o.emitSetupEvent(feature.SetupEvent{Kind: feature.SetupEventCompleted, FeatureID: topLevel.ID})
 	ev := drainOrchestratorEvent(t, o)
-	if ev.Type != ports.SetupCompleted || ev.FeatureID != topLevel.ID || ev.RelatedFeatureID != "" {
+	if ev.Type != ports.SetupCompleted || ev.FeatureID != topLevel.ID || ev.ParentID != "" || ev.ChildID != "" {
 		t.Fatalf("top-level setup event = %+v, want no related feature id", ev)
 	}
 }

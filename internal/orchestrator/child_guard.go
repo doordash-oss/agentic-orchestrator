@@ -16,9 +16,39 @@ package orchestrator
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
+
+type childRelationshipCloser interface {
+	CloseChild(childID, outcome string, closedAt time.Time) error
+}
+
+func (o *Orchestrator) closeChildRelationship(childID, outcome string, closedAt time.Time) error {
+	closer, ok := o.deps.Store.(childRelationshipCloser)
+	if ok {
+		return closer.CloseChild(childID, outcome, closedAt)
+	}
+	// Lightweight port doubles may not expose the concrete store primitive.
+	// Preserve the same idempotent invariant in that compatibility path;
+	// production wiring always uses feature.Store.CloseChild.
+	return o.deps.Store.Modify(childID, func(child *feature.Feature) error {
+		if !child.IsChild() {
+			return fmt.Errorf("feature %s is not a child", childID)
+		}
+		if !child.IsActiveChild() {
+			if child.Parent.CloseOutcome == outcome {
+				return nil
+			}
+			return feature.ErrChildRelationshipClosed
+		}
+		child.Parent.CloseOutcome = outcome
+		timestamp := closedAt
+		child.Parent.ClosedAt = &timestamp
+		return nil
+	})
+}
 
 // MutationOperation identifies which orchestrator mutation is being guarded.
 type MutationOperation string
@@ -87,6 +117,15 @@ func (o *Orchestrator) RelationshipGuard(featureID string, op MutationOperation)
 	if f == nil {
 		return nil
 	}
+	relationshipParentID := featureID
+	if f.IsChild() {
+		relationshipParentID = f.Parent.ParentID
+	}
+	if owned, ownershipErr := o.cascadeOwnsRelationship(relationshipParentID); ownershipErr != nil {
+		return ownershipErr
+	} else if owned && op != MutationDelete {
+		return fmt.Errorf("%w: cascade delete owns relationship %s", feature.ErrParentMutationLocked, relationshipParentID)
+	}
 
 	var activeChild *feature.Feature
 	if !f.IsChild() {
@@ -123,15 +162,13 @@ func relationshipGuardCheck(f *feature.Feature, activeChild *feature.Feature, op
 			}
 			return nil
 		}
-		// Closed child: restart, retry, and start have their own execution gate
-		// (checkChildExecution) that handles the closed-relationship case
-		// with the typed ErrChildExecutionClosed. Let them pass through;
-		// all other mutations are rejected.
+		// Closed child controls are presentation-only. Automatic
+		// reconciliation owns any unfinished closure cleanup.
 		if f.Parent != nil && f.Parent.CloseOutcome != "" {
 			if op == MutationRestart || op == MutationRetry || op == MutationStart {
 				return nil
 			}
-			return fmt.Errorf("%w: %s is not permitted on closed child %s", feature.ErrChildMutationRestricted, op, f.ID)
+			return fmt.Errorf("%w: %s is not permitted on closed child %s", feature.ErrChildRelationshipClosed, op, f.ID)
 		}
 		return nil
 	}

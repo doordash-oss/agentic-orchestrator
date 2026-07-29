@@ -83,7 +83,7 @@ func TestDiscardChildRecordsIntentAndCloses(t *testing.T) {
 	}
 }
 
-func TestDiscardChildIdempotent(t *testing.T) {
+func TestDiscardChildClosesThenRejectsStaleRetry(t *testing.T) {
 	t.Parallel()
 	child := &feature.Feature{
 		ID:       "discard-idempotent",
@@ -119,9 +119,10 @@ func TestDiscardChildIdempotent(t *testing.T) {
 	firstLoaded, _ := store.Load("discard-idempotent")
 	firstCloseTime := firstLoaded.Parent.ClosedAt
 
-	// Second discard should be a no-op (already done).
-	if err := o.DiscardChild("discard-idempotent"); err != nil {
-		t.Fatalf("second DiscardChild: %v", err)
+	// Automatic reconciliation, not another user mutation, owns any cleanup
+	// after the relationship has closed.
+	if err := o.DiscardChild("discard-idempotent"); !errors.Is(err, feature.ErrChildRelationshipClosed) {
+		t.Fatalf("second DiscardChild error = %v, want ErrChildRelationshipClosed", err)
 	}
 	secondLoaded, _ := store.Load("discard-idempotent")
 	if secondLoaded.Parent.ClosedAt != firstCloseTime {
@@ -131,6 +132,7 @@ func TestDiscardChildIdempotent(t *testing.T) {
 
 func TestDiscardChildRejectsCompletedChild(t *testing.T) {
 	t.Parallel()
+	closedAt := time.Now()
 	child := &feature.Feature{
 		ID:       "discard-completed",
 		Status:   feature.StatusReviewPassed,
@@ -139,6 +141,7 @@ func TestDiscardChildRejectsCompletedChild(t *testing.T) {
 			ParentID:     "discard-parent3",
 			Kind:         feature.ChildKindRefactor,
 			CloseOutcome: feature.ChildCloseOutcomeCompleted,
+			ClosedAt:     &closedAt,
 		},
 	}
 	store := newFeatureStore(child)
@@ -146,8 +149,44 @@ func TestDiscardChildRejectsCompletedChild(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
 
 	err := o.DiscardChild("discard-completed")
-	if err == nil {
-		t.Fatal("expected error discarding completed child")
+	if !errors.Is(err, feature.ErrChildRelationshipClosed) {
+		t.Fatalf("DiscardChild() error = %v, want ErrChildRelationshipClosed", err)
+	}
+}
+
+func TestDiscardChildDoesNotResumeClosedDiscardCleanup(t *testing.T) {
+	t.Parallel()
+	closedAt := time.Now()
+	child := &feature.Feature{
+		ID:       "discard-closed",
+		Status:   feature.StatusCreated,
+		Pipeline: feature.PipelineMedium,
+		Parent: &feature.ChildRelationship{
+			ParentID:     "discard-parent",
+			Kind:         feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeDiscarded,
+			ClosedAt:     &closedAt,
+		},
+		DiscardIntent: &feature.DiscardIntent{
+			RequestedAt: closedAt.Add(-time.Minute),
+			Step:        feature.DiscardStepClosed,
+			ClosedAt:    &closedAt,
+		},
+	}
+	store := newFeatureStore(child)
+	lc := lifecycleForFeature(child)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+
+	err := o.DiscardChild(child.ID)
+	if !errors.Is(err, feature.ErrChildRelationshipClosed) {
+		t.Fatalf("DiscardChild() error = %v, want ErrChildRelationshipClosed", err)
+	}
+	loaded, loadErr := store.Load(child.ID)
+	if loadErr != nil {
+		t.Fatalf("Load() error = %v", loadErr)
+	}
+	if loaded.DiscardIntent.Step != feature.DiscardStepClosed {
+		t.Fatalf("discard step = %q, want unchanged closed step", loaded.DiscardIntent.Step)
 	}
 }
 
@@ -347,8 +386,8 @@ func TestDiscardChildAttentionResolveFailureDoesNotAdvance(t *testing.T) {
 			Branch:     "feature/child",
 			BaseBranch: "main",
 		}},
-		PermissionsQueue:         []feature.PermissionRequest{{Tool: "pending"}},
-		Parent:                   &feature.ChildRelationship{ParentID: "discard-attn-parent", Kind: feature.ChildKindRefactor},
+		PermissionsQueue: []feature.PermissionRequest{{Tool: "pending"}},
+		Parent:           &feature.ChildRelationship{ParentID: "discard-attn-parent", Kind: feature.ChildKindRefactor},
 	}
 	parent := &feature.Feature{
 		ID:       "discard-attn-parent",

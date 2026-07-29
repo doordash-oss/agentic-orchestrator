@@ -79,6 +79,13 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 			o.emitSetupReconciled(id)
 		}
 	}
+	// Child creation and abandoned setup establish the complete durable
+	// relationship first. Cascade then takes exclusive ownership before
+	// paired config, discard, integration, closure cleanup, or ordinary
+	// session recovery can advance either record.
+	if err := o.ReconcileCascadeDeletes(); err != nil {
+		return nil, fmt.Errorf("reconcile cascade deletes: %w", err)
+	}
 	// Reconcile interrupted paired config updates before integration
 	// transactions so both records converge before any integration work.
 	if reconciler, ok := o.deps.Store.(interface {
@@ -312,6 +319,11 @@ func (o *Orchestrator) ReconcileIntegrationTransactions() error {
 // reconcileOneIntegration reconciles a single feature's integration journal.
 func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 	if f == nil || !f.IsChild() {
+		return nil
+	}
+	if owned, err := o.cascadeOwnsRelationship(f.Parent.ParentID); err != nil {
+		return err
+	} else if owned {
 		return nil
 	}
 	// A child with a durable discard intent is owned by the discard

@@ -38,8 +38,8 @@ var (
 	// ErrRefactorParentStatusIneligible: only Published or CodeReady parents
 	// can launch a refactor child.
 	ErrRefactorParentStatusIneligible = errors.New("refactor parent status is not eligible")
-	// ErrChildExecutionBlocked: setup-complete children are deliberately
-	// non-runnable; every pipeline start/resume/restart path rejects them.
+	// ErrChildExecutionBlocked rejects children whose setup is incomplete or
+	// whose execution shape is unsupported.
 	ErrChildExecutionBlocked = errors.New("child features are not runnable")
 	// ErrParentMutationLocked: the parent has an active child or a discard
 	// intent that has not reached safe closure. Only read-only inspection
@@ -49,11 +49,34 @@ var (
 	// set (ordinary execution controls, input handling, paired Review
 	// editing, typed discard).
 	ErrChildMutationRestricted = errors.New("child mutation is restricted")
+	// ErrChildRelationshipClosed rejects every mutation addressed to a
+	// child after its Completed or Discarded outcome becomes durable.
+	ErrChildRelationshipClosed = errors.New("child relationship is closed")
+	// ErrChildRelationshipInvalid identifies a persisted child relationship
+	// whose outcome and close timestamp do not form a valid lifecycle state.
+	ErrChildRelationshipInvalid = errors.New("child relationship is invalid")
 	// ErrCascadeDeleteNotAvailable: parent Delete is not available while
 	// a child is active. A complete recoverable cascade operation is
 	// required before parent deletion can be allowed.
 	ErrCascadeDeleteNotAvailable = errors.New("cascade delete is not available while a child is active")
 )
+
+// ChildRelationshipError identifies the child record that violates a
+// relationship lifecycle invariant.
+type ChildRelationshipError struct {
+	ChildID string
+	Reason  string
+}
+
+func (e *ChildRelationshipError) Error() string {
+	return fmt.Sprintf("child %s relationship is invalid: %s", e.ChildID, e.Reason)
+}
+
+// Unwrap lets callers classify malformed persisted records without parsing
+// the contextual child identifier.
+func (e *ChildRelationshipError) Unwrap() error {
+	return ErrChildRelationshipInvalid
+}
 
 // ActiveChildExistsError reports that the parent already has an active child
 // (CloseOutcome empty). Exactly one concurrent launch under the same parent
@@ -171,41 +194,18 @@ func (f *Feature) IsActiveChild() bool {
 	return f.IsChild() && f.Parent.CloseOutcome == ""
 }
 
-// IntegrationResumable reports whether a Restart should replay some part of
-// the child's durable integration record instead of rerunning pipeline
-// phases. It is true for an active child whose integration reached any
-// recorded phase (anchors captured, attention, or merged-but-unclosed), and
-// for a completed child whose impermanent closure tail is unfinished:
-// cleanup never settled, so the disposable worktree path or a cleanup
-// warning is still durable on the record.
+// IntegrationResumable reports whether an active child's durable integration
+// record can resume instead of rerunning pipeline phases. Closed cleanup tails
+// are owned exclusively by automatic reconciliation and are never executable
+// through Restart.
 func (f *Feature) IntegrationResumable() bool {
-	if !f.IsChild() {
+	if !f.IsActiveChild() {
 		return false
 	}
 	if f.Parent.Transaction == nil || f.Parent.Transaction.Phase == "" {
 		return false
 	}
-	phase := f.Parent.Transaction.Phase
-	if phase == TransactionPhaseMerged {
-		return f.IsActiveChild() || f.hasUnsettledClosureTail()
-	}
-	return f.IsActiveChild()
-}
-
-// hasUnsettledClosureTail reports whether any disposable child worktree path
-// or cleanup warning is still durable on the record.
-func (f *Feature) hasUnsettledClosureTail() bool {
-	if f.Parent.CloseOutcome != ChildCloseOutcomeCompleted {
-		return false
-	}
-	if t := f.Parent.Transaction; t != nil {
-		for i := range t.Entries {
-			if t.Entries[i].CleanupWarning != "" {
-				return true
-			}
-		}
-	}
-	return f.AnyChildWorktreePending()
+	return true
 }
 
 // AnyChildWorktreePending reports whether any child repository's disposable

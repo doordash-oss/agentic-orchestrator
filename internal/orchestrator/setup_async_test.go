@@ -98,8 +98,8 @@ drained:
 	if failure.FeatureID != "child-async" {
 		t.Errorf("SetupFailed FeatureID = %q, want child-async", failure.FeatureID)
 	}
-	if failure.RelatedFeatureID != "parent-1" {
-		t.Errorf("SetupFailed RelatedFeatureID = %q, want correlated parent-1", failure.RelatedFeatureID)
+	if failure.ParentID != "parent-1" || failure.ChildID != "child-async" {
+		t.Errorf("SetupFailed relationship = parent %q child %q, want parent-1/child-async", failure.ParentID, failure.ChildID)
 	}
 	if failure.Error == nil || !strings.Contains(failure.Error.Error(), earlyErr.Error()) {
 		t.Errorf("SetupFailed Error = %v, want the terminal setup error", failure.Error)
@@ -156,8 +156,8 @@ func TestRunSetupAsyncSignalsPostSetupFailure(t *testing.T) {
 		select {
 		case ev := <-o.Events():
 			if ev.Type == ports.SetupFailed {
-				if ev.RelatedFeatureID != "parent-1" {
-					t.Fatalf("SetupFailed RelatedFeatureID = %q, want parent-1", ev.RelatedFeatureID)
+				if ev.ParentID != "parent-1" || ev.ChildID != "child-async" {
+					t.Fatalf("SetupFailed relationship = parent %q child %q, want parent-1/child-async", ev.ParentID, ev.ChildID)
 				}
 				return
 			}

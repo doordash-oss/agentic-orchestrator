@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -51,6 +52,9 @@ type Client struct {
 	// server-side work is unbounded by request size (see LongTimeout).
 	longClient *http.Client
 	token      string
+
+	relationshipRefreshMu sync.Mutex
+	relationshipVersions  map[string]uint64
 }
 
 type APIError struct {
@@ -106,10 +110,11 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	longClient := *httpClient
 	longClient.Timeout = longClientTimeout(opts.LongTimeout)
 	return &Client{
-		baseURL:    baseURL,
-		client:     httpClient,
-		longClient: &longClient,
-		token:      strings.TrimSpace(opts.Token),
+		baseURL:              baseURL,
+		client:               httpClient,
+		longClient:           &longClient,
+		token:                strings.TrimSpace(opts.Token),
+		relationshipVersions: make(map[string]uint64),
 	}, nil
 }
 

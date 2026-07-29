@@ -1824,10 +1824,16 @@ func (t *serverMutationTarget) DeleteFeature(featureID string) (serverruntime.De
 	if t.orch == nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
-	if err := t.orch.Delete(featureID); err != nil {
-		return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	result, err := t.orch.DeleteCascade(featureID)
+	if err != nil {
+		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
 	}
-	return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
+	return serverruntime.DeleteFeatureResponse{
+		FeatureID:   result.ParentID,
+		OperationID: result.OperationID,
+		Status:      result.Status,
+		Diagnostics: result.Diagnostics,
+	}, nil
 }
 
 func (t *serverMutationTarget) DiscardChild(featureID string) (serverruntime.DiscardChildResponse, error) {

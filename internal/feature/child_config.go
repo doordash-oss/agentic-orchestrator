@@ -256,6 +256,12 @@ func (s *Store) ReconcilePendingConfigUpdates() ([]string, error) {
 		if parent.PendingConfigUpdate == nil {
 			continue
 		}
+		if _, err := os.Stat(s.cascadeDeletePath(parent.ID)); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("checking cascade ownership for parent %s: %w", parent.ID, err))
+			continue
+		}
 		intent := parent.PendingConfigUpdate
 		child, err := s.loadUnlocked(intent.ChildID)
 		if err != nil {

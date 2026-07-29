@@ -241,8 +241,8 @@ func TestRefactorAPIJourney(t *testing.T) {
 		t.Fatalf("top-level list = %+v, want only the parent (no child leak)", summaries)
 	}
 	activeChild := summaries[0].(map[string]any)["active_child"].(map[string]any)
-	if activeChild["id"] != childID || activeChild["state"] != "setup_complete" {
-		t.Fatalf("parent summary active_child = %+v, want setup_complete child %s", activeChild, childID)
+	if activeChild["id"] != childID || activeChild["relationship_state"] != "active" {
+		t.Fatalf("parent summary active_child = %+v, want active child %s", activeChild, childID)
 	}
 	if childBody["parent_id"] != parent.ID || childBody["active"] != true {
 		t.Fatalf("child detail linkage = %v/%v, want parent %s and active", childBody["parent_id"], childBody["active"], parent.ID)
@@ -260,8 +260,8 @@ func TestRefactorAPIJourney(t *testing.T) {
 			if res.err != nil {
 				t.Fatalf("read SSE while waiting for %q: %v", "lifecycle.updated", res.err)
 			}
-			if strings.Contains(res.text, `"feature_id":"`+childID+`"`) &&
-				strings.Contains(res.text, `"related_feature_id":"`+parent.ID+`"`) {
+			if strings.Contains(res.text, `"child_id":"`+childID+`"`) &&
+				strings.Contains(res.text, `"parent_id":"`+parent.ID+`"`) {
 				found = true
 			}
 		case <-timeout:

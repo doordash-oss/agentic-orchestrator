@@ -87,6 +87,10 @@ type FeatureReader interface {
 	RunDir(featureID string, runNumber int) string
 }
 
+type RelationshipReader interface {
+	RelationshipChildren(parentID string) (*feature.RelationshipChildren, error)
+}
+
 type ErrorDTO = Error
 
 // OwnerDTO is the public process-owner metadata safe to expose through REST and

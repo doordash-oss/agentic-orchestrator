@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -500,7 +501,11 @@ func (o *Orchestrator) parkApplyAttention(child *feature.Feature, journal *featu
 // persistTransaction durably records the transaction journal on the child
 // feature record.
 func (o *Orchestrator) persistTransaction(childID string, journal *feature.TransactionJournal) error {
-	return o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+	var parentID string
+	var changed bool
+	err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
+		parentID = f.Parent.ParentID
+		changed = !reflect.DeepEqual(f.Parent.Transaction, journal)
 		f.Parent.Transaction = journal
 		if f.LastError != "" && journal.Phase != feature.TransactionPhaseAttention {
 			f.LastError = ""
@@ -510,16 +515,28 @@ func (o *Orchestrator) persistTransaction(childID string, journal *feature.Trans
 		}
 		return nil
 	})
+	if err != nil || !changed {
+		return err
+	}
+	o.emitEvent(ports.Event{
+		Type:      ports.RelationshipIntegrationChanged,
+		FeatureID: childID,
+		ParentID:  parentID,
+		ChildID:   childID,
+		Message:   "relationship integration state changed",
+	})
+	return nil
 }
 
 // emitTransactionAttention notifies consumers that the child's transaction
 // is parked at a retryable attention boundary.
 func (o *Orchestrator) emitTransactionAttention(child *feature.Feature, attention string) error {
 	o.emitEvent(ports.Event{
-		Type:             ports.RepoStatusChanged,
-		FeatureID:        child.ID,
-		RelatedFeatureID: child.Parent.ParentID,
-		Message:          "child integration needs attention: " + attention,
+		Type:      ports.RelationshipIntegrationChanged,
+		FeatureID: child.ID,
+		ParentID:  child.Parent.ParentID,
+		ChildID:   child.ID,
+		Message:   "child integration needs attention: " + attention,
 	})
 	return nil
 }

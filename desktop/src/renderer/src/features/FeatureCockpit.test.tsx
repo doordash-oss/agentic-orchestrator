@@ -1005,8 +1005,7 @@ describe('FeatureCockpit convergence', () => {
     expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
       featureId: FEATURE_ID,
       answers: {
-        'Which deployment window should implementation use?':
-          'After packaged attention evidence passes.',
+        '1': 'After packaged attention evidence passes.',
       },
     });
     expect(mock.api.resolveGate).not.toHaveBeenCalled();

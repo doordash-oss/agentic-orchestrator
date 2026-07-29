@@ -161,6 +161,36 @@ func TestResumeNeedUserInput_StaleRepoNameRoutesToFeatureScope(t *testing.T) {
 	}
 }
 
+func TestResumeNeedUserInput_GenericGateResumesWithoutVerificationDecision(t *testing.T) {
+	stateRoot := t.TempDir()
+	gatePath := writeGateArtifact(
+		t,
+		"Implementation needs a deployment window.",
+		[]string{"Deployment window?"},
+		[]string{"Tomorrow morning."},
+	)
+	f := &feature.Feature{
+		ID: "feat-generic-gate", Name: "Generic gate", Slug: "generic-gate",
+		Status: feature.StatusNeedUserInput, CurrentPhase: feature.PhaseImplement,
+		PendingNeedUserInputPath: gatePath,
+		Repos:                    []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
+	}
+	store := feature.NewStore(stateRoot)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	lc := lifecycleForFeature(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+
+	err := o.ResumeNeedUserInput(f.ID, orchestrator.NeedUserInputResume{})
+	if err == nil || !strings.Contains(err.Error(), "plan phase did not produce an artifact") {
+		t.Fatalf("ResumeNeedUserInput() error = %v, want expected post-resume dispatch failure", err)
+	}
+	if strings.Contains(err.Error(), "not a harness verification decision") {
+		t.Fatalf("ResumeNeedUserInput() error = %v, generic gate must not require verification decision", err)
+	}
+}
+
 func TestResumeNeedUserInputAppliesHarnessWaiverBeforeResume(t *testing.T) {
 	stateRoot := t.TempDir()
 	contractPath := filepath.Join(stateRoot, "feat-waiver", "testing-contract.yaml")

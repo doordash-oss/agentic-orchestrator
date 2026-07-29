@@ -182,7 +182,7 @@ describe('AttentionInbox gate detail', () => {
         featureId: gateItem.featureId,
         repoName: 'repo-a',
         cycleType: 'review-comments',
-        answers: { [gateItem.questions[0]!.prompt]: 'RETRY_AFTER_AUTH' },
+        answers: { '1': 'RETRY_AFTER_AUTH' },
       }),
     );
 
@@ -211,7 +211,7 @@ describe('AttentionInbox gate detail', () => {
         featureId: gateItem.featureId,
         repoName: 'repo-a',
         cycleType: 'review-comments',
-        answers: { [gateItem.questions[0]!.prompt]: 'WAIVE' },
+        answers: { '1': 'WAIVE' },
       }),
     );
 

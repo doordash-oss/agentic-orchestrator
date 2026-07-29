@@ -117,8 +117,10 @@ func (o *Orchestrator) resumeRebaseCycleNeedUserInput(featureID string, d NeedUs
 	if !rec.AllAnswered() {
 		return errors.New("cannot resume: every question must have a non-empty answer before resume")
 	}
-	if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
-		return err
+	if rec.VerificationDecision != nil {
+		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+			return err
+		}
 	}
 	outcomes := featureRebaseOutcomesFromOperation(o, f)
 	conflicted := harnessRebaseOutcomesWithStatus(outcomes, feature.RebaseRepoStatusConflict)
@@ -304,8 +306,10 @@ func (o *Orchestrator) resumeRepoCycleNeedUserInput(featureID string, d NeedUser
 	if !rec.AllAnswered() {
 		return errors.New("cannot resume: every question must have a non-empty answer before resume")
 	}
-	if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
-		return err
+	if rec.VerificationDecision != nil {
+		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+			return err
+		}
 	}
 	// Clear the paused-gate fields on ALL repos sharing the gate,
 	// preserving Count, PlanPath, and Type so the restart seam
@@ -379,8 +383,10 @@ func (o *Orchestrator) resumeFeatureNeedUserInput(featureID string, d NeedUserIn
 	if !rec.AllAnswered() {
 		return errors.New("cannot resume: every question must have a non-empty answer before resume")
 	}
-	if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
-		return err
+	if rec.VerificationDecision != nil {
+		if err := o.applyTrustedVerificationDecision(featureID, gatePath, rec); err != nil {
+			return err
+		}
 	}
 	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 		ff.PendingNeedUserInputPath = ""

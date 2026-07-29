@@ -831,7 +831,7 @@ function gateAnswersForSubmit(
   draft: Record<number, string>,
 ): Record<string, string> {
   return Object.fromEntries(
-    item.questions.map((question) => [question.prompt, draft[question.index] ?? '']),
+    item.questions.map((question) => [String(question.index), draft[question.index] ?? '']),
   );
 }
 

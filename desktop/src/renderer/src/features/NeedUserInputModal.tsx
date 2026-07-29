@@ -66,7 +66,7 @@ export function NeedUserInputModal({
             ...(currentItem.cycleType === undefined ? {} : { cycleType: currentItem.cycleType }),
             answers: Object.fromEntries(
               currentItem.questions.map((question) => [
-                question.prompt,
+                String(question.index),
                 currentDraft[question.index] ?? '',
               ]),
             ),

@@ -79,7 +79,7 @@ describe('NeedUserInputModal', () => {
         featureId: gate.featureId,
         repoName: 'repo-a',
         cycleType: 'review-comments',
-        answers: { 'Deployment window?': 'After verification passes.' },
+        answers: { '1': 'After verification passes.' },
       }),
     );
     expect(mock.api.resolveGate).not.toHaveBeenCalled();
@@ -127,7 +127,7 @@ describe('NeedUserInputModal', () => {
         featureId: verificationGate.featureId,
         repoName: 'repo-a',
         cycleType: 'review-comments',
-        answers: { [verificationGate.questions[0]!.prompt]: 'RETRY_AFTER_AUTH' },
+        answers: { '1': 'RETRY_AFTER_AUTH' },
       }),
     );
 
@@ -185,7 +185,7 @@ describe('NeedUserInputModal', () => {
         featureId: verificationGate.featureId,
         repoName: 'repo-a',
         cycleType: 'review-comments',
-        answers: { [verificationGate.questions[0]!.prompt]: 'WAIVE' },
+        answers: { '1': 'WAIVE' },
       });
     });
   });

@@ -1334,6 +1334,7 @@ those findings before handoff.
 **Files:**
 - Modify: `internal/orchestrator/orchestrator.go`
 - Modify: `internal/orchestrator/orchestrator_interrupt_test.go`
+- Modify: `internal/server/read_model.go`
 - Modify: `internal/server/read_api_contract_test.go`
 - Modify: `internal/feature/manager.go`
 - Modify: `internal/feature/manager_test.go`

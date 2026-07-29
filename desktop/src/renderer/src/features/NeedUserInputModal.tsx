@@ -41,6 +41,7 @@ export function NeedUserInputModal({
   itemRef.current = item;
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const answerLaterRef = useRef(onAnswerLater);
   answerLaterRef.current = onAnswerLater;
   const structuredVerification = hasStructuredVerificationDecision(item);
@@ -54,19 +55,25 @@ export function NeedUserInputModal({
     : item.questions.every((question) => (draft[question.index] ?? '').trim() !== '');
 
   const saveDraft = useCallback(
-    async (currentItem = itemRef.current, currentDraft = draftRef.current): Promise<void> => {
-      if (currentItem.questions.length === 0) return;
-      await window.agentico.saveGateDraft({
-        featureId: currentItem.featureId,
-        ...(currentItem.repoName === undefined ? {} : { repoName: currentItem.repoName }),
-        ...(currentItem.cycleType === undefined ? {} : { cycleType: currentItem.cycleType }),
-        answers: Object.fromEntries(
-          currentItem.questions.map((question) => [
-            question.prompt,
-            currentDraft[question.index] ?? '',
-          ]),
-        ),
-      });
+    (currentItem = itemRef.current, currentDraft = draftRef.current): Promise<void> => {
+      const run = saveQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (currentItem.questions.length === 0) return;
+          await window.agentico.saveGateDraft({
+            featureId: currentItem.featureId,
+            ...(currentItem.repoName === undefined ? {} : { repoName: currentItem.repoName }),
+            ...(currentItem.cycleType === undefined ? {} : { cycleType: currentItem.cycleType }),
+            answers: Object.fromEntries(
+              currentItem.questions.map((question) => [
+                question.prompt,
+                currentDraft[question.index] ?? '',
+              ]),
+            ),
+          });
+        });
+      saveQueueRef.current = run;
+      return run;
     },
     [],
   );
@@ -192,6 +199,11 @@ export function NeedUserInputModal({
           <button
             type="button"
             className="need-input-modal__primary"
+            data-tone={
+              structuredVerification && selectedVerificationAction === 'WAIVE'
+                ? 'warning'
+                : undefined
+            }
             disabled={!complete || busy || submitting}
             aria-describedby={
               !structuredVerification && !complete ? `${detailKey}-hint` : undefined

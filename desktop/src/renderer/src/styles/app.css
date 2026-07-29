@@ -1568,6 +1568,12 @@ body {
   color: var(--color-bg);
 }
 
+.need-input-modal__footer .need-input-modal__primary[data-tone='warning'] {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-panel));
+  color: var(--color-danger);
+}
+
 .need-input-modal__footer button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -2624,6 +2630,12 @@ body {
   color: var(--color-bg);
   background: var(--color-signal);
   border-color: var(--color-signal);
+}
+
+.attention-button--primary[data-tone='warning'] {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-panel));
+  border-color: var(--color-danger);
 }
 
 .attention-button--danger {

@@ -205,7 +205,9 @@ describe('AttentionInbox gate detail', () => {
     render(<GateDetailHarness />);
 
     await user.click(screen.getByRole('radio', { name: /Waive blocked checks/ }));
-    expect(screen.getByRole('button', { name: 'Waive and resume' })).toBeEnabled();
+    const waiveAndResume = screen.getByRole('button', { name: 'Waive and resume' });
+    expect(waiveAndResume).toBeEnabled();
+    expect(waiveAndResume).toHaveAttribute('data-tone', 'warning');
     await waitFor(() =>
       expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
         featureId: gateItem.featureId,

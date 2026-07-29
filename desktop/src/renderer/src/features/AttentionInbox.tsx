@@ -640,6 +640,11 @@ export function AttentionDetail({
         <div className="attention-detail__actions">
           <button
             className="attention-button attention-button--primary"
+            data-tone={
+              structuredVerification && selectedVerificationAction === 'WAIVE'
+                ? 'warning'
+                : undefined
+            }
             disabled={busy || !complete}
             aria-describedby={
               !structuredVerification && !complete ? `${detailKey}-resume-hint` : undefined

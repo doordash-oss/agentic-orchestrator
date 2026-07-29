@@ -155,6 +155,40 @@ describe('NeedUserInputModal', () => {
 
     expect(waiver.closest('label')).toHaveAttribute('data-selected', 'true');
     expect(waiver.closest('label')).toHaveAttribute('data-tone', 'warning');
-    expect(screen.getByRole('button', { name: 'Waive and resume' })).toBeEnabled();
+    const waiveAndResume = screen.getByRole('button', { name: 'Waive and resume' });
+    expect(waiveAndResume).toBeEnabled();
+    expect(waiveAndResume).toHaveAttribute('data-tone', 'warning');
+  });
+
+  it('serializes rapid decisions and persists the final waiver after a failed save', async () => {
+    const mock = installAgenticoMock();
+    let rejectRetrySave: (reason?: unknown) => void = () => undefined;
+    mock.api.saveGateDraft
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectRetrySave = reject;
+          }),
+      )
+      .mockResolvedValue({ result: 'saved' });
+    const user = userEvent.setup();
+    render(<Harness item={verificationGate} />);
+
+    await user.click(screen.getByRole('radio', { name: /retry verification/ }));
+    await waitFor(() => expect(mock.api.saveGateDraft).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole('radio', { name: /Waive blocked checks/ }));
+    expect(mock.api.saveGateDraft).toHaveBeenCalledTimes(1);
+
+    rejectRetrySave(new Error('retry draft save failed'));
+    await waitFor(() => {
+      expect(mock.api.saveGateDraft).toHaveBeenCalledTimes(2);
+      expect(mock.api.saveGateDraft).toHaveBeenLastCalledWith({
+        featureId: verificationGate.featureId,
+        repoName: 'repo-a',
+        cycleType: 'review-comments',
+        answers: { [verificationGate.questions[0]!.prompt]: 'WAIVE' },
+      });
+    });
   });
 });

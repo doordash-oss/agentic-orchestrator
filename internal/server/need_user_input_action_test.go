@@ -22,11 +22,13 @@ import (
 
 type needUserInputResumeTarget struct {
 	MutationTarget
-	featureID string
-	request   NeedUserInputResumeRequest
+	resumeCalls int
+	featureID   string
+	request     NeedUserInputResumeRequest
 }
 
 func (t *needUserInputResumeTarget) ResumeNeedUserInput(featureID string, req NeedUserInputResumeRequest) (NeedUserInputResumeResponse, error) {
+	t.resumeCalls++
 	t.featureID = featureID
 	t.request = req
 	return NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
@@ -63,5 +65,24 @@ func TestNeedUserInputActionResumesTargetWithoutDecision(t *testing.T) {
 	}
 	if _, ok := body["decision"]; ok {
 		t.Fatalf("response unexpectedly contains retired decision field: %+v", body)
+	}
+}
+
+func TestNeedUserInputActionRejectsRetiredAbortPayload(t *testing.T) {
+	t.Parallel()
+	target := &needUserInputResumeTarget{}
+	handler := NewHandler(HandlerOptions{
+		Mutations:             target,
+		DisableHostValidation: true,
+	})
+
+	w := postTrustedJSON(handler, "/api/v1/features/feat-resume/actions/need-user-input", map[string]any{
+		"decision": "abort",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+	}
+	if target.resumeCalls != 0 {
+		t.Fatalf("resume calls = %d; want zero for retired abort payload", target.resumeCalls)
 	}
 }

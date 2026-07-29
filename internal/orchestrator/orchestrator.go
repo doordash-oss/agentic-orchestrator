@@ -111,10 +111,11 @@ type PhaseCompletionInput struct {
 // NeedUserInputResume identifies the paused need-user-input gate to resume.
 // Scope selection is derived from a combination of fields plus persisted
 // state on the feature (see ResumeNeedUserInput):
-//   - empty RepoName → feature-scoped (single-repo mainline implement)
+//   - an active paused rebase cycle → rebase-cycle-scoped
 //   - RepoName set + RepoCycleState[RepoName].Status == RepoCycleNeedUserInput
 //     on the persisted feature → cycle-scoped (post-publish)
-//   - otherwise → repo-scoped (multi-repo mainline implement)
+//   - otherwise, including an empty or stale RepoName → feature-scoped
+//     (SchemaVersionCurrent = 4 mainline implement)
 type NeedUserInputResume struct {
 	// RepoName, when set, identifies the repo whose gate this resume
 	// targets in a multi-repo run. Empty for single-repo / feature-scoped

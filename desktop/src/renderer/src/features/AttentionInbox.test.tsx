@@ -59,6 +59,35 @@ const gateItem: Extract<AttentionItem, { kind: 'gate' }> = {
   },
 };
 
+const questionsItem: Extract<AttentionItem, { kind: 'questions' }> = {
+  kind: 'questions',
+  id: 'questions-1',
+  featureId: 'feature-1',
+  sessionId: 'session-1',
+  phase: 'Inquire',
+  waitingSince: '2026-07-15T10:00:00.000Z',
+  questions: [
+    {
+      key: 'Which overall direction should this project take?',
+      header: 'Project direction',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Harden the review pipeline (Recommended)',
+          description: 'Invest in the existing multi-axis review workflow.',
+          confidence: 0.86,
+        },
+        {
+          label: 'Build user-facing features',
+          description: 'Shift toward capabilities for end users.',
+          confidence: 0.62,
+        },
+        { label: 'Improve documentation', confidence: 0.45 },
+      ],
+    },
+  ],
+};
+
 function Harness({ items, onJump }: { items: AttentionItem[]; onJump: ReturnType<typeof vi.fn> }) {
   const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   return (
@@ -90,6 +119,23 @@ function GateDetailHarness({
       saveDraft={async (action) => {
         await action();
       }}
+      drafts={drafts}
+      setDrafts={setDrafts}
+    />
+  );
+}
+
+function QuestionDetailHarness({
+  item = questionsItem,
+}: {
+  item?: Extract<AttentionItem, { kind: 'questions' }>;
+}): React.ReactElement {
+  const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
+  return (
+    <AttentionDetail
+      item={item}
+      busy={false}
+      submit={(action) => void action()}
       drafts={drafts}
       setDrafts={setDrafts}
     />
@@ -232,5 +278,81 @@ describe('AttentionInbox gate detail', () => {
 
     expect(screen.getByLabelText(/Deployment window/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
+  });
+});
+
+describe('AttentionInbox question detail', () => {
+  it('renders single-select options and free text as numbered cards', () => {
+    installAgenticoMock();
+    render(<QuestionDetailHarness />);
+
+    expect(
+      screen.getByRole('heading', { name: 'Which overall direction should this project take?' }),
+    ).toBeVisible();
+    const options = screen.getAllByRole('radio');
+    expect(options).toHaveLength(3);
+    const recommendedCard = screen.getByText('Recommended').closest('.attention-option');
+    expect(recommendedCard).toHaveTextContent('Harden the review pipeline');
+    expect(recommendedCard).not.toHaveTextContent('(Recommended)');
+    expect(recommendedCard).toHaveAttribute('data-recommended');
+    expect(screen.getAllByText('Recommended')).toHaveLength(1);
+    expect(screen.getByText('86%').parentElement).not.toHaveAttribute('aria-hidden');
+    expect(screen.getByText('1', { selector: '.attention-option__number' })).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+    expect(screen.getByPlaceholderText('Type your own answer here')).toBeVisible();
+    expect(screen.getByText('4', { selector: '.attention-option__number' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled();
+  });
+
+  it('preserves single-select and free-text answer payload behavior', async () => {
+    const mock = installAgenticoMock();
+    const user = userEvent.setup();
+    render(<QuestionDetailHarness />);
+
+    const selected = screen.getByRole('radio', { name: /Harden the review pipeline/ });
+    await user.click(selected);
+    expect(selected.closest('.attention-option')).toHaveAttribute('data-selected');
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    expect(mock.api.answerQuestions).toHaveBeenLastCalledWith({
+      requestId: questionsItem.id,
+      sessionId: questionsItem.sessionId,
+      answers: {
+        'Which overall direction should this project take?':
+          'Harden the review pipeline (Recommended)',
+      },
+    });
+
+    const freeText = screen.getByPlaceholderText('Type your own answer here');
+    await user.type(freeText, 'Focus on speed');
+    expect(freeText.closest('.attention-option')).toHaveAttribute('data-selected');
+    expect(selected.closest('.attention-option')).not.toHaveAttribute('data-selected');
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    expect(mock.api.answerQuestions).toHaveBeenLastCalledWith({
+      requestId: questionsItem.id,
+      sessionId: questionsItem.sessionId,
+      answers: { 'Which overall direction should this project take?': 'Focus on speed' },
+    });
+  });
+
+  it('keeps checkbox semantics and omits recommendation tags for multi-select', async () => {
+    installAgenticoMock();
+    const user = userEvent.setup();
+    render(
+      <QuestionDetailHarness
+        item={{
+          ...questionsItem,
+          questions: [{ ...questionsItem.questions[0]!, multiSelect: true }],
+        }}
+      />,
+    );
+
+    const options = screen.getAllByRole('checkbox');
+    await user.click(options[0]!);
+    await user.click(options[1]!);
+    expect(options[0]).toBeChecked();
+    expect(options[1]).toBeChecked();
+    expect(screen.queryByText(/Recommended/)).not.toBeInTheDocument();
   });
 });

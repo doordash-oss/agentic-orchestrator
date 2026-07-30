@@ -20,10 +20,9 @@ import {
   type CycleView,
   type FeatureSnapshot,
   type RunDetailView,
-  type SetupTaskView,
   type FeatureActionRequest,
 } from '../../../shared/ipc';
-import { PhaseSpine } from '../components/PhaseSpine';
+import { PhaseLadder } from '../components/PhaseLadder';
 import { useModalDismiss } from '../components/useModalDismiss';
 import { useMediaQuery } from '../hooks';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
@@ -79,11 +78,7 @@ import {
   formatDuration,
   isReadyToStart,
   isRunAtRest,
-  setupProgress,
   showsRun,
-  spineActiveIndex,
-  spineStages,
-  spineTone,
 } from './featureView';
 
 type CockpitState =
@@ -112,20 +107,6 @@ export interface FeatureCockpitProps {
   onSelectRun?(runNumber: number | null): void;
 }
 
-const TASK_STATUS_TEXT: Record<SetupTaskView['status'], string> = {
-  queued: 'Queued',
-  running: 'Running',
-  done: 'Done',
-  failed: 'Failed',
-};
-
-const TASK_STATUS_ICON: Record<SetupTaskView['status'], string> = {
-  queued: '○',
-  running: '◐',
-  done: '●',
-  failed: '✕',
-};
-
 const MAX_ITERATIONS_RESTART_DELTA = 10;
 const MAX_PLAN_ITERATIONS_RESTART_DELTA = 2;
 
@@ -146,21 +127,6 @@ function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch
           </dd>
         </div>
       ) : null}
-      <div className="cockpit__fact">
-        <dt>Automatic review</dt>
-        <dd>
-          <code>
-            {snapshot.automaticReview.enabled ? 'On' : 'Off'} ·{' '}
-            {snapshot.automaticReview.source === 'global' ? 'workspace' : 'feature'}
-          </code>
-        </dd>
-      </div>
-      <div className="cockpit__fact">
-        <dt>{snapshot.repos.length === 1 ? 'Repository' : 'Repositories'}</dt>
-        <dd>
-          <code>{snapshot.repos.join(', ')}</code>
-        </dd>
-      </div>
     </dl>
   );
 }
@@ -232,63 +198,17 @@ function RewindLanding({ outcome, run, onOpenSource, onDismiss }: RewindLandingP
   );
 }
 
-function SetupDetails({ snapshot }: { snapshot: FeatureSnapshot }) {
-  if (snapshot.setup === undefined) return null;
-  const progress = setupProgress(snapshot.setup);
-  return (
-    <section className="cockpit__setup" aria-label="Durable setup">
-      <h3 className="setup-step__title">Durable setup</h3>
-      <p className="cockpit__progress" aria-live="polite">
-        {progress.done} of {progress.total} tasks complete
-        {snapshot.setup.status === 'failed' ? ' — setup failed' : ''}
-        {snapshot.setup.attempt > 1 ? ` (attempt ${snapshot.setup.attempt})` : ''}
-      </p>
-      {snapshot.setup.lastError !== undefined ? (
-        <p className="form-field__error">{snapshot.setup.lastError}</p>
-      ) : null}
-      <ol className="task-list">
-        {snapshot.setup.tasks.map((task) => (
-          <li key={task.key} className="task-row" data-status={task.status}>
-            <span className="task-row__state" data-status={task.status}>
-              <span aria-hidden="true">{TASK_STATUS_ICON[task.status]}</span>{' '}
-              {TASK_STATUS_TEXT[task.status]}
-            </span>
-            <span className="task-row__label">{task.label}</span>
-            <span className="task-row__meta">
-              {task.repo !== undefined ? <code>{task.repo}</code> : null}
-              {task.branch !== undefined ? <code>{task.branch}</code> : null}
-              {task.attempt > 1 ? <code>attempt {task.attempt}</code> : null}
-            </span>
-            {task.error !== undefined ? (
-              <details className="task-row__diagnostics">
-                <summary className="task-row__error">{task.error}</summary>
-                <p className="task-row__diagnostics-detail">
-                  Reported by the runtime for <code>{task.key}</code>
-                  {task.attempt > 0 ? ` after attempt ${task.attempt}` : ''}. Retry re-runs only
-                  unfinished tasks on this feature.
-                </p>
-              </details>
-            ) : null}
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
 function InspectorContent({
   snapshot,
   branch,
   stale,
   runMetrics,
-  onOpenConfig,
   onOpenPullRequest,
 }: {
   snapshot: FeatureSnapshot;
   branch: string | null;
   stale: boolean;
   runMetrics: RunMetrics | null;
-  onOpenConfig(): void;
   onOpenPullRequest(url: string): void;
 }) {
   return (
@@ -304,6 +224,7 @@ function InspectorContent({
           </p>
         ) : null}
       </header>
+      <PhaseLadder snapshot={snapshot} />
       {runMetrics !== null ? (
         <section className="cockpit__run-totals" aria-label="This run">
           <h3 className="setup-step__title">This run</h3>
@@ -323,16 +244,9 @@ function InspectorContent({
           </dl>
         </section>
       ) : null}
-      <SetupDetails snapshot={snapshot} />
       {snapshot.repoStatus !== undefined && snapshot.repoStatus.length > 0 ? (
         <RepositoryInstrument repos={snapshot.repoStatus} onOpenPullRequest={onOpenPullRequest} />
       ) : null}
-      <section className="cockpit__config-entry" aria-label="Feature configuration">
-        <h3 className="setup-step__title">Configuration</h3>
-        <button type="button" className="cockpit__config-open" onClick={onOpenConfig}>
-          Edit configuration…
-        </button>
-      </section>
     </>
   );
 }
@@ -554,7 +468,6 @@ function InspectorDrawer({
   branch,
   stale,
   runMetrics,
-  onOpenConfig,
   onOpenPullRequest,
   onClose,
 }: {
@@ -562,7 +475,6 @@ function InspectorDrawer({
   branch: string | null;
   stale: boolean;
   runMetrics: RunMetrics | null;
-  onOpenConfig(): void;
   onOpenPullRequest(url: string): void;
   onClose(): void;
 }) {
@@ -605,7 +517,6 @@ function InspectorDrawer({
           branch={branch}
           stale={stale}
           runMetrics={runMetrics}
-          onOpenConfig={onOpenConfig}
           onOpenPullRequest={onOpenPullRequest}
         />
       </aside>
@@ -1290,7 +1201,6 @@ export function FeatureCockpit({
   }
 
   const { snapshot } = state;
-  const stages = spineStages(snapshot.pipeline);
   const branch = featureBranch(snapshot);
   const ready = isReadyToStart(snapshot);
   const setupAction = actionById(snapshot, 'setup');
@@ -1362,6 +1272,15 @@ export function FeatureCockpit({
     routedAttentionItem?.kind === 'gate'
       ? featureAttentionItems.find((item) => item.kind !== 'gate')
       : (routedAttentionItem ?? featureAttentionItems.find((item) => item.kind !== 'gate'));
+  const pendingQuestion =
+    activeAttentionItem?.kind === 'questions' ? activeAttentionItem.questions[0] : undefined;
+  const suppressQuestion =
+    pendingQuestion === undefined
+      ? undefined
+      : {
+          prompt: pendingQuestion.key,
+          optionLabels: pendingQuestion.options.map((option) => option.label),
+        };
   const preferredGate =
     routedAttentionItem?.kind === 'gate'
       ? routedAttentionItem
@@ -1525,6 +1444,12 @@ export function FeatureCockpit({
   if (restartAction?.enabled === true) {
     menuActions.push({ key: 'restart', label: 'Restart', enabled: true, onClick: restart });
   }
+  menuActions.push({
+    key: 'edit-config',
+    label: 'Edit configuration…',
+    enabled: true,
+    onClick: () => setConfigOpen(true),
+  });
   if (rebaseAction?.enabled === true) {
     menuActions.push({
       key: 'rebase',
@@ -1938,14 +1863,6 @@ export function FeatureCockpit({
         </div>
       ) : (
         <>
-          <PhaseSpine
-            stages={stages}
-            activeIndex={spineActiveIndex(snapshot, stages)}
-            tone={spineTone(snapshot)}
-            atRest={isRunAtRest(snapshot.status)}
-            label="Feature pipeline"
-          />
-
           <CockpitActionBar
             status={snapshot.status}
             primaryActions={primaryActions}
@@ -1971,10 +1888,6 @@ export function FeatureCockpit({
               branch={branch}
               stale={stale}
               runMetrics={runMetrics}
-              onOpenConfig={() => {
-                setInspectorOpen(false);
-                setConfigOpen(true);
-              }}
               onOpenPullRequest={(url) => {
                 void window.agentico.openExternal({ url });
               }}
@@ -2043,6 +1956,7 @@ export function FeatureCockpit({
                       }
                       onAttentionPreviewClose={onAttentionPreviewClose}
                       onRunMetrics={setRunMetrics}
+                      suppressQuestion={suppressQuestion}
                       attentionFooter={
                         activeAttentionItem === undefined ? undefined : (
                           <AttentionDetail
@@ -2124,7 +2038,6 @@ export function FeatureCockpit({
                   branch={branch}
                   stale={stale}
                   runMetrics={runMetrics}
-                  onOpenConfig={() => setConfigOpen(true)}
                   onOpenPullRequest={(url) => {
                     void window.agentico.openExternal({ url });
                   }}

@@ -103,6 +103,149 @@ describe('buildConversation', () => {
     ]);
   });
 
+  it('suppresses an assistant question that starts with the pending structured prompt', () => {
+    const items = buildConversation(
+      [
+        row({
+          index: 0,
+          text: [
+            'Which direction should this project take?',
+            '1. Harden the review pipeline [confidence: 0.84]',
+            '2. Build user-facing features [confidence: 0.61]',
+          ].join('\n'),
+        }),
+        row({ index: 1, text: 'I will wait for your response.' }),
+      ],
+      {
+        mode: 'assistant-only',
+        suppressQuestion: {
+          prompt: 'Which direction should this project take?',
+          optionLabels: ['Harden the review pipeline', 'Build user-facing features'],
+        },
+      },
+    );
+
+    expect(items).toEqual([
+      {
+        kind: 'message',
+        key: 'message-1:0',
+        role: 'assistant',
+        text: 'I will wait for your response.',
+      },
+    ]);
+  });
+
+  it('requires a confidence marker and at least two option labels for a non-prefix match', () => {
+    const suppressQuestion = {
+      prompt: 'Which direction should this project take?',
+      optionLabels: [
+        'Harden the review pipeline',
+        'Build user-facing features',
+        'Improve documentation',
+      ],
+    };
+    const items = buildConversation(
+      [
+        row({
+          index: 0,
+          text: 'Please choose:\nHarden the review pipeline [confidence: 0.84]\nBuild user-facing features',
+        }),
+        row({
+          index: 1,
+          text: 'One option was Harden the review pipeline [confidence: 0.84].',
+        }),
+      ],
+      { mode: 'assistant-only', suppressQuestion },
+    );
+
+    expect(items).toEqual([
+      {
+        kind: 'message',
+        key: 'message-1:0',
+        role: 'assistant',
+        text: 'One option was Harden the review pipeline [confidence: 0.84].',
+      },
+    ]);
+  });
+
+  it('does not count one overlapping option occurrence as two label matches', () => {
+    const suppressQuestion = {
+      prompt: 'Which documentation scope?',
+      optionLabels: ['README', 'README + user docs', 'Whole repo markdown'],
+    };
+
+    expect(
+      buildConversation(
+        [
+          row({
+            index: 0,
+            text: 'I inspected README + user docs [confidence: 0.81] and found no blocker.',
+          }),
+        ],
+        { mode: 'assistant-only', suppressQuestion },
+      ),
+    ).toEqual([
+      {
+        kind: 'message',
+        key: 'message-0:0',
+        role: 'assistant',
+        text: 'I inspected README + user docs [confidence: 0.81] and found no blocker.',
+      },
+    ]);
+  });
+
+  it('does not count a short option label embedded inside an unrelated word', () => {
+    const suppressQuestion = {
+      prompt: 'Which implementation language?',
+      optionLabels: ['Go', 'Rust', 'TypeScript'],
+    };
+
+    expect(
+      buildConversation(
+        [
+          row({
+            index: 0,
+            text: 'I will undergo a Rust review [confidence: 0.80] before recommending a language.',
+          }),
+        ],
+        { mode: 'assistant-only', suppressQuestion },
+      ),
+    ).toEqual([
+      {
+        kind: 'message',
+        key: 'message-0:0',
+        role: 'assistant',
+        text: 'I will undergo a Rust review [confidence: 0.80] before recommending a language.',
+      },
+    ]);
+  });
+
+  it('uses Unicode code-point boundaries for astral-letter option labels', () => {
+    const suppressQuestion = {
+      prompt: 'Which script should we use?',
+      optionLabels: ['\u{10400}', 'Rust', 'TypeScript'],
+    };
+
+    expect(
+      buildConversation(
+        [
+          row({
+            index: 0,
+            text: 'I compared \u{10401}\u{10400}\u{10402} with Rust [confidence: 0.80] before choosing.',
+          }),
+        ],
+        { mode: 'assistant-only', suppressQuestion },
+      ),
+    ).toEqual([
+      {
+        kind: 'message',
+        key: 'message-0:0',
+        role: 'assistant',
+        text: 'I compared \u{10401}\u{10400}\u{10402} with Rust [confidence: 0.80] before choosing.',
+      },
+    ]);
+  });
+
   it('merges consecutive activity rows and keeps hidden reasoning label-less', () => {
     const items = buildConversation([
       row({ index: 0, type: 'thinking', text: 'chain of thought' }),

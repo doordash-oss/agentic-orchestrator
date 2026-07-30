@@ -34,7 +34,7 @@ import {
   phaseMetric,
 } from './featureView';
 import { stripUnsafeAnsi } from './timelineModel';
-import { buildConversation } from './transcript/conversation';
+import { buildConversation, type BuildConversationOptions } from './transcript/conversation';
 import { ConversationTranscript } from './transcript/ConversationTranscript';
 import { HistoricalTimeline } from './RunTimeline';
 import { useCohortTranscripts } from './useCohortTranscripts';
@@ -82,6 +82,8 @@ export interface CurrentRunInspectionProps {
   attentionRequestId?: number;
   /** Response controls docked beneath the expanded conversation. */
   attentionFooter?: ReactNode;
+  /** Pending structured question whose raw transcript prose should be hidden. */
+  suppressQuestion?: BuildConversationOptions['suppressQuestion'];
   onAttentionPreviewClose?(): void;
   /** Reports this run's totals up so the inspector sidebar can show them. */
   onRunMetrics?(metrics: RunMetrics | null): void;
@@ -332,9 +334,7 @@ function LogChannelGroup({
       >
         <span className="current-inspection__channel-caret" aria-hidden="true" />
         <span className="current-inspection__channel-name">
-          {parent === '' ? null : (
-            <span className="current-inspection__channel-dim">{parent}</span>
-          )}
+          {parent === '' ? null : <span className="current-inspection__channel-dim">{parent}</span>}
           <span className="current-inspection__channel-leaf">{leaf}</span>
         </span>
         <span className="current-inspection__channel-count" aria-hidden="true">
@@ -386,6 +386,7 @@ export function CurrentRunInspection({
   shouldStream = true,
   attentionRequestId,
   attentionFooter,
+  suppressQuestion,
   onAttentionPreviewClose,
   onRunMetrics,
   presentation = 'regular',
@@ -434,7 +435,13 @@ export function CurrentRunInspection({
     presentedCohort.find((session) => session.id === live.selectedId) ?? presentedCohort[0] ?? null;
   const metricPhase = cycleTimingKey(presentation, cycle, currentPhase);
   const metricRoadmapPhase = presentation === 'cycle' ? undefined : currentRoadmapPhase;
-  const stage = useTranscriptStage(presentedCohort, live.transcripts, selectedSession, preview);
+  const stage = useTranscriptStage(
+    presentedCohort,
+    live.transcripts,
+    selectedSession,
+    preview,
+    suppressQuestion,
+  );
   const initialLoading =
     preview === null && presentedCohort.length === 0 && attentionFooter === undefined;
   const rebaseOperationInFlight = repoStatus.some((repo) =>
@@ -782,9 +789,7 @@ export function CurrentRunInspection({
         />
       ) : null}
 
-      {content !== null ? (
-        <FileOverlay content={content} onClose={() => setContent(null)} />
-      ) : null}
+      {content !== null ? <FileOverlay content={content} onClose={() => setContent(null)} /> : null}
     </section>
   );
 }
@@ -909,7 +914,9 @@ function FileOverlay({
               <p className="current-inspection__overlay-note">Latest 64 KB</p>
             ) : null}
             {content.value.truncated ? (
-              <p className="current-inspection__overlay-note">Bounded page · more content remains</p>
+              <p className="current-inspection__overlay-note">
+                Bounded page · more content remains
+              </p>
             ) : null}
           </div>
           <div className="live-preview__overlay-controls">
@@ -952,6 +959,7 @@ function useTranscriptStage(
   transcripts: Record<string, TranscriptMessage[]>,
   selectedSession: SessionSummary | null,
   preview: LivePreviewView | null,
+  suppressQuestion?: BuildConversationOptions['suppressQuestion'],
 ): TranscriptStageModel {
   const usesFallback = cohort.length === 0;
   const rows = usesFallback
@@ -963,8 +971,9 @@ function useTranscriptStage(
       buildConversation(rows, {
         mode: 'assistant-only',
         taskActivities: activeSession?.taskActivities ?? [],
+        suppressQuestion,
       }),
-    [activeSession?.taskActivities, rows],
+    [activeSession?.taskActivities, rows, suppressQuestion],
   );
   const labels = useMemo(() => cohortTabLabels(cohort), [cohort]);
   const waiting = activeSession !== null && !isTerminalSessionStatus(activeSession.status);

@@ -11,7 +11,12 @@ import '@fontsource/ibm-plex-mono/500.css';
 import '../../../src/renderer/src/styles/tokens.css';
 import '../../../src/renderer/src/styles/app.css';
 
-import { installMockApi, CYCLES_FEATURE_SNAPSHOT, REBASE_FEATURE_SNAPSHOT } from './mock-api';
+import {
+  installMockApi,
+  CYCLES_FEATURE_SNAPSHOT,
+  REBASE_FEATURE_SNAPSHOT,
+  FEATURE_QUESTION_ITEM,
+} from './mock-api';
 import { ArchiveMode } from '../../../src/renderer/src/features/ArchiveMode';
 import { RewindJourney } from '../../../src/renderer/src/features/RewindJourney';
 import { RepositoryInstrument } from '../../../src/renderer/src/features/RepositoryInstrument';
@@ -318,6 +323,33 @@ function AftercareScene() {
             onLoadedName={() => undefined}
             attentionItems={[]}
             refreshAttention={() => Promise.resolve([])}
+            attentionDrafts={drafts}
+            setAttentionDrafts={setDrafts}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FeatureQuestionScene(): React.ReactElement {
+  const [drafts, setDrafts] = React.useState(emptyAttentionDrafts);
+  const attentionItems: AttentionItem[] = [FEATURE_QUESTION_ITEM];
+  return (
+    <div className="app-frame">
+      <header className="global-bar" aria-hidden="true">
+        <span className="global-bar__brand">Agentico</span>
+      </header>
+      <div className="workspace">
+        <div className="tab-strip__rail" aria-hidden="true" />
+        <div className="tab-panel tab-panel--cockpit">
+          <FeatureCockpit
+            featureId="abcd1234ef567890"
+            titleHint="History and Rewind"
+            onClose={() => undefined}
+            onLoadedName={() => undefined}
+            attentionItems={attentionItems}
+            refreshAttention={() => Promise.resolve(attentionItems)}
             attentionDrafts={drafts}
             setAttentionDrafts={setDrafts}
           />
@@ -915,6 +947,9 @@ function CaptureApp() {
   }
   if (scene === 'aftercare') {
     return <AftercareScene />;
+  }
+  if (scene === 'feature-question') {
+    return <FeatureQuestionScene />;
   }
   if (scene.startsWith('post-cycle-')) {
     return <PostImplementationScene scene={scene} />;

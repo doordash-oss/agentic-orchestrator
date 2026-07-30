@@ -2533,23 +2533,24 @@ body {
 }
 
 .attention-question,
-.attention-gate-question,
-.attention-free-text {
+.attention-gate-question {
   display: grid;
   gap: var(--space-2);
 }
 
 .attention-question {
+  min-inline-size: 0;
   margin: 0;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-3);
+  border: 0;
+  padding: 0;
 }
 
 .attention-question legend {
   display: grid;
   gap: 2px;
-  padding: 0 var(--space-1);
+  width: 100%;
+  margin-bottom: var(--space-2);
+  padding: 0;
 }
 
 .attention-question__header {
@@ -2561,29 +2562,81 @@ body {
 }
 
 .attention-question__prompt {
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 17px;
+  line-height: 1.25;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
-.attention-option {
+.attention-question .attention-option {
+  position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  min-width: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  color: var(--color-text);
+  background: var(--color-panel);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    background 120ms ease;
 }
 
-.attention-option input {
-  margin-top: 3px;
-  accent-color: var(--color-accent);
+.attention-question .attention-option:hover {
+  border-color: color-mix(in srgb, var(--color-signal) 45%, var(--color-hairline));
+}
+
+.attention-question .attention-option[data-selected] {
+  border-color: var(--color-signal);
+  box-shadow: 0 0 0 2px var(--color-signal);
+  background: color-mix(in srgb, var(--color-signal) 6%, var(--color-panel));
+}
+
+.attention-question .attention-option:has(input[type='radio']:focus-visible),
+.attention-question .attention-option:has(input[type='checkbox']:focus-visible) {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.attention-question .attention-option[data-recommended] {
+  border-left: 3px solid var(--color-accent);
 }
 
 .attention-option__copy {
   display: grid;
-  gap: 1px;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.attention-option__heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 .attention-option__label {
+  font-family: var(--font-display);
   font-weight: 700;
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.attention-option__recommended {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .attention-option__description,
@@ -2592,11 +2645,56 @@ body {
   font-size: 11px;
 }
 
+.attention-option__description {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.attention-option__meta {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: var(--space-1);
+  min-width: 1.5rem;
+}
+
+.attention-option__number,
 .attention-option__confidence {
   font-family: var(--font-mono);
 }
 
-.attention-free-text > span:first-child,
+.attention-option__number {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.attention-option__confidence {
+  opacity: 0.58;
+}
+
+.attention-question .attention-option--other {
+  cursor: text;
+}
+
+.attention-question .attention-free-text__input {
+  width: 100%;
+  min-width: 0;
+  margin-top: var(--space-1);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  color: var(--color-text);
+  background: var(--color-bg);
+  font: 13px var(--font-body);
+}
+
+.attention-question .attention-free-text__input:focus-visible {
+  border-color: var(--color-signal);
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .attention-gate-question > span:first-child {
   font-weight: 700;
   font-size: 12px;
@@ -2611,6 +2709,10 @@ body {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.attention-detail:has(> .attention-question) > .attention-detail__actions {
+  justify-content: flex-end;
 }
 
 .attention-button {
@@ -2629,6 +2731,11 @@ body {
   color: var(--color-bg);
   background: var(--color-signal);
   border-color: var(--color-signal);
+}
+
+.attention-detail:has(> .attention-question) .attention-button--jump {
+  color: var(--color-muted);
+  font-weight: 500;
 }
 
 .attention-button--primary[data-tone='warning'] {
@@ -2783,6 +2890,96 @@ body {
 
 .phase-spine__stage[data-state='active'] .phase-spine__label {
   color: var(--color-text);
+}
+
+/* --- Feature inspector phase ladder ---------------------------------------- */
+
+.phase-ladder {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  border-top: 1px solid var(--color-hairline);
+  padding-top: var(--space-3);
+}
+
+.phase-ladder__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.phase-ladder__step {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-muted);
+}
+
+.phase-ladder__pip {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+}
+
+.phase-ladder__step[data-state='done'] .phase-ladder__pip {
+  color: var(--color-success);
+}
+
+.phase-ladder__step[data-state='active'] .phase-ladder__pip {
+  color: var(--color-accent);
+  animation: phase-ladder-pulse 1.8s ease-in-out infinite;
+}
+
+.phase-ladder[data-tone='error'] .phase-ladder__step[data-state='active'] .phase-ladder__pip {
+  color: var(--color-danger);
+}
+
+.phase-ladder__label {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
+}
+
+.phase-ladder__step[data-state='active'] .phase-ladder__label {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.phase-ladder__status {
+  min-width: 0;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.phase-ladder[data-tone='error'] .phase-ladder__status {
+  color: var(--color-danger);
+}
+
+@keyframes phase-ladder-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.52;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phase-ladder__step[data-state='active'] .phase-ladder__pip {
+    animation: none;
+  }
 }
 
 /* --- Status line ------------------------------------------------------------ */
@@ -5122,33 +5319,10 @@ body {
   line-height: 1.35;
 }
 
-/* Configuration lives in the inspector as an entry point; the wide forms open
- * in a slide-over rather than cramming into the rail. */
-.cockpit__config-entry {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
 .cockpit__run-totals {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-}
-
-.cockpit__config-open {
-  align-self: flex-start;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-panel);
-  color: var(--color-text);
-  font: 700 13px var(--font-body);
-  cursor: pointer;
-}
-
-.cockpit__config-open:hover {
-  background: color-mix(in srgb, var(--color-signal) 10%, var(--color-panel));
 }
 
 /* Do-and-dismiss tasks (configuration, cycles) open as a centered modal over

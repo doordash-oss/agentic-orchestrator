@@ -114,6 +114,73 @@ export interface BuildConversationOptions {
   optimisticMessage?: string | null;
   /** Durable provider-neutral task snapshots; authoritative over bounded transcript rows. */
   taskActivities?: readonly SessionTaskActivity[];
+  /** Structured question currently rendered beside the transcript. */
+  suppressQuestion?: { prompt: string; optionLabels: string[] };
+}
+
+function normalizedQuestionText(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+function isWordCharacter(value: string | undefined): boolean {
+  return value !== undefined && /[\p{L}\p{N}_]/u.test(value);
+}
+
+function codePointAt(value: string, index: number): string | undefined {
+  const codePoint = value.codePointAt(index);
+  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint);
+}
+
+function codePointBefore(value: string, index: number): string | undefined {
+  if (index <= 0) return undefined;
+  const previousIndex = index - 1;
+  const previousCodeUnit = value.charCodeAt(previousIndex);
+  const codePointIndex =
+    previousCodeUnit >= 0xdc00 && previousCodeUnit <= 0xdfff ? previousIndex - 1 : previousIndex;
+  return codePointAt(value, codePointIndex);
+}
+
+function hasLabelBoundaries(text: string, start: number, label: string): boolean {
+  const end = start + label.length;
+  const hasStartBoundary =
+    !isWordCharacter(codePointAt(label, 0)) || !isWordCharacter(codePointBefore(text, start));
+  const hasEndBoundary =
+    !isWordCharacter(codePointBefore(label, label.length)) ||
+    !isWordCharacter(codePointAt(text, end));
+  return hasStartBoundary && hasEndBoundary;
+}
+
+function matchesPendingQuestion(
+  text: string,
+  question: NonNullable<BuildConversationOptions['suppressQuestion']>,
+): boolean {
+  const normalizedText = normalizedQuestionText(text);
+  const normalizedPrompt = normalizedQuestionText(question.prompt);
+  if (normalizedPrompt !== '' && normalizedText.startsWith(normalizedPrompt)) return true;
+  if (!normalizedText.includes('[confidence:')) return false;
+
+  const labels = [
+    ...new Set(question.optionLabels.map(normalizedQuestionText).filter((label) => label !== '')),
+  ];
+  const occupiedRanges: Array<{ start: number; end: number }> = [];
+  let distinctMatches = 0;
+  for (const label of labels.sort((left, right) => right.length - left.length)) {
+    let offset = 0;
+    while (offset < normalizedText.length) {
+      const start = normalizedText.indexOf(label, offset);
+      if (start < 0) break;
+      const end = start + label.length;
+      const overlaps = occupiedRanges.some((range) => start < range.end && end > range.start);
+      if (!overlaps && hasLabelBoundaries(normalizedText, start, label)) {
+        occupiedRanges.push({ start, end });
+        distinctMatches += 1;
+        break;
+      }
+      offset = start + 1;
+    }
+    if (distinctMatches >= 2) return true;
+  }
+  return false;
 }
 
 /** Reduce a validated row stream into conversational responses and activity groups. */
@@ -121,7 +188,13 @@ export function buildConversation(
   messages: readonly TranscriptMessage[],
   options: BuildConversationOptions = {},
 ): ConversationItem[] {
-  const { mode = 'chat', initialPrompt, optimisticMessage, taskActivities = [] } = options;
+  const {
+    mode = 'chat',
+    initialPrompt,
+    optimisticMessage,
+    taskActivities = [],
+    suppressQuestion,
+  } = options;
   const includeUser = mode === 'chat';
   const items: ConversationItem[] = [];
   const subagentsById = new Map<string, SubagentActivity>();
@@ -199,6 +272,13 @@ export function buildConversation(
       text !== '';
     if (isMessage) {
       if (role === 'user' && !includeUser) continue;
+      if (
+        role === 'assistant' &&
+        suppressQuestion !== undefined &&
+        matchesPendingQuestion(text as string, suppressQuestion)
+      ) {
+        continue;
+      }
       items.push({
         kind: 'message',
         key: `message-${messageKey(entry)}`,

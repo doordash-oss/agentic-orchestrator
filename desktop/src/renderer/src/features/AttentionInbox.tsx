@@ -424,57 +424,106 @@ export function AttentionDetail({
     return (
       <div className="attention-detail">
         <AttentionContextMeta item={item} />
-        {item.questions.map((question) => {
+        {item.questions.map((question, questionIndex) => {
           const draft = questionDraft[question.key] ?? { selected: [], freeText: '' };
+          let recommendedIndex = -1;
+          let highestConfidence = Number.NEGATIVE_INFINITY;
+          if (!question.multiSelect) {
+            question.options.forEach((option, optionIndex) => {
+              if (option.confidence !== undefined && option.confidence > highestConfidence) {
+                highestConfidence = option.confidence;
+                recommendedIndex = optionIndex;
+              }
+            });
+          }
+          const freeTextHintId = `${detailKey}:${questionIndex}:free-text-hint`;
           return (
             <fieldset key={question.key} className="attention-question">
               <legend>
                 <span className="attention-question__header">{question.header}</span>
-                <span className="attention-question__prompt">{question.key}</span>
+                <span className="attention-question__prompt" role="heading" aria-level={3}>
+                  {question.key}
+                </span>
               </legend>
-              {question.options.map((option) => (
-                <label key={option.label} className="attention-option">
+              {question.options.map((option, optionIndex) => {
+                const recommended = optionIndex === recommendedIndex;
+                const selected =
+                  draft.freeText.trim() === '' && draft.selected.includes(option.label);
+                return (
+                  <label
+                    key={option.label}
+                    className="attention-option"
+                    data-recommended={recommended ? true : undefined}
+                    data-selected={selected ? true : undefined}
+                  >
+                    <input
+                      className="sr-only"
+                      type={question.multiSelect ? 'checkbox' : 'radio'}
+                      name={`${detailKey}:${question.key}`}
+                      value={option.label}
+                      checked={draft.selected.includes(option.label)}
+                      onChange={(event) =>
+                        setQuestionDraft(setDrafts, detailKey, question.key, {
+                          selected: question.multiSelect
+                            ? event.currentTarget.checked
+                              ? [...new Set([...draft.selected, option.label])]
+                              : draft.selected.filter((value) => value !== option.label)
+                            : [option.label],
+                        })
+                      }
+                    />
+                    <span className="attention-option__copy">
+                      <span className="attention-option__heading">
+                        <span className="attention-option__label">
+                          {displayQuestionOptionLabel(option.label)}
+                        </span>
+                        {recommended ? (
+                          <span className="attention-option__recommended">Recommended</span>
+                        ) : null}
+                      </span>
+                      {option.description === undefined ? null : (
+                        <span className="attention-option__description">{option.description}</span>
+                      )}
+                    </span>
+                    <span className="attention-option__meta">
+                      {option.confidence === undefined ? null : (
+                        <span className="attention-option__confidence">
+                          {formatConfidence(option.confidence)}
+                        </span>
+                      )}
+                      <span className="attention-option__number" aria-hidden="true">
+                        {optionIndex + 1}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+              <label
+                className="attention-option attention-option--other"
+                data-selected={draft.freeText.trim() === '' ? undefined : true}
+              >
+                <span className="attention-option__copy">
+                  <span className="attention-option__label">Other</span>
                   <input
-                    type={question.multiSelect ? 'checkbox' : 'radio'}
-                    name={`${detailKey}:${question.key}`}
-                    value={option.label}
-                    checked={draft.selected.includes(option.label)}
+                    className="attention-free-text__input"
+                    aria-label={`${question.header} free text`}
+                    aria-describedby={freeTextHintId}
+                    placeholder="Type your own answer here"
+                    value={draft.freeText}
                     onChange={(event) =>
                       setQuestionDraft(setDrafts, detailKey, question.key, {
-                        selected: question.multiSelect
-                          ? event.currentTarget.checked
-                            ? [...new Set([...draft.selected, option.label])]
-                            : draft.selected.filter((value) => value !== option.label)
-                          : [option.label],
+                        freeText: event.target.value,
                       })
                     }
                   />
-                  <span className="attention-option__copy">
-                    <span className="attention-option__label">{option.label}</span>
-                    {option.description === undefined ? null : (
-                      <span className="attention-option__description">{option.description}</span>
-                    )}
+                  <span id={freeTextHintId} className="attention-free-text__hint">
+                    Replaces selected options.
                   </span>
-                  {option.confidence === undefined ? null : (
-                    <span className="attention-option__confidence">
-                      {formatConfidence(option.confidence)}
-                    </span>
-                  )}
-                </label>
-              ))}
-              <label className="attention-free-text">
-                <span>Free text</span>
-                <input
-                  aria-label={`${question.header} free text`}
-                  value={draft.freeText}
-                  onChange={(event) =>
-                    setQuestionDraft(setDrafts, detailKey, question.key, {
-                      freeText: event.target.value,
-                    })
-                  }
-                />
-                <span className="attention-free-text__hint">
-                  Free text replaces selected options.
+                </span>
+                <span className="attention-option__meta">
+                  <span className="attention-option__number" aria-hidden="true">
+                    {question.options.length + 1}
+                  </span>
                 </span>
               </label>
             </fieldset>
@@ -501,7 +550,7 @@ export function AttentionDetail({
               )
             }
           >
-            Submit answers
+            Submit <span aria-hidden="true">↵</span>
           </button>
           <AttentionJumpAction item={item} onJump={onJump} />
         </div>
@@ -730,7 +779,7 @@ function AttentionJumpAction({
   if (item.featureId === undefined) return null;
   const featureId = item.featureId;
   return (
-    <button className="attention-button" onClick={() => onJump(featureId)}>
+    <button className="attention-button attention-button--jump" onClick={() => onJump(featureId)}>
       Open feature
     </button>
   );
@@ -789,6 +838,10 @@ function formatWaitingSince(value: string): string {
 
 function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
+}
+
+function displayQuestionOptionLabel(label: string): string {
+  return label.replace(/\s+\(recommended\)\s*$/i, '').trim();
 }
 
 function setQuestionDraft(

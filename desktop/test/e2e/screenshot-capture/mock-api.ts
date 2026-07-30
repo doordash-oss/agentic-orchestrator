@@ -882,6 +882,49 @@ function isBackgroundScene(scene: string): boolean {
   return scene.startsWith('background-');
 }
 
+export const FEATURE_QUESTION_ITEM = {
+  kind: 'questions',
+  id: 'ask-feature-direction',
+  featureId: 'abcd1234ef567890',
+  sessionId: 'sess-impl-03',
+  phase: 'Design',
+  waitingSince: '2026-07-29T16:00:00Z',
+  questions: [
+    {
+      key: 'For the agentic-orchestrator project, which overall direction should guide the next major investment while preserving the reliability of the existing orchestration engine, keeping the desktop experience understandable during long-running agent work, and giving maintainers enough evidence to distinguish a genuinely useful workflow improvement from a visually attractive change that adds operational complexity without improving completion quality? The answer should also account for teams adopting the tool gradually, repositories with different verification costs, and operators who need to recover interrupted work without reconstructing hidden runtime context.',
+      header: 'Project direction',
+      multiSelect: false,
+      options: [
+        {
+          label: 'Harden the review pipeline (Recommended)',
+          description:
+            'Double down on the recently added multi-axis review workflow by making evidence collection more consistent, tightening the handoff between implementation and review, and ensuring that a partially successful verification run leaves enough structured context for the next agent to resume without repeating expensive work. This direction would also clarify which findings block progression, which can be acknowledged with evidence, and how a resumed reviewer distinguishes newly introduced regressions from findings that were already evaluated in an earlier iteration.',
+          confidence: 0.86,
+        },
+        {
+          label: 'Build user-facing features',
+          description:
+            'Shift focus toward capabilities that operators can see and control directly in the desktop application, including clearer intervention points, stronger progress communication, and focused workflows that turn complex runtime state into decisions a person can make quickly without learning the internal protocol.',
+          confidence: 0.68,
+        },
+        {
+          label: 'Invest in runtime resilience',
+          description:
+            'Prioritize process supervision, recovery, and deterministic state convergence so interrupted work can be diagnosed and resumed safely across app restarts, provider failures, and repository-level conflicts while preserving the exact evidence needed for a trustworthy audit trail.',
+          confidence: 0.73,
+        },
+        {
+          label: 'Simplify the platform surface',
+          description:
+            'Consolidate overlapping controls and retire low-value presentation layers so the product exposes fewer concepts, keeps the strongest workflows prominent, and reduces the amount of renderer and orchestration code maintainers must reason about during future changes.',
+          confidence: 0.59,
+        },
+      ],
+    },
+  ],
+} satisfies AttentionSnapshot['items'][number];
+const FEATURE_QUESTION = FEATURE_QUESTION_ITEM.questions[0]!;
+
 function backgroundAttentionItems(scene: string): AttentionSnapshot['items'] {
   if (scene === 'background-ama-compact') {
     return [
@@ -1211,15 +1254,40 @@ function makeMockApi(
       Promise.resolve(
         sessionId === CHAT_SESSION_ID
           ? AMA_TRANSCRIPT
-          : ({
-              sessionId,
-              cursor: {
-                total: RUN_SESSION_TRANSCRIPT.length,
-                start: 0,
-                end: RUN_SESSION_TRANSCRIPT.length,
-              },
-              messages: RUN_SESSION_TRANSCRIPT,
-            } as SessionTranscript),
+          : scene === 'feature-question'
+            ? ({
+                sessionId,
+                cursor: {
+                  total: RUN_SESSION_TRANSCRIPT.length + 1,
+                  start: 0,
+                  end: RUN_SESSION_TRANSCRIPT.length + 1,
+                },
+                messages: [
+                  ...RUN_SESSION_TRANSCRIPT,
+                  {
+                    index: RUN_SESSION_TRANSCRIPT.length,
+                    role: 'assistant',
+                    type: 'text',
+                    text: [
+                      FEATURE_QUESTION.key,
+                      '',
+                      ...FEATURE_QUESTION.options.map(
+                        (option, index) =>
+                          `${index + 1}. ${option.label}${index === 0 && !/\(Recommended\)$/i.test(option.label) ? ' (Recommended)' : ''} [confidence: ${option.confidence?.toFixed(2)}]`,
+                      ),
+                    ].join('\n'),
+                  },
+                ],
+              } as SessionTranscript)
+            : ({
+                sessionId,
+                cursor: {
+                  total: RUN_SESSION_TRANSCRIPT.length,
+                  start: 0,
+                  end: RUN_SESSION_TRANSCRIPT.length,
+                },
+                messages: RUN_SESSION_TRANSCRIPT,
+              } as SessionTranscript),
       ),
     openSessionOutput: () =>
       Promise.resolve({ subscriptionId: 'subscription-1' } as SessionOutputOpenResult),

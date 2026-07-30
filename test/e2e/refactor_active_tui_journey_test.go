@@ -494,6 +494,13 @@ func journeyCapture(t *testing.T, screenshotsDir, name, view string) {
 	if err := testutil.RenderTerminalPNG(view, path, 1200, 800); err != nil {
 		t.Fatalf("capture %s: %v", name, err)
 	}
+	// Visual regression assertion: the AGENTICO wordmark, both panel
+	// borders, the status line, and the global Ask/Help cluster must render
+	// fully inside the 1200x800 bitmap for every named state — ink touching
+	// the viewport edge is exactly what a clipped capture looks like.
+	if err := testutil.AssertCaptureUncropped(path); err != nil {
+		t.Fatalf("capture %s: %v", name, err)
+	}
 	t.Logf("wrote %s", path)
 }
 

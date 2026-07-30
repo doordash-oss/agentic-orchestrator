@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,19 +67,22 @@ func RendererPath() (string, error) {
 }
 
 // RenderTerminalPNG converts ANSI-styled terminal text to a PNG at
-// width x height CSS pixels with the shared 13px/17px body style. It is the
+// width x height CSS pixels with the shared 12px/16px body style. It is the
 // single headless renderer for every visual-evidence capture in the repo:
 // the autoreview_screenshots-tagged TUI helper delegates to
 // RenderTerminalPNGStyled.
 //
-// The 13px font and 24px/20px padding keep a full 140-column terminal line
-// (~140 × 7.8px ≈ 1092px, plus 40px padding ≈ 1132px) comfortably inside
-// the standard 1200px-wide evidence capture, so the right-most columns of
-// header/footer/panel lines are never clipped. The width/height parameters
-// only size the screenshot viewport; the body style is identical at every
-// size.
+// The 12px font budgets for the widest monospace fallback the headless
+// renderer may pick, not just Menlo: at a 0.66em advance (≈7.92px) a full
+// 140-column terminal line is ~140 × 7.92px ≈ 1109px, plus 40px padding ≈
+// 1149px, still inside the standard 1200px-wide evidence capture; 42 rows
+// at 16px plus 48px padding ≈ 720px fits the 800px height. Pair this
+// budget with AssertCaptureUncropped on every capture so a fallback font
+// outside the budget fails the test instead of shipping a clipped capture.
+// The width/height parameters only size the screenshot viewport; the body
+// style is identical at every size.
 func RenderTerminalPNG(ansi, pngPath string, width, height int) error {
-	return RenderTerminalPNGStyled(ansi, pngPath, width, height, 13, 17)
+	return RenderTerminalPNGStyled(ansi, pngPath, width, height, 12, 16)
 }
 
 // RenderTerminalPNGStyled converts ANSI-styled terminal text to an HTML
@@ -93,7 +97,8 @@ func RenderTerminalPNGStyled(ansi, pngPath string, width, height, fontPx, linePx
 	}
 	html := ansiToHTML(ansi)
 	body := fmt.Sprintf("<!doctype html><html><head><meta charset='utf-8'><style>"+
-		"body{margin:0;background:#1e1e2e;padding:24px 20px;}"+
+		"html,body{margin:0;background:#1e1e2e;}"+
+		"body{padding:24px 20px;}"+
 		"pre{font-family:'Menlo','SF Mono','Cascadia Mono',monospace;font-size:%dpx;line-height:%dpx;color:#cdd6f4;white-space:pre;}"+
 		"</style></head><body><pre>%s</pre></body></html>", fontPx, linePx, html)
 	tmp, err := os.CreateTemp("", "screenshot-*.html")
@@ -121,6 +126,55 @@ func RenderTerminalPNGStyled(ansi, pngPath string, width, height, fontPx, linePx
 		return fmt.Errorf("chrome screenshot: %w\n%s", err, out)
 	}
 	return nil
+}
+
+// AssertCaptureUncropped fails the capture when any glyph ink reaches the
+// outer ring of the bitmap. Clip artifacts (a cut-off wordmark, a truncated
+// right-hand help cluster, a clipped panel border or footer) all present
+// identically: non-background pixels at the viewport edge. Any ink inside
+// the ring therefore proves the terminal grid did not fit the capture
+// viewport. The body background (#1e1e2e) is compared per pixel; a small
+// ring width keeps antialiased edge-of-glyph artifacts from producing false
+// positives on legitimately fitted captures.
+func AssertCaptureUncropped(pngPath string) error {
+	f, err := os.Open(pngPath)
+	if err != nil {
+		return fmt.Errorf("open capture: %w", err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		return fmt.Errorf("decode capture: %w", err)
+	}
+	b := img.Bounds()
+	const ring = 2
+	isBackground := func(x, y int) bool {
+		r, g, bl, a := img.At(x, y).RGBA()
+		if a>>8 < 200 {
+			// Transparent regions (background-color flag) count as clear.
+			return true
+		}
+		// Body background rgb(30,30,46) with a small antialiasing tolerance.
+		return closeByte(r>>8, 30) && closeByte(g>>8, 30) && closeByte(bl>>8, 46)
+	}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			inner := x >= b.Min.X+ring && x < b.Max.X-ring && y >= b.Min.Y+ring && y < b.Max.Y-ring
+			if inner {
+				continue
+			}
+			if !isBackground(x, y) {
+				return fmt.Errorf("capture %s is clipped: ink at bitmap edge (%d,%d) of %dx%d; the rendered terminal grid does not fit the viewport",
+					pngPath, x, y, b.Dx(), b.Dy())
+			}
+		}
+	}
+	return nil
+}
+
+func closeByte(v, want uint32) bool {
+	diff := int(v) - int(want)
+	return diff >= -12 && diff <= 12
 }
 
 var sgrRe = regexp.MustCompile(`\x1b\[([0-9;]*)m`)

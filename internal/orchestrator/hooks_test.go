@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -312,6 +313,7 @@ func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
 	h.OnPublishCompleted("x", map[string]string{}, nil)
 	h.OnFeatureSummaryNeeded("x", f)
 	h.OnFeatureConfigChanged("x", feature.ConfigSnapshot{}, feature.ConfigSnapshot{})
+	h.OnFeatureResumed(ports.FeatureResumedData{FeatureID: "x"})
 }
 
 // TestBuildHooks_OnFeatureConfigChanged_FiresObserver verifies that the hook
@@ -407,6 +409,53 @@ func TestBuildHooks_OnFeatureRewound_FiresObserver(t *testing.T) {
 	}
 	if data["source_run"] != float64(1) || data["new_run"] != float64(2) {
 		t.Errorf("data source/new run = %v/%v, want 1/2", data["source_run"], data["new_run"])
+	}
+}
+
+func TestBuildHooks_OnFeatureResumed_FiresObserver(t *testing.T) {
+	tmp := t.TempDir()
+	featureID := "resumed-hook-feat"
+	if err := os.MkdirAll(filepath.Join(tmp, featureID), 0o755); err != nil {
+		t.Fatalf("mkdir feature dir: %v", err)
+	}
+	obs := newTestObserver(tmp)
+	fs := mocks.NewMockFeatureStore()
+	fs.LoadFn = func(id string) (*feature.Feature, error) {
+		return &feature.Feature{
+			ID:            featureID,
+			Name:          "resumed hook",
+			TraceID:       "1234567890abcdef1234567890abcdef",
+			FeatureSpanID: "1234567890abcdef",
+			ActiveRun:     4,
+		}, nil
+	}
+
+	h := orchestrator.BuildHooks(obs, nil, fs)
+	input := ports.FeatureResumedData{
+		FeatureID:   featureID,
+		PhaseKey:    "phase-02/implement",
+		Iteration:   3,
+		RunNumber:   4,
+		ResumeCount: 2,
+	}
+	h.OnFeatureResumed(input)
+
+	events := readEvents(t, filepath.Join(tmp, featureID, "events.jsonl"))
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1: %+v", len(events), events)
+	}
+	if events[0]["event_type"] != "feature.resumed" {
+		t.Fatalf("event_type = %v, want feature.resumed", events[0]["event_type"])
+	}
+	if events[0]["phase"] != "phase-02/implement" ||
+		events[0]["iteration"] != float64(3) ||
+		events[0]["run_number"] != float64(4) {
+		t.Errorf("phase/iteration/run = %v/%v/%v, want phase-02/implement/3/4",
+			events[0]["phase"], events[0]["iteration"], events[0]["run_number"])
+	}
+	data := events[0]["data"].(map[string]any)
+	if data["resume_count"] != float64(2) {
+		t.Errorf("data.resume_count = %v, want 2", data["resume_count"])
 	}
 }
 

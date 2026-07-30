@@ -123,6 +123,11 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 			Model:     "test",
 		},
 	})
+	var providerInit ports.ProviderInitInfo
+	s.onProviderInit = func(info ports.ProviderInitInfo) {
+		providerInit = info
+	}
+	s.providerName = "test-provider"
 
 	if err := WritePIDFile(dir, PIDFile{
 		PID: s.process.Process.Pid, RepoName: "repo", FeatureID: "feat-1", Phase: feature.PhaseImplement.String(),
@@ -145,6 +150,11 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 	}
 	if got := s.SessionID(); got != "provider-session" {
 		t.Fatalf("session.SessionID() = %q, want provider-session", got)
+	}
+	if providerInit.SessionID != "provider-session" ||
+		providerInit.Provider != "test-provider" ||
+		providerInit.Model != "test" {
+		t.Errorf("provider init = %#v, want provider session identity", providerInit)
 	}
 }
 

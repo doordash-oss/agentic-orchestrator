@@ -56,6 +56,10 @@ type PhaseRunner struct {
 	// clients while verification runs without an active agent session.
 	OnVerificationProgress func(featureID string)
 
+	// OnFeatureResumed publishes the resume audit event after a continuation
+	// provider process has successfully launched.
+	OnFeatureResumed func(ports.FeatureResumedData)
+
 	// BuildSessionFn, if non-nil, overrides the production BuildSession logic.
 	// Used exclusively for test injection.
 	BuildSessionFn func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
@@ -851,6 +855,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		OnFeatureResumed:           pr.OnFeatureResumed,
 	}
 
 	resultCh := make(chan *LoopResult, 1)
@@ -986,6 +991,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
+		OnFeatureResumed:           pr.OnFeatureResumed,
 		RunImplementFn:             pr.RunImplementFn,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -1579,6 +1585,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		RepoName:            opts.RepoName,
 		LogPath:             opts.LogPath,
 		ProviderName:        prov.Name(),
+		ResolvedModel:       bareModel,
 		Protocol:            protocol,
 		DebugSystemPrompt:   opts.SystemPrompt,
 		TurnMode:            opts.TurnMode,

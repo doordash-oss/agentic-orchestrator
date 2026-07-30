@@ -347,5 +347,16 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			}
 			obs.FeatureRewound(sc, input)
 		},
+		OnFeatureResumed: func(input ports.FeatureResumedData) {
+			if obs == nil || fs == nil {
+				return
+			}
+			f, err := fs.Load(input.FeatureID)
+			if err != nil || f == nil {
+				return
+			}
+			sc := observe.SpanContextForFeature(input.FeatureID, f.TraceID, f.Name, f.FeatureSpanID).WithRun(input.RunNumber)
+			obs.FeatureResumed(sc, input)
+		},
 	}
 }

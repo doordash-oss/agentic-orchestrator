@@ -154,6 +154,8 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.repoName = opts[0].RepoName
 		s.permCacheScope = opts[0].PermCacheScope
 		s.providerName = opts[0].ProviderName
+		s.model = opts[0].ResolvedModel
+		s.onProviderInit = opts[0].OnProviderInit
 		if opts[0].Protocol != nil {
 			s.protocol = opts[0].Protocol
 		}

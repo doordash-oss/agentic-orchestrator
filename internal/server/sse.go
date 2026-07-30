@@ -514,12 +514,17 @@ func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
 		resourceType = resourceTypeSession
 	case ports.RepoStatusChanged:
 		kind = sseEventLifecycleUpdated
+	case ports.FeatureResumed:
+		kind = sseEventLifecycleUpdated
 	case ports.FeatureFailed:
 		kind = sseEventLifecycleUpdated
 	}
 	phase := ev.Phase.String()
 	if ev.Phase == feature.Phase(0) && phase == feature.PhaseResearch.String() {
 		phase = ""
+	}
+	if ev.PhaseKey != "" {
+		phase = ev.PhaseKey
 	}
 	resource := ResourceDTO{Type: resourceType, FeatureID: ev.FeatureID, Phase: phase}
 	var dto SSEEventDTO
@@ -568,6 +573,8 @@ func safeEventSummary(ev ports.Event) string {
 		return "feature failed"
 	case ports.FeatureRewound:
 		return "feature rewound"
+	case ports.FeatureResumed:
+		return "feature resumed"
 	case ports.PhaseCompleted:
 		return "phase completed"
 	case ports.PhaseStarted:

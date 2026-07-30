@@ -59,6 +59,34 @@ func TestVerificationProgressEventInvalidatesFeatureSnapshot(t *testing.T) {
 	}
 }
 
+func TestFeatureResumedMapsToLifecycleUpdated(t *testing.T) {
+	t.Parallel()
+
+	event := eventDTOFromDomain(ports.Event{
+		Type:        ports.FeatureResumed,
+		FeatureID:   testFeatureID,
+		PhaseKey:    "phase-02/implement",
+		Iteration:   3,
+		RunNumber:   4,
+		ResumeCount: 2,
+	})
+	if event.Kind != sseEventLifecycleUpdated {
+		t.Errorf("event kind = %q, want %q", event.Kind, sseEventLifecycleUpdated)
+	}
+	if event.Resource.Type != entityFeature || event.Resource.FeatureID != testFeatureID {
+		t.Errorf("event resource = %+v, want feature %s", event.Resource, testFeatureID)
+	}
+	if event.Resource.Phase != "phase-02/implement" {
+		t.Errorf("event phase = %q, want phase-02/implement", event.Resource.Phase)
+	}
+	if event.Summary != "feature resumed" {
+		t.Errorf("event summary = %q, want feature resumed", event.Summary)
+	}
+	if !event.SnapshotRequired {
+		t.Error("feature resume must require a feature snapshot refresh")
+	}
+}
+
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	t.Parallel()
 

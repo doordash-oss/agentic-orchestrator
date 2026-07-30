@@ -117,15 +117,20 @@ func RefactorBaseDir(stateDir string, f *feature.Feature, n int) string {
 }
 
 type IterationMeta struct {
-	Iteration    int           `yaml:"iteration"`
-	StartedAt    time.Time     `yaml:"started_at"`
-	Duration     time.Duration `yaml:"duration"`
-	ExitCode     int           `yaml:"exit_code"`
-	AgentStatus  string        `yaml:"agent_status"`
-	ReviewStatus string        `yaml:"review_status"`
-	MadeProgress bool          `yaml:"made_progress"`
-	CostUSD      float64       `yaml:"cost_usd,omitempty"`
-	Context      *ContextMeta  `yaml:"context,omitempty"`
+	Iteration         int           `yaml:"iteration"`
+	StartedAt         time.Time     `yaml:"started_at"`
+	Duration          time.Duration `yaml:"duration"`
+	ExitCode          int           `yaml:"exit_code"`
+	AgentStatus       string        `yaml:"agent_status"`
+	ReviewStatus      string        `yaml:"review_status"`
+	MadeProgress      bool          `yaml:"made_progress"`
+	CostUSD           float64       `yaml:"cost_usd,omitempty"`
+	Context           *ContextMeta  `yaml:"context,omitempty"`
+	Provider          string        `yaml:"provider,omitempty"`
+	ResolvedModel     string        `yaml:"resolved_model,omitempty"`
+	ProviderSessionID string        `yaml:"provider_session_id,omitempty"`
+	Resumed           bool          `yaml:"resumed,omitempty"`
+	ResumeCount       int           `yaml:"resume_count,omitempty"`
 }
 
 type ContextMeta struct {

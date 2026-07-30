@@ -270,6 +270,10 @@ type Session struct {
 	// bundles before they enter pending TUI routing.
 	askUserAutoPick *ports.AskUserAutoPickConfig
 
+	// onProviderInit persists provider-native identity as soon as the protocol
+	// exposes it. The callback is optional and must not control session flow.
+	onProviderInit func(ports.ProviderInitInfo)
+
 	// watchdog monitors provider-specific lifecycle stalls that do not surface
 	// as normal Result, Done, or control_request events.
 	watchdog *sessionWatchdog
@@ -976,6 +980,8 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				s.mu.Lock()
 				s.model = msg.Init.Model
 				pidDir := s.pidDir
+				onProviderInit := s.onProviderInit
+				providerName := s.providerName
 				s.mu.Unlock()
 
 				// Update PID file with session ID for --resume support
@@ -983,6 +989,13 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 					if err := s.updatePIDFileSessionID(pidDir, s.protocol.SessionID()); err != nil {
 						log.Printf("session %s: update PID file with session ID: %v", s.id, err)
 					}
+				}
+				if onProviderInit != nil {
+					onProviderInit(ports.ProviderInitInfo{
+						SessionID: s.SessionID(),
+						Provider:  providerName,
+						Model:     msg.Init.Model,
+					})
 				}
 			}
 

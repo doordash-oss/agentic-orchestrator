@@ -224,6 +224,14 @@ type SessionBuildNoticeContext struct {
 	Iteration int
 }
 
+// ProviderInitInfo carries the provider-native identity learned during the
+// initialization message for a newly started session.
+type ProviderInitInfo struct {
+	SessionID string
+	Provider  string
+	Model     string
+}
+
 // SessionOpts holds optional configuration for a session start. Owned by the
 // ports package so orchestrator / agent code can construct session options
 // without importing internal/session.
@@ -241,8 +249,12 @@ type SessionOpts struct {
 	RepoName          string
 	PermCacheScope    string
 	ProviderName      string
+	ResolvedModel     string
 	Protocol          llm.Protocol
 	DebugSystemPrompt string
+	// OnProviderInit runs synchronously after a provider initialization message
+	// updates the session identity. Callers should keep it fast and best-effort.
+	OnProviderInit func(ProviderInitInfo)
 	// CriticalAttachSendTimeout overrides the bounded send timeout for
 	// result messages forwarded to the attach channel. Zero uses the
 	// production default.

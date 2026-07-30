@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // readEvents reads all events from events.jsonl for the given featureID.
@@ -748,6 +749,13 @@ func TestNilObserverMethodsAreNoOps(t *testing.T) {
 		SourceRun:       1,
 		NewRun:          2,
 	})
+	obs.FeatureResumed(sc, ports.FeatureResumedData{
+		FeatureID:   "test",
+		PhaseKey:    "phase-01/implement",
+		Iteration:   3,
+		RunNumber:   2,
+		ResumeCount: 1,
+	})
 
 	// No events.jsonl should exist
 	eventsPath := filepath.Join(dir, "test", "events.jsonl")
@@ -778,10 +786,53 @@ func TestDisabledObserverMethodsAreNoOps(t *testing.T) {
 		SourceRun:       1,
 		NewRun:          2,
 	})
+	obs.FeatureResumed(sc, ports.FeatureResumedData{
+		FeatureID:   featureID,
+		PhaseKey:    "phase-01/implement",
+		Iteration:   3,
+		RunNumber:   2,
+		ResumeCount: 1,
+	})
 
 	eventsPath := filepath.Join(stateDir, featureID, "events.jsonl")
 	if _, err := os.Stat(eventsPath); !os.IsNotExist(err) {
 		t.Errorf("events.jsonl should not exist for disabled observer")
+	}
+}
+
+func TestFeatureResumedEmitsTypedAuditEvent(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "resumed_feat"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	obs := New(true, stateDir, false, "", false, "agentic")
+	sc := SpanContextForFeature(featureID, "", "", "").WithRun(4)
+
+	obs.FeatureResumed(sc, ports.FeatureResumedData{
+		FeatureID:   featureID,
+		PhaseKey:    "phase-02/implement",
+		Iteration:   3,
+		RunNumber:   4,
+		ResumeCount: 2,
+	})
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if evt.EventType != "feature.resumed" {
+		t.Errorf("EventType = %q, want feature.resumed", evt.EventType)
+	}
+	if evt.FeatureID != featureID || evt.Phase != "phase-02/implement" {
+		t.Errorf("identity = %q/%q, want %q/phase-02/implement", evt.FeatureID, evt.Phase, featureID)
+	}
+	if evt.Iteration != 3 || evt.RunNumber != 4 {
+		t.Errorf("iteration/run = %d/%d, want 3/4", evt.Iteration, evt.RunNumber)
+	}
+	if got := int(evt.Data["resume_count"].(float64)); got != 2 {
+		t.Errorf("Data[resume_count] = %d, want 2", got)
 	}
 }
 

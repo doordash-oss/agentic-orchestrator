@@ -1678,11 +1678,25 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 	featureID := "crash-resume-001"
 	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
 	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+	cfg.Feature.ActiveTimingKey = "implement"
+	store := feature.NewStore(filepath.Join(filepath.Dir(stateDir), "feature-store"))
+	if err := store.Save(cfg.Feature); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	cfg.FeatureStore = store
 
 	var buildOpts []BuildSessionOpts
 	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		buildOpts = append(buildOpts, opts)
-		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+		return []string{"mock-agent"}, nil, &session.SessionOpts{
+			SupportsSessionResume: true,
+			ProviderName:          "codex",
+			ResolvedModel:         "gpt-5.6-codex",
+		}, nil
+	}
+	var resumedEvents []ports.FeatureResumedData
+	cfg.OnFeatureResumed = func(input ports.FeatureResumedData) {
+		resumedEvents = append(resumedEvents, input)
 	}
 
 	var startIDs []string
@@ -1691,6 +1705,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 		if len(startIDs) == 1 {
 			// First process dies mid-turn without writing the marker.
 			dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
+			dead.result = &llm.ResultMessage{TotalCostUSD: 1}
 			dead.statusCh <- agentStatusFailed
 			return dead, nil
 		}
@@ -1701,6 +1716,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 			t.Fatalf("write phase_complete: %v", err)
 		}
 		resumed := newUtilityTestSession()
+		resumed.result = &llm.ResultMessage{TotalCostUSD: 2}
 		resumed.statusCh <- agentStatusSuccess
 		return resumed, nil
 	}
@@ -1725,6 +1741,10 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 	if !strings.Contains(buildOpts[1].Prompt, crashResumeMessageFragment) {
 		t.Errorf("resume prompt = %q, want crash-resume message", buildOpts[1].Prompt)
 	}
+	wantResumePrompt := renderResumePrompt(implementResumeContext)
+	if buildOpts[1].Prompt != wantResumePrompt {
+		t.Errorf("resume prompt = %q, want byte-identical %q", buildOpts[1].Prompt, wantResumePrompt)
+	}
 	if len(startIDs) != 2 || !strings.HasSuffix(startIDs[1], "-resume") {
 		t.Errorf("start session IDs = %v, want second with -resume suffix", startIDs)
 	}
@@ -1735,6 +1755,57 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 	}
 	if meta.AgentStatus != agentStatusSuccess {
 		t.Fatalf("AgentStatus = %q, want %q", meta.AgentStatus, agentStatusSuccess)
+	}
+	if meta.Provider != "codex" ||
+		meta.ResolvedModel != "gpt-5.6-codex" ||
+		meta.ProviderSessionID != "native-123" ||
+		!meta.Resumed ||
+		meta.ResumeCount != 1 {
+		t.Errorf("resume meta = %#v, want mirrored provider identity and one resume", meta)
+	}
+
+	record, err := ReadResumeRecord(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if record == nil {
+		t.Fatal("ReadResumeRecord() = nil, want retained record")
+	}
+	if record.ProviderSessionID != "native-123" ||
+		record.Provider != "codex" ||
+		record.ResolvedModel != "gpt-5.6-codex" ||
+		record.PhaseKey != "implement" ||
+		record.Iteration != 1 ||
+		record.RunNumber != 1 ||
+		record.OrchestratorSessionID != startIDs[0] ||
+		!record.Resumed ||
+		record.ResumeCount != 1 ||
+		!record.Completed ||
+		record.CompletedAt == nil {
+		t.Errorf("resume record = %#v, want completed resumed identity", record)
+	}
+	if len(resumedEvents) != 1 {
+		t.Fatalf("FeatureResumed callbacks = %d, want 1", len(resumedEvents))
+	}
+	if got := resumedEvents[0]; got.FeatureID != featureID ||
+		got.PhaseKey != "implement" ||
+		got.Iteration != 1 ||
+		got.RunNumber != 1 ||
+		got.ResumeCount != 1 {
+		t.Errorf("FeatureResumed callback = %#v, want complete resume identity", got)
+	}
+	reloaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("load feature costs: %v", err)
+	}
+	if len(reloaded.SessionCosts) != 2 {
+		t.Fatalf("session cost records = %#v, want dead and resumed process", reloaded.SessionCosts)
+	}
+	if reloaded.SessionCosts[0].SessionID != startIDs[0] ||
+		reloaded.SessionCosts[1].SessionID != startIDs[1] ||
+		!strings.HasSuffix(reloaded.SessionCosts[1].SessionID, "-resume") {
+		t.Errorf("session cost IDs = (%q, %q), want base and -resume suffix",
+			reloaded.SessionCosts[0].SessionID, reloaded.SessionCosts[1].SessionID)
 	}
 
 	events := readObserveEvents(t, observeDir, featureID)
@@ -1749,6 +1820,10 @@ func TestImplementLoop_CrashResumeNotAttemptedWithoutCapability(t *testing.T) {
 	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
 
 	buildCalls := 0
+	resumedEvents := 0
+	cfg.OnFeatureResumed = func(ports.FeatureResumedData) {
+		resumedEvents++
+	}
 	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		buildCalls++
 		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: false}, nil
@@ -1764,6 +1839,9 @@ func TestImplementLoop_CrashResumeNotAttemptedWithoutCapability(t *testing.T) {
 	}
 	if buildCalls != 1 {
 		t.Fatalf("BuildSession calls = %d, want 1 (no resume without capability)", buildCalls)
+	}
+	if resumedEvents != 0 {
+		t.Errorf("FeatureResumed callbacks = %d, want 0", resumedEvents)
 	}
 	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
 	if err != nil {
@@ -1803,6 +1881,91 @@ func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
 	}
 	if meta.AgentStatus != agentStatusFailed {
 		t.Fatalf("AgentStatus = %q, want FAILED", meta.AgentStatus)
+	}
+}
+
+func TestImplementLoop_CrashResumeNotAttemptedWithoutProviderSessionID(t *testing.T) {
+	featureID := "crash-resume-empty-provider-session"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	buildCalls := 0
+	resumedEvents := 0
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildCalls++
+		return []string{"mock-agent"}, nil, &session.SessionOpts{
+			SupportsSessionResume: true,
+			ProviderName:          "codex",
+			ResolvedModel:         "gpt-5.6-codex",
+		}, nil
+	}
+	cfg.OnFeatureResumed = func(ports.FeatureResumedData) {
+		resumedEvents++
+	}
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession()}
+		dead.statusCh <- agentStatusFailed
+		return dead, nil
+	}
+
+	if _, err := RunImplementationLoop(cfg, nil); err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("BuildSession calls = %d, want 1", buildCalls)
+	}
+	if resumedEvents != 0 {
+		t.Errorf("FeatureResumed callbacks = %d, want 0", resumedEvents)
+	}
+	record, err := ReadResumeRecord(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if record == nil {
+		t.Fatal("ReadResumeRecord() = nil, want coherent record without provider session ID")
+	}
+	if record.ProviderSessionID != "" || record.Provider != "codex" || record.ResolvedModel != "gpt-5.6-codex" {
+		t.Errorf("resume record = %#v, want provider/model with empty native session ID", record)
+	}
+}
+
+func TestImplementLoop_CrashResumeNotAttemptedWithPhaseComplete(t *testing.T) {
+	featureID := "crash-resume-complete"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+
+	buildCalls := 0
+	resumedEvents := 0
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		buildCalls++
+		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+	}
+	cfg.OnFeatureResumed = func(ports.FeatureResumedData) {
+		resumedEvents++
+	}
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		iterDir := filepath.Join(artifactDir, "iteration-01")
+		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
+		if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), []byte("complete\n"), 0o644); err != nil {
+			t.Fatalf("write phase_complete: %v", err)
+		}
+		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
+		dead.statusCh <- agentStatusFailed
+		return dead, nil
+	}
+
+	result, err := RunImplementationLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, finalStatusReviewPassed)
+	}
+	if buildCalls != 1 {
+		t.Fatalf("BuildSession calls = %d, want 1", buildCalls)
+	}
+	if resumedEvents != 0 {
+		t.Errorf("FeatureResumed callbacks = %d, want 0", resumedEvents)
 	}
 }
 

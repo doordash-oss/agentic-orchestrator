@@ -90,6 +90,10 @@ type Hooks struct {
 	// the requested target and the effective target plus source/new run
 	// numbers so observers can emit a durable audit record.
 	OnFeatureRewound func(featureID string, request feature.RewindRequest, effectiveTarget feature.Phase, sourceRun, newRun int)
+
+	// OnFeatureResumed fires after a persisted provider session is
+	// successfully relaunched.
+	OnFeatureResumed func(ports.FeatureResumedData)
 }
 
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly
@@ -335,6 +339,13 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 			}
 			o.emitEvent(ports.Event{Type: ports.VerificationProgress, FeatureID: featureID})
 		}
+		existingResumeHook := o.deps.PhaseRunner.OnFeatureResumed
+		o.deps.PhaseRunner.OnFeatureResumed = func(input ports.FeatureResumedData) {
+			if existingResumeHook != nil {
+				existingResumeHook(input)
+			}
+			o.featureResumed(input)
+		}
 	}
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,
@@ -477,6 +488,25 @@ func (o *Orchestrator) emitEventBlocking(ev ports.Event) {
 	case o.eventCh <- ev:
 	case <-o.doneCh:
 	}
+}
+
+// featureResumed is the single orchestrator adapter for a successful provider
+// session relaunch. Agent-side dispatch wiring supplies this as its callback.
+func (o *Orchestrator) featureResumed(input ports.FeatureResumedData) {
+	if o == nil {
+		return
+	}
+	if o.hooks.OnFeatureResumed != nil {
+		o.hooks.OnFeatureResumed(input)
+	}
+	o.emitEventBlocking(ports.Event{
+		Type:        ports.FeatureResumed,
+		FeatureID:   input.FeatureID,
+		PhaseKey:    input.PhaseKey,
+		Iteration:   input.Iteration,
+		RunNumber:   input.RunNumber,
+		ResumeCount: input.ResumeCount,
+	})
 }
 
 func (o *Orchestrator) emitShutdownStarted() {

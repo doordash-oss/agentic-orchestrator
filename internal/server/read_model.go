@@ -673,10 +673,9 @@ const disabledChildSetupIncomplete = "setup_incomplete"
 const disabledChildRelationshipClosed = "relationship_closed"
 
 // childExecutionBlockReason returns the error that currently blocks child
-// execution: the settled-relationship block on a closed child, the
-// setup-state block while setup is incomplete, or the typed capability
-// rejection for an unsupported profile or repository count. Nil means the
-// child may run through the ordinary Medium pipeline.
+// execution: the settled-relationship block on a closed child, or the
+// setup-state block while setup is incomplete. Nil means the child may run
+// through the ordinary pipeline for its profile.
 func childExecutionBlockReason(f *feature.Feature) error {
 	if f == nil || !f.IsChild() {
 		return nil
@@ -691,15 +690,12 @@ func childExecutionBlockReason(f *feature.Feature) error {
 }
 
 // childCapabilityDisabledReason maps a child execution block to the stable
-// disabled-reason code echoed by the action catalog: relationship_closed,
-// setup_incomplete, or unsupported_profile.
+// disabled-reason code echoed by the action catalog: relationship_closed or
+// setup_incomplete.
 func childCapabilityDisabledReason(err error) ActionDisabledReasonDTO {
-	var capErr *feature.ChildCapabilityError
 	switch {
 	case errors.Is(err, feature.ErrChildExecutionClosed):
 		return ActionDisabledReasonDTO{Code: disabledChildRelationshipClosed, Message: "the child relationship is closed; the settled child cannot execute"}
-	case errors.As(err, &capErr):
-		return ActionDisabledReasonDTO{Code: capErr.Reason, Message: capErr.Error()}
 	case errors.Is(err, feature.ErrChildExecutionBlocked):
 		return ActionDisabledReasonDTO{Code: disabledChildSetupIncomplete, Message: "child setup is queued, running, or failed; only setup and setup-retry are available"}
 	default:

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -44,9 +45,10 @@ type childHeadReader interface {
 // checkChildExecution is the fail-closed capability gate for child feature
 // execution. Queued, setting-up, and failed-setup children stay reachable
 // only through RunSetup / RetrySetup; setup-complete children must satisfy
-// the supported execution shape (active Medium); a child whose relationship
-// has settled can never replay pipeline phases. Feature-lookup failures
-// propagate so the gate can never be silently skipped.
+// the supported execution shape (any active pipeline profile); a child
+// whose relationship has settled can never replay pipeline phases.
+// Feature-lookup failures propagate so the gate can never be silently
+// skipped.
 func (o *Orchestrator) checkChildExecution(featureID string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -121,6 +123,16 @@ func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
 	if err != nil {
 		return fmt.Errorf("%w: parent %s unreadable: %v", ErrChildIntegrationRefused, child.Parent.ParentID, err)
 	}
+
+	// Final KB refresh: revalidate workspace provenance and rebuild against
+	// the final reviewed child HEAD before any parent ref is touched. Only a
+	// complete, validated refresh vector may enter the integration path.
+	if child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
+		if err := o.RefreshChildKBWorkspaces(childID); err != nil {
+			return fmt.Errorf("final KB refresh: %w", err)
+		}
+	}
+
 	return o.runTransactionIntegration(childID, child, parent)
 }
 
@@ -425,7 +437,51 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		return fmt.Errorf("reload child: %w", err)
 	}
 
+	// Promote child KB workspaces to parent overlays before cleanup. The
+	// promotion is a post-close operation: a completed child never reopens.
+	// If promotion fails, the workspace is preserved and promotion remains
+	// pending for idempotent recovery. Cleanup and auto-publish are blocked
+	// until promotion succeeds — the parent must not publish before its
+	// successful child knowledge is available in the overlay.
+	if child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
+		if err := o.PromoteChildKBWorkspaces(childID, parentID); err != nil {
+			o.emitEvent(ports.Event{
+				Type:      ports.RepoStatusChanged,
+				FeatureID: childID,
+				ParentID:  parentID,
+				ChildID:   childID,
+				Message:   "child KB promotion failed: " + err.Error(),
+			})
+			// Promotion is pending — block cleanup and auto-publish. The
+			// child stays Completed with its workspace preserved for
+			// idempotent recovery by ReconcilePromotions.
+			return fmt.Errorf("child KB promotion pending for %s: %w", childID, err)
+		}
+	}
+
 	warnings := o.cleanupChildResourcesPerRepo(child)
+
+	// Clean up child KB workspaces after successful promotion. If promotion
+	// is still pending, the workspace is preserved for recovery.
+	baseDir := o.stateDir()
+	if baseDir != "" && child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
+		if store, ok := o.deps.Store.(promotionStore); ok {
+			journal, jerr := store.LoadPromotion(childID)
+			if jerr != nil {
+				return fmt.Errorf("loading promotion journal for cleanup: %w", jerr)
+			}
+			if journal != nil && journal.Phase == feature.PromotionPhasePromoted {
+				for _, repo := range child.Repos {
+					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, childID, repo.Name)
+					if err := agent.RemoveWorkspace(workspaceDir); err != nil {
+						warnings[repo.Name] = fmt.Sprintf("removing child KB workspace for %s: %v", repo.Name, err)
+					}
+				}
+				_ = store.DeletePromotion(childID)
+			}
+		}
+	}
+
 	for _, repo := range child.Repos {
 		warning := warnings[repo.Name]
 		if err := o.recordTransactionCleanupWarning(childID, repo.Name, warning); err != nil {

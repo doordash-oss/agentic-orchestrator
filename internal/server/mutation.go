@@ -53,7 +53,6 @@ const (
 	errCodeActiveChildExists              = "active_child_exists"
 	errCodeParentWorktreesDirty           = "parent_worktrees_dirty"
 	errCodeChildExecutionBlocked          = "child_execution_blocked"
-	errCodeChildProfileUnsupported        = "child_profile_unsupported"
 	errCodeChildRelationshipClosed        = "relationship_closed"
 	errCodeParentMutationLocked           = "parent_mutation_locked"
 	errCodeChildMutationRestricted        = "child_mutation_restricted"
@@ -466,18 +465,7 @@ func writeRelationshipGuardError(w http.ResponseWriter, err error) bool {
 func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 	var activeChild *feature.ActiveChildExistsError
 	var dirty *feature.ParentWorktreesDirtyError
-	var capability *feature.ChildCapabilityError
 	switch {
-	case errors.As(err, &capability):
-		code := errCodeChildExecutionBlocked
-		switch capability.Reason {
-		case feature.ChildCapabilityProfileUnsupported:
-			code = errCodeChildProfileUnsupported
-		}
-		writeAPIError(w, http.StatusConflict, code, capability.Error(), map[string]any{
-			"feature_id": capability.FeatureID,
-			"profile":    string(capability.Profile),
-		})
 	case errors.Is(err, feature.ErrRefactorParentNotFound):
 		writeAPIError(w, http.StatusNotFound, errCodeRefactorParentNotFound, err.Error(), nil)
 	case errors.Is(err, feature.ErrRefactorParentIsChild):

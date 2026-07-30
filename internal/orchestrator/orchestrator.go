@@ -693,6 +693,11 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 		return PhaseStartResult{Outcome: PhaseSkipped, NextPhase: feature.PhaseInquire}, nil
 	}
 
+	// Child features use disposable KB workspaces; ordinary features use the
+	// canonical KB. The KB dispatch logic is shared but the directory and
+	// freshness checks target the appropriate path.
+	isChild := f.IsChild()
+
 	// Check freshness for all repos.
 	freshness := make(map[string]bool, len(f.Repos))
 	activeKBRepos := o.activeKBSessionRepos(featureID)
@@ -705,11 +710,22 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 			continue
 		}
 		isFresh := false
-		// Without a resolved base dir, agent.KBStateDir would read from CWD;
-		// treat that as "not fresh" rather than consulting stray files.
 		if baseDir != "" && !f.ForceKBRebuild {
-			kbDir := agent.KBStateDir(baseDir, repo.Name)
-			isFresh = agent.IsKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+			var kbDir string
+			if isChild {
+				kbDir = feature.ChildKBWorkspaceDir(baseDir, featureID, repo.Name)
+			} else {
+				kbDir = agent.KBStateDir(baseDir, repo.Name)
+			}
+			if isChild {
+				repoPath := repo.Path
+				if repo.WorktreePath != "" {
+					repoPath = repo.WorktreePath
+				}
+				isFresh = agent.IsWorkspaceFresh(context.Background(), o.deps.CmdRunner, kbDir, repoPath)
+			} else {
+				isFresh = agent.IsKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+			}
 		}
 		freshness[repo.Name] = isFresh
 		if !isFresh {
@@ -754,13 +770,19 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 				_ = o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repo.Name)
 				continue
 			}
-			if baseDir != "" {
+			if baseDir != "" && !isChild {
 				kbDir := agent.KBStateDir(baseDir, repo.Name)
 				if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, kbDir, repo.Name); err != nil {
 					return PhaseStartResult{}, fmt.Errorf("record KB read-only repo baseline for %s: %w", repo.Name, err)
 				}
 			}
-			sessionID, err := o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo)
+			var sessionID string
+			var err error
+			if isChild {
+				sessionID, err = o.deps.PhaseRunner.RunChildKnowledgeBaseForRepo(f, repo)
+			} else {
+				sessionID, err = o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo)
+			}
 			if err != nil {
 				if errors.Is(err, agent.ErrKBLocked) {
 					o.markKBWaiting(featureID, baseDir, repo.Name)

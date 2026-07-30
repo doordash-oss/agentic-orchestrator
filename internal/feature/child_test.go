@@ -1024,14 +1024,13 @@ func TestChildExecutionCapability(t *testing.T) {
 		}
 	})
 
-	t.Run("large and moonshot children get the typed KB capability error", func(t *testing.T) {
+	t.Run("large and moonshot children are now capable (profile gate retired)", func(t *testing.T) {
 		for _, profile := range []feature.PipelineProfile{feature.PipelineLarge, feature.PipelineMoonshot} {
 			f := &feature.Feature{ID: "c", Pipeline: profile, Repos: oneRepo,
 				Parent: &feature.ChildRelationship{ParentID: "p", Kind: feature.ChildKindRefactor}}
 			err := f.ChildExecutionCapability()
-			var capErr *feature.ChildCapabilityError
-			if !errors.As(err, &capErr) || capErr.Reason != feature.ChildCapabilityProfileUnsupported || capErr.Profile != profile {
-				t.Fatalf("profile %s: error = %v, want typed unsupported_profile", profile, err)
+			if err != nil {
+				t.Fatalf("profile %s: error = %v, want nil (profile gate retired)", profile, err)
 			}
 		}
 	})

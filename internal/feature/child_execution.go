@@ -14,40 +14,10 @@
 
 package feature
 
-import "fmt"
-
 // ErrChildExecutionClosed rejects execution of a child whose relationship
 // has settled. It aliases the relationship mutation sentinel so execution
 // and serialized direct mutations expose the same stable closed error.
 var ErrChildExecutionClosed = ErrChildRelationshipClosed
-
-// Child execution capability reasons. Reason values are stable identifiers
-// surfaced through the API so clients can distinguish a temporary profile
-// restriction from other limitations.
-const (
-	// ChildCapabilityProfileUnsupported: Large and Moonshot children cannot
-	// execute until child knowledge-base isolation exists.
-	ChildCapabilityProfileUnsupported = "unsupported_profile"
-)
-
-// ChildCapabilityError rejects execution of a setup-complete child whose
-// shape is not yet supported. It never invalidates or closes the child: the
-// record stays setup-complete and inspectable, and becomes runnable once the
-// phase that retires the restriction lands.
-type ChildCapabilityError struct {
-	FeatureID string
-	Reason    string
-	Profile   PipelineProfile
-}
-
-func (e *ChildCapabilityError) Error() string {
-	switch e.Reason {
-	case ChildCapabilityProfileUnsupported:
-		return fmt.Sprintf("child feature %s cannot execute yet: %s pipeline execution requires temporary child knowledge-base isolation that is not available", e.FeatureID, e.Profile)
-	default:
-		return fmt.Sprintf("child feature %s cannot execute yet: %s", e.FeatureID, e.Reason)
-	}
-}
 
 // ChildSetupComplete reports whether the child's durable setup finished
 // successfully — the child is parked at Created (or any later non-failed
@@ -66,23 +36,17 @@ func (f *Feature) ChildSetupComplete() bool {
 	return true
 }
 
-// ChildExecutionCapability enforces the supported child execution shape:
-// only a Medium refactor child may execute. The repository-count restriction
-// is retired for Medium children — multi-repository transactional integration
-// is now supported. Large and Moonshot children still require temporary
-// child knowledge-base isolation. The check is deterministic from the
+// ChildExecutionCapability is a deliberate extension seam for enforcing the
+// supported child execution shape. All pipeline profiles (Medium, Large, and
+// Moonshot) may execute. Large and Moonshot children use disposable KB
+// workspaces seeded from the parent overlay or canonical KB, so the temporary
+// profile restriction is retired. The check is deterministic from the
 // durable record and is enforced identically by start, resume, retry, and
-// restart paths.
+// restart paths. It currently always returns nil; callers still invoke it
+// so future capability gates can be added without touching every call site.
 func (f *Feature) ChildExecutionCapability() error {
 	if f == nil || !f.IsChild() {
 		return nil
-	}
-	if profile := f.EffectivePipeline(); profile != PipelineMedium {
-		return &ChildCapabilityError{
-			FeatureID: f.ID,
-			Reason:    ChildCapabilityProfileUnsupported,
-			Profile:   profile,
-		}
 	}
 	return nil
 }

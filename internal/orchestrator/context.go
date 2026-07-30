@@ -41,7 +41,8 @@ func (o *Orchestrator) stateDir() string {
 }
 
 // computeKBInfos builds KB info metadata for all feature repos.
-// Mirrors app.go:5278-5289.
+// For child features, the KB info points at the disposable workspace
+// instead of the canonical KB.
 func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
 	baseDir := o.stateDir()
 	if baseDir == "" {
@@ -49,7 +50,12 @@ func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
 	}
 	var infos []agent.KBInfo
 	for _, repo := range f.Repos {
-		kbDir := agent.KBStateDir(baseDir, repo.Name)
+		var kbDir string
+		if f.IsChild() {
+			kbDir = feature.ChildKBWorkspaceDir(baseDir, f.ID, repo.Name)
+		} else {
+			kbDir = agent.KBStateDir(baseDir, repo.Name)
+		}
 		indexPath := agent.KBPath(kbDir)
 		if _, err := os.Stat(indexPath); err == nil {
 			infos = append(infos, agent.KBInfo{Name: repo.Name, IndexPath: indexPath, RootDir: kbDir})

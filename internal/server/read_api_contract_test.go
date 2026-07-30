@@ -916,7 +916,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 // boundary: a child feature's catalog carries only the capability-gated
 // execution entries (start/resume/restart), setup retry, cleanup, and
 // delete — every delivery and post-publish action is omitted — and the
-// disabled reasons distinguish setup state, unsupported profile, and
+// disabled reasons distinguish setup state, closed relationship, and
 // unsupported repository count.
 func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 	t.Parallel()
@@ -985,7 +985,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), disabledChildSetupIncomplete)
 	})
 
-	t.Run("large child reports unsupported_profile", func(t *testing.T) {
+	t.Run("large child is eligible to execute", func(t *testing.T) {
 		t.Parallel()
 		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
 		f.Pipeline = feature.PipelineLarge
@@ -993,9 +993,13 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 
 		actions := actionCatalogDTOs(f)
 		assertNoDeliveryActions(t, actions)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), feature.ChildCapabilityProfileUnsupported)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), feature.ChildCapabilityProfileUnsupported)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), feature.ChildCapabilityProfileUnsupported)
+		if start := actionDTOByID(t, actions, actionStart); !start.Enabled {
+			t.Fatalf("start disabled = %+v; want enabled for an eligible large child", start.DisabledReasons)
+		}
+		if restart := actionDTOByID(t, actions, actionRestart); !restart.Enabled {
+			t.Fatalf("restart disabled = %+v; want enabled for an eligible large child", restart.DisabledReasons)
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), "not_paused")
 	})
 
 	t.Run("multi-repo child no longer restricted by repo count", func(t *testing.T) {

@@ -214,7 +214,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		return nil
 	}
 
-	_, kbDir, violations, err := o.validateKBCompletionContract(repoName)
+	_, kbDir, violations, err := o.validateKBCompletionContract(f, repoName)
 	if err != nil {
 		return err
 	}
@@ -294,14 +294,22 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	}
 
 	// Mark KB fresh on disk — best-effort, failures don't block the phase.
-	// Skipped when stateDir is unresolved (tests without a PhaseRunner/Store):
-	// without a base dir, agent.KBStateDir would resolve relative to CWD and
-	// scribble a state.json into the test's working directory.
+	// For child features, mark the disposable workspace fresh instead of the
+	// canonical KB.
 	if repoName != "" {
 		if repo, ok := findRepo(f, repoName); ok {
 			if baseDir := o.stateDir(); baseDir != "" {
-				kbDir := agent.KBStateDir(baseDir, repo.Name)
-				_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+				if f.IsChild() {
+					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, featureID, repo.Name)
+					repoPath := repo.Path
+					if repo.WorktreePath != "" {
+						repoPath = repo.WorktreePath
+					}
+					_ = agent.MarkWorkspaceFresh(context.Background(), o.deps.CmdRunner, workspaceDir, repoPath)
+				} else {
+					kbDir := agent.KBStateDir(baseDir, repo.Name)
+					_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+				}
 			}
 		}
 		if err := o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repoName); err != nil {
@@ -334,7 +342,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	return o.advanceToNextPhase(featureID, feature.PhaseKnowledgeBase)
 }
 
-func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
+func (o *Orchestrator) validateKBCompletionContract(f *feature.Feature, repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
 	var violations []agent.ProtocolViolation
 	var outcome agent.Outcome
 	kbDir := ""
@@ -352,7 +360,11 @@ func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outc
 			Reason:   "state directory is empty",
 		})
 	default:
-		kbDir = agent.KBStateDir(baseDir, repoName)
+		if f.IsChild() {
+			kbDir = feature.ChildKBWorkspaceDir(baseDir, f.ID, repoName)
+		} else {
+			kbDir = agent.KBStateDir(baseDir, repoName)
+		}
 		if !agent.HasPhaseComplete(kbDir) {
 			violations = append(violations, agent.ProtocolViolation{
 				Artifact: agent.PhaseCompleteFile,

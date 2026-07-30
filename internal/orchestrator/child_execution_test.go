@@ -54,8 +54,8 @@ func setupCompleteChild() *feature.Feature {
 	}
 }
 
-// largeProfileChild returns a setup-complete child whose Large profile needs
-// temporary child knowledge-base isolation.
+// largeProfileChild returns a setup-complete child with a Large pipeline
+// profile.
 func largeProfileChild() *feature.Feature {
 	child := setupCompleteChild()
 	child.ID = "child-large"
@@ -141,8 +141,7 @@ func TestOrchestrator_ClosedChildExecutionRefused(t *testing.T) {
 			if !errors.Is(err, feature.ErrChildExecutionClosed) {
 				t.Fatalf("StartFeature() error = %v, want ErrChildExecutionClosed", err)
 			}
-			var capErr *feature.ChildCapabilityError
-			if errors.As(err, &capErr) || errors.Is(err, feature.ErrChildExecutionBlocked) {
+			if errors.Is(err, feature.ErrChildExecutionBlocked) {
 				t.Fatalf("StartFeature() error = %v, want the closed-relationship error, not a capability/setup block", err)
 			}
 			refuteLifecycleCall(t, lc, "RunSetup")
@@ -278,10 +277,10 @@ func TestOrchestrator_ChildSetupRunsOnlyViaSetupEntrypoints(t *testing.T) {
 
 // TestOrchestrator_ChildCapabilityGate pins the child capability matrix:
 // a setup-complete Medium child with exactly one repository passes start,
-// resume/retry, and restart; Large/Moonshot children return the typed
-// temporary KB-capability error, and a multi-repository child returns the
-// distinct typed multi-repository error. Rejection never invalidates or
-// closes the child, which stays setup-complete and active.
+// resume/retry, and restart; Large children also pass since the temporary
+// profile restriction is retired, and a multi-repository child passes too.
+// Rejection never invalidates or closes the child, which stays
+// setup-complete and active.
 func TestOrchestrator_ChildCapabilityGate(t *testing.T) {
 	t.Run("eligible medium single-repo child starts", func(t *testing.T) {
 		child := setupCompleteChild()
@@ -305,51 +304,38 @@ func TestOrchestrator_ChildCapabilityGate(t *testing.T) {
 		}
 	})
 
-	capabilityChildren := []struct {
-		name       string
-		f          *feature.Feature
-		wantReason string
+	profileChildren := []struct {
+		name string
+		f    *feature.Feature
 	}{
-		{"large child", largeProfileChild(), feature.ChildCapabilityProfileUnsupported},
+		{"large child", largeProfileChild()},
 	}
-	for _, tc := range capabilityChildren {
+	for _, tc := range profileChildren {
 		t.Run("start/"+tc.name, func(t *testing.T) {
 			lc := lifecycleForFeature(tc.f)
 			store := newFeatureStore(tc.f)
 			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
 			err := o.StartFeature(tc.f.ID)
-			var capErr *feature.ChildCapabilityError
-			if !errors.As(err, &capErr) || capErr.Reason != tc.wantReason {
-				t.Fatalf("StartFeature() error = %v, want ChildCapabilityError reason %s", err, tc.wantReason)
+			if err != nil {
+				t.Fatalf("StartFeature() error = %v, want nil for eligible %s child", err, tc.name)
 			}
-			refuteLifecycleCall(t, lc, "StartPlanning")
-			refuteLifecycleCall(t, lc, "StartInquire")
-			// The rejection is not a failure: the child remains
-			// setup-complete, active, and eligible later.
-			parked, loadErr := store.Load(tc.f.ID)
-			if loadErr != nil {
-				t.Fatalf("reload child: %v", loadErr)
-			}
-			if parked.Status != feature.StatusCreated || !parked.IsActiveChild() {
-				t.Fatalf("child after rejection = %s active=%v, want Created and active", parked.Status, parked.IsActiveChild())
-			}
+			refuteLifecycleCall(t, lc, "RunSetup")
+			refuteLifecycleCall(t, lc, "RetrySetup")
 		})
 		t.Run("restart/"+tc.name, func(t *testing.T) {
 			lc := lifecycleForFeature(tc.f)
 			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(tc.f)}, orchestrator.Hooks{})
 			_, err := o.RestartPhase(tc.f.ID, 0, 0)
-			var capErr *feature.ChildCapabilityError
-			if !errors.As(err, &capErr) || capErr.Reason != tc.wantReason {
-				t.Fatalf("RestartPhase() error = %v, want ChildCapabilityError reason %s", err, tc.wantReason)
+			if err != nil {
+				t.Fatalf("RestartPhase() error = %v, want nil for eligible %s child", err, tc.name)
 			}
 		})
 		t.Run("retry/"+tc.name, func(t *testing.T) {
 			lc := lifecycleForFeature(tc.f)
 			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(tc.f)}, orchestrator.Hooks{})
 			err := o.RetryPhase(tc.f.ID)
-			var capErr *feature.ChildCapabilityError
-			if !errors.As(err, &capErr) || capErr.Reason != tc.wantReason {
-				t.Fatalf("RetryPhase() error = %v, want ChildCapabilityError reason %s", err, tc.wantReason)
+			if err != nil {
+				t.Fatalf("RetryPhase() error = %v, want nil for eligible %s child", err, tc.name)
 			}
 		})
 	}

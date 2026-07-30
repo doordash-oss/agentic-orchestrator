@@ -403,6 +403,20 @@ func (o *Orchestrator) cleanupCascadeResources(
 			} else {
 				err = errors.New("durable branch cleanup is not configured")
 			}
+		case feature.CascadeResourceKBWorkspace:
+			expected := feature.ChildKBWorkspaceDir(o.stateDir(), resource.OwnerID, resource.Repo)
+			if filepath.Clean(resource.Path) != filepath.Clean(expected) {
+				err = fmt.Errorf("refusing unexpected KB workspace path %s", resource.Path)
+			} else {
+				err = os.RemoveAll(resource.Path)
+			}
+		case feature.CascadeResourcePromotion:
+			if !pathWithin(filepath.Join(o.stateDir(), resource.OwnerID), resource.Path) {
+				err = fmt.Errorf("refusing promotion path outside feature state: %s", resource.Path)
+			} else {
+				_ = os.Remove(resource.Path)
+				err = nil
+			}
 		default:
 			err = fmt.Errorf("unknown cascade resource kind %q", resource.Kind)
 		}

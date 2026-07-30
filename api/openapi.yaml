@@ -179,9 +179,7 @@ paths:
         `relationship_closed` for a child whose relationship has settled;
         automatic reconciliation owns any remaining cleanup tail. A 409
         `child_execution_blocked`
-        while setup is queued, running, or failed; 409
-        `child_profile_unsupported` for Large/Moonshot children (child
-        knowledge-base isolation is not yet available). Capability
+        while setup is queued, running, or failed. Capability
         rejections never invalidate or close the child record.
       parameters:
         - $ref: "#/components/parameters/FeatureID"

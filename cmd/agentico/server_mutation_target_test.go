@@ -480,8 +480,8 @@ func (f *fakeFeatureRebaseStarter) StartFeatureRebase(featureID string) error {
 // resume backend path (serverMutationTarget.StartFeature fronts both routes)
 // end-to-end through the real orchestrator and store: a child whose setup is
 // queued, running, or failed returns ErrChildExecutionBlocked and never
-// reports "started", while a setup-complete but unsupported-profile child
-// surfaces the typed temporary capability error.
+// reports "started", while a setup-complete large-profile child is eligible
+// to start.
 func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
 	newChildTarget := func(t *testing.T, mutate func(*feature.Feature)) (serverMutationTarget, string) {
 		t.Helper()
@@ -542,17 +542,16 @@ func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
 		}
 	})
 
-	t.Run("large-profile child returns typed capability error", func(t *testing.T) {
+	t.Run("large-profile child is eligible to start", func(t *testing.T) {
 		target, childID := newChildTarget(t, func(f *feature.Feature) {
 			f.Pipeline = feature.PipelineLarge
 		})
 		resp, err := target.StartFeature(childID)
-		var capErr *feature.ChildCapabilityError
-		if !errors.As(err, &capErr) || capErr.Reason != feature.ChildCapabilityProfileUnsupported {
-			t.Fatalf("StartFeature() error = %v; want ChildCapabilityError(unsupported_profile)", err)
+		if err != nil {
+			t.Fatalf("StartFeature() error = %v; want nil for eligible large-profile child", err)
 		}
-		if resp.Result == resultStarted {
-			t.Fatalf("StartFeature() response = %+v; must not report started for an unsupported child", resp)
+		if resp.Result != resultStarted {
+			t.Fatalf("StartFeature() response = %+v; want started for eligible large-profile child", resp)
 		}
 	})
 }

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -178,6 +179,23 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 			return fmt.Errorf("reload child for cleanup: %w", err)
 		}
 		warnings := o.cleanupChildResourcesPerRepo(child)
+
+		// Remove disposable KB workspaces for discarded children. Discarded
+		// children never modify a parent overlay; their workspaces, markers,
+		// and locks are removed idempotently after session quiescence.
+		baseDir := o.stateDir()
+		if baseDir != "" && child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
+			for _, repo := range child.Repos {
+				workspaceDir := feature.ChildKBWorkspaceDir(baseDir, childID, repo.Name)
+				if err := agent.RemoveWorkspace(workspaceDir); err != nil {
+					warnings[repo.Name] = fmt.Sprintf("removing discarded child KB workspace for %s: %v", repo.Name, err)
+				}
+			}
+		}
+		// Delete any pending promotion journal (discarded children never promote).
+		if store, ok := o.deps.Store.(promotionStore); ok {
+			_ = store.DeletePromotion(childID)
+		}
 		// Durably record per-repo cleanup warnings on the transaction
 		// journal so they remain visible and retryable after restart.
 		if child.Parent.Transaction != nil {

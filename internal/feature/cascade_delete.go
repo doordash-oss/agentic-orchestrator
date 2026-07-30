@@ -49,11 +49,13 @@ const (
 type CascadeResourceKind string
 
 const (
-	CascadeResourceCopiedInput CascadeResourceKind = "copied_input"
-	CascadeResourceWorktree    CascadeResourceKind = "worktree"
-	CascadeResourceBranch      CascadeResourceKind = "branch"
-	CascadeResourceOverlay     CascadeResourceKind = "overlay"
-	CascadeResourceRecord      CascadeResourceKind = "record"
+	CascadeResourceCopiedInput  CascadeResourceKind = "copied_input"
+	CascadeResourceWorktree     CascadeResourceKind = "worktree"
+	CascadeResourceBranch       CascadeResourceKind = "branch"
+	CascadeResourceOverlay      CascadeResourceKind = "overlay"
+	CascadeResourceRecord       CascadeResourceKind = "record"
+	CascadeResourceKBWorkspace  CascadeResourceKind = "kb_workspace"
+	CascadeResourcePromotion    CascadeResourceKind = "promotion"
 )
 
 // CascadeResource is one independently retryable manifest item.
@@ -220,7 +222,21 @@ func appendFeatureCascadeManifest(intent *CascadeDeleteIntent, stateDir string, 
 				ID: "overlay:" + f.ID + ":" + repo.Name, Kind: CascadeResourceOverlay,
 				OwnerID: f.ID, Repo: repo.Name, Path: ParentOverlayPath(stateDir, f.ID, repo.Name),
 			})
+		} else {
+			// Child KB workspaces are disposable resources that cascade
+			// cleanup must remove.
+			intent.Resources = append(intent.Resources, CascadeResource{
+				ID: "kb-workspace:" + f.ID + ":" + repo.Name, Kind: CascadeResourceKBWorkspace,
+				OwnerID: f.ID, Repo: repo.Name, Path: ChildKBWorkspaceDir(stateDir, f.ID, repo.Name),
+			})
 		}
+	}
+	// Children may have a promotion journal file.
+	if !parent {
+		intent.Resources = append(intent.Resources, CascadeResource{
+			ID: "promotion:" + f.ID, Kind: CascadeResourcePromotion,
+			OwnerID: f.ID, Path: filepath.Join(stateDir, f.ID, "promotion.yaml"),
+		})
 	}
 	intent.Resources = append(intent.Resources, CascadeResource{
 		ID: "record:" + f.ID, Kind: CascadeResourceRecord, OwnerID: f.ID,

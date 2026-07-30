@@ -448,13 +448,56 @@ func (pr *PhaseRunner) RunKnowledgeBase(f *feature.Feature) (string, error) {
 // Session ID format: "<featureID>-kb-<repoName>"
 // Returns (sessionID, error). Returns ("", nil) if KB is already fresh.
 func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.FeatureRepo) (string, error) {
+	kbDir := KBStateDir(pr.StateDir, repo.Name)
+	return pr.runKBSession(f, repo, kbDir)
+}
+
+// RunChildKnowledgeBaseForRepo starts a KB build for a child's disposable
+// workspace. The workspace is seeded from the parent overlay or canonical KB
+// before the build begins. Uses the child's workspace lock (disjoint from the
+// canonical KB lock) so ordinary feature KB builds never wait on child state.
+func (pr *PhaseRunner) RunChildKnowledgeBaseForRepo(f *feature.Feature, repo feature.FeatureRepo) (string, error) {
+	paths := ResolveChildKBPaths(pr.StateDir, f, repo)
+	kbDir := paths.WorkspaceDir
+
+	// Seed the workspace if it hasn't been seeded yet.
+	if state, _ := feature.LoadWorkspaceState(kbDir); state == nil {
+		if err := SeedChildKBWorkspace(context.Background(), pr.CommandRunner, paths); err != nil {
+			return "", fmt.Errorf("seeding child KB workspace for %s: %w", repo.Name, err)
+		}
+	}
+
+	_ = os.MkdirAll(kbDir, 0o755)
+	for _, cat := range kbStandardCategories {
+		_ = os.MkdirAll(filepath.Join(kbDir, cat), 0o755)
+	}
+
+	// Skip rebuild if the workspace KB is already up-to-date with the child HEAD.
+	if IsWorkspaceFresh(context.Background(), pr.CommandRunner, kbDir, func() string {
+		rp := repo.Path
+		if repo.WorktreePath != "" {
+			rp = repo.WorktreePath
+		}
+		return rp
+	}()) {
+		return "", nil
+	}
+
+	return pr.runKBSession(f, repo, kbDir)
+}
+
+// runKBSession is the shared KB session builder for both canonical and child
+// workspace builds. The kbDir parameter controls where KB files, the lock,
+// and the completion marker live. For canonical builds, kbDir is
+// KBStateDir(stateDir, repoName); for child builds, it is the disposable
+// workspace directory.
+func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo, kbDir string) (string, error) {
 	// Resolve effective repo path: prefer worktree, fall back to original path.
 	repoPath := repo.Path
 	if repo.WorktreePath != "" {
 		repoPath = repo.WorktreePath
 	}
 
-	kbDir := KBStateDir(pr.StateDir, repo.Name)
 	_ = os.MkdirAll(kbDir, 0o755)
 
 	// Pre-create standard KB category subdirectories so the agent doesn't
@@ -487,11 +530,34 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	// Determine full vs incremental build
 	var existingKBPath, lastCommit string
 	state, _ := LoadKBState(kbDir)
-	if state != nil {
+	if state != nil && state.HeadCommit != "" {
 		kbPath := KBPath(kbDir)
 		if _, err := os.Stat(kbPath); err == nil {
 			existingKBPath = kbPath
 			lastCommit = state.HeadCommit
+		}
+	} else {
+		// Child workspaces store ChildKBWorkspaceState (not KBState) in
+		// state.json. LoadKBState parses it into a non-nil KBState with
+		// an empty HeadCommit because the JSON field names differ. Check
+		// the child workspace state to determine incremental mode from
+		// the seed provenance. A workspace seeded from a valid overlay
+		// or canonical baseline already contains a KB built through a
+		// known commit; only the delta from that commit to the child
+		// HEAD needs analysis.
+		wsState, _ := feature.LoadWorkspaceState(kbDir)
+		if wsState != nil && wsState.Source != feature.WorkspaceSourceFull {
+			kbPath := KBPath(kbDir)
+			if _, err := os.Stat(kbPath); err == nil {
+				existingKBPath = kbPath
+				if wsState.AnalyzedCommit != "" {
+					lastCommit = wsState.AnalyzedCommit
+				} else if wsState.Source == feature.WorkspaceSourceOverlay {
+					lastCommit = wsState.ParentHEAD
+				} else if wsState.Source == feature.WorkspaceSourceCanonical {
+					lastCommit = wsState.CanonicalCommit
+				}
+			}
 		}
 	}
 

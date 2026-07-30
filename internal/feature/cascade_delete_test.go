@@ -74,8 +74,8 @@ func TestBeginCascadeDeletePersistsCompleteStableManifest(t *testing.T) {
 	if got, want := intent.ChildIDs, []string{"child"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("child ids = %v, want %v", got, want)
 	}
-	if len(intent.Resources) != 8 {
-		t.Fatalf("resources = %d, want 8: %+v", len(intent.Resources), intent.Resources)
+	if len(intent.Resources) != 10 {
+		t.Fatalf("resources = %d, want 10: %+v", len(intent.Resources), intent.Resources)
 	}
 	if len(intent.Refs) != 1 || intent.Refs[0].AnchorSHA != "anchor" ||
 		intent.Refs[0].CandidateSHA != "candidate" {

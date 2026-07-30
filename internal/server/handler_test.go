@@ -989,9 +989,10 @@ func jsonResponse(v any) (*http.Response, error) {
 	}, nil
 }
 
-// TestStartActionChildCapabilityErrors verifies the typed temporary child
-// capability rejections surface through the action route as distinct stable
-// 409 machine codes carrying the feature/profile/repository context.
+// TestStartActionChildCapabilityErrors verifies the typed child
+// capability rejections surface through the action route as distinct
+// stable 409 machine codes carrying the feature/profile/repository
+// context.
 func TestStartActionChildCapabilityErrors(t *testing.T) {
 	t.Parallel()
 
@@ -1001,13 +1002,9 @@ func TestStartActionChildCapabilityErrors(t *testing.T) {
 		wantCode string
 	}{
 		{
-			name: "unsupported profile",
-			err: &feature.ChildCapabilityError{
-				FeatureID: "child-9",
-				Reason:    feature.ChildCapabilityProfileUnsupported,
-				Profile:   feature.PipelineLarge,
-			},
-			wantCode: errCodeChildProfileUnsupported,
+			name:     "blocked child",
+			err:      fmt.Errorf("%w: child-9", feature.ErrChildExecutionBlocked),
+			wantCode: errCodeChildExecutionBlocked,
 		},
 		{
 			name:     "settled closed child",

@@ -10090,11 +10090,6 @@ body {
   background: color-mix(in srgb, var(--color-panel) 92%, var(--color-signal));
 }
 
-.current-inspection:has(.current-inspection__content) {
-  flex-basis: auto;
-  min-height: 100%;
-}
-
 @media (max-height: 700px) {
   .cockpit__surface--live .current-inspection {
     gap: var(--space-2);
@@ -10113,8 +10108,7 @@ body {
   min-height: 0;
 }
 
-.current-inspection__header,
-.current-inspection__content-header {
+.current-inspection__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -10122,7 +10116,6 @@ body {
 }
 
 .current-inspection__header button,
-.current-inspection__content-header button,
 .live-preview__refresh {
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius);
@@ -11179,30 +11172,6 @@ body {
   }
 }
 
-.current-inspection__content {
-  min-width: 0;
-  border-top: 1px solid var(--color-hairline);
-  padding-top: var(--space-3);
-}
-
-.current-inspection__content-header {
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.current-inspection__content-header > button:first-of-type {
-  margin-left: auto;
-}
-
-.current-inspection__content pre {
-  max-height: 240px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
 .current-inspection__artifact-markdown {
   max-height: 28rem;
   margin-top: var(--space-3);
@@ -11237,6 +11206,24 @@ body {
   margin: 0;
   border: 0;
   border-radius: 0;
+}
+
+.current-inspection__overlay-note {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.current-inspection__overlay-log {
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-4) var(--space-5);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 @media (max-width: 760px) {

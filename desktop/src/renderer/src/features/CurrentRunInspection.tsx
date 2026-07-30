@@ -199,34 +199,33 @@ interface OpenedContent {
 }
 
 /**
- * The "Files" preview view: the artifact spine and log channels side by side,
- * with the opened file rendered beneath. It shares the transcript's pane, so
- * browsing files never pushes the live activity down the page.
+ * The "Files" preview view: the artifact spine and log channels side by side.
+ * It shares the transcript's pane, so browsing files never pushes the live
+ * activity down the page; an opened file floats in a modal (see FileOverlay).
  */
 function FilesSurface({
   artifacts,
   logs,
   logListError,
   loadingContent,
-  content,
   contentError,
   onOpen,
-  onEnlarge,
-  onCloseContent,
 }: {
   artifacts: RunArtifactsListResult['artifacts'];
   logs: RunLogView[];
   logListError: string | null;
   loadingContent: boolean;
-  content: OpenedContent | null;
   contentError: string | null;
   onOpen(kind: 'artifact' | 'log', id: string, size?: number, label?: string): void;
-  onEnlarge(): void;
-  onCloseContent(): void;
 }): React.ReactElement {
   const channels = logs.length === 0 ? [] : groupLogsByChannel(logs);
   return (
     <div className="current-inspection__files" aria-label="Run files">
+      {contentError !== null ? (
+        <p role="alert" className="form-field__error">
+          Could not open this file: {contentError}
+        </p>
+      ) : null}
       <div className="current-inspection__files-columns">
         <section className="current-inspection__files-column" aria-label="Run artifacts">
           <h4 className="current-inspection__files-heading">
@@ -293,41 +292,6 @@ function FilesSurface({
           )}
         </section>
       </div>
-
-      {contentError !== null ? (
-        <p role="alert" className="form-field__error">
-          Could not open this file: {contentError}
-        </p>
-      ) : null}
-
-      {content !== null ? (
-        <div className="current-inspection__content">
-          <div className="current-inspection__content-header">
-            <span>{content.label}</span>
-            {content.kind === 'log' && content.value.offset > 0 ? <span>Latest 64 KB</span> : null}
-            {content.value.truncated ? <span>Bounded page · more content remains</span> : null}
-            {content.kind === 'artifact' ? (
-              <button
-                type="button"
-                className="live-preview__icon-button"
-                aria-label="Enlarge artifact"
-                title="Enlarge artifact"
-                onClick={onEnlarge}
-              >
-                <MaximizeIcon />
-              </button>
-            ) : null}
-            <button type="button" onClick={onCloseContent}>
-              Close
-            </button>
-          </div>
-          {content.kind === 'artifact' ? (
-            <RenderedArtifact text={content.value.text} ariaLabel="Current run artifact content" />
-          ) : (
-            <pre aria-label="Current run log content">{stripUnsafeAnsi(content.value.text)}</pre>
-          )}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -443,7 +407,6 @@ export function CurrentRunInspection({
   const [logListError, setLogListError] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const [artifactFullscreen, setArtifactFullscreen] = useState(false);
   const [view, setView] = useState<PreviewView>('conversation');
   const requestRef = useRef(0);
   const catalogueRequestRef = useRef(0);
@@ -598,7 +561,6 @@ export function CurrentRunInspection({
   useEffect(() => {
     setContent(null);
     setContentError(null);
-    setArtifactFullscreen(false);
   }, [featureId, runNumber]);
 
   const openContent = useCallback(
@@ -622,7 +584,6 @@ export function CurrentRunInspection({
                 limit: 64 * 1024,
               });
         setContent({ kind, label, value });
-        setArtifactFullscreen(false);
       } catch (cause) {
         setContentError(parseIpcError(cause).message);
       } finally {
@@ -638,14 +599,8 @@ export function CurrentRunInspection({
       logs={logs}
       logListError={logListError}
       loadingContent={loadingContent}
-      content={content}
       contentError={contentError}
       onOpen={(kind, id, size, label) => void openContent(kind, id, size, label)}
-      onEnlarge={() => setArtifactFullscreen(true)}
-      onCloseContent={() => {
-        setArtifactFullscreen(false);
-        setContent(null);
-      }}
     />
   );
 
@@ -804,10 +759,6 @@ export function CurrentRunInspection({
         </>
       )}
 
-      {artifactFullscreen && content?.kind === 'artifact' ? (
-        <ArtifactOverlay artifact={content.value} onClose={() => setArtifactFullscreen(false)} />
-      ) : null}
-
       {fullscreen ? (
         <LivePreviewOverlay
           onClose={closeFullscreen}
@@ -829,6 +780,10 @@ export function CurrentRunInspection({
           verificationItems={verificationItems}
           filesSurface={filesSurface}
         />
+      ) : null}
+
+      {content !== null ? (
+        <FileOverlay content={content} onClose={() => setContent(null)} />
       ) : null}
     </section>
   );
@@ -919,15 +874,21 @@ function RenderedArtifact({ text, ariaLabel }: { text: string; ariaLabel: string
   );
 }
 
-function ArtifactOverlay({
-  artifact,
+/**
+ * An opened file floats above everything so it stays visible no matter where
+ * the run list has scrolled. Artifacts render as sanitized markdown; logs as a
+ * plain, ANSI-stripped pre.
+ */
+function FileOverlay({
+  content,
   onClose,
 }: {
-  artifact: RunTextContent;
+  content: OpenedContent;
   onClose(): void;
 }): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalDismiss(dialogRef, onClose);
+  const isArtifact = content.kind === 'artifact';
 
   return (
     <div className="live-preview__overlay-backdrop" onMouseDown={onClose}>
@@ -935,30 +896,27 @@ function ArtifactOverlay({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`Expanded artifact ${artifact.id}`}
+        aria-label={`${isArtifact ? 'Run artifact' : 'Run log'} ${content.label}`}
         className="current-inspection__artifact-overlay"
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="live-preview__overlay-header">
           <div>
-            <p className="cockpit__eyebrow">Run artifact</p>
-            <h2>{artifact.id}</h2>
+            <p className="cockpit__eyebrow">{isArtifact ? 'Run artifact' : 'Run log'}</p>
+            <h2>{content.label}</h2>
+            {content.kind === 'log' && content.value.offset > 0 ? (
+              <p className="current-inspection__overlay-note">Latest 64 KB</p>
+            ) : null}
+            {content.value.truncated ? (
+              <p className="current-inspection__overlay-note">Bounded page · more content remains</p>
+            ) : null}
           </div>
           <div className="live-preview__overlay-controls">
             <button
               type="button"
               className="live-preview__icon-button"
-              aria-label="Exit enlarged artifact"
-              title="Exit enlarged view"
-              onClick={onClose}
-            >
-              <MinimizeIcon />
-            </button>
-            <button
-              type="button"
-              className="live-preview__icon-button"
-              aria-label="Close enlarged artifact"
+              aria-label="Close file"
               title="Close"
               onClick={onClose}
             >
@@ -966,7 +924,13 @@ function ArtifactOverlay({
             </button>
           </div>
         </header>
-        <RenderedArtifact text={artifact.text} ariaLabel="Expanded artifact content" />
+        {isArtifact ? (
+          <RenderedArtifact text={content.value.text} ariaLabel="Current run artifact content" />
+        ) : (
+          <pre className="current-inspection__overlay-log" aria-label="Current run log content">
+            {stripUnsafeAnsi(content.value.text)}
+          </pre>
+        )}
       </div>
     </div>
   );

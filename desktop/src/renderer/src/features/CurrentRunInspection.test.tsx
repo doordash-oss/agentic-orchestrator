@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ModelCatalogue, SessionSummary } from '../../../shared/ipc';
@@ -411,26 +411,21 @@ describe('CurrentRunInspection', () => {
       'Open artifact phase-2-plan',
       'Open artifact phase-10-plan',
     ]);
+    // Opening an artifact floats it in a modal so it stays visible regardless of scroll.
     await user.click(screen.getByRole('button', { name: 'Open artifact phase-plan' }));
-    const artifact = await screen.findByLabelText('Current run artifact content');
+    const artifactDialog = await screen.findByRole('dialog', { name: 'Run artifact phase-plan' });
+    const artifact = screen.getByLabelText('Current run artifact content');
     expect(artifact).toHaveTextContent('Current artifact');
     expect(artifact.querySelector('h1')).toHaveTextContent('Current artifact');
-
-    await user.click(screen.getByRole('button', { name: 'Enlarge artifact' }));
-    expect(screen.getByRole('dialog', { name: 'Expanded artifact phase-plan' })).toBeVisible();
+    await user.click(within(artifactDialog).getByRole('button', { name: 'Close file' }));
     expect(
-      screen.getByLabelText('Expanded artifact content').querySelector('h1'),
-    ).toHaveTextContent('Current artifact');
-    await user.click(screen.getByRole('button', { name: 'Exit enlarged artifact' }));
-    expect(
-      screen.queryByRole('dialog', { name: 'Expanded artifact phase-plan' }),
+      screen.queryByRole('dialog', { name: 'Run artifact phase-plan' }),
     ).not.toBeInTheDocument();
 
-    // The lone log channel opens by default, so its file is directly reachable.
+    // The lone log channel opens by default; its file opens in the same modal.
     await user.click(screen.getByRole('button', { name: 'Open log research/output.txt' }));
-    expect(await screen.findByLabelText('Current run log content')).toHaveTextContent(
-      'current log',
-    );
+    expect(await screen.findByRole('dialog', { name: 'Run log research/output.txt' })).toBeVisible();
+    expect(screen.getByLabelText('Current run log content')).toHaveTextContent('current log');
     expect(screen.getByLabelText('Current run log content')).not.toHaveTextContent('\u001b');
     expect(mock.api.getRunArtifactContent).toHaveBeenCalledWith(
       expect.objectContaining({ artifactId: 'phase-plan', limit: 64 * 1024 }),

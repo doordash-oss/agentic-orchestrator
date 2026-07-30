@@ -35,10 +35,10 @@ func TestUpdatePairedConfigAtomicallyUpdatesBothRecords(t *testing.T) {
 		Repos: []feature.FeatureRepo{
 			{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "main", BaseBranch: "main"},
 		},
-		Models:       config.ModelConfig{Implementation: "old-model"},
-		Effort:       config.EffortConfig{Planning: "low"},
-		Inquireness:  feature.InquirenessMedium,
-		Checkpoints:  feature.Checkpoints{PhasePlanReview: false},
+		Models:      config.ModelConfig{Implementation: "old-model"},
+		Effort:      config.EffortConfig{Planning: "low"},
+		Inquireness: feature.InquirenessMedium,
+		Checkpoints: feature.Checkpoints{PhasePlanReview: false},
 	}
 	saveChildTestParent(t, mgr, parent)
 
@@ -336,9 +336,9 @@ func TestUpdatePairedConfigParentSaveFailureRevertsChild(t *testing.T) {
 	defer mgr.Store.ResetSaveHook()
 
 	input := feature.PairedConfigInput{
-		Models:              config.ModelConfig{Implementation: "new-model"},
-		Effort:              config.EffortConfig{Planning: "high"},
-		Inquireness:         feature.InquirenessHigh,
+		Models:      config.ModelConfig{Implementation: "new-model"},
+		Effort:      config.EffortConfig{Planning: "high"},
+		Inquireness: feature.InquirenessHigh,
 	}
 	_, err = mgr.Store.UpdatePairedConfig("p-fail", input, feature.PipelineMoonshot, "p-fail")
 	if err == nil {

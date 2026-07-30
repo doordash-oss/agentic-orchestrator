@@ -531,7 +531,7 @@ func (o *Orchestrator) emitShutdownStarted() {
 // medium-pipeline Created → PlanReady pre-transition, fires
 // OnFeatureStarted, emits FeatureStarted, and delegates to startPhase.
 // Children hit the checkChildExecution capability gate first: only
-// setup-complete, active, single-repository Medium children may execute.
+// setup-complete, active children (any pipeline profile) may execute.
 func (o *Orchestrator) StartFeature(featureID string) error {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()

@@ -102,9 +102,10 @@ func TestPairedEditorPreservesConfiguredEffort(t *testing.T) {
 	}
 }
 
-// TestClosedChildLeavesActiveProjection pins Phase 8's fallback behavior:
-// once a child's relationship carries a close outcome it must disappear
-// from the active nested rows, and selecting it is no longer valid.
+// TestClosedChildLeavesActiveProjection pins the settled-projection
+// behavior: once a child's relationship carries a close outcome it must
+// disappear from the active nested rows, and selecting it is no longer
+// valid.
 func TestClosedChildLeavesActiveProjection(t *testing.T) {
 	t.Parallel()
 
@@ -153,8 +154,7 @@ func TestClosedChildLeavesActiveProjection(t *testing.T) {
 }
 
 // TestDiscardSelectionFallsBackToParent pins that discarding the selected
-// active child moves selection to its parent until Phase 9 supplies
-// closed-history navigation.
+// active child moves selection to its parent.
 func TestDiscardSelectionFallsBackToParent(t *testing.T) {
 	t.Parallel()
 

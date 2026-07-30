@@ -49,13 +49,13 @@ const (
 type CascadeResourceKind string
 
 const (
-	CascadeResourceCopiedInput  CascadeResourceKind = "copied_input"
-	CascadeResourceWorktree     CascadeResourceKind = "worktree"
-	CascadeResourceBranch       CascadeResourceKind = "branch"
-	CascadeResourceOverlay      CascadeResourceKind = "overlay"
-	CascadeResourceRecord       CascadeResourceKind = "record"
-	CascadeResourceKBWorkspace  CascadeResourceKind = "kb_workspace"
-	CascadeResourcePromotion    CascadeResourceKind = "promotion"
+	CascadeResourceCopiedInput CascadeResourceKind = "copied_input"
+	CascadeResourceWorktree    CascadeResourceKind = "worktree"
+	CascadeResourceBranch      CascadeResourceKind = "branch"
+	CascadeResourceOverlay     CascadeResourceKind = "overlay"
+	CascadeResourceRecord      CascadeResourceKind = "record"
+	CascadeResourceKBWorkspace CascadeResourceKind = "kb_workspace"
+	CascadeResourcePromotion   CascadeResourceKind = "promotion"
 )
 
 // CascadeResource is one independently retryable manifest item.

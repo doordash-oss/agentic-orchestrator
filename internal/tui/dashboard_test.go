@@ -105,7 +105,7 @@ func TestDashboardClipsLongFailureDetailLinesToTerminalWidth(t *testing.T) {
 		Status:       feature.StatusFailed,
 		CurrentPhase: feature.PhaseFinalReview,
 		FailureType:  feature.FailureProtocolViolation,
-		LastError:    "protocol violation: final_review_reviewer @ /Users/ivar.lazzaro/.agentic-workflow/worktrees/agentico-mcp-server/agentic-orchestrator/runs/run-001/final-review/iteration-02: dropped critical SDK message (type=result) after 5s on full attachCh",
+		LastError:    "protocol violation: final_review_reviewer @ /tmp/agentic-workflow/worktrees/example/agentic-orchestrator/runs/run-001/final-review/iteration-02: dropped critical SDK message (type=result) after 5s on full attachCh",
 		Repos:        []feature.FeatureRepo{{Name: testRepoNameOrchestrator}},
 		RepoStates: map[string]*feature.RepoState{
 			testRepoNameOrchestrator: {Touched: true, LastError: "dropped critical SDK message (type=result) after 5s on full attachCh"},

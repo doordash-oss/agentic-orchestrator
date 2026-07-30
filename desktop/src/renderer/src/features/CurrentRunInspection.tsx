@@ -58,7 +58,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-type PreviewView = 'conversation' | 'trace';
+type PreviewView = 'conversation' | 'trace' | 'files';
 
 export interface CurrentRunInspectionProps {
   featureId: string;
@@ -135,40 +135,275 @@ export function orderRunArtifacts(artifacts: readonly RunArtifact[]): RunArtifac
   });
 }
 
-function ResourceSection({
-  title,
-  count,
-  children,
-}: {
-  title: string;
-  count: number;
-  children: ReactNode;
-}): React.ReactElement {
-  const [expanded, setExpanded] = useState(false);
-  const contentId = useId();
+/** Friendly pipeline-stage label for an artifact id; falls back to the raw id. */
+function artifactStageLabel(id: string): string {
+  const normalized = id.trim().toLowerCase();
+  switch (normalized) {
+    case 'inquire':
+      return 'Inquire';
+    case 'research':
+      return 'Research';
+    case 'design':
+      return 'Design';
+    case 'roadmap':
+      return 'Roadmap';
+    case 'plan':
+    case 'phase-plan':
+      return 'Plan';
+    default: {
+      const phasePlan = /^phase-(\d+)-plan$/.exec(normalized);
+      return phasePlan !== null ? `Phase ${Number(phasePlan[1])}` : id;
+    }
+  }
+}
 
+interface LogChannel {
+  /** Directory prefix (with trailing slash), or '' for root-level logs. */
+  channel: string;
+  logs: RunLogView[];
+}
+
+/**
+ * Logs are a stream, not a list: bucket the flat paths by their directory so
+ * hundreds of `phase-06/verification-events/*` entries collapse into one
+ * countable channel the reader can triage before drilling in.
+ */
+export function groupLogsByChannel(logs: readonly RunLogView[]): LogChannel[] {
+  const buckets = new Map<string, RunLogView[]>();
+  for (const log of logs) {
+    const slash = log.path.lastIndexOf('/');
+    const channel = slash >= 0 ? log.path.slice(0, slash + 1) : '';
+    const bucket = buckets.get(channel);
+    if (bucket === undefined) buckets.set(channel, [log]);
+    else bucket.push(log);
+  }
+  return [...buckets.entries()]
+    .map(([channel, channelLogs]) => ({ channel, logs: channelLogs }))
+    .sort((a, b) => b.logs.length - a.logs.length || a.channel.localeCompare(b.channel));
+}
+
+/** Split a channel into a dim parent path and its highlighted trailing segment. */
+function splitChannel(channel: string): { parent: string; leaf: string } {
+  const trimmed = channel.endsWith('/') ? channel.slice(0, -1) : channel;
+  if (trimmed === '') return { parent: '', leaf: '(root)' };
+  const slash = trimmed.lastIndexOf('/');
+  return slash >= 0
+    ? { parent: trimmed.slice(0, slash + 1), leaf: trimmed.slice(slash + 1) }
+    : { parent: '', leaf: trimmed };
+}
+
+interface OpenedContent {
+  kind: 'artifact' | 'log';
+  label: string;
+  value: RunTextContent;
+}
+
+/**
+ * The "Files" preview view: the artifact spine and log channels side by side,
+ * with the opened file rendered beneath. It shares the transcript's pane, so
+ * browsing files never pushes the live activity down the page.
+ */
+function FilesSurface({
+  artifacts,
+  logs,
+  logListError,
+  loadingContent,
+  content,
+  contentError,
+  onOpen,
+  onEnlarge,
+  onCloseContent,
+}: {
+  artifacts: RunArtifactsListResult['artifacts'];
+  logs: RunLogView[];
+  logListError: string | null;
+  loadingContent: boolean;
+  content: OpenedContent | null;
+  contentError: string | null;
+  onOpen(kind: 'artifact' | 'log', id: string, size?: number, label?: string): void;
+  onEnlarge(): void;
+  onCloseContent(): void;
+}): React.ReactElement {
+  const channels = logs.length === 0 ? [] : groupLogsByChannel(logs);
   return (
-    <section className="current-inspection__resource">
-      <h4>
-        <button
-          type="button"
-          className="current-inspection__resource-toggle"
-          aria-label={`${title} (${count})`}
-          aria-expanded={expanded}
-          aria-controls={contentId}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <span className="current-inspection__resource-caret" aria-hidden="true" />
-          <span>{title}</span>
-          <span className="current-inspection__resource-count">{count}</span>
-        </button>
-      </h4>
-      {expanded ? (
-        <div id={contentId} className="current-inspection__resource-content">
-          {children}
+    <div className="current-inspection__files" aria-label="Run files">
+      <div className="current-inspection__files-columns">
+        <section className="current-inspection__files-column" aria-label="Run artifacts">
+          <h4 className="current-inspection__files-heading">
+            <span>Run artifacts</span>
+            <span className="current-inspection__resource-count">{artifacts.length}</span>
+          </h4>
+          {artifacts.length === 0 ? (
+            <p className="setup-step__empty">No current-run artifacts yet.</p>
+          ) : (
+            <ol className="current-inspection__spine">
+              {artifacts.map((artifact) => (
+                <li key={artifact.id}>
+                  <button
+                    type="button"
+                    className="current-inspection__spine-node"
+                    disabled={artifact.contentAvailable === false || loadingContent}
+                    aria-label={`Open artifact ${artifact.id}`}
+                    onClick={() => onOpen('artifact', artifact.id)}
+                  >
+                    <span className="current-inspection__spine-dot" aria-hidden="true" />
+                    <span className="current-inspection__spine-stage">
+                      {artifactStageLabel(artifact.id)}
+                    </span>
+                    <span className="current-inspection__spine-meta">
+                      <span className="current-inspection__spine-id">{artifact.id}</span>
+                      {artifact.size === undefined ? null : (
+                        <span className="current-inspection__spine-size">
+                          {' · '}
+                          {formatBytes(artifact.size)}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+        <section className="current-inspection__files-column" aria-label="Bounded logs">
+          <h4 className="current-inspection__files-heading">
+            <span>Bounded logs</span>
+            <span className="current-inspection__resource-count">{logs.length}</span>
+          </h4>
+          {logs.length === 0 ? (
+            <p className="setup-step__empty">
+              {logListError === null
+                ? 'No run logs yet.'
+                : `Could not refresh run logs: ${logListError}`}
+            </p>
+          ) : (
+            <ul className="current-inspection__channels" aria-label="Available run logs">
+              {channels.map((group) => (
+                <LogChannelGroup
+                  key={group.channel}
+                  channel={group.channel}
+                  logs={group.logs}
+                  share={Math.round((group.logs.length / logs.length) * 100)}
+                  defaultExpanded={channels.length === 1}
+                  disabled={loadingContent}
+                  onOpen={(log) => onOpen('log', log.id, log.size, log.path)}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      {contentError !== null ? (
+        <p role="alert" className="form-field__error">
+          Could not open this file: {contentError}
+        </p>
+      ) : null}
+
+      {content !== null ? (
+        <div className="current-inspection__content">
+          <div className="current-inspection__content-header">
+            <span>{content.label}</span>
+            {content.kind === 'log' && content.value.offset > 0 ? <span>Latest 64 KB</span> : null}
+            {content.value.truncated ? <span>Bounded page · more content remains</span> : null}
+            {content.kind === 'artifact' ? (
+              <button
+                type="button"
+                className="live-preview__icon-button"
+                aria-label="Enlarge artifact"
+                title="Enlarge artifact"
+                onClick={onEnlarge}
+              >
+                <MaximizeIcon />
+              </button>
+            ) : null}
+            <button type="button" onClick={onCloseContent}>
+              Close
+            </button>
+          </div>
+          {content.kind === 'artifact' ? (
+            <RenderedArtifact text={content.value.text} ariaLabel="Current run artifact content" />
+          ) : (
+            <pre aria-label="Current run log content">{stripUnsafeAnsi(content.value.text)}</pre>
+          )}
         </div>
       ) : null}
-    </section>
+    </div>
+  );
+}
+
+/**
+ * One collapsible log channel: a share-metered header (count + proportion of
+ * the run's total) that expands to the individual files beneath it. A lone
+ * channel opens by default — there is nothing to triage.
+ */
+function LogChannelGroup({
+  channel,
+  logs,
+  share,
+  defaultExpanded,
+  disabled,
+  onOpen,
+}: {
+  channel: string;
+  logs: RunLogView[];
+  share: number;
+  defaultExpanded: boolean;
+  disabled: boolean;
+  onOpen(log: RunLogView): void;
+}): React.ReactElement {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const contentId = useId();
+  const { parent, leaf } = splitChannel(channel);
+  const noun = logs.length === 1 ? 'file' : 'files';
+  return (
+    <li className="current-inspection__channel">
+      <button
+        type="button"
+        className="current-inspection__channel-toggle"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        aria-label={`${parent}${leaf} channel — ${logs.length} ${noun}`}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="current-inspection__channel-caret" aria-hidden="true" />
+        <span className="current-inspection__channel-name">
+          {parent === '' ? null : (
+            <span className="current-inspection__channel-dim">{parent}</span>
+          )}
+          <span className="current-inspection__channel-leaf">{leaf}</span>
+        </span>
+        <span className="current-inspection__channel-count" aria-hidden="true">
+          {logs.length}
+        </span>
+        <span className="current-inspection__channel-meter" aria-hidden="true">
+          <span className="current-inspection__channel-fill" style={{ width: `${share}%` }} />
+        </span>
+      </button>
+      {expanded ? (
+        <ul id={contentId} className="current-inspection__channel-logs">
+          {logs.map((log) => (
+            <li key={log.id}>
+              <button
+                type="button"
+                className="current-inspection__channel-log"
+                disabled={disabled}
+                aria-label={`Open log ${log.path}`}
+                title={`${log.path} · ${formatBytes(log.size)}`}
+                onClick={() => onOpen(log)}
+              >
+                <span className="current-inspection__channel-log-name">
+                  {log.path.slice(channel.length) || log.path}
+                </span>
+                <span className="current-inspection__channel-log-size">
+                  {formatBytes(log.size)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </li>
   );
 }
 
@@ -359,6 +594,13 @@ export function CurrentRunInspection({
     shouldStream,
   ]);
 
+  // Switching runs must not leak the previous run's opened file into the new one.
+  useEffect(() => {
+    setContent(null);
+    setContentError(null);
+    setArtifactFullscreen(false);
+  }, [featureId, runNumber]);
+
   const openContent = useCallback(
     async (kind: 'artifact' | 'log', id: string, size?: number, label = id) => {
       setLoadingContent(true);
@@ -388,6 +630,23 @@ export function CurrentRunInspection({
       }
     },
     [featureId, runNumber],
+  );
+
+  const filesSurface = (
+    <FilesSurface
+      artifacts={artifacts}
+      logs={logs}
+      logListError={logListError}
+      loadingContent={loadingContent}
+      content={content}
+      contentError={contentError}
+      onOpen={(kind, id, size, label) => void openContent(kind, id, size, label)}
+      onEnlarge={() => setArtifactFullscreen(true)}
+      onCloseContent={() => {
+        setArtifactFullscreen(false);
+        setContent(null);
+      }}
+    />
   );
 
   const livePreviewFrame = (
@@ -433,6 +692,8 @@ export function CurrentRunInspection({
         </p>
       ) : initialLoading ? (
         <p className="setup-step__empty">Loading current run inspection…</p>
+      ) : view === 'files' ? (
+        filesSurface
       ) : verifying && verificationItems !== undefined ? (
         <VerificationStage items={verificationItems} />
       ) : (
@@ -540,118 +801,6 @@ export function CurrentRunInspection({
               />
             )
           ) : null}
-
-          <div className="current-inspection__archive">
-            <div className="current-inspection__resources">
-              <ResourceSection
-                key={`artifacts-${featureId}`}
-                title="Run artifacts"
-                count={artifacts.length}
-              >
-                {artifacts.length === 0 ? (
-                  <p className="setup-step__empty">No current-run artifacts yet.</p>
-                ) : (
-                  <ol className="current-inspection__artifact-list">
-                    {artifacts.map((artifact, index) => (
-                      <li key={artifact.id} className="current-inspection__artifact-item">
-                        <span className="current-inspection__artifact-index" aria-hidden="true">
-                          {String(index + 1).padStart(2, '0')}
-                        </span>
-                        <button
-                          type="button"
-                          className="current-inspection__artifact-button"
-                          disabled={artifact.contentAvailable === false || loadingContent}
-                          aria-label={`Open artifact ${artifact.id}`}
-                          onClick={() => void openContent('artifact', artifact.id)}
-                        >
-                          {artifact.id}
-                        </button>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </ResourceSection>
-              <ResourceSection key={`logs-${featureId}`} title="Bounded logs" count={logs.length}>
-                {logs.length === 0 ? (
-                  <p className="setup-step__empty">
-                    {logListError === null
-                      ? 'No run logs yet.'
-                      : `Could not refresh run logs: ${logListError}`}
-                  </p>
-                ) : (
-                  <ol className="current-inspection__artifact-list" aria-label="Available run logs">
-                    {logs.map((log, index) => (
-                      <li key={log.id} className="current-inspection__artifact-item">
-                        <span className="current-inspection__artifact-index" aria-hidden="true">
-                          {String(index + 1).padStart(2, '0')}
-                        </span>
-                        <button
-                          type="button"
-                          className="current-inspection__artifact-button"
-                          disabled={loadingContent}
-                          aria-label={`Open log ${log.path}`}
-                          title={`${log.path} · ${formatBytes(log.size)}`}
-                          onClick={() => void openContent('log', log.id, log.size, log.path)}
-                        >
-                          {log.path} · {formatBytes(log.size)}
-                        </button>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </ResourceSection>
-            </div>
-
-            {contentError !== null ? (
-              <p role="alert" className="form-field__error">
-                Could not open this file: {contentError}
-              </p>
-            ) : null}
-
-            {content !== null ? (
-              <div className="current-inspection__content">
-                <div className="current-inspection__content-header">
-                  <span>{content.label}</span>
-                  {content.kind === 'log' && content.value.offset > 0 ? (
-                    <span>Latest 64 KB</span>
-                  ) : null}
-                  {content.value.truncated ? (
-                    <span>Bounded page · more content remains</span>
-                  ) : null}
-                  {content.kind === 'artifact' ? (
-                    <button
-                      type="button"
-                      className="live-preview__icon-button"
-                      aria-label="Enlarge artifact"
-                      title="Enlarge artifact"
-                      onClick={() => setArtifactFullscreen(true)}
-                    >
-                      <MaximizeIcon />
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setArtifactFullscreen(false);
-                      setContent(null);
-                    }}
-                  >
-                    Close
-                  </button>
-                </div>
-                {content.kind === 'artifact' ? (
-                  <RenderedArtifact
-                    text={content.value.text}
-                    ariaLabel="Current run artifact content"
-                  />
-                ) : (
-                  <pre aria-label="Current run log content">
-                    {stripUnsafeAnsi(content.value.text)}
-                  </pre>
-                )}
-              </div>
-            ) : null}
-          </div>
         </>
       )}
 
@@ -678,6 +827,7 @@ export function CurrentRunInspection({
           attentionFooter={attentionFooter}
           verifying={verifying}
           verificationItems={verificationItems}
+          filesSurface={filesSurface}
         />
       ) : null}
     </section>
@@ -886,6 +1036,14 @@ function ViewToggle({
         onClick={() => onChange('trace')}
       >
         Signal trace
+      </button>
+      <button
+        type="button"
+        className="live-preview__view"
+        aria-pressed={view === 'files'}
+        onClick={() => onChange('files')}
+      >
+        Files
       </button>
     </div>
   );
@@ -1108,6 +1266,7 @@ function LivePreviewOverlay({
   attentionFooter,
   verifying,
   verificationItems,
+  filesSurface,
 }: {
   onClose(): void;
   stage: TranscriptStageModel;
@@ -1126,6 +1285,7 @@ function LivePreviewOverlay({
   attentionFooter?: ReactNode;
   verifying: boolean;
   verificationItems?: VerificationItemView[];
+  filesSurface: ReactNode;
 }): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalDismiss(dialogRef, onClose);
@@ -1165,7 +1325,9 @@ function LivePreviewOverlay({
             </button>
           </div>
         </header>
-        {verifying && verificationItems !== undefined ? (
+        {view === 'files' ? (
+          filesSurface
+        ) : verifying && verificationItems !== undefined ? (
           <VerificationStage items={verificationItems} />
         ) : (
           <TranscriptStage

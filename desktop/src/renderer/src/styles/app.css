@@ -10090,7 +10090,6 @@ body {
   background: color-mix(in srgb, var(--color-panel) 92%, var(--color-signal));
 }
 
-.current-inspection:has(.current-inspection__resource-content),
 .current-inspection:has(.current-inspection__content) {
   flex-basis: auto;
   min-height: 100%;
@@ -10123,7 +10122,6 @@ body {
 }
 
 .current-inspection__header button,
-.current-inspection__resources button,
 .current-inspection__content-header button,
 .live-preview__refresh {
   border: 1px solid var(--color-hairline);
@@ -10152,16 +10150,11 @@ body {
   gap: 2px;
 }
 
-.current-inspection__metrics dt,
-.current-inspection__resources h4 {
+.current-inspection__metrics dt {
   color: var(--color-muted);
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.current-inspection__resources [aria-label='Available run logs'] {
-  flex-basis: 100%;
 }
 
 .current-inspection__metrics dd {
@@ -10804,29 +10797,18 @@ body {
   overflow-wrap: anywhere;
 }
 
-.current-inspection__resources {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4);
-}
-
-.current-inspection__archive {
-  min-width: 0;
-  min-height: 0;
-}
-
-/* The record variant behaves like a horizontal archive desk: activity stays
- * visible on the left while the artifact ledger scrolls independently on the
- * right. Opening a long roadmap no longer stretches the whole modal. */
+/* The record variant stacks the sealed run: activity and its Files tab, then
+ * the review gate. Artifacts and logs live inside the preview's Files tab, so
+ * no separate archive column is reserved. */
 .current-inspection[data-presentation='record'] {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   grid-template-areas:
-    'header header'
-    'roadmap roadmap'
-    'preview archive'
-    'gate archive';
+    'header'
+    'roadmap'
+    'preview'
+    'gate';
   gap: 0;
   width: 100%;
   height: 100%;
@@ -10869,27 +10851,6 @@ body {
 .current-inspection[data-presentation='record'] > .review-gate {
   grid-area: gate;
   margin: 0 var(--space-4) var(--space-4);
-}
-
-.current-inspection[data-presentation='record'] > .current-inspection__archive {
-  grid-area: archive;
-  overflow: auto;
-  border-left: 1px solid var(--color-hairline);
-  padding: var(--space-4);
-  background: color-mix(in srgb, var(--color-bg) 72%, var(--color-panel));
-}
-
-.current-inspection[data-presentation='record'] .current-inspection__resources {
-  grid-template-columns: 1fr;
-  gap: var(--space-3);
-}
-
-.current-inspection[data-presentation='record'] .current-inspection__artifact-list {
-  grid-template-columns: 1fr;
-}
-
-.current-inspection[data-presentation='record'] .current-inspection__content {
-  margin-top: var(--space-4);
 }
 
 .current-inspection[data-presentation='record'] .current-inspection__artifact-markdown {
@@ -10940,44 +10901,6 @@ body {
   border-radius: var(--radius);
 }
 
-.current-inspection__resource {
-  min-width: 0;
-}
-
-.current-inspection__resource h4 {
-  margin: 0;
-}
-
-.current-inspection__resource-toggle {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: var(--space-2);
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
-
-.current-inspection__resource-toggle:hover {
-  color: var(--color-signal);
-}
-
-.current-inspection__resource-caret {
-  width: 0;
-  height: 0;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  border-left: 6px solid currentColor;
-  transition: transform 120ms ease;
-}
-
-.current-inspection__resource-toggle[aria-expanded='true'] .current-inspection__resource-caret {
-  transform: rotate(90deg);
-}
-
 .current-inspection__resource-count {
   min-width: 1.5rem;
   border: 1px solid var(--color-hairline);
@@ -10991,46 +10914,269 @@ body {
   text-align: center;
 }
 
-.current-inspection__resource-content {
-  margin-top: var(--space-2);
-}
-
-.current-inspection__artifact-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: var(--space-2);
+/* Artifacts are the run's document pipeline: a vertical spine whose order
+   carries the workflow stages (inquire → … → phase plans). */
+.current-inspection__spine {
+  position: relative;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.current-inspection__artifact-item {
-  display: grid;
-  grid-template-columns: 2.4rem minmax(0, 1fr);
-  align-items: stretch;
-  min-width: 0;
+.current-inspection__spine::before {
+  content: '';
+  position: absolute;
+  left: calc(var(--space-3) + 5px);
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  background: var(--color-hairline);
 }
 
-.current-inspection__artifact-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--color-hairline);
-  border-right: 0;
-  border-radius: var(--radius) 0 0 var(--radius);
-  background: color-mix(in srgb, var(--color-panel) 74%, var(--color-bg));
-  color: var(--color-muted);
+.current-inspection__spine-node {
+  position: relative;
+  display: grid;
+  grid-template-columns: calc(var(--space-3) + 12px) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--space-2);
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.current-inspection__spine-node:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-signal) 8%, transparent);
+}
+
+.current-inspection__spine-node:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.current-inspection__spine-dot {
+  grid-row: 1 / span 2;
+  align-self: start;
+  justify-self: start;
+  margin-top: 4px;
+  margin-left: var(--space-3);
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-hairline);
+  border-radius: 50%;
+  background: var(--color-bg);
+}
+
+.current-inspection__spine-node:hover:not(:disabled) .current-inspection__spine-dot {
+  border-color: var(--color-signal);
+}
+
+.current-inspection__spine-stage {
+  grid-column: 2;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  color: var(--color-text);
+}
+
+.current-inspection__spine-node:hover:not(:disabled) .current-inspection__spine-stage {
+  color: var(--color-signal);
+}
+
+.current-inspection__spine-meta {
+  grid-column: 2;
   font-family: var(--font-mono);
   font-size: 0.72rem;
-}
-
-.current-inspection__artifact-button {
-  min-width: 0;
+  color: var(--color-muted);
   overflow: hidden;
-  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border-radius: 0 var(--radius) var(--radius) 0 !important;
+}
+
+/* Logs are a stream, not a list: group into channels with a share-meter so a
+   count and its proportion of the run replace an unreadable numbered grid. */
+.current-inspection__channels {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.current-inspection__channel + .current-inspection__channel {
+  border-top: 1px solid var(--color-hairline);
+}
+
+.current-inspection__channel-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.current-inspection__channel-toggle:hover {
+  background: color-mix(in srgb, var(--color-signal) 8%, transparent);
+}
+
+.current-inspection__channel-caret {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid var(--color-muted);
+  transition: transform 120ms ease;
+}
+
+.current-inspection__channel-toggle[aria-expanded='true'] .current-inspection__channel-caret {
+  transform: rotate(90deg);
+}
+
+.current-inspection__channel-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.current-inspection__channel-dim {
+  color: var(--color-muted);
+}
+
+.current-inspection__channel-leaf {
+  color: var(--color-text);
+}
+
+.current-inspection__channel-count {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--color-muted);
+}
+
+.current-inspection__channel-meter {
+  grid-column: 1 / -1;
+  height: 5px;
+  margin-top: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-hairline) 60%, var(--color-bg));
+  overflow: hidden;
+}
+
+.current-inspection__channel-fill {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+  border-radius: 3px;
+  background: var(--color-signal);
+}
+
+.current-inspection__channel-logs {
+  margin: 0;
+  padding: 0 0 var(--space-2);
+  list-style: none;
+  border-top: 1px solid var(--color-hairline);
+  background: color-mix(in srgb, var(--color-panel) 60%, var(--color-bg));
+}
+
+.current-inspection__channel-log {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 5px var(--space-3) 5px calc(var(--space-3) + var(--space-4));
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.current-inspection__channel-log:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-signal) 8%, transparent);
+}
+
+.current-inspection__channel-log:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.current-inspection__channel-log-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+
+.current-inspection__channel-log-size {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .current-inspection__channel-caret {
+    transition: none;
+  }
+}
+
+/* The Files preview view shares the transcript's pane; it scrolls internally so
+   the artifact spine and log channels never grow the panel past the frame. */
+.current-inspection__files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3);
+}
+
+.current-inspection__files-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.current-inspection__files-column {
+  min-width: 0;
+}
+
+.current-inspection__files-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  color: var(--color-muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 640px) {
+  .current-inspection__files-columns {
+    grid-template-columns: 1fr;
+  }
 }
 
 .current-inspection__content {
@@ -11116,7 +11262,7 @@ body {
     text-align: center;
   }
 
-  .current-inspection__resources {
+  .current-inspection__files-columns {
     grid-template-columns: 1fr;
   }
 }
@@ -11147,12 +11293,6 @@ body {
   .current-inspection[data-presentation='record'] {
     display: flex;
     overflow: auto;
-  }
-
-  .current-inspection[data-presentation='record'] > .current-inspection__archive {
-    overflow: visible;
-    border-top: 1px solid var(--color-hairline);
-    border-left: 0;
   }
 
   .current-inspection__record-skeleton {

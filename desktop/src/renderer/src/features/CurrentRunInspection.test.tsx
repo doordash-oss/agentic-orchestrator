@@ -395,19 +395,22 @@ describe('CurrentRunInspection', () => {
     expect(await screen.findByRole('tablist', { name: 'Live agents' })).toBeVisible();
     expect(screen.queryByLabelText('Review gate')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
-    const artifactsToggle = screen.getByRole('button', { name: 'Run artifacts (6)' });
-    const logsToggle = screen.getByRole('button', { name: 'Bounded logs (1)' });
-    expect(artifactsToggle).toHaveAttribute('aria-expanded', 'false');
-    expect(logsToggle).toHaveAttribute('aria-expanded', 'false');
+    // Files live behind their own preview tab; nothing is openable until it opens.
     expect(screen.queryByRole('button', { name: /^Open artifact / })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Files' }));
 
-    await user.click(artifactsToggle);
-    expect(artifactsToggle).toHaveAttribute('aria-expanded', 'true');
     expect(
       screen
         .getAllByRole('button', { name: /^Open artifact / })
-        .map((button) => button.textContent),
-    ).toEqual(['inquire', 'research', 'design', 'phase-plan', 'phase-2-plan', 'phase-10-plan']);
+        .map((button) => button.getAttribute('aria-label')),
+    ).toEqual([
+      'Open artifact inquire',
+      'Open artifact research',
+      'Open artifact design',
+      'Open artifact phase-plan',
+      'Open artifact phase-2-plan',
+      'Open artifact phase-10-plan',
+    ]);
     await user.click(screen.getByRole('button', { name: 'Open artifact phase-plan' }));
     const artifact = await screen.findByLabelText('Current run artifact content');
     expect(artifact).toHaveTextContent('Current artifact');
@@ -423,8 +426,7 @@ describe('CurrentRunInspection', () => {
       screen.queryByRole('dialog', { name: 'Expanded artifact phase-plan' }),
     ).not.toBeInTheDocument();
 
-    await user.click(logsToggle);
-    expect(logsToggle).toHaveAttribute('aria-expanded', 'true');
+    // The lone log channel opens by default, so its file is directly reachable.
     await user.click(screen.getByRole('button', { name: 'Open log research/output.txt' }));
     expect(await screen.findByLabelText('Current run log content')).toHaveTextContent(
       'current log',
@@ -445,14 +447,65 @@ describe('CurrentRunInspection', () => {
         reviewGate={REVIEW_GATE}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Run artifacts (6)' })).toHaveAttribute(
-      'aria-expanded',
-      'false',
+    // Switching runs clears the opened file so the prior run's content can't leak.
+    expect(screen.queryByLabelText('Current run log content')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Current run artifact content')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+  });
+
+  it('groups bounded logs into channels and drills into a channel on demand', async () => {
+    const user = userEvent.setup();
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Running implementation',
+      contextPercentage: 42,
+      totalSeconds: 73,
+      totalUsd: 0.12,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+    mock.api.listRunLogs.mockResolvedValue({
+      logs: [
+        { id: 'v1', path: 'phase-06/verification-events/iter-1.jsonl', size: 2048, modifiedAt: 'x' },
+        { id: 'v2', path: 'phase-06/verification-events/iter-2.jsonl', size: 2048, modifiedAt: 'x' },
+        { id: 'v3', path: 'phase-06/verification-events/iter-3.jsonl', size: 2048, modifiedAt: 'x' },
+        { id: 'p1', path: 'phase-06/plan/attempt-1.md', size: 4096, modifiedAt: 'x' },
+      ],
+    });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Implement"
+        reviewGate={REVIEW_GATE}
+      />,
     );
-    expect(screen.getByRole('button', { name: 'Bounded logs (1)' })).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
+
+    await user.click(await screen.findByRole('button', { name: 'Files' }));
+    // The dominant channel sorts first; individual files stay collapsed while
+    // more than one channel exists, so nothing is directly openable yet.
+    const channelToggle = screen.getByRole('button', {
+      name: 'phase-06/verification-events channel — 3 files',
+    });
+    expect(channelToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(
+      screen.queryByRole('button', { name: /^Open log / }),
+    ).not.toBeInTheDocument();
+
+    await user.click(channelToggle);
+    expect(channelToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(
+      screen
+        .getAllByRole('button', { name: /^Open log / })
+        .map((button) => button.getAttribute('aria-label')),
+    ).toEqual([
+      'Open log phase-06/verification-events/iter-1.jsonl',
+      'Open log phase-06/verification-events/iter-2.jsonl',
+      'Open log phase-06/verification-events/iter-3.jsonl',
+    ]);
   });
 
   it('shows the roadmap gauge with phase, total, and iteration during implementation', async () => {
@@ -869,8 +922,7 @@ describe('CurrentRunInspection', () => {
     expect(screen.getByText('12m 40s')).toBeVisible();
     expect(screen.getByText('$12.40')).toBeVisible();
     expect(screen.getByText('glm-5p2[1.04M]')).toHaveAttribute('title', canonicalModel);
-    expect(screen.getByRole('button', { name: 'Run artifacts (0)' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Bounded logs (0)' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Files' })).toBeVisible();
 
     await act(async () => {
       resolveCatalogue?.({

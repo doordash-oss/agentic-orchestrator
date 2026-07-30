@@ -66,19 +66,26 @@ func RendererPath() (string, error) {
 }
 
 // RenderTerminalPNG converts ANSI-styled terminal text to a PNG at
-// width x height CSS pixels with the shared 14px/18px body style. It is the
+// width x height CSS pixels with the shared 13px/17px body style. It is the
 // single headless renderer for every visual-evidence capture in the repo:
 // the autoreview_screenshots-tagged TUI helper delegates to
 // RenderTerminalPNGStyled.
+//
+// The 13px font and 24px/20px padding keep a full 140-column terminal line
+// (~140 × 7.8px ≈ 1092px, plus 40px padding ≈ 1132px) comfortably inside
+// the standard 1200px-wide evidence capture, so the right-most columns of
+// header/footer/panel lines are never clipped. The width/height parameters
+// only size the screenshot viewport; the body style is identical at every
+// size.
 func RenderTerminalPNG(ansi, pngPath string, width, height int) error {
-	return RenderTerminalPNGStyled(ansi, pngPath, width, height, 14, 18)
+	return RenderTerminalPNGStyled(ansi, pngPath, width, height, 13, 17)
 }
 
 // RenderTerminalPNGStyled converts ANSI-styled terminal text to an HTML
 // page, renders it via the resolved headless Chrome/Chromium binary, and
 // saves the PNG to pngPath sized width x height CSS pixels with fontPx /
-// linePx body styling. The output uses a dark background matching the
-// terminal palette.
+// linePx body styling (padding 24px vertical, 20px horizontal at every
+// size). The output uses a dark background matching the terminal palette.
 func RenderTerminalPNGStyled(ansi, pngPath string, width, height, fontPx, linePx int) error {
 	renderer, err := RendererPath()
 	if err != nil {
@@ -86,7 +93,7 @@ func RenderTerminalPNGStyled(ansi, pngPath string, width, height, fontPx, linePx
 	}
 	html := ansiToHTML(ansi)
 	body := fmt.Sprintf("<!doctype html><html><head><meta charset='utf-8'><style>"+
-		"body{margin:0;background:#1e1e2e;padding:24px 28px;}"+
+		"body{margin:0;background:#1e1e2e;padding:24px 20px;}"+
 		"pre{font-family:'Menlo','SF Mono','Cascadia Mono',monospace;font-size:%dpx;line-height:%dpx;color:#cdd6f4;white-space:pre;}"+
 		"</style></head><body><pre>%s</pre></body></html>", fontPx, linePx, html)
 	tmp, err := os.CreateTemp("", "screenshot-*.html")

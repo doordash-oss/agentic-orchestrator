@@ -254,6 +254,72 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 	}
 }
 
+// TestClosedChildSurfacesPreservedDiffSummary pins the API contract for the
+// preserved close-time diff: a closed child surfaces `diff_summary`, while
+// open children and children closed without a captured diff omit the field.
+func TestClosedChildSurfacesPreservedDiffSummary(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	active := seedReadChildFeature(t, store, parent.ID, feature.StatusImplementing, feature.SetupStatusDone, "")
+
+	closedAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	diffSummary := "Repository: " + repoNameSelf + "\ndiff --git a/auth.go b/auth.go\n+session rotation"
+	withDiff := &feature.Feature{
+		ID: parent.ID + "-closed-diff", Name: "Closed with diff", Slug: "closed-with-diff",
+		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseImplement,
+		Created:   time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC),
+		Repos:     []feature.FeatureRepo{{Name: repoNameSelf}},
+		ActiveRun: 1, RunCount: 1,
+		Parent: &feature.ChildRelationship{
+			ParentID: parent.ID, Kind: feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+			DiffSummary: diffSummary,
+		},
+	}
+	withDiff.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusDone}})
+	if err := store.Save(withDiff); err != nil {
+		t.Fatalf("Save(withDiff) error = %v", err)
+	}
+
+	olderClosedAt := closedAt.Add(-time.Hour)
+	withoutDiff := &feature.Feature{
+		ID: parent.ID + "-closed-clean", Name: "Closed without diff", Slug: "closed-clean",
+		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseImplement,
+		Created:   time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC),
+		Repos:     []feature.FeatureRepo{{Name: repoNameSelf}},
+		ActiveRun: 1, RunCount: 1,
+		Parent: &feature.ChildRelationship{
+			ParentID: parent.ID, Kind: feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeDiscarded, ClosedAt: &olderClosedAt,
+		},
+	}
+	withoutDiff.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusDone}})
+	if err := store.Save(withoutDiff); err != nil {
+		t.Fatalf("Save(withoutDiff) error = %v", err)
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	parentSummary := getJSONMap(t, handler, apiPathFeatures)["features"].([]any)[0].(map[string]any)
+
+	if got := parentSummary["active_child"].(map[string]any)["diff_summary"]; got != nil {
+		t.Fatalf("active child diff_summary = %#v, want omitted", got)
+	}
+	history := parentSummary["child_history"].([]any)
+	seen := map[string]map[string]any{}
+	for _, raw := range history {
+		item := raw.(map[string]any)
+		seen[item["id"].(string)] = item
+	}
+	if got := seen[withDiff.ID]["diff_summary"]; got != diffSummary {
+		t.Fatalf("closed child diff_summary = %#v, want preserved summary", got)
+	}
+	if got, ok := seen[withoutDiff.ID]["diff_summary"]; ok {
+		t.Fatalf("no-diff closed child diff_summary = %#v, want omitted", got)
+	}
+	_ = active
+}
+
 func TestParentDeleteRemainsEnabledDuringActiveRelationship(t *testing.T) {
 	t.Parallel()
 

@@ -1,6 +1,6 @@
 # Agentic Orchestrator Keybinding Reference
 
-_Auto-generated on 2026-07-29. Do not edit manually._
+_Auto-generated on 2026-07-30. Do not edit manually._
 
 _Run `go generate ./internal/tui/...` to regenerate._
 
@@ -9,7 +9,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | Key | Action |
 |-----|--------|
 | `n` | New feature (launch wizard) |
-| `enter` | Focus right panel / expand |
+| `enter` | Focus right panel / expand section or Refactor History |
 | `a` | Watch active work; Answer, Approve, or Review when prompted |
 | `Shift+R` | Resume all interrupted features |
 | `Shift+F` | Start refactor (eligible terminal feature) |
@@ -21,7 +21,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `y` | Approve pending permissions |
 | `Shift+A` | Approve & remember permissions |
 | `Shift+E` | Edit workspace config |
-| `d` | Delete feature |
+| `d` | Delete feature / discard active refactor child |
 
 ## Feature Detail
 
@@ -37,6 +37,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `ctrl+r` | Rewind to phase |
 | `l` | Live Preview / View logs |
 | `v` | View diff |
+| `l / v` | Closed child (Refactor History): logs / preserved diff, read-only |
 | `p` | Publish (when code ready) |
 | `b` | Rebase on main (code ready or published) |
 | `e` | Edit config |
@@ -46,7 +47,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `Shift+D` | Mark as done |
 | `g` | Review comments (published) |
 | `c` | Clean worktree |
-| `d` | Delete feature |
+| `d` | Delete feature / discard active refactor child |
 | `esc` | Back to dashboard |
 
 ## General

@@ -29,6 +29,24 @@ const (
 	SseAccessTokenScopes sSEAccessTokenContextKey = "sseAccessToken.Scopes"
 )
 
+// Defines values for ActionImpactPreviewKind.
+const (
+	ChildDiscard        ActionImpactPreviewKind = "child_discard"
+	ParentCascadeDelete ActionImpactPreviewKind = "parent_cascade_delete"
+)
+
+// Valid indicates whether the value is a known member of the ActionImpactPreviewKind enum.
+func (e ActionImpactPreviewKind) Valid() bool {
+	switch e {
+	case ChildDiscard:
+		return true
+	case ParentCascadeDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AutomaticReviewStateMode.
 const (
 	AutomaticReviewStateModeDefault  AutomaticReviewStateMode = "default"
@@ -655,6 +673,7 @@ type Action struct {
 	DisabledReasons []ActionDisabledReason `json:"disabled_reasons,omitempty"`
 	Enabled         bool                   `json:"enabled"`
 	ID              string                 `json:"id"`
+	ImpactPreview   *ActionImpactPreview   `json:"impact_preview,omitempty"`
 	RequiredInputs  []ActionInput          `json:"required_inputs"`
 	Scope           ActionScope            `json:"scope"`
 }
@@ -669,6 +688,34 @@ type ActionDisabledReason struct {
 
 	// Target Optional machine-readable context for the disable reason. The `dirty_parent` reason on the Refactor action carries per-repository dirty-worktree diagnostics under `target.repos` using the same shape as the `parent_worktrees_dirty` mutation error target.
 	Target map[string]interface{} `json:"target,omitempty"`
+}
+
+// ActionImpactCategory defines model for ActionImpactCategory.
+type ActionImpactCategory struct {
+	// Items Human-readable entries in this impact category; empty when the category has no projected impact (clients render None). Absent impact is an explicitly empty items array rather than an omitted category.
+	Items []string `json:"items"`
+	Key   string   `json:"key"`
+	Label string   `json:"label"`
+}
+
+// ActionImpactPreview defines model for ActionImpactPreview.
+type ActionImpactPreview struct {
+	// Categories Fixed, always-complete impact breakdown for the kind. Absent categories are explicitly empty entries (an entry with an empty items array) rather than omitted, so the confirmation never implies hidden impact. child_discard uses sessions, worktrees, branches, knowledge; parent_cascade_delete uses children, sessions, worktrees, branches, history, knowledge.
+	Categories []ActionImpactCategory  `json:"categories"`
+	Kind       ActionImpactPreviewKind `json:"kind"`
+
+	// Retained Statements of what the action deliberately keeps (the paired Review configuration and the immutable closed-child history record for child_discard). Empty for parent_cascade_delete.
+	Retained []string            `json:"retained"`
+	Subject  ActionImpactSubject `json:"subject"`
+}
+
+// ActionImpactPreviewKind defines model for ActionImpactPreview.Kind.
+type ActionImpactPreviewKind string
+
+// ActionImpactSubject defines model for ActionImpactSubject.
+type ActionImpactSubject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // ActionInput defines model for ActionInput.
@@ -1437,6 +1484,9 @@ type RelationshipChild struct {
 	CleanupWarnings []RelationshipCleanupWarning `json:"cleanup_warnings"`
 	ClosedAt        *time.Time                   `json:"closed_at,omitempty"`
 	Cost            Cost                         `json:"cost"`
+
+	// DiffSummary Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Empty when no diff was preserved.
+	DiffSummary string `json:"diff_summary,omitempty"`
 
 	// DisplayState Human-readable relationship state. Closed children use exactly "Closed — Completed" or "Closed — Discarded".
 	DisplayState string `json:"display_state"`

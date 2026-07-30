@@ -112,6 +112,15 @@ func LoadOverlayProvenance(overlayDir string) (*OverlayProvenance, error) {
 	return &prov, nil
 }
 
+// ParentOverlayExists reports whether a durable promoted overlay exists for
+// the parent repository. The overlay namespace is reserved speculatively by
+// cascade manifests, so only provenance stamped by a completed promotion
+// proves an overlay is real.
+func ParentOverlayExists(stateDir, parentID, repoName string) bool {
+	prov, err := LoadOverlayProvenance(ParentOverlayPath(stateDir, parentID, repoName))
+	return err == nil && prov != nil
+}
+
 // SaveOverlayProvenance atomically writes overlay provenance to disk.
 func SaveOverlayProvenance(overlayDir string, prov *OverlayProvenance) error {
 	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
@@ -259,8 +268,8 @@ type PromotionPhase string
 
 const (
 	PromotionPhasePending   PromotionPhase = "pending"
-	PromotionPhasePromoting  PromotionPhase = "promoting"
-	PromotionPhasePromoted   PromotionPhase = "promoted"
+	PromotionPhasePromoting PromotionPhase = "promoting"
+	PromotionPhasePromoted  PromotionPhase = "promoted"
 )
 
 // PromotionEntry is the per-repository entry in the promotion journal.

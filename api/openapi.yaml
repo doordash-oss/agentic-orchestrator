@@ -2305,6 +2305,12 @@ components:
         last_error:
           type: string
           description: Setup failure message when the child's setup failed.
+        diff_summary:
+          type: string
+          description: >-
+            Preserved read-only diff summary captured at close time, before
+            the child's disposable worktrees and ephemeral branches were
+            removed. Empty when no diff was preserved.
     FeatureSummary:
       type: object
       required:
@@ -2580,6 +2586,59 @@ components:
             shape as the `parent_worktrees_dirty` mutation error target.
           type: object
           additionalProperties: true
+    ActionImpactSubject:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    ActionImpactCategory:
+      type: object
+      required: [key, label, items]
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        items:
+          description: >-
+            Human-readable entries in this impact category; empty when the
+            category has no projected impact (clients render None). Absent
+            impact is an explicitly empty items array rather than an omitted
+            category.
+          type: array
+          items:
+            type: string
+    ActionImpactPreview:
+      type: object
+      required: [kind, subject, categories, retained]
+      properties:
+        kind:
+          type: string
+          enum: [child_discard, parent_cascade_delete]
+        subject:
+          $ref: "#/components/schemas/ActionImpactSubject"
+        categories:
+          description: >-
+            Fixed, always-complete impact breakdown for the kind. Absent
+            categories are explicitly empty entries (an entry with an empty
+            items array) rather than omitted, so the confirmation never
+            implies hidden impact. child_discard uses sessions, worktrees,
+            branches, knowledge; parent_cascade_delete uses children,
+            sessions, worktrees, branches, history, knowledge.
+          type: array
+          items:
+            $ref: "#/components/schemas/ActionImpactCategory"
+        retained:
+          description: >-
+            Statements of what the action deliberately keeps (the paired
+            Review configuration and the immutable closed-child history
+            record for child_discard). Empty for parent_cascade_delete.
+          type: array
+          items:
+            type: string
     Action:
       type: object
       required: [id, enabled, scope, required_inputs]
@@ -2598,6 +2657,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ActionDisabledReason"
+        impact_preview:
+          $ref: "#/components/schemas/ActionImpactPreview"
+          x-go-type-skip-optional-pointer: false
     FeatureDetail:
       allOf:
         - $ref: "#/components/schemas/FeatureSummary"

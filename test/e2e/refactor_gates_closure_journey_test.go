@@ -423,14 +423,14 @@ func TestRefactorChildClosureSelectsParentAcrossReorder(t *testing.T) {
 			got, parent.ID, other.ID)
 	}
 	view := ansi.Strip(h.View())
-	if strings.Contains(view, "↳") {
-		t.Fatalf("dashboard still nests the closed child:\n%s", view)
+	if !strings.Contains(view, "Refactor History (1)") {
+		t.Fatalf("closed child not nested in the collapsed history group:\n%s", view)
 	}
 	if strings.Contains(view, "closure-child") {
-		t.Fatalf("dashboard still lists the closed child:\n%s", view)
+		t.Fatalf("dashboard still lists the closed child outside history:\n%s", view)
 	}
 	if strings.Contains(view, "Refactoring") {
 		t.Fatalf("parent still displays Refactoring after the relationship refresh closed the child:\n%s", view)
 	}
-	t.Logf("ordered closure refresh removed the child row and fell back to the parent across the reorder")
+	t.Logf("ordered closure refresh moved the child into the collapsed history group and fell back to the parent across the reorder")
 }

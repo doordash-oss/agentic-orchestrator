@@ -52,6 +52,12 @@ func (m APIAppModel) SelectedFeatureID() string {
 }
 
 // StatusMessage is the dashboard status line the live app would show.
+// FeatureListSummaries exposes the cached top-level list snapshot for
+// journey/test probes asserting the consumed relationship projection.
+func (m APIAppModel) FeatureListSummaries() []server.FeatureSummary {
+	return append([]server.FeatureSummary(nil), m.featureList.Features...)
+}
+
 func (m APIAppModel) StatusMessage() string {
 	return m.statusMessage
 }

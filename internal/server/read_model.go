@@ -106,6 +106,7 @@ func revisionForAny(v any) string {
 
 func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, error) {
 	var activeRelationshipChild *feature.Feature
+	var relationshipChildren *feature.RelationshipChildren
 	active := runSummaryDTO(f.Run(), f)
 	historyRunNumbers := boundedHistoricalRunNumbers(f.ActiveRun, f.RunCount, maxFeatureDetailHistoricalRuns)
 	history := make([]RunSummaryDTO, 0, len(historyRunNumbers))
@@ -176,6 +177,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 		if err != nil {
 			return FeatureDetailDTO{}, err
 		}
+		relationshipChildren = children
 		detail.ActiveChild = relationshipChildDTO(children.Active)
 		detail.ChildHistory = relationshipChildDTOs(children.Closed)
 		activeRelationshipChild = children.Active
@@ -212,6 +214,13 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
 	}
 	detail.Actions = actionCatalogDTOsWithChildGuard(f, detail.ActiveChild != nil)
+	// Destructive actions carry a server-authoritative impact preview so
+	// confirmations enumerate the exact relationship and resources at stake.
+	if f.IsChild() {
+		attachImpactPreview(detail.Actions, actionDiscard, h.childDiscardImpactPreview(f))
+	} else {
+		attachImpactPreview(detail.Actions, actionDelete, h.parentCascadeDeleteImpactPreview(f, relationshipChildren))
+	}
 	if childHasIntegrationAttention(activeRelationshipChild) {
 		appendDisabledReason(detail.Actions, ActionDisabledReasonDTO{
 			Code:    "integration_attention",
@@ -452,6 +461,7 @@ func relationshipChildDTO(child *feature.Feature) *RelationshipChild {
 	if child.Parent.CloseOutcome != "" {
 		dto.Outcome = RelationshipChildOutcome(child.Parent.CloseOutcome)
 		dto.ClosedAt = child.Parent.ClosedAt
+		dto.DiffSummary = child.Parent.DiffSummary
 		dto.RelationshipState = child.Parent.CloseOutcome
 		switch child.Parent.CloseOutcome {
 		case feature.ChildCloseOutcomeCompleted:

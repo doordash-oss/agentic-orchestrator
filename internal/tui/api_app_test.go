@@ -7364,8 +7364,8 @@ func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 	if len(client.deleteFeatureIDs) != 0 {
 		t.Fatalf("DeleteFeature calls = %v, want none for disabled action", client.deleteFeatureIDs)
 	}
-	if view := stripANSI(updated.View().Content); !strings.Contains(view, "Delete is unavailable") {
-		t.Fatalf("View() missing disabled-action status in:\n%s", view)
+	if view := stripANSI(updated.View().Content); !strings.Contains(view, "Delete — delete is disabled while work is running") {
+		t.Fatalf("View() missing typed disabled-action reason in:\n%s", view)
 	}
 }
 

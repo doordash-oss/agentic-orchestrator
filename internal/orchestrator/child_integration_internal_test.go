@@ -21,6 +21,7 @@ package orchestrator
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 type childIntegrationFixture struct {
@@ -190,6 +192,51 @@ func execCommandGit(dir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// TestCaptureChildDiffSummaryConcatenatesPerRepo proves the preserved diff
+// anchors at each repo's launch base SHA, prefixes a per-repo header, and
+// skips repos whose diff fails or is empty without failing the capture.
+func TestCaptureChildDiffSummaryConcatenatesPerRepo(t *testing.T) {
+	t.Parallel()
+	pub := mocks.NewMockPublisher()
+	pub.DiffSummaryFn = func(path, base string) (string, error) {
+		switch path {
+		case "/wt/repo-a":
+			if base != "base-sha-a" {
+				return "", fmt.Errorf("repo-a diff base = %q, want base-sha-a", base)
+			}
+			return "diff --git a/a b/a\n+one", nil
+		case "/wt/repo-b":
+			return "", errors.New("worktree gone")
+		default:
+			return "", fmt.Errorf("unexpected worktree %q", path)
+		}
+	}
+	o := New(Deps{Publisher: pub, Store: feature.NewStore(t.TempDir())}, Hooks{})
+
+	child := &feature.Feature{
+		ID: "child-diff-capture",
+		Repos: []feature.FeatureRepo{
+			{Name: "repo-a", Path: "/repos/repo-a", WorktreePath: "/wt/repo-a"},
+			{Name: "repo-b", Path: "/repos/repo-b", WorktreePath: "/wt/repo-b"},
+			{Name: "repo-c", Path: "/repos/repo-c", WorktreePath: "/wt/repo-c"},
+		},
+		Parent: &feature.ChildRelationship{
+			ParentID: "parent",
+			Kind:     feature.ChildKindRefactor,
+			Bases: []feature.ChildRepoBase{
+				{Repo: "repo-a", SHA: "base-sha-a", ParentBranch: "main"},
+				{Repo: "repo-b", SHA: "base-sha-b", ParentBranch: "main"},
+			},
+		},
+	}
+
+	got := o.captureChildDiffSummary(child)
+	want := "Repository: repo-a\ndiff --git a/a b/a\n+one\n"
+	if got != want {
+		t.Fatalf("captureChildDiffSummary = %q, want %q", got, want)
+	}
+}
+
 // TestChildIntegrationHappyPath proves the full boundary: remaining child
 // work is committed, the child head is recorded before the parent moves, a
 // two-parent no-fast-forward merge lands on the recorded parent branch, the
@@ -241,6 +288,13 @@ func TestChildIntegrationHappyPath(t *testing.T) {
 	}
 	if tx.Entries[0].CleanupWarning != "" {
 		t.Fatalf("unexpected cleanup warning: %q", tx.Entries[0].CleanupWarning)
+	}
+
+	// The child's diff was captured before cleanup removed the disposable
+	// worktree, so the preserved read-only summary survives closure.
+	if !strings.Contains(child.Parent.DiffSummary, "Repository: repoA") ||
+		!strings.Contains(child.Parent.DiffSummary, "child.txt") {
+		t.Fatalf("preserved diff summary = %q, want repo header and child change", child.Parent.DiffSummary)
 	}
 
 	// Manual-publish parent stays CodeReady; the child never published.

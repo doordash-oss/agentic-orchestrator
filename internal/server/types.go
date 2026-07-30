@@ -126,6 +126,12 @@ type ActionInputDTO = ActionInput
 
 type ActionDisabledReasonDTO = ActionDisabledReason
 
+type ActionImpactPreviewDTO = ActionImpactPreview
+
+type ActionImpactCategoryDTO = ActionImpactCategory
+
+type ActionImpactSubjectDTO = ActionImpactSubject
+
 type RunSummaryDTO = RunSummary
 
 type SetupDTO = Setup

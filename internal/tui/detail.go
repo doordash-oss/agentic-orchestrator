@@ -375,8 +375,40 @@ func (m DetailModel) ViewCompact(width int) string {
 
 	attention := computeFeatureAttention(f, nil)
 	if detailShowsInputAttention(attention) {
-		b.WriteString(WarningStyle.Render("\u26a0 waiting for input"))
+		b.WriteString(WarningStyle.Render("⚠ waiting for input"))
 		b.WriteString("\n")
+	}
+
+	// Closed-child banner — settled refactor children render their full
+	// detail data but are unmistakably read-only history. It leads the detail
+	// surface so it survives compact-height clipping of the lower boxes.
+	if label, outcome := closedChildBannerContent(f); label != "" {
+		closedStyle := SubtextStyle
+		borderColor := colorSubtext
+		if outcome == feature.ChildCloseOutcomeDiscarded {
+			closedStyle = WarningStyle
+			borderColor = colorWarning
+		}
+		banner := closedStyle.Render("  " + label + " — immutable refactor history, inspection only.")
+		closedBox := panelStyle(false).
+			BorderForeground(borderColor).
+			Width(width - 4).
+			Render(banner)
+		closedBox = renderBorderTitle(closedBox, "Read only", closedStyle)
+		b.WriteString(closedBox)
+		b.WriteString("\n")
+	}
+
+	// Cleanup warnings surfaced by closure (non-fatal worktree/branch
+	// cleanup failures) sit directly under the read-only banner; the section
+	// is omitted entirely when closure completed cleanly.
+	if warnings := closedChildCleanupWarnings(f); len(warnings) > 0 {
+		b.WriteString(SubtextStyle.Render("Cleanup warnings:"))
+		b.WriteString("\n")
+		for _, warning := range warnings {
+			b.WriteString(WarningStyle.Render("  " + warning))
+			b.WriteString("\n")
+		}
 	}
 
 	// Metadata
@@ -405,8 +437,13 @@ func (m DetailModel) ViewCompact(width int) string {
 		b.WriteString("\n")
 	}
 
-	if hint := renderLightbulbHint(f, width-4); hint != "" {
-		b.WriteString(hint + "\n")
+	// Rewind & Upgrade is a mutation: settled refactor children render their
+	// detail strictly for read-only inspection, so the pipeline-upgrade panel
+	// is suppressed even though its copy invites a rewind.
+	if _, outcome := closedChildBannerContent(f); outcome == "" {
+		if hint := renderLightbulbHint(f, width-4); hint != "" {
+			b.WriteString(hint + "\n")
+		}
 	}
 
 	// Needs-review banner — prominent call-to-action when an artifact awaits review.
@@ -794,6 +831,44 @@ func renderDetailInputAttentionBox(att featureAttention, boxWidth int) string {
 	}
 	contentWidth := max(boxWidth-4, 1)
 	return livePreviewAttentionSectionBox(att, att.ActivityLine(), boxWidth, contentWidth)
+}
+
+// closedChildBannerContent returns the read-only banner label for a settled
+// refactor child ("Closed — Completed" or "Closed — Discarded", matching the
+// server's DisplayState vocabulary) and the raw outcome. Empty for anything
+// other than a closed child.
+func closedChildBannerContent(f *feature.Feature) (label, outcome string) {
+	if f == nil || f.Parent == nil || f.Parent.CloseOutcome == "" {
+		return "", ""
+	}
+	switch f.Parent.CloseOutcome {
+	case feature.ChildCloseOutcomeCompleted:
+		return "Closed — Completed", feature.ChildCloseOutcomeCompleted
+	case feature.ChildCloseOutcomeDiscarded:
+		return "Closed — Discarded", feature.ChildCloseOutcomeDiscarded
+	}
+	return "", ""
+}
+
+// closedChildCleanupWarnings extracts the non-fatal cleanup warnings a
+// settled child recorded in its transaction journal, formatted with the repo
+// name when known. Empty for anything other than a closed child.
+func closedChildCleanupWarnings(f *feature.Feature) []string {
+	if f == nil || f.Parent == nil || f.Parent.CloseOutcome == "" || f.Parent.Transaction == nil {
+		return nil
+	}
+	var warnings []string
+	for _, entry := range f.Parent.Transaction.Entries {
+		if entry.CleanupWarning == "" {
+			continue
+		}
+		if entry.Repo != "" {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", entry.Repo, entry.CleanupWarning))
+		} else {
+			warnings = append(warnings, entry.CleanupWarning)
+		}
+	}
+	return warnings
 }
 
 // needsReviewBanner returns a prominent banner describing the pending review

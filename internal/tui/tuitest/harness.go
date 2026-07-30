@@ -145,6 +145,24 @@ func (h *AppHarness) RefreshRelationship(parentID, childID string) {
 	h.pumpCmd(h.model.RefreshCmd(RelationshipSignal(parentID, childID)))
 }
 
+// RefreshRelationshipDeleted synchronously runs the refresh the
+// relationship_deleted SSE frame triggers: a list re-pull plus the ordered
+// eviction of both relationship records, without expected-to-fail detail
+// reads.
+func (h *AppHarness) RefreshRelationshipDeleted(parentID, childID string) {
+	resource := server.ResourceDTO{
+		Type:                "relationship",
+		ID:                  parentID + ":" + childID,
+		ParentID:            parentID,
+		ChildID:             childID,
+		RelationshipDeleted: true,
+	}
+	h.pumpCmd(h.model.RefreshCmd(server.RefreshSignal{
+		Event:    server.SSEEventDTO{Kind: "lifecycle.updated", Resource: resource},
+		Resource: resource,
+	}))
+}
+
 // Refresh synchronously runs the same refresh the SSE "connected" resync
 // signal triggers — a full snapshot re-pull — and additionally re-fetches
 // the detail snapshots of the selected feature and its relationship partner
@@ -224,6 +242,13 @@ func (h *AppHarness) ReviewMenuLabels() []string {
 // StatusMessage is the dashboard status line the live app would show.
 func (h *AppHarness) StatusMessage() string {
 	return h.model.StatusMessage()
+}
+
+// FeatureListSummaries exposes the model's cached top-level feature list
+// snapshot so journey tests can assert the relationship projection the
+// dashboard actually consumed.
+func (h *AppHarness) FeatureListSummaries() []server.FeatureSummary {
+	return h.model.FeatureListSummaries()
 }
 
 // Close releases the model's event subscription.

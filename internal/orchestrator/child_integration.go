@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -437,6 +438,10 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		return fmt.Errorf("reload child: %w", err)
 	}
 
+	// Preserve the child's diff before any cleanup removes the disposable
+	// worktrees. Best-effort: capture failures never block the closure tail.
+	o.preserveChildDiffSummary(childID)
+
 	// Promote child KB workspaces to parent overlays before cleanup. The
 	// promotion is a post-close operation: a completed child never reopens.
 	// If promotion fails, the workspace is preserved and promotion remains
@@ -587,4 +592,70 @@ func (o *Orchestrator) childHeadSHA(worktreePath string) (string, error) {
 		return "", fmt.Errorf("child integration: exact head capture is not configured")
 	}
 	return reader.CurrentHeadSHA(worktreePath)
+}
+
+// closedChildDiffSetter is the store capability that persists the preserved
+// diff summary on an already-closed child.
+type closedChildDiffSetter interface {
+	SetClosedChildDiffSummary(childID, summary string) error
+}
+
+// preserveChildDiffSummary best-effort captures and records the closed child's
+// per-repository diff before cleanup removes the disposable worktrees. It
+// never fails the closure: missing capabilities, empty diffs, or store errors
+// simply leave the recorded summary empty.
+func (o *Orchestrator) preserveChildDiffSummary(childID string) {
+	setter, ok := o.deps.Store.(closedChildDiffSetter)
+	if !ok {
+		return
+	}
+	child, err := o.deps.Lifecycle.Get(childID)
+	if err != nil || child == nil || child.Parent == nil {
+		return
+	}
+	if child.Parent.DiffSummary != "" {
+		return
+	}
+	summary := o.captureChildDiffSummary(child)
+	if summary == "" {
+		return
+	}
+	_ = setter.SetClosedChildDiffSummary(childID, summary)
+}
+
+// captureChildDiffSummary computes the child's preserved diff per repository
+// using the same diff semantics as the publish preview. The launch-time base
+// SHA anchors the diff so a completed merge does not make the child's own
+// changes appear empty; multi-repo children concatenate one header-prefixed
+// section per repository. Repos whose diff is empty or fails contribute
+// nothing.
+func (o *Orchestrator) captureChildDiffSummary(child *feature.Feature) string {
+	if o.deps.Publisher == nil {
+		return ""
+	}
+	bases := make(map[string]string, len(child.Parent.Bases))
+	for _, b := range child.Parent.Bases {
+		if b.SHA != "" {
+			bases[b.Repo] = b.SHA
+		} else if b.ParentBranch != "" {
+			bases[b.Repo] = b.ParentBranch
+		}
+	}
+	var sb strings.Builder
+	for i := range child.Repos {
+		repo := &child.Repos[i]
+		worktree := repo.WorktreePath
+		if worktree == "" {
+			worktree = repo.Path
+		}
+		if worktree == "" {
+			continue
+		}
+		summary, err := o.deps.Publisher.DiffSummary(worktree, bases[repo.Name])
+		if err != nil || strings.TrimSpace(summary) == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, "Repository: %s\n%s\n", repo.Name, summary)
+	}
+	return sb.String()
 }

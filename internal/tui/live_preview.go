@@ -67,6 +67,11 @@ func isLivePreviewEligible(f *feature.Feature) bool {
 	if f == nil {
 		return false
 	}
+	// A settled child is immutable history: its stored status stays
+	// unchanged by closure, so it must never surface a live preview.
+	if f.IsChild() && f.Parent != nil && f.Parent.CloseOutcome != "" {
+		return false
+	}
 	if f.Status.IsNeedsReview() {
 		return false
 	}

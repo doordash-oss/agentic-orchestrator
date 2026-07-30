@@ -207,6 +207,30 @@ func (s *Store) CloseChild(childID, outcome string, closedAt time.Time) error {
 	return s.saveUnlocked(child)
 }
 
+// SetClosedChildDiffSummary records the best-effort preserved diff summary of
+// a closed child for post-close inspection. It no-ops when the feature is not
+// a closed child (the close write owns ordering) or the summary is unchanged.
+func (s *Store) SetClosedChildDiffSummary(childID, summary string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if summary == "" {
+		return nil
+	}
+	child, err := s.loadUnlocked(childID)
+	if err != nil {
+		return err
+	}
+	if !child.IsChild() || child.IsActiveChild() {
+		return nil
+	}
+	if child.Parent.DiffSummary == summary {
+		return nil
+	}
+	child.Parent.DiffSummary = summary
+	return s.saveUnlocked(child)
+}
+
 func (s *Store) relationshipChildrenUnlocked(parentID string) (*RelationshipChildren, error) {
 	result, err := s.validatedRelationshipChildrenUnlocked(parentID)
 	if err != nil {

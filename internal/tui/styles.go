@@ -60,6 +60,9 @@ var (
 	ReviewStyle   = lipgloss.NewStyle().Foreground(colorBrand)
 	BadgeStyle    = lipgloss.NewStyle().Bold(true).Foreground(colorPeach)
 	MutedStyle    = lipgloss.NewStyle().Foreground(colorOverlay)
+	// SubtextStyle is for secondary text that is still required reading:
+	// more contrast than the muted overlay token without full emphasis.
+	SubtextStyle = lipgloss.NewStyle().Foreground(colorSubtext)
 	// automaticReviewStatusStyle keeps approval provenance quieter than Bash
 	// activity without assigning required user-facing information to muted
 	// chrome's lower-contrast color.

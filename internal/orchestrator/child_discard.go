@@ -178,6 +178,9 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 		if err != nil {
 			return fmt.Errorf("reload child for cleanup: %w", err)
 		}
+		// Preserve the child's diff before cleanup removes the disposable
+		// worktrees. Best-effort: capture failures never block the discard.
+		o.preserveChildDiffSummary(childID)
 		warnings := o.cleanupChildResourcesPerRepo(child)
 
 		// Remove disposable KB workspaces for discarded children. Discarded

@@ -15,8 +15,6 @@
 package e2e
 
 import (
-	"fmt"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,15 +23,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
-	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/server"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
-	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui/tuitest"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -55,33 +46,12 @@ func TestRefactorActiveTUIJourney(t *testing.T) {
 		t.Skip("journey boots real-git setup and scripted provider subprocesses")
 	}
 
-	tmp := t.TempDir()
-	stateDir := filepath.Join(tmp, "state")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		t.Fatalf("mkdir state: %v", err)
-	}
-	wtBaseDir := filepath.Join(tmp, "worktrees")
-
 	// Two parent repositories so the dirty-worktree remediation panel lists
-	// both entries with their staged/unstaged/untracked tallies.
-	repoDirs := map[string]string{}
-	for _, repo := range []string{"repoA", "repoB"} {
-		dir := testutil.InitGitRepo(t)
-		testutil.InitBareRemote(t, dir)
-		journeyGit(t, dir, "checkout", "-b", "feature/tui-journey-parent")
-		writeJourneyFile(t, dir, "base.txt", "v1\n")
-		journeyGit(t, dir, "add", "base.txt")
-		journeyGit(t, dir, "commit", "-m", repo+" base commit")
-		journeyGit(t, dir, "push", "-u", "origin", "feature/tui-journey-parent")
-		repoDirs[repo] = dir
-	}
-
-	store := feature.NewStore(stateDir)
-	publishable := true
-	// The parent deliberately carries non-default Review axes (models,
-	// effort, inquiry behavior, risk, exit criteria, gates) so the journey
-	// can prove the refactor wizard seeds Review from the parent and keeps
-	// those values intact when the child pipeline cursor moves.
+	// both entries with their staged/unstaged/untracked tallies. The parent
+	// deliberately carries non-default Review axes (models, effort, inquiry
+	// behavior, risk, exit criteria, gates) so the journey can prove the
+	// refactor wizard seeds Review from the parent and keeps those values
+	// intact when the child pipeline cursor moves.
 	parentModels := config.ModelConfig{
 		Inquiry:        "opus[200K]",
 		Research:       "opus[200K]",
@@ -103,132 +73,26 @@ func TestRefactorActiveTUIJourney(t *testing.T) {
 		PhasePlanReview: true,
 		ManualPublish:   false,
 	}
-	parent := &feature.Feature{
-		ID:            "tui-journey-parent",
-		Name:          "TUI Journey Parent",
-		Slug:          "tui-journey-parent",
-		Status:        feature.StatusPublished,
-		CurrentPhase:  feature.PhasePublish,
-		Created:       time.Now().UTC().Truncate(time.Second),
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Models:        parentModels,
-		Effort:        parentEffort,
-		Inquireness:   feature.InquirenessNone,
-		RiskLevel:     feature.RiskHigh,
-		ExitCriteria:  "refresh the journey without losing parent context",
-		Checkpoints:   parentCheckpoints,
-		Repos: []feature.FeatureRepo{
-			{
-				Name:         "repoA",
-				Path:         repoDirs["repoA"],
-				WorktreePath: repoDirs["repoA"],
-				Branch:       "feature/tui-journey-parent",
-				BaseBranch:   "main",
-				Publishable:  &publishable,
-			},
-			{
-				Name:         "repoB",
-				Path:         repoDirs["repoB"],
-				WorktreePath: repoDirs["repoB"],
-				Branch:       "feature/tui-journey-parent",
-				BaseBranch:   "main",
-				Publishable:  &publishable,
-			},
-		},
-		RepoStates: map[string]*feature.RepoState{
-			"repoA": {Touched: true},
-			"repoB": {Touched: true},
-		},
-	}
-	if err := store.Save(parent); err != nil {
-		t.Fatalf("Save(parent) error = %v", err)
-	}
-
-	wm := git.NewWorktreeManager(wtBaseDir)
-	mgr := feature.NewManager(store, config.NewDefault())
-	mgr.Worktrees = wm
-	mgr.Cleanliness = journeyCleanliness(wm)
-
-	serverEvents := make(chan interface{}, 512)
-	stopForwarding := make(chan struct{})
-	defer close(stopForwarding)
-
-	sm := session.NewManager(serverEvents)
-	t.Cleanup(sm.Shutdown)
-	pr := journeyChildPhaseRunner(t, sm, store, stateDir)
-
-	// Wrap phase-plan sessions so the test can hold a planning run open
-	// while a lock file exists. This gives the restart/stop/resume segment
-	// a deterministic running-phase window instead of racing the instant
-	// scripted completion.
-	blockFile := filepath.Join(tmp, "block-phase-plan")
-	scriptsDir := t.TempDir()
-	baseBuild := pr.BuildSessionFn
-	pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-		args, env, sessOpts, err := baseBuild(opts)
-		if err != nil || opts.MarkerPath == "" || strings.Contains(opts.MarkerPath, "roadmap") {
-			return args, env, sessOpts, err
-		}
-		wrapper := testutil.WriteScript(t, scriptsDir, filepath.Base(args[1])+"-blocked.sh",
-			fmt.Sprintf("while [ -f %q ]; do sleep 0.1; done\nexec bash %q\n", blockFile, args[1]))
-		return []string{"bash", wrapper}, env, sessOpts, err
-	}
-
-	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   mgr,
-		Store:       store,
-		Sessions:    sm,
-		Recovery:    session.NewRecoveryAdapter(stateDir, mgr),
-		Publisher:   &git.PublishAdapter{},
-		Worktrees:   wm,
-		PhaseRunner: pr,
-		CmdRunner:   pr.CommandRunner,
-		Cleanliness: journeyCleanliness(wm),
-	}, orchestrator.Hooks{})
-	t.Cleanup(func() {
-		_ = orch.Shutdown()
-		orch.WaitForCycles()
+	fx := newTUIJourneyFixture(t, tuiJourneyFixtureOptions{
+		ParentID:           "tui-journey-parent",
+		ParentName:         "TUI Journey Parent",
+		RepoNames:          []string{"repoA", "repoB"},
+		ParentSelfWorktree: true,
+		Models:             parentModels,
+		Effort:             parentEffort,
+		Checkpoints:        parentCheckpoints,
+		Inquireness:        feature.InquirenessNone,
+		RiskLevel:          feature.RiskHigh,
+		ExitCriteria:       "refresh the journey without losing parent context",
 	})
-	go func() {
-		for {
-			select {
-			case ev := <-orch.Events():
-				select {
-				case serverEvents <- ev:
-				default:
-				}
-			case <-stopForwarding:
-				return
-			}
-		}
-	}()
-
-	// The runtime config served to the TUI must carry non-empty workspace
-	// roots so the model boots into the dashboard rather than the welcome
-	// screen, and the git-backed freshness provider lets the server flag the
-	// dirty-parent entry condition exactly like production.
-	runtimeCfg := config.NewDefault()
-	runtimeCfg.WorkspaceRoots = []string{tmp}
-
-	srv := httptest.NewServer(server.NewHandler(server.HandlerOptions{
-		Runtime:               server.RuntimeIdentity{RuntimeDir: tmp, StateDir: stateDir},
-		Features:              store,
-		FeatureStore:          store,
-		Freshness:             journeyFreshnessProvider{},
-		Config:                runtimeCfg,
-		Sessions:              sm,
-		Events:                serverEvents,
-		Mutations:             &journeyMutationTarget{mgr: mgr, orch: orch},
-		Cleanliness:           journeyCleanliness(wm),
-		DisableHostValidation: true,
-	}))
-	t.Cleanup(srv.Close)
-	client, err := server.NewClient(server.ClientOptions{BaseURL: srv.URL})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
+	parent := fx.Parent
+	srv := fx.Server
+	repoDirs := fx.RepoDirs
+	// The fixture's phase-plan lock file gives the restart/stop/resume
+	// segment a deterministic running-phase window instead of racing the
+	// instant scripted completion.
+	blockFile := fx.BlockFile
+	stateDir := fx.StateDir
 
 	screenshotsDir := journeyScreenshotDir(t)
 	childName := "TUI Journey Refactor"
@@ -237,12 +101,7 @@ func TestRefactorActiveTUIJourney(t *testing.T) {
 	// Step 1: Cold boot — the parent must be selected and offer the
 	// Start Refactor entry point in the dashboard.
 	// ------------------------------------------------------------------
-	h, err := tuitest.NewAppHarness(t.Context(), client, tui.APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAppHarness() error = %v", err)
-	}
-	defer h.Close()
-	h.Resize(140, 42)
+	h := fx.NewHarness(t)
 	if got := h.SelectedFeatureID(); got != parent.ID {
 		t.Fatalf("cold boot selected feature = %q, want %q", got, parent.ID)
 	}
@@ -424,11 +283,7 @@ func TestRefactorActiveTUIJourney(t *testing.T) {
 	// Step 9 (mid-journey cold start): a second harness instance must
 	// project the nested active child eagerly and allow selecting it.
 	// ------------------------------------------------------------------
-	h2, err := tuitest.NewAppHarness(t.Context(), client, tui.APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAppHarness() cold start error = %v", err)
-	}
-	h2.Resize(140, 42)
+	h2 := fx.NewHarness(t)
 	assertViewContains(t, h2.View(), "Refactoring", "tui-journey-refac", "↳")
 	selectedCold := false
 	for i := 0; i < 6 && !selectedCold; i++ {
@@ -440,7 +295,6 @@ func TestRefactorActiveTUIJourney(t *testing.T) {
 	if !selectedCold {
 		t.Fatalf("cold-start harness could not select nested child row; selected = %q", h2.SelectedFeatureID())
 	}
-	h2.Close()
 	t.Logf("cold start: nested child row visible and selectable on a fresh model")
 
 	h.Refresh()
@@ -580,24 +434,25 @@ func TestRefactorActiveTUIJourney(t *testing.T) {
 		t.Fatalf("parent active_child = %v, want nil after discard", parentBody["active_child"])
 	}
 
-	// Until Phase 9's closed-history surface exists, the discarded child
-	// must leave the active projection entirely: selection falls back to
-	// the parent and no nested or top-level row for the child remains.
+	// After a child is discarded, the closed-history surface drops it from
+	// the ACTIVE projection entirely (selection falls back to the parent, no
+	// active child row, no top-level row, no Refactoring parent label); it
+	// lives only inside the collapsed Refactor History group.
 	h.Refresh()
 	if got := h.SelectedFeatureID(); got != parent.ID {
 		t.Fatalf("after discard selected feature = %q, want parent fallback %q", got, parent.ID)
 	}
 	postDiscardView := ansi.Strip(h.View())
-	if strings.Contains(postDiscardView, "↳") {
-		t.Fatalf("dashboard still nests the discarded child:\n%s", postDiscardView)
+	if !strings.Contains(postDiscardView, "Refactor History (1)") {
+		t.Fatalf("discarded child not nested in the collapsed history group:\n%s", postDiscardView)
 	}
 	if strings.Contains(postDiscardView, "tui-journey-refactor") {
-		t.Fatalf("dashboard still lists the discarded child:\n%s", postDiscardView)
+		t.Fatalf("dashboard still lists the discarded child outside history:\n%s", postDiscardView)
 	}
 	if strings.Contains(postDiscardView, "Refactoring") {
 		t.Fatalf("parent still displays Refactoring after the child closed:\n%s", postDiscardView)
 	}
-	t.Logf("post-discard TUI projection verified: child row gone, parent selected, Refactoring state cleared")
+	t.Logf("post-discard TUI projection verified: active child row gone, parent selected, Refactoring state cleared, history group collapsed")
 
 	list := getJourneyJSON(t, srv.URL+"/api/v1/features")
 	summaries := list["features"].([]any)

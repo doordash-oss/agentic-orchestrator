@@ -581,6 +581,75 @@ func TestStoreCloseChildIsIdempotentAndPreservesInspectionState(t *testing.T) {
 	}
 }
 
+func TestStoreSetClosedChildDiffSummary(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate persisted relationship state.
+
+	store := NewStore(t.TempDir())
+	closedAt := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	summary := "Repository: repo\ndiff --git a/auth.go b/auth.go\n+session rotation"
+
+	child := &Feature{
+		ID: "child-diff", Name: "diff child", Status: StatusReviewPassed,
+		Repos: []FeatureRepo{{Name: "repo"}},
+		Parent: &ChildRelationship{
+			ParentID: "parent", Kind: ChildKindRefactor,
+			CloseOutcome: ChildCloseOutcomeCompleted, ClosedAt: &closedAt,
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save(%q): %v", child.ID, err)
+	}
+	if err := store.SetClosedChildDiffSummary(child.ID, summary); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(closed): %v", err)
+	}
+	got, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", child.ID, err)
+	}
+	if got.Parent.DiffSummary != summary {
+		t.Fatalf("DiffSummary = %q, want preserved summary", got.Parent.DiffSummary)
+	}
+
+	// Empty summaries and repeat writes are no-ops.
+	if err := store.SetClosedChildDiffSummary(child.ID, ""); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(empty): %v", err)
+	}
+	got, _ = store.Load(child.ID)
+	if got.Parent.DiffSummary != summary {
+		t.Fatalf("DiffSummary after empty write = %q, want unchanged", got.Parent.DiffSummary)
+	}
+
+	// An open child and a non-child never receive a summary.
+	openChild := &Feature{
+		ID: "child-open", Name: "open child", Status: StatusImplementing,
+		Repos:  []FeatureRepo{{Name: "repo"}},
+		Parent: &ChildRelationship{ParentID: "parent", Kind: ChildKindRefactor},
+	}
+	if err := store.Save(openChild); err != nil {
+		t.Fatalf("Save(%q): %v", openChild.ID, err)
+	}
+	if err := store.SetClosedChildDiffSummary(openChild.ID, summary); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(open child): %v", err)
+	}
+	got, _ = store.Load(openChild.ID)
+	if got.Parent.DiffSummary != "" {
+		t.Fatalf("open child DiffSummary = %q, want empty", got.Parent.DiffSummary)
+	}
+
+	plain := &Feature{ID: "plain", Name: "plain", Status: StatusImplementing}
+	if err := store.Save(plain); err != nil {
+		t.Fatalf("Save(%q): %v", plain.ID, err)
+	}
+	if err := store.SetClosedChildDiffSummary(plain.ID, summary); err != nil {
+		t.Fatalf("SetClosedChildDiffSummary(non-child): %v", err)
+	}
+	got, _ = store.Load(plain.ID)
+	if got.Parent != nil {
+		t.Fatalf("non-child Parent = %#v, want nil", got.Parent)
+	}
+}
+
 func TestStoreModifyGuardedRejectsClosedChildBeforeCallbacks(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs isolate persisted relationship state.

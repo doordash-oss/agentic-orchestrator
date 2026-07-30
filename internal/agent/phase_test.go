@@ -17,6 +17,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -937,6 +938,57 @@ func TestRunInteractivePhaseInitializesResumeRecordAndCapturesProviderInit(t *te
 	}
 }
 
+func TestRunKnowledgeBaseForRepoInitializesResumeRecordAndCapturesProviderInit(t *testing.T) {
+	stateDir := t.TempDir()
+	repo := feature.FeatureRepo{Name: "repo-a", Path: t.TempDir()}
+	f := &feature.Feature{
+		ID:           "feat-kb-provider-init",
+		ActiveRun:    1,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Repos:        []feature.FeatureRepo{repo},
+	}
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		opts[0].OnProviderInit(ports.ProviderInitInfo{
+			SessionID: "provider-kb-session",
+			Provider:  "codex",
+			Model:     "model",
+		})
+		return &phaseTestSessionHandle{MockSessionView: mocks.NewMockSessionView(id, featureID)}, nil
+	}
+	pr := &PhaseRunner{
+		SessionManager: sm,
+		StateDir:       stateDir,
+		BuildSessionFn: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			return []string{"true"}, nil, &session.SessionOpts{
+				ProviderName:          "codex",
+				ResolvedModel:         "model",
+				SupportsSessionResume: true,
+			}, nil
+		},
+	}
+	t.Cleanup(func() {
+		_ = ReleaseKBLock(KBStateDir(stateDir, repo.Name), f.ID)
+	})
+
+	sessionID, err := pr.RunKnowledgeBaseForRepo(f, repo)
+	if err != nil {
+		t.Fatalf("RunKnowledgeBaseForRepo() error = %v", err)
+	}
+	record, err := ReadResumeRecord(KBResumeDir(stateDir, f, repo.Name))
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if record == nil ||
+		record.ProviderSessionID != "provider-kb-session" ||
+		record.PhaseKey != feature.PhaseKnowledgeBase.DirName() ||
+		record.ChildKey != repo.Name ||
+		record.OrchestratorSessionID != sessionID ||
+		record.Completed {
+		t.Fatalf("resume record = %+v", record)
+	}
+}
+
 func TestRunInteractivePhaseConsumesPendingManualResumeOnFirstDispatch(t *testing.T) {
 	stateDir := t.TempDir()
 	f := &feature.Feature{ID: "feat", ActiveRun: 1, CurrentPhase: feature.PhaseInquire, Repos: []feature.FeatureRepo{{Path: t.TempDir()}}}
@@ -1374,6 +1426,176 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 	}
 	if HasPhaseComplete(kbDir) {
 		t.Fatal("stale phase_complete still exists after RunKnowledgeBaseForRepo")
+	}
+}
+
+func TestRunKnowledgeBaseForRepo_ResumesPendingProviderSession(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := filepath.Join(tmpDir, "features")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+
+	eventCh := make(chan any, 16)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	provider := &captureProvider{
+		name:          "capture",
+		model:         "model-a[1M]",
+		sessionResume: true,
+	}
+	var builds []BuildSessionOpts
+	var resumedAudit ports.FeatureResumedData
+	pr := &PhaseRunner{
+		SessionManager: sm,
+		FeatureStore:   feature.NewStore(stateDir),
+		StateDir:       stateDir,
+		Registry:       newRegistryWithCaptureProvider(provider),
+		OnFeatureResumed: func(input ports.FeatureResumedData) {
+			resumedAudit = input
+		},
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			builds = append(builds, opts)
+			command := []string{"true"}
+			if len(builds) == 3 {
+				command = []string{"sh", "-c", "sleep 1"}
+			}
+			return command, nil, &session.SessionOpts{
+				PIDDir:                opts.PIDDir,
+				ProviderName:          provider.name,
+				ResolvedModel:         provider.model,
+				RepoName:              opts.RepoName,
+				SupportsSessionResume: true,
+			}, nil
+		},
+	}
+	repo := feature.FeatureRepo{Name: "repo-a", Path: workDir}
+	f := &feature.Feature{
+		ID:           "kb-resume",
+		ActiveRun:    1,
+		RunCount:     1,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Repos:        []feature.FeatureRepo{repo},
+		Models:       config.ModelConfig{KBBuild: "capture:model-a[1M]"},
+	}
+
+	firstID, err := pr.RunKnowledgeBaseForRepo(f, repo)
+	if err != nil {
+		t.Fatalf("first RunKnowledgeBaseForRepo() error = %v", err)
+	}
+	first := sm.GetSession(firstID)
+	if first == nil {
+		t.Fatal("first KB session not found")
+	}
+	select {
+	case <-first.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("first KB session did not finish")
+	}
+
+	resumeDir := KBResumeDir(stateDir, f, repo.Name)
+	record, err := ReadResumeRecord(resumeDir)
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if record == nil {
+		t.Fatal("KB launch did not persist resume record")
+	}
+	if _, err := os.Stat(filepath.Join(KBStateDir(stateDir, repo.Name), ResumeSidecarFile)); !os.IsNotExist(err) {
+		t.Fatalf("shared KB artifact directory contains feature-owned %s", ResumeSidecarFile)
+	}
+
+	coordinator := NewChildResumeCoordinator(
+		resumeDir,
+		repo.Name,
+		ResumeParentContext{PhaseKey: feature.PhaseKnowledgeBase.DirName()},
+	)
+	if err := coordinator.CaptureProviderInit(ports.ProviderInitInfo{
+		SessionID: "ses-kb-prior",
+		Provider:  provider.name,
+		Model:     provider.model,
+	}); err != nil {
+		t.Fatalf("CaptureProviderInit() error = %v", err)
+	}
+	claim, eligibility, err := coordinator.Claim(
+		f.ID,
+		f,
+		f.Models.KBBuild,
+		pr.Registry,
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if !eligibility.Eligible || claim == nil {
+		t.Fatalf("KB resume eligibility = %+v claim=%v, want eligible claim", eligibility, claim)
+	}
+	claim.DispatchStarted()
+
+	secondID, err := pr.RunKnowledgeBaseForRepo(f, repo)
+	if err != nil {
+		t.Fatalf("second RunKnowledgeBaseForRepo() error = %v", err)
+	}
+	if secondID == firstID {
+		t.Fatalf("resumed session ID = %q, want distinct orchestrator session", secondID)
+	}
+	if len(builds) != 2 {
+		t.Fatalf("BuildSession calls = %d, want 2", len(builds))
+	}
+	if got := builds[1].ResumeSessionID; got != "ses-kb-prior" {
+		t.Fatalf("second ResumeSessionID = %q, want ses-kb-prior", got)
+	}
+	if !strings.Contains(builds[1].Prompt, "index.md") {
+		t.Fatalf("resume prompt does not identify KB contract: %q", builds[1].Prompt)
+	}
+	if got := builds[1].RepoName; got != repo.Name {
+		t.Fatalf("resume RepoName = %q, want %q", got, repo.Name)
+	}
+
+	second := sm.GetSession(secondID)
+	if second == nil {
+		t.Fatal("second KB session not found")
+	}
+	select {
+	case <-second.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("second KB session did not finish")
+	}
+	continued, err := pr.DispatchSingleShotContinuation(secondID, "ses-kb-prior", 1, false)
+	if err != nil {
+		t.Fatalf("DispatchSingleShotContinuation() error = %v", err)
+	}
+	kbDir := KBStateDir(stateDir, repo.Name)
+	if got := ReadKBLockOwner(kbDir); got != f.ID {
+		t.Fatalf("continuation KB lock owner = %q, want %q", got, f.ID)
+	}
+	established, err := pr.CompleteSingleShotResumeEstablishment(
+		continued.SessionID,
+		continued.Session,
+		time.Second,
+	)
+	if err != nil || !established {
+		t.Fatalf("CompleteSingleShotResumeEstablishment() = (%v, %v), want (true, nil)", established, err)
+	}
+	if resumedAudit.PhaseKey != feature.PhaseKnowledgeBase.DirName() ||
+		resumedAudit.ChildKey != repo.Name ||
+		resumedAudit.ResumeCount != 1 {
+		t.Fatalf("FeatureResumed audit = %+v, want KB repo-a resume count 1", resumedAudit)
+	}
+	select {
+	case <-continued.Session.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("continued KB session did not finish")
+	}
+	locked, err := AcquireKBLock(kbDir, "other-feature")
+	if err != nil || !locked {
+		t.Fatalf("AcquireKBLock(other-feature) = (%v, %v), want (true, nil)", locked, err)
+	}
+	t.Cleanup(func() { _ = ReleaseKBLock(kbDir, "other-feature") })
+	if _, err := pr.DispatchSingleShotContinuation(continued.SessionID, "ses-kb-prior", 2, false); !errors.Is(err, ErrKBLocked) {
+		t.Fatalf("continuation with foreign KB lock error = %v, want ErrKBLocked", err)
 	}
 }
 

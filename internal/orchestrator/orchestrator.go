@@ -103,6 +103,7 @@ type Hooks struct {
 type PhaseCompletionInput struct {
 	Phase       feature.Phase
 	SessionID   string
+	RepoName    string
 	Success     bool
 	ErrorDetail string
 

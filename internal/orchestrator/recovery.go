@@ -170,6 +170,7 @@ func (o *Orchestrator) ExecuteRecovery(
 	// Build dedup map for relaunch: a multi-repo feature may have several
 	// items, but we want to re-dispatch its current phase at most once.
 	resumedFeatures := make(map[string]feature.Phase)
+	resumedRepos := make(map[string]map[string]struct{})
 	var resumedOrder []string
 	for _, item := range items {
 		if item.Feature == nil {
@@ -184,25 +185,49 @@ func (o *Orchestrator) ExecuteRecovery(
 			resumedFeatures[item.Feature.ID] = item.Feature.CurrentPhase
 			resumedOrder = append(resumedOrder, item.Feature.ID)
 		}
+		if item.RepoName != "" {
+			if resumedRepos[item.Feature.ID] == nil {
+				resumedRepos[item.Feature.ID] = make(map[string]struct{})
+			}
+			resumedRepos[item.Feature.ID][item.RepoName] = struct{}{}
+		}
 	}
 	var relaunchErrs []error
 	for _, fid := range resumedOrder {
 		phase := resumedFeatures[fid]
-		claim, dispatch := o.claimRecoveryResume(fid, phase)
-		if !dispatch {
-			continue
+		var claims []*agent.ResumeClaim
+		if phase == feature.PhaseKnowledgeBase {
+			current, err := o.deps.Lifecycle.Get(fid)
+			if err != nil {
+				relaunchErrs = append(relaunchErrs, fmt.Errorf("load %s for KB recovery resume: %w", fid, err))
+				continue
+			}
+			claims, err = o.claimKBResumes(current, resumedRepos[fid])
+			if err != nil {
+				if errors.Is(err, agent.ErrResumeAlreadyClaimed) {
+					continue
+				}
+				relaunchErrs = append(relaunchErrs, fmt.Errorf("claim KB recovery resume for %s: %w", fid, err))
+				continue
+			}
+		} else {
+			claim, dispatch := o.claimSequentialResume(fid, phase)
+			if !dispatch {
+				continue
+			}
+			if claim != nil {
+				claims = append(claims, claim)
+			}
 		}
 		_, started, err := o.startPhase(fid, phase)
 		if err != nil {
-			if claim != nil {
-				if relErr := claim.Release(time.Now()); relErr != nil {
-					relaunchErrs = append(relaunchErrs, fmt.Errorf("releasing resume claim for %s: %w", fid, relErr))
-				}
+			if relErr := releaseResumeClaims(claims, time.Now()); relErr != nil {
+				relaunchErrs = append(relaunchErrs, fmt.Errorf("releasing resume claims for %s: %w", fid, relErr))
 			}
 			relaunchErrs = append(relaunchErrs, fmt.Errorf("relaunch %s phase %s: %w", fid, phase, err))
 			continue
 		}
-		if claim != nil {
+		for _, claim := range claims {
 			if started {
 				claim.DispatchStarted()
 			} else if relErr := claim.Release(time.Now()); relErr != nil {
@@ -216,10 +241,11 @@ func (o *Orchestrator) ExecuteRecovery(
 	return nil
 }
 
-// claimRecoveryResume stamps the durable continuation intent for an eligible
-// interrupted implementation unit. Any lookup, eligibility, or claim failure
-// deliberately degrades to the existing fresh relaunch path.
-func (o *Orchestrator) claimRecoveryResume(featureID string, phase feature.Phase) (*agent.ResumeClaim, bool) {
+// claimSequentialResume stamps durable continuation intent for an eligible
+// interrupted parent unit. Manual resume and startup recovery share this seam;
+// lookup, eligibility, or claim failures deliberately degrade to the existing
+// fresh relaunch path unless durable fallback bookkeeping also fails.
+func (o *Orchestrator) claimSequentialResume(featureID string, phase feature.Phase) (*agent.ResumeClaim, bool) {
 	if o.deps.Lifecycle == nil || o.deps.PhaseRunner == nil {
 		return nil, true
 	}

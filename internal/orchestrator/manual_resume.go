@@ -40,7 +40,46 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 		return ErrResumeConflict
 	}
 	switch f.Status {
-	case feature.StatusInterrupted, feature.StatusNeedUserInput:
+	case feature.StatusInterrupted:
+		if f.CurrentPhase == feature.PhaseKnowledgeBase {
+			claims, err := o.claimInterruptedKBResumes(f)
+			if err != nil {
+				if errors.Is(err, agent.ErrResumeAlreadyClaimed) {
+					return ErrResumeConflict
+				}
+				return err
+			}
+			if err := o.StartFeature(featureID); err != nil {
+				return errors.Join(err, releaseResumeClaims(claims, time.Now()))
+			}
+			for _, claim := range claims {
+				claim.DispatchStarted()
+			}
+			return nil
+		}
+		if !phaseUsesParentResumeClaim(f.CurrentPhase) {
+			return o.StartFeature(featureID)
+		}
+		claim, dispatch := o.claimSequentialResume(featureID, f.CurrentPhase)
+		if !dispatch {
+			return ErrResumeConflict
+		}
+		if claim != nil && f.CurrentPhase == feature.PhaseImplement {
+			if err := o.transitionImplementationResume(featureID); err != nil {
+				return errors.Join(err, claim.Release(time.Now()))
+			}
+		}
+		if err := o.StartFeature(featureID); err != nil {
+			if claim != nil {
+				return errors.Join(err, claim.Release(time.Now()))
+			}
+			return err
+		}
+		if claim != nil {
+			claim.DispatchStarted()
+		}
+		return nil
+	case feature.StatusNeedUserInput:
 		return o.StartFeature(featureID)
 	case feature.StatusFailed:
 		// Continue below: Failed is the only status whose action-catalog
@@ -86,6 +125,73 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 	}
 
 	return o.resumeFailedFeature(featureID, f.CurrentPhase)
+}
+
+func phaseUsesParentResumeClaim(phase feature.Phase) bool {
+	switch phase {
+	case feature.PhaseInquire,
+		feature.PhaseResearch,
+		feature.PhaseDesign,
+		feature.PhasePlan,
+		feature.PhaseImplement:
+		return true
+	default:
+		return false
+	}
+}
+
+func (o *Orchestrator) claimInterruptedKBResumes(f *feature.Feature) ([]*agent.ResumeClaim, error) {
+	return o.claimKBResumes(f, nil)
+}
+
+func (o *Orchestrator) claimKBResumes(f *feature.Feature, repoFilter map[string]struct{}) ([]*agent.ResumeClaim, error) {
+	if o == nil || f == nil || o.deps.PhaseRunner == nil {
+		return nil, nil
+	}
+	runner := o.deps.PhaseRunner
+	model := resumeModelForFeature(runner, f)
+	parent := agent.ResumeParentContext{PhaseKey: feature.PhaseKnowledgeBase.DirName()}
+	claims := make([]*agent.ResumeClaim, 0, len(f.Repos))
+	for _, repo := range f.Repos {
+		if repoFilter != nil {
+			if _, selected := repoFilter[repo.Name]; !selected {
+				continue
+			}
+		}
+		coordinator := agent.NewChildResumeCoordinator(
+			agent.KBResumeDir(o.stateDir(), f, repo.Name),
+			repo.Name,
+			parent,
+		)
+		claim, eligibility, err := coordinator.Claim(
+			f.ID,
+			f,
+			model,
+			runner.Registry,
+			time.Now(),
+		)
+		if err != nil {
+			return nil, errors.Join(err, releaseResumeClaims(claims, time.Now()))
+		}
+		if eligibility.Eligible && claim != nil {
+			claims = append(claims, claim)
+			continue
+		}
+		if coordinator.Snapshot() != nil {
+			if err := coordinator.MarkFreshFallback(string(eligibility.Reason), time.Now()); err != nil {
+				return nil, errors.Join(err, releaseResumeClaims(claims, time.Now()))
+			}
+		}
+	}
+	return claims, nil
+}
+
+func releaseResumeClaims(claims []*agent.ResumeClaim, at time.Time) error {
+	var releaseErr error
+	for _, claim := range claims {
+		releaseErr = errors.Join(releaseErr, claim.Release(at))
+	}
+	return releaseErr
 }
 
 func (o *Orchestrator) implementationReviewResumeEligibility(f *feature.Feature) agent.ResumeEligibility {
@@ -147,6 +253,13 @@ func (o *Orchestrator) resumeEligibleFailedFeature(featureID string, phase featu
 	if err := o.TransitionTo(featureID, feature.StatusImplementReady); err != nil {
 		return fmt.Errorf("prepare failed phase for resume: %w", err)
 	}
+	if err := o.transitionImplementationResume(featureID); err != nil {
+		return err
+	}
+	return o.StartFeature(featureID)
+}
+
+func (o *Orchestrator) transitionImplementationResume(featureID string) error {
 	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		if err := f.Transition(feature.StatusImplementing); err != nil {
 			return err
@@ -164,7 +277,7 @@ func (o *Orchestrator) resumeEligibleFailedFeature(featureID string, phase featu
 	}); err != nil {
 		return fmt.Errorf("transition provider resume to implementing: %w", err)
 	}
-	return o.StartFeature(featureID)
+	return nil
 }
 
 func (o *Orchestrator) resumeFailedFeature(featureID string, phase feature.Phase) error {
@@ -222,6 +335,8 @@ func resumeModelForFeature(runner *agent.PhaseRunner, f *feature.Feature) string
 		return ""
 	}
 	switch f.CurrentPhase {
+	case feature.PhaseKnowledgeBase:
+		return runner.ModelForRole(f.Models.KBBuild, llm.PhaseKBBuild)
 	case feature.PhaseInquire:
 		configured := f.Models.Inquiry
 		if configured == "" {

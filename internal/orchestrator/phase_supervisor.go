@@ -187,6 +187,7 @@ func (s *phaseSupervisor) handleSingleShotStatus(featureID, sessionID string, ph
 		s.complete(featureID, PhaseCompletionInput{
 			Phase:     phase,
 			SessionID: sessionID,
+			RepoName:  sess.RepoName(),
 			Success:   true,
 		})
 		return true
@@ -374,6 +375,7 @@ func (s *phaseSupervisor) completeSingleShotFailure(featureID, sessionID string,
 	s.complete(featureID, PhaseCompletionInput{
 		Phase:       phase,
 		SessionID:   sessionID,
+		RepoName:    sess.RepoName(),
 		Success:     false,
 		ErrorDetail: singleShotErrorDetail(phase, sess),
 	})

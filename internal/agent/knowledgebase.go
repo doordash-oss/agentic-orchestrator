@@ -42,6 +42,13 @@ func KBStateDir(stateDir, repoName string) string {
 	return filepath.Join(filepath.Dir(stateDir), "knowledge-base", repoName)
 }
 
+// KBResumeDir returns the feature-run-owned directory for one repository's KB
+// provider-session identity. KB artifacts remain repo-scoped in KBStateDir;
+// keeping resume identity here prevents another feature from claiming it.
+func KBResumeDir(stateDir string, f *feature.Feature, repoName string) string {
+	return filepath.Join(ActiveRunDir(stateDir, f), feature.PhaseKnowledgeBase.DirName(), repoName)
+}
+
 // BuildKBSessionID returns the canonical session ID for a per-repo KB build.
 // Format: "<featureID>-kb-<repoName>". Mirrors the literal in
 // PhaseRunner.RunKnowledgeBaseForRepo.

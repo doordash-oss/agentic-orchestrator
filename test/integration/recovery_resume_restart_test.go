@@ -16,6 +16,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 type restartRecoveryOperator struct {
@@ -582,6 +584,222 @@ func TestRecoveryResumeDesignAcrossOrchestratorRestart(t *testing.T) {
 	}
 }
 
+func TestRecoveryResumeKnowledgeBaseRepositoriesAcrossOrchestratorRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	stateDir := filepath.Join(tmpDir, "state")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	repos := []feature.FeatureRepo{
+		{Name: "repo-a", Path: filepath.Join(tmpDir, "repo-a")},
+		{Name: "repo-b", Path: filepath.Join(tmpDir, "repo-b")},
+	}
+	for _, repo := range repos {
+		if err := os.MkdirAll(repo.Path, 0o755); err != nil {
+			t.Fatalf("mkdir repo %s: %v", repo.Name, err)
+		}
+	}
+	f := &feature.Feature{
+		ID:            "recovery-kb-restart",
+		Name:          "Recovery KB Restart",
+		Slug:          "recovery-kb-restart",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Pipeline:      feature.PipelineLarge,
+		Models:        config.ModelConfig{KBBuild: "codex:model-a"},
+		Repos:         repos,
+		RepoStates: map[string]*feature.RepoState{
+			"repo-a": {},
+			"repo-b": {},
+		},
+		KBStatus: map[string]string{
+			"repo-a": "pending",
+			"repo-b": "pending",
+		},
+	}
+	seedStore := feature.NewStore(stateDir)
+	if err := seedStore.Save(f); err != nil {
+		t.Fatalf("seed feature: %v", err)
+	}
+
+	scripts := make(map[string]string, len(repos))
+	now := time.Now()
+	for _, repo := range repos {
+		threadID := "thread-" + repo.Name + "-before-restart"
+		resumeDir := agent.KBResumeDir(stateDir, f, repo.Name)
+		if err := agent.WriteResumeRecord(resumeDir, agent.ResumeRecord{
+			ProviderSessionID:     threadID,
+			Provider:              "codex",
+			ResolvedModel:         "model-a",
+			PhaseKey:              feature.PhaseKnowledgeBase.DirName(),
+			ChildKey:              repo.Name,
+			RunNumber:             1,
+			OrchestratorSessionID: f.ID + "-kb-" + repo.Name,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}); err != nil {
+			t.Fatalf("seed %s resume record: %v", repo.Name, err)
+		}
+		kbDir := agent.KBStateDir(stateDir, repo.Name)
+		scripts[repo.Name] = testutil.WriteScript(t, scriptsDir, repo.Name+"-kb-agent.sh",
+			"read -r _initialize\n"+
+				"read -r _prompt\n"+
+				"echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\""+threadID+"\",\"model\":\"model-a\"}'\n"+
+				"mkdir -p \""+kbDir+"\"\n"+
+				"echo '# Recovered Knowledge Base' > \""+agent.KBPath(kbDir)+"\"\n"+
+				testutil.TouchPhaseCompleteInDir(kbDir)+"\n"+
+				testutil.JSONLSuccess+"\n")
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sessionManager := session.NewManager(eventCh)
+	t.Cleanup(sessionManager.Shutdown)
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	restartedStore := feature.NewStore(stateDir)
+	restartedManager := feature.NewManager(restartedStore, &config.Config{})
+	restartedFeature, err := restartedStore.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature after restart: %v", err)
+	}
+	recoveryItems := make([]ports.RecoveryItem, 0, len(repos))
+	actions := make(map[string]ports.RecoveryAction, len(repos))
+	for _, repo := range repos {
+		recoveryItems = append(recoveryItems, ports.RecoveryItem{
+			PIDFile: ports.PIDFile{
+				FeatureID: f.ID,
+				Phase:     feature.PhaseKnowledgeBase.String(),
+				RepoName:  repo.Name,
+			},
+			Feature:  restartedFeature,
+			RepoName: repo.Name,
+		})
+		actions[ports.RecoveryActionKey(f.ID, repo.Name)] = ports.RecoveryResume
+	}
+	recovery := &restartRecoveryOperator{items: recoveryItems}
+	commandRunner := mocks.NewMockCommandRunner()
+	commandRunner.RunFn = func(context.Context, string, []string, ports.CommandOpts) ([]byte, error) {
+		return nil, nil
+	}
+	var captureMu sync.Mutex
+	var kbBuilds []agent.BuildSessionOpts
+	var resumeEvents []ports.FeatureResumedData
+	phaseRunner := &agent.PhaseRunner{
+		SessionManager: sessionManager,
+		FeatureStore:   restartedStore,
+		CommandRunner:  commandRunner,
+		StateDir:       stateDir,
+		Registry:       registry,
+		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			if opts.Phase != feature.PhaseKnowledgeBase {
+				return nil, nil, nil, errors.New("test stops after KB completion")
+			}
+			captureMu.Lock()
+			kbBuilds = append(kbBuilds, opts)
+			captureMu.Unlock()
+			return []string{"bash", scripts[opts.RepoName]}, nil, &ports.SessionOpts{
+				PIDDir:                opts.PIDDir,
+				InitialPrompt:         opts.Prompt,
+				ProviderName:          "codex",
+				ResolvedModel:         "model-a",
+				RepoName:              opts.RepoName,
+				SupportsSessionResume: true,
+				Protocol: claude.NewProtocol(llm.ProtocolOpts{
+					InitialPrompt: opts.Prompt,
+					WorkDir:       opts.WorkDir,
+					Model:         "model-a",
+				}),
+			}, nil
+		},
+		OnFeatureResumed: func(data ports.FeatureResumedData) {
+			captureMu.Lock()
+			resumeEvents = append(resumeEvents, data)
+			captureMu.Unlock()
+		},
+	}
+	restarted := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   restartedManager,
+		Store:       restartedStore,
+		Sessions:    sessionManager,
+		Recovery:    recovery,
+		PhaseRunner: phaseRunner,
+		CmdRunner:   commandRunner,
+	}, orchestrator.Hooks{})
+
+	items, err := restarted.ScanRecovery(context.Background())
+	if err != nil {
+		t.Fatalf("ScanRecovery() error = %v", err)
+	}
+	if err := restarted.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery() error = %v", err)
+	}
+	waitForRestartResumeCondition(t, func() bool {
+		for _, repo := range repos {
+			record, readErr := agent.ReadResumeRecord(agent.KBResumeDir(stateDir, f, repo.Name))
+			if readErr != nil || record == nil || !record.Completed {
+				return false
+			}
+		}
+		return true
+	}, "completed KB repository resume records")
+	waitForRestartResumeCondition(t, func() bool {
+		loaded, loadErr := restartedStore.Load(f.ID)
+		return loadErr == nil && loaded.CurrentPhase != feature.PhaseKnowledgeBase
+	}, "post-KB phase transition")
+
+	captureMu.Lock()
+	capturedBuilds := append([]agent.BuildSessionOpts(nil), kbBuilds...)
+	capturedEvents := append([]ports.FeatureResumedData(nil), resumeEvents...)
+	captureMu.Unlock()
+	if len(capturedBuilds) != len(repos) {
+		t.Fatalf("KB BuildSession() calls = %d, want %d", len(capturedBuilds), len(repos))
+	}
+	resumeIDs := make(map[string]string, len(capturedBuilds))
+	for _, build := range capturedBuilds {
+		resumeIDs[build.RepoName] = build.ResumeSessionID
+	}
+	eventChildren := make(map[string]int, len(capturedEvents))
+	for _, event := range capturedEvents {
+		if event.PhaseKey == feature.PhaseKnowledgeBase.DirName() {
+			eventChildren[event.ChildKey] = event.ResumeCount
+		}
+	}
+	for _, repo := range repos {
+		wantID := "thread-" + repo.Name + "-before-restart"
+		if got := resumeIDs[repo.Name]; got != wantID {
+			t.Errorf("repo %s ResumeSessionID = %q, want %q", repo.Name, got, wantID)
+		}
+		if got := eventChildren[repo.Name]; got != 1 {
+			t.Errorf("repo %s feature.resumed count = %d, want 1", repo.Name, got)
+		}
+		record, readErr := agent.ReadResumeRecord(agent.KBResumeDir(stateDir, f, repo.Name))
+		if readErr != nil {
+			t.Fatalf("ReadResumeRecord(%s) error = %v", repo.Name, readErr)
+		}
+		if record == nil ||
+			record.ProviderSessionID != wantID ||
+			record.PendingResume ||
+			!record.Resumed ||
+			record.ResumeCount != 1 ||
+			!record.Completed {
+			t.Errorf("repo %s resume record = %#v", repo.Name, record)
+		}
+		if owner := agent.ReadKBLockOwner(agent.KBStateDir(stateDir, repo.Name)); owner != "" {
+			t.Errorf("repo %s KB lock owner = %q, want released", repo.Name, owner)
+		}
+	}
+}
+
 func TestRecoveryResumeRoadmapAttemptAcrossOrchestratorRestart(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -608,6 +826,7 @@ func TestRecoveryResumeRoadmapAttemptAcrossOrchestratorRestart(t *testing.T) {
 		RunCount:      1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Pipeline:      feature.PipelineMedium,
+		Checkpoints:   feature.Checkpoints{RoadmapReview: true},
 		Models: config.ModelConfig{
 			Planning: "codex:model-a",
 			Review:   "codex:model-a",
@@ -726,6 +945,10 @@ func TestRecoveryResumeRoadmapAttemptAcrossOrchestratorRestart(t *testing.T) {
 		return readErr == nil && record != nil && record.Completed &&
 			agent.LatestCompletedPlanAttempt(roadmapDir) == 1
 	}, "completed roadmap attempt-01")
+	waitForRestartResumeCondition(t, func() bool {
+		loaded, loadErr := restartedStore.Load(f.ID)
+		return loadErr == nil && loaded.Status == feature.StatusPlanNeedsReview
+	}, "post-roadmap planning transition")
 
 	captureMu.Lock()
 	capturedBuilds := append([]agent.BuildSessionOpts(nil), planBuilds...)

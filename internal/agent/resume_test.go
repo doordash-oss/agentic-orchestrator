@@ -337,6 +337,11 @@ func TestResumePhaseKeyDescribesCurrentResumableKind(t *testing.T) {
 			want:    "inquire",
 		},
 		{
+			name:    "knowledge base",
+			current: feature.Feature{CurrentPhase: feature.PhaseKnowledgeBase},
+			want:    "knowledgebase",
+		},
+		{
 			name:    "research",
 			current: feature.Feature{CurrentPhase: feature.PhaseResearch},
 			want:    "research",

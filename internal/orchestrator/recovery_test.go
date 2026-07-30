@@ -644,6 +644,116 @@ func TestExecuteRecovery_ResumeIneligibleImplementMarksFreshFallback(t *testing.
 	}
 }
 
+func TestExecuteRecovery_ClaimsKnowledgeBaseRepositorySessions(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	store := feature.NewStore(cpr.stateDir)
+	manager := feature.NewManager(store, config.NewDefault())
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	cpr.pr.FeatureStore = store
+	cpr.pr.Registry = registry
+	cpr.pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		cpr.mu.Lock()
+		cpr.capturedOpts = append(cpr.capturedOpts, opts)
+		cpr.mu.Unlock()
+		return []string{"echo", "test"}, nil, &session.SessionOpts{
+			PIDDir:                opts.PIDDir,
+			InitialPrompt:         opts.Prompt,
+			ProviderName:          "codex",
+			ResolvedModel:         "model-a",
+			RepoName:              opts.RepoName,
+			SupportsSessionResume: true,
+		}, nil
+	}
+	repos := []feature.FeatureRepo{
+		{Name: "repo-a", Path: t.TempDir()},
+		{Name: "repo-b", Path: t.TempDir()},
+	}
+	f := &feature.Feature{
+		ID:            "recovery-kb-provider-resume",
+		Name:          "Recovery KB provider resume",
+		Slug:          "recovery-kb-provider-resume",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Pipeline:      feature.PipelineLarge,
+		Models:        config.ModelConfig{KBBuild: "codex:model-a"},
+		Repos:         repos,
+		RepoStates: map[string]*feature.RepoState{
+			"repo-a": {},
+			"repo-b": {},
+		},
+		KBStatus: map[string]string{
+			"repo-a": "pending",
+			"repo-b": "pending",
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	now := time.Now()
+	items := make([]ports.RecoveryItem, 0, len(repos))
+	actions := make(map[string]ports.RecoveryAction, len(repos))
+	for i, repo := range repos {
+		if err := agent.WriteResumeRecord(agent.KBResumeDir(cpr.stateDir, f, repo.Name), agent.ResumeRecord{
+			ProviderSessionID:     "thread-" + repo.Name,
+			Provider:              "codex",
+			ResolvedModel:         "model-a",
+			PhaseKey:              feature.PhaseKnowledgeBase.DirName(),
+			ChildKey:              repo.Name,
+			RunNumber:             1,
+			OrchestratorSessionID: f.ID + "-kb-" + repo.Name,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}); err != nil {
+			t.Fatalf("WriteResumeRecord(%s) error = %v", repo.Name, err)
+		}
+		items = append(items, ports.RecoveryItem{
+			PIDFile: session.PIDFile{
+				PID:       999999900 + i,
+				FeatureID: f.ID,
+				Phase:     feature.PhaseKnowledgeBase.String(),
+				RepoName:  repo.Name,
+			},
+			Feature:  f,
+			RepoName: repo.Name,
+		})
+		actions[ports.RecoveryActionKey(f.ID, repo.Name)] = ports.RecoveryResume
+		repoName := repo.Name
+		t.Cleanup(func() {
+			_ = agent.ReleaseKBLock(agent.KBStateDir(cpr.stateDir, repoName), f.ID)
+		})
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Recovery:    &fakeRecoveryOp{},
+		Lifecycle:   manager,
+		Store:       store,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
+		t.Fatalf("ExecuteRecovery() error = %v", err)
+	}
+
+	builds := cpr.capturedByPhase(feature.PhaseKnowledgeBase)
+	if len(builds) != len(repos) {
+		t.Fatalf("KB BuildSession calls = %d, want %d", len(builds), len(repos))
+	}
+	resumeIDs := make(map[string]string, len(builds))
+	for _, build := range builds {
+		resumeIDs[build.RepoName] = build.ResumeSessionID
+	}
+	for _, repo := range repos {
+		if got := resumeIDs[repo.Name]; got != "thread-"+repo.Name {
+			t.Errorf("repo %s ResumeSessionID = %q, want %q", repo.Name, got, "thread-"+repo.Name)
+		}
+	}
+}
+
 func TestExecuteRecovery_ResumeClaimConflictDegradesToFresh(t *testing.T) {
 	stateDir := t.TempDir()
 	planPath := writeTempFile(t, "plan.md", "# plan")

@@ -793,6 +793,8 @@ func ResumePhaseKey(current *feature.Feature) string {
 		return ""
 	}
 	switch current.CurrentPhase {
+	case feature.PhaseKnowledgeBase:
+		return feature.PhaseKnowledgeBase.DirName()
 	case feature.PhaseInquire:
 		return "inquire"
 	case feature.PhaseResearch:

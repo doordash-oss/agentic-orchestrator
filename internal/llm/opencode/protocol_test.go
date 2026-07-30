@@ -849,6 +849,34 @@ func TestParseLine_PromptErrorResponseIsNonSuccess(t *testing.T) {
 	}
 }
 
+func TestParseLine_AssistantErrorSurfacesRetryMetadata(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t)
+	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "assistant_message",
+			"error": map[string]any{
+				"name": "APIError",
+				"data": map[string]any{
+					"message":     "backend overloaded",
+					"statusCode":  503,
+					"isRetryable": true,
+				},
+			},
+		},
+	}))
+	if len(msgs) != 1 || msgs[0].Result == nil || msgs[0].Result.Failure == nil {
+		t.Fatalf("assistant error produced %+v, want one structured terminal error", msgs)
+	}
+	got := msgs[0].Result
+	if got.Result != "backend overloaded" ||
+		got.Failure.StatusCode != 503 ||
+		got.Failure.Retryable == nil ||
+		!*got.Failure.Retryable {
+		t.Errorf("assistant error result = %+v, want surfaced retry metadata", got)
+	}
+}
+
 func TestParseLine_MalformedPromptResultIsNonSuccess(t *testing.T) {
 	p, _, promptID := newPostHandshakeProtocol(t)
 	// A result that is a JSON array rather than the expected object.

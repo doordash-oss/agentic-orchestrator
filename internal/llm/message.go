@@ -290,6 +290,19 @@ type ResultMessage struct {
 	// invocation — often an internal truncation), "max_tokens", "pause_turn",
 	// "stop_sequence", "refusal". Empty when the provider doesn't emit it.
 	StopReason string `json:"stop_reason,omitempty"`
+
+	// Failure carries provider-normalized structured error signals. It is
+	// populated by adapters when the provider exposes more than terminal text.
+	Failure *FailureMetadata `json:"-"`
+}
+
+// FailureMetadata carries structured provider error signals used by recovery
+// policy without coupling the session layer to a provider protocol.
+type FailureMetadata struct {
+	Type       string
+	StatusCode int
+	Retryable  *bool
+	Watchdog   bool
 }
 
 // IsSuccess returns true if the result indicates successful completion.

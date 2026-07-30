@@ -105,6 +105,30 @@ func resumeSessionDidWork(sess ports.SessionView) bool {
 	return false
 }
 
+func resumeSessionMadeProgress(sess ports.SessionView) bool {
+	if sess == nil {
+		return false
+	}
+	if resumeUsageHasTokens(sess.AccumulatedUsage()) {
+		return true
+	}
+	if sess.MessageLog() == nil {
+		return false
+	}
+	for _, msg := range sess.MessageLog().Messages() {
+		if msg.Assistant != nil ||
+			msg.ToolProgress != nil ||
+			msg.TaskStarted != nil ||
+			msg.TaskProgress != nil ||
+			msg.TaskNotification != nil ||
+			len(msg.FileReads) > 0 ||
+			len(msg.FileChanges) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func resumeMessageIsProductive(msg llm.SDKMessage) bool {
 	return msg.Init != nil ||
 		msg.Assistant != nil ||

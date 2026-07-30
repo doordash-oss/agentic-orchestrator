@@ -729,6 +729,18 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 			)))
 		}
 	}
+	if su.Update.Error != nil {
+		msg, ok := p.terminalError(su.Update.Error.Data.Message)
+		if !ok {
+			return nil
+		}
+		msg.Result.Failure = &llm.FailureMetadata{
+			Type:       su.Update.Error.Name,
+			StatusCode: su.Update.Error.Data.StatusCode,
+			Retryable:  su.Update.Error.Data.IsRetryable,
+		}
+		return []llm.SDKMessage{msg}
+	}
 
 	var out []llm.SDKMessage
 	switch su.Update.SessionUpdate {
@@ -779,6 +791,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		if msg, ok := p.applyUsageUpdate(su.Update); ok {
 			out = append(out, msg)
 		}
+
 	}
 
 	return out

@@ -462,6 +462,7 @@ func (s *Session) failFromWatchdog(reason string) {
 		Subtype: "error",
 		Result:  reason,
 		IsError: true,
+		Failure: &llm.FailureMetadata{Watchdog: true},
 	}
 	s.messageLog.Append(llm.SDKMessage{Type: "result", Result: result})
 

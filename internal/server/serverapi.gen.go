@@ -666,6 +666,9 @@ type ActionBaseResponse = JSONResponse
 type ActionDisabledReason struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+
+	// Target Optional machine-readable context for the disable reason. The `dirty_parent` reason on the Refactor action carries per-repository dirty-worktree diagnostics under `target.repos` using the same shape as the `parent_worktrees_dirty` mutation error target.
+	Target map[string]interface{} `json:"target,omitempty"`
 }
 
 // ActionInput defines model for ActionInput.
@@ -1002,18 +1005,21 @@ type FeatureDetail struct {
 	CloseOutcome string `json:"close_outcome,omitempty"`
 
 	// ClosedAt Relationship close timestamp; only set on closed child features.
-	ClosedAt       *time.Time         `json:"closed_at,omitempty"`
-	Cost           Cost               `json:"cost"`
-	CreatedAt      time.Time          `json:"created_at"`
-	CurrentPhase   string             `json:"current_phase"`
-	Cycle          *Cycle             `json:"cycle,omitempty"`
-	Description    string             `json:"description,omitempty"`
-	Failure        *Failure           `json:"failure,omitempty"`
-	HistoricalRuns []RunSummary       `json:"historical_runs"`
-	ID             string             `json:"id"`
-	Models         ModelDefaults      `json:"models"`
-	Name           string             `json:"name"`
-	NeedUserInput  *NeedUserInputGate `json:"need_user_input,omitempty"`
+	ClosedAt       *time.Time          `json:"closed_at,omitempty"`
+	Cost           Cost                `json:"cost"`
+	CreatedAt      time.Time           `json:"created_at"`
+	CurrentPhase   string              `json:"current_phase"`
+	Cycle          *Cycle              `json:"cycle,omitempty"`
+	Description    string              `json:"description,omitempty"`
+	Effort         EffortConfig        `json:"effort,omitempty"`
+	ExitCriteria   string              `json:"exit_criteria,omitempty"`
+	Failure        *Failure            `json:"failure,omitempty"`
+	HistoricalRuns []RunSummary        `json:"historical_runs"`
+	ID             string              `json:"id"`
+	Inquireness    feature.Inquireness `json:"inquireness,omitempty"`
+	Models         ModelDefaults       `json:"models"`
+	Name           string              `json:"name"`
+	NeedUserInput  *NeedUserInputGate  `json:"need_user_input,omitempty"`
 
 	// ParentID Launch parent id; only set on child features.
 	ParentID string `json:"parent_id,omitempty"`
@@ -1027,6 +1033,7 @@ type FeatureDetail struct {
 	Repos        []string           `json:"repos"`
 	ReviewGate   ReviewGate         `json:"review_gate"`
 	Revision     string             `json:"revision"`
+	RiskLevel    feature.RiskLevel  `json:"risk_level,omitempty"`
 	RunCount     int                `json:"run_count"`
 
 	// SetupComplete True when the child's active run setup finished; only set on child features.

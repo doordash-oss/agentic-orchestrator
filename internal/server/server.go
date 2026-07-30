@@ -60,6 +60,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		DomainEvents:    opts.DomainEvents,
 		Mutations:       opts.Mutations,
 		RequestShutdown: opts.RequestShutdown,
+		Cleanliness:     opts.Cleanliness,
 	})
 	httpServer := &http.Server{
 		Handler: handler.routes(),

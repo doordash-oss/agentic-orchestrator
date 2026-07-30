@@ -306,6 +306,90 @@ func TestParentRefactorActionReportsDirtyParent(t *testing.T) {
 	t.Fatal("refactor action missing")
 }
 
+func TestParentRefactorDirtyReasonCarriesDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	parent.Status = feature.StatusPublished
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("Save(parent) error = %v", err)
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Freshness = StaticFreshnessProvider{repoNameSelf: RepoFreshnessLocalChanges}
+	opts.Cleanliness = feature.CleanlinessFunc(func(worktreePath string, _ int) (*feature.RepoCleanliness, error) {
+		return &feature.RepoCleanliness{
+			Staged:         []string{"staged.txt"},
+			Unstaged:       []string{"unstaged.txt"},
+			Untracked:      []string{"untracked-a.txt", "untracked-b.txt"},
+			StagedTotal:    1,
+			UnstagedTotal:  1,
+			UntrackedTotal: 2,
+		}, nil
+	})
+	handler := NewHandler(opts)
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
+	for _, raw := range body["actions"].([]any) {
+		action := raw.(map[string]any)
+		if action["id"] != actionRefactor {
+			continue
+		}
+		reasons := action["disabled_reasons"].([]any)
+		if len(reasons) == 0 {
+			t.Fatalf("refactor disabled reasons = %+v, want dirty_parent", reasons)
+		}
+		target, ok := reasons[0].(map[string]any)["target"].(map[string]any)
+		if !ok {
+			t.Fatalf("dirty_parent reason target = %#v, want diagnostics payload", reasons[0])
+		}
+		repos, ok := target["repos"].([]any)
+		if !ok || len(repos) != 1 {
+			t.Fatalf("dirty_parent target.repos = %#v, want one repo entry", target)
+		}
+		repo := repos[0].(map[string]any)
+		if repo["repo"] != repoNameSelf {
+			t.Fatalf("diagnostics repo = %v, want %q", repo["repo"], repoNameSelf)
+		}
+		for key, want := range map[string]float64{"staged_total": 1, "unstaged_total": 1, "untracked_total": 2} {
+			if repo[key] != want {
+				t.Fatalf("diagnostics %s = %#v, want %v (full repo entry: %#v)", key, repo[key], want, repo)
+			}
+		}
+		return
+	}
+	t.Fatal("refactor action missing")
+}
+
+func TestParentRefactorDirtyReasonWithoutCleanlinessOmitsTarget(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	parent.Status = feature.StatusPublished
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("Save(parent) error = %v", err)
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Freshness = StaticFreshnessProvider{repoNameSelf: RepoFreshnessLocalChanges}
+	handler := NewHandler(opts)
+
+	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
+	for _, raw := range body["actions"].([]any) {
+		action := raw.(map[string]any)
+		if action["id"] != actionRefactor {
+			continue
+		}
+		reasons := action["disabled_reasons"].([]any)
+		if len(reasons) == 0 {
+			t.Fatalf("refactor disabled reasons = %+v, want dirty_parent", reasons)
+		}
+		if target, ok := reasons[0].(map[string]any)["target"]; ok {
+			t.Fatalf("dirty_parent reason target = %#v, want none without cleanliness wiring", target)
+		}
+		return
+	}
+	t.Fatal("refactor action missing")
+}
+
 func assertRelationshipProjection(t *testing.T, raw any, wantID, wantOutcome, wantDisplayPrefix string) {
 	t.Helper()
 	projection, ok := raw.(map[string]any)

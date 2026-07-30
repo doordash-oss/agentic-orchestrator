@@ -116,6 +116,8 @@ var tuiParallelCandidateTestFiles = []string{
 	"parallel_safety_test.go",
 	"phase_catalog_test.go",
 	"question_picker_test.go",
+	"refactor_review_axes_test.go",
+	"refactor_selection_test.go",
 	"repos_block_test.go",
 	"simpletextarea_test.go",
 	"styles_test.go",

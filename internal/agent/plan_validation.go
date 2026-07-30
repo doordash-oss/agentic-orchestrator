@@ -1662,6 +1662,9 @@ roadmapAttemptLoop:
 					criticFeedback = newCriticFeedback
 					continue roadmapAttemptLoop
 				case planOutcomeRetrySession:
+					if result, interrupted := interruptiblePlanRetry(cfg.FeatureStore, cfg.Feature.ID, attempt); interrupted {
+						return result, nil
+					}
 					sessionAttempt = newSessionAttempt
 					continue
 				case planOutcomeFailedNoRetry:
@@ -2048,6 +2051,9 @@ phasePlanAttemptLoop:
 					criticFeedback = newCriticFeedback
 					continue phasePlanAttemptLoop
 				case planOutcomeRetrySession:
+					if result, interrupted := interruptiblePlanRetry(cfg.FeatureStore, cfg.Feature.ID, attempt); interrupted {
+						return result, nil
+					}
 					sessionAttempt = newSessionAttempt
 					continue
 				case planOutcomeFailedNoRetry:
@@ -2249,6 +2255,18 @@ phasePlanAttemptLoop:
 		Iterations:  maxAttempts,
 		LastError:   fmt.Sprintf("phase plan not approved after %d attempts", maxAttempts),
 	}, nil
+}
+
+// interruptiblePlanRetry guards the infrastructure-failure session retry: a
+// user-initiated stop kills the session with the same footprint as a
+// retryable infrastructure failure (fast exit, zero cost, empty log), so
+// without this check the loop would silently relaunch a session the user
+// just interrupted.
+func interruptiblePlanRetry(store ports.FeatureStore, featureID string, attempt int) (*PlanLoopResult, bool) {
+	if isFeatureInterrupted(store, featureID) {
+		return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, true
+	}
+	return nil, false
 }
 
 // planSessionOutcome tells a planning attempt loop what control-flow action

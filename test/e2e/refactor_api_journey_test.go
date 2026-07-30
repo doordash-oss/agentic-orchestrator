@@ -17,6 +17,7 @@ package e2e
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -404,6 +405,24 @@ func getJourneyJSON(t *testing.T, url string) map[string]any {
 		t.Fatalf("decode %s: %v", url, err)
 	}
 	return out
+}
+
+// getJourneyJSONQuiet fetches a JSON object without failing the test —
+// used by debug pollers that run off the main test goroutine.
+func getJourneyJSONQuiet(url string) (map[string]any, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s status %d", url, resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // journeySSEBlock carries one SSE block (or a read error) from the reader

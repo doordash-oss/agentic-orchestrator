@@ -221,6 +221,18 @@ func setupState(f *feature.Feature) *feature.SetupState {
 	return f.Run().Setup
 }
 
+// setupReadyToStart reports a feature whose asynchronous setup completed and
+// whose lifecycle is still Created: execution has not been dispatched, so
+// every presentation must offer the ordinary Start action instead of
+// implying the pipeline is already starting.
+func setupReadyToStart(f *feature.Feature) bool {
+	if f == nil || f.Status != feature.StatusCreated {
+		return false
+	}
+	setup := setupState(f)
+	return setup != nil && setup.Status == feature.SetupStatusDone
+}
+
 func isSetupLifecycle(f *feature.Feature) bool {
 	if f == nil {
 		return false

@@ -343,6 +343,43 @@ func TestLivePreviewActivityLine(t *testing.T) {
 	}
 }
 
+// TestSetupCompleteCreatedPresentsReadyToStart pins the setup-done Created
+// presentation: asynchronous setup has finished and execution has not been
+// dispatched, so the panel must offer the ordinary Start action and never
+// imply the pipeline is already starting.
+func TestSetupCompleteCreatedPresentsReadyToStart(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		Status:       feature.StatusCreated,
+		CurrentPhase: feature.PhasePlan,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, time.Now())
+	setup.Status = feature.SetupStatusDone
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+
+	if got := livePreviewStatusText(f); got != "Ready to start" {
+		t.Errorf("livePreviewStatusText(setup-done Created) = %q, want %q", got, "Ready to start")
+	}
+	if got := livePreviewActivityLine(f, nil); got != "Setup complete — ready to start" {
+		t.Errorf("livePreviewActivityLine(setup-done Created) = %q, want setup-complete presentation", got)
+	}
+	hint, _ := contextualAActionHintFor(f, nil)
+	if hint != "[a] Start" {
+		t.Errorf("contextual A hint for setup-done Created = %q, want %q", hint, "[a] Start")
+	}
+
+	// Without a completed setup record, a plain Created feature keeps the
+	// legacy startup presentation.
+	plain := &feature.Feature{Status: feature.StatusCreated, CurrentPhase: feature.PhasePlan}
+	if got := livePreviewStatusText(plain); got != "Starting" {
+		t.Errorf("livePreviewStatusText(plain Created) = %q, want %q", got, "Starting")
+	}
+	if hint, _ := contextualAActionHintFor(plain, nil); hint != "[a] Watch" {
+		t.Errorf("contextual A hint for plain Created = %q, want %q", hint, "[a] Watch")
+	}
+}
+
 func TestLivePreviewTranscriptSummaries(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

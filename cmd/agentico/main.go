@@ -865,6 +865,7 @@ type runtimeBootstrap struct {
 	phaseRunner     *agent.PhaseRunner
 	observer        *observe.Observer
 	permissionCache *permission.Cache
+	cleanliness     feature.CleanlinessOps
 	eventCh         chan interface{}
 	runtime         serverruntime.RuntimeIdentity
 	workspaceDir    string
@@ -2262,6 +2263,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	var phaseRunner *agent.PhaseRunner
 	var observer *observe.Observer
 	var permissionCache *permission.Cache
+	var cleanliness feature.CleanlinessOps
 	fxApp := fx.New(
 		fx.Supply(
 			fx.Annotate(configPath, fx.ResultTags(`name:"configPath"`)),
@@ -2285,7 +2287,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 				tui.SetTerminalBundleID(c.Notifications.TerminalBundleID)
 			}
 		}),
-		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache),
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &cleanliness),
 		fx.NopLogger,
 	)
 	boot.fxApp = fxApp
@@ -2373,6 +2375,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.phaseRunner = phaseRunner
 	boot.observer = observer
 	boot.permissionCache = permissionCache
+	boot.cleanliness = cleanliness
 	boot.eventCh = eventCh
 	boot.workspaceDir = workspaceDir
 	boot.recoveryItems = recoveryItems
@@ -2972,6 +2975,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			reviewer:        &git.ReviewCommentAdapter{},
 		},
 		RequestShutdown: requestShutdown,
+		Cleanliness:     boot.cleanliness,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)

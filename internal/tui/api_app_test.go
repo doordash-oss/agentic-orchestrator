@@ -8722,6 +8722,8 @@ type fakeTUIAPIClient struct {
 	updateFeatureConfigErr         error
 	updateFeatureConfigIDs         []string
 	updateFeatureConfigRequests    []server.FeatureConfigMutationRequest
+	refactorFeatureIDs             []string
+	refactorFeatureRequests        []server.RefactorFeatureRequest
 	updateRuntimeConfigAccepted    apiTestActionResponse
 	updateRuntimeConfigErr         error
 	updateRuntimeConfigRequests    []server.RuntimeConfigMutationRequest
@@ -9019,7 +9021,14 @@ func (f *fakeTUIAPIClient) StartRebase(_ context.Context, featureID string, req 
 
 func (f *fakeTUIAPIClient) RefactorFeature(_ context.Context, featureID string, req server.RefactorFeatureRequest) (server.RefactorFeatureResponse, error) {
 	f.calls = append(f.calls, "RefactorFeature")
+	f.refactorFeatureIDs = append(f.refactorFeatureIDs, featureID)
+	f.refactorFeatureRequests = append(f.refactorFeatureRequests, req)
 	return server.RefactorFeatureResponse{FeatureID: featureID, ParentID: featureID, Result: "created"}, nil
+}
+
+func (f *fakeTUIAPIClient) DiscardChild(_ context.Context, featureID string) (server.DiscardChildResponse, error) {
+	f.calls = append(f.calls, "DiscardChild")
+	return server.DiscardChildResponse{FeatureID: featureID, Result: "discarded"}, nil
 }
 
 func (f *fakeTUIAPIClient) RewindFeature(_ context.Context, featureID string, req server.RewindFeatureRequest) (server.RewindFeatureResponse, error) {

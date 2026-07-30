@@ -15,6 +15,7 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -387,6 +389,35 @@ func (t *journeyMutationTarget) DiscardChild(featureID string) (server.DiscardCh
 	return resp, nil
 }
 
+// ScanRecovery mirrors the production mutation target so a TUI cold boot
+// (which always pulls the recovery snapshot) sees the real orphan/session
+// scan rather than the unimplemented embedded interface.
+func (t *journeyMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
+	return t.orch.ScanRecovery(ctx)
+}
+
+// journeyFreshnessProvider mirrors cmd/agentico's git-backed freshness
+// provider so the read model can flag a dirty parent (dirty_parent disabled
+// reason) the same way production does.
+type journeyFreshnessProvider struct{}
+
+func (journeyFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) server.RepoFreshness {
+	worktree := repo.WorktreePath
+	if worktree == "" {
+		worktree = repo.Path
+	}
+	switch git.RepoFreshness(worktree) {
+	case "in sync":
+		return server.RepoFreshnessInSync
+	case git.FreshnessLocalChanges:
+		return server.RepoFreshnessLocalChanges
+	case "local only":
+		return server.RepoFreshnessLocalOnly
+	default:
+		return server.RepoFreshnessUnknown
+	}
+}
+
 func (t *journeyMutationTarget) StopFeature(featureID string) (server.FeatureStopResponse, error) {
 	if err := t.orch.WithRelationshipReadLock(func() error {
 		if err := t.orch.RelationshipGuard(featureID, orchestrator.MutationStop); err != nil {
@@ -397,6 +428,50 @@ func (t *journeyMutationTarget) StopFeature(featureID string) (server.FeatureSto
 		return server.FeatureStopResponse{}, err
 	}
 	return server.FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
+}
+
+// RestartFeature mirrors the production mutation target: RestartPhase
+// computes the restart outcome under the relationship guard, and the
+// returned outcome drives the ordinary resume dispatch (StartFeature for a
+// phase restart, StartRepoCycleImplement for repo cycles).
+func (t *journeyMutationTarget) RestartFeature(featureID string, req server.RestartFeatureRequest) (server.FeatureRestartResponse, error) {
+	resp := server.FeatureRestartResponse{FeatureID: featureID, Result: "failed"}
+	outcome, err := t.orch.RestartPhase(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
+	if err != nil {
+		return resp, err
+	}
+	resp.Result = "restarted"
+	if outcome.Phase.String() != "" {
+		resp.Phase = outcome.Phase.String()
+	}
+	switch outcome.Action {
+	case orchestrator.RestartNoOp:
+		resp.Dispatch = "none"
+		return resp, nil
+	case orchestrator.RestartDispatchPhase:
+		resp.Dispatch = "phase"
+		if err := t.orch.StartFeature(featureID); err != nil {
+			resp.Result = "failed"
+			return resp, err
+		}
+		return resp, nil
+	case orchestrator.RestartDispatchRepoCycles:
+		resp.Dispatch = "repo_cycles"
+		resp.RepoCycleCount = len(outcome.RepoCycleRestarts)
+		for _, restart := range outcome.RepoCycleRestarts {
+			sessionID, err := t.orch.StartRepoCycleImplement(featureID, restart.RepoName, restart.CycleType, restart.PlanContent)
+			if sessionID != "" {
+				resp.SessionIDs = append(resp.SessionIDs, sessionID)
+			}
+			if err != nil {
+				resp.Result = "failed"
+				return resp, err
+			}
+		}
+		return resp, nil
+	default:
+		return resp, fmt.Errorf("unknown restart action %d", outcome.Action)
+	}
 }
 
 func (t *journeyMutationTarget) UpdateFeatureConfig(featureID string, req server.FeatureConfigMutationRequest) (server.FeatureConfigUpdateResponse, error) {

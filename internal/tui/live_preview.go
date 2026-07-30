@@ -574,6 +574,9 @@ func livePreviewStatusText(f *feature.Feature) string {
 	if livePreviewHasValidationContext(f, nil) {
 		return livePreviewValidationTarget(f)
 	}
+	if setupReadyToStart(f) {
+		return "Ready to start"
+	}
 	if f.Status == feature.StatusCreated {
 		return "Starting"
 	}
@@ -601,6 +604,9 @@ func livePreviewCostText(f *feature.Feature) string {
 }
 
 func livePreviewActivityLine(f *feature.Feature, sess session.SessionView) string {
+	if setupReadyToStart(f) {
+		return "Setup complete — ready to start"
+	}
 	if f != nil && f.Status == feature.StatusCreated {
 		return "Starting " + f.CurrentPhase.String() + "..."
 	}

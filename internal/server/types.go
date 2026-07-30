@@ -52,6 +52,11 @@ type Options struct {
 	DomainEvents         <-chan ports.Event
 	Mutations            MutationTarget
 	RequestShutdown      func()
+	// Cleanliness inspects parent worktrees so a dirty refactor entry can
+	// attach the same structured diagnostics the launch-time error carries.
+	// Nil is tolerated: the dirty_parent disabled reason then ships without
+	// a diagnostics target.
+	Cleanliness feature.CleanlinessOps
 }
 
 type HandlerOptions struct {
@@ -74,6 +79,7 @@ type HandlerOptions struct {
 	DomainEvents          <-chan ports.Event
 	Mutations             MutationTarget
 	RequestShutdown       func()
+	Cleanliness           feature.CleanlinessOps
 }
 
 type FeatureLister interface {

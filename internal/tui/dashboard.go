@@ -68,14 +68,19 @@ type listItemKind int
 const (
 	listItemSectionHeader listItemKind = iota
 	listItemFeature
-	listItemGhostCTA // empty-state call-to-action
+	listItemChildFeature // indented child beneath a parent with an active relationship
+	listItemGhostCTA     // empty-state call-to-action
 )
 
 // listItem represents a single navigable entry in the feature list (section header or feature).
 type listItem struct {
-	kind    listItemKind
-	feature *feature.Feature // non-nil for feature items
-	section string           // "inProgress", "published", "completed"
+	kind listItemKind
+	// feature is the record this item represents: the top-level feature for
+	// listItemFeature and the active child for listItemChildFeature. Parent
+	// context is derived from the record's ChildRelationship, never
+	// stored on the item.
+	feature *feature.Feature
+	section string
 }
 
 type dashboardRightPanelMode int
@@ -89,6 +94,7 @@ const dashboardFeaturesPanelTitle = "Features"
 
 type DashboardModel struct {
 	features             []*feature.Feature
+	childFeatures        map[string]*feature.Feature // child ID → child feature for active refactor relationships
 	cursor               int
 	focusPanel           int // 0=list, 1=detail
 	rightPanelMode       dashboardRightPanelMode
@@ -109,6 +115,7 @@ type DashboardModel struct {
 	rewindingFeatureID   string          // feature ID currently being rewound (shows "Stopping..." label)
 	wantNewFeature       bool            // set when ghost CTA Enter is pressed
 	welcomeSkipped       bool            // true when user skipped the welcome flow
+	refactorEligibleIDs  map[string]bool // feature IDs that have the server-enabled refactor action
 }
 
 func NewDashboardModel(features []*feature.Feature, stateDir string) DashboardModel {
@@ -139,6 +146,39 @@ func (m *DashboardModel) ConsumeWantNewFeature() bool {
 	return false
 }
 
+// SetChildFeatures populates the child-features map and rebuilds visible items
+// so that parent rows with active children gain an indented child entry.
+func (m *DashboardModel) SetChildFeatures(children map[string]*feature.Feature) {
+	m.childFeatures = children
+	m.buildVisibleItems()
+	if m.cursor >= len(m.visibleItems) {
+		m.cursor = max(0, len(m.visibleItems)-1)
+	}
+	m.computeCursorLine()
+	m.updateScrollState(0)
+}
+
+func (m *DashboardModel) SetRefactorEligibleIDs(ids map[string]bool) {
+	m.refactorEligibleIDs = ids
+}
+
+// childForParent returns the active child feature whose ParentID matches
+// parentID, or nil when no active child exists.
+func (m DashboardModel) childForParent(parentID string) *feature.Feature {
+	for _, child := range m.childFeatures {
+		if child != nil && child.IsChild() && child.Parent.ParentID == parentID && child.IsActiveChild() {
+			return child
+		}
+	}
+	return nil
+}
+
+// hasActiveChild reports whether the given parent has an active child in the
+// childFeatures map.
+func (m DashboardModel) hasActiveChild(parentID string) bool {
+	return m.childForParent(parentID) != nil
+}
+
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -163,7 +203,7 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 						m.updateScrollState(0)
 						return m, nil
 					}
-				case listItemFeature:
+				case listItemFeature, listItemChildFeature:
 					// Focus right panel
 					m.focusPanel = 1
 				case listItemGhostCTA:
@@ -208,7 +248,7 @@ func (m *DashboardModel) MoveToAdjacentFeature(delta int) {
 		return
 	}
 	for i := m.cursor + delta; i >= 0 && i < len(m.visibleItems); i += delta {
-		if m.visibleItems[i].kind == listItemFeature {
+		if m.visibleItems[i].kind == listItemFeature || m.visibleItems[i].kind == listItemChildFeature {
 			m.cursor = i
 			m.computeCursorLine()
 			m.updateScrollState(0)
@@ -414,23 +454,13 @@ func (m DashboardModel) renderHeader(w int) string {
 
 	var contextParts []string
 	if len(m.features) > 0 {
-		activeCount, publishedCount, completedCount := 0, 0, 0
-		for _, f := range m.features {
-			switch f.Status {
-			case feature.StatusPublished:
-				publishedCount++
-			case feature.StatusDone:
-				completedCount++
-			default:
-				activeCount++
-			}
+		inProgress, published, completed := m.partitionSections()
+		featureText := fmt.Sprintf("%d active", len(inProgress))
+		if len(published) > 0 {
+			featureText += fmt.Sprintf(", %d published", len(published))
 		}
-		featureText := fmt.Sprintf("%d active", activeCount)
-		if publishedCount > 0 {
-			featureText += fmt.Sprintf(", %d published", publishedCount)
-		}
-		if completedCount > 0 {
-			featureText += fmt.Sprintf(", %d completed", completedCount)
+		if len(completed) > 0 {
+			featureText += fmt.Sprintf(", %d completed", len(completed))
 		}
 		contextParts = append(contextParts,
 			lipgloss.NewStyle().Foreground(infoColor).Render(featureText))
@@ -489,6 +519,7 @@ func (m DashboardModel) renderFooter() string {
 			}
 		}
 		if f != nil {
+			isChild := f.IsChild()
 			if isLivePreviewEligible(f) {
 				if m.showingOverviewForLiveFeature() {
 					hints = append(hints, "[l] Live Preview")
@@ -505,38 +536,49 @@ func (m DashboardModel) renderFooter() string {
 			} else {
 				hints = append(hints, "[r] Restart")
 			}
-			hints = append(hints, "[ctrl+r] Rewind")
+			if !isChild {
+				hints = append(hints, "[ctrl+r] Rewind")
+			}
 			if (f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted) && !m.showingOverviewForLiveFeature() {
 				hints = append(hints, "[l] Logs")
 			}
 
-			if f.Status == feature.StatusCodeReady && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-				hints = append(hints, "[v] Diff")
-			}
-			if f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish() && f.IsPublishable() {
-				hints = append(hints, "[p] Publish")
-			}
-			if (!activePublishedCycle && f.Status == feature.StatusPublished) || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
-				hints = append(hints, "[b] Rebase")
-			}
-			if f.Status == feature.StatusCodeReady && !f.IsPublishable() {
-				hints = append(hints, "[Shift+M] Merge to base")
-				hints = append(hints, "[Shift+D] Mark done")
-			}
-			if f.Status == feature.StatusPublished && !activePublishedCycle {
-				hints = append(hints, "[Shift+D] Mark done")
-				if len(f.PRURLs()) > 0 && f.IsPublishable() {
-					hints = append(hints, "[g] Reviews")
+			if !isChild {
+				if f.Status == feature.StatusCodeReady && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
+					hints = append(hints, "[v] Diff")
 				}
-			}
-			if ((f.Status == feature.StatusPublished && !activePublishedCycle) || f.Status == feature.StatusDone) &&
-				len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-				hints = append(hints, "[c] Clean worktree")
+				if f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish() && f.IsPublishable() {
+					hints = append(hints, "[p] Publish")
+				}
+				if (!activePublishedCycle && f.Status == feature.StatusPublished) || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
+					hints = append(hints, "[b] Rebase")
+				}
+				if f.Status == feature.StatusCodeReady && !f.IsPublishable() {
+					hints = append(hints, "[Shift+M] Merge to base")
+					hints = append(hints, "[Shift+D] Mark done")
+				}
+				if f.Status == feature.StatusPublished && !activePublishedCycle {
+					hints = append(hints, "[Shift+D] Mark done")
+					if len(f.PRURLs()) > 0 && f.IsPublishable() {
+						hints = append(hints, "[g] Reviews")
+					}
+				}
+				if ((f.Status == feature.StatusPublished && !activePublishedCycle) || f.Status == feature.StatusDone) &&
+					len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
+					hints = append(hints, "[c] Clean worktree")
+				}
 			}
 			if canEditFeatureConfig(f) {
 				hints = append(hints, "[e] Edit config")
 			}
-			hints = append(hints, "[d] Delete")
+			if !isChild && m.refactorEligibleIDs != nil && m.refactorEligibleIDs[f.ID] && !m.hasActiveChild(f.ID) {
+				hints = append(hints, "[Shift+F] Refactor")
+			}
+			if isChild {
+				hints = append(hints, "[d] Discard")
+			} else {
+				hints = append(hints, "[d] Delete")
+			}
 		}
 		hints = append(hints, "[Shift+E] Workspace Config")
 		hints = append(hints, "[←/esc] Back")
@@ -545,6 +587,9 @@ func (m DashboardModel) renderFooter() string {
 		hints = append(hints, "[n] New")
 		if m.SelectedFeature() != nil {
 			hints = append(hints, "[→/enter] Focus")
+			if m.refactorEligibleIDs != nil && m.refactorEligibleIDs[m.SelectedFeature().ID] && !m.hasActiveChild(m.SelectedFeature().ID) {
+				hints = append(hints, "[Shift+F] Refactor")
+			}
 		}
 		hints = append(hints, "[Shift+W] Workspaces", "[Shift+E] Workspace Config", "[Shift+R] Resume All", "[tab] Panel", "[q] Quit")
 	}
@@ -615,15 +660,18 @@ const (
 	dashboardSectionCompleted = "completed"
 )
 
-// buildVisibleItems computes the flat list of navigable items (section headers + features).
-// It must be called whenever features or collapsed sections change.
-func (m *DashboardModel) buildVisibleItems() {
-	// Partition features into sections
-	var inProgress, published, completed []*feature.Feature
+// partitionSections projects features into the dashboard's section buckets.
+// It is relationship-aware: a parent with an active refactor child is in
+// progress even when its stored lifecycle remains Published, and children
+// never appear as top-level entries. The header summary and the feature
+// list must consume this single projection so their counts never diverge.
+func (m DashboardModel) partitionSections() (inProgress, published, completed []*feature.Feature) {
 	for _, f := range m.features {
 		switch {
 		case f.Status == feature.StatusDone:
 			completed = append(completed, f)
+		case m.hasActiveChild(f.ID):
+			inProgress = append(inProgress, f)
 		case isActivePublishedCycle(f):
 			inProgress = append(inProgress, f)
 		case f.Status == feature.StatusPublished:
@@ -632,6 +680,13 @@ func (m *DashboardModel) buildVisibleItems() {
 			inProgress = append(inProgress, f)
 		}
 	}
+	return inProgress, published, completed
+}
+
+// buildVisibleItems computes the flat list of navigable items (section headers + features).
+// It must be called whenever features or collapsed sections change.
+func (m *DashboardModel) buildVisibleItems() {
+	inProgress, published, completed := m.partitionSections()
 
 	sections := []sectionMeta{
 		{"inProgress", sectionLabel("inProgress"), inProgress},
@@ -652,6 +707,9 @@ func (m *DashboardModel) buildVisibleItems() {
 
 		for _, f := range sec.features {
 			items = append(items, listItem{kind: listItemFeature, feature: f, section: sec.key})
+			if child := m.childForParent(f.ID); child != nil {
+				items = append(items, listItem{kind: listItemChildFeature, feature: child, section: sec.key})
+			}
 		}
 	}
 
@@ -691,6 +749,12 @@ func (m *DashboardModel) computeCursorLine() {
 				return
 			}
 			lineIndex++ // feature row
+		case listItemChildFeature:
+			if i == m.cursor {
+				m.cursorLine = lineIndex
+				return
+			}
+			lineIndex++ // child feature row
 		}
 	}
 }
@@ -778,23 +842,18 @@ func (m *DashboardModel) updateScrollState(panelHeight int) {
 }
 
 // sectionFeatureCount returns the total number of features in a section (regardless of collapse).
+// Counts come from partitionSections so the header badges, list rows, and this
+// count never drift apart when relationship-aware sectioning changes.
 func (m DashboardModel) sectionFeatureCount(sectionKey string) int {
-	count := 0
-	for _, f := range m.features {
-		switch sectionKey {
-		case "inProgress":
-			if isActivePublishedCycle(f) || (f.Status != feature.StatusPublished && f.Status != feature.StatusDone) {
-				count++
-			}
-		case "published":
-			if f.Status == feature.StatusPublished && !isActivePublishedCycle(f) {
-				count++
-			}
-		case "completed":
-			if f.Status == feature.StatusDone {
-				count++
-			}
-		}
+	inProgress, published, completed := m.partitionSections()
+	var count int
+	switch sectionKey {
+	case "inProgress":
+		count = len(inProgress)
+	case dashboardSectionPublished:
+		count = len(published)
+	case dashboardSectionCompleted:
+		count = len(completed)
 	}
 	if sectionKey == "inProgress" && m.creatingName != "" {
 		count++
@@ -859,6 +918,11 @@ func (m DashboardModel) renderFeatureList() string {
 			f := item.feature
 
 			row := m.renderFeatureRowCompact(f, i == m.cursor)
+			content.WriteString(row + "\n")
+			lineIndex++
+
+		case listItemChildFeature:
+			row := m.renderChildRowCompact(item.feature, i == m.cursor)
 			content.WriteString(row + "\n")
 			lineIndex++
 
@@ -984,6 +1048,15 @@ func (m DashboardModel) renderFeatureRowCompact(f *feature.Feature, selected boo
 	var status string
 	if m.rewindingFeatureID == f.ID {
 		status = WarningStyle.Render("Stopping…")
+	} else if child := m.childForParent(f.ID); child != nil {
+		label := refactoringDisplayState(f, child)
+		if label == "Refactoring — Needs attention" {
+			status = WarningStyle.Render(label)
+			icon = awaitingUserGlyph()
+		} else {
+			status = lipgloss.NewStyle().Foreground(colorInfo).Render(label)
+			icon = lipgloss.NewStyle().Foreground(colorInfo).Render(icons.Implementing)
+		}
 	} else {
 		status = formatStatus(f)
 	}
@@ -1009,10 +1082,51 @@ func (m DashboardModel) renderFeatureRowCompact(f *feature.Feature, selected boo
 	return "  " + row
 }
 
+func (m DashboardModel) renderChildRowCompact(f *feature.Feature, selected bool) string {
+	icon := statusIcon(f.Status.String())
+	att := computeFeatureAttention(f, nil)
+	if att.RequiresUser() {
+		icon = awaitingUserGlyph()
+	} else if att.Kind == attentionWatch && m.spinnerView != "" {
+		icon = m.spinnerView
+	}
+	status := formatStatus(f)
+
+	slug := f.Slug
+	if len(slug) > 18 {
+		slug = slug[:17] + "\u2026"
+	}
+
+	pipelineBadge := formatPipelineBadge(f.EffectivePipeline())
+	row := fmt.Sprintf("%s %-18s %s %s", icon, slug, pipelineBadge, status)
+
+	if selected {
+		return SelectedRowStyle.Render("\u25b8 \u21b3 " + ansi.Strip(row))
+	}
+	return "  \u21b3 " + row
+}
+
+// refactoringDisplayState returns the parent's display label when it has an
+// active refactor child. Returns "Refactoring — Needs attention" when the
+// child needs user attention, otherwise "Refactoring". Returns empty when no
+// child is provided.
+func refactoringDisplayState(parent *feature.Feature, child *feature.Feature) string {
+	if child == nil {
+		return ""
+	}
+	if featureNeedsUserAttention(child) {
+		return "Refactoring — Needs attention"
+	}
+	return "Refactoring"
+}
+
 func (m DashboardModel) SelectedFeature() *feature.Feature {
 	if m.cursor >= 0 && m.cursor < len(m.visibleItems) {
 		item := m.visibleItems[m.cursor]
 		if item.kind == listItemFeature {
+			return item.feature
+		}
+		if item.kind == listItemChildFeature {
 			return item.feature
 		}
 	}
@@ -1028,6 +1142,26 @@ func (m DashboardModel) SelectedSection() string {
 		}
 	}
 	return ""
+}
+
+// SelectFeatureByID moves the cursor to the feature or child feature matching
+// the given ID. Returns true if found. Unlike selectFeature (which only
+// matches top-level listItemFeature rows), this also matches child rows by
+// their child ID.
+func (m *DashboardModel) SelectFeatureByID(featureID string) bool {
+	if featureID == "" {
+		m.syncPreview()
+		return false
+	}
+	return m.findAndSelect(func(item listItem) bool {
+		if item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID {
+			return true
+		}
+		if item.kind == listItemChildFeature && item.feature != nil && item.feature.ID == featureID {
+			return true
+		}
+		return false
+	})
 }
 
 // SetWelcomeSkipped marks that the user skipped the welcome flow, enabling
@@ -1067,10 +1201,18 @@ func (m DashboardModel) CollapsedSectionsList() []string {
 	return result
 }
 
+// countNeedAttention counts the relationships that need user attention. An
+// active refactor child that needs attention surfaces on its parent's row as
+// "Refactoring — Needs attention", so each parent/child relationship
+// contributes at most once to the warning total.
 func (m DashboardModel) countNeedAttention() int {
 	count := 0
 	for _, f := range m.features {
 		if featureNeedsUserAttention(f) {
+			count++
+			continue
+		}
+		if child := m.childForParent(f.ID); child != nil && featureNeedsUserAttention(child) {
 			count++
 		}
 	}

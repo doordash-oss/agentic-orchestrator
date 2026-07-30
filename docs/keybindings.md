@@ -1,6 +1,6 @@
 # Agentic Orchestrator Keybinding Reference
 
-_Auto-generated on 2026-07-14. Do not edit manually._
+_Auto-generated on 2026-07-29. Do not edit manually._
 
 _Run `go generate ./internal/tui/...` to regenerate._
 
@@ -12,6 +12,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `enter` | Focus right panel / expand |
 | `a` | Watch active work; Answer, Approve, or Review when prompted |
 | `Shift+R` | Resume all interrupted features |
+| `Shift+F` | Start refactor (eligible terminal feature) |
 | `tab` | Switch panel |
 | `↑/k` | Move up |
 | `↓/j` | Move down |
@@ -40,6 +41,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `b` | Rebase on main (code ready or published) |
 | `e` | Edit config |
 | `Shift+E` | Edit workspace config |
+| `Shift+F` | Start refactor (eligible terminal feature) |
 | `Shift+M` | Merge to base branch (local repos) |
 | `Shift+D` | Mark as done |
 | `g` | Review comments (published) |

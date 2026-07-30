@@ -184,6 +184,10 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 	detail.Summary = safeDisplayText(f.Summary, 500)
 	detail.Pipeline = string(f.Pipeline)
 	detail.Models = f.Models
+	detail.Effort = f.Effort
+	detail.Inquireness = f.Inquireness
+	detail.RiskLevel = f.RiskLevel
+	detail.ExitCriteria = safeDisplayText(f.ExitCriteria, 500)
 	autoReviewEnabled, autoReviewSource := feature.ResolveAutomaticReview(
 		f.AutomaticReviewMode,
 		h.configOrDefault().Defaults.AutomaticReviewEnabled,
@@ -214,11 +218,10 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetailDTO, err
 			Message: "the active child relationship requires integration attention",
 		}, actionDelete)
 	}
-	if !f.IsChild() && detail.ActiveChild == nil && h.parentHasLocalChanges(f) {
-		disableAction(detail.Actions, actionRefactor, ActionDisabledReasonDTO{
-			Code:    "dirty_parent",
-			Message: "parent repositories must be clean before launching a refactor child",
-		})
+	if !f.IsChild() && detail.ActiveChild == nil {
+		if reason, dirty := h.refactorEntryDisabledReason(f); dirty {
+			disableAction(detail.Actions, actionRefactor, reason)
+		}
 	}
 	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {
@@ -252,16 +255,74 @@ func appendDisabledReason(actions []ActionDTO, reason ActionDisabledReasonDTO, e
 	}
 }
 
-func (h *apiHandler) parentHasLocalChanges(f *feature.Feature) bool {
-	if h.freshness == nil || f == nil {
-		return false
+// refactorEntryDisabledReason reports the dirty_parent disabled reason for a
+// refactor-eligible parent whose worktrees carry uncommitted changes. When
+// the cleanliness capability is wired it is the authoritative check — its
+// staged/unstaged/untracked inspection matches the launch-time preflight —
+// and the reason carries the same structured per-repository diagnostics the
+// parent_worktrees_dirty mutation error returns, so clients can present the
+// remediation immediately instead of only after a failed submission. Without
+// the capability, the coarser freshness probe keeps the historical boolean.
+func (h *apiHandler) refactorEntryDisabledReason(f *feature.Feature) (ActionDisabledReasonDTO, bool) {
+	if f == nil {
+		return ActionDisabledReasonDTO{}, false
+	}
+	reason := ActionDisabledReasonDTO{
+		Code:    "dirty_parent",
+		Message: "parent repositories must be clean before launching a refactor child",
+	}
+	if h.cleanliness != nil {
+		if payload := h.dirtyRepoDiagnostics(f.Repos); len(payload) > 0 {
+			reason.Target = map[string]any{"repos": payload}
+			return reason, true
+		}
+		return ActionDisabledReasonDTO{}, false
+	}
+	if h.freshness == nil {
+		return ActionDisabledReasonDTO{}, false
 	}
 	for _, repo := range f.Repos {
 		if h.freshness.Freshness(f, repo) == RepoFreshnessLocalChanges {
-			return true
+			return reason, true
 		}
 	}
-	return false
+	return ActionDisabledReasonDTO{}, false
+}
+
+// dirtyRepoDiagnostics converts the dirty parent repositories into the
+// categorized payload shared with the launch-time error mapping.
+func (h *apiHandler) dirtyRepoDiagnostics(repos []feature.FeatureRepo) []map[string]any {
+	if h.cleanliness == nil {
+		return nil
+	}
+	dirty := make([]feature.RepoDirtyDiagnostics, 0, len(repos))
+	for _, repo := range repos {
+		path := repo.WorktreePath
+		if path == "" {
+			path = repo.Path
+		}
+		if path == "" {
+			continue
+		}
+		report, err := h.cleanliness.InspectCleanliness(path, feature.DefaultDirtyPathLimit)
+		if err != nil || report == nil || !report.Dirty() {
+			continue
+		}
+		dirty = append(dirty, feature.RepoDirtyDiagnostics{
+			Repo:           repo.Name,
+			Path:           path,
+			Staged:         report.Staged,
+			Unstaged:       report.Unstaged,
+			Untracked:      report.Untracked,
+			StagedTotal:    report.StagedTotal,
+			UnstagedTotal:  report.UnstagedTotal,
+			UntrackedTotal: report.UntrackedTotal,
+		})
+	}
+	if len(dirty) == 0 {
+		return nil
+	}
+	return dirtyDiagnosticsPayload(dirty)
 }
 
 func disableAction(actions []ActionDTO, actionID string, reason ActionDisabledReasonDTO) {

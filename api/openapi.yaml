@@ -2572,6 +2572,14 @@ components:
           type: string
         message:
           type: string
+        target:
+          description: >-
+            Optional machine-readable context for the disable reason. The
+            `dirty_parent` reason on the Refactor action carries per-repository
+            dirty-worktree diagnostics under `target.repos` using the same
+            shape as the `parent_worktrees_dirty` mutation error target.
+          type: object
+          additionalProperties: true
     Action:
       type: object
       required: [id, enabled, scope, required_inputs]
@@ -2614,6 +2622,23 @@ components:
               type: string
             models:
               $ref: "#/components/schemas/ModelDefaults"
+            effort:
+              $ref: "#/components/schemas/EffortConfig"
+            inquireness:
+              type: string
+              enum: [none, medium, high]
+              x-go-type: feature.Inquireness
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            risk_level:
+              type: string
+              x-go-type: feature.RiskLevel
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
+            exit_criteria:
+              type: string
             automatic_review:
               $ref: "#/components/schemas/AutomaticReviewState"
             active_run_detail:

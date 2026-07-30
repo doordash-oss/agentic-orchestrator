@@ -198,6 +198,57 @@ func waitForJourneyGate(t *testing.T, baseURL, childID string, wantRoadmapPhase 
 	t.Fatalf("child %s never reached plan-review gate for roadmap phase %v; last: %s", childID, wantRoadmapPhase, lastJSON)
 }
 
+// waitForJourneyStatus polls until the feature reports the wanted durable
+// status, failing with the last observed body on timeout.
+func waitForJourneyStatus(t *testing.T, baseURL, featureID, wantStatus string) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	var last map[string]any
+	for time.Now().Before(deadline) {
+		body := journeyFeatureBody(baseURL, featureID)
+		if body != nil {
+			last = body
+			if body["status"] == wantStatus {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	lastJSON, _ := json.Marshal(last)
+	t.Fatalf("feature %s never reached status %q; last: %s", featureID, wantStatus, lastJSON)
+}
+
+// waitForJourneyFeatureSessionsQuiescent polls until the feature has no
+// active sessions left. A stop transitions the durable status to
+// Interrupted BEFORE the session kill settles, so resume/restart actions
+// dispatched on the status alone would race a still-running subprocess.
+func waitForJourneyFeatureSessionsQuiescent(t *testing.T, baseURL, featureID string) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		sessions, err := getJourneyJSONQuiet(baseURL + "/api/v1/sessions")
+		if err == nil && sessions != nil {
+			active := false
+			rows, _ := sessions["sessions"].([]any)
+			lastRows, _ := json.Marshal(rows)
+			last = string(lastRows)
+			for _, row := range rows {
+				sess, _ := row.(map[string]any)
+				if sess["feature_id"] == featureID && sess["status"] == "Running" {
+					active = true
+					break
+				}
+			}
+			if !active {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("feature %s sessions never drained; last: %s", featureID, last)
+}
+
 // waitForJourneyChildClosed polls until the child relationship is durably
 // closed AND the closure tail (cleanup or its recorded warning) has settled,
 // so follow-on assertions never race the post-close work.

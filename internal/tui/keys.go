@@ -142,6 +142,9 @@ type keyMap struct {
 	// Dashboard approve-and-remember
 	ApproveAndRemember key.Binding
 
+	// Refactor-specific
+	Refactor key.Binding
+
 	// Attach-specific
 	Detach key.Binding
 }
@@ -204,6 +207,9 @@ var keys = keyMap{
 
 	// Dashboard approve-and-remember
 	ApproveAndRemember: key.NewBinding(key.WithKeys("A"), key.WithHelp("Shift+A", "approve & remember")),
+
+	// Refactor-specific
+	Refactor: key.NewBinding(key.WithKeys("F"), key.WithHelp("Shift+F", "start refactor")),
 
 	// Attach-specific
 	Detach: key.NewBinding(key.WithKeys("ctrl+]", "esc"), key.WithHelp("ctrl+]/esc", "stop watching")),

@@ -396,6 +396,12 @@ func (c *Client) CleanupFeature(ctx context.Context, featureID string, req Clean
 	return out, err
 }
 
+func (c *Client) DiscardChild(ctx context.Context, featureID string) (DiscardChildResponse, error) {
+	var out DiscardChildResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionDiscard), nil, map[string]any{}, &out, true)
+	return out, err
+}
+
 func (c *Client) DeleteFeature(ctx context.Context, featureID string) (DeleteFeatureResponse, error) {
 	var out DeleteFeatureResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionDelete), nil, map[string]any{}, &out, true)

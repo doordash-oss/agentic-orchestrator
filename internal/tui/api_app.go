@@ -78,6 +78,7 @@ type APIClient interface {
 	RefactorFeature(context.Context, string, server.RefactorFeatureRequest) (server.RefactorFeatureResponse, error)
 	MarkDone(context.Context, string) (server.MarkDoneResponse, error)
 	CleanupFeature(context.Context, string, server.CleanupActionRequest) (server.CleanupFeatureResponse, error)
+	DiscardChild(context.Context, string) (server.DiscardChildResponse, error)
 	UpdateFeatureConfig(context.Context, string, server.FeatureConfigMutationRequest) (server.FeatureConfigUpdateResponse, error)
 	UpdateRuntimeConfig(context.Context, server.RuntimeConfigMutationRequest) (server.RuntimeConfigUpdateResponse, error)
 	ExecuteRecovery(context.Context, server.RecoveryActionRequest) (server.RecoveryActionResponse, error)
@@ -182,6 +183,8 @@ const (
 	mutationKindFeatureRebase                = "feature.rebase"
 	mutationKindFeatureCleanup               = "feature.cleanup"
 	mutationKindFeatureStop                  = "feature.stop"
+	mutationKindFeatureRefactor              = "feature.refactor"
+	mutationKindFeatureDiscard               = "feature.discard"
 )
 
 // actionIDX are the short action-verb IDs server.ActionDTO.ID reports,
@@ -199,6 +202,8 @@ const (
 	actionIDRewind         = "rewind"
 	actionIDStop           = "stop"
 	actionIDDelete         = "delete"
+	actionIDDiscard        = "discard"
+	actionIDRefactor       = "refactor"
 )
 
 // actionInputNameX are server.ActionDTO.RequiredInputs[*].Name values.
@@ -490,6 +495,7 @@ type APIAppModel struct {
 	attach                     *AttachModel
 	artifactReview             *ArtifactReviewModel
 	wizard                     *WizardModel
+	refactorLaunch             refactorLaunchState
 	reviewComments             *apiReviewCommentsPanel
 	configEditor               *EditConfigModel
 	workspaceManager           *WorkspaceManagerModel
@@ -805,6 +811,19 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 		welcome := NewWelcomeModel()
 		app.welcome = &welcome
 	}
+	// Project every active relationship eagerly: the nested child row must be
+	// discoverable on a cold start even before its parent is selected, since
+	// apiChildFeatures only renders children whose detail records are cached.
+	for _, summary := range features.Features {
+		if summary.ActiveChild == nil || summary.ActiveChild.ID == "" {
+			continue
+		}
+		childDetail, err := client.FeatureDetail(ctx, summary.ActiveChild.ID)
+		if err != nil {
+			return APIAppModel{}, fmt.Errorf("load active child detail snapshot: %w", err)
+		}
+		app.storeFeatureDetail(childDetail)
+	}
 	app.rebuildPresentation("")
 	if app.selectedFeature != "" {
 		if err := app.loadSelectedFeatureState(ctx, client); err != nil {
@@ -827,6 +846,17 @@ func (app *APIAppModel) loadSelectedFeatureState(ctx context.Context, client API
 		return fmt.Errorf("load selected feature detail snapshot: %w", err)
 	}
 	app.storeFeatureDetail(detail)
+	// A parent loaded with an active child must project the nested child row
+	// even when no relationship event has delivered the child's own record.
+	if child := detail.Feature.ActiveChild; child != nil && child.ID != "" {
+		if _, ok := app.featureDetails[child.ID]; !ok {
+			childDetail, err := client.FeatureDetail(ctx, child.ID)
+			if err != nil {
+				return fmt.Errorf("load active child detail snapshot: %w", err)
+			}
+			app.storeFeatureDetail(childDetail)
+		}
+	}
 	preview, err := client.LivePreview(ctx, app.selectedFeature)
 	if err != nil {
 		return fmt.Errorf("load selected feature live preview snapshot: %w", err)
@@ -959,6 +989,15 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncAPIContentViewport()
 		}
 		m = m.applyAPIChatRefreshSnapshot(msg.snapshot)
+		if m.refactorLaunch.entryRetryParentID != "" && m.refactorLaunch.remediation == nil && m.wizard == nil {
+			parentID := m.refactorLaunch.entryRetryParentID
+			m.refactorLaunch.entryRetryParentID = ""
+			if m.selectedFeature == parentID {
+				var entryCmd tea.Cmd
+				m, entryCmd = m.openRefactorWizardIfEligible()
+				return m, tea.Batch(m.apiChatRecoveryCmdIfResponding(), notifyCmd, entryCmd)
+			}
+		}
 		return m, tea.Batch(m.apiChatRecoveryCmdIfResponding(), notifyCmd)
 	case apiAttachSessionsSnapshotMsg:
 		return m.applyAPIAttachSessionsSnapshot(msg)
@@ -1043,6 +1082,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if f := m.selectedAPIDashboardFeature(); f != nil && f.ID == msg.featureID {
 			m.configEditor.deferredEffectWarning = featureConfigChangesDeferred(f)
 		}
+		m.applyPairedConfigEditorMode(msg.featureID)
 		m.statusMessage = ""
 		return m, nil
 	case publishDescGeneratedMsg:
@@ -1113,6 +1153,15 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.configEditor.saveErr = firstLine(msg.err.Error())
 				return m, nil
 			}
+			if msg.kind == mutationKindFeatureRefactor {
+				remediation := parseDirtyRemediation(msg.err, m.refactorLaunch.pendingResult, m.refactorLaunch.pendingParentID)
+				if remediation != nil {
+					m.refactorLaunch.remediation = remediation
+					m.statusMessage = ""
+					return m, nil
+				}
+				m.refactorLaunch.reset()
+			}
 			m.statusMessage = "Mutation failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
@@ -1121,7 +1170,15 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recovery = server.RecoverySnapshotResponse{}
 		}
 		if msg.kind == mutationKindFeatureConfigUpdate {
+			pairedID := ""
+			if m.configEditor != nil && m.configEditor.pairedMode {
+				pairedID = m.configEditor.pairedFeatureID
+			}
 			m.configEditor = nil
+			if pairedID != "" {
+				m.rebuildPresentation(m.selectedFeature)
+				return m, m.fetchFeatureDetailCmd(pairedID)
+			}
 		}
 		if msg.kind == mutationKindRuntimeConfigUpdate {
 			m.configEditor = nil
@@ -1171,6 +1228,38 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.rebuildPresentation(m.selectedFeature)
 			return m, m.fetchFeatureDetailCmd(msg.featureID)
+		}
+		if msg.kind == mutationKindFeatureRefactor && msg.featureID != "" {
+			m.refactorLaunch.reset()
+			m.rebuildPresentation(m.selectedFeature)
+			m.selectedFeature = msg.featureID
+			return m, m.fetchFeatureDetailCmd(msg.featureID)
+		}
+		if msg.kind == mutationKindFeatureDiscard && msg.featureID != "" {
+			// Discarding a child closes the active relationship: refresh both
+			// records so the child leaves the nested rows and the parent's
+			// Refactoring projection clears, and fall back to the parent as
+			// the selected row, the only closed-history affordance exposed
+			// while the child is closed.
+			var parentID string
+			if resp, ok := m.featureDetails[msg.featureID]; ok {
+				parentID = resp.Feature.ParentID
+			}
+			if m.selectedFeature == msg.featureID && parentID != "" {
+				m.selectedFeature = parentID
+			}
+			m.rebuildPresentation(m.selectedFeature)
+			// Refresh via resource-scoped signals rather than the
+			// selected-feature detail command: after the fallback above the
+			// discarded child is no longer selected, and the selected-feature
+			// fetch path drops unselected detail responses.
+			if parentID != "" {
+				return m, tea.Batch(
+					m.fetchRefreshSnapshotCmd(apiFeatureUpdatedSignal(parentID)),
+					m.fetchRefreshSnapshotCmd(apiFeatureUpdatedSignal(msg.featureID)),
+				)
+			}
+			return m, m.fetchRefreshSnapshotCmd(apiFeatureUpdatedSignal(msg.featureID))
 		}
 		if apiMutationRefreshesFeatureDetail(msg.kind) && msg.featureID != "" {
 			m.rebuildPresentation(m.selectedFeature)
@@ -1306,6 +1395,30 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.publish != nil {
 		return m.handleAPIPublishKey(msg)
 	}
+	if m.refactorLaunch.remediation != nil {
+		switch msg.Code {
+		case tea.KeyEscape:
+			m.refactorLaunch.reset()
+			return m, nil
+		}
+		if msg.Text == "r" || msg.Text == "R" {
+			result := m.refactorLaunch.remediation.wizardResult
+			parentID := m.refactorLaunch.remediation.parentID
+			if result == nil {
+				// Entry-time remediation: nothing has been submitted yet.
+				// Re-pull the parent's authoritative action catalog and
+				// re-evaluate entry once the refreshed snapshot lands.
+				m.refactorLaunch.remediation = nil
+				m.refactorLaunch.entryRetryParentID = parentID
+				return m, m.fetchRefreshSnapshotCmd(apiFeatureUpdatedSignal(parentID))
+			}
+			// Clear only the panel: the pending launch state stays so a
+			// dirty retry reopens remediation with the same wizard values.
+			m.refactorLaunch.remediation = nil
+			return m, m.refactorFeatureCmd(result, parentID)
+		}
+		return m, nil
+	}
 	if m.recoveryPanel != nil {
 		return m.handleAPIRecoveryKey(msg)
 	}
@@ -1415,6 +1528,9 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openAPIContextualAction()
 	case msg.Text == "o":
 		return m.showAPIOverview(), nil
+	case key.Matches(msg, keys.Refactor):
+		newM, cmd := m.openRefactorWizardIfEligible()
+		return newM, cmd
 	}
 	switch msg.Text {
 	case "E":
@@ -1455,6 +1571,9 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		return m.confirmSelectedFeatureAction(mutationKindFeatureStop), nil
 	case "d":
+		if m.selectedActionReady(mutationKindFeatureDiscard) {
+			return m.confirmSelectedFeatureAction(mutationKindFeatureDiscard), nil
+		}
 		return m.confirmSelectedFeatureAction(mutationKindFeatureDelete), nil
 	case "c":
 		return m.confirmSelectedFeatureAction(mutationKindFeatureCleanup), nil
@@ -1774,6 +1893,9 @@ func (m APIAppModel) View() tea.View {
 			view = overlayModal(view, m.wizard.RootPickerView(), w, h)
 		}
 	}
+	if m.refactorLaunch.remediation != nil {
+		view = overlayModal(view, m.refactorLaunch.remediation.View(w), w, h)
+	}
 	if m.repoActionPanel != nil {
 		view = overlayModal(view, m.renderAPIRepoActionPanel(min(w-4, 72)), w, h)
 	}
@@ -1841,9 +1963,11 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 	if len(m.runtimeConfig.UI.CollapsedSections) > 0 {
 		dashboard.SetCollapsedSections(m.runtimeConfig.UI.CollapsedSections)
 	}
+	dashboard.SetChildFeatures(m.apiChildFeatures())
+	dashboard.SetRefactorEligibleIDs(m.apiRefactorEligibleIDs())
 	switch {
 	case m.selectedFeature != "":
-		dashboard.selectFeature(m.selectedFeature)
+		dashboard.SelectFeatureByID(m.selectedFeature)
 	case m.selectedSection != "":
 		dashboard.selectSection(m.selectedSection)
 	default:
@@ -1885,9 +2009,51 @@ func (m APIAppModel) apiDashboardFeatures() []*feature.Feature {
 	features := make([]*feature.Feature, 0, len(m.featureList.Features))
 	for _, summary := range m.featureList.Features {
 		detail, hasDetail := details[summary.ID]
+		// The top-level list never carries child records: a child renders
+		// only as the nested row beneath its parent, so an upserted child
+		// summary (e.g. from a selected-child detail refresh) would
+		// otherwise duplicate the relationship as an ordinary feature row.
+		if hasDetail && detail.ParentID != "" {
+			continue
+		}
 		features = append(features, m.apiDashboardFeature(summary, detail, hasDetail))
 	}
 	return features
+}
+
+func (m APIAppModel) apiChildFeatures() map[string]*feature.Feature {
+	children := make(map[string]*feature.Feature)
+	for id, resp := range m.featureDetails {
+		if resp.Feature.ParentID == "" {
+			continue
+		}
+		// A closed child (e.g. discarded) leaves the active relationship:
+		// the dashboard exposes no closed-history rows, so it must not
+		// render as the nested active row.
+		if resp.Feature.CloseOutcome != "" {
+			continue
+		}
+		summary := apiFeatureDetailSummary(resp.Feature)
+		child := m.apiDashboardFeature(summary, resp.Feature, true)
+		children[id] = child
+	}
+	return children
+}
+
+func (m APIAppModel) apiRefactorEligibleIDs() map[string]bool {
+	eligible := make(map[string]bool)
+	for id, resp := range m.featureDetails {
+		if resp.Feature.ParentID != "" {
+			continue
+		}
+		for _, action := range resp.Feature.Actions {
+			if action.ID == actionIDRefactor && action.Enabled {
+				eligible[id] = true
+				break
+			}
+		}
+	}
+	return eligible
 }
 
 func (m APIAppModel) selectedAPIDashboardFeature() *feature.Feature {
@@ -1899,6 +2065,9 @@ func (m APIAppModel) apiDashboardFeatureByID(featureID string) *feature.Feature 
 		if f.ID == featureID {
 			return f
 		}
+	}
+	if child, ok := m.apiChildFeatures()[featureID]; ok {
+		return child
 	}
 	return nil
 }
@@ -2010,6 +2179,14 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	}
 	if hasDetail {
 		applyAPIFeatureDetail(f, detail)
+		if detail.ParentID != "" {
+			f.Parent = &feature.ChildRelationship{
+				ParentID:     detail.ParentID,
+				Kind:         detail.ParentKind,
+				CloseOutcome: detail.CloseOutcome,
+				ClosedAt:     detail.ClosedAt,
+			}
+		}
 	}
 	activeCycleType := feature.RepoCycleType("")
 	rebaseCount := 0
@@ -3791,6 +3968,16 @@ func (m APIAppModel) Close() {
 
 func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 	selected := m.selectedFeature
+	// Remember the selected record's parent before the refresh applies: if
+	// the selected active child closes or disappears in this snapshot, the
+	// relationship fallback is its parent regardless of how other top-level
+	// features re-sort.
+	fallbackParent := ""
+	if selected != "" {
+		if resp, ok := m.featureDetails[selected]; ok {
+			fallbackParent = resp.Feature.ParentID
+		}
+	}
 	if snapshot.Features != nil {
 		m.featureList = *snapshot.Features
 	}
@@ -3839,7 +4026,7 @@ func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 		m.storeLivePreview(snapshot.LivePreview.Feature.ID, *snapshot.LivePreview)
 		m.upsertFeatureSummary(snapshot.LivePreview.Feature)
 	}
-	m.rebuildPresentation(selected)
+	m.rebuildPresentationWithFallback(selected, fallbackParent)
 }
 
 func (m *APIAppModel) storeFeatureDetail(detail server.FeatureDetailResponse) {
@@ -4034,6 +4221,14 @@ func (m APIAppModel) apiLivePreviewAndTranscript(selected string) (*APILivePrevi
 }
 
 func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
+	m.rebuildPresentationWithFallback(preferredFeatureID, "")
+}
+
+// rebuildPresentationWithFallback rebuilds the dashboard presentation,
+// preferring preferredFeatureID for selection and falling back to
+// fallbackFeatureID (a closed/removed child's parent) before the generic
+// first-feature default.
+func (m *APIAppModel) rebuildPresentationWithFallback(preferredFeatureID, fallbackFeatureID string) {
 	attention := apiAttentionCounts(m.featureList.Features, m.prompts, m.permissions)
 	features := make([]APIFeaturePresentation, 0, len(m.featureList.Features))
 	for _, dto := range m.featureList.Features {
@@ -4065,9 +4260,14 @@ func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
 		providers = append(providers, m.catalog.ProviderOrder...)
 	}
 	selected := preferredFeatureID
-	if !apiHasFeature(features, selected) {
+	// A closed child must lose selection even when its summary still lingers
+	// in the cached feature list: closed relationships project no rows, so
+	// list membership alone never keeps them selectable.
+	if m.apiClosedChildFeature(selected) || (!apiHasFeature(features, selected) && !m.apiHasChildFeature(selected)) {
 		selected = ""
-		if len(features) > 0 && m.selectedSection == "" {
+		if apiHasFeature(features, fallbackFeatureID) {
+			selected = fallbackFeatureID
+		} else if len(features) > 0 && m.selectedSection == "" {
 			selected = features[0].ID
 		}
 	}
@@ -4591,6 +4791,70 @@ func (m APIAppModel) openCreateFeaturePrompt(_ int) APIAppModel {
 	return m
 }
 
+func (m APIAppModel) openRefactorWizard() APIAppModel {
+	parentID := m.selectedFeature
+	if parentID == "" {
+		return m
+	}
+	parentDetail, ok := m.featureDetails[parentID]
+	if !ok {
+		return m
+	}
+	parentRepos := append([]string(nil), parentDetail.Feature.Repos...)
+
+	availRepos, repoPaths, repoConfigs := apiRuntimeRepoState(m.runtimeConfig)
+	existingSlugs := make(map[string]string, len(m.featureList.Features))
+	for _, f := range m.featureList.Features {
+		if f.Slug != "" {
+			existingSlugs[f.Slug] = f.Name
+		}
+	}
+	cat := apiPhaseModelCatalog(m.catalog)
+	parentReviews := parentDetail.Feature.Checkpoints
+	wizard := NewRefactorWizardModel(
+		availRepos,
+		repoPaths,
+		repoConfigs,
+		apiWizardDefaults(m.runtimeConfig),
+		"",
+		cat.ProviderModels,
+		cat.ProviderOrder,
+		cat.PhaseDefaults,
+		cat.PhaseProviderModels,
+		existingSlugs,
+		append([]string(nil), m.runtimeConfig.WorkspaceRoots...),
+		RefactorWizardSeed{
+			ParentID:    parentID,
+			ParentRepos: parentRepos,
+			// server.ModelDefaults and server.EffortConfig are type aliases
+			// for the config-domain structs, so direct copies suffice.
+			Models:       parentDetail.Feature.Models,
+			Effort:       parentDetail.Feature.Effort,
+			Inquireness:  parentDetail.Feature.Inquireness,
+			RiskLevel:    parentDetail.Feature.RiskLevel,
+			ExitCriteria: parentDetail.Feature.ExitCriteria,
+			Checkpoints: config.Checkpoints{
+				InquiryReview:   parentReviews.InquiryReview,
+				ResearchReview:  parentReviews.ResearchReview,
+				DesignReview:    parentReviews.DesignReview,
+				RoadmapReview:   parentReviews.RoadmapReview,
+				PhasePlanReview: parentReviews.PhasePlanReview,
+				ManualPublish:   parentReviews.ManualPublish,
+			},
+		},
+	)
+	if m.width > 0 {
+		wizard.SetWidth(m.width)
+	}
+	if m.height > 0 {
+		wizard.height = m.height
+	}
+	m.wizard = &wizard
+	m.configEditor = nil
+	m.statusMessage = ""
+	return m
+}
+
 func (m APIAppModel) newCreateFeatureWizard() WizardModel {
 	availRepos, repoPaths, repoConfigs := apiRuntimeRepoState(m.runtimeConfig)
 
@@ -4615,6 +4879,55 @@ func (m APIAppModel) newCreateFeatureWizard() WizardModel {
 		existingSlugs,
 		append([]string(nil), m.runtimeConfig.WorkspaceRoots...),
 	)
+}
+
+func (m APIAppModel) openRefactorWizardIfEligible() (APIAppModel, tea.Cmd) {
+	if !m.requireSelectedFeature() {
+		return m, nil
+	}
+	if !m.selectedActionReady(mutationKindFeatureRefactor) {
+		// A known-dirty parent is a recoverable entry condition, not a hard
+		// block and never a reason to bypass the guard: show the same focused
+		// remediation presentation the submission-time dirty race produces,
+		// built from the server's structured disabled-reason diagnostics.
+		// Wizard-value preservation is reserved for the submission-time race
+		// after an initially enabled entry.
+		if reason, ok := m.selectedActionDisabledReason(mutationKindFeatureRefactor, disabledReasonDirtyParent); ok {
+			m.refactorLaunch.reset()
+			m.refactorLaunch.remediation = newDirtyEntryRemediation(m.selectedFeature, reason)
+			m.statusMessage = ""
+			return m, nil
+		}
+		m.statusMessage = "Refactor is not available for the selected feature"
+		return m, nil
+	}
+	return m.openRefactorWizard(), nil
+}
+
+// disabledReasonDirtyParent is the server ActionDisabledReason code reported
+// when the parent's worktrees carry uncommitted changes (see
+// internal/server/read_model.go). The same structured diagnostics also arrive
+// at submission time as the parent_worktrees_dirty mutation error.
+const disabledReasonDirtyParent = "dirty_parent"
+
+// selectedActionDisabledReason returns the disabled reason with the given
+// code on the selected feature's action of the given kind, if present.
+func (m APIAppModel) selectedActionDisabledReason(kind, code string) (server.ActionDisabledReason, bool) {
+	detail, ok := m.featureDetails[m.selectedFeature]
+	if !ok {
+		return server.ActionDisabledReason{}, false
+	}
+	for _, action := range detail.Feature.Actions {
+		if !apiActionMatchesMutationKind(action.ID, kind) {
+			continue
+		}
+		for _, reason := range action.DisabledReasons {
+			if reason.Code == code {
+				return reason, true
+			}
+		}
+	}
+	return server.ActionDisabledReason{}, false
 }
 
 func apiRuntimeRepoState(runtime server.RuntimeConfigResponse) ([]string, map[string]string, map[string]config.RepoConfig) {
@@ -5409,17 +5722,25 @@ func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
 	if _, ok := m.selectedNeedInputGate(m.selectedFeature); ok {
 		return m.openNeedUserInputReview(), nil
 	}
-	if m.hasAPIAttachableSession(m.selectedFeature) {
-		return m.openAPIAttachForFeature(m.selectedFeature)
+	// A server-enabled Start outranks watch: a Created feature with an
+	// eligible live preview (notably a refactor child awaiting its explicit
+	// post-setup start) would otherwise trap `a` in the attach fallback and
+	// the ordinary start action could never be dispatched.
+	if m.selectedActionReady(mutationKindFeatureStart) {
+		return m, m.primarySelectedFeatureActionCmd(mutationKindFeatureStart, m.selectedFeature)
 	}
+	// Resume likewise outranks watch: an interrupted phase keeps a recently
+	// stopped (attachable) session record, so `a` would otherwise trap the
+	// user in the attach fallback and the ordinary resume action could never
+	// be dispatched.
 	if m.selectedActionReady(mutationKindFeatureResume) {
 		return m, m.primarySelectedFeatureActionCmd(mutationKindFeatureResume, m.selectedFeature)
 	}
+	if m.hasAPIAttachableSession(m.selectedFeature) {
+		return m.openAPIAttachForFeature(m.selectedFeature)
+	}
 	if m.selectedActionReady(mutationKindFeatureRetry) {
 		return m, m.selectedFeatureActionCmd(mutationKindFeatureRetry, m.selectedFeature)
-	}
-	if m.selectedActionReady(mutationKindFeatureStart) {
-		return m, m.primarySelectedFeatureActionCmd(mutationKindFeatureStart, m.selectedFeature)
 	}
 	if f := m.selectedAPIDashboardFeature(); isLivePreviewEligible(f) {
 		m.focusPanel = 1
@@ -5913,6 +6234,10 @@ func apiActionMatchesMutationKind(actionID, kind string) bool {
 		return actionID == "pause-stop" || actionID == actionIDStop
 	case mutationKindFeatureDelete:
 		return actionID == actionIDDelete
+	case mutationKindFeatureRefactor:
+		return actionID == actionIDRefactor
+	case mutationKindFeatureDiscard:
+		return actionID == actionIDDiscard
 	default:
 		return false
 	}
@@ -6652,6 +6977,16 @@ func (m APIAppModel) fetchAttachTranscriptBackfillCmd(sessionID string, before i
 	}
 }
 
+// apiFeatureUpdatedSignal builds the resource-scoped signal an SSE
+// feature.updated frame carries for one feature, so a refresh command
+// re-fetches exactly that record's detail snapshot.
+func apiFeatureUpdatedSignal(featureID string) server.RefreshSignal {
+	return server.RefreshSignal{
+		Event:    server.SSEEventDTO{Kind: "feature.updated"},
+		Resource: server.ResourceDTO{Type: "feature", FeatureID: featureID},
+	}
+}
+
 func (m APIAppModel) fetchRefreshSnapshotCmd(signal server.RefreshSignal) tea.Cmd {
 	return func() tea.Msg {
 		ctx := m.apiCtx()
@@ -6938,6 +7273,42 @@ func (m APIAppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 	}
 }
 
+func (m APIAppModel) refactorFeatureCmd(result *WizardResult, parentID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := m.apiCtx()
+		// Review gates are part of the parent-seeded paired Review
+		// configuration: submit them as entered instead of normalizing
+		// through the independent child pipeline, which would zero gates
+		// the child profile does not display but the parent retains.
+		req := server.RefactorFeatureRequest{
+			Name:         strings.TrimSpace(result.Name),
+			Description:  strings.TrimSpace(result.Description),
+			Models:       result.Models,
+			Effort:       result.Effort,
+			ExitCriteria: result.ExitCriteria,
+			Inquireness:  feature.Inquireness(result.Inquireness),
+			Images:       append([]string(nil), result.Images...),
+			Checkpoints:  result.Checkpoints,
+			Attachments:  append([]string(nil), result.Attachments...),
+			RiskLevel:    feature.RiskLevel(result.RiskLevel),
+			Pipeline:     result.Pipeline,
+		}
+		resp, err := m.client.RefactorFeature(ctx, parentID, req)
+		if err != nil {
+			return apiMutationResultMsg{
+				kind:      mutationKindFeatureRefactor,
+				featureID: parentID,
+				err:       err,
+			}
+		}
+		return apiMutationResultMsg{
+			kind:      mutationKindFeatureRefactor,
+			featureID: resp.FeatureID,
+			err:       nil,
+		}
+	}
+}
+
 func (m APIAppModel) handleAPIWizardMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.wizard == nil {
 		return m, nil
@@ -6973,8 +7344,15 @@ func (m APIAppModel) handleAPIWizardMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 		result := m.wizard.Result()
+		isRefactor := m.wizard.IsRefactor()
+		parentID := m.wizard.RefactorParentID()
 		m.clearCreatePrompt()
 		if result != nil {
+			if isRefactor {
+				m.refactorLaunch.pendingResult = result
+				m.refactorLaunch.pendingParentID = parentID
+				return m, m.refactorFeatureCmd(result, parentID)
+			}
 			return m, m.createFeatureCmd(result)
 		}
 		return m, nil
@@ -7080,6 +7458,8 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 			})
 		case mutationKindFeatureStop:
 			_, err = m.client.StopFeature(ctx, featureID)
+		case mutationKindFeatureDiscard:
+			_, err = m.client.DiscardChild(ctx, featureID)
 		case mutationKindFeatureDelete:
 			response, deleteErr := m.client.DeleteFeature(ctx, featureID)
 			deleteResponse = &response
@@ -7898,6 +8278,29 @@ func (m APIAppModel) stopOwnedServerCmd() tea.Cmd {
 	}
 }
 
+func (m *APIAppModel) applyPairedConfigEditorMode(featureID string) {
+	if m.configEditor == nil {
+		return
+	}
+	detail, ok := m.featureDetails[featureID]
+	if !ok {
+		return
+	}
+	if detail.Feature.ParentID != "" && detail.Feature.CloseOutcome == "" {
+		if _, hasParent := m.featureDetails[detail.Feature.ParentID]; hasParent {
+			m.configEditor.pairedMode = true
+			m.configEditor.pairedName = m.featureNameByID(detail.Feature.ParentID)
+			m.configEditor.pairedFeatureID = detail.Feature.ParentID
+		}
+		return
+	}
+	if detail.Feature.ActiveChild != nil && detail.Feature.ActiveChild.ID != "" {
+		m.configEditor.pairedMode = true
+		m.configEditor.pairedName = m.featureNameByID(detail.Feature.ActiveChild.ID)
+		m.configEditor.pairedFeatureID = detail.Feature.ActiveChild.ID
+	}
+}
+
 func newAPIEditConfigModel(featureID, featureName string, response server.FeatureConfigResponse, catalog PhaseModelCatalog) *EditConfigModel {
 	if response.FeatureID != "" {
 		featureID = response.FeatureID
@@ -7923,6 +8326,7 @@ func apiFeatureFromConfig(featureID, featureName string, response server.Feature
 		ID:                  featureID,
 		Name:                featureName,
 		Models:              current.Models,
+		Effort:              current.Effort,
 		Inquireness:         feature.Inquireness(current.Inquireness),
 		AutomaticReviewMode: feature.AutomaticReviewMode(current.AutomaticReviewMode),
 		Checkpoints: feature.Checkpoints{
@@ -8409,6 +8813,25 @@ func apiHasFeature(features []APIFeaturePresentation, id string) bool {
 		}
 	}
 	return false
+}
+
+func (m APIAppModel) apiHasChildFeature(featureID string) bool {
+	if featureID == "" {
+		return false
+	}
+	resp, ok := m.featureDetails[featureID]
+	return ok && resp.Feature.ParentID != "" && resp.Feature.CloseOutcome == ""
+}
+
+// apiClosedChildFeature reports whether the id belongs to a child whose
+// relationship has closed. Closed children project no dashboard rows, so
+// they can never remain selected.
+func (m APIAppModel) apiClosedChildFeature(featureID string) bool {
+	if featureID == "" {
+		return false
+	}
+	resp, ok := m.featureDetails[featureID]
+	return ok && resp.Feature.ParentID != "" && resp.Feature.CloseOutcome != ""
 }
 
 func apiHasRepo(repos []feature.FeatureRepo, name string) bool {
@@ -8950,6 +9373,10 @@ func apiMutationKindLabel(kind string) string {
 		return "Cleanup"
 	case mutationKindFeatureRewind:
 		return "Rewind" //nolint:goconst // action-verb label, unrelated to other domains sharing this word
+	case mutationKindFeatureRefactor:
+		return "Refactor"
+	case mutationKindFeatureDiscard:
+		return "Discard"
 	case mutationKindFeatureReviewComments:
 		return helpContextReviewComments
 	case mutationKindFeatureNeedUserInputDecision:
@@ -9025,7 +9452,9 @@ func apiCascadeDeleteStatusMessage(response server.DeleteFeatureResponse) string
 func apiMutationRefreshesFeatureDetail(kind string) bool {
 	switch kind {
 	case mutationKindFeatureRebase,
-		mutationKindFeatureReviewComments:
+		mutationKindFeatureReviewComments,
+		mutationKindFeatureRefactor,
+		mutationKindFeatureDiscard:
 		return true
 	default:
 		return false

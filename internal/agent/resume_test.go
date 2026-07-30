@@ -16,6 +16,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,6 +38,8 @@ func TestResumeSidecarRoundTripAndLifecycleMutations(t *testing.T) {
 		Iteration:             2,
 		RunNumber:             3,
 		OrchestratorSessionID: "feat-1-phase-01-impl-02",
+		FreshFallbackCount:    2,
+		FreshFallbackReason:   "model_changed",
 		CreatedAt:             createdAt,
 		UpdatedAt:             createdAt,
 	}
@@ -84,6 +87,51 @@ func TestResumeSidecarRoundTripAndLifecycleMutations(t *testing.T) {
 	}
 	if !mutated.UpdatedAt.Equal(rejectedAt) {
 		t.Errorf("UpdatedAt = %v, want %v", mutated.UpdatedAt, rejectedAt)
+	}
+	if mutated.FreshFallbackCount != 2 || mutated.FreshFallbackReason != "model_changed" {
+		t.Errorf("fresh fallback lineage = (%d, %q), want (2, %q)",
+			mutated.FreshFallbackCount, mutated.FreshFallbackReason, "model_changed")
+	}
+}
+
+func TestResumeCoordinatorInitializePreservesFreshFallbackLineage(t *testing.T) {
+	tests := []struct {
+		name          string
+		fallbacks     int
+		successResume bool
+	}{
+		{name: "single fallback", fallbacks: 1},
+		{name: "repeated fallbacks", fallbacks: 3},
+		{name: "fallback after successful resume", fallbacks: 2, successResume: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			coordinator := NewResumeCoordinator(t.TempDir())
+			coordinator.Initialize(resumeTestRecord())
+			if test.successResume {
+				coordinator.MarkResumed(time.Now())
+			}
+			for i := 0; i < test.fallbacks; i++ {
+				coordinator.MarkFreshFallback("model_changed", time.Now())
+				next := resumeTestRecord()
+				next.ProviderSessionID = fmt.Sprintf("provider-session-%d", i+2)
+				next.OrchestratorSessionID = fmt.Sprintf("orchestrator-session-%d", i+2)
+				coordinator.Initialize(next)
+			}
+
+			got := coordinator.Snapshot()
+			if got == nil {
+				t.Fatal("Snapshot() = nil")
+			}
+			if got.FreshFallbackCount != test.fallbacks ||
+				got.FreshFallbackReason != "model_changed" {
+				t.Errorf("fresh fallback lineage = (%d, %q), want (%d, %q)",
+					got.FreshFallbackCount, got.FreshFallbackReason, test.fallbacks, "model_changed")
+			}
+			if got.Resumed || got.ResumeCount != 0 {
+				t.Errorf("new provider lineage resume state = (%v, %d), want (false, 0)", got.Resumed, got.ResumeCount)
+			}
+		})
 	}
 }
 
@@ -157,6 +205,7 @@ func TestEvaluateResumeEligibility(t *testing.T) {
 	baseFeature := feature.Feature{
 		ID:                  "feature-1",
 		ActiveRun:           3,
+		CurrentPhase:        feature.PhaseImplement,
 		CurrentIteration:    2,
 		ActiveTimingKey:     "phase-1-impl",
 		CurrentRoadmapPhase: 1,
@@ -227,6 +276,14 @@ func TestEvaluateResumeEligibility(t *testing.T) {
 			name: "phase changed",
 			mutateFeature: func(current *feature.Feature) {
 				current.ActiveTimingKey = "phase-2-impl"
+			},
+			model:      "codex:model-a",
+			wantReason: ResumeReasonPositionChanged,
+		},
+		{
+			name: "phase kind changed",
+			mutateFeature: func(current *feature.Feature) {
+				current.CurrentPhase = feature.PhasePlan
 			},
 			model:      "codex:model-a",
 			wantReason: ResumeReasonPositionChanged,
@@ -306,6 +363,7 @@ func TestResumeEligibilityIgnoresNonIdentityLaunchChanges(t *testing.T) {
 	current := &feature.Feature{
 		ID:                  "feature-1",
 		ActiveRun:           1,
+		CurrentPhase:        feature.PhaseImplement,
 		CurrentIteration:    1,
 		ActiveTimingKey:     "phase-1-impl",
 		CurrentRoadmapPhase: 1,
@@ -456,6 +514,7 @@ func resumeTestFeature() *feature.Feature {
 	return &feature.Feature{
 		ID:                  "feature-claim",
 		ActiveRun:           1,
+		CurrentPhase:        feature.PhaseImplement,
 		CurrentIteration:    1,
 		ActiveTimingKey:     "phase-1-impl",
 		CurrentRoadmapPhase: 1,

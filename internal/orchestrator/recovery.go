@@ -18,8 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -186,14 +189,65 @@ func (o *Orchestrator) ExecuteRecovery(
 	var relaunchErrs []error
 	for _, fid := range resumedOrder {
 		phase := resumedFeatures[fid]
-		if _, _, err := o.startPhase(fid, phase); err != nil {
+		claim := o.claimRecoveryResume(fid, phase)
+		_, started, err := o.startPhase(fid, phase)
+		if err != nil {
+			if claim != nil {
+				_ = claim.Release(time.Now())
+			}
 			relaunchErrs = append(relaunchErrs, fmt.Errorf("relaunch %s phase %s: %w", fid, phase, err))
+			continue
+		}
+		if claim != nil {
+			if started {
+				claim.DispatchStarted()
+			} else {
+				_ = claim.Release(time.Now())
+			}
 		}
 	}
 	if len(relaunchErrs) > 0 {
 		return errors.Join(relaunchErrs...)
 	}
 	return nil
+}
+
+// claimRecoveryResume stamps the durable continuation intent for an eligible
+// interrupted implementation unit. Any lookup, eligibility, or claim failure
+// deliberately degrades to the existing fresh relaunch path.
+func (o *Orchestrator) claimRecoveryResume(featureID string, phase feature.Phase) *agent.ResumeClaim {
+	if phase != feature.PhaseImplement || o.deps.Lifecycle == nil || o.deps.PhaseRunner == nil {
+		return nil
+	}
+	current, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return nil
+	}
+	coordinator := o.resumeCoordinatorForFeature(current)
+	if coordinator == nil {
+		return nil
+	}
+	model := o.deps.PhaseRunner.ModelForRole(current.Models.Implementation, llm.PhaseImplementation)
+	claim, eligibility, err := coordinator.Claim(
+		featureID,
+		current,
+		model,
+		o.deps.PhaseRunner.Registry,
+		time.Now(),
+	)
+	if err != nil {
+		reason := "claim_error"
+		if errors.Is(err, agent.ErrResumeAlreadyClaimed) {
+			reason = "claim_conflict"
+		}
+		coordinator.MarkFreshFallback(reason, time.Now())
+		return nil
+	}
+	if !eligibility.Eligible {
+		coordinator.MarkFreshFallback(string(eligibility.Reason), time.Now())
+		return nil
+	}
+	return claim
 }
 
 // recoveryActionString returns the lowercase action label used for events

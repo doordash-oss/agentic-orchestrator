@@ -182,12 +182,10 @@ func ExecuteRecovery(items []RecoveryItem, actions map[string]RecoveryAction, fm
 				isReviewPhase = false // Allow resume
 			}
 
-			// The unified phase-implement loop re-runs the interrupted unit
-			// (iteration N's implement, or iteration N's review) from scratch
-			// with a fresh Claude session. The durable on-disk state
-			// (progress.md, plan checkmarks, working tree, prior reviewer
-			// feedback) is the resume scaffolding. The recovery flow no
-			// longer writes resume hints.
+			// Provider-session eligibility is evaluated by the orchestrator
+			// relaunch layer after this package finishes process and PID-file
+			// cleanup. This lower-level recovery path intentionally does not
+			// inspect or mutate implementation resume sidecars.
 			_ = isReviewPhase
 
 		case RecoverySkip:

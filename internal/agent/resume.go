@@ -90,6 +90,8 @@ type ResumeRecord struct {
 	UpdatedAt             time.Time  `yaml:"updated_at"`
 	Resumed               bool       `yaml:"resumed"`
 	ResumeCount           int        `yaml:"resume_count"`
+	FreshFallbackCount    int        `yaml:"fresh_fallback_count"`
+	FreshFallbackReason   string     `yaml:"fresh_fallback_reason,omitempty"`
 	PendingResume         bool       `yaml:"pending_resume,omitempty"`
 	Completed             bool       `yaml:"completed"`
 	CompletedAt           *time.Time `yaml:"completed_at,omitempty"`
@@ -147,6 +149,10 @@ func (c *ResumeCoordinator) Eligibility(current *feature.Feature, currentModel s
 // does not call Initialize and therefore mutates the same record.
 func (c *ResumeCoordinator) Initialize(record ResumeRecord) {
 	c.update(func(current *ResumeRecord) {
+		if current.FreshFallbackCount > record.FreshFallbackCount {
+			record.FreshFallbackCount = current.FreshFallbackCount
+			record.FreshFallbackReason = current.FreshFallbackReason
+		}
 		*current = record
 	})
 }
@@ -195,6 +201,17 @@ func (c *ResumeCoordinator) MarkCompleted(at time.Time) {
 func (c *ResumeCoordinator) MarkRejected(reason string, at time.Time) {
 	c.update(func(record *ResumeRecord) {
 		record.MarkRejected(reason, at)
+	})
+}
+
+// MarkFreshFallback records that provider continuity was skipped and the
+// interrupted unit will be relaunched with a fresh provider identity.
+func (c *ResumeCoordinator) MarkFreshFallback(reason string, at time.Time) {
+	c.update(func(record *ResumeRecord) {
+		record.FreshFallbackCount++
+		record.FreshFallbackReason = reason
+		record.PendingResume = false
+		record.UpdatedAt = at
 	})
 }
 
@@ -346,7 +363,9 @@ func EvaluateResumeEligibility(current *feature.Feature, record *ResumeRecord, c
 	if current == nil || record.RunNumber != activeRunNumber(current) {
 		return ineligibleResume(ResumeReasonRunSealed)
 	}
-	if record.PhaseKey != resumePhaseKey(current) || record.Iteration != current.CurrentIteration {
+	if current.CurrentPhase != feature.PhaseImplement ||
+		record.PhaseKey != resumePhaseKey(current) ||
+		record.Iteration != current.CurrentIteration {
 		return ineligibleResume(ResumeReasonPositionChanged)
 	}
 	if registry == nil {

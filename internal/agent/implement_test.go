@@ -1948,15 +1948,42 @@ func TestImplementLoop_ManualResumeRejectsExpiredProviderSession(t *testing.T) {
 				t.Fatalf("WriteResumeRecord() error = %v", err)
 			}
 
-			cfg.BuildSession = func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			var buildOpts []BuildSessionOpts
+			cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+				buildOpts = append(buildOpts, opts)
 				return []string{"mock-agent"}, nil, &session.SessionOpts{
 					SupportsSessionResume: true,
 					ProviderName:          test.provider,
 					ResolvedModel:         "model",
 				}, nil
 			}
+			startCalls := 0
 			cfg.SessionStartFunc = func(string, string, feature.Phase, []string, string, []string, ...*session.SessionOpts) (session.SessionHandle, error) {
-				return nil, errors.New(test.detail)
+				startCalls++
+				if startCalls == 1 {
+					if test.provider == "codex" {
+						rejected := &crashResumeTestSession{
+							utilityTestSession: newUtilityTestSession(),
+							providerSessionID:  "expired-provider-session",
+							providerName:       test.provider,
+							errorDetail:        test.detail,
+						}
+						rejected.statusCh <- agentStatusFailed
+						return rejected, nil
+					}
+					return nil, errors.New(test.detail)
+				}
+				testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
+				if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), []byte("complete\n"), 0o644); err != nil {
+					t.Fatalf("write phase_complete: %v", err)
+				}
+				fresh := &crashResumeTestSession{
+					utilityTestSession: newUtilityTestSession(),
+					providerSessionID:  "fresh-provider-session",
+					providerName:       test.provider,
+				}
+				fresh.statusCh <- agentStatusSuccess
+				return fresh, nil
 			}
 			resumedEvents := 0
 			cfg.OnFeatureResumed = func(ports.FeatureResumedData) {
@@ -1967,15 +1994,36 @@ func TestImplementLoop_ManualResumeRejectsExpiredProviderSession(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RunImplementationLoop() error = %v", err)
 			}
-			if result.FinalStatus != "failed" || !strings.Contains(result.LastError, "not found or has expired") {
-				t.Fatalf("result = %#v, want informative resume rejection failure", result)
+			if result.FinalStatus != finalStatusReviewPassed {
+				t.Fatalf("result = %#v, want successful fresh fallback", result)
+			}
+			if len(buildOpts) != 2 ||
+				buildOpts[0].ResumeSessionID != "expired-provider-session" ||
+				buildOpts[1].ResumeSessionID != "" {
+				t.Fatalf("BuildSession opts = %#v, want rejected resume followed by fresh dispatch", buildOpts)
+			}
+			if buildOpts[1].Prompt == renderResumePrompt(implementResumeContext) {
+				t.Error("fresh fallback reused resume prompt, want standard implement prompt")
 			}
 			record, err := ReadResumeRecord(iterDir)
 			if err != nil {
 				t.Fatalf("ReadResumeRecord() error = %v", err)
 			}
-			if record == nil || !record.Rejected || record.PendingResume || record.RejectedAt == nil {
-				t.Errorf("resume record = %#v, want rejected stamp and cleared intent", record)
+			if record == nil ||
+				record.ProviderSessionID != "fresh-provider-session" ||
+				record.Rejected ||
+				record.PendingResume ||
+				record.FreshFallbackCount != 1 ||
+				!record.Completed {
+				t.Errorf("resume record = %#v, want completed fresh identity with one fallback", record)
+			}
+			meta, err := NewArtifactManager(artifactDir).ReadMeta(iterDir)
+			if err != nil {
+				t.Fatalf("ReadMeta() error = %v", err)
+			}
+			if meta.FreshFallbackCount != 1 || strings.TrimSpace(meta.FreshFallbackReason) == "" {
+				t.Errorf("meta fresh fallback lineage = (%d, %q), want one recorded reason",
+					meta.FreshFallbackCount, meta.FreshFallbackReason)
 			}
 			if resumedEvents != 0 {
 				t.Errorf("FeatureResumed callbacks = %d, want 0", resumedEvents)
@@ -2356,6 +2404,7 @@ func TestImplementLoop_AutoResumeRejectionFallsBackFreshThenResumesNewSession(t 
 	if record == nil ||
 		record.ProviderSessionID != "native-new" ||
 		record.ResumeCount != 1 ||
+		record.FreshFallbackCount != 1 ||
 		!record.Completed ||
 		record.Rejected {
 		t.Errorf("resume record = %#v, want completed resume of fresh provider session", record)

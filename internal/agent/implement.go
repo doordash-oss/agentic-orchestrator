@@ -473,6 +473,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				implBuildOpts.EffortLevel = cfg.EffectiveEffort
 			}
 			resumeCoordinator = NewResumeCoordinator(iterDir)
+			freshBuildOpts := implBuildOpts
 			if pendingResume != nil && pendingResume.Iteration == i {
 				manualResumeLaunch = true
 				implBuildOpts.ResumeSessionID = pendingResume.ProviderSessionID
@@ -491,6 +492,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// the current (possibly edited) workspace config.
 			if sessOpts != nil && sessOpts.AutoReview.Enabled != nil {
 				implBuildOpts.AutoReview = sessOpts.AutoReview
+				freshBuildOpts.AutoReview = sessOpts.AutoReview
 			}
 
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
@@ -547,14 +549,27 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				if manualResumeLaunch {
 					if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, time.Since(iterStart)); verdict.Rejected {
 						resumeCoordinator.MarkRejected(verdict.Reason, time.Now())
-						return &LoopResult{
-							FinalStatus: "failed",
-							Iterations:  i,
-							LastError:   verdict.Reason,
-						}, nil
+						freshSessionID := sessionID + "-fresh-01"
+						sess, sessOpts, err = resumeCoordinator.DispatchFreshAfterRejection(
+							cfg,
+							sm,
+							freshBuildOpts,
+							freshSessionID,
+							i,
+							permRepoName,
+						)
+						if err != nil {
+							return nil, err
+						}
+						sessionID = freshSessionID
+						manualResumeLaunch = false
+						pendingResume = nil
+					} else {
+						resumeCoordinator.ClearPending(time.Now())
 					}
-					resumeCoordinator.ClearPending(time.Now())
 				}
+			}
+			if err != nil {
 				if errors.Is(err, ports.ErrSessionShuttingDown) {
 					cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "interrupted")
 					return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
@@ -632,11 +647,43 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				verdict := resumeCoordinator.CompleteResumeEstablishment(cfg, sess, time.Since(iterStart), i)
 				pendingResume = nil
 				if verdict.Rejected {
-					return &LoopResult{
-						FinalStatus: "failed",
-						Iterations:  i,
-						LastError:   verdict.Reason,
-					}, nil
+					rejectedCost := ExtractSessionCost(sess)
+					cfg.Observer.SessionEnded(
+						implSessionCtx,
+						"implement",
+						sessionID,
+						cfg.RepoName,
+						toSessionUsage(rejectedCost),
+						time.Since(iterStart),
+						sessionErrFromLogicalAgentStatus(agentStatus, sess),
+					)
+					_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", rejectedCost, SessionCostMetadata{
+						SessionID:     sessionID,
+						ObserverPhase: "implement",
+						RepoName:      cfg.RepoName,
+					})
+					appendIterationLog(aggregateLogPath, i, sess.MessageLog().Text())
+
+					freshSessionID := sessionID + "-fresh-01"
+					sess, sessOpts, err = resumeCoordinator.DispatchFreshAfterRejection(
+						cfg,
+						sm,
+						freshBuildOpts,
+						freshSessionID,
+						i,
+						permRepoName,
+					)
+					if err != nil {
+						return nil, err
+					}
+					sessionID = freshSessionID
+					manualResumeLaunch = false
+					implSessionCtx = iterCtx.Child()
+					cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, sessOpts.ProviderName, cfg.Model, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
+					implTracker.Install(sess, implSessionCtx, "implement", sessionID)
+					waitResult = waitForStatusDetailed(sess, sm, sessionID, implWaitOptions(sess, implSessionCtx, sessionID))
+					agentStatus = waitResult.Status
+					resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model())
 				}
 			}
 
@@ -842,6 +889,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			meta.ProviderSessionID = resumeRecord.ProviderSessionID
 			meta.Resumed = resumeRecord.Resumed
 			meta.ResumeCount = resumeRecord.ResumeCount
+			meta.FreshFallbackCount = resumeRecord.FreshFallbackCount
+			meta.FreshFallbackReason = resumeRecord.FreshFallbackReason
 		}
 
 		// Accumulate iteration cost into the latest active timing key rather
@@ -1357,6 +1406,11 @@ func (c *ResumeCoordinator) DispatchFreshAfterRejection(cfg ImplementConfig, sm 
 	sessOpts.StderrPath = filepath.Join(c.dir, "stderr-fresh.log")
 
 	now := time.Now()
+	fallbackReason := string(ResumeReasonSessionRejected)
+	if record := c.Snapshot(); record != nil && strings.TrimSpace(record.RejectionReason) != "" {
+		fallbackReason = record.RejectionReason
+	}
+	c.MarkFreshFallback(fallbackReason, now)
 	c.Initialize(ResumeRecord{
 		Provider:              sessOpts.ProviderName,
 		ResolvedModel:         sessOpts.ResolvedModel,

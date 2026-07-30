@@ -1636,6 +1636,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			if p.opts.NativeToollessReview {
 				return p.nativeToollessViolation("unexpected child agent activity"), true
 			}
+			if len(started.Item.ReceiverThreadIDs) == 0 {
+				return llm.SDKMessage{}, false
+			}
 			return p.taskStartedForCollab(started.Item), true
 		default:
 			if p.opts.NativeToollessReview && started.Item.Type != "userMessage" &&

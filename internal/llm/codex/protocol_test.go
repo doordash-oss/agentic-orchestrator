@@ -337,6 +337,19 @@ func TestCodexProtocol_NormalizesRootAndDelegatedTaskActivity(t *testing.T) {
 	}
 }
 
+func TestCodexProtocol_IgnoresUnboundDelegatedTaskStart(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+	p.SetThreadIDForTest("thread-root")
+
+	msgs, err := p.ParseLine([]byte(`{"method":"item/started","params":{"threadId":"thread-root","turnId":"turn-root","item":{"id":"collab-abandoned","type":"collabAgentToolCall","tool":"spawnAgent","status":"inProgress","receiverThreadIds":[],"prompt":"Inspect the server package."}}}`))
+	if err != nil {
+		t.Fatalf("ParseLine(task start): %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("unbound delegated task messages = %+v, want no running task before Codex assigns a child thread", msgs)
+	}
+}
+
 func TestCodexProtocol_IgnoresUncorrelatedChildThreadActivity(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{})
 	p.SetThreadIDForTest("thread-root")

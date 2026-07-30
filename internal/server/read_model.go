@@ -18,8 +18,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -113,7 +115,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 			}
 		}
 	}
-	detail := featureDetailFromSummary(summarizeFeature(f))
+	detail := featureDetailFromSummary(h.featureSummaryDTO(f))
 	detail.Description = safeDisplayText(f.Description, 500)
 	detail.Summary = safeDisplayText(f.Summary, 500)
 	detail.Pipeline = string(f.Pipeline)
@@ -141,7 +143,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 	for _, item := range f.VerificationItems {
 		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
 	}
-	detail.Actions = actionCatalogDTOs(f)
+	detail.Actions = h.actionCatalogDTOs(f)
 	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {
 		detail.Failure = &FailureDTO{
@@ -155,6 +157,43 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
 	return detail
+}
+
+func (h *apiHandler) activeImplementResumeIndicator(f *feature.Feature) (bool, int) {
+	if h == nil || h.store == nil || f == nil || f.ActiveRun <= 0 || f.CurrentIteration <= 0 {
+		return false, 0
+	}
+	iterDir := activeImplementIterationDirForRead(
+		h.store.RunDir(f.ID, f.ActiveRun),
+		f,
+	)
+	record, err := agent.ReadResumeRecord(iterDir)
+	if err == nil && record != nil {
+		return record.Resumed || record.ResumeCount > 0, max(record.ResumeCount, 0)
+	}
+	meta, err := agent.NewArtifactManager("").ReadMeta(iterDir)
+	if err != nil {
+		return false, 0
+	}
+	return meta.Resumed || meta.ResumeCount > 0, max(meta.ResumeCount, 0)
+}
+
+func activeImplementIterationDirForRead(runDir string, f *feature.Feature) string {
+	if f == nil {
+		return ""
+	}
+	var implementDir string
+	if prefix := f.CyclePrefix(); prefix != "" {
+		implementDir = filepath.Join(runDir, prefix, "implement")
+	} else {
+		base := filepath.Join(runDir, f.RefactorPrefix())
+		if f.CurrentRoadmapPhase > 0 {
+			implementDir = filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
+		} else {
+			implementDir = filepath.Join(base, "implement")
+		}
+	}
+	return filepath.Join(implementDir, fmt.Sprintf("iteration-%02d", f.CurrentIteration))
 }
 
 func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
@@ -171,6 +210,8 @@ func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
 		CreatedAt:    summary.CreatedAt,
 		Checkpoints:  summary.Checkpoints,
 		Progress:     summary.Progress,
+		Resumed:      summary.Resumed,
+		ResumeCount:  summary.ResumeCount,
 		Warnings:     summary.Warnings,
 	}
 }
@@ -255,6 +296,38 @@ func activeCycleCount(f *feature.Feature, cycle *feature.RepoCycleState) int {
 }
 
 func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
+	return actionCatalogDTOsWithResumeEligibility(f, nil)
+}
+
+func (h *apiHandler) actionCatalogDTOs(f *feature.Feature) []ActionDTO {
+	if f == nil || f.Status != feature.StatusFailed {
+		return actionCatalogDTOs(f)
+	}
+	eligibility := h.resumeEligibility(f)
+	return actionCatalogDTOsWithResumeEligibility(f, &eligibility)
+}
+
+func (h *apiHandler) resumeEligibility(f *feature.Feature) agent.ResumeEligibility {
+	var record *agent.ResumeRecord
+	if h != nil && h.store != nil && f != nil && f.ActiveRun > 0 && f.CurrentIteration > 0 {
+		iterDir := activeImplementIterationDirForRead(h.store.RunDir(f.ID, f.ActiveRun), f)
+		record, _ = agent.ReadResumeRecord(iterDir)
+	}
+	var registry *llm.Registry
+	if h != nil {
+		registry = h.registry
+	}
+	currentModel := ""
+	if f != nil {
+		currentModel = (&agent.PhaseRunner{Registry: registry}).ModelForRole(
+			f.Models.Implementation,
+			llm.PhaseImplementation,
+		)
+	}
+	return agent.EvaluateResumeEligibility(f, record, currentModel, registry)
+}
+
+func actionCatalogDTOsWithResumeEligibility(f *feature.Feature, resumeEligibility *agent.ResumeEligibility) []ActionDTO {
 	if f == nil {
 		return nil
 	}
@@ -297,6 +370,19 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 		status == feature.StatusNeedUserInput ||
 		f.PendingNeedUserInputPath != "" ||
 		len(f.PendingUserInputCycles()) > 0
+	resumeDisabledReason := ActionDisabledReasonDTO{
+		Code:    "not_paused",
+		Message: "feature has no paused session or input gate",
+	}
+	if status == feature.StatusFailed && resumeEligibility != nil {
+		canResume = resumeEligibility.Eligible
+		if !resumeEligibility.Eligible {
+			resumeDisabledReason = ActionDisabledReasonDTO{
+				Code:    string(resumeEligibility.Reason),
+				Message: resumeEligibility.Message,
+			}
+		}
+	}
 	canRestart := !running
 	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
@@ -311,7 +397,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	return []ActionDTO{
 		action(actionStart, canStart, featureScope, nil, disabledStatusReason(status)),
 		action(actionPauseStop, canStop, featureScope, nil, ActionDisabledReasonDTO{Code: "not_running", Message: "feature has no active work to pause or stop"}),
-		action(actionResume, canResume, featureScope, nil, ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"}),
+		action(actionResume, canResume, featureScope, nil, resumeDisabledReason),
 		action(actionRestart, canRestart, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"}),
 		action(actionPublish, canPublish, featureScope, nil, publishDisabledReason(f)),
 		action(actionMerge, canMerge, featureScope, nil, mergeDisabledReason(f)),

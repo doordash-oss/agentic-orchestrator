@@ -124,6 +124,10 @@ type MutationTarget interface {
 	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (RecoveryActionResponse, error)
 }
 
+type resumeFeatureMutationTarget interface {
+	ResumeFeature(featureID string) (FeatureStartResponse, error)
+}
+
 type ActionConflictError struct {
 	Err     error
 	Message string
@@ -646,6 +650,18 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 	case actionStart, actionResume:
 		if subaction != "" {
 			return false
+		}
+		if action == actionResume {
+			if target, ok := h.mutations.(resumeFeatureMutationTarget); ok {
+				resp, err := target.ResumeFeature(featureID)
+				if err != nil {
+					writeMutationError(w, err)
+					return true
+				}
+				defaultActionFields(&resp, featureID, resultStarted)
+				writeActionJSON(w, http.StatusOK, &resp)
+				return true
+			}
 		}
 		h.handleStartFeatureMutationTrusted(w, r, featureID)
 	case actionPauseStop:

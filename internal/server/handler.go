@@ -206,7 +206,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 	}
 	summaries := make([]FeatureSummary, 0, len(features))
 	for _, f := range features {
-		summary := summarizeFeature(f)
+		summary := h.featureSummaryDTO(f)
 		summary.Warnings = append(summary.Warnings, effortDriftWarnings(f, h.registry)...)
 		summaries = append(summaries, summary)
 	}
@@ -400,6 +400,12 @@ func summarizeFeature(f *feature.Feature) FeatureSummary {
 			CurrentPhaseStatus:  f.CurrentPhaseStatus,
 		},
 	}
+}
+
+func (h *apiHandler) featureSummaryDTO(f *feature.Feature) FeatureSummary {
+	summary := summarizeFeature(f)
+	summary.Resumed, summary.ResumeCount = h.activeImplementResumeIndicator(f)
+	return summary
 }
 
 func splitPath(path string) []string {

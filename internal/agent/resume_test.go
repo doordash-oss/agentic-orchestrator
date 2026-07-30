@@ -15,10 +15,15 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
 func TestResumeSidecarRoundTripAndLifecycleMutations(t *testing.T) {
@@ -144,6 +149,331 @@ func TestCrashResumePromptTemplateMatchesLegacyContent(t *testing.T) {
 		"from where you left off."
 	if got := renderResumePrompt(implementResumeContext); got != want {
 		t.Errorf("renderResumePrompt() = %q, want %q", got, want)
+	}
+}
+
+func TestEvaluateResumeEligibility(t *testing.T) {
+	registry := resumeTestRegistry()
+	baseFeature := feature.Feature{
+		ID:                  "feature-1",
+		ActiveRun:           3,
+		CurrentIteration:    2,
+		ActiveTimingKey:     "phase-1-impl",
+		CurrentRoadmapPhase: 1,
+	}
+	baseRecord := ResumeRecord{
+		ProviderSessionID: "provider-session-123",
+		Provider:          "codex",
+		ResolvedModel:     "model-a",
+		PhaseKey:          "phase-1-impl",
+		Iteration:         2,
+		RunNumber:         3,
+	}
+
+	tests := []struct {
+		name          string
+		mutateFeature func(*feature.Feature)
+		mutateRecord  func(*ResumeRecord) *ResumeRecord
+		model         string
+		wantEligible  bool
+		wantReason    ResumeEligibilityReason
+	}{
+		{
+			name:         "matching prefixed model",
+			model:        "codex:model-a",
+			wantEligible: true,
+		},
+		{
+			name:         "matching bare model",
+			model:        "model-a",
+			wantEligible: true,
+		},
+		{
+			name: "missing record",
+			mutateRecord: func(*ResumeRecord) *ResumeRecord {
+				return nil
+			},
+			model:      "codex:model-a",
+			wantReason: ResumeReasonNoRecord,
+		},
+		{
+			name: "missing provider session identity",
+			mutateRecord: func(record *ResumeRecord) *ResumeRecord {
+				record.ProviderSessionID = ""
+				return record
+			},
+			model:      "codex:model-a",
+			wantReason: ResumeReasonNoRecord,
+		},
+		{
+			name:       "model changed",
+			model:      "codex:model-b",
+			wantReason: ResumeReasonModelChanged,
+		},
+		{
+			name:       "provider changed",
+			model:      "claude:model-a",
+			wantReason: ResumeReasonModelChanged,
+		},
+		{
+			name: "run sealed",
+			mutateFeature: func(current *feature.Feature) {
+				current.ActiveRun = 4
+			},
+			model:      "codex:model-a",
+			wantReason: ResumeReasonRunSealed,
+		},
+		{
+			name: "phase changed",
+			mutateFeature: func(current *feature.Feature) {
+				current.ActiveTimingKey = "phase-2-impl"
+			},
+			model:      "codex:model-a",
+			wantReason: ResumeReasonPositionChanged,
+		},
+		{
+			name: "iteration changed",
+			mutateFeature: func(current *feature.Feature) {
+				current.CurrentIteration = 3
+			},
+			model:      "codex:model-a",
+			wantReason: ResumeReasonPositionChanged,
+		},
+		{
+			name: "provider cannot resume",
+			mutateRecord: func(record *ResumeRecord) *ResumeRecord {
+				record.Provider = "legacy"
+				return record
+			},
+			model:      "legacy:model-a",
+			wantReason: ResumeReasonUnsupported,
+		},
+		{
+			name: "completed wins over other mismatches",
+			mutateFeature: func(current *feature.Feature) {
+				current.ActiveRun = 4
+			},
+			mutateRecord: func(record *ResumeRecord) *ResumeRecord {
+				record.Completed = true
+				record.Rejected = true
+				return record
+			},
+			model:      "claude:model-b",
+			wantReason: ResumeReasonRecordCompleted,
+		},
+		{
+			name: "rejected wins over model and run mismatch",
+			mutateFeature: func(current *feature.Feature) {
+				current.ActiveRun = 4
+			},
+			mutateRecord: func(record *ResumeRecord) *ResumeRecord {
+				record.Rejected = true
+				return record
+			},
+			model:      "claude:model-b",
+			wantReason: ResumeReasonSessionRejected,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current := baseFeature
+			record := baseRecord
+			recordPtr := &record
+			if test.mutateFeature != nil {
+				test.mutateFeature(&current)
+			}
+			if test.mutateRecord != nil {
+				recordPtr = test.mutateRecord(recordPtr)
+			}
+
+			got := EvaluateResumeEligibility(&current, recordPtr, test.model, registry)
+			if got.Eligible != test.wantEligible {
+				t.Errorf("EvaluateResumeEligibility().Eligible = %v, want %v", got.Eligible, test.wantEligible)
+			}
+			if got.Reason != test.wantReason {
+				t.Errorf("EvaluateResumeEligibility().Reason = %q, want %q", got.Reason, test.wantReason)
+			}
+			if !got.Eligible && got.Message == "" {
+				t.Error("EvaluateResumeEligibility().Message = empty, want stable human message")
+			}
+		})
+	}
+}
+
+func TestResumeEligibilityIgnoresNonIdentityLaunchChanges(t *testing.T) {
+	registry := resumeTestRegistry()
+	current := &feature.Feature{
+		ID:                  "feature-1",
+		ActiveRun:           1,
+		CurrentIteration:    1,
+		ActiveTimingKey:     "phase-1-impl",
+		CurrentRoadmapPhase: 1,
+	}
+	record := &ResumeRecord{
+		ProviderSessionID: "provider-session-123",
+		Provider:          "codex",
+		ResolvedModel:     "model-a",
+		PhaseKey:          "phase-1-impl",
+		Iteration:         1,
+		RunNumber:         1,
+	}
+
+	// Effort, sandbox, and prompt-template configuration are intentionally
+	// absent from the evaluator's identity inputs and therefore cannot block.
+	got := EvaluateResumeEligibility(current, record, "codex:model-a", registry)
+	if !got.Eligible {
+		t.Errorf("EvaluateResumeEligibility() = %#v, want eligible after non-identity launch changes", got)
+	}
+}
+
+func TestResumeClaimPendingMarkerLifecyclePreservesIdentity(t *testing.T) {
+	dir := t.TempDir()
+	registry := resumeTestRegistry()
+	current := resumeTestFeature()
+	record := resumeTestRecord()
+	if err := WriteResumeRecord(dir, record); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	coordinator := NewResumeCoordinator(dir)
+	claimedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+
+	claim, eligibility, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, claimedAt)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if !eligibility.Eligible || claim == nil {
+		t.Fatalf("Claim() = (%#v, %#v), want claim and eligible verdict", claim, eligibility)
+	}
+	pending := coordinator.Snapshot()
+	if pending == nil || !pending.PendingResume {
+		t.Fatalf("Snapshot().PendingResume = %#v, want true", pending)
+	}
+	assertResumeIdentity(t, pending, record)
+
+	releasedAt := claimedAt.Add(time.Minute)
+	if err := claim.Release(releasedAt); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	cleared := coordinator.Snapshot()
+	if cleared == nil || cleared.PendingResume {
+		t.Fatalf("Snapshot().PendingResume after Release = %#v, want false", cleared)
+	}
+	assertResumeIdentity(t, cleared, record)
+}
+
+func TestResumeClaimAllowsExactlyOneConcurrentResumer(t *testing.T) {
+	dir := t.TempDir()
+	registry := resumeTestRegistry()
+	current := resumeTestFeature()
+	if err := WriteResumeRecord(dir, resumeTestRecord()); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	coordinator := NewResumeCoordinator(dir)
+
+	const contenders = 16
+	type result struct {
+		claim *ResumeClaim
+		err   error
+	}
+	results := make(chan result, contenders)
+	var wg sync.WaitGroup
+	for range contenders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claim, _, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, time.Now())
+			results <- result{claim: claim, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var winner *ResumeClaim
+	conflicts := 0
+	for got := range results {
+		switch {
+		case got.err == nil && got.claim != nil:
+			if winner != nil {
+				t.Error("Claim() returned more than one winning claim")
+			}
+			winner = got.claim
+		case errors.Is(got.err, ErrResumeAlreadyClaimed):
+			conflicts++
+		default:
+			t.Errorf("Claim() = (%#v, %v), want winner or conflict", got.claim, got.err)
+		}
+	}
+	if winner == nil {
+		t.Fatal("Claim() produced no winner")
+	}
+	if conflicts != contenders-1 {
+		t.Errorf("Claim() conflicts = %d, want %d", conflicts, contenders-1)
+	}
+	if err := winner.Release(time.Now()); err != nil {
+		t.Fatalf("winner.Release() error = %v", err)
+	}
+}
+
+func TestResumeClaimRechecksRunAfterRewindWins(t *testing.T) {
+	dir := t.TempDir()
+	registry := resumeTestRegistry()
+	current := resumeTestFeature()
+	if err := WriteResumeRecord(dir, resumeTestRecord()); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	coordinator := NewResumeCoordinator(dir)
+
+	// The rewind has already sealed run 1 and moved the feature pointer before
+	// the queued resume reaches the claim-time strict-match check.
+	current.ActiveRun = 2
+	claim, eligibility, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, time.Now())
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if claim != nil {
+		t.Fatal("Claim() returned a claim after rewind won, want nil")
+	}
+	if eligibility.Reason != ResumeReasonRunSealed {
+		t.Errorf("Claim().Reason = %q, want %q", eligibility.Reason, ResumeReasonRunSealed)
+	}
+	if got := coordinator.Snapshot(); got == nil || got.PendingResume {
+		t.Errorf("Snapshot().PendingResume = %#v, want false", got)
+	}
+}
+
+func resumeTestRegistry() *llm.Registry {
+	registry := llm.NewRegistry()
+	registry.Register(&captureProvider{name: "codex", model: "model-a", sessionResume: true})
+	registry.Register(&captureProvider{name: "claude", model: "model-a", sessionResume: true})
+	registry.Register(&captureProvider{name: "legacy", model: "model-a", sessionResume: false})
+	registry.Register(&captureProvider{name: "codex", model: "model-b", sessionResume: true})
+	registry.Register(&captureProvider{name: "claude", model: "model-b", sessionResume: true})
+	return registry
+}
+
+func resumeTestFeature() *feature.Feature {
+	return &feature.Feature{
+		ID:                  "feature-claim",
+		ActiveRun:           1,
+		CurrentIteration:    1,
+		ActiveTimingKey:     "phase-1-impl",
+		CurrentRoadmapPhase: 1,
+	}
+}
+
+func resumeTestRecord() ResumeRecord {
+	createdAt := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
+	return ResumeRecord{
+		ProviderSessionID:     "provider-session-123",
+		Provider:              "codex",
+		ResolvedModel:         "model-a",
+		PhaseKey:              "phase-1-impl",
+		Iteration:             1,
+		RunNumber:             1,
+		OrchestratorSessionID: "feature-claim-phase-01-impl-01",
+		CreatedAt:             createdAt,
+		UpdatedAt:             createdAt,
 	}
 }
 

@@ -31,8 +31,14 @@ type DetailModel struct {
 	spinnerView    string // set by parent from app-level spinner
 	contextPct     int    // context window usage percentage for active session; -1 = no data
 	kbStaleWarning string // yellow warning text when KB is outdated or missing
-	width          int
-	height         int
+	resumed        bool
+	resumeCount    int
+	primaryAction  string
+	retryAvailable bool
+
+	resumeDisabledReason string
+	width                int
+	height               int
 
 	// Refactor overlay — set by parent when refactor input is active.
 	// When refactorActive is true, View/ViewCompact render a refactor input panel
@@ -468,6 +474,22 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 	var b strings.Builder
 	b.WriteString(LabelStyle.Render("Status"))
 	b.WriteString("  " + formatDetailStatus(f) + "\n")
+	if m.resumed {
+		b.WriteString(LabelStyle.Render("Session"))
+		b.WriteString("  " + MutedStyle.Render(formatResumedIndicator(m.resumeCount)) + "\n")
+	}
+	if m.primaryAction != "" {
+		b.WriteString(LabelStyle.Render("Action"))
+		b.WriteString("  [a] " + m.primaryAction)
+		if m.primaryAction == "Resume" && m.retryAvailable {
+			b.WriteString("  " + MutedStyle.Render("[r] Retry"))
+		}
+		b.WriteString("\n")
+	}
+	if m.resumeDisabledReason != "" {
+		b.WriteString(LabelStyle.Render("Resume"))
+		b.WriteString("  " + MutedStyle.Render("Unavailable — "+m.resumeDisabledReason) + "\n")
+	}
 	if desc := featureDescLine(f); desc != "" {
 		b.WriteString(LabelStyle.Render("Desc"))
 		b.WriteString("  " + MutedStyle.Render(desc) + "\n")
@@ -510,6 +532,13 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 		b.WriteString("    " + MutedStyle.Render(formatCost(totalCost)) + "\n")
 	}
 	return b.String()
+}
+
+func formatResumedIndicator(count int) string {
+	if count < 1 {
+		count = 1
+	}
+	return fmt.Sprintf("Resumed ×%d", count)
 }
 
 func automaticReviewSourceLabel(enabled bool, source feature.AutomaticReviewSource) string {

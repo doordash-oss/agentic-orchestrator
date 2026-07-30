@@ -291,6 +291,8 @@ func apiTestFeatureDetail(summary server.FeatureSummary) server.FeatureDetailDTO
 		Cycle:        summary.Cycle,
 		ActiveRun:    summary.ActiveRun,
 		RunCount:     summary.RunCount,
+		Resumed:      summary.Resumed,
+		ResumeCount:  summary.ResumeCount,
 		Repos:        append([]string(nil), summary.Repos...),
 		CreatedAt:    summary.CreatedAt,
 		Checkpoints:  summary.Checkpoints,
@@ -3406,13 +3408,23 @@ func TestAPIAppModelDetailContextualRetryUsesAWithoutResumeAll(t *testing.T) {
 func TestAPIAppModelResumeAllUsesRESTMutations(t *testing.T) {
 	t.Parallel()
 
+	paused := server.FeatureSummary{ID: testFeatureIDPaused, Name: testFeatureNamePausedWork, Slug: testFeatureSlugPausedWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()}
+	failed := server.FeatureSummary{ID: testStatusFailed, Name: testFeatureNameFailedWork, Slug: testFeatureSlugFailedWork, Status: testFeatureStatusFailed, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now().Add(-time.Minute)}
+	resumeAction := server.ActionDTO{ID: recoveryActionResume, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: testFeatureIDPaused, Name: testFeatureNamePausedWork, Slug: testFeatureSlugPausedWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
-			{ID: testStatusFailed, Name: testFeatureNameFailedWork, Slug: testFeatureSlugFailedWork, Status: testFeatureStatusFailed, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now().Add(-time.Minute)},
+			paused,
+			failed,
 		}},
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(paused, server.FeatureDetailDTO{
+			Actions: []server.ActionDTO{resumeAction},
+		})},
+		detailsByID: map[string]server.FeatureDetailResponse{
+			testStatusFailed: {Feature: apiTestFeatureDetailWith(failed, server.FeatureDetailDTO{
+				Actions: []server.ActionDTO{resumeAction},
+			})},
+		},
 		resumeAccepted: apiTestActionResponse{},
-		retryAccepted:  apiTestActionResponse{},
 	}
 	app := newTestAPIAppModel(t, client)
 
@@ -3422,9 +3434,10 @@ func TestAPIAppModelResumeAllUsesRESTMutations(t *testing.T) {
 		t.Fatalf("focusPanel after right = %d, want detail focus", focused.focusPanel)
 	}
 	model, cmd := focused.Update(tea.KeyPressMsg{Code: 'R', Text: "R"})
-	if cmd != nil {
-		t.Fatal("Update(Shift+R) returned command before resume-all confirmation")
+	if cmd == nil {
+		t.Fatal("Update(Shift+R) returned nil command, want action catalogs loaded")
 	}
+	model, _ = model.(APIAppModel).Update(cmd())
 	confirming := model.(APIAppModel)
 	if !confirming.resumeAllConfirmActive {
 		t.Fatal("Update(Shift+R) did not open resume-all confirmation")
@@ -3441,11 +3454,11 @@ func TestAPIAppModelResumeAllUsesRESTMutations(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	resumed := model.(APIAppModel)
 
-	if got := strings.Join(client.resumeFeatureIDs, ","); got != testFeatureIDPaused {
-		t.Fatalf("ResumeFeature calls = %q, want paused", got)
+	if got := strings.Join(client.resumeFeatureIDs, ","); got != testFeatureIDPaused+","+testStatusFailed {
+		t.Fatalf("ResumeFeature calls = %q, want paused,failed", got)
 	}
-	if got := strings.Join(client.retryFeatureIDs, ","); got != testStatusFailed {
-		t.Fatalf("RetryFeature calls = %q, want failed", got)
+	if got := strings.Join(client.retryFeatureIDs, ","); got != "" {
+		t.Fatalf("RetryFeature calls = %q, want none", got)
 	}
 	if view := stripANSI(resumed.View().Content); !strings.Contains(view, "Resumed 2 feature(s)") {
 		t.Fatalf("API app View() missing resume-all completed status in:\n%s", view)

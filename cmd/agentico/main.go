@@ -964,6 +964,20 @@ func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.Fea
 	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
 }
 
+func (t *serverMutationTarget) ResumeFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
+	if err := t.orch.ResumeFeature(featureID); err != nil {
+		if errors.Is(err, orchestrator.ErrResumeConflict) {
+			return serverruntime.FeatureStartResponse{}, &serverruntime.ActionConflictError{
+				Err:     err,
+				Message: "resume already in progress",
+				Target:  map[string]any{"feature_id": featureID},
+			}
+		}
+		return serverruntime.FeatureStartResponse{}, err
+	}
+	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: "resumed"}, nil
+}
+
 func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
 	if err := t.orch.InterruptFeature(featureID); err != nil {
 		return serverruntime.FeatureStopResponse{}, err

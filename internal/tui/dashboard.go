@@ -89,6 +89,9 @@ const dashboardFeaturesPanelTitle = "Features"
 
 type DashboardModel struct {
 	features             []*feature.Feature
+	resumed              map[string]int
+	detailResumed        map[string]int
+	recoveryActions      map[string]apiFeatureRecoveryPresentation
 	cursor               int
 	focusPanel           int // 0=list, 1=detail
 	rightPanelMode       dashboardRightPanelMode
@@ -117,6 +120,9 @@ func NewDashboardModel(features []*feature.Feature, stateDir string) DashboardMo
 		features:          features,
 		stateDir:          stateDir,
 		collapsedSections: make(map[string]bool),
+		resumed:           make(map[string]int),
+		detailResumed:     make(map[string]int),
+		recoveryActions:   make(map[string]apiFeatureRecoveryPresentation),
 	}
 	m.buildVisibleItems()
 	// Create the preview once — its spinner ID must stay stable for tick chain
@@ -232,11 +238,28 @@ func (m *DashboardModel) syncPreview() {
 		return
 	}
 	m.preview = NewDetailModel(f, m.stateDir)
+	m.applySelectedRecoveryPresentation()
 	m.preview.width = m.width
 	m.preview.height = m.height
 	m.livePreview = newLivePreviewModel(f)
 	m.livePreview.width = m.width
 	m.livePreview.height = m.height
+}
+
+func (m *DashboardModel) applySelectedRecoveryPresentation() {
+	if m.preview.feature == nil {
+		return
+	}
+	featureID := m.preview.feature.ID
+	if count, ok := m.detailResumed[featureID]; ok {
+		m.preview.resumed = true
+		m.preview.resumeCount = count
+	}
+	if recovery, ok := m.recoveryActions[featureID]; ok {
+		m.preview.primaryAction = recovery.primary
+		m.preview.resumeDisabledReason = recovery.resumeDisabledReason
+		m.preview.retryAvailable = recovery.retryAvailable
+	}
 }
 
 func (m DashboardModel) shouldRenderLivePreview(f *feature.Feature) bool {
@@ -487,6 +510,12 @@ func (m DashboardModel) renderFooter() string {
 					leadHint = WarningStyle.Bold(true).Render(actionHint)
 				} else {
 					hints = append(hints, actionHint)
+				}
+			}
+			if recovery := m.recoveryActions[f.ID]; recovery.primary != "" {
+				hint := "[a] " + recovery.primary
+				if leadHint == "" && !stringSliceContains(hints, hint) {
+					hints = append(hints, hint)
 				}
 			}
 		}
@@ -998,6 +1027,9 @@ func (m DashboardModel) renderFeatureRowCompact(f *feature.Feature, selected boo
 
 	pipelineBadge := formatPipelineBadge(f.EffectivePipeline())
 	row := fmt.Sprintf("%s %-20s %s %s", icon, slug, pipelineBadge, status)
+	if count, ok := m.resumed[f.ID]; ok {
+		row += " " + MutedStyle.Render(formatResumedIndicator(count))
+	}
 
 	if selected {
 		// Strip ANSI from sub-components so SelectedRowStyle colors the

@@ -1246,18 +1246,7 @@ func installAutoReviewObserver(handler ports.PermissionHandler, observer *observ
 // directories. Includes refactor prefix when an active refactor cycle is in
 // progress.
 func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
-	runDir := ActiveRunDir(pr.StateDir, f)
-	// Cycle prefix takes precedence — when an active cycle is running,
-	// artifacts go into the cycle subtree (e.g. rebase-1/).
-	// Cycles operate on the whole branch, so roadmap phase scoping is skipped.
-	if prefix := f.CyclePrefix(); prefix != "" {
-		return filepath.Join(runDir, prefix, "implement")
-	}
-	base := filepath.Join(runDir, f.RefactorPrefix())
-	if f.CurrentRoadmapPhase > 0 {
-		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
-	}
-	return filepath.Join(base, "implement")
+	return ActiveImplementDir(pr.StateDir, f)
 }
 
 // resolveUnifiedWorkDir computes the working directory and additional directories

@@ -66,6 +66,23 @@ func PhaseImplementDir(stateDir string, f *feature.Feature, phase int) string {
 	return filepath.Join(PhaseDir(stateDir, f, phase), "implement")
 }
 
+// ActiveImplementDir returns the implementation artifact root for the
+// feature's current phase or cycle.
+func ActiveImplementDir(stateDir string, f *feature.Feature) string {
+	if f == nil {
+		return ""
+	}
+	runDir := ActiveRunDir(stateDir, f)
+	if prefix := f.CyclePrefix(); prefix != "" {
+		return filepath.Join(runDir, prefix, "implement")
+	}
+	base := filepath.Join(runDir, f.RefactorPrefix())
+	if f.CurrentRoadmapPhase > 0 {
+		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
+	}
+	return filepath.Join(base, "implement")
+}
+
 // PhaseTestingContractDir returns the base directory for a roadmap phase's
 // testing contract artifact. The contract lives at the phase root so
 // implementation and review share one binding file.

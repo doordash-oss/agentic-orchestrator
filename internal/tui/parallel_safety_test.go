@@ -62,6 +62,7 @@ import (
 //   - parallel_safety_test.go
 //   - phase_catalog_test.go
 //   - repos_block_test.go
+//   - resume_contract_test.go
 //   - simpletextarea_test.go
 //   - styles_test.go
 //   - test_helpers_test.go
@@ -117,6 +118,7 @@ var tuiParallelCandidateTestFiles = []string{
 	"phase_catalog_test.go",
 	"question_picker_test.go",
 	"repos_block_test.go",
+	"resume_contract_test.go",
 	"simpletextarea_test.go",
 	"styles_test.go",
 	"test_helpers_test.go",

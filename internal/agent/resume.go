@@ -16,14 +16,18 @@ package agent
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"text/template"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"gopkg.in/yaml.v3"
 )
@@ -36,7 +40,40 @@ const (
 	implementResumeContext   = "Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing required artifacts and the completion marker per your instructions; otherwise update progress and continue from where you left off."
 )
 
+// ResumeEligibilityReason is the closed set of stable reason codes shared by
+// resume read models and mutation dispatch.
+type ResumeEligibilityReason string
+
+const (
+	ResumeReasonNoRecord        ResumeEligibilityReason = "no_resume_record"
+	ResumeReasonModelChanged    ResumeEligibilityReason = "model_changed"
+	ResumeReasonRunSealed       ResumeEligibilityReason = "run_sealed"
+	ResumeReasonSessionRejected ResumeEligibilityReason = "session_rejected"
+	ResumeReasonRecordCompleted ResumeEligibilityReason = "record_completed"
+	ResumeReasonPositionChanged ResumeEligibilityReason = "position_changed"
+	ResumeReasonUnsupported     ResumeEligibilityReason = "resume_unsupported"
+)
+
+// ResumeEligibility is a side-effect-free verdict over persisted resume
+// identity and the feature's current launch identity.
+type ResumeEligibility struct {
+	Eligible bool
+	Reason   ResumeEligibilityReason
+	Message  string
+}
+
+// ErrResumeAlreadyClaimed reports that another goroutine owns the feature's
+// bookkeeping-plus-dispatch resume window.
+var ErrResumeAlreadyClaimed = errors.New("resume already claimed")
+
 var resumePromptTemplate = template.Must(template.New("resume").Parse(resumePromptTemplateText))
+
+var activeResumeClaims = struct {
+	sync.Mutex
+	features map[string]struct{}
+}{
+	features: make(map[string]struct{}),
+}
 
 // ResumeRecord describes the provider and orchestrator identity needed to
 // continue one resumable unit. It is descriptive state only; phase_complete
@@ -53,6 +90,7 @@ type ResumeRecord struct {
 	UpdatedAt             time.Time  `yaml:"updated_at"`
 	Resumed               bool       `yaml:"resumed"`
 	ResumeCount           int        `yaml:"resume_count"`
+	PendingResume         bool       `yaml:"pending_resume,omitempty"`
 	Completed             bool       `yaml:"completed"`
 	CompletedAt           *time.Time `yaml:"completed_at,omitempty"`
 	Rejected              bool       `yaml:"rejected"`
@@ -68,6 +106,26 @@ type ResumeCoordinator struct {
 	mu  sync.Mutex
 }
 
+// ResumeClaim owns the in-memory single-resumer slot until Release clears the
+// durable pending intent and frees the slot.
+type ResumeClaim struct {
+	coordinator *ResumeCoordinator
+	featureID   string
+	once        sync.Once
+	err         error
+}
+
+// DispatchStarted releases the in-memory claim after dispatch has accepted
+// the work while leaving the durable intent for the resumed loop to consume.
+func (c *ResumeClaim) DispatchStarted() {
+	if c == nil {
+		return
+	}
+	c.once.Do(func() {
+		releaseResumeClaim(c.featureID)
+	})
+}
+
 // NewResumeCoordinator returns a coordinator for the unit stored under dir.
 func NewResumeCoordinator(dir string) *ResumeCoordinator {
 	return &ResumeCoordinator{dir: dir}
@@ -76,6 +134,12 @@ func NewResumeCoordinator(dir string) *ResumeCoordinator {
 // Prompt renders the shared resume template with phase-specific context.
 func (c *ResumeCoordinator) Prompt(phaseContext string) string {
 	return renderResumePrompt(phaseContext)
+}
+
+// Eligibility evaluates the coordinator's current durable record without
+// probing a live session or mutating the sidecar.
+func (c *ResumeCoordinator) Eligibility(current *feature.Feature, currentModel string, registry *llm.Registry) ResumeEligibility {
+	return EvaluateResumeEligibility(current, c.Snapshot(), currentModel, registry)
 }
 
 // Initialize writes the identity for a fresh provider process. A replay of an
@@ -134,6 +198,90 @@ func (c *ResumeCoordinator) MarkRejected(reason string, at time.Time) {
 	})
 }
 
+// ClearPending clears an accepted intent when dispatch cannot start.
+func (c *ResumeCoordinator) ClearPending(at time.Time) {
+	c.update(func(record *ResumeRecord) {
+		record.PendingResume = false
+		record.UpdatedAt = at
+	})
+}
+
+// Claim atomically reserves the feature for one resumer, re-reads and
+// evaluates the durable record against the feature's claim-time position, and
+// stamps the pending-resume intent before dispatch work can begin.
+func (c *ResumeCoordinator) Claim(featureID string, current *feature.Feature, currentModel string, registry *llm.Registry, at time.Time) (*ResumeClaim, ResumeEligibility, error) {
+	if c == nil {
+		return nil, ineligibleResume(ResumeReasonNoRecord), nil
+	}
+	featureID = strings.TrimSpace(featureID)
+	if featureID == "" {
+		return nil, ResumeEligibility{}, fmt.Errorf("claiming resume: empty feature ID")
+	}
+	if !tryAcquireResumeClaim(featureID) {
+		return nil, ResumeEligibility{}, ErrResumeAlreadyClaimed
+	}
+	release := true
+	defer func() {
+		if release {
+			releaseResumeClaim(featureID)
+		}
+	}()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	record, err := ReadResumeRecord(c.dir)
+	if err != nil {
+		return nil, ResumeEligibility{}, fmt.Errorf("claiming resume: %w", err)
+	}
+	eligibility := EvaluateResumeEligibility(current, record, currentModel, registry)
+	if !eligibility.Eligible {
+		if record != nil && record.PendingResume {
+			record.PendingResume = false
+			record.UpdatedAt = at
+			if err := WriteResumeRecord(c.dir, *record); err != nil {
+				return nil, ResumeEligibility{}, fmt.Errorf("clearing ineligible resume intent: %w", err)
+			}
+		}
+		return nil, eligibility, nil
+	}
+	record.PendingResume = true
+	record.UpdatedAt = at
+	if err := WriteResumeRecord(c.dir, *record); err != nil {
+		return nil, ResumeEligibility{}, fmt.Errorf("writing pending resume intent: %w", err)
+	}
+
+	release = false
+	return &ResumeClaim{
+		coordinator: c,
+		featureID:   featureID,
+	}, eligibility, nil
+}
+
+// Release clears the durable intent before making the feature available to a
+// later claimant. It is safe to call more than once.
+func (c *ResumeClaim) Release(at time.Time) error {
+	if c == nil {
+		return nil
+	}
+	c.once.Do(func() {
+		if c.coordinator != nil {
+			c.coordinator.mu.Lock()
+			record, err := ReadResumeRecord(c.coordinator.dir)
+			if err == nil && record != nil && record.PendingResume {
+				record.PendingResume = false
+				record.UpdatedAt = at
+				err = WriteResumeRecord(c.coordinator.dir, *record)
+			}
+			c.coordinator.mu.Unlock()
+			if err != nil {
+				c.err = fmt.Errorf("clearing pending resume intent: %w", err)
+			}
+		}
+		releaseResumeClaim(c.featureID)
+	})
+	return c.err
+}
+
 // Snapshot returns the current record, or nil when it is missing or unreadable.
 func (c *ResumeCoordinator) Snapshot() *ResumeRecord {
 	if c == nil {
@@ -179,10 +327,111 @@ func renderResumePrompt(phaseContext string) string {
 	return out.String()
 }
 
+// EvaluateResumeEligibility compares only provider-session identity. Mutable
+// launch parameters such as effort, sandboxing, and prompt templates are not
+// inputs and therefore cannot make an otherwise matching record ineligible.
+func EvaluateResumeEligibility(current *feature.Feature, record *ResumeRecord, currentModel string, registry *llm.Registry) ResumeEligibility {
+	if record == nil {
+		return ineligibleResume(ResumeReasonNoRecord)
+	}
+	if record.Completed {
+		return ineligibleResume(ResumeReasonRecordCompleted)
+	}
+	if record.Rejected {
+		return ineligibleResume(ResumeReasonSessionRejected)
+	}
+	if strings.TrimSpace(record.ProviderSessionID) == "" {
+		return ineligibleResume(ResumeReasonNoRecord)
+	}
+	if current == nil || record.RunNumber != activeRunNumber(current) {
+		return ineligibleResume(ResumeReasonRunSealed)
+	}
+	if record.PhaseKey != resumePhaseKey(current) || record.Iteration != current.CurrentIteration {
+		return ineligibleResume(ResumeReasonPositionChanged)
+	}
+	if registry == nil {
+		return ineligibleResume(ResumeReasonModelChanged)
+	}
+
+	recordedProvider, recordedModel, err := registry.ResolveModel(record.Provider + ":" + record.ResolvedModel)
+	if err != nil {
+		return ineligibleResume(ResumeReasonModelChanged)
+	}
+	configuredProvider, configuredModel, err := registry.ResolveModel(currentModel)
+	if err != nil ||
+		recordedProvider.Name() != configuredProvider.Name() ||
+		recordedModel != configuredModel {
+		return ineligibleResume(ResumeReasonModelChanged)
+	}
+	resumer, ok := recordedProvider.(sessionResumeProvider)
+	if !ok || !resumer.SupportsSessionResume() {
+		return ineligibleResume(ResumeReasonUnsupported)
+	}
+	return ResumeEligibility{Eligible: true}
+}
+
+func ineligibleResume(reason ResumeEligibilityReason) ResumeEligibility {
+	return ResumeEligibility{
+		Reason:  reason,
+		Message: resumeEligibilityMessage(reason),
+	}
+}
+
+func resumeEligibilityMessage(reason ResumeEligibilityReason) string {
+	switch reason {
+	case ResumeReasonNoRecord:
+		return "no resume record"
+	case ResumeReasonModelChanged:
+		return "model changed"
+	case ResumeReasonRunSealed:
+		return "run sealed"
+	case ResumeReasonSessionRejected:
+		return "session previously rejected"
+	case ResumeReasonRecordCompleted:
+		return "record completed"
+	case ResumeReasonPositionChanged:
+		return "feature position changed"
+	case ResumeReasonUnsupported:
+		return "provider does not support session resume"
+	default:
+		return "resume unavailable"
+	}
+}
+
+func resumePhaseKey(current *feature.Feature) string {
+	if current == nil {
+		return ""
+	}
+	if key := strings.TrimSpace(current.ActiveTimingKey); key != "" {
+		return key
+	}
+	if current.CurrentRoadmapPhase > 0 {
+		return fmt.Sprintf("phase-%d-impl", current.CurrentRoadmapPhase)
+	}
+	return "implement"
+}
+
+func tryAcquireResumeClaim(featureID string) bool {
+	activeResumeClaims.Lock()
+	defer activeResumeClaims.Unlock()
+	if _, exists := activeResumeClaims.features[featureID]; exists {
+		return false
+	}
+	activeResumeClaims.features[featureID] = struct{}{}
+	return true
+}
+
+func releaseResumeClaim(featureID string) {
+	activeResumeClaims.Lock()
+	delete(activeResumeClaims.features, featureID)
+	activeResumeClaims.Unlock()
+}
+
 // MarkResumed increments the continuation count without changing identity.
 func (r *ResumeRecord) MarkResumed(at time.Time) {
 	r.Resumed = true
 	r.ResumeCount++
+	r.PendingResume = false
 	r.UpdatedAt = at
 }
 
@@ -190,6 +439,7 @@ func (r *ResumeRecord) MarkResumed(at time.Time) {
 func (r *ResumeRecord) MarkCompleted(at time.Time) {
 	r.Completed = true
 	r.CompletedAt = timePtr(at)
+	r.PendingResume = false
 	r.UpdatedAt = at
 }
 
@@ -198,6 +448,7 @@ func (r *ResumeRecord) MarkRejected(reason string, at time.Time) {
 	r.Rejected = true
 	r.RejectionReason = reason
 	r.RejectedAt = timePtr(at)
+	r.PendingResume = false
 	r.UpdatedAt = at
 }
 

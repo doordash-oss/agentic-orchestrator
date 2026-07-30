@@ -907,36 +907,42 @@ type FeatureDefaults struct {
 
 // FeatureDetail defines model for FeatureDetail.
 type FeatureDetail struct {
-	Actions           []Action             `json:"actions"`
-	ActiveRun         int                  `json:"active_run"`
-	ActiveRunDetail   *RunSummary          `json:"active_run_detail,omitempty"`
-	AutomaticReview   AutomaticReviewState `json:"automatic_review"`
-	CacheRevalidate   string               `json:"cache_revalidate"`
-	Checkpoints       Checkpoints          `json:"checkpoints"`
-	Cost              Cost                 `json:"cost"`
-	CreatedAt         time.Time            `json:"created_at"`
-	CurrentPhase      string               `json:"current_phase"`
-	Cycle             *Cycle               `json:"cycle,omitempty"`
-	Description       string               `json:"description,omitempty"`
-	Failure           *Failure             `json:"failure,omitempty"`
-	HistoricalRuns    []RunSummary         `json:"historical_runs"`
-	ID                string               `json:"id"`
-	Models            ModelDefaults        `json:"models"`
-	Name              string               `json:"name"`
-	NeedUserInput     *NeedUserInputGate   `json:"need_user_input,omitempty"`
-	Pipeline          string               `json:"pipeline,omitempty"`
-	Progress          FeatureProgress      `json:"progress"`
-	RepoStatus        []RepoStatus         `json:"repo_status"`
-	Repos             []string             `json:"repos"`
-	ReviewGate        ReviewGate           `json:"review_gate"`
-	Revision          string               `json:"revision"`
-	RunCount          int                  `json:"run_count"`
-	Slug              string               `json:"slug"`
-	Status            string               `json:"status"`
-	Summary           string               `json:"summary,omitempty"`
-	Timing            Timing               `json:"timing"`
-	VerificationItems []VerificationItem   `json:"verification_items,omitempty"`
-	Warnings          []Warning            `json:"warnings,omitempty"`
+	Actions         []Action             `json:"actions"`
+	ActiveRun       int                  `json:"active_run"`
+	ActiveRunDetail *RunSummary          `json:"active_run_detail,omitempty"`
+	AutomaticReview AutomaticReviewState `json:"automatic_review"`
+	CacheRevalidate string               `json:"cache_revalidate"`
+	Checkpoints     Checkpoints          `json:"checkpoints"`
+	Cost            Cost                 `json:"cost"`
+	CreatedAt       time.Time            `json:"created_at"`
+	CurrentPhase    string               `json:"current_phase"`
+	Cycle           *Cycle               `json:"cycle,omitempty"`
+	Description     string               `json:"description,omitempty"`
+	Failure         *Failure             `json:"failure,omitempty"`
+	HistoricalRuns  []RunSummary         `json:"historical_runs"`
+	ID              string               `json:"id"`
+	Models          ModelDefaults        `json:"models"`
+	Name            string               `json:"name"`
+	NeedUserInput   *NeedUserInputGate   `json:"need_user_input,omitempty"`
+	Pipeline        string               `json:"pipeline,omitempty"`
+	Progress        FeatureProgress      `json:"progress"`
+	RepoStatus      []RepoStatus         `json:"repo_status"`
+	Repos           []string             `json:"repos"`
+
+	// ResumeCount Number of persisted provider-session resumptions for the active implementation unit.
+	ResumeCount int `json:"resume_count"`
+
+	// Resumed Whether the active implementation unit has resumed a persisted provider session.
+	Resumed           bool               `json:"resumed"`
+	ReviewGate        ReviewGate         `json:"review_gate"`
+	Revision          string             `json:"revision"`
+	RunCount          int                `json:"run_count"`
+	Slug              string             `json:"slug"`
+	Status            string             `json:"status"`
+	Summary           string             `json:"summary,omitempty"`
+	Timing            Timing             `json:"timing"`
+	VerificationItems []VerificationItem `json:"verification_items,omitempty"`
+	Warnings          []Warning          `json:"warnings,omitempty"`
 }
 
 // FeatureDetailResponse defines model for FeatureDetailResponse.
@@ -1004,10 +1010,16 @@ type FeatureSummary struct {
 	Name         string          `json:"name"`
 	Progress     FeatureProgress `json:"progress"`
 	Repos        []string        `json:"repos"`
-	RunCount     int             `json:"run_count"`
-	Slug         string          `json:"slug"`
-	Status       string          `json:"status"`
-	Warnings     []Warning       `json:"warnings,omitempty"`
+
+	// ResumeCount Number of persisted provider-session resumptions for the active implementation unit.
+	ResumeCount int `json:"resume_count"`
+
+	// Resumed Whether the active implementation unit has resumed a persisted provider session.
+	Resumed  bool      `json:"resumed"`
+	RunCount int       `json:"run_count"`
+	Slug     string    `json:"slug"`
+	Status   string    `json:"status"`
+	Warnings []Warning `json:"warnings,omitempty"`
 }
 
 // FileChange defines model for FileChange.

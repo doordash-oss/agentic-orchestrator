@@ -213,10 +213,6 @@ const (
 	actionInputNameTargetPhase = "target_phase"
 )
 
-// actionStatusReady is the server.ActionDTO.Status value for an action that
-// is currently available to invoke.
-const actionStatusReady = "ready"
-
 // sseEventKindSessionUpdated is the SSEEventDTO.Kind synthesized for locally
 // generated session refresh signals, mirroring the server's own
 // sseEventSessionUpdated.
@@ -340,6 +336,8 @@ type APIFeaturePresentation struct {
 	CreatedAt      time.Time
 	AttentionCount int
 	Progress       server.FeatureProgress
+	Resumed        bool
+	ResumeCount    int
 }
 
 type APISessionPresentation struct {
@@ -423,6 +421,8 @@ type APIFeatureDetailPresentation struct {
 	TotalCostUSD       float64
 	NeedUserInputLabel string
 	Failure            string
+	Resumed            bool
+	ResumeCount        int
 }
 
 type APIRepoStatusPresentation struct {
@@ -434,6 +434,12 @@ type APIActionPresentation struct {
 	ID     string
 	Status string
 	Reason string
+}
+
+type apiFeatureRecoveryPresentation struct {
+	primary              string
+	resumeDisabledReason string
+	retryAvailable       bool
 }
 
 type APIAppModel struct {
@@ -648,6 +654,11 @@ type apiOwnedServerStoppedMsg struct {
 type apiResumeAllResultMsg struct {
 	succeeded []string
 	failed    []string
+}
+
+type apiResumeAllCatalogMsg struct {
+	details []server.FeatureDetailResponse
+	failed  []string
 }
 
 type apiRecoveryPanel struct {
@@ -1271,7 +1282,20 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case len(msg.failed) > 0:
 			m.statusMessage = "Resume all failed: " + strings.Join(msg.failed, "; ")
 		default:
-			m.statusMessage = "No interrupted or failed features to resume"
+			m.statusMessage = "No features have Resume available"
+		}
+		m.rebuildPresentation(m.selectedFeature)
+		return m, nil
+	case apiResumeAllCatalogMsg:
+		for _, detail := range msg.details {
+			m.storeFeatureDetail(detail)
+		}
+		m.resumeAllFeatureIDs = m.resumeAllCandidates()
+		m.resumeAllConfirmActive = true
+		if len(msg.failed) > 0 {
+			m.statusMessage = "Resume availability unavailable: " + strings.Join(msg.failed, "; ")
+		} else {
+			m.statusMessage = ""
 		}
 		m.rebuildPresentation(m.selectedFeature)
 		return m, nil
@@ -1481,6 +1505,12 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openPublishAction(), nil
 	case "r":
 		if canRetrySetup(m.selectedAPIDashboardFeature()) {
+			return m, m.selectedFeatureActionCmd(mutationKindFeatureRetry, m.selectedFeature)
+		}
+		if f := m.selectedAPIDashboardFeature(); f != nil &&
+			f.Status == feature.StatusFailed &&
+			f.FailureType != feature.FailureMaxIterations &&
+			m.selectedActionReady(mutationKindFeatureRetry) {
 			return m, m.selectedFeatureActionCmd(mutationKindFeatureRetry, m.selectedFeature)
 		}
 		args := apiFeatureActionArgs{}
@@ -1861,6 +1891,17 @@ func (m APIAppModel) renderAPIDashboard() string {
 func (m APIAppModel) apiDashboardModel() DashboardModel {
 	features := m.apiDashboardFeatures()
 	dashboard := NewDashboardModel(features, m.runtimeConfig.Runtime.StateDir)
+	for _, summary := range m.featureList.Features {
+		if summary.Resumed {
+			dashboard.resumed[summary.ID] = summary.ResumeCount
+		}
+		if detail, ok := m.featureDetails[summary.ID]; ok {
+			if detail.Feature.Resumed {
+				dashboard.detailResumed[summary.ID] = detail.Feature.ResumeCount
+			}
+			dashboard.recoveryActions[summary.ID] = apiFeatureRecovery(detail.Feature.Actions)
+		}
+	}
 	dashboard.width = max(m.width, 80)
 	dashboard.height = max(m.height, 24)
 	if m.chatOpen {
@@ -2259,6 +2300,8 @@ func mergeAPIFeatureSummary(base, overlay server.FeatureSummary) server.FeatureS
 	if overlay.RunCount != 0 {
 		base.RunCount = overlay.RunCount
 	}
+	base.Resumed = overlay.Resumed
+	base.ResumeCount = overlay.ResumeCount
 	if len(overlay.Repos) > 0 {
 		base.Repos = append([]string(nil), overlay.Repos...)
 	}
@@ -2287,6 +2330,8 @@ func apiFeatureDetailSummary(detail server.FeatureDetailDTO) server.FeatureSumma
 		Cycle:        detail.Cycle,
 		ActiveRun:    detail.ActiveRun,
 		RunCount:     detail.RunCount,
+		Resumed:      detail.Resumed,
+		ResumeCount:  detail.ResumeCount,
 		Repos:        append([]string(nil), detail.Repos...),
 		CreatedAt:    detail.CreatedAt,
 		Checkpoints:  detail.Checkpoints,
@@ -4095,6 +4140,8 @@ func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
 			CreatedAt:      dto.CreatedAt,
 			AttentionCount: attention[dto.ID],
 			Progress:       dto.Progress,
+			Resumed:        dto.Resumed,
+			ResumeCount:    dto.ResumeCount,
 		})
 	}
 	sort.Slice(features, func(i, j int) bool {
@@ -5099,6 +5146,11 @@ func (m APIAppModel) transitionToAPIHelpOverlay() (tea.Model, tea.Cmd) {
 }
 
 func (m APIAppModel) confirmResumeAll() (tea.Model, tea.Cmd) {
+	missing := m.resumeAllMissingCatalogs()
+	if len(missing) > 0 {
+		m.statusMessage = "Loading resume availability..."
+		return m, m.loadResumeAllCatalogCmd(missing)
+	}
 	m.resumeAllFeatureIDs = m.resumeAllCandidates()
 	m.resumeAllConfirmActive = true
 	return m, nil
@@ -5107,44 +5159,62 @@ func (m APIAppModel) confirmResumeAll() (tea.Model, tea.Cmd) {
 func (m APIAppModel) resumeAllCandidates() []string {
 	ids := make([]string, 0)
 	for _, summary := range m.featureList.Features {
-		if apiFeatureResumeAllKind(summary.Status) != "" {
+		detail, ok := m.featureDetails[summary.ID]
+		if !ok {
+			continue
+		}
+		action, found := apiActionByID(detail.Feature.Actions, recoveryActionResume)
+		if found && action.Enabled {
 			ids = append(ids, summary.ID)
 		}
 	}
 	return ids
 }
 
-func apiFeatureResumeAllKind(status string) string {
-	switch apiFeatureStatus(status) {
-	case feature.StatusInterrupted, feature.StatusNeedUserInput:
-		return mutationKindFeatureResume
-	case feature.StatusFailed:
-		return mutationKindFeatureRetry
-	default:
-		return ""
+func (m APIAppModel) resumeAllMissingCatalogs() []string {
+	ids := make([]string, 0)
+	for _, summary := range m.featureList.Features {
+		switch apiFeatureStatus(summary.Status) {
+		case feature.StatusInterrupted, feature.StatusNeedUserInput, feature.StatusFailed:
+			if _, ok := m.featureDetails[summary.ID]; !ok {
+				ids = append(ids, summary.ID)
+			}
+		}
 	}
+	return ids
+}
+
+func (m APIAppModel) loadResumeAllCatalogCmd(featureIDs []string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := m.apiCtx()
+		result := apiResumeAllCatalogMsg{}
+		for _, featureID := range featureIDs {
+			detail, err := m.client.FeatureDetail(ctx, featureID)
+			if err != nil {
+				result.failed = append(result.failed, fmt.Sprintf("%s: %s", featureID, firstLine(err.Error())))
+				continue
+			}
+			result.details = append(result.details, detail)
+		}
+		return result
+	}
+}
+
+func apiActionByID(actions []server.ActionDTO, actionID string) (server.ActionDTO, bool) {
+	for _, action := range actions {
+		if action.ID == actionID {
+			return action, true
+		}
+	}
+	return server.ActionDTO{}, false
 }
 
 func (m APIAppModel) resumeAllCmd(featureIDs []string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := m.apiCtx()
-		statusByFeature := map[string]string{}
-		for _, summary := range m.featureList.Features {
-			statusByFeature[summary.ID] = summary.Status
-		}
 		var result apiResumeAllResultMsg
 		for _, featureID := range featureIDs {
-			kind := apiFeatureResumeAllKind(statusByFeature[featureID])
-			if kind == "" {
-				continue
-			}
-			var err error
-			switch kind {
-			case mutationKindFeatureResume:
-				_, err = m.client.ResumeFeature(ctx, featureID)
-			case mutationKindFeatureRetry:
-				_, err = m.client.RetryFeature(ctx, featureID)
-			}
+			_, err := m.client.ResumeFeature(ctx, featureID)
 			if err != nil {
 				result.failed = append(result.failed, fmt.Sprintf("%s: %s", featureID, firstLine(err.Error())))
 				continue
@@ -5901,6 +5971,26 @@ func (m APIAppModel) selectedRawAction(kind string) (server.ActionDTO, bool) {
 	return server.ActionDTO{}, false
 }
 
+func apiFeatureRecovery(actions []server.ActionDTO) apiFeatureRecoveryPresentation {
+	var recovery apiFeatureRecoveryPresentation
+	for _, action := range actions {
+		switch action.ID {
+		case recoveryActionResume:
+			if action.Enabled {
+				recovery.primary = "Resume"
+			} else if len(action.DisabledReasons) > 0 {
+				recovery.resumeDisabledReason = action.DisabledReasons[0].Message
+			}
+		case actionIDRetry:
+			recovery.retryAvailable = action.Enabled
+		}
+	}
+	if recovery.primary == "" && recovery.retryAvailable {
+		recovery.primary = "Retry"
+	}
+	return recovery
+}
+
 func (m APIAppModel) selectedReviewCommentsRepo() string {
 	if detail, ok := m.featureDetails[m.selectedFeature]; ok {
 		for _, repo := range detail.Feature.RepoStatus {
@@ -5962,12 +6052,9 @@ func (m APIAppModel) featureNameByID(featureID string) string {
 }
 
 func (m APIAppModel) selectedActionReady(kind string) bool {
-	if m.snapshot.Detail != nil {
-		for _, action := range m.snapshot.Detail.Actions {
-			if apiActionMatchesMutationKind(action.ID, kind) {
-				return action.Status == "" || action.Status == actionStatusReady
-			}
-		}
+	if _, catalogAvailable := m.featureDetails[m.selectedFeature]; catalogAvailable {
+		action, ok := m.selectedRawAction(kind)
+		return ok && action.Enabled
 	}
 	switch kind {
 	case mutationKindFeatureStart:
@@ -6301,9 +6388,9 @@ func (m APIAppModel) renderAPIResumeAllConfirm() string {
 	var b strings.Builder
 	b.WriteString("\n")
 	if len(m.resumeAllFeatureIDs) > 0 {
-		fmt.Fprintf(&b, "  %d interrupted/failed feature(s) will be resumed.\n", len(m.resumeAllFeatureIDs))
+		fmt.Fprintf(&b, "  %d feature(s) with Resume available will be resumed.\n", len(m.resumeAllFeatureIDs))
 	} else {
-		b.WriteString(MutedStyle.Render("  No interrupted or failed features to resume."))
+		b.WriteString(MutedStyle.Render("  No features have Resume available."))
 		b.WriteString("\n")
 	}
 	panelWidth := 56
@@ -8932,6 +9019,8 @@ func apiFeatureDetailPresentation(dto server.FeatureDetailDTO) APIFeatureDetailP
 		Summary:      dto.Summary,
 		Pipeline:     dto.Pipeline,
 		TotalCostUSD: dto.Cost.TotalUSD,
+		Resumed:      dto.Resumed,
+		ResumeCount:  dto.ResumeCount,
 	}
 	for _, repo := range dto.RepoStatus {
 		stateParts := make([]string, 0, 4)

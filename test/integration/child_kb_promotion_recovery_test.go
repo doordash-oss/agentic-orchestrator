@@ -49,21 +49,21 @@ import (
 // a parent feature, and a Large child feature for testing the multi-repository
 // KB promotion journey.
 type kbPromoFixture struct {
-	t          *testing.T
-	tmpDir     string
-	stateDir   string
-	baseDir    string
-	repoDirA   string
-	repoDirB   string
-	childWTA   string
-	childWTB   string
-	parentBaseA string
-	parentBaseB string
-	store      *feature.Store
-	mgr        *feature.Manager
-	wm         *git.WorktreeManager
-	parent     *feature.Feature
-	child      *feature.Feature
+	t              *testing.T
+	tmpDir         string
+	stateDir       string
+	baseDir        string
+	repoDirA       string
+	repoDirB       string
+	childWTA       string
+	childWTB       string
+	parentBaseA    string
+	parentBaseB    string
+	store          *feature.Store
+	mgr            *feature.Manager
+	wm             *git.WorktreeManager
+	parent         *feature.Feature
+	child          *feature.Feature
 	capturedPrompt string
 }
 
@@ -307,10 +307,10 @@ func (fx *kbPromoFixture) orchestratorWithPhaseRunner(writeMarker bool) *orchest
 		},
 	}
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:  fx.mgr,
-		Store:      fx.store,
-		Publisher:  &git.PublishAdapter{},
-		Worktrees:  fx.wm,
+		Lifecycle:   fx.mgr,
+		Store:       fx.store,
+		Publisher:   &git.PublishAdapter{},
+		Worktrees:   fx.wm,
 		PhaseRunner: pr,
 		Sessions:    mockSM,
 		CmdRunner:   fx.realRunner(),
@@ -594,10 +594,14 @@ func (fx *kbPromoFixture) runStep3MultiRepoPromotionFailure(t *testing.T) {
 	}
 
 	// Verify repoA's overlay lock is held from the manual partial promotion.
-	if owner := feature.ReadOverlayLockOwner(pathsA.OverlayDir); owner == "" {
+	owner, lockErr := feature.ReadOverlayLockOwner(pathsA.OverlayDir)
+	if lockErr != nil {
+		t.Fatalf("ReadOverlayLockOwner repoA: %v", lockErr)
+	}
+	if owner == "" {
 		t.Fatal("repoA overlay lock should be held after manual partial promotion")
 	}
-	t.Logf("repoA overlay lock held by %s after manual partial promotion", feature.ReadOverlayLockOwner(pathsA.OverlayDir))
+	t.Logf("repoA overlay lock held by %s after manual partial promotion", owner)
 
 	// Make repoB's workspace unreadable so its staging fails after the
 	// lock acquisition loop acquires locks for ALL repos (including the
@@ -647,16 +651,22 @@ func (fx *kbPromoFixture) runStep3MultiRepoPromotionFailure(t *testing.T) {
 	// Verify both overlay locks are held — repoA's from the partial
 	// promotion (retained by the lock acquisition loop), and repoB's
 	// from this failed attempt.
-	if owner := feature.ReadOverlayLockOwner(fx.overlayDir("repoA")); owner == "" {
+	ownerA, err := feature.ReadOverlayLockOwner(fx.overlayDir("repoA"))
+	if err != nil {
+		t.Fatalf("ReadOverlayLockOwner repoA: %v", err)
+	}
+	if ownerA == "" {
 		t.Fatal("repoA overlay lock should still be held after promotion failure")
-	} else {
-		t.Logf("repoA overlay lock held by %s", owner)
 	}
-	if owner := feature.ReadOverlayLockOwner(fx.overlayDir("repoB")); owner == "" {
+	t.Logf("repoA overlay lock held by %s", ownerA)
+	ownerB, err := feature.ReadOverlayLockOwner(fx.overlayDir("repoB"))
+	if err != nil {
+		t.Fatalf("ReadOverlayLockOwner repoB: %v", err)
+	}
+	if ownerB == "" {
 		t.Fatal("repoB overlay lock should be held after promotion failure")
-	} else {
-		t.Logf("repoB overlay lock held by %s", owner)
 	}
+	t.Logf("repoB overlay lock held by %s", ownerB)
 
 	// Verify settleChildClosureTail returns an error (blocks cleanup and
 	// auto-publish). The workspace is still unreadable, so the promotion
@@ -738,13 +748,15 @@ func (fx *kbPromoFixture) runStep4RetryAndSeed(t *testing.T) {
 		t.Fatalf("promotion retry should succeed after restoring workspace: %v", err)
 	}
 
-	// Verify the promotion journal is now promoted.
+	// Verify the promotion journal is now promoted AND unlocked — the
+	// settled state is one durable transition, not two separate flags of
+	// progress that recovery can observe half-finished.
 	journal, jerr := fx.store.LoadPromotion(fx.child.ID)
 	if jerr != nil {
 		t.Fatalf("LoadPromotion after retry: %v", jerr)
 	}
-	if journal == nil || journal.Phase != feature.PromotionPhasePromoted {
-		t.Fatalf("promotion should be promoted after retry, got phase %v", journal)
+	if journal == nil || journal.Phase != feature.PromotionPhasePromoted || !journal.LocksReleased {
+		t.Fatalf("promotion should be promoted+unlocked after retry, got %+v", journal)
 	}
 
 	// Verify ALL overlay locks are released — including repoA's lock
@@ -752,11 +764,11 @@ func (fx *kbPromoFixture) runStep4RetryAndSeed(t *testing.T) {
 	// critical assertion: without the fix, repoA's lock would remain
 	// held because the retry skipped Done repos in the lock acquisition
 	// loop, leaving it out of the release set.
-	if owner := feature.ReadOverlayLockOwner(fx.overlayDir("repoA")); owner != "" {
-		t.Fatalf("repoA overlay lock should be released after promotion, still held by %s", owner)
+	if owner, err := feature.ReadOverlayLockOwner(fx.overlayDir("repoA")); err != nil || owner != "" {
+		t.Fatalf("repoA overlay lock should be released after promotion, owner=%q err=%v", owner, err)
 	}
-	if owner := feature.ReadOverlayLockOwner(fx.overlayDir("repoB")); owner != "" {
-		t.Fatalf("repoB overlay lock should be released after promotion, still held by %s", owner)
+	if owner, err := feature.ReadOverlayLockOwner(fx.overlayDir("repoB")); err != nil || owner != "" {
+		t.Fatalf("repoB overlay lock should be released after promotion, owner=%q err=%v", owner, err)
 	}
 	t.Log("Step 4: promotion completed, ALL overlay locks released (including already-Done repoA)")
 

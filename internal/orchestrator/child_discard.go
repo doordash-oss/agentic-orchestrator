@@ -195,8 +195,14 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 				}
 			}
 		}
-		// Delete any pending promotion journal (discarded children never promote).
+		// Delete any pending promotion journal (discarded children never
+		// promote). Release the journal's recorded overlay locks first so a
+		// discarded child with an interrupted promotion cannot strand a
+		// stable lock for every later child of this parent.
 		if store, ok := o.deps.Store.(promotionStore); ok {
+			if journal, jerr := store.LoadPromotion(childID); jerr == nil && journal != nil {
+				_ = releaseJournalOverlayLocks(journal)
+			}
 			_ = store.DeletePromotion(childID)
 		}
 		// Durably record per-repo cleanup warnings on the transaction

@@ -19,12 +19,33 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+// Overlay lock seams for promotion. They are package-level variables so
+// fault-injection tests can force acquisition, re-acquisition (refresh), and
+// release failures deterministically; production code must use these instead
+// of calling feature.AcquireOverlayLock / feature.ReleaseOverlayLock directly.
+var (
+	acquireOverlayLockFn = feature.AcquireOverlayLock
+	releaseOverlayLockFn = feature.ReleaseOverlayLock
+)
+
+// persistPromotionJournal durably saves the promotion journal with child
+// context. Every journal mutation during promotion must flow through this
+// helper so a persistence failure is never silently discarded — the journal
+// is the only recovery input for an interrupted promotion.
+func persistPromotionJournal(store promotionStore, journal *feature.PromotionJournal) error {
+	if err := store.SavePromotion(journal.ChildID, journal); err != nil {
+		return fmt.Errorf("persisting promotion journal for child %s: %w", journal.ChildID, err)
+	}
+	return nil
+}
 
 // This file owns the child KB workspace lifecycle beyond the initial KB phase:
 // the final-KB-refresh boundary before integration, and the promotion of
@@ -203,14 +224,25 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 				OverlayPath: feature.ParentOverlayPath(baseDir, parentID, repo.Name),
 			})
 		}
-		if err := store.SavePromotion(childID, journal); err != nil {
-			return fmt.Errorf("saving promotion journal: %w", err)
+		if err := persistPromotionJournal(store, journal); err != nil {
+			return err
 		}
 	}
 
-	// Already fully promoted — nothing to do.
+	// Already fully promoted — but "promoted" is only complete once every
+	// recorded overlay lock is released. A prior final-release failure can
+	// leave the journal promoted with locks still held; retry the release
+	// before reporting success so no caller treats a locked journal as
+	// settled.
 	if journal.Phase == feature.PromotionPhasePromoted {
-		return nil
+		if journal.LocksReleased {
+			return nil
+		}
+		if err := releaseJournalOverlayLocks(journal); err != nil {
+			return fmt.Errorf("releasing leftover overlay locks for child %s: %w", childID, err)
+		}
+		journal.LocksReleased = true
+		return persistPromotionJournal(store, journal)
 	}
 
 	// Load the parent as an existence guard. Merge HEADs are read from
@@ -224,8 +256,8 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 
 	// Set phase to promoting.
 	journal.Phase = feature.PromotionPhasePromoting
-	if err := store.SavePromotion(childID, journal); err != nil {
-		return fmt.Errorf("saving promotion phase: %w", err)
+	if err := persistPromotionJournal(store, journal); err != nil {
+		return err
 	}
 
 	// Acquire overlay locks for ALL repos — including ones already marked
@@ -235,21 +267,12 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 	// succeeds; on failure, the locks remain held so a later child waits on
 	// the pending promotion journal rather than seeding from a stale baseline.
 	//
-	// Including Done repos is critical: a Done repo's lock was re-acquired
-	// after its commit in the prior run (CommitStagedOverlay destroys the
-	// lock file inside the replaced overlay dir). If we skipped Done repos
-	// here, the retry's lockedOverlays map would never include them, and
-	// releaseAllOverlayLocks at the end would leave their locks held
+	// Including Done repos is critical: a Done repo's lock lives in the
+	// stable overlay namespace (CommitStagedOverlay no longer destroys it),
+	// so a retry that skipped Done repos would leave their locks held
 	// permanently, blocking all later children. AcquireOverlayLock is
 	// reentrant for the same childID, so re-acquiring a Done repo's lock
-	// simply refreshes the timestamp and adds it to the release set.
-	lockedOverlays := make(map[string]string) // repo -> overlayDir
-	releaseAllOverlayLocks := func() {
-		for repoName, overlayDir := range lockedOverlays {
-			_ = feature.ReleaseOverlayLock(overlayDir, childID)
-			delete(lockedOverlays, repoName)
-		}
-	}
+	// simply refreshes the timestamp.
 	for i := range journal.Entries {
 		entry := &journal.Entries[i]
 		repo := featureRepoByName(child, entry.Repo)
@@ -257,14 +280,13 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 			continue
 		}
 		paths := agent.ResolveChildKBPaths(baseDir, child, *repo)
-		acquired, lockErr := feature.AcquireOverlayLock(paths.OverlayDir, childID)
+		acquired, lockErr := acquireOverlayLockFn(paths.OverlayDir, childID)
 		if lockErr != nil {
 			return fmt.Errorf("acquiring overlay lock for repo %s: %w", entry.Repo, lockErr)
 		}
 		if !acquired {
 			return fmt.Errorf("overlay locked by another child for repo %s: %w", entry.Repo, feature.ErrOverlayLocked)
 		}
-		lockedOverlays[entry.Repo] = paths.OverlayDir
 	}
 
 	// Promote each repo's workspace to the parent overlay in two phases:
@@ -288,8 +310,13 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 		}
 		repo := featureRepoByName(child, entry.Repo)
 		if repo == nil {
+			// The child no longer resolves this repository, so the entry
+			// can never be promoted. Record the failure durably and surface
+			// it via the terminal incomplete-journal error below.
 			entry.Error = fmt.Sprintf("child no longer has repository %s", entry.Repo)
-			_ = store.SavePromotion(childID, journal)
+			if err := persistPromotionJournal(store, journal); err != nil {
+				return err
+			}
 			continue
 		}
 		paths := agent.ResolveChildKBPaths(baseDir, child, *repo)
@@ -303,7 +330,9 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 		wsState, wsErr := feature.LoadWorkspaceState(paths.WorkspaceDir)
 		if wsErr != nil {
 			entry.Error = wsErr.Error()
-			_ = store.SavePromotion(childID, journal)
+			if perr := persistPromotionJournal(store, journal); perr != nil {
+				return errors.Join(fmt.Errorf("loading workspace state for promotion repo %s: %w", entry.Repo, wsErr), perr)
+			}
 			return fmt.Errorf("loading workspace state for promotion repo %s: %w", entry.Repo, wsErr)
 		}
 		if wsState != nil {
@@ -326,7 +355,9 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 		)
 		if stageErr != nil {
 			entry.Error = stageErr.Error()
-			_ = store.SavePromotion(childID, journal)
+			if perr := persistPromotionJournal(store, journal); perr != nil {
+				return errors.Join(fmt.Errorf("staging workspace for repo %s: %w", entry.Repo, stageErr), perr)
+			}
 			// Clean up all staged temp dirs.
 			for dir := range stagedDirs {
 				_ = os.RemoveAll(dir)
@@ -342,11 +373,12 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 		})
 	}
 
-	// Phase 2: Commit all staged overlays. Re-acquire the overlay lock
-	// after each commit because CommitStagedOverlay replaces the overlay
-	// directory (destroying the lock file inside it). The locks are
-	// released only after the entire vector is complete, preventing a
-	// later child from consuming a partial promotion.
+	// Phase 2: Commit all staged overlays, then refresh the overlay lock
+	// after each commit. The lock lives in the stable sibling namespace so
+	// CommitStagedOverlay does not destroy it, but the refresh keeps the
+	// timestamp current and re-registers the overlay in the release set.
+	// The locks are released only after the entire vector is complete,
+	// preventing a later child from consuming a partial promotion.
 	for _, s := range staged {
 		entry := &journal.Entries[s.entryIdx]
 		repo := featureRepoByName(child, entry.Repo)
@@ -357,29 +389,50 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 
 		if err := agent.CommitStagedOverlay(s.tmpDir, paths.OverlayDir); err != nil {
 			entry.Error = err.Error()
-			_ = store.SavePromotion(childID, journal)
+			if perr := persistPromotionJournal(store, journal); perr != nil {
+				return errors.Join(fmt.Errorf("committing staged overlay for repo %s: %w", entry.Repo, err), perr)
+			}
 			return fmt.Errorf("committing staged overlay for repo %s: %w", entry.Repo, err)
 		}
 
-		// Re-acquire the overlay lock so it survives the replacement.
-		if reacquired, _ := feature.AcquireOverlayLock(paths.OverlayDir, childID); reacquired {
-			lockedOverlays[entry.Repo] = paths.OverlayDir
+		// Refresh the overlay lock after the replacement, failing closed:
+		// without an exclusive lock the freshly committed overlay would be
+		// exposed to seeding by a later child mid-promotion.
+		reacquired, lockErr := acquireOverlayLockFn(paths.OverlayDir, childID)
+		if lockErr != nil || !reacquired {
+			if lockErr == nil {
+				lockErr = feature.ErrOverlayLocked
+			}
+			entry.Error = fmt.Sprintf("re-acquiring overlay lock after commit: %v", lockErr)
+			if perr := persistPromotionJournal(store, journal); perr != nil {
+				return errors.Join(fmt.Errorf("re-acquiring overlay lock for repo %s after commit: %w", entry.Repo, lockErr), perr)
+			}
+			return fmt.Errorf("re-acquiring overlay lock for repo %s after commit: %w", entry.Repo, lockErr)
 		}
 
 		entry.MergeHEAD = s.mergeHEAD
 		entry.CanonicalCommit = s.canonical
 		entry.Done = true
 		entry.Error = ""
-		_ = store.SavePromotion(childID, journal)
+		if err := persistPromotionJournal(store, journal); err != nil {
+			return err
+		}
 	}
 
-	// All promoted — mark the journal as promoted and release locks.
+	// All promoted — release every recorded lock BEFORE marking the journal
+	// promoted. This ordering keeps "promoted" and "unlocked" one durable
+	// transition: a failed release leaves the journal in the promoting
+	// phase (entries already record the completed overlay commits), so the
+	// idempotent retry above re-runs the release instead of skipping it.
 	if journal.AllPromoted() {
-		journal.Phase = feature.PromotionPhasePromoted
-		if err := store.SavePromotion(childID, journal); err != nil {
-			return fmt.Errorf("saving promoted phase: %w", err)
+		if err := releaseJournalOverlayLocks(journal); err != nil {
+			return fmt.Errorf("releasing overlay locks after promotion for child %s: %w", childID, err)
 		}
-		releaseAllOverlayLocks()
+		journal.Phase = feature.PromotionPhasePromoted
+		journal.LocksReleased = true
+		if err := persistPromotionJournal(store, journal); err != nil {
+			return err
+		}
 		o.emitEvent(ports.Event{
 			Type:      ports.RepoStatusChanged,
 			FeatureID: childID,
@@ -387,9 +440,43 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 			ChildID:   childID,
 			Message:   "child KB workspaces promoted to parent overlays",
 		})
+		return nil
 	}
 
-	return nil
+	// The journal remains incomplete (for example, a repository no longer
+	// resolves on the child). Returning nil here would let the closure tail
+	// treat the promotion vector as settled and delete the recovery inputs,
+	// so surface the pending entries as an error instead.
+	var pending []string
+	for i := range journal.Entries {
+		if journal.Entries[i].Done {
+			continue
+		}
+		msg := journal.Entries[i].Repo
+		if journal.Entries[i].Error != "" {
+			msg += ": " + journal.Entries[i].Error
+		}
+		pending = append(pending, msg)
+	}
+	return fmt.Errorf("promotion journal for child %s remains incomplete: %s", childID, strings.Join(pending, "; "))
+}
+
+// releaseJournalOverlayLocks releases every overlay lock recorded in the
+// promotion journal. It is idempotent: ReleaseOverlayLock is a no-op for an
+// absent or foreign lock file, so a retry after a partial release only
+// re-attempts the locks that are still held. All failures are joined so one
+// stubborn lock never masks the outcome of the others.
+func releaseJournalOverlayLocks(journal *feature.PromotionJournal) error {
+	var errs []error
+	for i := range journal.Entries {
+		if journal.Entries[i].OverlayPath == "" {
+			continue
+		}
+		if err := releaseOverlayLockFn(journal.Entries[i].OverlayPath, journal.ChildID); err != nil {
+			errs = append(errs, fmt.Errorf("repo %s: %w", journal.Entries[i].Repo, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // promotionStore is the subset of Store used for promotion journal persistence.
@@ -457,11 +544,20 @@ func (o *Orchestrator) reconcileOnePromotion(f *feature.Feature, store promotion
 	if journal == nil {
 		return nil
 	}
-	// A promoted journal with a closed child is fully done — clean up.
+	// A promoted journal is only settled once every recorded lock is
+	// verifiably released. Establish that invariant idempotently through
+	// the promotion owner — a failed final release leaves the journal
+	// promoted with locks held, and only this retry frees later children.
 	if journal.Phase == feature.PromotionPhasePromoted {
+		if err := o.PromoteChildKBWorkspaces(f.ID, f.Parent.ParentID); err != nil {
+			return err
+		}
 		// Only clean up the journal if the child is closed and cleanup is done.
-		if f.Parent.CloseOutcome == feature.ChildCloseOutcomeCompleted {
-			_ = store.DeletePromotion(f.ID)
+		if f.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+			return nil
+		}
+		if err := store.DeletePromotion(f.ID); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("deleting promoted journal: %w", err)
 		}
 		return nil
 	}

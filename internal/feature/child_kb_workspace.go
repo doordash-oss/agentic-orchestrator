@@ -75,9 +75,13 @@ type OverlayLockInfo struct {
 // ErrOverlayLocked is returned when a parent overlay is locked by another child.
 var ErrOverlayLocked = fmt.Errorf("parent overlay is locked by another child")
 
-// OverlayLockPath returns the path to the overlay lock file.
+// OverlayLockPath returns the path to the overlay lock file. The lock lives
+// as a sibling of the overlay directory (inside the stable overlay parent
+// namespace) rather than inside the overlay itself, so that atomic overlay
+// replacement does not destroy the lock and the exclusive-promotion
+// guarantee holds across overlay generations.
 func OverlayLockPath(overlayDir string) string {
-	return filepath.Join(overlayDir, "overlay.lock")
+	return overlayDir + ".lock"
 }
 
 // OverlayStatePath returns the path to the overlay provenance state file.
@@ -182,71 +186,111 @@ func SaveWorkspaceState(workspaceDir string, state *ChildKBWorkspaceState) error
 // Returns true if the lock was acquired, false if another child holds it.
 // The lock is reentrant: if the same childID already holds it, the timestamp
 // is refreshed and the call succeeds.
+//
+// The operation fails closed: any error reading, parsing, writing, or closing
+// the lock payload is returned with context instead of being treated as an
+// unlocked overlay, so a corrupt or unwritable lock can never admit a second
+// child while a promotion is in flight.
 func AcquireOverlayLock(overlayDir, childID string) (bool, error) {
-	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
-		return false, fmt.Errorf("creating overlay dir: %w", err)
-	}
 	lockPath := OverlayLockPath(overlayDir)
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return false, fmt.Errorf("creating overlay lock dir: %w", err)
+	}
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
 			data, readErr := os.ReadFile(lockPath)
-			if readErr == nil {
-				var existing OverlayLockInfo
-				if json.Unmarshal(data, &existing) == nil && existing.ChildID == childID {
-					existing.Timestamp = time.Now()
-					refreshed, _ := json.Marshal(existing)
-					_ = os.WriteFile(lockPath, refreshed, 0o644)
-					return true, nil
-				}
+			if readErr != nil {
+				return false, fmt.Errorf("reading existing overlay lock %s: %w", lockPath, readErr)
 			}
-			return false, nil
+			var existing OverlayLockInfo
+			if err := json.Unmarshal(data, &existing); err != nil {
+				return false, fmt.Errorf("parsing existing overlay lock %s: %w", lockPath, err)
+			}
+			if existing.ChildID != childID {
+				return false, nil
+			}
+			existing.Timestamp = time.Now()
+			refreshed, err := json.Marshal(existing)
+			if err != nil {
+				return false, fmt.Errorf("marshaling refreshed overlay lock %s: %w", lockPath, err)
+			}
+			if err := os.WriteFile(lockPath, refreshed, 0o644); err != nil {
+				return false, fmt.Errorf("refreshing overlay lock %s: %w", lockPath, err)
+			}
+			return true, nil
 		}
-		return false, fmt.Errorf("creating overlay lock: %w", err)
+		return false, fmt.Errorf("creating overlay lock %s: %w", lockPath, err)
 	}
-	defer func() { _ = f.Close() }()
 	info := OverlayLockInfo{ChildID: childID, Timestamp: time.Now()}
-	data, _ := json.Marshal(info)
-	_, _ = f.Write(data)
+	data, err := json.Marshal(info)
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(lockPath)
+		return false, fmt.Errorf("marshaling overlay lock payload: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(lockPath)
+		return false, fmt.Errorf("writing overlay lock %s: %w", lockPath, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(lockPath)
+		return false, fmt.Errorf("closing overlay lock %s: %w", lockPath, err)
+	}
 	return true, nil
 }
 
-// ReadOverlayLockOwner returns the child ID of the current overlay lock holder,
-// or "" if the lock file is missing or unreadable.
-func ReadOverlayLockOwner(overlayDir string) string {
+// ReadOverlayLockOwner returns the child ID of the current overlay lock
+// holder. It returns "" only when no lock file exists; an unreadable or
+// corrupt lock payload is returned as an error so callers fail closed
+// instead of treating the overlay as unlocked.
+func ReadOverlayLockOwner(overlayDir string) (string, error) {
 	data, err := os.ReadFile(OverlayLockPath(overlayDir))
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading overlay lock: %w", err)
 	}
 	var info OverlayLockInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return ""
+		return "", fmt.Errorf("parsing overlay lock: %w", err)
 	}
-	return info.ChildID
+	return info.ChildID, nil
 }
 
 // ReleaseOverlayLock removes the overlay lock file only if it belongs to the
-// given childID. If childID is empty, the lock is forcibly removed (stale cleanup).
+// given childID. If childID is empty, the lock is forcibly removed (stale
+// cleanup). The operation fails closed: an unreadable or corrupt lock payload
+// returns a contextual error rather than silently deleting another child's
+// potentially valid lock.
 func ReleaseOverlayLock(overlayDir, childID string) error {
 	lockPath := OverlayLockPath(overlayDir)
 	if childID == "" {
-		return os.Remove(lockPath)
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing overlay lock %s: %w", lockPath, err)
+		}
+		return nil
 	}
 	data, err := os.ReadFile(lockPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("reading overlay lock: %w", err)
+		return fmt.Errorf("reading overlay lock %s: %w", lockPath, err)
 	}
 	var info OverlayLockInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return os.Remove(lockPath)
+		return fmt.Errorf("parsing overlay lock %s: %w", lockPath, err)
 	}
 	if info.ChildID != childID {
 		return nil
 	}
-	return os.Remove(lockPath)
+	if err := os.Remove(lockPath); err != nil {
+		return fmt.Errorf("removing overlay lock %s: %w", lockPath, err)
+	}
+	return nil
 }
 
 // IsOverlayLockStale checks if the overlay lock file is stale.
@@ -287,11 +331,17 @@ type PromotionEntry struct {
 // feature.yaml at <stateDir>/<childID>/promotion.yaml. It records the
 // per-repository promotion of child KB workspaces to parent overlays.
 type PromotionJournal struct {
-	ChildID   string           `yaml:"child_id"`
-	ParentID  string           `yaml:"parent_id"`
-	Phase     PromotionPhase   `yaml:"phase"`
-	Entries   []PromotionEntry `yaml:"entries"`
-	CreatedAt time.Time        `yaml:"created_at"`
+	ChildID  string           `yaml:"child_id"`
+	ParentID string           `yaml:"parent_id"`
+	Phase    PromotionPhase   `yaml:"phase"`
+	Entries  []PromotionEntry `yaml:"entries"`
+	// LocksReleased flips true only after every overlay lock recorded in
+	// Entries has verifiably been released. A promoted journal without this
+	// flag is not complete: a failed final release leaves the phase at
+	// promoted with locks still held, and the promotion owner must retry
+	// the release before any consumer treats the journal as settled.
+	LocksReleased bool      `yaml:"locks_released,omitempty"`
+	CreatedAt     time.Time `yaml:"created_at"`
 }
 
 // AllPromoted reports whether every per-repo entry is done.

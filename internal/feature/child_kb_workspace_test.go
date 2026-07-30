@@ -123,7 +123,10 @@ func TestAcquireReleaseOverlayLock(t *testing.T) {
 	}
 
 	// Read owner.
-	owner := ReadOverlayLockOwner(dir)
+	owner, err := ReadOverlayLockOwner(dir)
+	if err != nil {
+		t.Fatalf("ReadOverlayLockOwner: %v", err)
+	}
 	if owner != "child-1" {
 		t.Errorf("ReadOverlayLockOwner = %q, want child-1", owner)
 	}
@@ -142,6 +145,148 @@ func TestAcquireReleaseOverlayLock(t *testing.T) {
 	}
 	if _, err := os.Stat(OverlayLockPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("lock file should be removed after owner release")
+	}
+}
+
+// TestOverlayLockSurvivesOverlayReplacement proves the lock lives in the
+// stable sibling namespace: removing and recreating the overlay directory
+// (what CommitStagedOverlay's rename does) must not destroy the lock.
+func TestOverlayLockSurvivesOverlayReplacement(t *testing.T) {
+	base := t.TempDir()
+	overlayDir := filepath.Join(base, "repo")
+
+	acquired, err := AcquireOverlayLock(overlayDir, "child-1")
+	if err != nil || !acquired {
+		t.Fatalf("AcquireOverlayLock = %v, %v", acquired, err)
+	}
+
+	// Simulate the atomic overlay replacement.
+	if err := os.RemoveAll(overlayDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	owner, err := ReadOverlayLockOwner(overlayDir)
+	if err != nil {
+		t.Fatalf("ReadOverlayLockOwner after replacement: %v", err)
+	}
+	if owner != "child-1" {
+		t.Fatalf("lock should survive overlay replacement, owner = %q", owner)
+	}
+
+	if err := ReleaseOverlayLock(overlayDir, "child-1"); err != nil {
+		t.Fatalf("ReleaseOverlayLock after replacement: %v", err)
+	}
+}
+
+// TestAcquireOverlayLockCreationFailureFailsClosed proves that a lock path
+// that cannot be created surfaces an error instead of reporting acquisition.
+func TestAcquireOverlayLockCreationFailureFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	overlayDir := filepath.Join(base, "repo")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A directory at the lock path defeats exclusive file creation while
+	// remaining readable, forcing the read-existing path to fail too.
+	if err := os.MkdirAll(OverlayLockPath(overlayDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	acquired, err := AcquireOverlayLock(overlayDir, "child-1")
+	if err == nil {
+		t.Fatal("expected acquisition to fail closed when the lock path is a directory")
+	}
+	if acquired {
+		t.Fatal("acquisition must not report success when lock creation fails")
+	}
+}
+
+// TestAcquireOverlayLockCorruptExistingFailsClosed proves a corrupt existing
+// lock is an error for every contender, never a silent "unlocked" or "locked"
+// verdict that could admit a second child or strand the payload.
+func TestAcquireOverlayLockCorruptExistingFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	overlayDir := filepath.Join(base, "repo")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(OverlayLockPath(overlayDir), []byte("{corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := AcquireOverlayLock(overlayDir, "child-1"); err == nil {
+		t.Fatal("expected error acquiring over a corrupt lock")
+	}
+	if _, err := AcquireOverlayLock(overlayDir, "other-child"); err == nil {
+		t.Fatal("expected error acquiring over a corrupt lock held by an unknown child")
+	}
+	if _, err := ReadOverlayLockOwner(overlayDir); err == nil {
+		t.Fatal("expected ReadOverlayLockOwner to fail closed on a corrupt lock")
+	}
+}
+
+// TestAcquireOverlayLockRefreshFailureFailsClosed proves that a reentrant
+// refresh of an unwritable lock returns the write error instead of claiming
+// a successful refresh.
+func TestAcquireOverlayLockRefreshFailureFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	overlayDir := filepath.Join(base, "repo")
+
+	acquired, err := AcquireOverlayLock(overlayDir, "child-1")
+	if err != nil || !acquired {
+		t.Fatalf("AcquireOverlayLock = %v, %v", acquired, err)
+	}
+	lockPath := OverlayLockPath(overlayDir)
+	if err := os.Chmod(lockPath, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(lockPath, 0o644) }()
+
+	acquired, err = AcquireOverlayLock(overlayDir, "child-1")
+	if err == nil {
+		t.Fatal("expected refresh of a read-only lock to fail")
+	}
+	if acquired {
+		t.Fatal("failed refresh must not report acquisition success")
+	}
+}
+
+// TestReleaseOverlayLockFailureFailsClosed proves release does not silently
+// drop read/parse/remove failures.
+func TestReleaseOverlayLockFailureFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	overlayDir := filepath.Join(base, "repo")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := OverlayLockPath(overlayDir)
+
+	// Corrupt payload: release by a specific child must fail closed rather
+	// than deleting a potentially valid lock.
+	if err := os.WriteFile(lockPath, []byte("{corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReleaseOverlayLock(overlayDir, "child-1"); err == nil {
+		t.Fatal("expected release of a corrupt lock to fail")
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatal("corrupt lock must be preserved when release fails closed")
+	}
+	// Forced stale cleanup still removes it.
+	if err := ReleaseOverlayLock(overlayDir, ""); err != nil {
+		t.Fatalf("forced release: %v", err)
+	}
+
+	// Unreadable payload: read failure propagates.
+	if err := os.WriteFile(lockPath, []byte(`{"child_id":"child-1"}`), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(lockPath, 0o644) }()
+	if err := ReleaseOverlayLock(overlayDir, "child-1"); err == nil {
+		t.Fatal("expected release of an unreadable lock to fail")
 	}
 }
 

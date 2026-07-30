@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -475,14 +476,22 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 			if jerr != nil {
 				return fmt.Errorf("loading promotion journal for cleanup: %w", jerr)
 			}
-			if journal != nil && journal.Phase == feature.PromotionPhasePromoted {
+			// The journal is the only recovery input for a stranded overlay
+			// lock, so it (and the disposable workspaces it references) may
+			// only be removed once "promoted and unlocked" is durable. The
+			// PromoteChildKBWorkspaces call above establishes LocksReleased
+			// before returning success; anything less keeps the journal for
+			// ReconcilePromotions.
+			if journal != nil && journal.Phase == feature.PromotionPhasePromoted && journal.LocksReleased {
 				for _, repo := range child.Repos {
 					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, childID, repo.Name)
 					if err := agent.RemoveWorkspace(workspaceDir); err != nil {
 						warnings[repo.Name] = fmt.Sprintf("removing child KB workspace for %s: %v", repo.Name, err)
 					}
 				}
-				_ = store.DeletePromotion(childID)
+				if err := store.DeletePromotion(childID); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("deleting settled promotion journal for %s: %w", childID, err)
+				}
 			}
 		}
 	}

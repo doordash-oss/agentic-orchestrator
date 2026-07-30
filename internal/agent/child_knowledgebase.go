@@ -93,9 +93,9 @@ func MarkWorkspaceFresh(ctx context.Context, runner ports.CommandRunner, workspa
 	// state when present, distinguishing missing state (existing == nil)
 	// from corrupt or unreadable state (err != nil, handled above).
 	updated := &feature.ChildKBWorkspaceState{
-		Source:          feature.WorkspaceSourceFull,
-		AnalyzedCommit:  commit,
-		LastUpdated:      time.Now(),
+		Source:         feature.WorkspaceSourceFull,
+		AnalyzedCommit: commit,
+		LastUpdated:    time.Now(),
 	}
 	if existing != nil {
 		updated.Source = existing.Source
@@ -246,7 +246,11 @@ func SeedChildKBWorkspace(ctx context.Context, runner ports.CommandRunner, paths
 	// canonical. A later child must wait for the preceding promotion to
 	// complete so it seeds from the newest overlay generation rather than
 	// a stale canonical baseline.
-	if owner := feature.ReadOverlayLockOwner(paths.OverlayDir); owner != "" {
+	owner, lockErr := feature.ReadOverlayLockOwner(paths.OverlayDir)
+	if lockErr != nil {
+		return fmt.Errorf("reading overlay lock for repo %s: %w", paths.RepoName, lockErr)
+	}
+	if owner != "" {
 		return fmt.Errorf("overlay for repo %s is locked by child %s: %w", paths.RepoName, owner, feature.ErrOverlayLocked)
 	}
 
@@ -282,7 +286,8 @@ func SeedChildKBWorkspace(ctx context.Context, runner ports.CommandRunner, paths
 
 // copyTree copies all regular files from src to dst, preserving directory
 // structure. It skips lock files, state files that are specific to the source
-// (overlay.lock, kb.lock), and temp files.
+// (kb.lock), and temp files. The overlay lock is never in-tree: it lives as
+// a sibling of the overlay directory in the stable parent namespace.
 func copyTree(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -298,7 +303,7 @@ func copyTree(src, dst string) error {
 		}
 		// Skip lock files and source-specific state files.
 		base := filepath.Base(path)
-		if base == "kb.lock" || base == "overlay.lock" || base == "workspace.lock" ||
+		if base == "kb.lock" || base == "workspace.lock" ||
 			base == "phase_complete" || base == "output.txt" {
 			return nil
 		}
@@ -381,9 +386,9 @@ func StageWorkspaceToOverlay(workspaceDir, overlayDir, mergeHEAD, canonicalCommi
 }
 
 // CommitStagedOverlay atomically replaces the existing overlay with the staged
-// temp directory via rename. The caller should re-acquire the overlay lock
-// after a successful commit because the lock file lives inside the overlay
-// directory and is destroyed during the rename.
+// temp directory via rename. The overlay lock lives beside the overlay
+// directory in the stable overlay parent namespace, so it survives the
+// replacement; the promotion loop still refreshes it after each commit.
 func CommitStagedOverlay(tmpDir, overlayDir string) error {
 	backupDir := overlayDir + ".old"
 	_ = os.RemoveAll(backupDir)

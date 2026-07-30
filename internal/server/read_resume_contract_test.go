@@ -111,6 +111,54 @@ func TestFeatureReadModelsExposeActiveImplementResumeIndicator(t *testing.T) {
 	}
 }
 
+func TestFeatureReadModelsExposeResumeIndicatorForSequentialKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		phase        feature.Phase
+		roadmapPhase int
+	}{
+		{name: "inquire", phase: feature.PhaseInquire},
+		{name: "research", phase: feature.PhaseResearch},
+		{name: "design", phase: feature.PhaseDesign},
+		{name: "roadmap plan", phase: feature.PhasePlan},
+		{name: "phase plan", phase: feature.PhasePlan, roadmapPhase: 2},
+		{name: "implement", phase: feature.PhaseImplement, roadmapPhase: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			store, f := seedReadFeature(t)
+			f.CurrentPhase = test.phase
+			f.CurrentRoadmapPhase = test.roadmapPhase
+			if test.phase != feature.PhaseImplement {
+				f.CurrentIteration = 0
+			}
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+			unitDir, ok := agent.ResumeUnitDir(store.BaseDir, f)
+			if !ok {
+				t.Fatal("ResumeUnitDir() did not resolve current sequential unit")
+			}
+			if err := agent.WriteResumeRecord(unitDir, agent.ResumeRecord{
+				PhaseKey:    agent.ResumePhaseKey(f),
+				RunNumber:   f.ActiveRun,
+				Resumed:     true,
+				ResumeCount: 2,
+			}); err != nil {
+				t.Fatalf("WriteResumeRecord() error = %v", err)
+			}
+
+			handler := NewHandler(baseReadHandlerOptions(store))
+			detail := getJSONMap(t, handler, apiPathFeatures+"/"+f.ID)
+			assertResumeIndicator(t, "detail", detail[entityFeature].(map[string]any), true, 2)
+		})
+	}
+}
+
 func TestFeatureReadModelResumeIndicatorIgnoresInactiveIteration(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -306,6 +354,93 @@ func TestFailedFeatureResumeActionUsesStrictEligibility(t *testing.T) {
 			}
 			if got := reason["message"]; got != tt.wantMessage {
 				t.Errorf("resume disabled message = %q; want %q", got, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestFailedFeatureResumeActionSupportsSequentialKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		phase        feature.Phase
+		roadmapPhase int
+		models       config.ModelConfig
+	}{
+		{
+			name:   "inquire",
+			phase:  feature.PhaseInquire,
+			models: config.ModelConfig{Inquiry: "codex:model-a"},
+		},
+		{
+			name:   "research",
+			phase:  feature.PhaseResearch,
+			models: config.ModelConfig{Research: "codex:model-a"},
+		},
+		{
+			name:   "design",
+			phase:  feature.PhaseDesign,
+			models: config.ModelConfig{Planning: "codex:model-a"},
+		},
+		{
+			name:   "roadmap plan",
+			phase:  feature.PhasePlan,
+			models: config.ModelConfig{Planning: "codex:model-a"},
+		},
+		{
+			name:         "phase plan",
+			phase:        feature.PhasePlan,
+			roadmapPhase: 2,
+			models:       config.ModelConfig{Planning: "codex:model-a"},
+		},
+		{
+			name:         "implement",
+			phase:        feature.PhaseImplement,
+			roadmapPhase: 1,
+			models:       config.ModelConfig{Implementation: "codex:model-a"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			store, f := seedReadFeature(t)
+			f.Status = feature.StatusFailed
+			f.CurrentPhase = test.phase
+			f.CurrentRoadmapPhase = test.roadmapPhase
+			f.Models = test.models
+			if test.phase != feature.PhaseImplement {
+				f.CurrentIteration = 0
+			}
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+			unitDir, ok := agent.ResumeUnitDir(store.BaseDir, f)
+			if !ok {
+				t.Fatal("ResumeUnitDir() did not resolve current sequential unit")
+			}
+			if err := agent.WriteResumeRecord(unitDir, agent.ResumeRecord{
+				ProviderSessionID: "thread-sequential",
+				Provider:          "codex",
+				ResolvedModel:     "model-a",
+				PhaseKey:          agent.ResumePhaseKey(f),
+				RunNumber:         f.ActiveRun,
+			}); err != nil {
+				t.Fatalf("WriteResumeRecord() error = %v", err)
+			}
+
+			registry := llm.NewRegistry()
+			registry.Register(resumableServerProvider{
+				fakeProvider: fakeProvider{name: "codex", models: []string{"model-a"}},
+			})
+			opts := baseReadHandlerOptions(store)
+			opts.Registry = registry
+			handler := NewHandler(opts)
+			detail := getJSONMap(t, handler, apiPathFeatures+"/"+f.ID)
+			actions := detail[entityFeature].(map[string]any)["actions"].([]any)
+			if resume := actionFromJSON(t, actions, actionResume); !resume["enabled"].(bool) {
+				t.Fatalf("resume action = %#v, want enabled", resume)
 			}
 		})
 	}

@@ -110,3 +110,61 @@ func TestResumeFeatureClaimsEligibleRecordAndDispatchesImplementation(t *testing
 	}
 	agent.NewResumeCoordinator(iterDir).ClearPending(time.Now())
 }
+
+func TestResumeModelForFeatureUsesCurrentPhaseRole(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		phase feature.Phase
+		model config.ModelConfig
+		want  string
+	}{
+		{
+			name:  "inquire",
+			phase: feature.PhaseInquire,
+			model: config.ModelConfig{Inquiry: "codex:inquiry"},
+			want:  "codex:inquiry",
+		},
+		{
+			name:  "inquire falls back to research",
+			phase: feature.PhaseInquire,
+			model: config.ModelConfig{Research: "codex:research"},
+			want:  "codex:research",
+		},
+		{
+			name:  "research",
+			phase: feature.PhaseResearch,
+			model: config.ModelConfig{Research: "codex:research"},
+			want:  "codex:research",
+		},
+		{
+			name:  "design",
+			phase: feature.PhaseDesign,
+			model: config.ModelConfig{Planning: "codex:planning"},
+			want:  "codex:planning",
+		},
+		{
+			name:  "plan",
+			phase: feature.PhasePlan,
+			model: config.ModelConfig{Planning: "codex:planning"},
+			want:  "codex:planning",
+		},
+		{
+			name:  "implement",
+			phase: feature.PhaseImplement,
+			model: config.ModelConfig{Implementation: "codex:implementation"},
+			want:  "codex:implementation",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			f := &feature.Feature{CurrentPhase: test.phase, Models: test.model}
+			if got := resumeModelForFeature(&agent.PhaseRunner{}, f); got != test.want {
+				t.Errorf("resumeModelForFeature() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

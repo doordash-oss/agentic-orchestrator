@@ -708,12 +708,11 @@ func TestExecuteRecovery_ResumeClaimConflictDegradesToFresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadResumeRecord() error = %v", err)
 	}
-	if spy.numCalls() != 1 ||
+	if spy.numCalls() != 0 ||
 		record == nil ||
-		record.PendingResume ||
-		record.FreshFallbackCount != 1 ||
-		record.FreshFallbackReason != "claim_conflict" {
-		t.Errorf("fresh conflict fallback = calls %d, record %#v", spy.numCalls(), record)
+		!record.PendingResume ||
+		record.FreshFallbackCount != 0 {
+		t.Errorf("duplicate recovery claim = calls %d, record %#v; want no second dispatch and original pending claim preserved", spy.numCalls(), record)
 	}
 }
 

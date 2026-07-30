@@ -363,9 +363,8 @@ func EvaluateResumeEligibility(current *feature.Feature, record *ResumeRecord, c
 	if current == nil || record.RunNumber != activeRunNumber(current) {
 		return ineligibleResume(ResumeReasonRunSealed)
 	}
-	if current.CurrentPhase != feature.PhaseImplement ||
-		record.PhaseKey != resumePhaseKey(current) ||
-		record.Iteration != current.CurrentIteration {
+	currentPhaseKey := ResumePhaseKey(current)
+	if currentPhaseKey == "" || record.PhaseKey != currentPhaseKey {
 		return ineligibleResume(ResumeReasonPositionChanged)
 	}
 	if registry == nil {
@@ -417,17 +416,78 @@ func resumeEligibilityMessage(reason ResumeEligibilityReason) string {
 	}
 }
 
-func resumePhaseKey(current *feature.Feature) string {
+// ResumePhaseKey returns the durable phase identity for the feature's current
+// resumable unit. It is independent of the unit's iteration or attempt number.
+func ResumePhaseKey(current *feature.Feature) string {
 	if current == nil {
 		return ""
 	}
-	if key := strings.TrimSpace(current.ActiveTimingKey); key != "" {
-		return key
+	switch current.CurrentPhase {
+	case feature.PhaseInquire:
+		return "inquire"
+	case feature.PhaseResearch:
+		return "research"
+	case feature.PhaseDesign:
+		return "design"
+	case feature.PhasePlan:
+		if current.CurrentRoadmapPhase > 0 {
+			if key := strings.TrimSpace(current.ActiveTimingKey); strings.HasSuffix(key, "-plan") {
+				return key
+			}
+			return fmt.Sprintf("phase-%d-plan", current.CurrentRoadmapPhase)
+		}
+		return "roadmap-plan"
+	case feature.PhaseImplement:
+		if key := strings.TrimSpace(current.ActiveTimingKey); key == "implement" || strings.HasSuffix(key, "-impl") {
+			return key
+		}
+		if current.CurrentRoadmapPhase > 0 {
+			return fmt.Sprintf("phase-%d-impl", current.CurrentRoadmapPhase)
+		}
+		return "implement"
+	default:
+		return ""
 	}
-	if current.CurrentRoadmapPhase > 0 {
-		return fmt.Sprintf("phase-%d-impl", current.CurrentRoadmapPhase)
+}
+
+// ResumeUnitDir resolves the directory that owns resume.yaml for the feature's
+// current resumable unit. Planning sidecars belong to the next logical attempt;
+// failed or interrupted attempts are retried because
+// LatestCompletedPlanAttempt deliberately excludes them.
+func ResumeUnitDir(stateDir string, current *feature.Feature) (string, bool) {
+	if current == nil || strings.TrimSpace(current.ID) == "" {
+		return "", false
 	}
-	return "implement"
+
+	runDir := ActiveRunDir(stateDir, current)
+	baseDir := filepath.Join(runDir, current.RefactorPrefix())
+	switch current.CurrentPhase {
+	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
+		return filepath.Join(baseDir, current.CurrentPhase.DirName()), true
+	case feature.PhasePlan:
+		var planDir string
+		if current.CurrentRoadmapPhase > 0 {
+			planDir = filepath.Join(
+				baseDir,
+				fmt.Sprintf("phase-%02d", current.CurrentRoadmapPhase),
+				"plan",
+			)
+		} else {
+			planDir = filepath.Join(baseDir, "roadmap")
+		}
+		attempt := LatestCompletedPlanAttempt(planDir) + 1
+		return filepath.Join(planDir, fmt.Sprintf("attempt-%02d", attempt)), true
+	case feature.PhaseImplement:
+		if current.CurrentIteration <= 0 {
+			return "", false
+		}
+		return filepath.Join(
+			ActiveImplementDir(stateDir, current),
+			fmt.Sprintf("iteration-%02d", current.CurrentIteration),
+		), true
+	default:
+		return "", false
+	}
 }
 
 func tryAcquireResumeClaim(featureID string) bool {

@@ -329,6 +329,7 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 	o.supervisor = newPhaseSupervisor(phaseSupervisorConfig{
 		Completion:        o,
 		Sessions:          o.deps.Sessions,
+		SingleShotResumer: o.deps.PhaseRunner,
 		OnCompletionError: o.surfaceDispatchCompletionError,
 	})
 	if o.deps.PhaseRunner != nil {

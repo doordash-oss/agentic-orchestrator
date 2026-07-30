@@ -34,6 +34,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	sessionruntime "github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"gopkg.in/yaml.v3"
 )
 
@@ -45,16 +46,32 @@ import (
 // reconstruct its state after a session restart — without them, the
 // on-stack counter resets and a drifting critic can escape the stall cap.
 type PlanAttemptMeta struct {
-	Attempt        int               `yaml:"attempt"`
-	SessionAttempt int               `yaml:"session_attempt,omitempty"` // provider-session retry within this logical attempt
-	AgentStatus    string            `yaml:"agent_status"`              // SUCCESS or FAILED
-	ReviewStatus   string            `yaml:"review_status"`             // APPROVED, CHANGES_REQUESTED, or empty
-	AxisVerdicts   map[string]string `yaml:"axis_verdicts,omitempty"`   // axis (lowercase) -> "APPROVED"|"CHANGES_REQUESTED"|"ERROR"
-	AxisDigests    map[string]string `yaml:"axis_digests,omitempty"`    // axis (lowercase) -> sha256 of the frozen section at this attempt
+	Attempt             int               `yaml:"attempt"`
+	SessionAttempt      int               `yaml:"session_attempt,omitempty"` // provider-session retry within this logical attempt
+	AgentStatus         string            `yaml:"agent_status"`              // SUCCESS or FAILED
+	ReviewStatus        string            `yaml:"review_status"`             // APPROVED, CHANGES_REQUESTED, or empty
+	Provider            string            `yaml:"provider,omitempty"`
+	ResolvedModel       string            `yaml:"resolved_model,omitempty"`
+	ProviderSessionID   string            `yaml:"provider_session_id,omitempty"`
+	Resumed             bool              `yaml:"resumed,omitempty"`
+	ResumeCount         int               `yaml:"resume_count,omitempty"`
+	FreshFallbackCount  int               `yaml:"fresh_fallback_count,omitempty"`
+	FreshFallbackReason string            `yaml:"fresh_fallback_reason,omitempty"`
+	AxisVerdicts        map[string]string `yaml:"axis_verdicts,omitempty"` // axis (lowercase) -> "APPROVED"|"CHANGES_REQUESTED"|"ERROR"
+	AxisDigests         map[string]string `yaml:"axis_digests,omitempty"`  // axis (lowercase) -> sha256 of the frozen section at this attempt
 }
 
 // WritePlanAttemptMeta persists a PlanAttemptMeta to the attempt subdirectory.
 func WritePlanAttemptMeta(artifactDir string, meta PlanAttemptMeta) error {
+	if record, err := ReadResumeRecord(filepath.Join(artifactDir, fmt.Sprintf("attempt-%02d", meta.Attempt))); err == nil && record != nil {
+		meta.Provider = record.Provider
+		meta.ResolvedModel = record.ResolvedModel
+		meta.ProviderSessionID = record.ProviderSessionID
+		meta.Resumed = record.Resumed
+		meta.ResumeCount = record.ResumeCount
+		meta.FreshFallbackCount = record.FreshFallbackCount
+		meta.FreshFallbackReason = record.FreshFallbackReason
+	}
 	data, err := yaml.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshaling plan attempt meta: %w", err)
@@ -201,6 +218,102 @@ func nextPlanSessionAttempt(artifactDir string, attempt int) int {
 
 func planAttemptSessionID(base string, sessionAttempt int) string {
 	return retrySessionID(base, sessionAttempt)
+}
+
+func planAttemptResumeContext(attempt int, phaseNumber int) string {
+	if phaseNumber > 0 {
+		return fmt.Sprintf("You were mid attempt %d of the phase-%d plan. Reconcile any partial plan artifacts in this attempt directory before continuing.", attempt, phaseNumber)
+	}
+	return fmt.Sprintf("You were mid attempt %d of the roadmap plan. Reconcile any partial roadmap artifacts in this attempt directory before continuing.", attempt)
+}
+
+func pendingPlanAttemptResume(record *ResumeRecord, phaseKey string, runNumber, attempt int) bool {
+	return record != nil &&
+		record.ProviderSessionID != "" &&
+		!record.Completed &&
+		!record.Rejected &&
+		record.PhaseKey == phaseKey &&
+		record.RunNumber == runNumber &&
+		record.Iteration == attempt
+}
+
+func initializeFreshPlanAttemptResume(coordinator *ResumeCoordinator, opts *ports.SessionOpts, phaseKey, sessionID string, runNumber, attempt int) {
+	if coordinator == nil {
+		return
+	}
+	now := time.Now()
+	record := ResumeRecord{
+		PhaseKey:              phaseKey,
+		Iteration:             attempt,
+		RunNumber:             runNumber,
+		OrchestratorSessionID: sessionID,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	if opts != nil {
+		record.Provider = opts.ProviderName
+		record.ResolvedModel = opts.ResolvedModel
+	}
+	coordinator.Initialize(record)
+}
+
+func markPlanAttemptResumed(cfg PlanLoopConfig, coordinator *ResumeCoordinator) {
+	coordinator.MarkResumed(time.Now())
+	if cfg.OnFeatureResumed == nil {
+		return
+	}
+	record := coordinator.Snapshot()
+	if record == nil {
+		return
+	}
+	cfg.OnFeatureResumed(ports.FeatureResumedData{
+		FeatureID:   cfg.Feature.ID,
+		PhaseKey:    record.PhaseKey,
+		Iteration:   record.Iteration,
+		RunNumber:   record.RunNumber,
+		ResumeCount: record.ResumeCount,
+	})
+}
+
+func waitForPlanAutoResume(cfg PlanLoopConfig, sm ports.SessionManager, wait time.Duration) bool {
+	if cfg.AutoResumeWait != nil {
+		return cfg.AutoResumeWait(wait)
+	}
+	if sm != nil && sm.IsShuttingDown() || isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		return false
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return true
+		case <-ticker.C:
+			if sm != nil && sm.IsShuttingDown() || isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+				return false
+			}
+		}
+	}
+}
+
+func shouldAutoResumePlanSession(cfg PlanLoopConfig, sm ports.SessionManager, sess ports.SessionView, opts *ports.SessionOpts, totalAttempts, consecutiveIdleAttempts int) (bool, bool) {
+	if opts == nil || !opts.SupportsSessionResume || providerSessionID(sess) == "" {
+		return false, false
+	}
+	classification := sessionruntime.ClassifyFailure(sess)
+	if classification.Tier == sessionruntime.BudgetExhausted || classification.Tier == sessionruntime.Permanent {
+		return false, true
+	}
+	if consecutiveIdleAttempts >= 3 || totalAttempts >= 10 {
+		return false, true
+	}
+	wait := autoResumeBackoff(totalAttempts)
+	if classification.RetryHint > wait {
+		wait = classification.RetryHint
+	}
+	return waitForPlanAutoResume(cfg, sm, wait), true
 }
 
 // AxisApproval is a sticky approval recovered from a prior validation attempt.
@@ -532,6 +645,13 @@ type PlanLoopConfig struct {
 	// before a protocol violation is recorded. Resolved per-model from the
 	// provider capability, so only capability-positive providers opt in.
 	FinishOrViolateNudge bool
+
+	// AutoResumeWait overrides transient provider backoff in tests.
+	AutoResumeWait func(time.Duration) bool
+
+	// OnFeatureResumed receives one audit callback after provider-session
+	// continuation is established.
+	OnFeatureResumed func(ports.FeatureResumedData)
 }
 
 func (cfg PlanLoopConfig) initialPlanningResearchArtifactPath() string {
@@ -1551,14 +1671,27 @@ roadmapAttemptLoop:
 				addDirs = []string{ActiveRunDir(cfg.StateDir, cfg.Feature)}
 			}
 			sessionAttempt := nextPlanSessionAttempt(artifactDir, attempt)
+			totalAutoResumeAttempts := 0
+			consecutiveIdleAttempts := 0
+			inProcessResume := false
 			for {
+				resumeCoordinator := NewResumeCoordinator(attemptDir)
+				phaseKey := "roadmap-plan"
+				resumeRecord := resumeCoordinator.Snapshot()
+				resumeLaunch := pendingPlanAttemptResume(resumeRecord, phaseKey, activeRunNumber(cfg.Feature), attempt) &&
+					(resumeRecord.PendingResume || inProcessResume)
+				inProcessResume = false
+				sessionPrompt := prompt
+				if resumeLaunch {
+					sessionPrompt = resumeCoordinator.Prompt(planAttemptResumeContext(attempt, 0))
+				}
 				// Clear stale phase_complete BEFORE spawning the script: otherwise
 				// the agent may write the marker before we get here, and we'd
 				// delete it.
 				RemovePhaseComplete(attemptDir)
-				cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
+				buildOpts := BuildSessionOpts{
 					Model:                          cfg.Feature.Models.Planning,
-					Prompt:                         prompt,
+					Prompt:                         sessionPrompt,
 					SystemPrompt:                   systemPrompt,
 					AdditionalDirs:                 addDirs,
 					AgentNames:                     explorationAgentNames(),
@@ -1569,7 +1702,11 @@ roadmapAttemptLoop:
 					Phase:                          feature.PhasePlan,
 					SystemPromptHasUsefulResources: true,
 					MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
-				})
+				}
+				if resumeLaunch {
+					buildOpts.ResumeSessionID = resumeRecord.ProviderSessionID
+				}
+				cmd, env, sessOpts, err := cfg.BuildSession(buildOpts)
 				if err != nil {
 					return nil, fmt.Errorf("building roadmap session (attempt %d): %w", attempt, err)
 				}
@@ -1581,10 +1718,14 @@ roadmapAttemptLoop:
 				if cfg.FinishOrViolateNudge {
 					sessOpts.TurnMode = ports.TurnModeInteractive
 				}
-				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
+				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, sessionPrompt)
 				sessOpts.PermCacheScope = cfg.RepoName
 
 				sessionID := planAttemptSessionID(fmt.Sprintf("%s-roadmap-%02d", cfg.Feature.ID, attempt), sessionAttempt)
+				if !resumeLaunch {
+					initializeFreshPlanAttemptResume(resumeCoordinator, sessOpts, phaseKey, sessionID, activeRunNumber(cfg.Feature), attempt)
+				}
+				installResumeProviderInitCapture(sessOpts, resumeCoordinator)
 				planSessionCtx := cfg.PhaseSpanCtx.Child()
 				if attempt == 1 {
 					sessOpts.AskUserAutoPick = askUserAutoPickConfig(
@@ -1601,6 +1742,18 @@ roadmapAttemptLoop:
 				startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 				sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhasePlan, cmd, cfg.WorkDir, env, sessOpts)
 				if err != nil {
+					if resumeLaunch {
+						if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, 0); verdict.Rejected {
+							resumeCoordinator.MarkRejected(verdict.Reason, time.Now())
+							resumeCoordinator.MarkFreshFallback(verdict.Reason, time.Now())
+							if totalAutoResumeAttempts > 0 {
+								totalAutoResumeAttempts--
+							}
+							sessionAttempt++
+							continue
+						}
+						resumeCoordinator.ClearPending(time.Now())
+					}
 					if errors.Is(err, ports.ErrSessionShuttingDown) {
 						return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
 					}
@@ -1637,6 +1790,22 @@ roadmapAttemptLoop:
 					FinishOrViolateNudge: cfg.FinishOrViolateNudge,
 					MissingArtifacts:     []string{"roadmap.md"},
 				}).Status
+				resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model())
+				if resumeLaunch {
+					if verdict := detectResumeRejection(sess, time.Since(sessionStart)); verdict.Rejected {
+						resumeCoordinator.MarkRejected(verdict.Reason, time.Now())
+						resumeCoordinator.MarkFreshFallback(verdict.Reason, time.Now())
+						if totalAutoResumeAttempts > 0 {
+							totalAutoResumeAttempts--
+						}
+						sessionAttempt++
+						continue
+					}
+					markPlanAttemptResumed(cfg, resumeCoordinator)
+				}
+				if agentStatus == agentStatusSuccess {
+					resumeCoordinator.MarkCompleted(time.Now())
+				}
 
 				cost := ExtractSessionCost(sess)
 				if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
@@ -1650,6 +1819,24 @@ roadmapAttemptLoop:
 						})
 						return nil
 					})
+				}
+				if agentStatus == agentStatusFailed && !HasPhaseComplete(attemptDir) {
+					if resumeLaunch {
+						if resumeSessionMadeProgress(sess) {
+							consecutiveIdleAttempts = 0
+						} else {
+							consecutiveIdleAttempts++
+						}
+					}
+					if retry, governed := shouldAutoResumePlanSession(cfg, sm, sess, sessOpts, totalAutoResumeAttempts, consecutiveIdleAttempts); governed {
+						if retry {
+							totalAutoResumeAttempts++
+							sessionAttempt++
+							inProcessResume = true
+							continue
+						}
+						sessionAttempt = retryableInfrastructureSessionMaxAttempts
+					}
 				}
 
 				outcome, sessionResult, newCriticFeedback, newSessionAttempt := handleCompletedPlanSession(
@@ -1936,14 +2123,27 @@ phasePlanAttemptLoop:
 				addDirs = []string{ActiveRunDir(cfg.StateDir, cfg.Feature)}
 			}
 			sessionAttempt := nextPlanSessionAttempt(artifactDir, attempt)
+			totalAutoResumeAttempts := 0
+			consecutiveIdleAttempts := 0
+			inProcessResume := false
 			for {
+				resumeCoordinator := NewResumeCoordinator(attemptDir)
+				phaseKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
+				resumeRecord := resumeCoordinator.Snapshot()
+				resumeLaunch := pendingPlanAttemptResume(resumeRecord, phaseKey, activeRunNumber(cfg.Feature), attempt) &&
+					(resumeRecord.PendingResume || inProcessResume)
+				inProcessResume = false
+				sessionPrompt := prompt
+				if resumeLaunch {
+					sessionPrompt = resumeCoordinator.Prompt(planAttemptResumeContext(attempt, cfg.Phase.Number))
+				}
 				// Clear stale phase_complete BEFORE spawning the script: otherwise
 				// the agent may write the marker before we get here, and we'd
 				// delete it.
 				RemovePhaseComplete(attemptDir)
-				cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
+				buildOpts := BuildSessionOpts{
 					Model:                          cfg.Feature.Models.Planning,
-					Prompt:                         prompt,
+					Prompt:                         sessionPrompt,
 					SystemPrompt:                   systemPrompt,
 					AdditionalDirs:                 addDirs,
 					AgentNames:                     explorationAgentNames(),
@@ -1954,7 +2154,11 @@ phasePlanAttemptLoop:
 					Phase:                          feature.PhasePlan,
 					SystemPromptHasUsefulResources: true,
 					MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
-				})
+				}
+				if resumeLaunch {
+					buildOpts.ResumeSessionID = resumeRecord.ProviderSessionID
+				}
+				cmd, env, sessOpts, err := cfg.BuildSession(buildOpts)
 				if err != nil {
 					return nil, fmt.Errorf("building phase plan session (attempt %d): %w", attempt, err)
 				}
@@ -1966,10 +2170,14 @@ phasePlanAttemptLoop:
 				if cfg.FinishOrViolateNudge {
 					sessOpts.TurnMode = ports.TurnModeInteractive
 				}
-				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
+				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, sessionPrompt)
 				sessOpts.PermCacheScope = cfg.RepoName
 
 				sessionID := planAttemptSessionID(fmt.Sprintf("%s-phase-%02d-plan-%02d", cfg.Feature.ID, cfg.Phase.Number, attempt), sessionAttempt)
+				if !resumeLaunch {
+					initializeFreshPlanAttemptResume(resumeCoordinator, sessOpts, phaseKey, sessionID, activeRunNumber(cfg.Feature), attempt)
+				}
+				installResumeProviderInitCapture(sessOpts, resumeCoordinator)
 				planSessionCtx := cfg.PlanLoopConfig.PhaseSpanCtx.Child()
 				if attempt == 1 {
 					sessOpts.AskUserAutoPick = askUserAutoPickConfig(
@@ -1986,6 +2194,18 @@ phasePlanAttemptLoop:
 				startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 				sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhasePlan, cmd, cfg.WorkDir, env, sessOpts)
 				if err != nil {
+					if resumeLaunch {
+						if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, 0); verdict.Rejected {
+							resumeCoordinator.MarkRejected(verdict.Reason, time.Now())
+							resumeCoordinator.MarkFreshFallback(verdict.Reason, time.Now())
+							if totalAutoResumeAttempts > 0 {
+								totalAutoResumeAttempts--
+							}
+							sessionAttempt++
+							continue
+						}
+						resumeCoordinator.ClearPending(time.Now())
+					}
 					if errors.Is(err, ports.ErrSessionShuttingDown) {
 						return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
 					}
@@ -2022,6 +2242,22 @@ phasePlanAttemptLoop:
 					FinishOrViolateNudge: cfg.FinishOrViolateNudge,
 					MissingArtifacts:     []string{"plan.md"},
 				}).Status
+				resumeCoordinator.CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model())
+				if resumeLaunch {
+					if verdict := detectResumeRejection(sess, time.Since(sessionStart)); verdict.Rejected {
+						resumeCoordinator.MarkRejected(verdict.Reason, time.Now())
+						resumeCoordinator.MarkFreshFallback(verdict.Reason, time.Now())
+						if totalAutoResumeAttempts > 0 {
+							totalAutoResumeAttempts--
+						}
+						sessionAttempt++
+						continue
+					}
+					markPlanAttemptResumed(cfg.PlanLoopConfig, resumeCoordinator)
+				}
+				if agentStatus == agentStatusSuccess {
+					resumeCoordinator.MarkCompleted(time.Now())
+				}
 
 				cost := ExtractSessionCost(sess)
 				if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
@@ -2036,6 +2272,24 @@ phasePlanAttemptLoop:
 						})
 						return nil
 					})
+				}
+				if agentStatus == agentStatusFailed && !HasPhaseComplete(attemptDir) {
+					if resumeLaunch {
+						if resumeSessionMadeProgress(sess) {
+							consecutiveIdleAttempts = 0
+						} else {
+							consecutiveIdleAttempts++
+						}
+					}
+					if retry, governed := shouldAutoResumePlanSession(cfg.PlanLoopConfig, sm, sess, sessOpts, totalAutoResumeAttempts, consecutiveIdleAttempts); governed {
+						if retry {
+							totalAutoResumeAttempts++
+							sessionAttempt++
+							inProcessResume = true
+							continue
+						}
+						sessionAttempt = retryableInfrastructureSessionMaxAttempts
+					}
 				}
 
 				outcome, sessionResult, newCriticFeedback, newSessionAttempt := handleCompletedPlanSession(

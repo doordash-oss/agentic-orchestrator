@@ -17,7 +17,6 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -52,7 +51,7 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 
 	coordinator := o.resumeCoordinatorForFeature(f)
 	if coordinator != nil && o.deps.PhaseRunner != nil {
-		model := o.deps.PhaseRunner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+		model := resumeModelForFeature(o.deps.PhaseRunner, f)
 		claim, eligibility, claimErr := coordinator.Claim(
 			featureID,
 			f,
@@ -67,7 +66,7 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 			return claimErr
 		}
 		if eligibility.Eligible {
-			if err := o.resumeEligibleFailedFeature(featureID); err != nil {
+			if err := o.resumeEligibleFailedFeature(featureID, f.CurrentPhase); err != nil {
 				_ = claim.Release(time.Now())
 				return err
 			}
@@ -76,10 +75,13 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 		}
 	}
 
-	return o.resumeFailedFeature(featureID)
+	return o.resumeFailedFeature(featureID, f.CurrentPhase)
 }
 
-func (o *Orchestrator) resumeEligibleFailedFeature(featureID string) error {
+func (o *Orchestrator) resumeEligibleFailedFeature(featureID string, phase feature.Phase) error {
+	if phase != feature.PhaseImplement {
+		return o.restartFailedSequentialPhase(featureID, phase)
+	}
 	if err := o.RetryPhase(featureID); err != nil {
 		return fmt.Errorf("reset failed phase for resume: %w", err)
 	}
@@ -106,7 +108,10 @@ func (o *Orchestrator) resumeEligibleFailedFeature(featureID string) error {
 	return o.StartFeature(featureID)
 }
 
-func (o *Orchestrator) resumeFailedFeature(featureID string) error {
+func (o *Orchestrator) resumeFailedFeature(featureID string, phase feature.Phase) error {
+	if phase != feature.PhaseImplement {
+		return o.restartFailedSequentialPhase(featureID, phase)
+	}
 	if err := o.RetryPhase(featureID); err != nil {
 		return fmt.Errorf("reset failed phase for resume: %w", err)
 	}
@@ -114,6 +119,20 @@ func (o *Orchestrator) resumeFailedFeature(featureID string) error {
 		return fmt.Errorf("prepare failed phase for resume: %w", err)
 	}
 	return o.StartFeature(featureID)
+}
+
+func (o *Orchestrator) restartFailedSequentialPhase(featureID string, phase feature.Phase) error {
+	outcome, err := o.RestartPhase(featureID, 0, 0)
+	if err != nil {
+		return fmt.Errorf("prepare failed phase for restart: %w", err)
+	}
+	if outcome.Action != RestartDispatchPhase || outcome.Phase != phase {
+		return fmt.Errorf("prepare failed phase for restart: unexpected outcome action=%d phase=%s", outcome.Action, outcome.Phase)
+	}
+	if _, _, err := o.startPhase(featureID, phase); err != nil {
+		return fmt.Errorf("restart failed phase: %w", err)
+	}
+	return nil
 }
 
 func (o *Orchestrator) featureHasActiveSession(featureID string) bool {
@@ -129,12 +148,34 @@ func (o *Orchestrator) featureHasActiveSession(featureID string) bool {
 }
 
 func (o *Orchestrator) resumeCoordinatorForFeature(f *feature.Feature) *agent.ResumeCoordinator {
-	if o == nil || f == nil || o.stateDir() == "" || f.CurrentIteration <= 0 {
+	if o == nil || f == nil || o.stateDir() == "" {
 		return nil
 	}
-	dir := filepath.Join(
-		agent.ActiveImplementDir(o.stateDir(), f),
-		fmt.Sprintf("iteration-%02d", f.CurrentIteration),
-	)
+	dir, ok := agent.ResumeUnitDir(o.stateDir(), f)
+	if !ok {
+		return nil
+	}
 	return agent.NewResumeCoordinator(dir)
+}
+
+func resumeModelForFeature(runner *agent.PhaseRunner, f *feature.Feature) string {
+	if runner == nil || f == nil {
+		return ""
+	}
+	switch f.CurrentPhase {
+	case feature.PhaseInquire:
+		configured := f.Models.Inquiry
+		if configured == "" {
+			configured = f.Models.Research
+		}
+		return runner.ModelForRole(configured, llm.PhaseInquiry)
+	case feature.PhaseResearch:
+		return runner.ModelForRole(f.Models.Research, llm.PhaseResearch)
+	case feature.PhaseDesign, feature.PhasePlan:
+		return runner.ModelForRole(f.Models.Planning, llm.PhasePlanning)
+	case feature.PhaseImplement:
+		return runner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+	default:
+		return ""
+	}
 }

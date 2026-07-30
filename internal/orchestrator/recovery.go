@@ -22,7 +22,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -189,7 +188,10 @@ func (o *Orchestrator) ExecuteRecovery(
 	var relaunchErrs []error
 	for _, fid := range resumedOrder {
 		phase := resumedFeatures[fid]
-		claim := o.claimRecoveryResume(fid, phase)
+		claim, dispatch := o.claimRecoveryResume(fid, phase)
+		if !dispatch {
+			continue
+		}
 		_, started, err := o.startPhase(fid, phase)
 		if err != nil {
 			if claim != nil {
@@ -215,19 +217,22 @@ func (o *Orchestrator) ExecuteRecovery(
 // claimRecoveryResume stamps the durable continuation intent for an eligible
 // interrupted implementation unit. Any lookup, eligibility, or claim failure
 // deliberately degrades to the existing fresh relaunch path.
-func (o *Orchestrator) claimRecoveryResume(featureID string, phase feature.Phase) *agent.ResumeClaim {
-	if phase != feature.PhaseImplement || o.deps.Lifecycle == nil || o.deps.PhaseRunner == nil {
-		return nil
+func (o *Orchestrator) claimRecoveryResume(featureID string, phase feature.Phase) (*agent.ResumeClaim, bool) {
+	if o.deps.Lifecycle == nil || o.deps.PhaseRunner == nil {
+		return nil, true
 	}
 	current, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		return nil
+		return nil, true
 	}
 	coordinator := o.resumeCoordinatorForFeature(current)
 	if coordinator == nil {
-		return nil
+		return nil, true
 	}
-	model := o.deps.PhaseRunner.ModelForRole(current.Models.Implementation, llm.PhaseImplementation)
+	if current.CurrentPhase != phase {
+		return nil, true
+	}
+	model := resumeModelForFeature(o.deps.PhaseRunner, current)
 	claim, eligibility, err := coordinator.Claim(
 		featureID,
 		current,
@@ -236,18 +241,17 @@ func (o *Orchestrator) claimRecoveryResume(featureID string, phase feature.Phase
 		time.Now(),
 	)
 	if err != nil {
-		reason := "claim_error"
 		if errors.Is(err, agent.ErrResumeAlreadyClaimed) {
-			reason = "claim_conflict"
+			return nil, false
 		}
-		coordinator.MarkFreshFallback(reason, time.Now())
-		return nil
+		coordinator.MarkFreshFallback("claim_error", time.Now())
+		return nil, true
 	}
 	if !eligibility.Eligible {
 		coordinator.MarkFreshFallback(string(eligibility.Reason), time.Now())
-		return nil
+		return nil, true
 	}
-	return claim
+	return claim, true
 }
 
 // recoveryActionString returns the lowercase action label used for events

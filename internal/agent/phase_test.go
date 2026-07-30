@@ -886,6 +886,137 @@ func TestRunInteractivePhase_RemovesStalePhaseCompleteBeforeSession(t *testing.T
 	}
 }
 
+func TestRunInteractivePhaseInitializesResumeRecordAndCapturesProviderInit(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		phase feature.Phase
+		run   func(*PhaseRunner, *feature.Feature) (string, error)
+	}{
+		{"inquire", feature.PhaseInquire, func(pr *PhaseRunner, f *feature.Feature) (string, error) { return pr.RunInquire(f) }},
+		{"research", feature.PhaseResearch, func(pr *PhaseRunner, f *feature.Feature) (string, error) {
+			return pr.RunResearchFromQuestions(f, "questions.md")
+		}},
+		{"design", feature.PhaseDesign, func(pr *PhaseRunner, f *feature.Feature) (string, error) {
+			return pr.RunDesign(f, "research.md", nil)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			f := &feature.Feature{
+				ID:           "feat",
+				ActiveRun:    1,
+				CurrentPhase: test.phase,
+				Repos:        []feature.FeatureRepo{{Name: "repo", Path: t.TempDir()}},
+			}
+			sm := mocks.NewMockSessionManager()
+			sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+				opts[0].OnProviderInit(ports.ProviderInitInfo{SessionID: "provider-session", Provider: "codex", Model: "model"})
+				return &phaseTestSessionHandle{MockSessionView: mocks.NewMockSessionView(id, featureID)}, nil
+			}
+			pr := &PhaseRunner{
+				SessionManager: sm,
+				StateDir:       stateDir,
+				BuildSessionFn: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+					return []string{"true"}, nil, &session.SessionOpts{ProviderName: "codex", ResolvedModel: "model", SupportsSessionResume: true}, nil
+				},
+			}
+
+			sessionID, err := test.run(pr, f)
+			if err != nil {
+				t.Fatalf("run phase: %v", err)
+			}
+			record, err := ReadResumeRecord(filepath.Join(ActiveRunDir(stateDir, f), test.phase.DirName()))
+			if err != nil {
+				t.Fatalf("ReadResumeRecord: %v", err)
+			}
+			if record == nil || record.ProviderSessionID != "provider-session" || record.PhaseKey != ResumePhaseKey(f) ||
+				record.OrchestratorSessionID != sessionID || record.Completed {
+				t.Fatalf("resume record = %+v", record)
+			}
+		})
+	}
+}
+
+func TestRunInteractivePhaseConsumesPendingManualResumeOnFirstDispatch(t *testing.T) {
+	stateDir := t.TempDir()
+	f := &feature.Feature{ID: "feat", ActiveRun: 1, CurrentPhase: feature.PhaseInquire, Repos: []feature.FeatureRepo{{Path: t.TempDir()}}}
+	artifactDir := filepath.Join(ActiveRunDir(stateDir, f), "inquire")
+	if err := WriteProtocolRetrySidecar(artifactDir, ProtocolRetrySidecar{
+		Role:          RoleInquirer,
+		ActiveRun:     1,
+		Consecutive:   2,
+		LastViolation: "missing questions artifact",
+		UpdatedAt:     time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	protocolRetryPath := filepath.Join(artifactDir, ProtocolRetrySidecarFile)
+	protocolRetryBefore, err := os.ReadFile(protocolRetryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteResumeRecord(artifactDir, ResumeRecord{
+		ProviderSessionID: "provider-prior",
+		PhaseKey:          ResumePhaseKey(f),
+		RunNumber:         1,
+		PendingResume:     true,
+		ResumeCount:       2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var captured BuildSessionOpts
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return &phaseTestSessionHandle{MockSessionView: mocks.NewMockSessionView(id, featureID)}, nil
+	}
+	pr := &PhaseRunner{
+		SessionManager: sm,
+		StateDir:       stateDir,
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			captured = opts
+			return []string{"true"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+		},
+	}
+	sessionID, err := pr.RunInquire(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured.ResumeSessionID != "provider-prior" || !strings.Contains(captured.Prompt, "questions.md") {
+		t.Fatalf("resume build opts = %+v", captured)
+	}
+	if sessionID != "feat-inquire-resume-03" {
+		t.Fatalf("sessionID = %q", sessionID)
+	}
+	protocolRetryAfter, err := os.ReadFile(protocolRetryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(protocolRetryAfter) != string(protocolRetryBefore) {
+		t.Errorf("protocol retry sidecar changed during provider resume:\nbefore:\n%s\nafter:\n%s", protocolRetryBefore, protocolRetryAfter)
+	}
+	NewResumeCoordinator(artifactDir).MarkResumed(time.Now())
+	continued, err := pr.DispatchSingleShotContinuation(sessionID, "provider-current", 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continued.SessionID == sessionID || continued.SessionID != "feat-inquire-resume-04" {
+		t.Errorf("continuation session ID = %q, want unique count-derived feat-inquire-resume-04", continued.SessionID)
+	}
+}
+
+type phaseTestSessionHandle struct {
+	*mocks.MockSessionView
+}
+
+func (s *phaseTestSessionHandle) SetStatus(session.SessionStatus)                {}
+func (s *phaseTestSessionHandle) SetLogFile(*os.File)                            {}
+func (s *phaseTestSessionHandle) AddCleanupFunc(func())                          {}
+func (s *phaseTestSessionHandle) SetHasUnansweredQuestion(bool)                  {}
+func (s *phaseTestSessionHandle) CloseStdin()                                    {}
+func (s *phaseTestSessionHandle) SetOnToolAllowed(func(string, json.RawMessage)) {}
+func (s *phaseTestSessionHandle) SetOnFileRead(func(llm.FileReadEvent))          {}
+func (s *phaseTestSessionHandle) SetOnSubagentEvent(func(llm.SDKMessage))        {}
+
 // TestRunInteractivePhase_EmptyConfiguredModel_UsesDefaultAskingClause verifies
 // that when f.Models.Research is empty and the registry provides a catalog
 // default, the system prompt includes the asking clause for the resolved

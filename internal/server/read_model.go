@@ -160,18 +160,21 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 }
 
 func (h *apiHandler) activeImplementResumeIndicator(f *feature.Feature) (bool, int) {
-	if h == nil || h.store == nil || f == nil || f.ActiveRun <= 0 || f.CurrentIteration <= 0 {
+	if h == nil || h.store == nil || f == nil || f.ActiveRun <= 0 {
 		return false, 0
 	}
-	iterDir := activeImplementIterationDirForRead(
-		h.store.RunDir(f.ID, f.ActiveRun),
-		f,
-	)
-	record, err := agent.ReadResumeRecord(iterDir)
+	unitDir, ok := agent.ResumeUnitDir(stateDirForFeatureRead(h.store, f), f)
+	if !ok {
+		return false, 0
+	}
+	record, err := agent.ReadResumeRecord(unitDir)
 	if err == nil && record != nil {
 		return record.Resumed || record.ResumeCount > 0, max(record.ResumeCount, 0)
 	}
-	meta, err := agent.NewArtifactManager("").ReadMeta(iterDir)
+	if f.CurrentPhase != feature.PhaseImplement {
+		return false, 0
+	}
+	meta, err := agent.NewArtifactManager("").ReadMeta(unitDir)
 	if err != nil {
 		return false, 0
 	}
@@ -194,6 +197,14 @@ func activeImplementIterationDirForRead(runDir string, f *feature.Feature) strin
 		}
 	}
 	return filepath.Join(implementDir, fmt.Sprintf("iteration-%02d", f.CurrentIteration))
+}
+
+func stateDirForFeatureRead(store FeatureReader, f *feature.Feature) string {
+	if store == nil || f == nil || f.ActiveRun <= 0 {
+		return ""
+	}
+	runDir := store.RunDir(f.ID, f.ActiveRun)
+	return filepath.Dir(filepath.Dir(filepath.Dir(runDir)))
 }
 
 func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
@@ -309,9 +320,10 @@ func (h *apiHandler) actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 
 func (h *apiHandler) resumeEligibility(f *feature.Feature) agent.ResumeEligibility {
 	var record *agent.ResumeRecord
-	if h != nil && h.store != nil && f != nil && f.ActiveRun > 0 && f.CurrentIteration > 0 {
-		iterDir := activeImplementIterationDirForRead(h.store.RunDir(f.ID, f.ActiveRun), f)
-		record, _ = agent.ReadResumeRecord(iterDir)
+	if h != nil && h.store != nil && f != nil && f.ActiveRun > 0 {
+		if unitDir, ok := agent.ResumeUnitDir(stateDirForFeatureRead(h.store, f), f); ok {
+			record, _ = agent.ReadResumeRecord(unitDir)
+		}
 	}
 	var registry *llm.Registry
 	if h != nil {
@@ -319,10 +331,21 @@ func (h *apiHandler) resumeEligibility(f *feature.Feature) agent.ResumeEligibili
 	}
 	currentModel := ""
 	if f != nil {
-		currentModel = (&agent.PhaseRunner{Registry: registry}).ModelForRole(
-			f.Models.Implementation,
-			llm.PhaseImplementation,
-		)
+		runner := &agent.PhaseRunner{Registry: registry}
+		switch f.CurrentPhase {
+		case feature.PhaseInquire:
+			configured := f.Models.Inquiry
+			if configured == "" {
+				configured = f.Models.Research
+			}
+			currentModel = runner.ModelForRole(configured, llm.PhaseInquiry)
+		case feature.PhaseResearch:
+			currentModel = runner.ModelForRole(f.Models.Research, llm.PhaseResearch)
+		case feature.PhaseDesign, feature.PhasePlan:
+			currentModel = runner.ModelForRole(f.Models.Planning, llm.PhasePlanning)
+		case feature.PhaseImplement:
+			currentModel = runner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+		}
 	}
 	return agent.EvaluateResumeEligibility(f, record, currentModel, registry)
 }

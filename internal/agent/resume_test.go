@@ -200,6 +200,156 @@ func TestCrashResumePromptTemplateMatchesLegacyContent(t *testing.T) {
 	}
 }
 
+func TestResumePhaseKeyDescribesCurrentResumableKind(t *testing.T) {
+	tests := []struct {
+		name    string
+		current feature.Feature
+		want    string
+	}{
+		{
+			name:    "inquire",
+			current: feature.Feature{CurrentPhase: feature.PhaseInquire},
+			want:    "inquire",
+		},
+		{
+			name:    "research",
+			current: feature.Feature{CurrentPhase: feature.PhaseResearch},
+			want:    "research",
+		},
+		{
+			name:    "design",
+			current: feature.Feature{CurrentPhase: feature.PhaseDesign},
+			want:    "design",
+		},
+		{
+			name:    "roadmap plan",
+			current: feature.Feature{CurrentPhase: feature.PhasePlan},
+			want:    "roadmap-plan",
+		},
+		{
+			name: "roadmap phase plan",
+			current: feature.Feature{
+				CurrentPhase:        feature.PhasePlan,
+				CurrentRoadmapPhase: 3,
+				ActiveTimingKey:     "phase-3-plan",
+			},
+			want: "phase-3-plan",
+		},
+		{
+			name: "roadmap phase implementation uses active timing identity",
+			current: feature.Feature{
+				CurrentPhase:        feature.PhaseImplement,
+				CurrentRoadmapPhase: 3,
+				ActiveTimingKey:     "phase-3-impl",
+			},
+			want: "phase-3-impl",
+		},
+		{
+			name:    "unscoped implementation",
+			current: feature.Feature{CurrentPhase: feature.PhaseImplement},
+			want:    "implement",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ResumePhaseKey(&test.current); got != test.want {
+				t.Errorf("ResumePhaseKey() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestResumeUnitDirResolvesCurrentUnit(t *testing.T) {
+	stateDir := t.TempDir()
+	baseFeature := feature.Feature{ID: "feature-1", ActiveRun: 2}
+	runDir := filepath.Join(stateDir, "feature-1", "runs", "run-002")
+
+	roadmapDir := filepath.Join(runDir, "roadmap")
+	if err := WritePlanAttemptMeta(roadmapDir, PlanAttemptMeta{
+		Attempt:     1,
+		AgentStatus: agentStatusSuccess,
+	}); err != nil {
+		t.Fatalf("WritePlanAttemptMeta(roadmap) error = %v", err)
+	}
+	phasePlanDir := filepath.Join(runDir, "phase-03", "plan")
+	if err := WritePlanAttemptMeta(phasePlanDir, PlanAttemptMeta{
+		Attempt:     2,
+		AgentStatus: agentStatusSuccess,
+	}); err != nil {
+		t.Fatalf("WritePlanAttemptMeta(phase plan) error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		current feature.Feature
+		want    string
+		wantOK  bool
+	}{
+		{
+			name:    "inquire uses its single shot artifact directory",
+			current: feature.Feature{CurrentPhase: feature.PhaseInquire},
+			want:    filepath.Join(runDir, "inquire"),
+			wantOK:  true,
+		},
+		{
+			name:    "research uses its single shot artifact directory",
+			current: feature.Feature{CurrentPhase: feature.PhaseResearch},
+			want:    filepath.Join(runDir, "research"),
+			wantOK:  true,
+		},
+		{
+			name:    "design uses its single shot artifact directory",
+			current: feature.Feature{CurrentPhase: feature.PhaseDesign},
+			want:    filepath.Join(runDir, "design"),
+			wantOK:  true,
+		},
+		{
+			name:    "roadmap planning uses the next completed attempt number",
+			current: feature.Feature{CurrentPhase: feature.PhasePlan},
+			want:    filepath.Join(roadmapDir, "attempt-02"),
+			wantOK:  true,
+		},
+		{
+			name: "roadmap phase planning uses the next completed attempt number",
+			current: feature.Feature{
+				CurrentPhase:        feature.PhasePlan,
+				CurrentRoadmapPhase: 3,
+			},
+			want:   filepath.Join(phasePlanDir, "attempt-03"),
+			wantOK: true,
+		},
+		{
+			name: "implementation uses the current iteration",
+			current: feature.Feature{
+				CurrentPhase:        feature.PhaseImplement,
+				CurrentRoadmapPhase: 3,
+				CurrentIteration:    4,
+			},
+			want:   filepath.Join(runDir, "phase-03", "implement", "iteration-04"),
+			wantOK: true,
+		},
+		{
+			name:    "unsupported phase has no resume unit",
+			current: feature.Feature{CurrentPhase: feature.PhasePublish},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current := baseFeature
+			current.CurrentPhase = test.current.CurrentPhase
+			current.CurrentRoadmapPhase = test.current.CurrentRoadmapPhase
+			current.CurrentIteration = test.current.CurrentIteration
+
+			got, ok := ResumeUnitDir(stateDir, &current)
+			if got != test.want || ok != test.wantOK {
+				t.Errorf("ResumeUnitDir() = (%q, %v), want (%q, %v)", got, ok, test.want, test.wantOK)
+			}
+		})
+	}
+}
+
 func TestEvaluateResumeEligibility(t *testing.T) {
 	registry := resumeTestRegistry()
 	baseFeature := feature.Feature{
@@ -289,12 +439,12 @@ func TestEvaluateResumeEligibility(t *testing.T) {
 			wantReason: ResumeReasonPositionChanged,
 		},
 		{
-			name: "iteration changed",
+			name: "iteration metadata does not determine eligibility",
 			mutateFeature: func(current *feature.Feature) {
 				current.CurrentIteration = 3
 			},
-			model:      "codex:model-a",
-			wantReason: ResumeReasonPositionChanged,
+			model:        "codex:model-a",
+			wantEligible: true,
 		},
 		{
 			name: "provider cannot resume",

@@ -359,3 +359,421 @@ func TestRecoveryResumeAcrossOrchestratorRestart(t *testing.T) {
 		})
 	}
 }
+
+func TestRecoveryResumeDesignAcrossOrchestratorRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tests := []struct {
+		name               string
+		recordModel        string
+		wantResumeID       string
+		wantProviderID     string
+		wantResumeCount    int
+		wantFallbackCount  int
+		wantFallbackReason string
+		wantResumeEvents   int
+	}{
+		{
+			name:             "eligible continuation",
+			recordModel:      "model-a",
+			wantResumeID:     "design-thread-before-restart",
+			wantProviderID:   "design-thread-before-restart",
+			wantResumeCount:  1,
+			wantResumeEvents: 1,
+		},
+		{
+			name:               "model changed uses fresh session",
+			recordModel:        "model-b",
+			wantProviderID:     "design-thread-fresh",
+			wantFallbackCount:  1,
+			wantFallbackReason: string(agent.ResumeReasonModelChanged),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			stateDir := filepath.Join(tmpDir, "state")
+			repoDir := filepath.Join(tmpDir, "repo")
+			scriptsDir := filepath.Join(tmpDir, "scripts")
+			for _, dir := range []string{stateDir, repoDir, scriptsDir} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", dir, err)
+				}
+			}
+
+			f := &feature.Feature{
+				ID:            "restart-design-" + strings.ReplaceAll(test.name, " ", "-"),
+				Name:          "Recovery Resume Design Restart",
+				Slug:          "recovery-resume-design-restart",
+				Description:   "cross-orchestrator design restart integration coverage",
+				Status:        feature.StatusDesigning,
+				CurrentPhase:  feature.PhaseDesign,
+				ActiveRun:     1,
+				RunCount:      1,
+				SchemaVersion: feature.SchemaVersionCurrent,
+				Pipeline:      feature.PipelineLarge,
+				Models: config.ModelConfig{
+					Planning: "codex:model-a",
+					Review:   "codex:model-a",
+				},
+				Repos: []feature.FeatureRepo{{
+					Name:         "repo",
+					Path:         repoDir,
+					WorktreePath: repoDir,
+				}},
+				RepoStates: map[string]*feature.RepoState{"repo": {}},
+			}
+
+			runDir := agent.ActiveRunDir(stateDir, f)
+			researchDir := filepath.Join(runDir, "research")
+			designDir := filepath.Join(runDir, "design")
+			if err := os.MkdirAll(researchDir, 0o755); err != nil {
+				t.Fatalf("mkdir research dir: %v", err)
+			}
+			researchPath := filepath.Join(researchDir, "research.md")
+			if err := os.WriteFile(researchPath, []byte("# Research\n\nEvidence for design.\n"), 0o644); err != nil {
+				t.Fatalf("write research: %v", err)
+			}
+			f.Artifacts = map[string]string{"research": researchPath}
+
+			seedStore := feature.NewStore(stateDir)
+			if err := seedStore.Save(f); err != nil {
+				t.Fatalf("seed feature: %v", err)
+			}
+			now := time.Now()
+			if err := agent.WriteResumeRecord(designDir, agent.ResumeRecord{
+				ProviderSessionID:     "design-thread-before-restart",
+				Provider:              "codex",
+				ResolvedModel:         test.recordModel,
+				PhaseKey:              "design",
+				RunNumber:             1,
+				OrchestratorSessionID: f.ID + "-design",
+				CreatedAt:             now,
+				UpdatedAt:             now,
+			}); err != nil {
+				t.Fatalf("seed design resume record: %v", err)
+			}
+
+			initSessionID := test.wantProviderID
+			agentScript := testutil.WriteScript(t, scriptsDir, "design-agent.sh",
+				"read -r _initialize\n"+
+					"read -r _prompt\n"+
+					"echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\""+initSessionID+"\",\"model\":\"model-a\"}'\n"+
+					"cat > \""+filepath.Join(designDir, "design.md")+"\" <<'DESIGN_EOF'\n"+
+					"# Design\n\nRecovered design output.\n"+
+					"DESIGN_EOF\n"+
+					testutil.TouchPhaseCompleteInDir(designDir)+"\n"+
+					testutil.JSONLSuccess+"\n")
+
+			eventCh := make(chan interface{}, 100)
+			sessionManager := session.NewManager(eventCh)
+			t.Cleanup(sessionManager.Shutdown)
+
+			registry := llm.NewRegistry()
+			registry.Register(&codex.Provider{})
+			restartedStore := feature.NewStore(stateDir)
+			restartedManager := feature.NewManager(restartedStore, &config.Config{})
+			restartedFeature, err := restartedStore.Load(f.ID)
+			if err != nil {
+				t.Fatalf("load feature after restart: %v", err)
+			}
+			recovery := &restartRecoveryOperator{items: []ports.RecoveryItem{{
+				PIDFile: ports.PIDFile{
+					FeatureID: f.ID,
+					Phase:     feature.PhaseDesign.String(),
+				},
+				ProcessAlive: false,
+				Feature:      restartedFeature,
+			}}}
+
+			var captureMu sync.Mutex
+			var designBuilds []agent.BuildSessionOpts
+			var resumeEvents []ports.FeatureResumedData
+			phaseRunner := &agent.PhaseRunner{
+				SessionManager: sessionManager,
+				FeatureStore:   restartedStore,
+				StateDir:       stateDir,
+				Registry:       registry,
+				BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+					captureMu.Lock()
+					if opts.Phase == feature.PhaseDesign {
+						designBuilds = append(designBuilds, opts)
+					}
+					captureMu.Unlock()
+					return []string{"bash", agentScript}, nil, &ports.SessionOpts{
+						PIDDir:                opts.PIDDir,
+						InitialPrompt:         opts.Prompt,
+						ProviderName:          "codex",
+						ResolvedModel:         "model-a",
+						SupportsSessionResume: true,
+						Protocol: claude.NewProtocol(llm.ProtocolOpts{
+							InitialPrompt: opts.Prompt,
+							WorkDir:       opts.WorkDir,
+							Model:         "model-a",
+						}),
+					}, nil
+				},
+				OnFeatureResumed: func(data ports.FeatureResumedData) {
+					captureMu.Lock()
+					resumeEvents = append(resumeEvents, data)
+					captureMu.Unlock()
+				},
+			}
+			restarted := orchestrator.New(orchestrator.Deps{
+				Lifecycle:   restartedManager,
+				Store:       restartedStore,
+				Sessions:    sessionManager,
+				Recovery:    recovery,
+				PhaseRunner: phaseRunner,
+			}, orchestrator.Hooks{})
+
+			items, err := restarted.ScanRecovery(context.Background())
+			if err != nil {
+				t.Fatalf("ScanRecovery() error = %v", err)
+			}
+			if err := restarted.ExecuteRecovery(context.Background(), items, map[string]ports.RecoveryAction{
+				ports.RecoveryActionKey(f.ID, ""): ports.RecoveryResume,
+			}); err != nil {
+				t.Fatalf("ExecuteRecovery() error = %v", err)
+			}
+
+			waitForRestartResumeCondition(t, func() bool {
+				record, readErr := agent.ReadResumeRecord(designDir)
+				return readErr == nil && record != nil && record.Completed
+			}, "completed design resume record")
+
+			captureMu.Lock()
+			capturedBuilds := append([]agent.BuildSessionOpts(nil), designBuilds...)
+			capturedEvents := append([]ports.FeatureResumedData(nil), resumeEvents...)
+			captureMu.Unlock()
+			if len(capturedBuilds) != 1 {
+				t.Fatalf("design BuildSession() calls = %d, want 1", len(capturedBuilds))
+			}
+			if capturedBuilds[0].ResumeSessionID != test.wantResumeID {
+				t.Errorf("design ResumeSessionID = %q, want %q", capturedBuilds[0].ResumeSessionID, test.wantResumeID)
+			}
+			if len(capturedEvents) != test.wantResumeEvents {
+				t.Fatalf("FeatureResumed callbacks = %d, want %d", len(capturedEvents), test.wantResumeEvents)
+			}
+			if test.wantResumeEvents == 1 &&
+				(capturedEvents[0].PhaseKey != "design" || capturedEvents[0].ResumeCount != 1) {
+				t.Errorf("FeatureResumed callback = %#v, want design resume count 1", capturedEvents[0])
+			}
+
+			record, err := agent.ReadResumeRecord(designDir)
+			if err != nil {
+				t.Fatalf("ReadResumeRecord() error = %v", err)
+			}
+			if record == nil {
+				t.Fatal("ReadResumeRecord() = nil, want completed design record")
+			}
+			if record.ProviderSessionID != test.wantProviderID ||
+				record.PendingResume ||
+				!record.Completed ||
+				record.ResumeCount != test.wantResumeCount ||
+				record.FreshFallbackCount != test.wantFallbackCount ||
+				record.FreshFallbackReason != test.wantFallbackReason {
+				t.Errorf("design resume record = %#v", record)
+			}
+		})
+	}
+}
+
+func TestRecoveryResumeRoadmapAttemptAcrossOrchestratorRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	stateDir := filepath.Join(tmpDir, "state")
+	repoDir := filepath.Join(tmpDir, "repo")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{stateDir, repoDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	f := &feature.Feature{
+		ID:            "restart-roadmap-attempt",
+		Name:          "Recovery Resume Roadmap Restart",
+		Slug:          "recovery-resume-roadmap-restart",
+		Description:   "cross-orchestrator roadmap attempt restart coverage",
+		Status:        feature.StatusPlanning,
+		CurrentPhase:  feature.PhasePlan,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Pipeline:      feature.PipelineMedium,
+		Models: config.ModelConfig{
+			Planning: "codex:model-a",
+			Review:   "codex:model-a",
+		},
+		Repos: []feature.FeatureRepo{{
+			Name:         "repo",
+			Path:         repoDir,
+			WorktreePath: repoDir,
+		}},
+		RepoStates: map[string]*feature.RepoState{"repo": {}},
+	}
+	seedStore := feature.NewStore(stateDir)
+	if err := seedStore.Save(f); err != nil {
+		t.Fatalf("seed feature: %v", err)
+	}
+
+	roadmapDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "roadmap")
+	attemptDir := filepath.Join(roadmapDir, "attempt-01")
+	now := time.Now()
+	if err := agent.WriteResumeRecord(attemptDir, agent.ResumeRecord{
+		ProviderSessionID:     "roadmap-thread-before-restart",
+		Provider:              "codex",
+		ResolvedModel:         "model-a",
+		PhaseKey:              "roadmap-plan",
+		Iteration:             1,
+		RunNumber:             1,
+		OrchestratorSessionID: f.ID + "-roadmap-01",
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}); err != nil {
+		t.Fatalf("seed roadmap resume record: %v", err)
+	}
+
+	plannerScript := testutil.WriteScript(t, scriptsDir, "roadmap-agent.sh",
+		"read -r _initialize\n"+
+			"read -r _prompt\n"+
+			"echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"roadmap-thread-before-restart\",\"model\":\"model-a\"}'\n"+
+			"mkdir -p \""+roadmapDir+"\"\n"+
+			"cat > \""+filepath.Join(roadmapDir, "roadmap.md")+"\" <<'ROADMAP_EOF'\n"+
+			"# Roadmap\n\n## Phase 1: Recovered phase\n\n### Goal\n\nComplete resumed work.\n"+
+			"ROADMAP_EOF\n"+
+			testutil.TouchPhaseCompleteInDir(attemptDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sessionManager := session.NewManager(eventCh)
+	t.Cleanup(sessionManager.Shutdown)
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	restartedStore := feature.NewStore(stateDir)
+	restartedManager := feature.NewManager(restartedStore, &config.Config{})
+	restartedFeature, err := restartedStore.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature after restart: %v", err)
+	}
+	recovery := &restartRecoveryOperator{items: []ports.RecoveryItem{{
+		PIDFile: ports.PIDFile{
+			FeatureID: f.ID,
+			Phase:     feature.PhasePlan.String(),
+		},
+		ProcessAlive: false,
+		Feature:      restartedFeature,
+	}}}
+
+	var captureMu sync.Mutex
+	var planBuilds []agent.BuildSessionOpts
+	var resumeEvents []ports.FeatureResumedData
+	phaseRunner := &agent.PhaseRunner{
+		SessionManager: sessionManager,
+		FeatureStore:   restartedStore,
+		StateDir:       stateDir,
+		Registry:       registry,
+		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			captureMu.Lock()
+			planBuilds = append(planBuilds, opts)
+			captureMu.Unlock()
+			return []string{"bash", plannerScript}, nil, &ports.SessionOpts{
+				PIDDir:                opts.PIDDir,
+				InitialPrompt:         opts.Prompt,
+				ProviderName:          "codex",
+				ResolvedModel:         "model-a",
+				SupportsSessionResume: true,
+				Protocol: claude.NewProtocol(llm.ProtocolOpts{
+					InitialPrompt: opts.Prompt,
+					WorkDir:       opts.WorkDir,
+					Model:         "model-a",
+				}),
+			}, nil
+		},
+		OnFeatureResumed: func(data ports.FeatureResumedData) {
+			captureMu.Lock()
+			resumeEvents = append(resumeEvents, data)
+			captureMu.Unlock()
+		},
+	}
+	restarted := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   restartedManager,
+		Store:       restartedStore,
+		Sessions:    sessionManager,
+		Recovery:    recovery,
+		PhaseRunner: phaseRunner,
+	}, orchestrator.Hooks{})
+
+	items, err := restarted.ScanRecovery(context.Background())
+	if err != nil {
+		t.Fatalf("ScanRecovery() error = %v", err)
+	}
+	if err := restarted.ExecuteRecovery(context.Background(), items, map[string]ports.RecoveryAction{
+		ports.RecoveryActionKey(f.ID, ""): ports.RecoveryResume,
+	}); err != nil {
+		t.Fatalf("ExecuteRecovery() error = %v", err)
+	}
+
+	waitForRestartResumeCondition(t, func() bool {
+		record, readErr := agent.ReadResumeRecord(attemptDir)
+		return readErr == nil && record != nil && record.Completed &&
+			agent.LatestCompletedPlanAttempt(roadmapDir) == 1
+	}, "completed roadmap attempt-01")
+
+	captureMu.Lock()
+	capturedBuilds := append([]agent.BuildSessionOpts(nil), planBuilds...)
+	capturedEvents := append([]ports.FeatureResumedData(nil), resumeEvents...)
+	captureMu.Unlock()
+	if len(capturedBuilds) != 1 {
+		t.Fatalf("plan BuildSession() calls = %d, want 1", len(capturedBuilds))
+	}
+	if capturedBuilds[0].ResumeSessionID != "roadmap-thread-before-restart" {
+		t.Errorf("plan ResumeSessionID = %q, want seeded provider identity", capturedBuilds[0].ResumeSessionID)
+	}
+	if len(capturedEvents) != 1 ||
+		capturedEvents[0].PhaseKey != "roadmap-plan" ||
+		capturedEvents[0].Iteration != 1 ||
+		capturedEvents[0].ResumeCount != 1 {
+		t.Errorf("FeatureResumed callbacks = %#v, want one roadmap attempt-01 resume", capturedEvents)
+	}
+	record, err := agent.ReadResumeRecord(attemptDir)
+	if err != nil {
+		t.Fatalf("ReadResumeRecord() error = %v", err)
+	}
+	if record == nil ||
+		record.ProviderSessionID != "roadmap-thread-before-restart" ||
+		record.PendingResume ||
+		!record.Completed ||
+		!record.Resumed ||
+		record.ResumeCount != 1 {
+		t.Errorf("roadmap resume record = %#v, want completed resumed attempt-01", record)
+	}
+	if _, err := os.Stat(filepath.Join(roadmapDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Errorf("attempt-02 exists after cross-restart resume: %v", err)
+	}
+}
+
+func waitForRestartResumeCondition(t *testing.T, condition func() bool, description string) {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if condition() {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for %s", description)
+		case <-ticker.C:
+		}
+	}
+}

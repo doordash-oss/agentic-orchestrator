@@ -17,11 +17,13 @@ package orchestrator
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	sessionruntime "github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
 const (
@@ -49,12 +51,27 @@ type phaseCompletionSink interface {
 type phaseSupervisorConfig struct {
 	Completion        phaseCompletionSink
 	Sessions          ports.SessionManager
+	SingleShotResumer singleShotResumeDriver
+	AutoResumeWait    func(time.Duration) bool
 	OnCompletionError func(featureID string, err error)
+}
+
+type singleShotResumeDriver interface {
+	SingleShotPhaseComplete(sessionID string) bool
+	SingleShotSupportsResume(sessionID string) bool
+	SingleShotInterrupted(sessionID string) bool
+	SingleShotNeedsEstablishment(sessionID string) bool
+	CaptureSingleShotProviderSnapshot(sessionID string, sess ports.SessionView)
+	DispatchSingleShotContinuation(previousSessionID, resumeID string, ordinal int, fresh bool) (*agent.SingleShotResumeResult, error)
+	CompleteSingleShotResumeEstablishment(sessionID string, sess ports.SessionView, elapsed time.Duration) bool
+	MarkSingleShotCompleted(sessionID string)
 }
 
 type phaseSupervisor struct {
 	completion        phaseCompletionSink
 	sessions          ports.SessionManager
+	singleShotResumer singleShotResumeDriver
+	autoResumeWait    func(time.Duration) bool
 	onCompletionError func(featureID string, err error)
 
 	singleShotMu       sync.Mutex
@@ -65,6 +82,8 @@ func newPhaseSupervisor(cfg phaseSupervisorConfig) *phaseSupervisor {
 	return &phaseSupervisor{
 		completion:        cfg.Completion,
 		sessions:          cfg.Sessions,
+		singleShotResumer: cfg.SingleShotResumer,
+		autoResumeWait:    cfg.AutoResumeWait,
 		onCompletionError: cfg.OnCompletionError,
 	}
 }
@@ -85,13 +104,15 @@ func (s *phaseSupervisor) superviseSingleShotSession(featureID, sessionID string
 }
 
 func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {
+	startedAt := time.Now()
+	establishing := s.singleShotResumer != nil && s.singleShotResumer.SingleShotNeedsEstablishment(sessionID)
 	doneCh := sess.Done()
 	for {
 		select {
 		case <-doneCh:
 			select {
 			case status := <-sess.StatusCh():
-				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, true) {
+				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, true, startedAt, establishing) {
 					return
 				}
 				doneCh = nil
@@ -99,17 +120,17 @@ func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phas
 			default:
 			}
 			if cost := sess.Cost(); cost != nil {
-				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, singleShotStatusFromResult(cost), true) {
+				if s.handleSingleShotStatus(featureID, sessionID, phase, sess, singleShotStatusFromResult(cost), true, startedAt, establishing) {
 					return
 				}
 				doneCh = nil
 				continue
 			}
-			s.completeSingleShotFailure(featureID, sessionID, phase, sess)
+			s.handleSingleShotTerminalFailure(featureID, sessionID, phase, sess, startedAt, establishing)
 			return
 
 		case status := <-sess.StatusCh():
-			if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, false) {
+			if s.handleSingleShotStatus(featureID, sessionID, phase, sess, status, false, startedAt, establishing) {
 				return
 			}
 		}
@@ -135,13 +156,21 @@ func (s *phaseSupervisor) releaseSingleShotSession(sessionID string) {
 	delete(s.singleShotSessions, sessionID)
 }
 
-func (s *phaseSupervisor) handleSingleShotStatus(featureID, sessionID string, phase feature.Phase, sess ports.SessionView, status string, sessionDone bool) bool {
+func (s *phaseSupervisor) handleSingleShotStatus(featureID, sessionID string, phase feature.Phase, sess ports.SessionView, status string, sessionDone bool, startedAt time.Time, establishing bool) bool {
 	if status == phaseSupervisorStatusAPIError && !sessionDone {
 		return false
 	}
 	_ = sess.Stop()
 	s.releaseSingleShotSession(sessionID)
 	if status == phaseSupervisorStatusSuccess {
+		if s.singleShotResumer != nil {
+			s.singleShotResumer.CaptureSingleShotProviderSnapshot(sessionID, sess)
+			if establishing && !s.singleShotResumer.CompleteSingleShotResumeEstablishment(sessionID, sess, time.Since(startedAt)) {
+				s.resumeSingleShotFresh(featureID, sessionID, phase, 1)
+				return true
+			}
+			s.singleShotResumer.MarkSingleShotCompleted(sessionID)
+		}
 		s.complete(featureID, PhaseCompletionInput{
 			Phase:     phase,
 			SessionID: sessionID,
@@ -149,13 +178,190 @@ func (s *phaseSupervisor) handleSingleShotStatus(featureID, sessionID string, ph
 		})
 		return true
 	}
-	s.complete(featureID, PhaseCompletionInput{
-		Phase:       phase,
-		SessionID:   sessionID,
-		Success:     false,
-		ErrorDetail: singleShotErrorDetail(phase, sess),
-	})
+	s.handleSingleShotTerminalFailure(featureID, sessionID, phase, sess, startedAt, establishing)
 	return true
+}
+
+func (s *phaseSupervisor) handleSingleShotTerminalFailure(featureID, sessionID string, phase feature.Phase, sess ports.SessionView, startedAt time.Time, establishing bool) {
+	s.releaseSingleShotSession(sessionID)
+	if s.singleShotResumer == nil || s.singleShotResumer.SingleShotPhaseComplete(sessionID) {
+		s.completeSingleShotFailure(featureID, sessionID, phase, sess)
+		return
+	}
+	s.singleShotResumer.CaptureSingleShotProviderSnapshot(sessionID, sess)
+	if establishing && !s.singleShotResumer.CompleteSingleShotResumeEstablishment(sessionID, sess, time.Since(startedAt)) {
+		s.resumeSingleShotFresh(featureID, sessionID, phase, 1)
+		return
+	}
+	classification := sessionruntime.ClassifyFailure(sess)
+	if classification.Tier != sessionruntime.TransientRetryable || !s.singleShotResumer.SingleShotSupportsResume(sessionID) {
+		s.completeSingleShotFailure(featureID, sessionID, phase, sess)
+		return
+	}
+	s.runSingleShotAutoResume(featureID, sessionID, phase, sess)
+}
+
+func (s *phaseSupervisor) runSingleShotAutoResume(featureID, sessionID string, phase feature.Phase, failed ports.SessionView) {
+	const (
+		consecutiveCap = 3
+		totalCap       = 10
+	)
+	consecutive := 0
+	total := 0
+	resumeOrdinal := 0
+	currentID := sessionID
+	current := failed
+	for {
+		if consecutive >= consecutiveCap || total >= totalCap {
+			s.completeSingleShotFailure(featureID, currentID, phase, current)
+			return
+		}
+		classification := sessionruntime.ClassifyFailure(current)
+		if classification.Tier != sessionruntime.TransientRetryable {
+			s.completeSingleShotFailure(featureID, currentID, phase, current)
+			return
+		}
+		resumeID := singleShotProviderSessionID(current)
+		if resumeID == "" {
+			s.completeSingleShotFailure(featureID, currentID, phase, current)
+			return
+		}
+		wait := singleShotResumeBackoff(total)
+		if classification.RetryHint > wait {
+			wait = classification.RetryHint
+		}
+		if !s.waitForSingleShotResume(currentID, wait) {
+			s.completeSingleShotFailure(featureID, currentID, phase, current)
+			return
+		}
+
+		total++
+		resumeOrdinal++
+		startedAt := time.Now()
+		result, err := s.singleShotResumer.DispatchSingleShotContinuation(currentID, resumeID, resumeOrdinal, false)
+		if agent.IsSingleShotResumeRejection(err) {
+			total--
+			s.resumeSingleShotFresh(featureID, currentID, phase, 1)
+			return
+		}
+		if err != nil {
+			s.completeSingleShotFailure(featureID, currentID, phase, current)
+			return
+		}
+		currentID, current = result.SessionID, result.Session
+		status := waitForSingleShotTerminal(current)
+		s.singleShotResumer.CaptureSingleShotProviderSnapshot(currentID, current)
+		if !s.singleShotResumer.CompleteSingleShotResumeEstablishment(currentID, current, time.Since(startedAt)) {
+			total--
+			s.resumeSingleShotFresh(featureID, currentID, phase, 1)
+			return
+		}
+		if status == phaseSupervisorStatusSuccess {
+			s.singleShotResumer.MarkSingleShotCompleted(currentID)
+			s.complete(featureID, PhaseCompletionInput{Phase: phase, SessionID: currentID, Success: true})
+			return
+		}
+		if singleShotSessionMadeProgress(current) {
+			consecutive = 0
+		} else {
+			consecutive++
+		}
+	}
+}
+
+func (s *phaseSupervisor) resumeSingleShotFresh(featureID, previousSessionID string, phase feature.Phase, ordinal int) {
+	result, err := s.singleShotResumer.DispatchSingleShotContinuation(previousSessionID, "", ordinal, true)
+	if err != nil {
+		s.complete(featureID, PhaseCompletionInput{
+			Phase:       phase,
+			SessionID:   previousSessionID,
+			Success:     false,
+			ErrorDetail: err.Error(),
+		})
+		return
+	}
+	s.runSingleShotSession(featureID, result.SessionID, phase, result.Session)
+}
+
+func (s *phaseSupervisor) waitForSingleShotResume(sessionID string, wait time.Duration) bool {
+	if s.autoResumeWait != nil {
+		return s.autoResumeWait(wait)
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return (s.sessions == nil || !s.sessions.IsShuttingDown()) &&
+				(s.singleShotResumer == nil || !s.singleShotResumer.SingleShotInterrupted(sessionID))
+		case <-ticker.C:
+			if (s.sessions != nil && s.sessions.IsShuttingDown()) ||
+				(s.singleShotResumer != nil && s.singleShotResumer.SingleShotInterrupted(sessionID)) {
+				return false
+			}
+		}
+	}
+}
+
+func singleShotResumeBackoff(attempt int) time.Duration {
+	switch attempt {
+	case 0:
+		return 5 * time.Second
+	case 1:
+		return 20 * time.Second
+	default:
+		return 60 * time.Second
+	}
+}
+
+func singleShotProviderSessionID(sess ports.SessionView) string {
+	if providerSession, ok := sess.(interface{ SessionID() string }); ok {
+		return providerSession.SessionID()
+	}
+	return ""
+}
+
+func singleShotSessionMadeProgress(sess ports.SessionView) bool {
+	if sess == nil {
+		return false
+	}
+	usage := sess.AccumulatedUsage()
+	if usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
+		return true
+	}
+	if sess.MessageLog() == nil {
+		return false
+	}
+	for _, msg := range sess.MessageLog().Messages() {
+		if msg.Assistant != nil || msg.ToolProgress != nil || msg.TaskStarted != nil ||
+			msg.TaskProgress != nil || msg.TaskNotification != nil ||
+			len(msg.FileReads) > 0 || len(msg.FileChanges) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForSingleShotTerminal(sess ports.SessionView) string {
+	for {
+		select {
+		case status := <-sess.StatusCh():
+			if status != phaseSupervisorStatusAPIError {
+				_ = sess.Stop()
+				return status
+			}
+		case <-sess.Done():
+			select {
+			case status := <-sess.StatusCh():
+				_ = sess.Stop()
+				return status
+			default:
+			}
+			return singleShotStatusFromResult(sess.Cost())
+		}
+	}
 }
 
 func (s *phaseSupervisor) completeSingleShotFailure(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {

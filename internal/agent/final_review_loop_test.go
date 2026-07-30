@@ -1647,6 +1647,70 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 	}
 }
 
+func TestRunFinalReviewAxis_ReusesCompletedCleanVerdict(t *testing.T) {
+	iterDir := t.TempDir()
+	axis := implementationReviewAxisRegistry[0]
+	axisDir := filepath.Join(iterDir, implementationReviewAxisSlug(axis.Name))
+	if err := os.MkdirAll(axisDir, 0o755); err != nil {
+		t.Fatalf("creating axis dir: %v", err)
+	}
+	feedback := FormatStructuredReviewFeedback("cached", "", "", ReviewApproved)
+	if err := os.WriteFile(filepath.Join(axisDir, "review-feedback.md"), []byte(feedback), 0o644); err != nil {
+		t.Fatalf("writing cached feedback: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(axisDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("writing phase_complete: %v", err)
+	}
+
+	state := &featureFinalReviewLoopState{
+		cfg: OrchestratorConfig{
+			BuildSession: func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				t.Fatal("BuildSession called for reusable final-review axis")
+				return nil, nil, nil, nil
+			},
+		},
+	}
+	status, gotFeedback, err := state.runFinalReviewAxis(1, iterDir, axis, observe.SpanContext{})
+	if err != nil {
+		t.Fatalf("runFinalReviewAxis() error = %v", err)
+	}
+	if status != ReviewApproved {
+		t.Errorf("runFinalReviewAxis() status = %v, want %v", status, ReviewApproved)
+	}
+	if !strings.Contains(gotFeedback, "## Verdict\nAPPROVED") {
+		t.Errorf("runFinalReviewAxis() feedback = %q, want cached approved verdict", gotFeedback)
+	}
+}
+
+func TestRunFinalReviewFixer_ReusesCompletedChild(t *testing.T) {
+	iterDir := t.TempDir()
+	fixDir := filepath.Join(iterDir, "fix")
+	if err := os.MkdirAll(fixDir, 0o755); err != nil {
+		t.Fatalf("creating fix dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(fixDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("writing child phase_complete: %v", err)
+	}
+	state := &featureFinalReviewLoopState{
+		cfg: OrchestratorConfig{
+			BuildSession: func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				t.Fatal("BuildSession called for reusable final-review fixer")
+				return nil, nil, nil, nil
+			},
+		},
+	}
+	status, err := state.runFix(1, iterDir, "cached feedback")
+	if err != nil {
+		t.Fatalf("runFix() error = %v", err)
+	}
+	if status != agentStatusSuccess {
+		t.Errorf("runFix() status = %q, want %q", status, agentStatusSuccess)
+	}
+	if !HasPhaseComplete(iterDir) {
+		t.Fatal("runFix() did not restore parent iteration phase_complete")
+	}
+}
+
 // TestRunFeatureFinalReviewLoop_NoStagedReposShortCircuits verifies the
 // degenerate "every repo already past FR" case returns review_passed
 // without launching a session. Mirrors the legacy short-circuit behavior

@@ -184,6 +184,58 @@ func TestFeatureReadModelResumeIndicatorIgnoresInactiveIteration(t *testing.T) {
 	assertResumeIndicator(t, "summary", summary, false, 0)
 }
 
+func TestFeatureReadModelsAggregateChildResumeRecords(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	iterDir := activeImplementIterationDir(store, f)
+	for child, count := range map[string]int{
+		filepath.Join("review", "craft"): 2,
+		filepath.Join("review", "qa"):    1,
+	} {
+		if err := agent.WriteResumeRecord(filepath.Join(iterDir, child), agent.ResumeRecord{
+			PhaseKey:    "phase-1-impl",
+			Iteration:   f.CurrentIteration,
+			RunNumber:   f.ActiveRun,
+			Resumed:     true,
+			ResumeCount: count,
+		}); err != nil {
+			t.Fatalf("WriteResumeRecord(%s) error = %v", child, err)
+		}
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	detail := getJSONMap(t, handler, apiPathFeatures+"/"+f.ID)
+	assertResumeIndicator(t, "detail", detail[entityFeature].(map[string]any), true, 3)
+}
+
+func TestFeatureReadModelsAggregateFinalReviewChildRecords(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	f.CurrentPhase = feature.PhaseFinalReview
+	f.ReviewIteration = 2
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	unitDir, ok := agent.ResumeUnitDir(store.BaseDir, f)
+	if !ok {
+		t.Fatal("ResumeUnitDir() did not resolve final-review iteration")
+	}
+	if err := agent.WriteResumeRecord(filepath.Join(unitDir, "qa"), agent.ResumeRecord{
+		PhaseKey:    feature.PhaseFinalReview.DirName(),
+		ChildKey:    "qa",
+		Iteration:   f.ReviewIteration,
+		RunNumber:   f.ActiveRun,
+		Resumed:     true,
+		ResumeCount: 2,
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	detail := getJSONMap(t, handler, apiPathFeatures+"/"+f.ID)
+	assertResumeIndicator(t, "detail", detail[entityFeature].(map[string]any), true, 2)
+}
+
 func activeImplementIterationDir(store *feature.Store, f *feature.Feature) string {
 	return filepath.Join(
 		store.RunDir(f.ID, f.ActiveRun),
@@ -443,6 +495,93 @@ func TestFailedFeatureResumeActionSupportsSequentialKinds(t *testing.T) {
 				t.Fatalf("resume action = %#v, want enabled", resume)
 			}
 		})
+	}
+}
+
+func TestFailedFinalReviewResumeActionUsesEligibleChildRecord(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	f.Status = feature.StatusFailed
+	f.CurrentPhase = feature.PhaseFinalReview
+	f.ReviewIteration = 1
+	f.Models.Review = "codex:model-a"
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	unitDir, ok := agent.ResumeUnitDir(store.BaseDir, f)
+	if !ok {
+		t.Fatal("ResumeUnitDir() did not resolve final-review iteration")
+	}
+	if err := agent.WriteResumeRecord(filepath.Join(unitDir, "qa"), agent.ResumeRecord{
+		ProviderSessionID:     "qa-thread",
+		Provider:              "codex",
+		ResolvedModel:         "model-a",
+		PhaseKey:              feature.PhaseFinalReview.DirName(),
+		ChildKey:              "qa",
+		Iteration:             f.ReviewIteration,
+		RunNumber:             f.ActiveRun,
+		OrchestratorSessionID: "final-review-qa",
+		CreatedAt:             time.Now(),
+		UpdatedAt:             time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	registry := llm.NewRegistry()
+	registry.Register(resumableServerProvider{
+		fakeProvider: fakeProvider{name: "codex", models: []string{"model-a"}},
+	})
+	opts := baseReadHandlerOptions(store)
+	opts.Registry = registry
+	handler := NewHandler(opts)
+
+	detail := getJSONMap(t, handler, apiPathFeatures+"/"+f.ID)
+	actions := detail[entityFeature].(map[string]any)["actions"].([]any)
+	resume := actionFromJSON(t, actions, actionResume)
+	if enabled, _ := resume["enabled"].(bool); !enabled {
+		t.Fatalf("resume action = %+v, want enabled from qa child record", resume)
+	}
+}
+
+func TestFailedImplementationResumeActionFallsThroughCompletedParentToReviewChild(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	f.Status = feature.StatusFailed
+	f.CurrentPhase = feature.PhaseImplement
+	f.CurrentRoadmapPhase = 1
+	f.ActiveTimingKey = "phase-1-impl"
+	f.Models.Implementation = "codex:model-a"
+	f.Models.Review = "codex:model-a"
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	unitDir := activeImplementIterationDir(store, f)
+	parent := *eligibleServerResumeRecord()
+	parent.Completed = true
+	if err := agent.WriteResumeRecord(unitDir, parent); err != nil {
+		t.Fatalf("WriteResumeRecord(parent) error = %v", err)
+	}
+	child := parent
+	child.Completed = false
+	child.ChildKey = "qa"
+	child.OrchestratorSessionID = "implementation-review-qa"
+	if err := agent.WriteResumeRecord(filepath.Join(unitDir, "review", "qa"), child); err != nil {
+		t.Fatalf("WriteResumeRecord(child) error = %v", err)
+	}
+	registry := llm.NewRegistry()
+	registry.Register(resumableServerProvider{
+		fakeProvider: fakeProvider{name: "codex", models: []string{"model-a"}},
+	})
+	opts := baseReadHandlerOptions(store)
+	opts.Registry = registry
+	handler := NewHandler(opts)
+
+	detail := getJSONMap(t, handler, apiPathFeatures+"/"+f.ID)
+	actions := detail[entityFeature].(map[string]any)["actions"].([]any)
+	resume := actionFromJSON(t, actions, actionResume)
+	if enabled, _ := resume["enabled"].(bool); !enabled {
+		t.Fatalf("resume action = %+v, want enabled from active implementation-review child", resume)
 	}
 }
 

@@ -160,6 +160,7 @@ func TestAPIAppModelFailedResumePrimaryKeepsRetryReachable(t *testing.T) {
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
+			Failure: &server.FailureDTO{Type: "other", Message: "failed"},
 			Actions: []server.ActionDTO{
 				{ID: recoveryActionResume, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 				{ID: actionIDRetry, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
@@ -167,9 +168,24 @@ func TestAPIAppModelFailedResumePrimaryKeepsRetryReachable(t *testing.T) {
 		})},
 	}
 	app := newTestAPIAppModel(t, client)
+	resized, _ := app.Update(tea.WindowSizeMsg{Width: 108, Height: 52})
+	app = resized.(APIAppModel)
 
-	if view := stripANSI(app.View().Content); !strings.Contains(view, "[r] Retry") {
-		t.Fatalf("View() missing Retry fallback hint:\n%s", view)
+	view := stripANSI(app.View().Content)
+	normalizedView := strings.Join(strings.Fields(strings.ReplaceAll(view, "│", " ")), " ")
+	if !strings.Contains(normalizedView, "[r] Retry") ||
+		!strings.Contains(normalizedView, "press [r] to retry") ||
+		!strings.Contains(normalizedView, "Press [r] to retry the failed phase or [ctrl+r] to rewind.") ||
+		strings.Contains(normalizedView, "[r] Restart") ||
+		strings.Contains(normalizedView, "press [r] to restart") ||
+		strings.Contains(normalizedView, "Press [r] to restart") {
+		t.Fatalf("View() does not use Retry consistently:\n%s", view)
+	}
+	app.focusPanel = 1
+	helpModel, _ := app.transitionToAPIHelpOverlay()
+	helpView := stripANSI(helpModel.(APIAppModel).View().Content)
+	if !strings.Contains(helpView, "Retry failed phase") || strings.Contains(helpView, "Restart phase") {
+		t.Fatalf("help does not use Retry consistently:\n%s", helpView)
 	}
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	if cmd == nil {

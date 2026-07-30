@@ -5140,6 +5140,12 @@ func (m APIAppModel) transitionToAPIHelpOverlay() (tea.Model, tea.Cmd) {
 	if !ok {
 		ctx = contexts[helpContextDashboard]
 	}
+	if ctxName == helpContextDetailPanel {
+		detail := m.featureDetails[m.selectedFeature]
+		if recovery := apiFeatureRecovery(detail.Feature.Actions); recovery.retryAvailable {
+			ctx = withHelpBindingDescription(ctx, "r", "Retry failed phase")
+		}
+	}
 	m.helpOverlay = NewHelpOverlayModel(ctx, m.width, m.height)
 	m.helpOverlayActive = true
 	return m, nil

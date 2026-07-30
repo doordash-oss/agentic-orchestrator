@@ -333,7 +333,11 @@ func (s *Session) SessionID() string {
 	return s.protocol.SessionID()
 }
 func (s *Session) PermCacheScope() string { return s.permCacheScope }
-func (s *Session) Model() string          { return s.model }
+func (s *Session) Model() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model
+}
 func (s *Session) EffectiveEffort() llm.EffortLevel {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -520,7 +524,11 @@ func (s *Session) LastStdoutAt() time.Time {
 
 // --- Setter methods (for test code) ---
 
-func (s *Session) SetModel(m string)           { s.model = m }
+func (s *Session) SetModel(m string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.model = m
+}
 func (s *Session) SetProviderName(name string) { s.providerName = name }
 func (s *Session) SetLatestUsage(u *llm.Usage) {
 	s.mu.Lock()

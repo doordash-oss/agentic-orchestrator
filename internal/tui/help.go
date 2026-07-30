@@ -82,6 +82,18 @@ func AllHelpContexts() map[string]ViewHelpContext {
 	}
 }
 
+func withHelpBindingDescription(ctx ViewHelpContext, key, description string) ViewHelpContext {
+	for sectionIndex := range ctx.Sections {
+		ctx.Sections[sectionIndex].Bindings = append([]HelpBinding(nil), ctx.Sections[sectionIndex].Bindings...)
+		for bindingIndex := range ctx.Sections[sectionIndex].Bindings {
+			if ctx.Sections[sectionIndex].Bindings[bindingIndex].Key == key {
+				ctx.Sections[sectionIndex].Bindings[bindingIndex].Desc = description
+			}
+		}
+	}
+	return ctx
+}
+
 func dashboardLeftHelp() ViewHelpContext {
 	return ViewHelpContext{
 		Name: helpContextDashboard,

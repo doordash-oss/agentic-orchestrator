@@ -105,7 +105,9 @@ func resumeSessionDidWork(sess ports.SessionView) bool {
 	return false
 }
 
-func resumeSessionMadeProgress(sess ports.SessionView) bool {
+// ResumeSessionMadeProgress applies the shared observable-progress semantics
+// used to reset consecutive idle resume attempts.
+func ResumeSessionMadeProgress(sess ports.SessionView) bool {
 	if sess == nil {
 		return false
 	}

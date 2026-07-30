@@ -159,7 +159,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 	return detail
 }
 
-func (h *apiHandler) activeImplementResumeIndicator(f *feature.Feature) (bool, int) {
+func (h *apiHandler) activeResumeIndicator(f *feature.Feature) (bool, int) {
 	if h == nil || h.store == nil || f == nil || f.ActiveRun <= 0 {
 		return false, 0
 	}
@@ -167,18 +167,42 @@ func (h *apiHandler) activeImplementResumeIndicator(f *feature.Feature) (bool, i
 	if !ok {
 		return false, 0
 	}
+	var resumed bool
+	var resumeCount int
 	record, err := agent.ReadResumeRecord(unitDir)
 	if err == nil && record != nil {
-		return record.Resumed || record.ResumeCount > 0, max(record.ResumeCount, 0)
+		resumed = record.Resumed || record.ResumeCount > 0
+		resumeCount = max(record.ResumeCount, 0)
+	} else if f.CurrentPhase == feature.PhaseImplement {
+		meta, metaErr := agent.NewArtifactManager("").ReadMeta(unitDir)
+		if metaErr == nil {
+			resumed = meta.Resumed || meta.ResumeCount > 0
+			resumeCount = max(meta.ResumeCount, 0)
+		}
 	}
-	if f.CurrentPhase != feature.PhaseImplement {
-		return false, 0
-	}
-	meta, err := agent.NewArtifactManager("").ReadMeta(unitDir)
-	if err != nil {
-		return false, 0
-	}
-	return meta.Resumed || meta.ResumeCount > 0, max(meta.ResumeCount, 0)
+	childResumed, childCount := aggregateChildResumeRecords(unitDir)
+	return resumed || childResumed, resumeCount + childCount
+}
+
+func aggregateChildResumeRecords(unitDir string) (bool, int) {
+	var resumed bool
+	var resumeCount int
+	rootSidecar := filepath.Join(unitDir, agent.ResumeSidecarFile)
+	_ = filepath.WalkDir(unitDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || entry.Name() != agent.ResumeSidecarFile || path == rootSidecar {
+			return nil
+		}
+		record, readErr := agent.ReadResumeRecord(filepath.Dir(path))
+		if readErr != nil || record == nil {
+			return nil
+		}
+		if record.Resumed || record.ResumeCount > 0 {
+			resumed = true
+			resumeCount += max(record.ResumeCount, 0)
+		}
+		return nil
+	})
+	return resumed, resumeCount
 }
 
 func activeImplementIterationDirForRead(runDir string, f *feature.Feature) string {
@@ -320,8 +344,10 @@ func (h *apiHandler) actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 
 func (h *apiHandler) resumeEligibility(f *feature.Feature) agent.ResumeEligibility {
 	var record *agent.ResumeRecord
+	var unitDir string
 	if h != nil && h.store != nil && f != nil && f.ActiveRun > 0 {
-		if unitDir, ok := agent.ResumeUnitDir(stateDirForFeatureRead(h.store, f), f); ok {
+		if dir, ok := agent.ResumeUnitDir(stateDirForFeatureRead(h.store, f), f); ok {
+			unitDir = dir
 			record, _ = agent.ReadResumeRecord(unitDir)
 		}
 	}
@@ -345,6 +371,42 @@ func (h *apiHandler) resumeEligibility(f *feature.Feature) agent.ResumeEligibili
 			currentModel = runner.ModelForRole(f.Models.Planning, llm.PhasePlanning)
 		case feature.PhaseImplement:
 			currentModel = runner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+			parent := agent.EvaluateResumeEligibility(f, record, currentModel, registry)
+			if parent.Eligible {
+				return parent
+			}
+			child := agent.EvaluateCompositeResumeEligibility(
+				unitDir,
+				f,
+				registry,
+				agent.ResumeParentContext{
+					PhaseKey:  agent.ResumePhaseKey(f),
+					Iteration: f.CurrentIteration,
+				},
+				func(string) string {
+					return runner.ModelForRole(f.Models.Review, llm.PhaseReview)
+				},
+			)
+			if child.Eligible {
+				return child
+			}
+			return parent
+		case feature.PhaseReview, feature.PhaseFinalReview:
+			return agent.EvaluateCompositeResumeEligibility(
+				unitDir,
+				f,
+				registry,
+				agent.ResumeParentContext{
+					PhaseKey:  feature.PhaseFinalReview.DirName(),
+					Iteration: f.ReviewIteration,
+				},
+				func(childKey string) string {
+					if childKey == string(agent.RoleFinalReviewFixer) {
+						return runner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+					}
+					return runner.ModelForRole(f.Models.Review, llm.PhaseReview)
+				},
+			)
 		}
 	}
 	return agent.EvaluateResumeEligibility(f, record, currentModel, registry)

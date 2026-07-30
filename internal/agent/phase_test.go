@@ -994,7 +994,9 @@ func TestRunInteractivePhaseConsumesPendingManualResumeOnFirstDispatch(t *testin
 	if string(protocolRetryAfter) != string(protocolRetryBefore) {
 		t.Errorf("protocol retry sidecar changed during provider resume:\nbefore:\n%s\nafter:\n%s", protocolRetryBefore, protocolRetryAfter)
 	}
-	NewResumeCoordinator(artifactDir).MarkResumed(time.Now())
+	if err := NewResumeCoordinator(artifactDir).MarkResumed(time.Now()); err != nil {
+		t.Fatalf("MarkResumed() error = %v", err)
+	}
 	continued, err := pr.DispatchSingleShotContinuation(sessionID, "provider-current", 1, false)
 	if err != nil {
 		t.Fatal(err)

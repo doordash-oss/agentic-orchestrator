@@ -50,6 +50,7 @@ import (
 type OrchestratorConfig struct {
 	Feature      *feature.Feature
 	FeatureStore ports.FeatureStore
+	Registry     *llm.Registry
 	PlanPath     string
 	StateDir     string
 	Config       *config.Config

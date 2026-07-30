@@ -1155,6 +1155,12 @@ func (o *Observer) FeatureResumed(sc SpanContext, input ports.FeatureResumedData
 	if o == nil || !o.enabled {
 		return
 	}
+	data := map[string]any{
+		"resume_count": input.ResumeCount,
+	}
+	if input.ChildKey != "" {
+		data["child_key"] = input.ChildKey
+	}
 	o.emit(sc.WithRun(input.RunNumber), Event{
 		Timestamp:    time.Now(),
 		TraceID:      sc.TraceID,
@@ -1164,9 +1170,7 @@ func (o *Observer) FeatureResumed(sc SpanContext, input ports.FeatureResumedData
 		FeatureID:    input.FeatureID,
 		Phase:        input.PhaseKey,
 		Iteration:    input.Iteration,
-		Data: map[string]any{
-			"resume_count": input.ResumeCount,
-		},
+		Data:         data,
 	})
 }
 

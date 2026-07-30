@@ -834,6 +834,34 @@ func TestFeatureResumedEmitsTypedAuditEvent(t *testing.T) {
 	if got := int(evt.Data["resume_count"].(float64)); got != 2 {
 		t.Errorf("Data[resume_count] = %d, want 2", got)
 	}
+	if _, exists := evt.Data["child_key"]; exists {
+		t.Errorf("parent Data[child_key] = %v, want omitted", evt.Data["child_key"])
+	}
+}
+
+func TestFeatureResumedChildAuditEventCarriesChildKey(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "resumed_child_feat"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	obs := New(true, stateDir, false, "", false, "agentic")
+	obs.FeatureResumed(SpanContextForFeature(featureID, "", "", ""), ports.FeatureResumedData{
+		FeatureID:   featureID,
+		PhaseKey:    "phase-02/implement",
+		ChildKey:    "craft",
+		Iteration:   3,
+		RunNumber:   4,
+		ResumeCount: 1,
+	})
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if got := events[0].Data["child_key"]; got != "craft" {
+		t.Errorf("Data[child_key] = %v, want craft", got)
+	}
 }
 
 func TestFeatureRewoundFullOmitRoadmapPhase(t *testing.T) {

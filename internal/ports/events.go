@@ -81,6 +81,7 @@ type Event struct {
 	RunNumber   int
 	Attempt     int
 	PhaseKey    string
+	ChildKey    string
 	Iteration   int
 	ResumeCount int
 	SetupLog    string
@@ -97,6 +98,7 @@ type Event struct {
 type FeatureResumedData struct {
 	FeatureID   string
 	PhaseKey    string
+	ChildKey    string
 	Iteration   int
 	RunNumber   int
 	ResumeCount int

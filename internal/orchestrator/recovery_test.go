@@ -540,7 +540,9 @@ func TestExecuteRecovery_ResumeEligibleImplementStampsPendingIntent(t *testing.T
 	if record == nil || !record.PendingResume {
 		t.Errorf("resume record = %#v, want recovery-stamped pending intent", record)
 	}
-	agent.NewResumeCoordinator(iterDir).ClearPending(time.Now())
+	if err := agent.NewResumeCoordinator(iterDir).ClearPending(time.Now()); err != nil {
+		t.Fatalf("ClearPending() error = %v", err)
+	}
 }
 
 func TestExecuteRecovery_ResumeIneligibleImplementMarksFreshFallback(t *testing.T) {

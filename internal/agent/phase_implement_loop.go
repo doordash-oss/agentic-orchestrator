@@ -138,6 +138,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	implCfg := ImplementConfig{
 		Feature:                    cfg.Feature,
 		FeatureStore:               cfg.FeatureStore,
+		Registry:                   cfg.Registry,
 		WorkDir:                    workspace.Cwd,
 		PlanPath:                   cfg.PlanPath,
 		MaxIterations:              cfg.MaxIterations,

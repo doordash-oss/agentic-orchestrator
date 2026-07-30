@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -90,6 +91,234 @@ touch "`+filepath.Join(helperDir, "phase_complete")+`"
 	}
 	if !strings.Contains(got.SystemPrompt, filepath.Join(helperDir, "phase_complete")) {
 		t.Fatalf("SystemPrompt missing helper phase_complete path:\n%s", got.SystemPrompt)
+	}
+}
+
+func TestRunReadOnlyReviewHelper_ResumesAndCompletesChildRecord(t *testing.T) {
+	root := t.TempDir()
+	helperDir := filepath.Join(root, "review", "craft")
+	workDir := filepath.Join(root, "work")
+	for _, dir := range []string{helperDir, workDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	current := resumeTestFeature()
+	parent := ResumeParentContext{PhaseKey: "phase-1-impl", Iteration: 1}
+	record := resumeTestRecord()
+	record.ChildKey = "craft"
+	if err := WriteResumeRecord(helperDir, record); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	script := testutil.WriteScript(t, root, "resume-reviewer.sh",
+		testutil.WriteReviewApprovedInDir(helperDir)+`
+touch "`+filepath.Join(helperDir, PhaseCompleteFile)+`"
+`+testutil.JSONLInit+`
+`+testutil.JSONLSuccess)
+
+	var got BuildSessionOpts
+	var audits []ports.FeatureResumedData
+	pr := &PhaseRunner{
+		StateDir:       root,
+		Registry:       resumeTestRegistry(),
+		SessionManager: session.NewManager(make(chan interface{}, 10)),
+		OnFeatureResumed: func(input ports.FeatureResumedData) {
+			audits = append(audits, input)
+		},
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			got = opts
+			return []string{"bash", script}, nil, &ports.SessionOpts{
+				PermHandler:       opts.PermHandler,
+				DebugSystemPrompt: opts.SystemPrompt,
+				ProviderName:      "codex",
+				ResolvedModel:     "model-a",
+			}, nil
+		},
+	}
+	t.Cleanup(func() { pr.SessionManager.Shutdown() })
+
+	_, err := pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+		SessionID:          "review-helper-craft-01",
+		FeatureID:          current.ID,
+		Phase:              feature.PhaseReview,
+		Model:              "codex:model-a",
+		Prompt:             "fresh prompt",
+		PromptPath:         filepath.Join(helperDir, "review-prompt.md"),
+		FeedbackPath:       filepath.Join(helperDir, "review-feedback.md"),
+		HelperIterDir:      helperDir,
+		Role:               RoleImplementationReviewCraft,
+		WorkDir:            workDir,
+		LogPath:            filepath.Join(helperDir, "review-output.txt"),
+		ResumeFeature:      current,
+		ResumeParent:       parent,
+		ResumeChildKey:     "craft",
+		ResumePhaseContext: "You were mid the Craft implementation-review axis for iteration 1.",
+	})
+	if err != nil {
+		t.Fatalf("RunReadOnlyReviewHelper() error = %v", err)
+	}
+	if got.ResumeSessionID != record.ProviderSessionID {
+		t.Errorf("ResumeSessionID = %q, want %q", got.ResumeSessionID, record.ProviderSessionID)
+	}
+	if !strings.Contains(got.Prompt, "Craft implementation-review axis") {
+		t.Errorf("resume prompt = %q, want axis context", got.Prompt)
+	}
+	updated, err := ReadResumeRecord(helperDir)
+	if err != nil || updated == nil {
+		t.Fatalf("ReadResumeRecord() = %#v, %v", updated, err)
+	}
+	if !updated.Resumed || updated.ResumeCount != 1 || !updated.Completed {
+		t.Errorf("child record = %#v, want resumed once and completed", updated)
+	}
+	if len(audits) != 1 || audits[0].ChildKey != "craft" {
+		t.Errorf("FeatureResumed audits = %#v, want one craft event", audits)
+	}
+}
+
+func TestRunReadOnlyReviewHelper_RejectedChildFallsBackFresh(t *testing.T) {
+	root := t.TempDir()
+	helperDir := filepath.Join(root, "review", "cleanliness")
+	workDir := filepath.Join(root, "work")
+	for _, dir := range []string{helperDir, workDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	current := resumeTestFeature()
+	parent := ResumeParentContext{PhaseKey: "phase-1-impl", Iteration: 1}
+	record := resumeTestRecord()
+	record.ChildKey = "cleanliness"
+	if err := WriteResumeRecord(helperDir, record); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+
+	sess := newUtilityTestSession()
+	sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		if strings.Contains(id, "-resume-") {
+			return nil, fmt.Errorf("thread/resume error: thread not found")
+		}
+		if err := os.WriteFile(filepath.Join(helperDir, "review-feedback.md"), []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
+			t.Errorf("write feedback: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(helperDir, PhaseCompleteFile), nil, 0o644); err != nil {
+			t.Errorf("write marker: %v", err)
+		}
+		sess.statusCh <- "SUCCESS"
+		return sess, nil
+	}
+
+	var builds []BuildSessionOpts
+	pr := &PhaseRunner{
+		StateDir:       root,
+		Registry:       resumeTestRegistry(),
+		SessionManager: sm,
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			builds = append(builds, opts)
+			return []string{"mock-reviewer"}, nil, &ports.SessionOpts{
+				ProviderName:  "codex",
+				ResolvedModel: "model-a",
+			}, nil
+		},
+	}
+
+	result, err := pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+		SessionID:          "review-helper-cleanliness-01",
+		FeatureID:          current.ID,
+		Phase:              feature.PhaseReview,
+		Model:              "codex:model-a",
+		Prompt:             "fresh prompt",
+		FeedbackPath:       filepath.Join(helperDir, "review-feedback.md"),
+		HelperIterDir:      helperDir,
+		Role:               RoleImplementationReviewCleanliness,
+		WorkDir:            workDir,
+		ResumeFeature:      current,
+		ResumeParent:       parent,
+		ResumeChildKey:     "cleanliness",
+		ResumePhaseContext: "You were mid the Cleanliness implementation-review axis for iteration 1.",
+	})
+	if err != nil {
+		t.Fatalf("RunReadOnlyReviewHelper() error = %v", err)
+	}
+	if result.Status != ReviewApproved {
+		t.Errorf("result.Status = %v, want %v", result.Status, ReviewApproved)
+	}
+	if len(builds) != 2 {
+		t.Fatalf("BuildSession calls = %d, want resume plus fresh fallback", len(builds))
+	}
+	if builds[0].ResumeSessionID != record.ProviderSessionID || builds[1].ResumeSessionID != "" || builds[1].Prompt != "fresh prompt" {
+		t.Errorf("BuildSession resume/fresh options = %#v, want isolated fresh fallback", builds)
+	}
+	updated, err := ReadResumeRecord(helperDir)
+	if err != nil || updated == nil {
+		t.Fatalf("ReadResumeRecord() = %#v, %v", updated, err)
+	}
+	if updated.Resumed || updated.Rejected || updated.FreshFallbackCount != 1 || !updated.Completed {
+		t.Errorf("fallback child record = %#v, want fresh completed lineage without resume", updated)
+	}
+}
+
+func TestReviewHelperReleasesChildClaimBeforeDispatch(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*PhaseRunner, ReviewHelperConfig) error
+	}{
+		{
+			name: "read only",
+			run: func(runner *PhaseRunner, cfg ReviewHelperConfig) error {
+				_, err := runner.RunReadOnlyReviewHelper(context.Background(), cfg)
+				return err
+			},
+		},
+		{
+			name: "live run",
+			run: func(runner *PhaseRunner, cfg ReviewHelperConfig) error {
+				_, err := runner.RunLiveRunReviewHelper(context.Background(), cfg)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			helperDir := filepath.Join(root, "review", "craft")
+			workDir := filepath.Join(root, "work")
+			for _, dir := range []string{helperDir, workDir} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+				}
+			}
+			current := resumeTestFeature()
+			parent := ResumeParentContext{PhaseKey: "phase-1-impl", Iteration: 1}
+			record := resumeTestRecord()
+			record.ChildKey = "craft"
+			if err := WriteResumeRecord(helperDir, record); err != nil {
+				t.Fatalf("WriteResumeRecord() error = %v", err)
+			}
+			runner := &PhaseRunner{Registry: resumeTestRegistry(), StateDir: root}
+			cfg := ReviewHelperConfig{
+				SessionID:          "claim-release",
+				FeatureID:          current.ID,
+				Phase:              feature.PhaseReview,
+				Model:              "codex:model-a",
+				Prompt:             "review",
+				FeedbackPath:       filepath.Join(helperDir, "review-feedback.md"),
+				HelperIterDir:      helperDir,
+				Role:               Role("missing-role"),
+				WorkDir:            workDir,
+				ResumeFeature:      current,
+				ResumeParent:       parent,
+				ResumeChildKey:     "craft",
+				ResumePhaseContext: "resume craft",
+			}
+			for attempt := 1; attempt <= 2; attempt++ {
+				err := test.run(runner, cfg)
+				if err == nil || !strings.Contains(err.Error(), "missing RoleSpec") {
+					t.Fatalf("attempt %d error = %v, want missing RoleSpec (not leaked claim)", attempt, err)
+				}
+			}
+		})
 	}
 }
 

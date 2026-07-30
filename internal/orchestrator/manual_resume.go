@@ -28,8 +28,8 @@ import (
 // resumer currently owns its bookkeeping-plus-dispatch window.
 var ErrResumeConflict = errors.New("resume already in progress")
 
-// ResumeFeature dispatches the existing provider session when a Failed
-// implementation has a strict-match resume record. Ineligible records retain
+// ResumeFeature dispatches existing provider sessions when a failed sequential
+// or composite phase has strict-match resume records. Ineligible records retain
 // the historical fresh-start recovery behavior.
 func (o *Orchestrator) ResumeFeature(featureID string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -47,6 +47,14 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 		// eligibility selects between provider continuation and fresh retry.
 	default:
 		return ErrResumeConflict
+	}
+
+	if f.CurrentPhase == feature.PhaseReview || f.CurrentPhase == feature.PhaseFinalReview {
+		eligibility := o.compositeResumeEligibility(f)
+		if eligibility.Eligible {
+			return o.resumeEligibleFailedFeature(featureID, feature.PhaseFinalReview)
+		}
+		return o.resumeFailedFeature(featureID, feature.PhaseFinalReview)
 	}
 
 	coordinator := o.resumeCoordinatorForFeature(f)
@@ -67,15 +75,66 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 		}
 		if eligibility.Eligible {
 			if err := o.resumeEligibleFailedFeature(featureID, f.CurrentPhase); err != nil {
-				_ = claim.Release(time.Now())
-				return err
+				return errors.Join(err, claim.Release(time.Now()))
 			}
 			claim.DispatchStarted()
 			return nil
 		}
+		if f.CurrentPhase == feature.PhaseImplement && o.implementationReviewResumeEligibility(f).Eligible {
+			return o.resumeEligibleFailedFeature(featureID, feature.PhaseImplement)
+		}
 	}
 
 	return o.resumeFailedFeature(featureID, f.CurrentPhase)
+}
+
+func (o *Orchestrator) implementationReviewResumeEligibility(f *feature.Feature) agent.ResumeEligibility {
+	if o == nil || f == nil || o.deps.PhaseRunner == nil {
+		return agent.ResumeEligibility{}
+	}
+	dir, ok := agent.ResumeUnitDir(o.stateDir(), f)
+	if !ok {
+		return agent.ResumeEligibility{}
+	}
+	runner := o.deps.PhaseRunner
+	return agent.EvaluateCompositeResumeEligibility(
+		dir,
+		f,
+		runner.Registry,
+		agent.ResumeParentContext{
+			PhaseKey:  agent.ResumePhaseKey(f),
+			Iteration: f.CurrentIteration,
+		},
+		func(string) string {
+			return runner.ModelForRole(f.Models.Review, llm.PhaseReview)
+		},
+	)
+}
+
+func (o *Orchestrator) compositeResumeEligibility(f *feature.Feature) agent.ResumeEligibility {
+	if o == nil || f == nil || o.deps.PhaseRunner == nil {
+		return agent.EvaluateCompositeResumeEligibility("", f, nil, agent.ResumeParentContext{}, nil)
+	}
+	dir, ok := agent.ResumeUnitDir(o.stateDir(), f)
+	if !ok {
+		return agent.EvaluateCompositeResumeEligibility("", f, o.deps.PhaseRunner.Registry, agent.ResumeParentContext{}, nil)
+	}
+	runner := o.deps.PhaseRunner
+	return agent.EvaluateCompositeResumeEligibility(
+		dir,
+		f,
+		runner.Registry,
+		agent.ResumeParentContext{
+			PhaseKey:  feature.PhaseFinalReview.DirName(),
+			Iteration: f.ReviewIteration,
+		},
+		func(childKey string) string {
+			if childKey == string(agent.RoleFinalReviewFixer) {
+				return runner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+			}
+			return runner.ModelForRole(f.Models.Review, llm.PhaseReview)
+		},
+	)
 }
 
 func (o *Orchestrator) resumeEligibleFailedFeature(featureID string, phase feature.Phase) error {
@@ -175,6 +234,8 @@ func resumeModelForFeature(runner *agent.PhaseRunner, f *feature.Feature) string
 		return runner.ModelForRole(f.Models.Planning, llm.PhasePlanning)
 	case feature.PhaseImplement:
 		return runner.ModelForRole(f.Models.Implementation, llm.PhaseImplementation)
+	case feature.PhaseReview, feature.PhaseFinalReview:
+		return runner.ModelForRole(f.Models.Review, llm.PhaseReview)
 	default:
 		return ""
 	}

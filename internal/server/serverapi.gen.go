@@ -929,10 +929,10 @@ type FeatureDetail struct {
 	RepoStatus      []RepoStatus         `json:"repo_status"`
 	Repos           []string             `json:"repos"`
 
-	// ResumeCount Number of persisted provider-session resumptions for the active implementation unit.
+	// ResumeCount Number of persisted provider-session resumptions for the active phase unit.
 	ResumeCount int `json:"resume_count"`
 
-	// Resumed Whether the active implementation unit has resumed a persisted provider session.
+	// Resumed Whether the active phase unit has resumed a persisted provider session.
 	Resumed           bool               `json:"resumed"`
 	ReviewGate        ReviewGate         `json:"review_gate"`
 	Revision          string             `json:"revision"`
@@ -1011,10 +1011,10 @@ type FeatureSummary struct {
 	Progress     FeatureProgress `json:"progress"`
 	Repos        []string        `json:"repos"`
 
-	// ResumeCount Number of persisted provider-session resumptions for the active implementation unit.
+	// ResumeCount Number of persisted provider-session resumptions for the active phase unit.
 	ResumeCount int `json:"resume_count"`
 
-	// Resumed Whether the active implementation unit has resumed a persisted provider session.
+	// Resumed Whether the active phase unit has resumed a persisted provider session.
 	Resumed  bool      `json:"resumed"`
 	RunCount int       `json:"run_count"`
 	Slug     string    `json:"slug"`

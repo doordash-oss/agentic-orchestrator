@@ -473,7 +473,7 @@ func (m DetailModel) ViewCompact(width int) string {
 func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 	var b strings.Builder
 	b.WriteString(LabelStyle.Render("Status"))
-	b.WriteString("  " + formatDetailStatus(f) + "\n")
+	b.WriteString("  " + m.formatDetailStatus(f) + "\n")
 	if m.resumed {
 		b.WriteString(LabelStyle.Render("Session"))
 		b.WriteString("  " + MutedStyle.Render(formatResumedIndicator(m.resumeCount)) + "\n")
@@ -903,6 +903,14 @@ func finalReviewStatusText(f *feature.Feature) string {
 	return "Final Review: " + finalReviewSubphaseText(f)
 }
 
+func (m DetailModel) formatDetailStatus(f *feature.Feature) string {
+	status := formatDetailStatus(f)
+	if f != nil && f.Status == feature.StatusFailed && m.retryAvailable {
+		return strings.Replace(status, "press [r] to restart", "press [r] to retry", 1)
+	}
+	return status
+}
+
 func formatDetailStatus(f *feature.Feature) string {
 	if setup := setupState(f); setup != nil && setup.Status == feature.SetupStatusFailed {
 		msg := "Failed"
@@ -1052,7 +1060,7 @@ func (m DetailModel) renderFailureInfo(f *feature.Feature) string {
 	}
 
 	// Recovery suggestion based on failure type
-	suggestion := recoverySuggestion(f.FailureType)
+	suggestion := recoverySuggestion(f.FailureType, m.retryAvailable)
 	if suggestion != "" {
 		b.WriteString(LabelStyle.Render("Suggestion"))
 		b.WriteString("  " + MutedStyle.Render(suggestion))
@@ -1085,7 +1093,7 @@ func renderLightbulbHint(f *feature.Feature, boxWidth int) string {
 }
 
 // recoverySuggestion returns a recovery hint based on the failure type.
-func recoverySuggestion(ft string) string {
+func recoverySuggestion(ft string, retryAvailable bool) string {
 	switch ft {
 	case feature.FailureSafetyRail:
 		return "Agent made no progress. Consider simplifying the task or adding more context."
@@ -1100,6 +1108,9 @@ func recoverySuggestion(ft string) string {
 	case feature.FailureInfrastructure:
 		return "A system error occurred. Check logs with [l] for details."
 	default:
+		if retryAvailable {
+			return "Press [r] to retry the failed phase or [ctrl+r] to rewind."
+		}
 		return "Press [r] to restart the failed phase or [ctrl+r] to rewind."
 	}
 }

@@ -2109,10 +2109,10 @@ components:
           $ref: "#/components/schemas/FeatureProgress"
         resumed:
           type: boolean
-          description: Whether the active implementation unit has resumed a persisted provider session.
+          description: Whether the active phase unit has resumed a persisted provider session.
         resume_count:
           type: integer
-          description: Number of persisted provider-session resumptions for the active implementation unit.
+          description: Number of persisted provider-session resumptions for the active phase unit.
         warnings:
           type: array
           items:

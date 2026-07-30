@@ -504,6 +504,7 @@ func (o *Orchestrator) featureResumed(input ports.FeatureResumedData) {
 		Type:        ports.FeatureResumed,
 		FeatureID:   input.FeatureID,
 		PhaseKey:    input.PhaseKey,
+		ChildKey:    input.ChildKey,
 		Iteration:   input.Iteration,
 		RunNumber:   input.RunNumber,
 		ResumeCount: input.ResumeCount,

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -94,6 +95,56 @@ func TestResumeSidecarRoundTripAndLifecycleMutations(t *testing.T) {
 	}
 }
 
+func TestResumeSidecarParentBytesRemainCompatibleAndChildRoundTrips(t *testing.T) {
+	parentDir := t.TempDir()
+	at := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
+	parent := ResumeRecord{
+		PhaseKey:              "phase-1-impl",
+		RunNumber:             1,
+		OrchestratorSessionID: "parent-session",
+		CreatedAt:             at,
+		UpdatedAt:             at,
+	}
+	if err := WriteResumeRecord(parentDir, parent); err != nil {
+		t.Fatalf("WriteResumeRecord(parent) error = %v", err)
+	}
+	parentBytes, err := os.ReadFile(filepath.Join(parentDir, ResumeSidecarFile))
+	if err != nil {
+		t.Fatalf("ReadFile(parent) error = %v", err)
+	}
+	wantParent := "" +
+		"phase_key: phase-1-impl\n" +
+		"run_number: 1\n" +
+		"orchestrator_session_id: parent-session\n" +
+		"created_at: 2026-07-29T10:00:00Z\n" +
+		"updated_at: 2026-07-29T10:00:00Z\n" +
+		"resumed: false\n" +
+		"resume_count: 0\n" +
+		"fresh_fallback_count: 0\n" +
+		"completed: false\n" +
+		"rejected: false\n"
+	if string(parentBytes) != wantParent {
+		t.Errorf("parent resume.yaml changed:\n got:\n%s\nwant:\n%s", parentBytes, wantParent)
+	}
+
+	childDir := t.TempDir()
+	child := parent
+	child.OrchestratorSessionID = "child-session"
+	coordinator := NewChildResumeCoordinator(childDir, "craft")
+	requireResumeMutation(t, coordinator.Initialize(child))
+	got := coordinator.Snapshot()
+	if got == nil || got.ChildKey != "craft" {
+		t.Fatalf("child Snapshot() = %#v, want child_key craft", got)
+	}
+	childBytes, err := os.ReadFile(filepath.Join(childDir, ResumeSidecarFile))
+	if err != nil {
+		t.Fatalf("ReadFile(child) error = %v", err)
+	}
+	if !strings.Contains(string(childBytes), "child_key: craft\n") {
+		t.Errorf("child resume.yaml =\n%s\nwant child_key", childBytes)
+	}
+}
+
 func TestResumeCoordinatorInitializePreservesFreshFallbackLineage(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -107,16 +158,16 @@ func TestResumeCoordinatorInitializePreservesFreshFallbackLineage(t *testing.T) 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			coordinator := NewResumeCoordinator(t.TempDir())
-			coordinator.Initialize(resumeTestRecord())
+			requireResumeMutation(t, coordinator.Initialize(resumeTestRecord()))
 			if test.successResume {
-				coordinator.MarkResumed(time.Now())
+				requireResumeMutation(t, coordinator.MarkResumed(time.Now()))
 			}
 			for i := 0; i < test.fallbacks; i++ {
-				coordinator.MarkFreshFallback("model_changed", time.Now())
+				requireResumeMutation(t, coordinator.MarkFreshFallback("model_changed", time.Now()))
 				next := resumeTestRecord()
 				next.ProviderSessionID = fmt.Sprintf("provider-session-%d", i+2)
 				next.OrchestratorSessionID = fmt.Sprintf("orchestrator-session-%d", i+2)
-				coordinator.Initialize(next)
+				requireResumeMutation(t, coordinator.Initialize(next))
 			}
 
 			got := coordinator.Snapshot()
@@ -132,6 +183,80 @@ func TestResumeCoordinatorInitializePreservesFreshFallbackLineage(t *testing.T) 
 				t.Errorf("new provider lineage resume state = (%v, %d), want (false, 0)", got.Resumed, got.ResumeCount)
 			}
 		})
+	}
+}
+
+func TestResumeCoordinatorMutationsReturnPersistenceErrors(t *testing.T) {
+	blockedPath := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockedPath, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	coordinator := NewResumeCoordinator(blockedPath)
+	now := time.Now()
+	tests := []struct {
+		name   string
+		mutate func() error
+	}{
+		{name: "initialize", mutate: func() error { return coordinator.Initialize(resumeTestRecord()) }},
+		{name: "capture provider", mutate: func() error {
+			return coordinator.CaptureProviderSnapshot("thread", "codex", "model-a")
+		}},
+		{name: "mark resumed", mutate: func() error { return coordinator.MarkResumed(now) }},
+		{name: "mark completed", mutate: func() error { return coordinator.MarkCompleted(now) }},
+		{name: "mark rejected", mutate: func() error { return coordinator.MarkRejected("expired", now) }},
+		{name: "mark fresh fallback", mutate: func() error {
+			return coordinator.MarkFreshFallback("expired", now)
+		}},
+		{name: "clear pending", mutate: func() error { return coordinator.ClearPending(now) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.mutate(); err == nil {
+				t.Fatalf("%s mutation error = nil, want persistence failure", test.name)
+			}
+		})
+	}
+}
+
+func TestAutoResumeEngineOwnsAccountingRejectionAndFreshFallback(t *testing.T) {
+	initial := newUtilityTestSession()
+	fresh := newUtilityTestSession()
+	accounted := 0
+	resumes := 0
+	fallbacks := 0
+	result, err := (AutoResumeEngine{}).Run(
+		AutoResumeProcess{Session: initial, Status: agentStatusFailed, ID: "initial"},
+		AutoResumeCallbacks{
+			Failed:         func(process AutoResumeProcess) bool { return process.Status == agentStatusFailed },
+			SupportsResume: func(AutoResumeProcess) bool { return true },
+			HasCompleted:   func(AutoResumeProcess) bool { return false },
+			ResumeID:       func(AutoResumeProcess) string { return "provider-thread" },
+			WaitBackoff:    func(AutoResumeProcess, time.Duration) bool { return true },
+			Account: func(AutoResumeProcess) error {
+				accounted++
+				return nil
+			},
+			Resume: func(AutoResumeProcess, string, int) (AutoResumeAttempt, error) {
+				resumes++
+				return AutoResumeAttempt{Rejected: true, Reason: "expired"}, nil
+			},
+			FreshFallback: func(AutoResumeProcess, string, int) (AutoResumeAttempt, error) {
+				fallbacks++
+				return AutoResumeAttempt{
+					Process: AutoResumeProcess{Session: fresh, Status: agentStatusSuccess, ID: "fresh"},
+				}, nil
+			},
+			Interrupted: func(AutoResumeProcess) bool { return false },
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Process.ID != "fresh" || result.Process.Status != agentStatusSuccess {
+		t.Fatalf("Run() result = %#v, want fresh successful process", result)
+	}
+	if accounted != 1 || resumes != 1 || fallbacks != 1 {
+		t.Fatalf("lifecycle counts = account:%d resume:%d fresh:%d, want 1/1/1", accounted, resumes, fallbacks)
 	}
 }
 
@@ -508,6 +633,189 @@ func TestEvaluateResumeEligibility(t *testing.T) {
 	}
 }
 
+func TestEvaluateResumeEligibilityForChild(t *testing.T) {
+	registry := resumeTestRegistry()
+	baseFeature := *resumeTestFeature()
+	baseFeature.CurrentIteration = 4
+	baseRecord := resumeTestRecord()
+	baseRecord.ChildKey = "craft"
+	baseRecord.Iteration = 4
+
+	tests := []struct {
+		name         string
+		childKey     string
+		mutateRecord func(*ResumeRecord)
+		mutate       func(*feature.Feature)
+		model        string
+		wantEligible bool
+		wantReason   ResumeEligibilityReason
+	}{
+		{name: "matching child and parent context", childKey: "craft", model: "codex:model-a", wantEligible: true},
+		{name: "wrong child", childKey: "correctness", model: "codex:model-a", wantReason: ResumeReasonPositionChanged},
+		{name: "absent dispatched child", model: "codex:model-a", wantReason: ResumeReasonPositionChanged},
+		{
+			name:     "absent record child",
+			childKey: "craft",
+			model:    "codex:model-a",
+			mutateRecord: func(record *ResumeRecord) {
+				record.ChildKey = ""
+			},
+			wantReason: ResumeReasonPositionChanged,
+		},
+		{
+			name:     "stale parent iteration",
+			childKey: "craft",
+			model:    "codex:model-a",
+			mutate: func(current *feature.Feature) {
+				current.CurrentIteration++
+			},
+			wantReason: ResumeReasonPositionChanged,
+		},
+		{
+			name:     "sealed run",
+			childKey: "craft",
+			model:    "codex:model-a",
+			mutate: func(current *feature.Feature) {
+				current.ActiveRun++
+			},
+			wantReason: ResumeReasonRunSealed,
+		},
+		{name: "model changed", childKey: "craft", model: "codex:model-b", wantReason: ResumeReasonModelChanged},
+		{
+			name:     "completed",
+			childKey: "craft",
+			model:    "codex:model-a",
+			mutateRecord: func(record *ResumeRecord) {
+				record.Completed = true
+			},
+			wantReason: ResumeReasonRecordCompleted,
+		},
+		{
+			name:     "rejected",
+			childKey: "craft",
+			model:    "codex:model-a",
+			mutateRecord: func(record *ResumeRecord) {
+				record.Rejected = true
+			},
+			wantReason: ResumeReasonSessionRejected,
+		},
+		{
+			name:     "unsupported provider",
+			childKey: "craft",
+			model:    "legacy:model-a",
+			mutateRecord: func(record *ResumeRecord) {
+				record.Provider = "legacy"
+			},
+			wantReason: ResumeReasonUnsupported,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current := baseFeature
+			record := baseRecord
+			if test.mutate != nil {
+				test.mutate(&current)
+			}
+			if test.mutateRecord != nil {
+				test.mutateRecord(&record)
+			}
+			got := EvaluateResumeEligibility(&current, &record, test.model, registry, test.childKey)
+			if got.Eligible != test.wantEligible || got.Reason != test.wantReason {
+				t.Errorf("EvaluateResumeEligibility() = %#v, want eligible=%v reason=%q",
+					got, test.wantEligible, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestEvaluateChildResumeEligibilityUsesExplicitCompositeParentContext(t *testing.T) {
+	current := resumeTestFeature()
+	current.CurrentPhase = feature.PhaseFinalReview
+	current.CurrentIteration = 0
+	record := resumeTestRecord()
+	record.PhaseKey = "final-review"
+	record.Iteration = 3
+	record.ChildKey = "correctness"
+	parent := ResumeParentContext{PhaseKey: "final-review", Iteration: 3}
+
+	got := EvaluateChildResumeEligibility(
+		current, &record, "codex:model-a", resumeTestRegistry(), parent, "correctness",
+	)
+	if !got.Eligible {
+		t.Fatalf("EvaluateChildResumeEligibility() = %#v, want eligible", got)
+	}
+
+	dir := t.TempDir()
+	if err := WriteResumeRecord(dir, record); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	coordinator := NewChildResumeCoordinator(dir, "correctness", parent)
+	if got := coordinator.Eligibility(current, "codex:model-a", resumeTestRegistry()); !got.Eligible {
+		t.Errorf("coordinator.Eligibility() = %#v, want explicit-context eligibility", got)
+	}
+}
+
+func TestEvaluateCompositeResumeEligibilityUsesIncompleteStrictMatch(t *testing.T) {
+	t.Parallel()
+
+	unitDir := t.TempDir()
+	current := resumeTestFeature()
+	current.CurrentPhase = feature.PhaseFinalReview
+	current.ReviewIteration = 3
+	parent := ResumeParentContext{PhaseKey: feature.PhaseFinalReview.DirName(), Iteration: 3}
+
+	completed := resumeTestRecord()
+	completed.PhaseKey = parent.PhaseKey
+	completed.Iteration = parent.Iteration
+	completed.ChildKey = "craft"
+	completed.Completed = true
+	if err := WriteResumeRecord(filepath.Join(unitDir, "craft"), completed); err != nil {
+		t.Fatalf("WriteResumeRecord(completed) error = %v", err)
+	}
+	resumable := completed
+	resumable.ChildKey = "qa"
+	resumable.Completed = false
+	if err := WriteResumeRecord(filepath.Join(unitDir, "qa"), resumable); err != nil {
+		t.Fatalf("WriteResumeRecord(resumable) error = %v", err)
+	}
+	stale := resumable
+	stale.ChildKey = "design"
+	stale.Iteration--
+	if err := WriteResumeRecord(filepath.Join(unitDir, "design"), stale); err != nil {
+		t.Fatalf("WriteResumeRecord(stale) error = %v", err)
+	}
+
+	got := EvaluateCompositeResumeEligibility(
+		unitDir,
+		current,
+		resumeTestRegistry(),
+		parent,
+		func(string) string { return "codex:model-a" },
+	)
+	if !got.Eligible {
+		t.Fatalf("EvaluateCompositeResumeEligibility() = %#v, want eligible qa child", got)
+	}
+
+	resumable.ResolvedModel = "model-b"
+	if err := WriteResumeRecord(filepath.Join(unitDir, "qa"), resumable); err != nil {
+		t.Fatalf("WriteResumeRecord(model mismatch) error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(unitDir, "design", ResumeSidecarFile)); err != nil {
+		t.Fatalf("Remove(stale sidecar) error = %v", err)
+	}
+	got = EvaluateCompositeResumeEligibility(
+		unitDir,
+		current,
+		resumeTestRegistry(),
+		parent,
+		func(string) string { return "codex:model-a" },
+	)
+	if got.Eligible || got.Reason != ResumeReasonModelChanged {
+		t.Fatalf("EvaluateCompositeResumeEligibility() = %#v, want model_changed", got)
+	}
+}
+
 func TestResumeEligibilityIgnoresNonIdentityLaunchChanges(t *testing.T) {
 	registry := resumeTestRegistry()
 	current := &feature.Feature{
@@ -570,6 +878,160 @@ func TestResumeClaimPendingMarkerLifecyclePreservesIdentity(t *testing.T) {
 	assertResumeIdentity(t, cleared, record)
 }
 
+func TestResumeClaimReleaseFailsClosedWhenIntentCannotBeCleared(t *testing.T) {
+	dir := t.TempDir()
+	registry := resumeTestRegistry()
+	current := resumeTestFeature()
+	// The fail-closed release intentionally retains the process-global claim, so
+	// use a unique feature ID to avoid colliding with other claim tests.
+	current.ID = "feature-claim-fail-closed"
+	if err := WriteResumeRecord(dir, resumeTestRecord()); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	coordinator := NewResumeCoordinator(dir)
+	claimedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+
+	claim, eligibility, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, claimedAt)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if !eligibility.Eligible || claim == nil {
+		t.Fatalf("Claim() = (%#v, %#v), want claim and eligible verdict", claim, eligibility)
+	}
+
+	// Make the sidecar directory unwritable so clearing the durable intent fails.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("os.Chmod(read-only) error = %v", err)
+	}
+	defer func() {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Logf("os.Chmod(restore) error = %v", err)
+		}
+	}()
+
+	if err := claim.Release(claimedAt.Add(time.Minute)); err == nil {
+		t.Fatal("Release() error = nil, want error when durable intent cannot be cleared")
+	}
+
+	// The in-memory claim must stay held: no second claimant is admitted.
+	if _, _, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, claimedAt.Add(2*time.Minute)); !errors.Is(err, ErrResumeAlreadyClaimed) {
+		t.Fatalf("Claim() after failed Release error = %v, want ErrResumeAlreadyClaimed", err)
+	}
+
+	// Repeat Release returns the stored error and still does not free the claim.
+	if err := claim.Release(claimedAt.Add(3 * time.Minute)); err == nil {
+		t.Fatal("second Release() error = nil, want stored clearing error")
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("os.Chmod(restore) error = %v", err)
+	}
+	snap := coordinator.Snapshot()
+	if snap == nil || !snap.PendingResume {
+		t.Fatalf("Snapshot().PendingResume after failed Release = %#v, want still true", snap)
+	}
+}
+
+func TestResumeClaimRejectPersistsRejectionBeforeReleasing(t *testing.T) {
+	dir := t.TempDir()
+	registry := resumeTestRegistry()
+	current := resumeTestFeature()
+	current.ID = "feature-claim-reject"
+	record := resumeTestRecord()
+	if err := WriteResumeRecord(dir, record); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	coordinator := NewResumeCoordinator(dir)
+	claimedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+
+	claim, eligibility, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, claimedAt)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if !eligibility.Eligible || claim == nil {
+		t.Fatalf("Claim() = (%#v, %#v), want claim and eligible verdict", claim, eligibility)
+	}
+
+	rejectedAt := claimedAt.Add(time.Minute)
+	if err := claim.Reject("provider session expired", rejectedAt); err != nil {
+		t.Fatalf("Reject() error = %v", err)
+	}
+
+	snap := coordinator.Snapshot()
+	if snap == nil || !snap.Rejected || snap.PendingResume {
+		t.Fatalf("Snapshot() after Reject = %#v, want rejected with pending intent cleared", snap)
+	}
+	if snap.RejectionReason != "provider session expired" {
+		t.Errorf("Snapshot().RejectionReason = %q, want %q", snap.RejectionReason, "provider session expired")
+	}
+	assertResumeIdentity(t, snap, record)
+
+	// The in-memory claim was freed only after the rejection was durable, so a
+	// new claimant sees the rejected record rather than an eligible pending one.
+	second, secondEligibility, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, rejectedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("second Claim() error = %v", err)
+	}
+	if second != nil || secondEligibility.Eligible {
+		t.Errorf("second Claim() = (%#v, %#v), want no claim and ineligible verdict after rejection", second, secondEligibility)
+	}
+}
+
+func TestResumeClaimRejectFailsClosedWhenRejectionCannotBePersisted(t *testing.T) {
+	dir := t.TempDir()
+	registry := resumeTestRegistry()
+	current := resumeTestFeature()
+	// The fail-closed reject intentionally retains the process-global claim, so
+	// use a unique feature ID to avoid colliding with other claim tests.
+	current.ID = "feature-claim-reject-fail-closed"
+	if err := WriteResumeRecord(dir, resumeTestRecord()); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	coordinator := NewResumeCoordinator(dir)
+	claimedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+
+	claim, eligibility, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, claimedAt)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if !eligibility.Eligible || claim == nil {
+		t.Fatalf("Claim() = (%#v, %#v), want claim and eligible verdict", claim, eligibility)
+	}
+
+	// Make the sidecar directory unwritable so persisting the rejection fails.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("os.Chmod(read-only) error = %v", err)
+	}
+	defer func() {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Logf("os.Chmod(restore) error = %v", err)
+		}
+	}()
+
+	if err := claim.Reject("provider session expired", claimedAt.Add(time.Minute)); err == nil {
+		t.Fatal("Reject() error = nil, want error when rejection cannot be persisted")
+	}
+
+	// The in-memory claim must stay held: no second claimant is admitted while
+	// the rejection is unpersisted.
+	if _, _, err := coordinator.Claim(current.ID, current, "codex:model-a", registry, claimedAt.Add(2*time.Minute)); !errors.Is(err, ErrResumeAlreadyClaimed) {
+		t.Fatalf("Claim() after failed Reject error = %v, want ErrResumeAlreadyClaimed", err)
+	}
+
+	// Repeat Reject returns the stored error and still does not free the claim.
+	if err := claim.Reject("provider session expired", claimedAt.Add(3*time.Minute)); err == nil {
+		t.Fatal("second Reject() error = nil, want stored persistence error")
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("os.Chmod(restore) error = %v", err)
+	}
+	snap := coordinator.Snapshot()
+	if snap == nil || snap.Rejected || !snap.PendingResume {
+		t.Fatalf("Snapshot() after failed Reject = %#v, want unrejected with pending intent still set", snap)
+	}
+}
+
 func TestResumeClaimAllowsExactlyOneConcurrentResumer(t *testing.T) {
 	dir := t.TempDir()
 	registry := resumeTestRegistry()
@@ -620,6 +1082,83 @@ func TestResumeClaimAllowsExactlyOneConcurrentResumer(t *testing.T) {
 	}
 	if err := winner.Release(time.Now()); err != nil {
 		t.Fatalf("winner.Release() error = %v", err)
+	}
+}
+
+func TestResumeClaimScopesParallelResumersByChild(t *testing.T) {
+	registry := resumeTestRegistry()
+	current := resumeTestFeature()
+	const childCount = 5
+	coordinators := make([]*ResumeCoordinator, childCount)
+	for i := range childCount {
+		childKey := fmt.Sprintf("axis-%d", i)
+		dir := t.TempDir()
+		record := resumeTestRecord()
+		record.ChildKey = childKey
+		if err := WriteResumeRecord(dir, record); err != nil {
+			t.Fatalf("WriteResumeRecord(%s) error = %v", childKey, err)
+		}
+		coordinators[i] = NewChildResumeCoordinator(dir, childKey)
+	}
+
+	type result struct {
+		child int
+		claim *ResumeClaim
+		err   error
+	}
+	start := make(chan struct{})
+	results := make(chan result, childCount+1)
+	var wg sync.WaitGroup
+	for i := range childCount {
+		wg.Add(1)
+		go func(child int) {
+			defer wg.Done()
+			<-start
+			claim, _, err := coordinators[child].Claim(
+				current.ID, current, "codex:model-a", registry, time.Now(),
+			)
+			results <- result{child: child, claim: claim, err: err}
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		claim, _, err := coordinators[2].Claim(
+			current.ID, current, "codex:model-a", registry, time.Now(),
+		)
+		results <- result{child: 2, claim: claim, err: err}
+	}()
+	close(start)
+	wg.Wait()
+	close(results)
+
+	winners := make(map[int]*ResumeClaim, childCount)
+	duplicateConflicts := 0
+	for got := range results {
+		switch {
+		case got.err == nil && got.claim != nil:
+			if previous := winners[got.child]; previous != nil {
+				t.Errorf("child %d produced duplicate winning claims", got.child)
+			}
+			winners[got.child] = got.claim
+		case got.child == 2 && errors.Is(got.err, ErrResumeAlreadyClaimed):
+			duplicateConflicts++
+		default:
+			t.Errorf("child %d Claim() = (%#v, %v), want winner or duplicate conflict",
+				got.child, got.claim, got.err)
+		}
+	}
+	if len(winners) != childCount {
+		t.Errorf("distinct child winners = %d, want %d", len(winners), childCount)
+	}
+	if duplicateConflicts != 1 {
+		t.Errorf("duplicate child conflicts = %d, want 1", duplicateConflicts)
+	}
+	for child, claim := range winners {
+		if err := claim.Release(time.Now()); err != nil {
+			t.Errorf("child %d Release() error = %v", child, err)
+		}
 	}
 }
 
@@ -692,10 +1231,18 @@ func assertResumeIdentity(t *testing.T, got *ResumeRecord, want ResumeRecord) {
 		got.Provider != want.Provider ||
 		got.ResolvedModel != want.ResolvedModel ||
 		got.PhaseKey != want.PhaseKey ||
+		got.ChildKey != want.ChildKey ||
 		got.Iteration != want.Iteration ||
 		got.RunNumber != want.RunNumber ||
 		got.OrchestratorSessionID != want.OrchestratorSessionID ||
 		!got.CreatedAt.Equal(want.CreatedAt) {
 		t.Errorf("resume identity = %#v, want %#v", got, want)
+	}
+}
+
+func requireResumeMutation(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("resume mutation error = %v", err)
 	}
 }

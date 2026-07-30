@@ -24,6 +24,7 @@ func TestFeatureResumedFiresHookAndTypedDomainEvent(t *testing.T) {
 	input := ports.FeatureResumedData{
 		FeatureID:   "feat-resumed",
 		PhaseKey:    "phase-02/implement",
+		ChildKey:    "craft",
 		Iteration:   3,
 		RunNumber:   4,
 		ResumeCount: 2,
@@ -45,6 +46,7 @@ func TestFeatureResumedFiresHookAndTypedDomainEvent(t *testing.T) {
 		if event.Type != ports.FeatureResumed ||
 			event.FeatureID != input.FeatureID ||
 			event.PhaseKey != input.PhaseKey ||
+			event.ChildKey != input.ChildKey ||
 			event.Iteration != input.Iteration ||
 			event.RunNumber != input.RunNumber ||
 			event.ResumeCount != input.ResumeCount {

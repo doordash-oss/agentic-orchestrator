@@ -108,7 +108,9 @@ func TestResumeFeatureClaimsEligibleRecordAndDispatchesImplementation(t *testing
 	if record == nil || !record.PendingResume {
 		t.Errorf("resume record = %#v, want durable intent handed to implementation loop", record)
 	}
-	agent.NewResumeCoordinator(iterDir).ClearPending(time.Now())
+	if err := agent.NewResumeCoordinator(iterDir).ClearPending(time.Now()); err != nil {
+		t.Fatalf("ClearPending() error = %v", err)
+	}
 }
 
 func TestResumeModelForFeatureUsesCurrentPhaseRole(t *testing.T) {
@@ -166,5 +168,147 @@ func TestResumeModelForFeatureUsesCurrentPhaseRole(t *testing.T) {
 				t.Errorf("resumeModelForFeature() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestResumeFeatureDispatchesFailedFinalReviewFromEligibleChild(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	manager := feature.NewManager(store, config.NewDefault())
+	publishable := false
+	f := &feature.Feature{
+		ID:              "manual-final-review-resume",
+		Name:            "Manual final review resume",
+		Slug:            "manual-final-review-resume",
+		Status:          feature.StatusFailed,
+		CurrentPhase:    feature.PhaseFinalReview,
+		ReviewIteration: 1,
+		ActiveRun:       1,
+		RunCount:        1,
+		SchemaVersion:   feature.SchemaVersionCurrent,
+		Pipeline:        feature.PipelineLarge,
+		Models: config.ModelConfig{
+			Implementation: "codex:model-a",
+			Review:         "codex:model-a",
+		},
+		Repos: []feature.FeatureRepo{{Name: "repo", Path: stateDir, Publishable: &publishable}},
+		RepoStates: map[string]*feature.RepoState{
+			"repo": {Touched: true, LastError: "review failed"},
+		},
+		LastError:   "review failed",
+		FailureType: feature.FailureInfrastructure,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	unitDir, ok := agent.ResumeUnitDir(stateDir, f)
+	if !ok {
+		t.Fatal("ResumeUnitDir() did not resolve final review")
+	}
+	if err := agent.WriteResumeRecord(filepath.Join(unitDir, "qa"), agent.ResumeRecord{
+		ProviderSessionID:     "qa-thread",
+		Provider:              "codex",
+		ResolvedModel:         "model-a",
+		PhaseKey:              feature.PhaseFinalReview.DirName(),
+		ChildKey:              "qa",
+		Iteration:             f.ReviewIteration,
+		RunNumber:             f.ActiveRun,
+		OrchestratorSessionID: "manual-final-review-qa",
+		CreatedAt:             time.Now(),
+		UpdatedAt:             time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord() error = %v", err)
+	}
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	o := New(Deps{
+		Lifecycle:   manager,
+		Store:       store,
+		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir, Registry: registry},
+	}, Hooks{})
+	dispatches := 0
+	o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		dispatches++
+		ch := make(chan *agent.OrchestratorResult, 1)
+		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
+		return ch, nil
+	})
+
+	if err := o.ResumeFeature(f.ID); err != nil {
+		t.Fatalf("ResumeFeature() error = %v", err)
+	}
+	if dispatches != 1 {
+		t.Fatalf("final-review dispatches = %d, want 1", dispatches)
+	}
+}
+
+func TestResumeFeatureDispatchesFailedImplementationReviewFromEligibleChild(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	manager := feature.NewManager(store, config.NewDefault())
+	planPath := filepath.Join(stateDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n\n## Tasks\n\n### Task 1\n\nResume review.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plan) error = %v", err)
+	}
+	f := &feature.Feature{
+		ID: "manual-implementation-review-resume", Name: "Manual implementation review resume",
+		Slug: "manual-implementation-review-resume", Status: feature.StatusFailed,
+		CurrentPhase: feature.PhaseImplement, CurrentIteration: 2, CurrentRoadmapPhase: 1,
+		ActiveTimingKey: "phase-1-impl", ActiveRun: 1, RunCount: 1,
+		SchemaVersion: feature.SchemaVersionCurrent, Pipeline: feature.PipelineMoonshot,
+		Models:    config.ModelConfig{Implementation: "codex:model-a", Review: "codex:model-a"},
+		Artifacts: map[string]string{"plan": planPath},
+		Repos:     []feature.FeatureRepo{{Name: "repo", Path: stateDir}},
+		RepoStates: map[string]*feature.RepoState{
+			"repo": {Touched: true, LastError: "review failed"},
+		},
+		LastError: "review failed", FailureType: feature.FailureInfrastructure,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	unitDir, ok := agent.ResumeUnitDir(stateDir, f)
+	if !ok {
+		t.Fatal("ResumeUnitDir() did not resolve implementation iteration")
+	}
+	now := time.Now()
+	if err := agent.WriteResumeRecord(unitDir, agent.ResumeRecord{
+		ProviderSessionID: "implementation-thread", Provider: "codex", ResolvedModel: "model-a",
+		PhaseKey: "phase-1-impl", Iteration: 2, RunNumber: 1,
+		OrchestratorSessionID: "implementation-parent", CreatedAt: now, UpdatedAt: now, Completed: true,
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord(parent) error = %v", err)
+	}
+	if err := agent.WriteResumeRecord(filepath.Join(unitDir, "review", "qa"), agent.ResumeRecord{
+		ProviderSessionID: "qa-thread", Provider: "codex", ResolvedModel: "model-a",
+		PhaseKey: "phase-1-impl", ChildKey: "qa", Iteration: 2, RunNumber: 1,
+		OrchestratorSessionID: "implementation-review-qa", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord(child) error = %v", err)
+	}
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	o := New(Deps{
+		Lifecycle: manager, Store: store,
+		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir, Registry: registry},
+	}, Hooks{})
+	dispatches := 0
+	o.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		dispatches++
+		return make(chan *agent.OrchestratorResult, 1), nil
+	})
+
+	if err := o.ResumeFeature(f.ID); err != nil {
+		t.Fatalf("ResumeFeature() error = %v", err)
+	}
+	if dispatches != 1 {
+		t.Fatalf("implementation dispatches = %d, want 1", dispatches)
+	}
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.CurrentIteration != 2 || got.ActiveTimingKey != "phase-1-impl" {
+		t.Fatalf("resume position = iteration %d timing %q, want preserved implementation artifacts", got.CurrentIteration, got.ActiveTimingKey)
 	}
 }

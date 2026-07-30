@@ -290,13 +290,15 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		model = axis.ModelOverride
 	}
 	helper := &PhaseRunner{
-		SessionManager: sm,
-		FeatureStore:   cfg.FeatureStore,
-		StateDir:       cfg.StateDir,
-		SkillsDir:      cfg.SkillsDir,
-		GuidelinesDir:  cfg.GuidelinesDir,
-		Observer:       cfg.Observer,
-		BuildSessionFn: cfg.BuildSession,
+		SessionManager:   sm,
+		FeatureStore:     cfg.FeatureStore,
+		Registry:         cfg.Registry,
+		StateDir:         cfg.StateDir,
+		SkillsDir:        cfg.SkillsDir,
+		GuidelinesDir:    cfg.GuidelinesDir,
+		Observer:         cfg.Observer,
+		OnFeatureResumed: cfg.OnFeatureResumed,
+		BuildSessionFn:   cfg.BuildSession,
 	}
 	featureID := ""
 	if cfg.Feature != nil {
@@ -324,6 +326,13 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		EffortSource:           cfg.ReviewEffortSource,
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
+		ResumeFeature:          cfg.Feature,
+		ResumeParent: ResumeParentContext{
+			PhaseKey:  implementResumePhaseKey(cfg),
+			Iteration: iteration,
+		},
+		ResumeChildKey:     axisSlug,
+		ResumePhaseContext: fmt.Sprintf("You were mid the %s implementation-review axis for iteration %d.", axis.Name, iteration),
 	}
 	var helperResult *ReviewHelperResult
 	var err error

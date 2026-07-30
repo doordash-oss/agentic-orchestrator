@@ -505,6 +505,7 @@ type fakeSingleShotResumeDriver struct {
 	dispatched  int
 	resumed     int
 	completed   int
+	retired     int
 	rejectOnce  bool
 	interrupted bool
 	dispatch    func(string, string, int, bool) (*agent.SingleShotResumeResult, error)
@@ -518,18 +519,23 @@ func (d *fakeSingleShotResumeDriver) SingleShotInterrupted(string) bool { return
 func (d *fakeSingleShotResumeDriver) SingleShotNeedsEstablishment(string) bool {
 	return d.pending
 }
-func (d *fakeSingleShotResumeDriver) CaptureSingleShotProviderSnapshot(string, ports.SessionView) {
+func (d *fakeSingleShotResumeDriver) CaptureSingleShotProviderSnapshot(string, ports.SessionView) error {
+	return nil
 }
 func (d *fakeSingleShotResumeDriver) DispatchSingleShotContinuation(previous, resumeID string, ordinal int, fresh bool) (*agent.SingleShotResumeResult, error) {
 	d.dispatched++
 	return d.dispatch(previous, resumeID, ordinal, fresh)
 }
-func (d *fakeSingleShotResumeDriver) CompleteSingleShotResumeEstablishment(string, ports.SessionView, time.Duration) bool {
+func (d *fakeSingleShotResumeDriver) CompleteSingleShotResumeEstablishment(string, ports.SessionView, time.Duration) (bool, error) {
 	if d.rejectOnce {
 		d.rejectOnce = false
-		return false
+		return false, nil
 	}
 	d.resumed++
-	return true
+	return true, nil
 }
-func (d *fakeSingleShotResumeDriver) MarkSingleShotCompleted(string) { d.completed++ }
+func (d *fakeSingleShotResumeDriver) MarkSingleShotCompleted(string) error {
+	d.completed++
+	return nil
+}
+func (d *fakeSingleShotResumeDriver) RetireSingleShotResume(string) { d.retired++ }

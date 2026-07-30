@@ -195,7 +195,9 @@ func (o *Orchestrator) ExecuteRecovery(
 		_, started, err := o.startPhase(fid, phase)
 		if err != nil {
 			if claim != nil {
-				_ = claim.Release(time.Now())
+				if relErr := claim.Release(time.Now()); relErr != nil {
+					relaunchErrs = append(relaunchErrs, fmt.Errorf("releasing resume claim for %s: %w", fid, relErr))
+				}
 			}
 			relaunchErrs = append(relaunchErrs, fmt.Errorf("relaunch %s phase %s: %w", fid, phase, err))
 			continue
@@ -203,8 +205,8 @@ func (o *Orchestrator) ExecuteRecovery(
 		if claim != nil {
 			if started {
 				claim.DispatchStarted()
-			} else {
-				_ = claim.Release(time.Now())
+			} else if relErr := claim.Release(time.Now()); relErr != nil {
+				relaunchErrs = append(relaunchErrs, fmt.Errorf("releasing resume claim for %s: %w", fid, relErr))
 			}
 		}
 	}
@@ -244,11 +246,15 @@ func (o *Orchestrator) claimRecoveryResume(featureID string, phase feature.Phase
 		if errors.Is(err, agent.ErrResumeAlreadyClaimed) {
 			return nil, false
 		}
-		coordinator.MarkFreshFallback("claim_error", time.Now())
+		if persistErr := coordinator.MarkFreshFallback("claim_error", time.Now()); persistErr != nil {
+			return nil, false
+		}
 		return nil, true
 	}
 	if !eligibility.Eligible {
-		coordinator.MarkFreshFallback(string(eligibility.Reason), time.Now())
+		if persistErr := coordinator.MarkFreshFallback(string(eligibility.Reason), time.Now()); persistErr != nil {
+			return nil, false
+		}
 		return nil, true
 	}
 	return claim, true

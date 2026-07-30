@@ -404,7 +404,7 @@ func summarizeFeature(f *feature.Feature) FeatureSummary {
 
 func (h *apiHandler) featureSummaryDTO(f *feature.Feature) FeatureSummary {
 	summary := summarizeFeature(f)
-	summary.Resumed, summary.ResumeCount = h.activeImplementResumeIndicator(f)
+	summary.Resumed, summary.ResumeCount = h.activeResumeIndicator(f)
 	return summary
 }
 

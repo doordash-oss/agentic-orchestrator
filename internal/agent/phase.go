@@ -322,7 +322,9 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	cmd, env, sessOpts, err := pr.BuildSession(buildOpts)
 	if err != nil {
 		if manualResume {
-			resumeCoordinator.ClearPending(time.Now())
+			if persistErr := resumeCoordinator.ClearPending(time.Now()); persistErr != nil {
+				return "", fmt.Errorf("clearing pending %s resume after build failure: %w", cfg.SkillName, persistErr)
+			}
 		}
 		return "", fmt.Errorf("building inquire session: %w", err)
 	}
@@ -340,7 +342,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		archiveExistingLog(sessOpts.StderrPath)
 	} else {
 		now := time.Now()
-		resumeCoordinator.Initialize(ResumeRecord{
+		if err := resumeCoordinator.Initialize(ResumeRecord{
 			Provider:              sessOpts.ProviderName,
 			ResolvedModel:         sessOpts.ResolvedModel,
 			PhaseKey:              ResumePhaseKey(f),
@@ -348,7 +350,9 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 			OrchestratorSessionID: sessionID,
 			CreatedAt:             now,
 			UpdatedAt:             now,
-		})
+		}); err != nil {
+			return "", fmt.Errorf("initializing %s resume record: %w", cfg.SkillName, err)
+		}
 	}
 	WriteDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, buildOpts.Prompt)
 	sessOpts.PermCacheScope = ""
@@ -378,7 +382,9 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	if err != nil {
 		if manualResume {
 			if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, 0); verdict.Rejected {
-				resumeCoordinator.MarkRejected(verdict.Reason, time.Now())
+				if persistErr := resumeCoordinator.MarkRejected(verdict.Reason, time.Now()); persistErr != nil {
+					return "", fmt.Errorf("recording %s resume rejection: %w", cfg.SkillName, persistErr)
+				}
 				freshResult, freshErr := pr.DispatchSingleShotContinuation(sessionID, "", 1, true)
 				if freshErr != nil {
 					return "", freshErr
@@ -390,7 +396,9 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 				sessionID, sess, sessOpts = freshResult.SessionID, freshSession, freshResult.Options
 				manualResume = false
 			} else {
-				resumeCoordinator.ClearPending(time.Now())
+				if persistErr := resumeCoordinator.ClearPending(time.Now()); persistErr != nil {
+					return "", fmt.Errorf("clearing pending %s resume: %w", cfg.SkillName, persistErr)
+				}
 			}
 		}
 		if sess == nil {
@@ -454,6 +462,19 @@ func (pr *PhaseRunner) rememberSingleShotResume(sessionID string, launch *single
 	pr.singleShotResumes[sessionID] = launch
 }
 
+func (pr *PhaseRunner) replaceSingleShotResume(previousSessionID, sessionID string, launch *singleShotResumeLaunch) {
+	if pr == nil || launch == nil || sessionID == "" {
+		return
+	}
+	pr.singleShotResumeMu.Lock()
+	defer pr.singleShotResumeMu.Unlock()
+	if pr.singleShotResumes == nil {
+		pr.singleShotResumes = make(map[string]*singleShotResumeLaunch)
+	}
+	delete(pr.singleShotResumes, previousSessionID)
+	pr.singleShotResumes[sessionID] = launch
+}
+
 func (pr *PhaseRunner) singleShotResume(sessionID string) *singleShotResumeLaunch {
 	if pr == nil {
 		return nil
@@ -496,12 +517,15 @@ func (pr *PhaseRunner) SingleShotNeedsEstablishment(sessionID string) bool {
 
 // CaptureSingleShotProviderSnapshot preserves provider identity when a test or
 // legacy adapter does not deliver an init callback.
-func (pr *PhaseRunner) CaptureSingleShotProviderSnapshot(sessionID string, sess ports.SessionView) {
+func (pr *PhaseRunner) CaptureSingleShotProviderSnapshot(sessionID string, sess ports.SessionView) error {
 	launch := pr.singleShotResume(sessionID)
 	if launch == nil || sess == nil {
-		return
+		return nil
 	}
-	NewResumeCoordinator(launch.artifactDir).CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model())
+	if err := NewResumeCoordinator(launch.artifactDir).CaptureProviderSnapshot(providerSessionID(sess), sess.ProviderName(), sess.Model()); err != nil {
+		return fmt.Errorf("capturing single-shot provider identity: %w", err)
+	}
+	return nil
 }
 
 // DispatchSingleShotContinuation starts either a provider-native continuation
@@ -522,7 +546,9 @@ func (pr *PhaseRunner) DispatchSingleShotContinuation(previousSessionID, resumeI
 		if record != nil && strings.TrimSpace(record.RejectionReason) != "" {
 			fallbackReason = record.RejectionReason
 		}
-		coordinator.MarkFreshFallback(fallbackReason, time.Now())
+		if err := coordinator.MarkFreshFallback(fallbackReason, time.Now()); err != nil {
+			return nil, fmt.Errorf("recording single-shot fresh fallback: %w", err)
+		}
 	} else {
 		opts.ResumeSessionID = resumeID
 		opts.Prompt = coordinator.Prompt(singleShotResumeContext(launch.phase))
@@ -562,7 +588,7 @@ func (pr *PhaseRunner) DispatchSingleShotContinuation(previousSessionID, resumeI
 	installResumeProviderInitCapture(sessOpts, coordinator)
 	if fresh {
 		now := time.Now()
-		coordinator.Initialize(ResumeRecord{
+		if err := coordinator.Initialize(ResumeRecord{
 			Provider:              sessOpts.ProviderName,
 			ResolvedModel:         sessOpts.ResolvedModel,
 			PhaseKey:              ResumePhaseKey(launch.feature),
@@ -570,7 +596,9 @@ func (pr *PhaseRunner) DispatchSingleShotContinuation(previousSessionID, resumeI
 			OrchestratorSessionID: sessionID,
 			CreatedAt:             now,
 			UpdatedAt:             now,
-		})
+		}); err != nil {
+			return nil, fmt.Errorf("initializing single-shot fresh fallback: %w", err)
+		}
 	}
 	archiveExistingLog(filepath.Join(launch.artifactDir, "output.txt"))
 	archiveExistingLog(sessOpts.StderrPath)
@@ -578,7 +606,9 @@ func (pr *PhaseRunner) DispatchSingleShotContinuation(previousSessionID, resumeI
 	if err != nil {
 		if !fresh {
 			if verdict := detectResumeStartRejection(sessOpts.ProviderName, err, 0); verdict.Rejected {
-				coordinator.MarkRejected(verdict.Reason, time.Now())
+				if persistErr := coordinator.MarkRejected(verdict.Reason, time.Now()); persistErr != nil {
+					return nil, fmt.Errorf("recording single-shot resume rejection: %w", persistErr)
+				}
 				return nil, &resumeRejectionError{reason: verdict.Reason}
 			}
 		}
@@ -618,23 +648,27 @@ func (pr *PhaseRunner) DispatchSingleShotContinuation(previousSessionID, resumeI
 	}
 	replacement := *launch
 	replacement.supportsResume = sessOpts.SupportsSessionResume
-	pr.rememberSingleShotResume(sessionID, &replacement)
+	pr.replaceSingleShotResume(previousSessionID, sessionID, &replacement)
 	return &SingleShotResumeResult{SessionID: sessionID, Session: sess, Options: sessOpts}, nil
 }
 
 // CompleteSingleShotResumeEstablishment records one actual continuation and
 // emits its audit event. Rejected establishment is left for a fresh fallback.
-func (pr *PhaseRunner) CompleteSingleShotResumeEstablishment(sessionID string, sess ports.SessionView, elapsed time.Duration) bool {
+func (pr *PhaseRunner) CompleteSingleShotResumeEstablishment(sessionID string, sess ports.SessionView, elapsed time.Duration) (bool, error) {
 	launch := pr.singleShotResume(sessionID)
 	if launch == nil {
-		return false
+		return false, nil
 	}
 	coordinator := NewResumeCoordinator(launch.artifactDir)
 	if verdict := detectResumeRejection(sess, elapsed); verdict.Rejected {
-		coordinator.MarkRejected(verdict.Reason, time.Now())
-		return false
+		if err := coordinator.MarkRejected(verdict.Reason, time.Now()); err != nil {
+			return false, fmt.Errorf("recording single-shot resume rejection: %w", err)
+		}
+		return false, nil
 	}
-	coordinator.MarkResumed(time.Now())
+	if err := coordinator.MarkResumed(time.Now()); err != nil {
+		return false, fmt.Errorf("marking single-shot resumed: %w", err)
+	}
 	if pr.OnFeatureResumed != nil {
 		record := coordinator.Snapshot()
 		input := ports.FeatureResumedData{
@@ -644,21 +678,36 @@ func (pr *PhaseRunner) CompleteSingleShotResumeEstablishment(sessionID string, s
 		}
 		if record != nil {
 			input.PhaseKey = record.PhaseKey
+			input.ChildKey = record.ChildKey
 			input.Iteration = record.Iteration
 			input.RunNumber = record.RunNumber
 			input.ResumeCount = record.ResumeCount
 		}
 		pr.OnFeatureResumed(input)
 	}
-	return true
+	return true, nil
 }
 
 // MarkSingleShotCompleted stamps durable completion before the orchestrator
 // performs normal contract validation and protocol-retry handling.
-func (pr *PhaseRunner) MarkSingleShotCompleted(sessionID string) {
+func (pr *PhaseRunner) MarkSingleShotCompleted(sessionID string) error {
 	if launch := pr.singleShotResume(sessionID); launch != nil {
-		NewResumeCoordinator(launch.artifactDir).MarkCompleted(time.Now())
+		if err := NewResumeCoordinator(launch.artifactDir).MarkCompleted(time.Now()); err != nil {
+			return fmt.Errorf("marking single-shot resume record completed: %w", err)
+		}
 	}
+	pr.RetireSingleShotResume(sessionID)
+	return nil
+}
+
+// RetireSingleShotResume removes terminal in-memory launch state.
+func (pr *PhaseRunner) RetireSingleShotResume(sessionID string) {
+	if pr == nil {
+		return
+	}
+	pr.singleShotResumeMu.Lock()
+	delete(pr.singleShotResumes, sessionID)
+	pr.singleShotResumeMu.Unlock()
 }
 
 // IsSingleShotResumeRejection identifies a provider refusal to establish a
@@ -989,6 +1038,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 	cfg := PlanLoopConfig{
 		Feature:                      f,
 		FeatureStore:                 pr.FeatureStore,
+		Registry:                     pr.Registry,
 		StateDir:                     pr.StateDir,
 		ResearchArtifactPath:         researchArtifactPath,
 		PlanningResearchArtifactPath: f.ResearchArtifactPath(),
@@ -1062,6 +1112,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 		PlanLoopConfig: PlanLoopConfig{
 			Feature:                      f,
 			FeatureStore:                 pr.FeatureStore,
+			Registry:                     pr.Registry,
 			StateDir:                     pr.StateDir,
 			PlanningResearchArtifactPath: f.ResearchArtifactPath(),
 			DesignArtifactPath:           f.DesignArtifactPath(),
@@ -1147,6 +1198,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 	cfg := ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               pr.FeatureStore,
+		Registry:                   pr.Registry,
 		WorkDir:                    workDir,
 		PlanPath:                   planPath,
 		KBInfos:                    kbInfos,
@@ -1219,6 +1271,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 	cfg := OrchestratorConfig{
 		Feature:                    f,
 		FeatureStore:               pr.FeatureStore,
+		Registry:                   pr.Registry,
 		StateDir:                   pr.StateDir,
 		Config:                     pr.Config,
 		Model:                      implementationModel,

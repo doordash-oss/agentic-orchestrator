@@ -533,6 +533,8 @@ func (m DashboardModel) renderFooter() string {
 			}
 			if isRunningFeature(f) {
 				hints = append(hints, "[s] Stop")
+			} else if recovery := m.recoveryActions[f.ID]; f.Status == feature.StatusFailed && recovery.retryAvailable {
+				hints = append(hints, "[r] Retry")
 			} else {
 				hints = append(hints, "[r] Restart")
 			}

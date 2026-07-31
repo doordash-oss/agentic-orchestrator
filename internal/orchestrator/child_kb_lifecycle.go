@@ -322,11 +322,66 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 		paths := agent.ResolveChildKBPaths(baseDir, child, *repo)
 
 		mergeHEAD := ""
+		if child.Parent.Transaction != nil {
+			if txEntry := child.Parent.Transaction.EntryByRepo(entry.Repo); txEntry != nil {
+				mergeHEAD = txEntry.MergeHEAD
+				if mergeHEAD == "" {
+					mergeHEAD = txEntry.CandidateSHA
+				}
+			}
+		}
+
 		// Stamp the canonical commit the workspace was actually built
 		// from, not the current canonical commit. This prevents stamping
 		// stale knowledge with a newer commit when the canonical KB
 		// advanced during child execution.
-		canonicalCommit := ""
+		canonicalCommit := agent.CanonicalKBCommit(paths.CanonicalDir)
+		if _, statErr := os.Stat(paths.WorkspaceDir); statErr != nil {
+			if !os.IsNotExist(statErr) {
+				entry.Error = statErr.Error()
+				if perr := persistPromotionJournal(store, journal); perr != nil {
+					return errors.Join(fmt.Errorf("checking workspace for promotion repo %s: %w", entry.Repo, statErr), perr)
+				}
+				return fmt.Errorf("checking workspace for promotion repo %s: %w", entry.Repo, statErr)
+			}
+			// Legacy and partially cleaned child records can reach closure
+			// without a disposable KB workspace. Retrying cannot recreate the
+			// reviewed workspace after its worktree has been removed. For a
+			// durably closed child, invalidate the old parent overlay so future
+			// children rebuild from canonical knowledge instead of consuming a
+			// stale overlay, then settle this journal entry.
+			if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
+				entry.Error = statErr.Error()
+				if perr := persistPromotionJournal(store, journal); perr != nil {
+					return errors.Join(fmt.Errorf("missing workspace for active child repo %s: %w", entry.Repo, statErr), perr)
+				}
+				return fmt.Errorf("missing workspace for active child repo %s: %w", entry.Repo, statErr)
+			}
+			if removeErr := agent.RemoveOverlay(paths.OverlayDir); removeErr != nil {
+				entry.Error = removeErr.Error()
+				if perr := persistPromotionJournal(store, journal); perr != nil {
+					return errors.Join(fmt.Errorf("invalidating stale overlay for repo %s: %w", entry.Repo, removeErr), perr)
+				}
+				return fmt.Errorf("invalidating stale overlay for repo %s: %w", entry.Repo, removeErr)
+			}
+			entry.MergeHEAD = mergeHEAD
+			entry.CanonicalCommit = canonicalCommit
+			entry.Done = true
+			entry.Error = ""
+			if err := persistPromotionJournal(store, journal); err != nil {
+				return err
+			}
+			o.emitEvent(ports.Event{
+				Type:      ports.RepoStatusChanged,
+				FeatureID: childID,
+				ParentID:  parentID,
+				ChildID:   childID,
+				RepoName:  entry.Repo,
+				Message:   "missing child KB workspace; invalidated stale parent overlay",
+			})
+			continue
+		}
+
 		wsState, wsErr := feature.LoadWorkspaceState(paths.WorkspaceDir)
 		if wsErr != nil {
 			entry.Error = wsErr.Error()
@@ -337,17 +392,6 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 		}
 		if wsState != nil {
 			canonicalCommit = wsState.CanonicalCommit
-		}
-		if canonicalCommit == "" {
-			canonicalCommit = agent.CanonicalKBCommit(paths.CanonicalDir)
-		}
-		if child.Parent.Transaction != nil {
-			if txEntry := child.Parent.Transaction.EntryByRepo(entry.Repo); txEntry != nil {
-				mergeHEAD = txEntry.MergeHEAD
-				if mergeHEAD == "" {
-					mergeHEAD = txEntry.CandidateSHA
-				}
-			}
 		}
 
 		tmpDir, stageErr := agent.StageWorkspaceToOverlay(

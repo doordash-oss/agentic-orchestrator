@@ -180,6 +180,49 @@ func TestPromoteMissingJournalRepositoryFailsClosed(t *testing.T) {
 	}
 }
 
+func TestPromoteMissingClosedChildWorkspaceInvalidatesStaleOverlay(t *testing.T) {
+	fx := newPromotionFaultFixture(t)
+	workspaceDir := feature.ChildKBWorkspaceDir(fx.stateDir, fx.child.ID, "repoA")
+	overlayDir := feature.ParentOverlayPath(fx.stateDir, fx.parent.ID, "repoA")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(overlayDir, "index.md"), []byte("stale parent knowledge\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := feature.SaveOverlayProvenance(overlayDir, &feature.OverlayProvenance{
+		CanonicalCommit: "old-canonical",
+		ParentHEAD:      "old-parent",
+		Generation:      1,
+		CreatedAt:       time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(workspaceDir); err != nil {
+		t.Fatal(err)
+	}
+
+	err := fx.o.PromoteChildKBWorkspaces(fx.child.ID, fx.parent.ID)
+	if err != nil {
+		t.Fatalf("PromoteChildKBWorkspaces() error = %v, want missing closed-child workspace settled", err)
+	}
+	if _, err := os.Stat(overlayDir); !os.IsNotExist(err) {
+		t.Fatalf("stale overlay should be invalidated, err=%v", err)
+	}
+	journal := fx.loadJournal(t)
+	entry := journal.EntryByRepo("repoA")
+	if entry == nil || !entry.Done || entry.Error != "" {
+		t.Fatalf("missing-workspace entry should be settled, got %+v", entry)
+	}
+	if journal.Phase != feature.PromotionPhasePromoted || !journal.LocksReleased {
+		t.Fatalf("journal = phase %s, locks_released=%v; want promoted and unlocked",
+			journal.Phase, journal.LocksReleased)
+	}
+	if owner, err := feature.ReadOverlayLockOwner(overlayDir); err != nil || owner != "" {
+		t.Fatalf("overlay lock owner = %q, err=%v; want released", owner, err)
+	}
+}
+
 // TestPromoteJournalPersistenceFailureFailsClosed proves that a failed
 // journal save aborts the promotion with contextual error rather than
 // proceeding against recovery state that was never written.

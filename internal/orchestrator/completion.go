@@ -299,16 +299,16 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	if repoName != "" {
 		if repo, ok := findRepo(f, repoName); ok {
 			if baseDir := o.stateDir(); baseDir != "" {
+				repoPath := repo.Path
+				if repo.WorktreePath != "" {
+					repoPath = repo.WorktreePath
+				}
 				if f.IsChild() {
 					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, featureID, repo.Name)
-					repoPath := repo.Path
-					if repo.WorktreePath != "" {
-						repoPath = repo.WorktreePath
-					}
 					_ = agent.MarkWorkspaceFresh(context.Background(), o.deps.CmdRunner, workspaceDir, repoPath)
 				} else {
 					kbDir := agent.KBStateDir(baseDir, repo.Name)
-					_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+					_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repoPath)
 				}
 			}
 		}

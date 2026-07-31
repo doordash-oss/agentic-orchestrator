@@ -727,9 +727,17 @@ func TestContractRegistryDesignRoleUsesCanonicalMarkdown(t *testing.T) {
 	if err := os.WriteFile(newPath, []byte("# new\n"), 0o644); err != nil {
 		t.Fatalf("write new artifact: %v", err)
 	}
+	ledgerPath := filepath.Join(artifactDir, designDecisionLedgerFile)
+	if err := os.WriteFile(ledgerPath, []byte("# Design Decision Ledger\n"), 0o644); err != nil {
+		t.Fatalf("write decision ledger: %v", err)
+	}
 	oldTime := time.Now().Add(-1 * time.Hour)
 	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
 		t.Fatalf("chtimes old artifact: %v", err)
+	}
+	newTime := time.Now().Add(-30 * time.Minute)
+	if err := os.Chtimes(newPath, newTime, newTime); err != nil {
+		t.Fatalf("chtimes canonical design: %v", err)
 	}
 	if err := WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
 		Attempt:      1,

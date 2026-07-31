@@ -42,6 +42,12 @@ Read the research findings at: {{ .ResearchPath }}
 
 Use the research to verify that the plan respects discovered constraints, existing patterns, and integration requirements.
 
+{{ end }}{{ if .DecisionLedgerPath }}## Authoritative Decision Ledger
+
+Read the harness-owned decision ledger at: {{ .DecisionLedgerPath }}
+
+This ledger is the binding source of product and architectural decisions. Every blocking Design finding must cite the relevant `REQ-###` or `DEC-###` ID. Do not replace a recorded decision with a critic preference.
+
 {{ end }}{{ if .MockupManifestPath }}## Mockup Bundle
 
 Read the mockup manifest and every referenced prototype and rendered state at: {{ .MockupManifestPath }}

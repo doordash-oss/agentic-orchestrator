@@ -60,6 +60,7 @@ type DesignUserInput struct {
 
 	MultiRepo            bool
 	ResearchArtifactPath string
+	DecisionLedgerPath   string
 
 	QAFiles     prompts.QAFilesInput
 	Inquireness prompts.GrillMeInquirenessInput

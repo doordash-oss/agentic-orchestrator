@@ -113,6 +113,7 @@ type ValidateSpecializedUserInput struct {
 
 	ResearchPath       string
 	MockupManifestPath string
+	DecisionLedgerPath string
 
 	FeedbackPath string
 	AxisLabel    string

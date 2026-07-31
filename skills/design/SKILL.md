@@ -23,14 +23,24 @@ When `**Visual mockups:** required`, locate `design-mockups` in the system promp
 
 Read all supplied inputs before deciding:
 
-1. The original feature description and acceptance intent.
-2. User Answers and prior human decisions. These are binding and supersede defaults.
-3. The research output, including cited source references and current-state constraints.
-4. The KB index and relevant KB documents when supplied.
-5. Relevant repository guidelines, ADRs, schemas, and public contracts.
-6. Existing design-system or product conventions when the feature changes a user-facing surface.
+1. The harness-owned `decision-ledger.md`. Its `REQ-###` requirements and
+   `DEC-###` human decisions are authoritative and supersede critic
+   preferences, generic defaults, and earlier ambiguous summaries.
+2. The original feature description and acceptance intent.
+3. User Answers and prior human decisions. Use the raw Q&A to retain nuance
+   behind the ledger entries.
+4. The research output, including cited source references and current-state constraints.
+5. The KB index and relevant KB documents when supplied.
+6. Relevant repository guidelines, ADRs, schemas, and public contracts.
+7. Existing design-system or product conventions when the feature changes a user-facing surface.
 
 Do not invent current-state facts. Verify important claims against supplied research or the repository. If sources conflict, resolve the conflict before writing the design.
+
+Do not strengthen a qualified human decision into a broader invariant. Preserve
+the exact observable semantics, preconditions, exceptions, and accepted
+trade-offs recorded in the decision ledger and raw Q&A. When summarizing a
+decision in the design, check the summary against its `DEC-###` source before
+using that summary as an invariant elsewhere.
 
 ## Consequential Ambiguity
 
@@ -139,3 +149,6 @@ Before writing the artifact, verify:
 7. The design gives a junior implementer enough direction while preserving safe local implementation latitude.
 8. When mockups are required, `{artifact_dir}/mockups/manifest.yaml` and every referenced real HTML/PNG artifact satisfy the design-mockups skill.
 9. No artifact was written outside `{artifact_dir}`.
+10. Every `REQ-###` and `DEC-###` entry is either represented by the final
+    design or explicitly excluded by another binding ledger entry; no prose
+    silently broadens or narrows a recorded decision.

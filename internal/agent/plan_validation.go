@@ -685,6 +685,7 @@ func runSpecializedPlanValidation(cfg PlanLoopConfig, sm ports.SessionManager, a
 type planValidationExtras struct {
 	PriorPhasePlanPaths []string
 	MockupManifestPath  string
+	DecisionLedgerPath  string
 }
 
 func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain validatorDomain, kind validationArtifactKind, extras planValidationExtras, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
@@ -1187,6 +1188,7 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 		IsDesignKind:              kind == validationArtifactDesign,
 		ResearchPath:              researchPath,
 		MockupManifestPath:        extras.MockupManifestPath,
+		DecisionLedgerPath:        extras.DecisionLedgerPath,
 		FeedbackPath:              feedbackPath,
 		AxisLabel:                 strings.ToLower(domain.Name),
 		AutomatedVerificationOnly: kind == validationArtifactPhasePlan && !f.EffectivePipeline().ShouldContractAgentEvidence(),
@@ -2497,7 +2499,7 @@ func IsArtifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == ProtocolRetrySidecarFile:
+	case lower == "qa-answers.md" || lower == designDecisionLedgerFile || lower == ProtocolRetrySidecarFile:
 		return true
 	case strings.HasPrefix(lower, ".protocol-retry-") && strings.HasSuffix(lower, ".yaml"):
 		return true

@@ -35,5 +35,12 @@ Read the research document produced by the previous phase at:
 
 Read this file completely before proceeding.
 
+{{ end }}{{ if .DecisionLedgerPath }}## Authoritative Decision Ledger
+
+Read the harness-owned decision ledger at:
+{{ .DecisionLedgerPath }}
+
+Treat every `REQ-###` requirement and `DEC-###` human decision as binding. Preserve these IDs when reasoning about conflicts or asking follow-up questions.
+
 {{ end }}{{ template "qa_files" .QAFiles }}{{ template "grillme_inquireness" .Inquireness }}
 {{ end -}}

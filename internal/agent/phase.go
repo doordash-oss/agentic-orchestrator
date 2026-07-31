@@ -397,8 +397,24 @@ func explorationAgentNames() []string {
 // subdirectory remains "design" so legacy run state stays readable in
 // place; the session identity, skill, and prompt template are Design-facing.
 func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
+	artifactDir := filepath.Join(
+		ActiveRunDir(pr.StateDir, f),
+		f.RefactorPrefix(),
+		feature.PhaseDesign.DirName(),
+	)
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating Design artifact directory: %w", err)
+	}
+	decisionLedgerPath, err := WriteDesignDecisionLedger(
+		artifactDir,
+		f,
+		designDecisionSourcePaths(qaFilePaths, artifactDir),
+	)
+	if err != nil {
+		return "", err
+	}
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:          BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
+		Prompt:          BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, decisionLedgerPath, qaFilePaths, kbInfos...),
 		Spec:            DesignerRoleSpec(),
 		DirName:         feature.PhaseDesign.DirName(),
 		SkillName:       "design",

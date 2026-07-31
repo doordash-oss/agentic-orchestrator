@@ -30,7 +30,7 @@ Explores the problem space by analyzing the codebase and gathering context. The 
 Deep dives into the codebase to understand relevant code paths, existing patterns, and technical constraints. Produces research artifacts that inform planning.
 
 ### Design
-Produces a final-decision implementation contract from the feature request, Q&A, and research. The author resolves consequential ambiguity with the user, spells out architecture and changed schemas/APIs/events, and separates binding decisions from implementation latitude. An Integrity critic always reviews the artifact; when the design requires UI mockups, the author also produces a self-contained HTML prototype, rendered PNG states, and a manifest, and a Visual critic reviews that bundle. Critic feedback drives bounded revision attempts before approval or human escalation.
+Produces a final-decision implementation contract from the feature request, Q&A, and research. Agentico generates an authoritative decision ledger with stable `REQ-###` and `DEC-###` IDs for the author, critics, and reviser. Critics must tie blocking findings to that ledger and may trigger autonomous revision only for a classified contract defect or grounding error; decision conflicts, missing consequential decisions, and malformed findings pause for human review. The canonical `design.md` always represents the latest attempt, while `attempt-NN/design.md` snapshots retain older designs for manual history and are ignored by artifact selection and validation. When the design requires UI mockups, the author also produces a self-contained HTML prototype, rendered PNG states, and a manifest, and a Visual critic reviews that bundle.
 
 ### Plan
 Creates a detailed implementation plan. Uses **two-tier planning**:

@@ -41,7 +41,7 @@ func TestBuildDesignPrompt_UsesGrillMeDirective(t *testing.T) {
 				},
 				Inquireness: level,
 			}
-			prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
+			prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", "", nil)
 
 			if first == "" {
 				first = prompt

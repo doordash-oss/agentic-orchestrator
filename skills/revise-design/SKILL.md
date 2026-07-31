@@ -21,9 +21,22 @@ You revise the existing design contract to resolve structured integrity and visu
 
 When mockups are present or visual feedback requires them, locate `design-mockups` in the system prompt's Additional Skills catalog and read the exact listed `SKILL.md` path before editing the bundle.
 
-Read the previous design completely, then all current validator feedback. Human decisions remain binding. Findings identify defects; suggestions are non-blocking and must not broaden scope by default.
+Read the original feature authority, research, harness-owned
+`decision-ledger.md`, previous design, and all current validator feedback.
+`REQ-###` requirements and `DEC-###` human decisions are binding. Findings
+identify possible defects; they do not become product or architecture authority.
+Suggestions are non-blocking and must not broaden scope by default.
 
-When feedback conflicts with a binding human decision, requests a materially different product behavior, or exposes consequential ambiguity that evidence cannot resolve, use `AskUserQuestion`. Record only the resulting final decision in the revised design.
+Only `CONTRACT_DEFECT` and `GROUNDING_ERROR` findings are eligible for
+autonomous revision. An explicit `## Human Direction` block from a review gate
+is direct human authority when the same direction appears in the decision
+ledger, and may be applied without re-asking. When other feedback is classified
+`DECISION_CONFLICT` or `MISSING_DECISION`, conflicts with a binding human
+decision, requests a materially different product behavior, architecture,
+persistence model, operational cost, rollout, or testing commitment, or
+exposes consequential ambiguity that evidence cannot resolve, use
+`AskUserQuestion` without first editing the design. Record only the resulting
+final decision in the revised design.
 
 ## Critical Rules
 
@@ -37,13 +50,20 @@ When feedback conflicts with a binding human decision, requests a materially dif
 8. **Keep required structure.** The revised document must continue to satisfy the design skill's document contract.
 9. **Update mockups when needed.** If a design correction changes a visible state, content, layout, interaction, viewport, or visual direction, rerun the design-mockups contract and replace the affected HTML, PNGs, and manifest entries together.
 10. **Never patch PNGs independently.** PNGs must remain real browser captures of the revised self-contained HTML.
+11. **Critics identify constraints, not solutions.** Do not implement a
+    reviewer-suggested mechanism merely because it appears in feedback. Verify
+    that the cited `REQ-###` or `DEC-###` entry requires the correction and
+    choose the smallest correction that preserves the ledger.
 
 Do not insert revision rationales into the design. The final artifact contains the corrected decision, not review process metadata.
 
 ## Revision Process
 
 1. Read the previous design, current feedback, and existing mockup manifest when present.
-2. Classify each finding as a contract contradiction, missing decision, incorrect factual claim, incomplete testing decision, scope leak, or visual/mockup mismatch.
+2. Verify each blocking finding has one allowed classification, cites a
+   `REQ-###` or `DEC-###` entry, and states an observable failure. Stop for
+   human input on `DECISION_CONFLICT`, `MISSING_DECISION`, or malformed
+   findings rather than guessing.
 3. Determine the minimal editable sections needed to resolve every blocking finding.
 4. Verify source-grounded corrections and ask the user only for consequential unresolved choices.
 5. Apply the corrections and re-read the complete design for cross-section consistency.

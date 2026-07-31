@@ -23,6 +23,7 @@ Read `## User Experience` in the complete design before inspecting artifacts.
 - If the marker is missing, malformed, duplicated, or contradicts a materially visual feature, report a High finding against `User Experience`.
 
 Human decisions about visual direction and required states are binding. Judge execution against them; do not substitute your own preferred style.
+Use the harness-owned decision ledger as the authority for those decisions.
 
 ## Mandatory Bundle Inspection
 
@@ -77,7 +78,14 @@ Do not summarize the design or bundle. Reference the exact design section and ma
 
 Three `## ` sections, in this exact order, are mandatory:
 
-1. `## Findings` — bullets prefixed exactly `- **Critical**:` or `- **High**:`. Include only Critical or High findings. Each finding must identify affected state IDs and an actionable correction. Use `- (none)` when no findings exist.
+1. `## Findings` — bullets must use one of the Design classifications
+   `CONTRACT_DEFECT`, `GROUNDING_ERROR`, `DECISION_CONFLICT`, or
+   `MISSING_DECISION`, cite a `REQ-###` or `DEC-###` ledger ID, identify
+   affected state IDs, and state an observable failure. Use the exact prefix
+   `- **High**: [CONTRACT_DEFECT] [DEC-001] Observable failure:` (or
+   `Critical`, with the applicable classification and ledger ID). Do not
+   prescribe a replacement visual direction. Use `- (none)` when no findings
+   exist.
 2. `## Suggestions` — non-blocking improvements or inspection caveats, or `- (none)`.
 3. `## Verdict` — exactly one of `APPROVED` or `CHANGES_REQUESTED` on its own line.
 

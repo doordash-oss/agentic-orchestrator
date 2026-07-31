@@ -48,11 +48,15 @@ func DesignReviserRoleSpec() RoleSpec {
 
 // DesignRevisionUserInput is the data passed to design_revision.user.tmpl.
 type DesignRevisionUserInput struct {
+	Name               string
+	Description        string
+	ExitCriteria       string
 	Attempt            int
 	CriticFeedback     string
 	PreviousDesignPath string
 	MockupManifestPath string
-	Inquireness        prompts.AutonomousInquirenessInput
+	ResearchPath       string
+	DecisionLedgerPath string
 }
 
 // BuildDesignRevisionPrompt renders the Design revision prompt.

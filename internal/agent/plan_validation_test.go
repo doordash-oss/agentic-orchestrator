@@ -1443,6 +1443,7 @@ func TestIsArtifactExcluded(t *testing.T) {
 		{"plan.md", false},
 		{"research.md", false},
 		{"qa-answers.md", true},
+		{"decision-ledger.md", true},
 		{".protocol-retry.yaml", true},
 		{".protocol-retry-feat-abc123.yaml", true},
 		{"protocol-retry.yaml", false},
@@ -3095,6 +3096,37 @@ func TestBuildSpecializedValidationPrompt_NonGroundingOmitsPriorPhaseContext(t *
 				t.Errorf("%s prompt should NOT contain prior-phase path %q:\n%s", template, priorPath, prompt)
 			}
 		})
+	}
+}
+
+func TestBuildSpecializedDesignValidationPromptIncludesAuthoritativeDecisionLedger(t *testing.T) {
+	f := &feature.Feature{
+		Name:          "Decision-preserving design",
+		Description:   "Keep human decisions authoritative.",
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	domain := validatorDomain{Name: "Integrity", Template: "validate-design-integrity"}
+	extras := planValidationExtras{DecisionLedgerPath: "/design/decision-ledger.md"}
+
+	prompt := buildSpecializedValidationPromptForArtifact(
+		f,
+		"/design/design.md",
+		"/research/research.md",
+		"",
+		"",
+		domain,
+		validationArtifactDesign,
+		extras,
+	)
+
+	for _, want := range []string{
+		"## Authoritative Decision Ledger",
+		"/design/decision-ledger.md",
+		"binding source of product and architectural decisions",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("specialized Design validation prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

@@ -122,17 +122,22 @@ type DesignUserInput struct {
 
 	MultiRepo            bool
 	ResearchArtifactPath string
+	DecisionLedgerPath   string
 
 	QAFiles     QAFilesInput
 	Inquireness GrillMeInquirenessInput
 }
 
 type DesignRevisionUserInput struct {
+	Name               string
+	Description        string
+	ExitCriteria       string
 	Attempt            int
 	CriticFeedback     string
 	PreviousDesignPath string
 	MockupManifestPath string
-	Inquireness        AutonomousInquirenessInput
+	ResearchPath       string
+	DecisionLedgerPath string
 }
 
 type RefactorPlanUserInput struct {
@@ -286,6 +291,7 @@ type ValidateSpecializedUserInput struct {
 
 	ResearchPath       string
 	MockupManifestPath string
+	DecisionLedgerPath string
 
 	FeedbackPath string
 	AxisLabel    string
@@ -375,6 +381,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					MultiRepo:            true,
 					ResearchArtifactPath: "/state/feat-x/run-1/research/research.md",
+					DecisionLedgerPath:   "/state/feat-x/run-1/design/decision-ledger.md",
 					QAFiles: QAFilesInput{
 						Paths: []string{"/state/feat-x/run-1/inquire/qa.md"},
 						Lead:  "Read these Q&A files for important context about their intent and preferences:",
@@ -388,11 +395,15 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "design_revision_user",
 			render: func() string {
 				return DesignRevisionUserPrompt(DesignRevisionUserInput{
+					Name:               "OAuth login",
+					Description:        "Sign in with Google.",
+					ExitCriteria:       "PKCE succeeds and errors are actionable.",
 					Attempt:            2,
 					CriticFeedback:     "Clarify callback errors and refresh the mobile error state.",
 					PreviousDesignPath: "/state/feat-x/run-1/design/design.md",
 					MockupManifestPath: "/state/feat-x/run-1/design/mockups/manifest.yaml",
-					Inquireness:        AutonomousInquirenessInput{},
+					ResearchPath:       "/state/feat-x/run-1/research/research.md",
+					DecisionLedgerPath: "/state/feat-x/run-1/design/decision-ledger.md",
 				})
 			},
 		},
@@ -400,13 +411,14 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "validate_design_integrity_user",
 			render: func() string {
 				return ValidateSpecializedUserPrompt(ValidateSpecializedUserInput{
-					Name:         "OAuth login",
-					Description:  "Sign in with Google.",
-					ExitCriteria: "PKCE succeeds and errors are actionable.",
-					DomainName:   "Integrity",
-					PlanPath:     "/state/feat-x/run-1/design/design.md",
-					IsDesignKind: true,
-					ResearchPath: "/state/feat-x/run-1/research/research.md",
+					Name:               "OAuth login",
+					Description:        "Sign in with Google.",
+					ExitCriteria:       "PKCE succeeds and errors are actionable.",
+					DomainName:         "Integrity",
+					PlanPath:           "/state/feat-x/run-1/design/design.md",
+					IsDesignKind:       true,
+					ResearchPath:       "/state/feat-x/run-1/research/research.md",
+					DecisionLedgerPath: "/state/feat-x/run-1/design/decision-ledger.md",
 				})
 			},
 		},
@@ -420,6 +432,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					PlanPath:           "/state/feat-x/run-1/design/design.md",
 					IsDesignKind:       true,
 					MockupManifestPath: "/state/feat-x/run-1/design/mockups/manifest.yaml",
+					DecisionLedgerPath: "/state/feat-x/run-1/design/decision-ledger.md",
 				})
 			},
 		},

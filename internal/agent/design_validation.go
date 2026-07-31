@@ -104,6 +104,14 @@ func RunDesignValidationLoop(cfg DesignLoopConfig, sm ports.SessionManager) (res
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating Design artifact directory: %w", err)
 	}
+	decisionLedgerPath, err := WriteDesignDecisionLedger(
+		artifactDir,
+		cfg.Feature,
+		designDecisionSourcePaths(cfg.QAFilePaths, artifactDir),
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	maxAttempts := cfg.MaxAttempts
 	if maxAttempts <= 0 {
@@ -162,13 +170,17 @@ designAttemptLoop:
 				cfg.SkillsDir,
 				cfg.GuidelinesDir,
 				cfg.ResearchArtifactPath,
+				decisionLedgerPath,
 				cfg.QAFilePaths,
 				cfg.KBInfos...,
 			)
 			if attempt > 1 {
 				prompt = BuildDesignRevisionPrompt(
+					cfg.Feature,
 					designPath,
 					manifestPath,
+					cfg.ResearchArtifactPath,
+					decisionLedgerPath,
 					criticFeedback,
 					attempt,
 				)
@@ -285,10 +297,23 @@ designAttemptLoop:
 				recordDesignSessionCost(cfg, sessionID, cost)
 
 				if agentStatus == agentStatusSuccess {
-					if attempt == 1 {
-						if _, err := WriteQAFile(sess.QALog(), artifactDir); err != nil {
+					qaLog := sess.QALog()
+					if len(qaLog) > 0 {
+						qaDir := attemptDir
+						if attempt == 1 {
+							qaDir = artifactDir
+						}
+						if _, err := WriteQAFile(qaLog, qaDir); err != nil {
 							return nil, fmt.Errorf("writing Design Q&A: %w", err)
 						}
+					}
+					decisionLedgerPath, err = WriteDesignDecisionLedger(
+						artifactDir,
+						cfg.Feature,
+						designDecisionSourcePaths(cfg.QAFilePaths, artifactDir),
+					)
+					if err != nil {
+						return nil, err
 					}
 					meta := PlanAttemptMeta{
 						Attempt:      attempt,
@@ -355,6 +380,9 @@ designAttemptLoop:
 		if designPath == "" {
 			return nil, fmt.Errorf("Design attempt %d produced no design markdown", attempt)
 		}
+		if _, err := archiveDesignAttempt(designPath, attemptDir); err != nil {
+			return nil, fmt.Errorf("archiving Design attempt %d: %w", attempt, err)
+		}
 		manifestPath := existingMockupManifestPath(artifactDir)
 		validators := designValidators(manifestPath)
 		setValidatingDesign(cfg, true)
@@ -366,7 +394,10 @@ designAttemptLoop:
 			designPath,
 			validators,
 			validationArtifactDesign,
-			planValidationExtras{MockupManifestPath: manifestPath},
+			planValidationExtras{
+				MockupManifestPath: manifestPath,
+				DecisionLedgerPath: decisionLedgerPath,
+			},
 		)
 		setValidatingDesign(cfg, false)
 
@@ -398,6 +429,33 @@ designAttemptLoop:
 				FinalStatus: "failed",
 				Iterations:  attempt,
 				LastError:   reviewErr.Error(),
+			}, nil
+		}
+
+		decisionIDs, err := readDesignDecisionIDs(decisionLedgerPath)
+		if err != nil {
+			return nil, err
+		}
+		disposition := designReviewDisposition(results, decisionIDs)
+		if disposition.RequiresHuman {
+			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback), 0o644)
+			verdicts := make(map[string]string, len(results))
+			for _, validatorResult := range results {
+				verdicts[strings.ToLower(validatorResult.Domain)] = validatorResult.Status.String()
+			}
+			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+				Attempt:      attempt,
+				AgentStatus:  agentStatusSuccess,
+				ReviewStatus: "NEEDS_HUMAN_REVIEW",
+				AxisVerdicts: verdicts,
+			})
+			if err := recordDesignArtifacts(cfg, designPath, manifestPath); err != nil {
+				return nil, err
+			}
+			return &DesignLoopResult{
+				FinalStatus: "needs_human_review",
+				Iterations:  attempt,
+				LastError:   disposition.Reason,
 			}, nil
 		}
 

@@ -138,9 +138,9 @@ type ReviewDecision struct {
 	IsRewind    bool
 	PhasePlan   bool
 	Roadmap     bool
-	// Comment carries free-text rejection feedback from a roadmap review
-	// menu. Only meaningful when Roadmap == true && Decision == "iterate"
-	// (the roadmap reject path). Mirrors RoadmapReviewDecisionMsg.Comment.
+	// Comment carries free-text rejection feedback from roadmap and Design
+	// review menus when Decision == "iterate". Design feedback is persisted as
+	// a binding decision before the next revision attempt.
 	Comment string
 }
 
@@ -1665,7 +1665,11 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 				feedback = "Human review requested another Design iteration."
 			}
 			attemptDir := filepath.Join(designDir, fmt.Sprintf("attempt-%02d", attempt))
-			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback+"\n"), 0o644)
+			if _, err := agent.RecordDesignHumanDirection(attemptDir, feedback); err != nil {
+				return fmt.Errorf("record Design human direction: %w", err)
+			}
+			humanFeedback := "## Human Direction\n\n" + feedback + "\n"
+			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(humanFeedback), 0o644)
 			_ = agent.WritePlanAttemptMeta(designDir, agent.PlanAttemptMeta{
 				Attempt:      attempt,
 				AgentStatus:  "SUCCESS",

@@ -113,15 +113,22 @@ func RenderTerminalPNGStyled(ansi, pngPath string, width, height, fontPx, linePx
 	if err := os.MkdirAll(filepath.Dir(pngPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	cmd := exec.Command(renderer,
+	args := []string{
 		"--headless",
 		"--disable-gpu",
-		"--screenshot="+pngPath,
+		"--screenshot=" + pngPath,
 		fmt.Sprintf("--window-size=%d,%d", width, height),
 		"--force-device-scale-factor=1",
 		"--default-background-color=00000000",
-		"file://"+tmp.Name(),
-	)
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CI")), "true") {
+		// Hosted CI runners may disable unprivileged user namespaces and do
+		// not provide Chromium's SUID sandbox. The renderer only opens the
+		// locally generated HTML above, so disable the unavailable sandbox.
+		args = append(args, "--no-sandbox")
+	}
+	args = append(args, "file://"+tmp.Name())
+	cmd := exec.Command(renderer, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("chrome screenshot: %w\n%s", err, out)
 	}

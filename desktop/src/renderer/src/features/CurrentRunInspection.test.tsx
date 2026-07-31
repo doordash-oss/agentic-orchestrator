@@ -424,7 +424,9 @@ describe('CurrentRunInspection', () => {
 
     // The lone log channel opens by default; its file opens in the same modal.
     await user.click(screen.getByRole('button', { name: 'Open log research/output.txt' }));
-    expect(await screen.findByRole('dialog', { name: 'Run log research/output.txt' })).toBeVisible();
+    expect(
+      await screen.findByRole('dialog', { name: 'Run log research/output.txt' }),
+    ).toBeVisible();
     expect(screen.getByLabelText('Current run log content')).toHaveTextContent('current log');
     expect(screen.getByLabelText('Current run log content')).not.toHaveTextContent('\u001b');
     expect(mock.api.getRunArtifactContent).toHaveBeenCalledWith(
@@ -463,9 +465,24 @@ describe('CurrentRunInspection', () => {
     mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
     mock.api.listRunLogs.mockResolvedValue({
       logs: [
-        { id: 'v1', path: 'phase-06/verification-events/iter-1.jsonl', size: 2048, modifiedAt: 'x' },
-        { id: 'v2', path: 'phase-06/verification-events/iter-2.jsonl', size: 2048, modifiedAt: 'x' },
-        { id: 'v3', path: 'phase-06/verification-events/iter-3.jsonl', size: 2048, modifiedAt: 'x' },
+        {
+          id: 'v1',
+          path: 'phase-06/verification-events/iter-1.jsonl',
+          size: 2048,
+          modifiedAt: 'x',
+        },
+        {
+          id: 'v2',
+          path: 'phase-06/verification-events/iter-2.jsonl',
+          size: 2048,
+          modifiedAt: 'x',
+        },
+        {
+          id: 'v3',
+          path: 'phase-06/verification-events/iter-3.jsonl',
+          size: 2048,
+          modifiedAt: 'x',
+        },
         { id: 'p1', path: 'phase-06/plan/attempt-1.md', size: 4096, modifiedAt: 'x' },
       ],
     });
@@ -486,9 +503,7 @@ describe('CurrentRunInspection', () => {
       name: 'phase-06/verification-events channel — 3 files',
     });
     expect(channelToggle).toHaveAttribute('aria-expanded', 'false');
-    expect(
-      screen.queryByRole('button', { name: /^Open log / }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Open log / })).not.toBeInTheDocument();
 
     await user.click(channelToggle);
     expect(channelToggle).toHaveAttribute('aria-expanded', 'true');

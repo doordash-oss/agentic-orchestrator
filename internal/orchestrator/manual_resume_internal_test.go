@@ -412,6 +412,91 @@ func TestResumeFeatureInterruptedImplementationPreservesIteration(t *testing.T) 
 	})
 }
 
+func TestResumeFeatureInterruptedImplementationReviewPreservesIteration(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	manager := feature.NewManager(store, config.NewDefault())
+	registry := llm.NewRegistry()
+	registry.Register(&codex.Provider{})
+	planPath := filepath.Join(stateDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n\n## Tasks\n\n### Task 1\n\nReview it.\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	f := &feature.Feature{
+		ID:                  "manual-interrupted-implementation-review",
+		Name:                "Manual interrupted implementation review",
+		Slug:                "manual-interrupted-implementation-review",
+		Status:              feature.StatusInterrupted,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentIteration:    2,
+		CurrentRoadmapPhase: 1,
+		ActiveTimingKey:     "phase-1-impl",
+		ActiveRun:           1,
+		RunCount:            1,
+		SchemaVersion:       feature.SchemaVersionCurrent,
+		Pipeline:            feature.PipelineMoonshot,
+		Models: config.ModelConfig{
+			Implementation: "codex:model-a",
+			Review:         "codex:model-a",
+		},
+		Artifacts:  map[string]string{"plan": planPath},
+		Repos:      []feature.FeatureRepo{{Name: "repo", Path: stateDir}},
+		RepoStates: map[string]*feature.RepoState{"repo": {}},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	unitDir, ok := agent.ResumeUnitDir(stateDir, f)
+	if !ok {
+		t.Fatal("ResumeUnitDir() did not resolve implementation iteration")
+	}
+	now := time.Now()
+	completedAt := now
+	if err := agent.WriteResumeRecord(unitDir, agent.ResumeRecord{
+		ProviderSessionID: "implementation-thread", Provider: "codex", ResolvedModel: "model-a",
+		PhaseKey: "phase-1-impl", Iteration: 2, RunNumber: 1,
+		OrchestratorSessionID: "implementation-parent", CreatedAt: now, UpdatedAt: now,
+		Completed: true, CompletedAt: &completedAt,
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord(parent) error = %v", err)
+	}
+	if err := agent.WriteResumeRecord(filepath.Join(unitDir, "review", "craft"), agent.ResumeRecord{
+		ProviderSessionID: "craft-thread", Provider: "codex", ResolvedModel: "model-a",
+		PhaseKey: "phase-1-impl", ChildKey: "craft", Iteration: 2, RunNumber: 1,
+		OrchestratorSessionID: "implementation-review-craft", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("WriteResumeRecord(child) error = %v", err)
+	}
+	runner := &agent.PhaseRunner{StateDir: stateDir, Registry: registry}
+	o := New(Deps{Lifecycle: manager, Store: store, PhaseRunner: runner}, Hooks{})
+	dispatchedIteration := 0
+	o.SetRunMultiRepoImplFn(func(current *feature.Feature, _ string, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		dispatchedIteration = current.CurrentIteration
+		return make(chan *agent.OrchestratorResult, 1), nil
+	})
+
+	if err := o.ResumeFeature(f.ID); err != nil {
+		t.Fatalf("ResumeFeature() error = %v", err)
+	}
+	if dispatchedIteration != 2 {
+		t.Fatalf("dispatched implementation iteration = %d, want interrupted review iteration 2", dispatchedIteration)
+	}
+	reloaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if reloaded.Status != feature.StatusImplementing ||
+		reloaded.CurrentIteration != 2 ||
+		reloaded.ActiveTimingKey != "phase-1-impl" {
+		t.Fatalf("feature after review resume = status %s iteration %d timing %q",
+			reloaded.Status, reloaded.CurrentIteration, reloaded.ActiveTimingKey)
+	}
+	eligibility := o.implementationReviewResumeEligibility(reloaded)
+	if !eligibility.Eligible {
+		t.Fatalf("implementation review eligibility = %#v, want eligible child continuation", eligibility)
+	}
+}
+
 func TestResumeFeatureClaimsInterruptedKnowledgeBaseRepositories(t *testing.T) {
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)

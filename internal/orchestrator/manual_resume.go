@@ -64,9 +64,16 @@ func (o *Orchestrator) ResumeFeature(featureID string) error {
 		if !dispatch {
 			return ErrResumeConflict
 		}
-		if claim != nil && f.CurrentPhase == feature.PhaseImplement {
+		resumeImplementation := claim != nil
+		if f.CurrentPhase == feature.PhaseImplement && !resumeImplementation {
+			resumeImplementation = o.implementationReviewResumeEligibility(f).Eligible
+		}
+		if f.CurrentPhase == feature.PhaseImplement && resumeImplementation {
 			if err := o.transitionImplementationResume(featureID); err != nil {
-				return errors.Join(err, claim.Release(time.Now()))
+				if claim != nil {
+					return errors.Join(err, claim.Release(time.Now()))
+				}
+				return err
 			}
 		}
 		if err := o.StartFeature(featureID); err != nil {

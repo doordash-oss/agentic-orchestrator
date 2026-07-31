@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -504,6 +505,44 @@ func TestResetToCommit_NoOriginNeeded(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(wtPath, "untracked.txt")); !os.IsNotExist(err) {
 		t.Errorf("untracked.txt should be cleaned, err=%v", err)
+	}
+}
+
+func TestResetToCommitRetriesTransientIndexLock(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	anchor := testutil.CommitFile(t, repoDir, "anchor.txt", "anchor\n", "anchor commit")
+	testutil.CommitFile(t, repoDir, "later.txt", "later\n", "later commit")
+
+	mgr := NewWorktreeManager(t.TempDir())
+	wtPath, err := mgr.Create(repoDir, "reset-lock-retry", "test-repo", "main")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	lockPath := gitOutput(t, wtPath, "rev-parse", "--git-path", "index.lock")
+	if !filepath.IsAbs(lockPath) {
+		lockPath = filepath.Join(wtPath, lockPath)
+	}
+	if err := os.WriteFile(lockPath, []byte("transient test lock\n"), 0o644); err != nil {
+		t.Fatalf("create transient index lock: %v", err)
+	}
+
+	lockReleased := make(chan struct{})
+	go func() {
+		defer close(lockReleased)
+		timer := time.NewTimer(75 * time.Millisecond)
+		defer timer.Stop()
+		<-timer.C
+		_ = os.Remove(lockPath)
+	}()
+	t.Cleanup(func() { <-lockReleased })
+
+	if err := mgr.ResetToCommit(wtPath, anchor); err != nil {
+		t.Fatalf("ResetToCommit() error = %v, want transient index lock retried", err)
+	}
+	if got := gitOutput(t, wtPath, "rev-parse", "HEAD"); got != anchor {
+		t.Fatalf("HEAD = %s, want anchor %s", got, anchor)
 	}
 }
 

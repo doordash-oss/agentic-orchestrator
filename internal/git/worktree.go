@@ -281,41 +281,53 @@ func (w *WorktreeManager) DetectStale(activeFeatureIDs []string) ([]WorktreeInfo
 // ResetToBase hard-resets a worktree back to its base branch, discarding all
 // local commits and changes on the feature branch.
 func (w *WorktreeManager) ResetToBase(worktreePath, baseBranch string) error {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Fetch the latest base branch so origin/<baseBranch> is up-to-date
 	fetchCmd := exec.Command("git", "-C", worktreePath, "fetch", "origin", baseBranch)
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetching origin/%s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	cmd := exec.Command("git", "-C", worktreePath, "reset", "--hard", "origin/"+baseBranch)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "reset", "--hard", "origin/"+baseBranch); err != nil {
 		return fmt.Errorf("resetting worktree to %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	cmd = exec.Command("git", "-C", worktreePath, "clean", "-fd")
-	_ = cmd.Run()
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("cleaning worktree after reset to %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
+	}
 	return nil
 }
 
 // ResetToBaseLocal hard-resets a worktree back to its local base branch ref,
 // without fetching from any remote. Used for repos without an origin remote.
 func (w *WorktreeManager) ResetToBaseLocal(worktreePath, baseBranch string) error {
-	cmd := exec.Command("git", "-C", worktreePath, "reset", "--hard", baseBranch)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "reset", "--hard", baseBranch); err != nil {
 		return fmt.Errorf("resetting to local %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
 	}
-	cmd = exec.Command("git", "-C", worktreePath, "clean", "-fd")
-	_ = cmd.Run()
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("cleaning worktree after reset to local %s: %s: %w", baseBranch, strings.TrimSpace(string(out)), err)
+	}
 	return nil
 }
 
 // ResetToCommit hard-resets a worktree to a local commit SHA without fetching
 // from any remote, then cleans untracked files.
 func (w *WorktreeManager) ResetToCommit(worktreePath, commitSHA string) error {
-	cmd := exec.Command("git", "-C", worktreePath, "reset", "--hard", commitSHA)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "reset", "--hard", commitSHA); err != nil {
 		return fmt.Errorf("resetting to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
 	}
-	cmd = exec.Command("git", "-C", worktreePath, "clean", "-fd")
-	_ = cmd.Run()
+	if out, err := runGitMutationWithIndexLockRetry(worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("cleaning worktree after reset to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
+	}
 	return nil
 }
 

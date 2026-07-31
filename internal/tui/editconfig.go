@@ -109,6 +109,12 @@ type EditConfigModel struct {
 	// dispatch, which branches to saveWorkspaceConfigCmd instead of
 	// saveFeatureConfigCmd.
 	isWorkspace bool
+	// pairedMode is true when this editor edits Review configuration for both
+	// the parent and active refactor child. The pipeline is preserved from
+	// the selected record and not editable.
+	pairedMode      bool
+	pairedName      string
+	pairedFeatureID string
 	// width is the terminal width propagated by the parent model via
 	// WindowSizeMsg. Zero until the first resize is received; the overlay
 	// falls back to natural panel widths when it is still zero.
@@ -305,10 +311,20 @@ func (m EditConfigModel) View() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("62")).Padding(0, 1)
 	diffStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
 
-	b.WriteString(titleStyle.Render(fmt.Sprintf(" Edit Config · %s ", m.featureName)))
+	if m.pairedMode {
+		b.WriteString(titleStyle.Render(fmt.Sprintf(" Paired Review · %s + %s ", m.featureName, m.pairedName)))
+	} else {
+		b.WriteString(titleStyle.Render(fmt.Sprintf(" Edit Config · %s ", m.featureName)))
+	}
 	b.WriteString("\n")
-	b.WriteString(diffStyle.Render(m.diffSummary()))
-	b.WriteString("\n")
+	if m.pairedMode {
+		pairedHintStyle := lipgloss.NewStyle().Foreground(colorSubtext)
+		b.WriteString(pairedHintStyle.Render("Review changes apply to both the parent and active refactor child. Pipeline is preserved per record."))
+		b.WriteString("\n")
+	} else {
+		b.WriteString(diffStyle.Render(m.diffSummary()))
+		b.WriteString("\n")
+	}
 	if m.deferredEffectWarning {
 		warningStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 		b.WriteString("\n")

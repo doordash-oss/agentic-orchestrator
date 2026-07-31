@@ -224,6 +224,12 @@ type WizardModel struct {
 	// modelCursor / checkpointsCursor / inquirenessCursor / manually-set flags.
 	configCatalog PhaseModelCatalog
 	configEditor  ConfigEditorModel
+
+	// Refactor wizard mode: skips the Where step and inherits repos/models/
+	// checkpoints from the parent feature.
+	refactorMode        bool
+	refactorParentID    string
+	refactorParentRepos []string
 }
 
 func pipelineProfileFromKey(key string) feature.PipelineProfile {
@@ -370,6 +376,74 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		provisionalPublishable: true, // default true until an unpublished repo is selected
 		configCatalog:          configCatalog,
 	}
+}
+
+// RefactorWizardSeed carries the TUI/config-domain values the refactor
+// wizard inherits from the selected parent: the inherited repositories in
+// authoritative order and the Review axes seeded from the parent's current
+// configuration. Callers extract it from the transport DTO so the shared
+// wizard stays coupled only to the config domain.
+type RefactorWizardSeed struct {
+	ParentID     string
+	ParentRepos  []string
+	Models       config.ModelConfig
+	Effort       config.EffortConfig
+	Inquireness  feature.Inquireness
+	RiskLevel    feature.RiskLevel
+	ExitCriteria string
+	Checkpoints  config.Checkpoints
+}
+
+// NewRefactorWizardModel creates a wizard variant for refactoring an existing
+// feature. It skips the Where step (repos are inherited from the parent) and
+// seeds models/checkpoints from the seed's Review axes.
+func NewRefactorWizardModel(availRepos []string, repoPaths map[string]string, repoConfigs map[string]config.RepoConfig, defaults config.DefaultsConfig, modelKey string, providerModels map[string][]string, providerOrder []string, phaseDefaults map[string]string, phaseModels map[string]map[string][]string, existingSlugs map[string]string, workspaceRoots []string, seed RefactorWizardSeed) WizardModel {
+	m := NewWizardModel(availRepos, repoPaths, repoConfigs, defaults, modelKey, providerModels, providerOrder, phaseDefaults, phaseModels, existingSlugs, workspaceRoots)
+
+	m.refactorMode = true
+	m.refactorParentID = seed.ParentID
+	m.refactorParentRepos = append([]string(nil), seed.ParentRepos...)
+
+	// Inherit selected repos from the parent so the review summary and
+	// result carry them without the user picking repos again.
+	for _, r := range seed.ParentRepos {
+		m.selectedRepos[r] = true
+	}
+
+	// Seed every Review axis from the parent's current configuration. In
+	// refactor mode these seeded values are authoritative: pipeline
+	// selection is the child's independent choice and must not overwrite
+	// the seeded parent values, so pipeline defaults stay latent here.
+	m.models = seed.Models
+	m.modelsManuallySet = true
+
+	m.effort = seed.Effort
+	for i, opt := range m.inquirenessOptions {
+		if opt == string(seed.Inquireness) {
+			m.inquirenessCursor = i
+			break
+		}
+	}
+	if seed.ExitCriteria != "" {
+		m.exitCriteria = seed.ExitCriteria
+	}
+	for i, opt := range m.riskOptions {
+		if opt == string(seed.RiskLevel) {
+			m.riskCursor = i
+			m.riskAutoDetected = false
+			break
+		}
+	}
+
+	m.checkpoints[checkpointInquiryReview] = seed.Checkpoints.InquiryReview
+	m.checkpoints[checkpointResearchReview] = seed.Checkpoints.ResearchReview
+	m.checkpoints[checkpointDesignReview] = seed.Checkpoints.DesignReview
+	m.checkpoints[checkpointRoadmapReview] = seed.Checkpoints.RoadmapReview
+	m.checkpoints[checkpointPhasePlanReview] = seed.Checkpoints.PhasePlanReview
+	m.checkpoints[checkpointManualPublish] = seed.Checkpoints.ManualPublish
+	m.checkpointsManuallySet = true
+
+	return m
 }
 
 func createGitRepo(parentPath, name string) error {
@@ -1308,6 +1382,10 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 					m.nameInput.Focus()
 					return m, textinput.Blink
 				case summaryFieldRepos:
+					if m.refactorMode {
+						// Repos are read-only in refactor mode — no navigation.
+						return m, nil
+					}
 					m.showBranchWarning = false
 					m.step = wizardStepWhere
 					m.whereFocus = whereFocusList
@@ -1453,10 +1531,14 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 				}
 			}
 			if m.step == wizardStepPipeline && m.pipelineCursor > 0 {
-				m.snapshotPipelinePreference(m.currentPipelineKey())
+				if !m.refactorMode {
+					m.snapshotPipelinePreference(m.currentPipelineKey())
+				}
 				m.pipelineCursor--
-				m.applyPipelinePreference(m.currentPipelineKey())
-				m.applyPipelineDefaults()
+				if !m.refactorMode {
+					m.applyPipelinePreference(m.currentPipelineKey())
+					m.applyPipelineDefaults()
+				}
 			}
 			if m.step == wizardStepReview {
 				m.prevSummaryField()
@@ -1506,10 +1588,14 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 				}
 			}
 			if m.step == wizardStepPipeline && m.pipelineCursor < len(m.pipelineOptions)-1 {
-				m.snapshotPipelinePreference(m.currentPipelineKey())
+				if !m.refactorMode {
+					m.snapshotPipelinePreference(m.currentPipelineKey())
+				}
 				m.pipelineCursor++
-				m.applyPipelinePreference(m.currentPipelineKey())
-				m.applyPipelineDefaults()
+				if !m.refactorMode {
+					m.applyPipelinePreference(m.currentPipelineKey())
+					m.applyPipelineDefaults()
+				}
 			}
 			if m.step == wizardStepReview {
 				m.nextSummaryField()
@@ -2366,6 +2452,17 @@ func (m WizardModel) goBack() (WizardModel, tea.Cmd) {
 		return m, textinput.Blink
 
 	case wizardStepPipeline:
+		if m.refactorMode {
+			// No Where step in refactor mode — go back to What.
+			m.showBranchWarning = false
+			m.step = wizardStepWhat
+			if m.whatFocus == 1 {
+				cmd := m.descInput.Focus()
+				return m, cmd
+			}
+			m.nameInput.Focus()
+			return m, textinput.Blink
+		}
 		m.showBranchWarning = false
 		m.step = wizardStepWhere
 		m.whereFocus = whereFocusList
@@ -2394,6 +2491,16 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 			return m, nil
 		}
 		m.nameWarning = ""
+
+		if m.refactorMode {
+			// Skip the Where step entirely — repos are inherited from the
+			// parent feature. Go straight to pipeline selection. Risk stays
+			// seeded from the parent; only an explicit user edit changes it.
+			m.nameInput.Blur()
+			m.descInput.Blur()
+			m.step = wizardStepPipeline
+			return m, nil
+		}
 
 		// Advance to Where
 		m.step = wizardStepWhere
@@ -2442,17 +2549,24 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 		}
 
 		// Either no off-default repos (first Enter) or second Enter after warning
-		// Auto-suggest pipeline and risk for the pipeline step
-		m.riskCursor = suggestRiskLevel(m.descInput.Value(), m.nameInput.Value())
-		m.riskAutoDetected = m.riskCursor != 1
+		// Auto-suggest pipeline and risk for the pipeline step. In refactor mode
+		// the parent's risk level is already seeded and stays authoritative.
+		if !m.refactorMode {
+			m.riskCursor = suggestRiskLevel(m.descInput.Value(), m.nameInput.Value())
+			m.riskAutoDetected = m.riskCursor != 1
+		}
 
 		m.step = wizardStepPipeline
 		return m, nil
 
 	case wizardStepPipeline:
 		// Pipeline selected — apply pipeline defaults (including per-repo config overrides)
-		// before advancing to the review screen.
-		m.applyPipelineDefaults()
+		// before advancing to the review screen. In refactor mode the Review
+		// axes are seeded from the parent and stay independent of the child's
+		// pipeline choice, so no defaults are applied.
+		if !m.refactorMode {
+			m.applyPipelineDefaults()
+		}
 		m.summaryCursor = summaryFieldRisk
 		m.step = wizardStepReview
 		return m, nil
@@ -2465,7 +2579,16 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 				repos = append(repos, r)
 			}
 		}
-		projection := m.currentGateProjection()
+		// Refactor mode submits the parent-seeded paired Review gates
+		// verbatim: the selected pipeline is the child's independent
+		// identity, so filtering the checkpoint state through it would zero
+		// gates the parent retains.
+		var checkpoints feature.Checkpoints
+		if m.refactorMode {
+			checkpoints = m.checkpointState()
+		} else {
+			checkpoints = m.currentGateProjection().Checkpoints
+		}
 		perRepo := m.useCurrentBranchPerRepo()
 		anyCurrent := false
 		for _, v := range perRepo {
@@ -2488,7 +2611,7 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 			Pipeline:                pipelineProfileFromKey(m.pipelineOptions[m.pipelineCursor]),
 			UseCurrentBranch:        anyCurrent,
 			UseCurrentBranchPerRepo: perRepo,
-			Checkpoints:             projection.Checkpoints,
+			Checkpoints:             checkpoints,
 		}
 		return m, nil
 	}
@@ -2704,6 +2827,9 @@ func suggestRiskLevel(description, name string) int {
 func (m WizardModel) wizardContent() (contentBox, footer string) {
 	stepProgress := m.renderStepProgress()
 	titlePrefix := "New Feature  "
+	if m.refactorMode {
+		titlePrefix = "Start Refactor  "
+	}
 
 	panelWidth := m.wizardPanelWidth()
 	inputBoxWidth := panelWidth - 6
@@ -2760,6 +2886,14 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		// File picker dropdown
 		if m.filePicker.IsActive() {
 			c.WriteString(m.filePicker.View() + "\n")
+		}
+		// Refactor mode: show inherited repos as read-only.
+		if m.refactorMode && len(m.refactorParentRepos) > 0 {
+			c.WriteString("\n")
+			c.WriteString(lipgloss.NewStyle().Foreground(colorSubtext).Render("Inherited repos (read-only)") + "\n")
+			for _, r := range m.refactorParentRepos {
+				c.WriteString(MutedStyle.Render("  "+r) + "\n")
+			}
 		}
 	case wizardStepWhere:
 		// LabelStyle has a hard Width(12) cap, so any heading or repo-name
@@ -3199,10 +3333,23 @@ func (m WizardModel) renderStepProgress() string {
 }
 
 func (m WizardModel) totalStepCount() int {
+	if m.refactorMode {
+		return 3
+	}
 	return 4
 }
 
 func (m WizardModel) currentStepNum() int {
+	if m.refactorMode {
+		switch m.step {
+		case wizardStepWhat:
+			return 1
+		case wizardStepPipeline:
+			return 2
+		case wizardStepReview:
+			return 3
+		}
+	}
 	return int(m.step) + 1
 }
 
@@ -3212,6 +3359,16 @@ func (m WizardModel) IsDone() bool {
 
 func (m WizardModel) IsCancelled() bool {
 	return m.cancelled
+}
+
+// IsRefactor returns true when the wizard was created in refactor mode.
+func (m WizardModel) IsRefactor() bool {
+	return m.refactorMode
+}
+
+// RefactorParentID returns the parent feature ID for refactor mode wizards.
+func (m WizardModel) RefactorParentID() string {
+	return m.refactorParentID
 }
 
 func (m WizardModel) Result() *WizardResult {

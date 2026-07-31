@@ -78,11 +78,10 @@ const (
 )
 
 type loopTestFeatureOptions struct {
-	Name           string
-	Slug           string
-	Description    string
-	ExitCriteria   string
-	RefactorPrompt string
+	Name         string
+	Slug         string
+	Description  string
+	ExitCriteria string
 
 	// Status overrides the feature's lifecycle status. Defaults to
 	// feature.StatusPublished when zero.
@@ -143,7 +142,6 @@ func newLoopTestFeature(t *testing.T, stateDir, featureID string, repoNames []st
 		Repos:               repos,
 		RepoStates:          repoStates,
 		ExitCriteria:        opts.ExitCriteria,
-		RefactorPrompt:      opts.RefactorPrompt,
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)

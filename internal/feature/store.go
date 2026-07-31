@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -65,6 +66,30 @@ func IsPartialLoadError(err error) bool {
 type Store struct {
 	BaseDir string
 	mu      sync.Mutex // serializes writes while reads use atomic file commits
+
+	// testSaveInterceptor is a test-only hook consulted by saveUnlocked to
+	// inject failures. The concrete wiring lives in export_test.go.
+	testSaveInterceptor func(f *Feature) error
+}
+
+// RelationshipChildren is the complete child-owned relationship view for a
+// parent. Active is nil when no child is open. Closed contains every settled
+// child in deterministic history order.
+type RelationshipChildren struct {
+	Active *Feature
+	Closed []*Feature
+}
+
+// isLegacyProviderBookkeepingDir identifies provider-owned directories that
+// older Agentico versions wrote beneath the feature store. They are not
+// feature records and must not participate in feature or relationship scans.
+func isLegacyProviderBookkeepingDir(name string) bool {
+	switch name {
+	case "opencode", "codex-home":
+		return true
+	default:
+		return false
+	}
 }
 
 func NewStore(baseDir string) *Store {
@@ -99,6 +124,203 @@ func (s *Store) Modify(id string, fn func(f *Feature) error) error {
 	return s.saveUnlocked(f)
 }
 
+// RelationshipGuardFunc evaluates whether a mutation is allowed given the
+// loaded feature and its active child (nil when the feature is a child or no
+// active child exists). Return an error to reject the mutation. The feature
+// and activeChild are loaded under the store mutex; do not call other Store
+// methods from within.
+type RelationshipGuardFunc func(f *Feature, activeChild *Feature) error
+
+// ModifyGuarded atomically loads a feature, runs the relationship guard
+// function under the store mutex (using the same activeChildOfUnlocked scan
+// as CreateChildLocked), and — if the guard passes — applies the mutation
+// function and saves. This closes the time-of-check/time-of-use gap between a
+// standalone RelationshipGuard call and a subsequent Store.Modify: child
+// creation (CreateChildLocked) holds the same mutex, so no child can appear
+// between the guard check and the mutation.
+func (s *Store) ModifyGuarded(
+	id string,
+	guard RelationshipGuardFunc,
+	fn func(f *Feature) error,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	f, err := s.loadUnlocked(id)
+	if err != nil {
+		return err
+	}
+	if f.IsChild() && !f.IsActiveChild() {
+		return ErrChildRelationshipClosed
+	}
+
+	var activeChild *Feature
+	if !f.IsChild() {
+		activeChild, err = s.activeChildOfUnlocked(id)
+		if err != nil {
+			return fmt.Errorf("checking active child during guarded modify: %w", err)
+		}
+	}
+
+	if guard != nil {
+		if err := guard(f, activeChild); err != nil {
+			return err
+		}
+	}
+
+	if err := fn(f); err != nil {
+		return err
+	}
+	return s.saveUnlocked(f)
+}
+
+// RelationshipChildren returns the unique active child and complete closed
+// history derived from child-owned Parent links. It fails closed if any stored
+// record cannot be loaded or carries an invalid relationship lifecycle state.
+func (s *Store) RelationshipChildren(parentID string) (*RelationshipChildren, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.relationshipChildrenUnlocked(parentID)
+}
+
+// CloseChild atomically settles an active child relationship exactly once.
+// Retrying the same outcome is a no-op and preserves the original timestamp;
+// a different outcome is rejected as a mutation of closed history.
+func (s *Store) CloseChild(childID, outcome string, closedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if outcome != ChildCloseOutcomeCompleted && outcome != ChildCloseOutcomeDiscarded {
+		return &ChildRelationshipError{ChildID: childID, Reason: fmt.Sprintf("unknown close outcome %q", outcome)}
+	}
+	if closedAt.IsZero() {
+		return &ChildRelationshipError{ChildID: childID, Reason: fmt.Sprintf("%s child has no valid close timestamp", outcome)}
+	}
+	child, err := s.loadUnlocked(childID)
+	if err != nil {
+		return err
+	}
+	if !child.IsChild() {
+		return &ChildRelationshipError{ChildID: childID, Reason: "feature is not a child"}
+	}
+	if err := validateChildRelationship(child); err != nil {
+		return err
+	}
+	if !child.IsActiveChild() {
+		if child.Parent.CloseOutcome == outcome {
+			return nil
+		}
+		return ErrChildRelationshipClosed
+	}
+	child.Parent.CloseOutcome = outcome
+	timestamp := closedAt
+	child.Parent.ClosedAt = &timestamp
+	return s.saveUnlocked(child)
+}
+
+// SetClosedChildDiffSummary records the best-effort preserved diff summary of
+// a closed child for post-close inspection. It no-ops when the feature is not
+// a closed child (the close write owns ordering) or the summary is unchanged.
+func (s *Store) SetClosedChildDiffSummary(childID, summary string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if summary == "" {
+		return nil
+	}
+	child, err := s.loadUnlocked(childID)
+	if err != nil {
+		return err
+	}
+	if !child.IsChild() || child.IsActiveChild() {
+		return nil
+	}
+	if child.Parent.DiffSummary == summary {
+		return nil
+	}
+	child.Parent.DiffSummary = summary
+	return s.saveUnlocked(child)
+}
+
+func (s *Store) relationshipChildrenUnlocked(parentID string) (*RelationshipChildren, error) {
+	result, err := s.validatedRelationshipChildrenUnlocked(parentID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(result.Closed, func(i, j int) bool {
+		left, right := result.Closed[i], result.Closed[j]
+		if !left.Parent.ClosedAt.Equal(*right.Parent.ClosedAt) {
+			return left.Parent.ClosedAt.After(*right.Parent.ClosedAt)
+		}
+		if !left.Created.Equal(right.Created) {
+			return left.Created.After(right.Created)
+		}
+		return left.ID < right.ID
+	})
+	return result, nil
+}
+
+// validatedRelationshipChildrenUnlocked discovers the complete relationship
+// while enforcing the same fail-closed invariants for every caller. Callers
+// may apply a projection-specific ordering only after validation succeeds.
+func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*RelationshipChildren, error) {
+	entries, err := os.ReadDir(s.BaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &RelationshipChildren{}, nil
+		}
+		return nil, fmt.Errorf("listing features directory: %w", err)
+	}
+
+	result := &RelationshipChildren{}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == parentID || isLegacyProviderBookkeepingDir(entry.Name()) {
+			continue
+		}
+		child, err := s.loadUnlocked(entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("classifying feature record %q during relationship scan: %w", entry.Name(), err)
+		}
+		if child.Parent == nil || child.Parent.ParentID != parentID {
+			continue
+		}
+		if err := validateChildRelationship(child); err != nil {
+			return nil, err
+		}
+		if child.IsActiveChild() {
+			if result.Active != nil {
+				return nil, &ChildRelationshipError{
+					ChildID: child.ID,
+					Reason:  fmt.Sprintf("parent %s has multiple active children %s and %s", parentID, result.Active.ID, child.ID),
+				}
+			}
+			result.Active = child
+			continue
+		}
+		result.Closed = append(result.Closed, child)
+	}
+	return result, nil
+}
+
+func validateChildRelationship(child *Feature) error {
+	outcome := child.Parent.CloseOutcome
+	closedAt := child.Parent.ClosedAt
+	switch outcome {
+	case "":
+		if closedAt != nil {
+			return &ChildRelationshipError{ChildID: child.ID, Reason: "active child has a close timestamp"}
+		}
+	case ChildCloseOutcomeCompleted, ChildCloseOutcomeDiscarded:
+		if closedAt == nil || closedAt.IsZero() {
+			return &ChildRelationshipError{ChildID: child.ID, Reason: fmt.Sprintf("%s child has no valid close timestamp", outcome)}
+		}
+	default:
+		return &ChildRelationshipError{ChildID: child.ID, Reason: fmt.Sprintf("unknown close outcome %q", outcome)}
+	}
+	return nil
+}
+
 // saveUnlocked writes a feature and (if populated and not sealed) its active
 // run without acquiring the mutex. Uses atomic write (temp file + rename) for
 // both files so readers never see a partial file.
@@ -107,6 +329,11 @@ func (s *Store) Modify(id string, fn func(f *Feature) error) error {
 // companion Run so the split-persistence layout stays coherent with call
 // sites that keep reading/writing `f.X` directly.
 func (s *Store) saveUnlocked(f *Feature) error {
+	if s.testSaveInterceptor != nil {
+		if err := s.testSaveInterceptor(f); err != nil {
+			return err
+		}
+	}
 	dir := filepath.Join(s.BaseDir, f.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating feature directory: %w", err)
@@ -257,6 +484,7 @@ func (s *Store) loadRunUnlocked(featureID string, runNumber int) (*Run, error) {
 		return nil, fmt.Errorf("parsing run file: %w", err)
 	}
 	normalizeLegacyArtifactAliases(r.Artifacts)
+	dropUnknownCycleState(&r)
 	return &r, nil
 }
 
@@ -271,7 +499,7 @@ func (s *Store) List() ([]*Feature, error) {
 	var features []*Feature
 	var warnings []LoadWarning
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || isLegacyProviderBookkeepingDir(e.Name()) {
 			continue
 		}
 		f, err := s.loadUnlocked(e.Name())
@@ -580,15 +808,172 @@ func (s *Store) CleanupOrphanRuns(id string) ([]int, error) {
 	return deleted, nil
 }
 
+// CreateChildLocked atomically validates and persists a parent-child
+// relationship under a single Store.mu hold. Sequence:
+//  1. Load the parent plus any active child (derived by scanning stored
+//     feature records for child-owned Parent links).
+//  2. Call fn(parent, activeChild) — nil activeChild when none exists. fn
+//     validates the launch, mutates the parent (e.g. applying the submitted
+//     Review configuration), and returns the child plus its durable
+//     creation intent. Error aborts without writing anything.
+//  3. Persist the parent WITH the pending intent stamped (durable intent).
+//  4. Persist the child (feature.yaml + first run.yaml, atomically).
+//  5. Clear the intent and persist the parent again.
+//
+// A crash between steps 3 and 5 leaves the intent on the parent;
+// ReconcilePendingChildCreations rolls the creation forward exactly once.
+// Concurrent launches under the same parent serialize on Store.mu, so
+// exactly one winner observes activeChild == nil.
+//
+// The fn closure must NOT call any other Store method (mu is not
+// reentrant).
+func (s *Store) CreateChildLocked(
+	parentID string,
+	fn func(parent *Feature, activeChild *Feature) (child *Feature, intent *ChildCreationIntent, err error),
+) (*Feature, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	parent, err := s.loadUnlocked(parentID)
+	if err != nil {
+		return nil, err
+	}
+	activeChild, err := s.activeChildOfUnlocked(parentID)
+	if err != nil {
+		return nil, err
+	}
+	child, intent, err := fn(parent, activeChild)
+	if err != nil {
+		return nil, err
+	}
+	if child == nil || intent == nil {
+		return nil, fmt.Errorf("create-child closure must return a child and an intent")
+	}
+	if child.ID == "" || intent.ChildID != child.ID {
+		return nil, fmt.Errorf("create-child intent %q does not match child %q", intent.ChildID, child.ID)
+	}
+
+	parent.PendingChild = intent
+	if err := s.saveUnlocked(parent); err != nil {
+		return nil, fmt.Errorf("saving parent with child intent: %w", err)
+	}
+	if err := s.saveUnlocked(child); err != nil {
+		return nil, fmt.Errorf("saving child: %w", err)
+	}
+	parent.PendingChild = nil
+	if err := s.saveUnlocked(parent); err != nil {
+		return nil, fmt.Errorf("clearing child intent on parent: %w", err)
+	}
+	return child, nil
+}
+
+// activeChildOfUnlocked scans stored feature records for the child that
+// links back to parentID with an empty close outcome. Callers hold s.mu.
+func (s *Store) activeChildOfUnlocked(parentID string) (*Feature, error) {
+	children, err := s.relationshipChildrenUnlocked(parentID)
+	if err != nil {
+		return nil, err
+	}
+	return children.Active, nil
+}
+
+// ReconcilePendingChildCreations rolls interrupted child creations forward
+// exactly once. For every feature carrying a PendingChild intent: when the
+// child already loads cleanly the intent is simply cleared (creation
+// finished before the crash); otherwise the child is rebuilt from the
+// durable intent — preserving the selected parent configuration captured at
+// launch — and then the intent is cleared. Returns the parent IDs whose
+// intents were resolved. Idempotent; a second run finds no intents.
+//
+// The intent scan reads each parent's feature.yaml directly: the durable
+// intent is owned by the parent's feature record, so unrelated run state
+// must never gate (or silently swallow) startup recovery. An unreadable
+// feature record is surfaced as a contextual load error instead of being
+// skipped, because skipping could let a submitted child remain neither
+// materialized nor diagnosed. Intents are cleared by rewriting feature.yaml
+// alone, so a parent whose active run.yaml is missing still reconciles.
+//
+// Intended to run at startup before abandoned-setup reconciliation so a
+// rebuilt child (left in SettingUpWorktrees with a running setup intent) is
+// then marked retryable-with-diagnostics by ReconcileAbandonedSetups in the
+// correct order.
+func (s *Store) ReconcilePendingChildCreations() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.BaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing features directory: %w", err)
+	}
+	var reconciled []string
+	var errs []error
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.BaseDir, e.Name(), "feature.yaml"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("reading feature record %q during pending-child scan: %w", e.Name(), err))
+			continue
+		}
+		var parent Feature
+		if err := yaml.Unmarshal(data, &parent); err != nil {
+			errs = append(errs, fmt.Errorf("parsing feature record %q during pending-child scan: %w", e.Name(), err))
+			continue
+		}
+		if parent.PendingChild == nil {
+			continue
+		}
+		intent := parent.PendingChild
+		if _, err := s.loadUnlocked(intent.ChildID); err != nil {
+			child := intent.Child
+			if child.ID == "" || child.ID != intent.ChildID {
+				errs = append(errs, fmt.Errorf("parent %s: child intent %q is incomplete; cannot roll forward", parent.ID, intent.ChildID))
+				continue
+			}
+			run := &Run{RunNumber: 1, Setup: intent.Setup}
+			if len(child.Repos) > 0 {
+				run.RepoStates = make(map[string]*RepoState, len(child.Repos))
+				for _, fr := range child.Repos {
+					run.RepoStates[fr.Name] = &RepoState{}
+				}
+			}
+			child.ActiveRun = 1
+			child.RunCount = 1
+			child.SetRun(run)
+			if err := s.saveUnlocked(&child); err != nil {
+				errs = append(errs, fmt.Errorf("parent %s: rebuilding child %s: %w", parent.ID, intent.ChildID, err))
+				continue
+			}
+		}
+		parent.PendingChild = nil
+		if err := s.writeFeatureYAMLUnlocked(parent.ID, &parent); err != nil {
+			errs = append(errs, fmt.Errorf("clearing child intent on parent %s: %w", parent.ID, err))
+			continue
+		}
+		reconciled = append(reconciled, parent.ID)
+	}
+	if len(errs) > 0 {
+		return reconciled, errors.Join(errs...)
+	}
+	return reconciled, nil
+}
+
 // writeFeatureYAMLUnlocked writes ONLY feature.yaml atomically via temp-file
 // + rename (matching saveUnlocked's pattern). Unlike saveUnlocked, it does
 // NOT call syncShadowsToRun, does NOT fabricate a missing f.run, and does
 // NOT persist the active run's run.yaml — those side effects are unsafe
 // when f was unmarshaled directly from feature.yaml (no shadows populated,
 // no run loaded). Used by CleanupOrphanRuns to reconcile ActiveRun / RunCount
-// after deletions without risking a stale shadow value leaking into
-// feature.yaml or a fabricated Run overwriting a sealed run.yaml. Callers
-// hold s.mu.
+// and by ReconcilePendingChildCreations to clear a pending-child intent,
+// without risking a stale shadow value leaking into feature.yaml or a
+// fabricated Run overwriting a sealed run.yaml. Callers hold s.mu.
 func (s *Store) writeFeatureYAMLUnlocked(id string, f *Feature) error {
 	dir := filepath.Join(s.BaseDir, id)
 	data, err := yaml.Marshal(f)

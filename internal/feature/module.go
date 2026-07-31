@@ -32,9 +32,10 @@ type Params struct {
 // module does not import internal/git directly.
 type ManagerDeps struct {
 	fx.In
-	Worktrees WorktreeOps `optional:"true"`
-	Branches  BranchOps   `optional:"true"`
-	PRs       PRCloser    `optional:"true"`
+	Worktrees   WorktreeOps    `optional:"true"`
+	Branches    BranchOps      `optional:"true"`
+	PRs         PRCloser       `optional:"true"`
+	Cleanliness CleanlinessOps `optional:"true"`
 }
 
 // Module provides feature Store and Manager via fx. The adapter dependencies
@@ -49,6 +50,7 @@ var Module = fx.Module("feature",
 		mgr.Worktrees = deps.Worktrees
 		mgr.Branches = deps.Branches
 		mgr.PRs = deps.PRs
+		mgr.Cleanliness = deps.Cleanliness
 		return mgr
 	}),
 )

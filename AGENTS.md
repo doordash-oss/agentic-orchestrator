@@ -114,7 +114,7 @@ isolate **both** state and config:
 agentico --config /tmp/agentico2/config.yaml --state-dir /tmp/agentico2/features
 ```
 
-Sibling dirs (`permissions/`, `worktrees/`, `skills/`, `guidelines/`,
-`agentico.log`) are derived from `filepath.Dir(--state-dir)`. Always pass a
+Sibling dirs (`permissions/`, `provider-state/`, `worktrees/`, `skills/`,
+`guidelines/`, `agentico.log`) are derived from `filepath.Dir(--state-dir)`. Always pass a
 `<parent>/features` path — not the parent itself — so they stay grouped under
 `<parent>/`.

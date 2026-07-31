@@ -43,6 +43,23 @@ const errCodeBadRequest = "bad_request"
 // conflicting feature state (ActionConflictError).
 const errCodeConflict = "conflict"
 
+// Stable machine codes for the typed refactor-launch failures and the
+// child-feature execution gate. Each maps a feature-package sentinel or
+// typed error (matched with errors.Is/As) to its API code and status.
+const (
+	errCodeRefactorParentNotFound         = "parent_not_found"
+	errCodeRefactorParentIsChild          = "parent_is_child"
+	errCodeRefactorParentStatusIneligible = "parent_status_ineligible"
+	errCodeActiveChildExists              = "active_child_exists"
+	errCodeParentWorktreesDirty           = "parent_worktrees_dirty"
+	errCodeChildExecutionBlocked          = "child_execution_blocked"
+	errCodeChildRelationshipClosed        = "relationship_closed"
+	errCodeParentMutationLocked           = "parent_mutation_locked"
+	errCodeChildMutationRestricted        = "child_mutation_restricted"
+	errCodeCascadeDeleteNotAvailable      = "cascade_delete_not_available"
+	errCodePipelineMismatch               = "pipeline_mismatch"
+)
+
 // resultCreated is the ActionResultDTO.Result value for a newly created
 // feature.
 const resultCreated = "created"
@@ -113,13 +130,13 @@ type MutationTarget interface {
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
 	RetryFeature(featureID string) (RetryFeatureResponse, error)
 	StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error)
+	RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error)
 	FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error)
 	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error)
-	StartRefactor(featureID string, req RefactorActionRequest) (RefactorStartResponse, error)
-	RestartRefactor(featureID string, req RefactorActionRequest) (RefactorRestartResponse, error)
 	MarkDone(featureID string) (MarkDoneResponse, error)
 	CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error)
 	DeleteFeature(featureID string) (DeleteFeatureResponse, error)
+	DiscardChild(featureID string) (DiscardChildResponse, error)
 	ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error)
 	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (RecoveryActionResponse, error)
 }
@@ -365,14 +382,6 @@ type ReviewCommentsActionRequest struct {
 	Comments []ReviewCommentDTO `json:"comments,omitempty"`
 }
 
-type RefactorActionRequest struct {
-	Repo        string                  `json:"repo,omitempty"`
-	Prompt      string                  `json:"prompt"`
-	Images      []string                `json:"images,omitempty"`
-	Attachments []string                `json:"attachments,omitempty"`
-	Pipeline    feature.PipelineProfile `json:"pipeline,omitempty"`
-}
-
 type CleanupActionRequest struct {
 	Target string `json:"target,omitempty"`
 }
@@ -411,12 +420,92 @@ func writeMutationError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "mutation failed", nil)
 		return
 	}
+	if writeChildLaunchError(w, err) {
+		return
+	}
+	if writeRelationshipGuardError(w, err) {
+		return
+	}
 	var conflict *ActionConflictError
 	if errors.As(err, &conflict) {
 		writeAPIError(w, http.StatusConflict, errCodeConflict, conflict.Error(), conflict.Target)
 		return
 	}
+	if errors.Is(err, feature.ErrPipelineMismatch) {
+		writeAPIError(w, http.StatusConflict, errCodePipelineMismatch, err.Error(), nil)
+		return
+	}
 	writeAPIError(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
+}
+
+// writeRelationshipGuardError maps the typed relationship-guard rejections to
+// their stable API machine codes. Returns true when err was a recognized
+// guard rejection.
+func writeRelationshipGuardError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, feature.ErrChildRelationshipClosed):
+		writeAPIError(w, http.StatusConflict, errCodeChildRelationshipClosed, err.Error(), nil)
+	case errors.Is(err, feature.ErrParentMutationLocked):
+		writeAPIError(w, http.StatusConflict, errCodeParentMutationLocked, err.Error(), nil)
+	case errors.Is(err, feature.ErrChildMutationRestricted):
+		writeAPIError(w, http.StatusConflict, errCodeChildMutationRestricted, err.Error(), nil)
+	case errors.Is(err, feature.ErrCascadeDeleteNotAvailable):
+		writeAPIError(w, http.StatusConflict, errCodeCascadeDeleteNotAvailable, err.Error(), nil)
+	default:
+		return false
+	}
+	return true
+}
+
+// writeChildLaunchError maps the typed child-launch failures of
+// feature.CreateRefactorChild and the child-feature execution gate to their
+// stable API machine codes. The dirty-worktree error additionally carries the
+// categorized diagnostics captured at launch. It reports whether err was a
+// recognized typed failure (and a response was written).
+func writeChildLaunchError(w http.ResponseWriter, err error) bool {
+	var activeChild *feature.ActiveChildExistsError
+	var dirty *feature.ParentWorktreesDirtyError
+	switch {
+	case errors.Is(err, feature.ErrRefactorParentNotFound):
+		writeAPIError(w, http.StatusNotFound, errCodeRefactorParentNotFound, err.Error(), nil)
+	case errors.Is(err, feature.ErrRefactorParentIsChild):
+		writeAPIError(w, http.StatusConflict, errCodeRefactorParentIsChild, err.Error(), nil)
+	case errors.Is(err, feature.ErrRefactorParentStatusIneligible):
+		writeAPIError(w, http.StatusConflict, errCodeRefactorParentStatusIneligible, err.Error(), nil)
+	case errors.As(err, &activeChild):
+		writeAPIError(w, http.StatusConflict, errCodeActiveChildExists, err.Error(), map[string]any{
+			"parent_id": activeChild.ParentID,
+			"child_id":  activeChild.ChildID,
+		})
+	case errors.As(err, &dirty):
+		writeAPIError(w, http.StatusConflict, errCodeParentWorktreesDirty, err.Error(), map[string]any{
+			"repos": dirtyDiagnosticsPayload(dirty.Repos),
+		})
+	case errors.Is(err, feature.ErrChildExecutionBlocked):
+		writeAPIError(w, http.StatusConflict, errCodeChildExecutionBlocked, err.Error(), nil)
+	case errors.Is(err, feature.ErrChildExecutionClosed):
+		writeAPIError(w, http.StatusConflict, errCodeChildRelationshipClosed, err.Error(), nil)
+	default:
+		return false
+	}
+	return true
+}
+
+func dirtyDiagnosticsPayload(repos []feature.RepoDirtyDiagnostics) []map[string]any {
+	payload := make([]map[string]any, 0, len(repos))
+	for _, repo := range repos {
+		payload = append(payload, map[string]any{
+			"repo":            repo.Repo,
+			"path":            repo.Path,
+			"staged":          repo.Staged,
+			"unstaged":        repo.Unstaged,
+			"untracked":       repo.Untracked,
+			"staged_total":    repo.StagedTotal,
+			"unstaged_total":  repo.UnstagedTotal,
+			"untracked_total": repo.UntrackedTotal,
+		})
+	}
+	return payload
 }
 
 func (h *apiHandler) handleMutationPreflight(w http.ResponseWriter, r *http.Request) bool {
@@ -515,13 +604,12 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionRefactor, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete:
+		case actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionReviewComments, actionReviewDecision, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionRefactor, actionDiscard:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
 			if (parts[2] == actionPublish && parts[3] == phaseNameDescription) ||
-				(parts[2] == actionReviewComments && parts[3] == "fetch") ||
-				(parts[2] == actionRefactor && parts[3] == actionRestart) {
+				(parts[2] == actionReviewComments && parts[3] == "fetch") {
 				return []string{http.MethodPost}, true
 			}
 		}
@@ -810,10 +898,13 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		}
 		defaultActionFields(&resp, featureID, resultStarted)
 		writeActionJSON(w, http.StatusOK, &resp)
+	case actionRefactor:
+		if subaction != "" {
+			return false
+		}
+		h.handleRefactorFeatureMutationTrusted(w, r, featureID)
 	case actionReviewComments:
 		return h.handleReviewCommentsAction(w, r, featureID, subaction)
-	case actionRefactor:
-		return h.handleRefactorAction(w, r, featureID, subaction)
 	case actionCleanup:
 		if subaction != "" {
 			return false
@@ -828,6 +919,21 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		defaultActionFields(&resp, featureID, "cleaned")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionDiscard:
+		if subaction != "" {
+			return false
+		}
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.DiscardChild(featureID)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "discarded")
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		return false
@@ -1025,6 +1131,35 @@ func (h *apiHandler) handleStopFeatureMutationTrusted(w http.ResponseWriter, r *
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 
+// handleRefactorFeatureMutationTrusted launches a refactor child under the
+// given parent. Unlike the other actions it returns 201 with the new child;
+// the mutation target runs child setup asynchronously after creation is
+// durable.
+func (h *apiHandler) handleRefactorFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
+	var req RefactorFeatureRequest
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "name is required", nil)
+		return
+	}
+	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) || !validateInquireness(w, req.Inquireness) {
+		return
+	}
+	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
+		return
+	}
+	resp, err := h.mutations.RefactorFeature(featureID, req)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	defaultActionFields(&resp, "", resultCreated)
+	writeActionJSON(w, http.StatusCreated, &resp)
+}
+
 func (h *apiHandler) writeRestartFeature(w http.ResponseWriter, featureID string, req RestartFeatureRequest) {
 	resp, err := h.mutations.RestartFeature(featureID, req)
 	if err != nil {
@@ -1081,34 +1216,6 @@ func (h *apiHandler) handleReviewCommentsFetch(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *apiHandler) handleRefactorAction(w http.ResponseWriter, r *http.Request, featureID, subaction string) bool {
-	var req RefactorActionRequest
-	if !decodeMutationJSON(w, r, &req) || !validateRefactorRequest(w, req) {
-		return true
-	}
-	if subaction == actionRestart {
-		resp, err := h.mutations.RestartRefactor(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "restarted")
-		writeActionJSON(w, http.StatusOK, &resp)
-		return true
-	}
-	if subaction != "" {
-		return false
-	}
-	resp, err := h.mutations.StartRefactor(featureID, req)
-	if err != nil {
-		writeMutationError(w, err)
-		return true
-	}
-	defaultActionFields(&resp, featureID, resultStarted)
-	writeActionJSON(w, http.StatusOK, &resp)
-	return true
-}
-
 func validatePipelineProfile(w http.ResponseWriter, profile feature.PipelineProfile) bool {
 	if profile == "" || profile.IsValid() {
 		return true
@@ -1125,6 +1232,43 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "risk_level must be low, medium, or high", nil)
 		return false
 	}
+}
+
+func validateInquireness(w http.ResponseWriter, inq feature.Inquireness) bool {
+	switch inq {
+	case "", feature.InquirenessNone, feature.InquirenessMedium, feature.InquirenessHigh:
+		return true
+	default:
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "inquireness must be none, medium, or high", nil)
+		return false
+	}
+}
+
+// RefactorChildSpecFromRequest maps a typed refactor launch request to the
+// domain launch brief. This is the single request→spec mapping: the
+// production mutation target and tests share it so no request field (Review
+// configuration, copied inputs) can silently drift out of one path.
+func RefactorChildSpecFromRequest(req RefactorFeatureRequest) (feature.RefactorChildSpec, error) {
+	spec := feature.RefactorChildSpec{
+		Name:         req.Name,
+		Description:  req.Description,
+		Images:       req.Images,
+		Attachments:  req.Attachments,
+		Checkpoints:  req.Checkpoints,
+		Effort:       req.Effort,
+		Models:       req.Models,
+		RiskLevel:    req.RiskLevel,
+		ExitCriteria: req.ExitCriteria,
+		Inquireness:  req.Inquireness,
+	}
+	if req.Pipeline != "" {
+		pipeline, err := feature.ParsePipelineProfile(string(req.Pipeline))
+		if err != nil {
+			return spec, err
+		}
+		spec.Pipeline = pipeline
+	}
+	return spec, nil
 }
 
 func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {
@@ -1242,22 +1386,6 @@ func validateReviewCommentsMode(w http.ResponseWriter, mode string) bool {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "mode must be auto or address_all", nil)
 		return false
 	}
-}
-
-func validateRefactorRequest(w http.ResponseWriter, req RefactorActionRequest) bool {
-	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "prompt is required", nil)
-		return false
-	}
-	if len(prompt) > MaxActionTextBytes {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "prompt is too long", nil)
-		return false
-	}
-	if !validateRepoName(w, req.Repo, false) || !validatePipelineProfile(w, req.Pipeline) {
-		return false
-	}
-	return true
 }
 
 func validateCleanupRequest(w http.ResponseWriter, req CleanupActionRequest) bool {

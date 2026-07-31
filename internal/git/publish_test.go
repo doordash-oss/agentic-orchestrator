@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -350,6 +351,44 @@ func TestCommitAllAndGetHead_NoChangesReturnsExistingHead(t *testing.T) {
 	}
 	if sha != strings.TrimSpace(string(before)) {
 		t.Errorf("sha = %q, want existing HEAD %q", sha, strings.TrimSpace(string(before)))
+	}
+}
+
+func TestCommitAllAndGetHeadRetriesTransientIndexLock(t *testing.T) {
+	t.Parallel()
+
+	repo := testutil.InitGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lockOutput, err := exec.Command("git", "-C", repo, "rev-parse", "--git-path", "index.lock").CombinedOutput()
+	if err != nil {
+		t.Fatalf("resolve index lock path: %v\n%s", err, lockOutput)
+	}
+	lockPath := strings.TrimSpace(string(lockOutput))
+	if !filepath.IsAbs(lockPath) {
+		lockPath = filepath.Join(repo, lockPath)
+	}
+	if err := os.WriteFile(lockPath, []byte("transient test lock\n"), 0o644); err != nil {
+		t.Fatalf("create transient index lock: %v", err)
+	}
+
+	lockReleased := make(chan struct{})
+	go func() {
+		defer close(lockReleased)
+		timer := time.NewTimer(75 * time.Millisecond)
+		defer timer.Stop()
+		<-timer.C
+		_ = os.Remove(lockPath)
+	}()
+	t.Cleanup(func() { <-lockReleased })
+
+	sha, err := CommitAllAndGetHead(repo, "commit after transient lock")
+	if err != nil {
+		t.Fatalf("CommitAllAndGetHead() error = %v, want transient index lock retried", err)
+	}
+	if len(sha) != 40 {
+		t.Fatalf("CommitAllAndGetHead() SHA = %q, want full SHA", sha)
 	}
 }
 

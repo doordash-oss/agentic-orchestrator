@@ -32,7 +32,7 @@ func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArt
 
 	return roles.BuildDesignPrompt(roles.DesignUserInput{
 		Name:                 f.Name,
-		Description:          f.EffectiveDescription(),
+		Description:          f.Description,
 		Images:               images,
 		Attachments:          attachments,
 		Repos:                repos,

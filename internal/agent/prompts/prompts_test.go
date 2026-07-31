@@ -127,12 +127,6 @@ type DesignUserInput struct {
 	Inquireness GrillMeInquirenessInput
 }
 
-type RefactorPlanUserInput struct {
-	Request        string
-	FeatureContext string
-	Repos          []RepoView
-}
-
 type RoadmapUserInput struct {
 	Name        string
 	Description string
@@ -328,19 +322,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					RepoPath:    "/repos/myrepo",
 					KBRootDir:   "/state/kb/myrepo",
 					KBIndexPath: "/state/kb/myrepo/index.md",
-				})
-			},
-		},
-		{
-			name: "refactor_plan_user",
-			render: func() string {
-				return RefactorPlanUserPrompt(RefactorPlanUserInput{
-					Request:        "Extract shared config loading.",
-					FeatureContext: "Existing feature context stays available for planning.",
-					Repos: []RepoView{
-						{Name: "api", Path: "/repos/api"},
-						{Name: "web", Path: "/repos/web"},
-					},
 				})
 			},
 		},

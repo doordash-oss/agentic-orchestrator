@@ -349,6 +349,53 @@ func TestEventBrokerSlowSubscriberReceivesNewestTerminalState(t *testing.T) {
 	}
 }
 
+func TestEventBrokerCoalescesRelationshipAsOneGeneration(t *testing.T) {
+	t.Parallel()
+
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 128})
+	ch, _, _ := b.subscribeAfter(0, "")
+	defer b.unsubscribe(ch)
+
+	for i := 0; i < subscriberFIFOSize; i++ {
+		b.publish(SSEEventDTO{Kind: sseEventConfigUpdated, Resource: ResourceDTO{Type: resourceTypeRuntime}})
+	}
+	resource := ResourceDTO{
+		Type:     resourceTypeRelationship,
+		ID:       relationshipResourceID("parent-1", "child-1"),
+		ParentID: "parent-1",
+		ChildID:  "child-1",
+	}
+	for i := 0; i < 5; i++ {
+		b.publish(SSEEventDTO{
+			Kind:             sseEventLifecycleUpdated,
+			Resource:         resource,
+			SnapshotRequired: true,
+			Summary:          fmt.Sprintf("generation-%d", i),
+		})
+	}
+
+	<-ch
+	b.flushSubscriber(ch)
+	var got *SSEEventDTO
+	for {
+		select {
+		case event := <-ch:
+			if event.Resource.ID == resource.ID {
+				copied := event
+				got = &copied
+			}
+		default:
+			if got == nil {
+				t.Fatal("no coalesced relationship event delivered")
+			}
+			if got.Summary != "generation-4" || got.ResourceVersion != 5 {
+				t.Fatalf("coalesced relationship event = %+v, want newest generation 5", *got)
+			}
+			return
+		}
+	}
+}
+
 func TestEventBrokerCoalescedOverflowDeliversReset(t *testing.T) {
 	t.Parallel()
 

@@ -188,8 +188,38 @@ type RepoCycleType string
 const (
 	CycleRebase         RepoCycleType = "rebase"
 	CycleReviewComments RepoCycleType = "review-comments"
-	CycleRefactor       RepoCycleType = "refactor"
 )
+
+// IsValid reports whether t names a surviving post-publish cycle type.
+// Persisted records from removed cycle types (e.g. the legacy "refactor"
+// cycle) are not valid and must never activate or resume work.
+func (t RepoCycleType) IsValid() bool {
+	return t == CycleRebase || t == CycleReviewComments
+}
+
+// dropUnknownCycleState strips persisted cycle entries whose type is not a
+// surviving post-publish cycle, so records written by removed cycle types
+// (e.g. the legacy Refactor cycle) load as ordinary published features and
+// the cleaned state is what the next save re-emits.
+func dropUnknownCycleState(r *Run) {
+	if r == nil {
+		return
+	}
+	if !r.ActiveCycleType.IsValid() {
+		r.ActiveCycleType = ""
+	}
+	if r.ActiveCycle != nil && !r.ActiveCycle.Type.IsValid() {
+		r.ActiveCycle = nil
+	}
+	for name, rc := range r.RepoCycles {
+		if rc == nil || !rc.Type.IsValid() {
+			delete(r.RepoCycles, name)
+		}
+	}
+	if len(r.RepoCycles) == 0 {
+		r.RepoCycles = nil
+	}
+}
 
 // Cycle status constants for RepoCycleState.Status.
 const (
@@ -232,8 +262,8 @@ type PendingUserInputCycle struct {
 // Run.RoadmapPhaseFrontendByPhase.
 const SchemaVersionCurrent = 7
 
-// CycleState tracks the feature-level active post-publish cycle (rebase,
-// review-comments, refactor). One cycle is active at a time per
+// CycleState tracks the feature-level active post-publish cycle (rebase or
+// review-comments). One cycle is active at a time per
 // feature regardless of how many repos it touches.
 // Run.RepoCycles persists alongside CycleState as the per-repo TUI rendering
 // surface; the unified cycle loops mirror their per-repo entries there so
@@ -242,7 +272,7 @@ type CycleState struct {
 	Type   RepoCycleType `yaml:"type"`
 	Status string        `yaml:"status"` // RepoCycle* constants
 	Count  int           `yaml:"count,omitempty"`
-	// PlanPath is the cycle's plan artifact (refactor/review-comments) when
+	// PlanPath is the cycle's plan artifact (review-comments) when
 	// applicable. Empty for plan-less cycles (rebase).
 	PlanPath string `yaml:"plan_path,omitempty"`
 	// LastError is populated when Status == RepoCycleFailed.
@@ -688,6 +718,27 @@ type Feature struct {
 	AutomaticReviewEnabled bool                  `yaml:"-"`
 	AutomaticReviewSource  AutomaticReviewSource `yaml:"-"`
 
+	// Parent links this feature to its launch parent (child-owned
+	// relationship identity). Nil for top-level features. Parent-to-child
+	// lookup and active-child classification are derived by scanning stored
+	// feature records — the parent never persists a child pointer or list.
+	Parent *ChildRelationship `yaml:"parent,omitempty"`
+	// PendingChild is the durable intent for an in-flight child creation on
+	// this (parent) feature. Present only between the atomic intent commit
+	// and child materialization; startup reconciliation rolls an interrupted
+	// creation forward from it.
+	PendingChild *ChildCreationIntent `yaml:"pending_child,omitempty"`
+	// PendingConfigUpdate is the durable intent for an in-flight paired
+	// Review configuration update. Present only between the intent commit
+	// and the completion of both record updates; startup reconciliation
+	// rolls an interrupted update forward exactly once.
+	PendingConfigUpdate *PairedConfigIntent `yaml:"pending_config_update,omitempty"`
+	// DiscardIntent is the durable intent for an in-flight child discard.
+	// Present on the child from the moment discard is requested until safe
+	// closure is durable. Startup reconciliation resumes an interrupted
+	// discard from the durable step.
+	DiscardIntent *DiscardIntent `yaml:"discard_intent,omitempty"`
+
 	TraceID       string `yaml:"trace_id,omitempty"`        // observability correlation; derived from ID if absent
 	FeatureSpanID string `yaml:"feature_span_id,omitempty"` // persisted feature-level span ID so all phases share a common parent
 
@@ -729,8 +780,7 @@ type Feature struct {
 	// in a single FeatureStore.Modify call; orchestration readers consume it
 	// via Feature.AllReposPublished / Feature.TouchedRepos. Persisted on
 	// Run.RepoStates.
-	RepoStates     map[string]*RepoState `yaml:"-"`
-	RefactorPrompt string                `yaml:"-"`
+	RepoStates map[string]*RepoState `yaml:"-"`
 	// ActiveCycle is the feature-level active post-publish cycle under
 	// SchemaVersionCurrent = 4.
 	ActiveCycle *CycleState `yaml:"-"`
@@ -851,7 +901,6 @@ func (f *Feature) syncShadowsToRun() {
 		f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	}
 	r.RepoStates = f.RepoStates
-	r.RefactorPrompt = f.RefactorPrompt
 	r.RepoCycles = f.RepoCycles
 	r.LastError = f.LastError
 	r.FailureType = f.FailureType
@@ -896,7 +945,6 @@ func (f *Feature) syncRunToShadows() {
 	f.Artifacts = r.Artifacts
 	f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	f.RepoStates = r.RepoStates
-	f.RefactorPrompt = r.RefactorPrompt
 	f.RepoCycles = r.RepoCycles
 	f.LastError = r.LastError
 	f.FailureType = r.FailureType
@@ -989,7 +1037,7 @@ var validTransitions = map[Status][]Status{
 	StatusFinalReviewing:      {StatusCodeReady, StatusReviewPassed, StatusFailed, StatusInterrupted},
 	StatusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},
 	StatusCodeReady:           {StatusPublished, StatusDone, StatusFailed, StatusImplementReady, StatusInquiring},
-	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady},
+	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady, StatusCodeReady},
 	StatusDone:                {},
 	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
 	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
@@ -1050,12 +1098,6 @@ func (f *Feature) RebaseCount() int { return f.Run().RebaseCount }
 // SetRebaseCount sets the run-level rebase counter.
 func (f *Feature) SetRebaseCount(n int) { f.Run().RebaseCount = n }
 
-// RefactorCount returns the run-level refactor counter.
-func (f *Feature) RefactorCount() int { return f.Run().RefactorCount }
-
-// SetRefactorCount sets the run-level refactor counter.
-func (f *Feature) SetRefactorCount(n int) { f.Run().RefactorCount = n }
-
 // ReviewCommentsCount returns the run-level review-comments cycle counter.
 func (f *Feature) ReviewCommentsCount() int { return f.Run().ReviewCommentsCount }
 
@@ -1110,20 +1152,6 @@ func (f *Feature) ActiveCycleType() RepoCycleType { return f.Run().ActiveCycleTy
 // SetActiveCycleType sets the feature-level active cycle type.
 func (f *Feature) SetActiveCycleType(t RepoCycleType) { f.Run().ActiveCycleType = t }
 
-// IsRefactoring returns true when the feature is in an active refactor cycle.
-func (f *Feature) IsRefactoring() bool {
-	return f.RefactorPrompt != ""
-}
-
-// RefactorPrefix returns the artifact directory prefix for the current
-// refactor cycle. Returns empty string when not refactoring.
-func (f *Feature) RefactorPrefix() string {
-	if f.RefactorCount() > 0 && f.RefactorPrompt != "" {
-		return fmt.Sprintf("refactor-%d", f.RefactorCount())
-	}
-	return ""
-}
-
 // CyclePrefix returns the artifact directory prefix for the current
 // post-publish cycle (rebase, or review-comments).
 // Returns empty string when no cycle is active.
@@ -1156,10 +1184,6 @@ func RepoCycleDirName(cycleType RepoCycleType, count int) string {
 		if count > 0 {
 			return fmt.Sprintf("review-comments-%d", count)
 		}
-	case CycleRefactor:
-		if count > 0 {
-			return fmt.Sprintf("refactor-%d", count)
-		}
 	}
 	return string(cycleType)
 }
@@ -1182,7 +1206,7 @@ func (f *Feature) EffectivePipeline() PipelineProfile {
 // outstanding post-publish work waiting on the user.
 func (f *Feature) HasActiveRepoCycles() bool {
 	for _, rc := range f.RepoCycles {
-		if rc == nil {
+		if rc == nil || !rc.Type.IsValid() {
 			continue
 		}
 		switch rc.Status {
@@ -1221,27 +1245,11 @@ func (f *Feature) EffectivePhases() []Phase {
 	return phases
 }
 
-// EffectiveDescription returns the combined description (original + refactor prompt)
-// during an active refactor, or the original description otherwise.
-func (f *Feature) EffectiveDescription() string {
-	if f.RefactorPrompt != "" {
-		return f.Description + "\n\n## Refactor Request\n\n" + f.RefactorPrompt
-	}
-	return f.Description
-}
-
-// isCycleTimingKey returns true if the key is a multi-phase cycle key
-// (e.g. refactor-N) that should not be overwritten by individual phase starters.
-func isCycleTimingKey(key string) bool {
-	return strings.HasPrefix(key, "refactor-")
-}
-
 // isImplementTimingKey returns true if the key belongs to the implement phase
 // (initial implementation or any cycle variant).
 func isImplementTimingKey(key string) bool {
 	return key == "implement" ||
 		strings.HasPrefix(key, "rebase-") ||
-		strings.HasPrefix(key, "refactor-") ||
 		strings.HasSuffix(key, "-impl") ||
 		key == "review-comments" ||
 		strings.HasPrefix(key, "review-comments-")

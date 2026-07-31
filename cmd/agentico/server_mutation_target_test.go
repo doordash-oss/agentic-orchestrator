@@ -15,8 +15,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -471,6 +474,178 @@ type fakeFeatureRebaseStarter struct {
 func (f *fakeFeatureRebaseStarter) StartFeatureRebase(featureID string) error {
 	f.featureIDs = append(f.featureIDs, featureID)
 	return f.err
+}
+
+// TestServerMutationTargetStartFeatureBlocksChildren exercises the start /
+// resume backend path (serverMutationTarget.StartFeature fronts both routes)
+// end-to-end through the real orchestrator and store: a child whose setup is
+// queued, running, or failed returns ErrChildExecutionBlocked and never
+// reports "started", while a setup-complete large-profile child is eligible
+// to start.
+func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
+	newChildTarget := func(t *testing.T, mutate func(*feature.Feature)) (serverMutationTarget, string) {
+		t.Helper()
+		runtimeDir := t.TempDir()
+		cfg := config.NewDefault()
+		cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+		store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+		manager := feature.NewManager(store, cfg)
+		child := &feature.Feature{
+			ID:        "child-blocked",
+			Slug:      "child-blocked",
+			Status:    feature.StatusCreated,
+			ActiveRun: 1,
+			RunCount:  1,
+			Pipeline:  feature.PipelineMedium,
+			Repos: []feature.FeatureRepo{{
+				Name:       testRepoAName,
+				Path:       filepath.Join(runtimeDir, testRepoAName),
+				Branch:     "feature/child-blocked",
+				BaseBranch: "main",
+			}},
+			Parent: &feature.ChildRelationship{ParentID: "p-1", Kind: feature.ChildKindRefactor},
+		}
+		mutate(child)
+		if err := store.Save(child); err != nil {
+			t.Fatalf("save child: %v", err)
+		}
+		orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+		return serverMutationTarget{orch: orch, store: store}, child.ID
+	}
+
+	t.Run("queued child", func(t *testing.T) {
+		target, childID := newChildTarget(t, func(f *feature.Feature) {
+			f.Status = feature.StatusSettingUpWorktrees
+		})
+		resp, err := target.StartFeature(childID)
+		if !errors.Is(err, feature.ErrChildExecutionBlocked) {
+			t.Fatalf("StartFeature() error = %v; want ErrChildExecutionBlocked", err)
+		}
+		if resp.Result == resultStarted {
+			t.Fatalf("StartFeature() response = %+v; must not report started for a child mid-setup", resp)
+		}
+	})
+
+	t.Run("failed-setup child", func(t *testing.T) {
+		target, childID := newChildTarget(t, func(f *feature.Feature) {
+			f.Status = feature.StatusFailed
+			// SetRun syncs run->shadows, so stamp shadow fields after it.
+			f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+			f.FailureType = feature.FailureWorktreeSetup
+		})
+		resp, err := target.StartFeature(childID)
+		if !errors.Is(err, feature.ErrChildExecutionBlocked) {
+			t.Fatalf("StartFeature() error = %v; want ErrChildExecutionBlocked", err)
+		}
+		if resp.Result == resultStarted {
+			t.Fatalf("StartFeature() response = %+v; must not report started for a failed-setup child", resp)
+		}
+	})
+
+	t.Run("large-profile child is eligible to start", func(t *testing.T) {
+		target, childID := newChildTarget(t, func(f *feature.Feature) {
+			f.Pipeline = feature.PipelineLarge
+		})
+		resp, err := target.StartFeature(childID)
+		if err != nil {
+			t.Fatalf("StartFeature() error = %v; want nil for eligible large-profile child", err)
+		}
+		if resp.Result != resultStarted {
+			t.Fatalf("StartFeature() response = %+v; want started for eligible large-profile child", resp)
+		}
+	})
+}
+
+// TestServerMutationTargetRefactorFeatureMapsBriefToSpec verifies the typed
+// wizard brief maps onto a RefactorChildSpec and that the response carries
+// the child identifier; setup dispatch stays asynchronous and is not driven
+// by this unit-level target (orch is nil).
+func TestServerMutationTargetRefactorFeatureMapsBriefToSpec(t *testing.T) {
+	creator := &fakeRefactorChildCreator{child: &feature.Feature{ID: "child-1"}}
+	target := serverMutationTarget{childCreator: creator}
+
+	resp, err := target.RefactorFeature("parent-1", serverruntime.RefactorFeatureRequest{
+		Name:         "Rework auth",
+		Description:  "split the auth package",
+		Images:       []string{"~/shots/login.png"},
+		Attachments:  []string{"~/docs/auth.md"},
+		Pipeline:     feature.PipelineLarge,
+		Checkpoints:  feature.Checkpoints{InquiryReview: true},
+		Effort:       config.EffortConfig{Planning: "high"},
+		Models:       config.ModelConfig{Planning: testModelClaudeSonnet},
+		RiskLevel:    feature.RiskLow,
+		ExitCriteria: "build passes",
+		Inquireness:  feature.InquirenessHigh,
+	})
+	if err != nil {
+		t.Fatalf("RefactorFeature() error = %v", err)
+	}
+	if resp.FeatureID != "child-1" || resp.ParentID != "parent-1" || resp.Result != resultCreated {
+		t.Fatalf("RefactorFeature() response = %+v; want child-1 under parent-1 created", resp)
+	}
+	if creator.parentID != "parent-1" {
+		t.Fatalf("CreateRefactorChild parentID = %q, want parent-1", creator.parentID)
+	}
+	spec := creator.spec
+	if spec.Name != "Rework auth" || spec.Description != "split the auth package" {
+		t.Fatalf("spec name/description = %q/%q", spec.Name, spec.Description)
+	}
+	if spec.Pipeline != feature.PipelineLarge || spec.RiskLevel != feature.RiskLow {
+		t.Fatalf("spec pipeline/risk = %q/%q, want large/low", spec.Pipeline, spec.RiskLevel)
+	}
+	if !spec.Checkpoints.InquiryReview {
+		t.Fatalf("spec checkpoints = %+v, want inquiry review", spec.Checkpoints)
+	}
+	if spec.Effort.Planning != "high" || spec.Models.Planning != testModelClaudeSonnet {
+		t.Fatalf("spec effort/models planning = %q/%q", spec.Effort.Planning, spec.Models.Planning)
+	}
+	if spec.ExitCriteria != "build passes" || spec.Inquireness != feature.InquirenessHigh {
+		t.Fatalf("spec exit criteria/inquireness = %q/%q", spec.ExitCriteria, spec.Inquireness)
+	}
+	if len(spec.Images) != 1 || len(spec.Attachments) != 1 {
+		t.Fatalf("spec images/attachments = %v/%v, want one each", spec.Images, spec.Attachments)
+	}
+}
+
+// TestServerMutationTargetRefactorFeatureInheritsEmptyPipeline verifies an
+// empty pipeline brief leaves the spec pipeline unset so the child inherits
+// the parent profile.
+func TestServerMutationTargetRefactorFeatureInheritsEmptyPipeline(t *testing.T) {
+	creator := &fakeRefactorChildCreator{child: &feature.Feature{ID: "child-2"}}
+	target := serverMutationTarget{childCreator: creator}
+
+	if _, err := target.RefactorFeature("parent-1", serverruntime.RefactorFeatureRequest{Name: "Rework auth"}); err != nil {
+		t.Fatalf("RefactorFeature() error = %v", err)
+	}
+	if creator.spec.Pipeline != "" {
+		t.Fatalf("spec pipeline = %q; want empty so the child inherits", creator.spec.Pipeline)
+	}
+}
+
+func TestServerMutationTargetRefactorFeatureSurfacesLaunchErrors(t *testing.T) {
+	creator := &fakeRefactorChildCreator{err: &feature.ParentWorktreesDirtyError{
+		Repos: []feature.RepoDirtyDiagnostics{{Repo: testRepoAName}},
+	}}
+	target := serverMutationTarget{childCreator: creator}
+
+	_, err := target.RefactorFeature("parent-1", serverruntime.RefactorFeatureRequest{Name: "Rework auth"})
+	var dirty *feature.ParentWorktreesDirtyError
+	if !errors.As(err, &dirty) {
+		t.Fatalf("RefactorFeature() error = %v, want ParentWorktreesDirtyError", err)
+	}
+}
+
+type fakeRefactorChildCreator struct {
+	parentID string
+	spec     feature.RefactorChildSpec
+	child    *feature.Feature
+	err      error
+}
+
+func (f *fakeRefactorChildCreator) CreateRefactorChild(parentID string, spec feature.RefactorChildSpec) (*feature.Feature, error) {
+	f.parentID = parentID
+	f.spec = spec
+	return f.child, f.err
 }
 
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
@@ -1155,6 +1330,13 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	}); err != nil {
 		t.Fatalf("mark publishable: %v", err)
 	}
+	legacyProviderDir := filepath.Join(stateDir, "opencode", "managed-session")
+	if err := os.MkdirAll(legacyProviderDir, 0o755); err != nil {
+		t.Fatalf("create legacy provider state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyProviderDir, "opencode.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write legacy provider state: %v", err)
+	}
 	target := serverMutationTarget{
 		orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
 		cfg:        cfg,
@@ -1234,6 +1416,78 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	gates := loaded.Repos[testRepoAName].PipelineGates["medium"]
 	if gates.InquiryReview || gates.DesignReview || !gates.RoadmapReview || !gates.PhasePlanReview || gates.ManualPublish {
 		t.Fatalf("persisted repo gates = %+v; want normalized medium gates", gates)
+	}
+}
+
+func TestServerMutationTargetClosedChildConfigReturnsRelationshipClosed(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	cfg := config.NewDefault()
+	closedAt := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	child := &feature.Feature{
+		ID:          "closed-child",
+		Name:        "Closed child",
+		Slug:        "closed-child",
+		Status:      feature.StatusDone,
+		Pipeline:    feature.PipelineMedium,
+		Models:      config.ModelConfig{Research: "old-research"},
+		Inquireness: feature.InquirenessMedium,
+		Checkpoints: feature.Checkpoints{RoadmapReview: true},
+		Parent: &feature.ChildRelationship{
+			ParentID:     "parent",
+			Kind:         feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted,
+			ClosedAt:     &closedAt,
+		},
+	}
+	if err := store.Save(child); err != nil {
+		t.Fatalf("Save closed child: %v", err)
+	}
+	manager := feature.NewManager(store, cfg)
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		cfg:   cfg,
+		store: store,
+	}
+	handler := serverruntime.NewHandler(serverruntime.HandlerOptions{
+		DisableHostValidation: true,
+		Features:              store,
+		FeatureStore:          store,
+		Config:                cfg,
+		Mutations:             &target,
+	})
+	body, err := json.Marshal(serverruntime.FeatureConfigMutationRequest{
+		Models:      config.ModelConfig{Research: "new-research"},
+		Inquireness: testInquirenessHigh,
+		Pipeline:    feature.PipelineMedium,
+		Checkpoints: feature.Checkpoints{ManualPublish: true},
+	})
+	if err != nil {
+		t.Fatalf("Marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/"+child.ID+"/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var response serverruntime.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+	if response.Error.Code != "relationship_closed" {
+		t.Fatalf("error code = %q, want relationship_closed", response.Error.Code)
+	}
+	loaded, err := store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("Load closed child: %v", err)
+	}
+	if loaded.Models.Research != "old-research" || loaded.Inquireness != feature.InquirenessMedium || loaded.Checkpoints != (feature.Checkpoints{RoadmapReview: true}) {
+		t.Fatalf("closed child config mutated: models=%+v inquireness=%q checkpoints=%+v", loaded.Models, loaded.Inquireness, loaded.Checkpoints)
 	}
 }
 
@@ -1510,146 +1764,6 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	assertJSONDoesNotContain(t, result, "do-not-leak", planPath)
 }
 
-func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testing.T) {
-	store, manager, f := newMutationTestFeature(t, "refactor with evidence", feature.CreateOptions{}, feature.StatusPublished, feature.PhasePublish)
-
-	attachDir := t.TempDir()
-	img := filepath.Join(attachDir, "clip.png")
-	doc := filepath.Join(attachDir, "spec.pdf")
-	if err := os.WriteFile(img, []byte("image bytes"), 0o644); err != nil {
-		t.Fatalf("write image: %v", err)
-	}
-	if err := os.WriteFile(doc, []byte("spec bytes"), 0o644); err != nil {
-		t.Fatalf("write attachment: %v", err)
-	}
-
-	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle: manager,
-		Store:     store,
-		PhaseRunner: &agent.PhaseRunner{
-			StateDir: store.BaseDir,
-			BuildSessionFn: func(agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-				return nil, nil, nil, errors.New("stop after synchronous refactor setup")
-			},
-		},
-	}, orchestrator.Hooks{})
-	t.Cleanup(orch.WaitForCycles)
-	target := serverMutationTarget{orch: orch, store: store}
-
-	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
-		Repo:        testRepoAName,
-		Prompt:      "use the attached evidence",
-		Images:      []string{img},
-		Attachments: []string{doc},
-	}); err != nil {
-		t.Fatalf("StartRefactor() error = %v", err)
-	}
-
-	updated, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load feature: %v", err)
-	}
-	if len(updated.Images) != 1 {
-		t.Fatalf("Images = %v, want one copied refactor image", updated.Images)
-	}
-	if data, err := os.ReadFile(updated.Images[0]); err != nil || string(data) != "image bytes" {
-		t.Fatalf("copied image data = %q, err=%v; want image bytes", string(data), err)
-	}
-	if len(updated.Attachments) != 1 {
-		t.Fatalf("Attachments = %v, want one copied refactor attachment", updated.Attachments)
-	}
-	if data, err := os.ReadFile(updated.Attachments[0]); err != nil || string(data) != "spec bytes" {
-		t.Fatalf("copied attachment data = %q, err=%v; want spec bytes", string(data), err)
-	}
-	if !strings.Contains(updated.Images[0], filepath.Join(f.ID, "images")) {
-		t.Fatalf("image path = %q, want copied under feature images directory", updated.Images[0])
-	}
-	if !strings.Contains(updated.Attachments[0], filepath.Join(f.ID, "attachments")) {
-		t.Fatalf("attachment path = %q, want copied under feature attachments directory", updated.Attachments[0])
-	}
-}
-
-func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *testing.T) {
-	store, manager, f := newMutationTestFeature(t, "moonshot refactor", feature.CreateOptions{
-		Pipeline:    feature.PipelineMoonshot,
-		Checkpoints: feature.DefaultCheckpointsForProfile(feature.PipelineMoonshot),
-	}, feature.StatusPublished, feature.PhasePublish)
-	originalCheckpoints := f.Checkpoints
-
-	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle: manager,
-		Store:     store,
-		PhaseRunner: &agent.PhaseRunner{
-			StateDir: store.BaseDir,
-			BuildSessionFn: func(agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-				return nil, nil, nil, errors.New("stop after synchronous refactor setup")
-			},
-		},
-	}, orchestrator.Hooks{})
-	t.Cleanup(orch.WaitForCycles)
-	target := serverMutationTarget{orch: orch, store: store}
-
-	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
-		Repo:     testRepoAName,
-		Prompt:   "make the small follow-up change",
-		Pipeline: feature.PipelineMedium,
-	}); err != nil {
-		t.Fatalf("StartRefactor() error = %v", err)
-	}
-
-	updated, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load feature: %v", err)
-	}
-	if updated.Pipeline != feature.PipelineMoonshot {
-		t.Fatalf("Pipeline = %s, want original moonshot after medium refactor request", updated.Pipeline)
-	}
-	if updated.Checkpoints != originalCheckpoints {
-		t.Fatalf("Checkpoints = %+v, want original %+v after medium refactor request", updated.Checkpoints, originalCheckpoints)
-	}
-}
-
-func TestServerMutationTargetStartRefactorUsesRequestedPipelineEffort(t *testing.T) {
-	store, manager, f := newMutationTestFeature(t, "moonshot feature", feature.CreateOptions{
-		Pipeline: feature.PipelineMoonshot,
-	}, feature.StatusPublished, feature.PhasePublish)
-
-	effortCh := make(chan llm.EffortLevel, 1)
-	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle: manager,
-		Store:     store,
-		PhaseRunner: &agent.PhaseRunner{
-			StateDir: store.BaseDir,
-			BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-				select {
-				case effortCh <- opts.EffortLevel:
-				default:
-				}
-				return nil, nil, nil, errors.New("stop after capturing refactor effort")
-			},
-		},
-	}, orchestrator.Hooks{})
-	t.Cleanup(orch.WaitForCycles)
-	target := serverMutationTarget{orch: orch, store: store}
-
-	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
-		Repo:     testRepoAName,
-		Prompt:   "make the small follow-up change",
-		Pipeline: feature.PipelineMedium,
-	}); err != nil {
-		t.Fatalf("StartRefactor() error = %v", err)
-	}
-
-	select {
-	case got := <-effortCh:
-		if got != llm.EffortMedium {
-			t.Fatalf("refactor effort = %s, want medium from request pipeline", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for refactor session build")
-	}
-}
-
 func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
 	target, store, f := newReviewCommentsActionTarget(t)
 	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, testRepoAName, []int{100}); err != nil {
@@ -1720,6 +1834,56 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	}
 }
 
+func TestServerMutationTargetReviewCommentsChildCreationWinnerDoesNotStage(t *testing.T) {
+	target, store, parent := newReviewCommentsActionTarget(t)
+	reviewer := target.reviewer.(*fakeReviewCommentOperator)
+	fetchStarted := make(chan struct{}, 1)
+	reviewer.fetchStarted = fetchStarted
+
+	resultCh := make(chan error, 1)
+	if err := target.orch.WithRelationshipWriteLock(func() error {
+		go func() {
+			_, err := target.StartReviewComments(parent.ID, serverruntime.ReviewCommentsActionRequest{
+				Repo: testRepoAName,
+				Mode: reviewCommentsModeAddressAll,
+			})
+			resultCh <- err
+		}()
+
+		select {
+		case <-fetchStarted:
+		case <-time.After(20 * time.Millisecond):
+		}
+
+		child := &feature.Feature{
+			ID:       "review-comments-active-child",
+			Slug:     "review-comments-active-child",
+			Status:   feature.StatusImplementing,
+			Pipeline: feature.PipelineMedium,
+			Parent: &feature.ChildRelationship{
+				ParentID: parent.ID,
+				Kind:     feature.ChildKindRefactor,
+			},
+		}
+		return store.Save(child)
+	}); err != nil {
+		t.Fatalf("create active child under relationship lock: %v", err)
+	}
+
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, feature.ErrParentMutationLocked) {
+			t.Fatalf("StartReviewComments() error = %v; want ErrParentMutationLocked", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartReviewComments() did not return after child creation completed")
+	}
+
+	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, parent, testRepoAName); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("LoadReviewCommentsForRepo() error = %v; want os.ErrNotExist after rejected parent mutation", err)
+	}
+}
+
 func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testing.T) {
 	t.Run("cleanup cycles", func(t *testing.T) {
 		target, store, f, _ := newCleanupActionTarget(t)
@@ -1769,7 +1933,7 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if err != nil {
 			t.Fatalf("DeleteFeature() error = %v", err)
 		}
-		if result.FeatureID != f.ID || result.Result != "deleted" {
+		if result.FeatureID != f.ID || result.Status != feature.CascadeDeleteCompleted {
 			t.Fatalf("DeleteFeature() result = %+v; want deleted feature", result)
 		}
 		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != testRepoAWorktreePath || !worktrees.removeCalls[0].deleteBranch {
@@ -1906,17 +2070,24 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 	if err != nil {
 		t.Fatalf("Load prepared feature: %v", err)
 	}
-	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Worktrees: worktrees}, orchestrator.Hooks{})
 	return serverMutationTarget{orch: orch, store: store}, store, loaded, worktrees
 }
 
 type fakeReviewCommentOperator struct {
-	comments   []ports.ReviewComment
-	fetchCalls int
+	comments     []ports.ReviewComment
+	fetchCalls   int
+	fetchStarted chan struct{}
 }
 
 func (f *fakeReviewCommentOperator) FetchPRComments(string, string) ([]ports.ReviewComment, error) {
 	f.fetchCalls++
+	if f.fetchStarted != nil {
+		select {
+		case f.fetchStarted <- struct{}{}:
+		default:
+		}
+	}
 	out := make([]ports.ReviewComment, len(f.comments))
 	copy(out, f.comments)
 	return out, nil
@@ -1973,6 +2144,12 @@ func (f *fakeWorktreeOperator) Remove(path string, deleteBranch bool) error {
 	return nil
 }
 
+func (f *fakeWorktreeOperator) List() ([]ports.WorktreeInfo, error) { return nil, nil }
+
+func (f *fakeWorktreeOperator) DetectStale([]string) ([]ports.WorktreeInfo, error) {
+	return nil, nil
+}
+
 func (f *fakeWorktreeOperator) ResetToBase(string, string) error {
 	return nil
 }
@@ -1983,6 +2160,10 @@ func (f *fakeWorktreeOperator) ResetToBaseLocal(string, string) error {
 
 func (f *fakeWorktreeOperator) ResetToCommit(string, string) error {
 	return nil
+}
+
+func (f *fakeWorktreeOperator) HasUncommittedChanges(string) (bool, error) {
+	return false, nil
 }
 
 func mutationTargetOrchestrator(sessions ports.SessionManager) *orchestrator.Orchestrator {

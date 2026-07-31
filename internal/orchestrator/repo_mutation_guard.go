@@ -22,16 +22,15 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// readOnlyGuardDir joins the active run dir + refactor prefix with a
-// caller-supplied tail, returning "" when the feature or state dir is
-// unresolved. suffix is only invoked once the base path is known to be
-// valid.
+// readOnlyGuardDir joins the active run dir with a caller-supplied tail,
+// returning "" when the feature or state dir is unresolved. suffix is only
+// invoked once the base path is known to be valid.
 func (o *Orchestrator) readOnlyGuardDir(f *feature.Feature, suffix func() string) string {
 	baseDir := o.stateDir()
 	if f == nil || baseDir == "" {
 		return ""
 	}
-	base := filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix())
+	base := agent.ActiveRunDir(baseDir, f)
 	return filepath.Join(base, suffix())
 }
 

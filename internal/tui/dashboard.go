@@ -68,14 +68,26 @@ type listItemKind int
 const (
 	listItemSectionHeader listItemKind = iota
 	listItemFeature
-	listItemGhostCTA // empty-state call-to-action
+	listItemChildFeature       // indented child beneath a parent with an active relationship
+	listItemGhostCTA           // empty-state call-to-action
+	listItemRefactorHistory    // collapsed/expanded "Refactor History (N)" group row beneath a parent
+	listItemClosedChildFeature // closed child row inside an expanded Refactor History group
 )
 
 // listItem represents a single navigable entry in the feature list (section header or feature).
 type listItem struct {
-	kind    listItemKind
-	feature *feature.Feature // non-nil for feature items
-	section string           // "inProgress", "published", "completed"
+	kind listItemKind
+	// feature is the record this item represents: the top-level feature for
+	// listItemFeature and the active child for listItemChildFeature. Parent
+	// context is derived from the record's ChildRelationship, never
+	// stored on the item.
+	feature *feature.Feature
+	section string
+	// parentID anchors relationship rows that carry no own detail surface:
+	// the Refactor History group row and (redundantly) each closed child row.
+	parentID string
+	// closedCount is the closed-child tally rendered on a history group row.
+	closedCount int
 }
 
 type dashboardRightPanelMode int
@@ -89,6 +101,9 @@ const dashboardFeaturesPanelTitle = "Features"
 
 type DashboardModel struct {
 	features             []*feature.Feature
+	childFeatures        map[string]*feature.Feature   // child ID → child feature for active refactor relationships
+	closedChildren       map[string][]*feature.Feature // parent ID → closed children, newest-first authoritative order
+	expandedHistory      map[string]bool               // parent ID → Refactor History group expanded (session-local)
 	cursor               int
 	focusPanel           int // 0=list, 1=detail
 	rightPanelMode       dashboardRightPanelMode
@@ -109,6 +124,7 @@ type DashboardModel struct {
 	rewindingFeatureID   string          // feature ID currently being rewound (shows "Stopping..." label)
 	wantNewFeature       bool            // set when ghost CTA Enter is pressed
 	welcomeSkipped       bool            // true when user skipped the welcome flow
+	refactorEligibleIDs  map[string]bool // feature IDs that have the server-enabled refactor action
 }
 
 func NewDashboardModel(features []*feature.Feature, stateDir string) DashboardModel {
@@ -139,6 +155,81 @@ func (m *DashboardModel) ConsumeWantNewFeature() bool {
 	return false
 }
 
+// SetChildFeatures populates the child-features map and rebuilds visible items
+// so that parent rows with active children gain an indented child entry.
+func (m *DashboardModel) SetChildFeatures(children map[string]*feature.Feature) {
+	m.childFeatures = children
+	m.buildVisibleItems()
+	if m.cursor >= len(m.visibleItems) {
+		m.cursor = max(0, len(m.visibleItems)-1)
+	}
+	m.computeCursorLine()
+	m.updateScrollState(0)
+}
+
+func (m *DashboardModel) SetRefactorEligibleIDs(ids map[string]bool) {
+	m.refactorEligibleIDs = ids
+}
+
+// SetClosedChildFeatures populates the per-parent closed-child history and
+// rebuilds visible items so qualifying parent rows gain a "Refactor History"
+// group directly beneath them (and beneath any active child row).
+func (m *DashboardModel) SetClosedChildFeatures(byParent map[string][]*feature.Feature) {
+	m.closedChildren = byParent
+	m.buildVisibleItems()
+	if m.cursor >= len(m.visibleItems) {
+		m.cursor = max(0, len(m.visibleItems)-1)
+	}
+	m.computeCursorLine()
+	m.updateScrollState(0)
+}
+
+// SetExpandedRefactorHistory installs the session-local per-parent expansion
+// state for the Refactor History groups. The map is shared by reference so an
+// Enter toggle lands in the caller's session state directly.
+func (m *DashboardModel) SetExpandedRefactorHistory(expanded map[string]bool) {
+	m.expandedHistory = expanded
+}
+
+// ExpandedRefactorHistory reports whether the parent's Refactor History group
+// is expanded for the current session.
+func (m DashboardModel) ExpandedRefactorHistory(parentID string) bool {
+	return m.expandedHistory[parentID]
+}
+
+// ExpandedRefactorHistoryMap exposes the session-local expansion map so the
+// app model can retain it across dashboard rebuilds.
+func (m DashboardModel) ExpandedRefactorHistoryMap() map[string]bool {
+	return m.expandedHistory
+}
+
+// childForParent returns the active child feature whose ParentID matches
+// parentID, or nil when no active child exists.
+func (m DashboardModel) childForParent(parentID string) *feature.Feature {
+	for _, child := range m.childFeatures {
+		if child != nil && child.IsChild() && child.Parent.ParentID == parentID && child.IsActiveChild() {
+			return child
+		}
+	}
+	return nil
+}
+
+// hasActiveChild reports whether the given parent has an active child in the
+// childFeatures map.
+func (m DashboardModel) hasActiveChild(parentID string) bool {
+	return m.childForParent(parentID) != nil
+}
+
+// featureByID returns a top-level feature by ID, or nil.
+func (m DashboardModel) featureByID(id string) *feature.Feature {
+	for _, f := range m.features {
+		if f != nil && f.ID == id {
+			return f
+		}
+	}
+	return nil
+}
+
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -163,7 +254,27 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 						m.updateScrollState(0)
 						return m, nil
 					}
-				case listItemFeature:
+				case listItemRefactorHistory:
+					// Toggling a group that currently contains the selected
+					// closed child returns selection to that child's parent
+					// before the rows disappear.
+					if m.expandedHistory == nil {
+						m.expandedHistory = make(map[string]bool)
+					}
+					wasExpanded := m.expandedHistory[item.parentID]
+					if wasExpanded && m.SelectedFeatureIsClosedChildOf(item.parentID) {
+						m.SelectFeatureByID(item.parentID)
+					}
+					m.expandedHistory[item.parentID] = !wasExpanded
+					m.buildVisibleItems()
+					if m.cursor >= len(m.visibleItems) {
+						m.cursor = max(0, len(m.visibleItems)-1)
+					}
+					m.computeCursorLine()
+					m.updateScrollState(0)
+					m.syncPreview()
+					return m, nil
+				case listItemFeature, listItemChildFeature, listItemClosedChildFeature:
 					// Focus right panel
 					m.focusPanel = 1
 				case listItemGhostCTA:
@@ -208,7 +319,8 @@ func (m *DashboardModel) MoveToAdjacentFeature(delta int) {
 		return
 	}
 	for i := m.cursor + delta; i >= 0 && i < len(m.visibleItems); i += delta {
-		if m.visibleItems[i].kind == listItemFeature {
+		switch m.visibleItems[i].kind {
+		case listItemFeature, listItemChildFeature, listItemClosedChildFeature:
 			m.cursor = i
 			m.computeCursorLine()
 			m.updateScrollState(0)
@@ -221,6 +333,13 @@ func (m *DashboardModel) MoveToAdjacentFeature(delta int) {
 // syncPreview updates the right panel's preview model to the currently selected feature.
 func (m *DashboardModel) syncPreview() {
 	f := m.SelectedFeature()
+	if f == nil {
+		// A Refactor History group row has no own detail surface: preview
+		// the parent whose relationship the group belongs to.
+		if parentID := m.SelectedRefactorHistoryGroup(); parentID != "" {
+			f = m.featureByID(parentID)
+		}
+	}
 	if f == nil {
 		m.preview = NewDetailModel(nil, m.stateDir)
 		m.preview.width = m.width
@@ -242,8 +361,6 @@ func (m *DashboardModel) syncPreview() {
 func (m DashboardModel) shouldRenderLivePreview(f *feature.Feature) bool {
 	return f != nil &&
 		m.rightPanelMode != dashboardRightPanelOverview &&
-		!m.preview.refactorActive &&
-		!m.preview.refactorPipelineActive &&
 		isLivePreviewEligible(f)
 }
 
@@ -416,23 +533,13 @@ func (m DashboardModel) renderHeader(w int) string {
 
 	var contextParts []string
 	if len(m.features) > 0 {
-		activeCount, publishedCount, completedCount := 0, 0, 0
-		for _, f := range m.features {
-			switch f.Status {
-			case feature.StatusPublished:
-				publishedCount++
-			case feature.StatusDone:
-				completedCount++
-			default:
-				activeCount++
-			}
+		inProgress, published, completed := m.partitionSections()
+		featureText := fmt.Sprintf("%d active", len(inProgress))
+		if len(published) > 0 {
+			featureText += fmt.Sprintf(", %d published", len(published))
 		}
-		featureText := fmt.Sprintf("%d active", activeCount)
-		if publishedCount > 0 {
-			featureText += fmt.Sprintf(", %d published", publishedCount)
-		}
-		if completedCount > 0 {
-			featureText += fmt.Sprintf(", %d completed", completedCount)
+		if len(completed) > 0 {
+			featureText += fmt.Sprintf(", %d completed", len(completed))
 		}
 		contextParts = append(contextParts,
 			lipgloss.NewStyle().Foreground(infoColor).Render(featureText))
@@ -490,7 +597,9 @@ func (m DashboardModel) renderFooter() string {
 				}
 			}
 		}
+		isClosedChild := f != nil && f.IsChild() && f.Parent != nil && f.Parent.CloseOutcome != ""
 		if f != nil {
+			isChild := f.IsChild()
 			if isLivePreviewEligible(f) {
 				if m.showingOverviewForLiveFeature() {
 					hints = append(hints, "[l] Live Preview")
@@ -499,55 +608,79 @@ func (m DashboardModel) renderFooter() string {
 				}
 			}
 			activePublishedCycle := isActivePublishedCycle(f)
-			if hasPendingPerms(f) {
-				hints = append(hints, "[y] Approve", "[Shift+A] Approve & Remember")
-			}
-			if isRunningFeature(f) {
-				hints = append(hints, "[s] Stop")
+			if isClosedChild {
+				// Settled children are immutable history: the footer keeps
+				// only inspection affordances, never mutation affordances —
+				// even though the server catalog still explains why.
+				hints = append(hints, "[l] Logs", "[v] Diff")
 			} else {
-				hints = append(hints, "[r] Restart")
-			}
-			hints = append(hints, "[ctrl+r] Rewind")
-			if (f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted) && !m.showingOverviewForLiveFeature() {
-				hints = append(hints, "[l] Logs")
-			}
+				if hasPendingPerms(f) {
+					hints = append(hints, "[y] Approve", "[Shift+A] Approve & Remember")
+				}
+				if isRunningFeature(f) {
+					hints = append(hints, "[s] Stop")
+				} else {
+					hints = append(hints, "[r] Restart")
+				}
+				if !isChild {
+					hints = append(hints, "[ctrl+r] Rewind")
+				}
+				if (f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted) && !m.showingOverviewForLiveFeature() {
+					hints = append(hints, "[l] Logs")
+				}
 
-			if f.Status == feature.StatusCodeReady && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-				hints = append(hints, "[v] Diff")
-			}
-			if f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish() && f.IsPublishable() {
-				hints = append(hints, "[p] Publish")
-			}
-			if (!activePublishedCycle && f.Status == feature.StatusPublished) || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
-				hints = append(hints, "[Shift+F] Refactor")
-				hints = append(hints, "[b] Rebase")
-			}
-			if f.Status == feature.StatusCodeReady && !f.IsPublishable() {
-				hints = append(hints, "[Shift+M] Merge to base")
-				hints = append(hints, "[Shift+D] Mark done")
-			}
-			if f.Status == feature.StatusPublished && !activePublishedCycle {
-				hints = append(hints, "[Shift+D] Mark done")
-				if len(f.PRURLs()) > 0 && f.IsPublishable() {
-					hints = append(hints, "[g] Reviews")
+				if !isChild {
+					if f.Status == feature.StatusCodeReady && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
+						hints = append(hints, "[v] Diff")
+					}
+					if f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish() && f.IsPublishable() {
+						hints = append(hints, "[p] Publish")
+					}
+					if (!activePublishedCycle && f.Status == feature.StatusPublished) || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
+						hints = append(hints, "[b] Rebase")
+					}
+					if f.Status == feature.StatusCodeReady && !f.IsPublishable() {
+						hints = append(hints, "[Shift+M] Merge to base")
+						hints = append(hints, "[Shift+D] Mark done")
+					}
+					if f.Status == feature.StatusPublished && !activePublishedCycle {
+						hints = append(hints, "[Shift+D] Mark done")
+						if len(f.PRURLs()) > 0 && f.IsPublishable() {
+							hints = append(hints, "[g] Reviews")
+						}
+					}
+					if ((f.Status == feature.StatusPublished && !activePublishedCycle) || f.Status == feature.StatusDone) &&
+						len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
+						hints = append(hints, "[c] Clean worktree")
+					}
+				}
+				if canEditFeatureConfig(f) {
+					hints = append(hints, "[e] Edit config")
+				}
+				if !isChild && m.refactorEligibleIDs != nil && m.refactorEligibleIDs[f.ID] && !m.hasActiveChild(f.ID) {
+					hints = append(hints, "[Shift+F] Refactor")
+				}
+				if isChild {
+					hints = append(hints, "[d] Discard")
+				} else {
+					hints = append(hints, "[d] Delete")
 				}
 			}
-			if ((f.Status == feature.StatusPublished && !activePublishedCycle) || f.Status == feature.StatusDone) &&
-				len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-				hints = append(hints, "[c] Clean worktree")
-			}
-			if canEditFeatureConfig(f) {
-				hints = append(hints, "[e] Edit config")
-			}
-			hints = append(hints, "[d] Delete")
 		}
-		hints = append(hints, "[Shift+E] Workspace Config")
+		if !isClosedChild {
+			// Workspace config can mutate the live workspace; closed children
+			// are inspection-only and omit it.
+			hints = append(hints, "[Shift+E] Workspace Config")
+		}
 		hints = append(hints, "[←/esc] Back")
 	} else {
 		// Left panel focused — show list actions
 		hints = append(hints, "[n] New")
 		if m.SelectedFeature() != nil {
 			hints = append(hints, "[→/enter] Focus")
+			if m.refactorEligibleIDs != nil && m.refactorEligibleIDs[m.SelectedFeature().ID] && !m.hasActiveChild(m.SelectedFeature().ID) {
+				hints = append(hints, "[Shift+F] Refactor")
+			}
 		}
 		hints = append(hints, "[Shift+W] Workspaces", "[Shift+E] Workspace Config", "[Shift+R] Resume All", "[tab] Panel", "[q] Quit")
 	}
@@ -618,15 +751,18 @@ const (
 	dashboardSectionCompleted = "completed"
 )
 
-// buildVisibleItems computes the flat list of navigable items (section headers + features).
-// It must be called whenever features or collapsed sections change.
-func (m *DashboardModel) buildVisibleItems() {
-	// Partition features into sections
-	var inProgress, published, completed []*feature.Feature
+// partitionSections projects features into the dashboard's section buckets.
+// It is relationship-aware: a parent with an active refactor child is in
+// progress even when its stored lifecycle remains Published, and children
+// never appear as top-level entries. The header summary and the feature
+// list must consume this single projection so their counts never diverge.
+func (m DashboardModel) partitionSections() (inProgress, published, completed []*feature.Feature) {
 	for _, f := range m.features {
 		switch {
 		case f.Status == feature.StatusDone:
 			completed = append(completed, f)
+		case m.hasActiveChild(f.ID):
+			inProgress = append(inProgress, f)
 		case isActivePublishedCycle(f):
 			inProgress = append(inProgress, f)
 		case f.Status == feature.StatusPublished:
@@ -635,6 +771,13 @@ func (m *DashboardModel) buildVisibleItems() {
 			inProgress = append(inProgress, f)
 		}
 	}
+	return inProgress, published, completed
+}
+
+// buildVisibleItems computes the flat list of navigable items (section headers + features).
+// It must be called whenever features or collapsed sections change.
+func (m *DashboardModel) buildVisibleItems() {
+	inProgress, published, completed := m.partitionSections()
 
 	sections := []sectionMeta{
 		{"inProgress", sectionLabel("inProgress"), inProgress},
@@ -655,6 +798,19 @@ func (m *DashboardModel) buildVisibleItems() {
 
 		for _, f := range sec.features {
 			items = append(items, listItem{kind: listItemFeature, feature: f, section: sec.key})
+			if child := m.childForParent(f.ID); child != nil {
+				items = append(items, listItem{kind: listItemChildFeature, feature: child, section: sec.key})
+			}
+			// Closed children project as a compact per-parent history group.
+			// Active work stays visible above the group at all times.
+			if closed := m.closedChildren[f.ID]; len(closed) > 0 {
+				items = append(items, listItem{kind: listItemRefactorHistory, parentID: f.ID, closedCount: len(closed), section: sec.key})
+				if m.expandedHistory[f.ID] {
+					for _, closedChild := range closed {
+						items = append(items, listItem{kind: listItemClosedChildFeature, feature: closedChild, parentID: f.ID, section: sec.key})
+					}
+				}
+			}
 		}
 	}
 
@@ -694,6 +850,12 @@ func (m *DashboardModel) computeCursorLine() {
 				return
 			}
 			lineIndex++ // feature row
+		case listItemChildFeature, listItemRefactorHistory, listItemClosedChildFeature:
+			if i == m.cursor {
+				m.cursorLine = lineIndex
+				return
+			}
+			lineIndex++ // relationship row
 		}
 	}
 }
@@ -781,23 +943,18 @@ func (m *DashboardModel) updateScrollState(panelHeight int) {
 }
 
 // sectionFeatureCount returns the total number of features in a section (regardless of collapse).
+// Counts come from partitionSections so the header badges, list rows, and this
+// count never drift apart when relationship-aware sectioning changes.
 func (m DashboardModel) sectionFeatureCount(sectionKey string) int {
-	count := 0
-	for _, f := range m.features {
-		switch sectionKey {
-		case "inProgress":
-			if isActivePublishedCycle(f) || (f.Status != feature.StatusPublished && f.Status != feature.StatusDone) {
-				count++
-			}
-		case "published":
-			if f.Status == feature.StatusPublished && !isActivePublishedCycle(f) {
-				count++
-			}
-		case "completed":
-			if f.Status == feature.StatusDone {
-				count++
-			}
-		}
+	inProgress, published, completed := m.partitionSections()
+	var count int
+	switch sectionKey {
+	case "inProgress":
+		count = len(inProgress)
+	case dashboardSectionPublished:
+		count = len(published)
+	case dashboardSectionCompleted:
+		count = len(completed)
 	}
 	if sectionKey == "inProgress" && m.creatingName != "" {
 		count++
@@ -862,6 +1019,21 @@ func (m DashboardModel) renderFeatureList() string {
 			f := item.feature
 
 			row := m.renderFeatureRowCompact(f, i == m.cursor)
+			content.WriteString(row + "\n")
+			lineIndex++
+
+		case listItemChildFeature:
+			row := m.renderChildRowCompact(item.feature, i == m.cursor)
+			content.WriteString(row + "\n")
+			lineIndex++
+
+		case listItemRefactorHistory:
+			row := m.renderHistoryGroupRow(item.parentID, item.closedCount, i == m.cursor)
+			content.WriteString(row + "\n")
+			lineIndex++
+
+		case listItemClosedChildFeature:
+			row := m.renderClosedChildRowCompact(item.feature, i == m.cursor)
 			content.WriteString(row + "\n")
 			lineIndex++
 
@@ -987,6 +1159,15 @@ func (m DashboardModel) renderFeatureRowCompact(f *feature.Feature, selected boo
 	var status string
 	if m.rewindingFeatureID == f.ID {
 		status = WarningStyle.Render("Stopping…")
+	} else if child := m.childForParent(f.ID); child != nil {
+		label := refactoringDisplayState(f, child)
+		if label == "Refactoring — Needs attention" {
+			status = WarningStyle.Render(label)
+			icon = awaitingUserGlyph()
+		} else {
+			status = lipgloss.NewStyle().Foreground(colorInfo).Render(label)
+			icon = lipgloss.NewStyle().Foreground(colorInfo).Render(icons.Implementing)
+		}
 	} else {
 		status = formatStatus(f)
 	}
@@ -1012,14 +1193,156 @@ func (m DashboardModel) renderFeatureRowCompact(f *feature.Feature, selected boo
 	return "  " + row
 }
 
+func (m DashboardModel) renderChildRowCompact(f *feature.Feature, selected bool) string {
+	icon := statusIcon(f.Status.String())
+	att := computeFeatureAttention(f, nil)
+	if att.RequiresUser() {
+		icon = awaitingUserGlyph()
+	} else if att.Kind == attentionWatch && m.spinnerView != "" {
+		icon = m.spinnerView
+	}
+	status := formatStatus(f)
+
+	slug := f.Slug
+	if len(slug) > 18 {
+		slug = slug[:17] + "\u2026"
+	}
+
+	pipelineBadge := formatPipelineBadge(f.EffectivePipeline())
+	row := fmt.Sprintf("%s %-18s %s %s", icon, slug, pipelineBadge, status)
+
+	if selected {
+		return SelectedRowStyle.Render("\u25b8 \u21b3 " + ansi.Strip(row))
+	}
+	return "  \u21b3 " + row
+}
+
+// renderHistoryGroupRow renders the "Refactor History (N)" group anchor
+// beneath a parent. The group is a presentation container, not a feature:
+// it selects like a section header but is styled as relationship context.
+func (m DashboardModel) renderHistoryGroupRow(parentID string, count int, selected bool) string {
+	arrow := "▸"
+	if m.expandedHistory[parentID] {
+		arrow = "▾"
+	}
+	label := fmt.Sprintf("%s Refactor History (%d)", arrow, count)
+	if selected {
+		return SelectedRowStyle.Render("▸ ↳ " + SubtextStyle.Render(label))
+	}
+	return "  ↳ " + SubtextStyle.Render(label)
+}
+
+// renderClosedChildRowCompact renders one closed child inside an expanded
+// history group: outcome, pipeline, and the close date with the total cost,
+// compact enough for the narrow list panel.
+func (m DashboardModel) renderClosedChildRowCompact(f *feature.Feature, selected bool) string {
+	icon := icons.Done
+	outcome := "Closed"
+	detail := ""
+	var closedAt *time.Time
+	if f.Parent != nil {
+		closedAt = f.Parent.ClosedAt
+		switch f.Parent.CloseOutcome {
+		case feature.ChildCloseOutcomeCompleted:
+			outcome = "Completed"
+		case feature.ChildCloseOutcomeDiscarded:
+			icon = icons.Failed
+			outcome = "Discarded"
+		}
+	}
+	startedAt := f.Created
+	if f.StartedAt != nil {
+		startedAt = *f.StartedAt
+	}
+	if !startedAt.IsZero() {
+		detail = startedAt.Local().Format("Jan 02 15:04")
+	}
+	if closedAt != nil {
+		if detail != "" {
+			detail += " → "
+		}
+		detail += closedAt.Local().Format("Jan 02 15:04")
+	}
+	if cost := f.TotalCost(); cost > 0 {
+		if detail != "" {
+			detail += " · "
+		}
+		detail += formatCost(cost)
+	}
+
+	slug := f.Slug
+	if slug == "" {
+		slug = f.Name
+	}
+	if len(slug) > 14 {
+		slug = slug[:13] + "…"
+	}
+	pipelineBadge := formatPipelineBadge(f.EffectivePipeline())
+	row := fmt.Sprintf("%s %-14s %s %s %s", icon, slug, pipelineBadge, outcome, detail)
+
+	if selected {
+		return SelectedRowStyle.Render("▸   ↳ " + ansi.Strip(row))
+	}
+	return "    ↳ " + SubtextStyle.Render(row)
+}
+
+// refactoringDisplayState returns the parent's display label when it has an
+// active refactor child. Returns "Refactoring — Needs attention" when the
+// child needs user attention, otherwise "Refactoring". Returns empty when no
+// child is provided.
+func refactoringDisplayState(parent *feature.Feature, child *feature.Feature) string {
+	if child == nil {
+		return ""
+	}
+	if featureNeedsUserAttention(child) {
+		return "Refactoring — Needs attention"
+	}
+	return "Refactoring"
+}
+
 func (m DashboardModel) SelectedFeature() *feature.Feature {
 	if m.cursor >= 0 && m.cursor < len(m.visibleItems) {
 		item := m.visibleItems[m.cursor]
-		if item.kind == listItemFeature {
+		switch item.kind {
+		case listItemFeature, listItemChildFeature, listItemClosedChildFeature:
 			return item.feature
 		}
 	}
 	return nil
+}
+
+// SelectedRefactorHistoryGroup returns the parent ID anchoring the Refactor
+// History group row under the cursor, or "" when the cursor is elsewhere.
+func (m DashboardModel) SelectedRefactorHistoryGroup() string {
+	if m.cursor >= 0 && m.cursor < len(m.visibleItems) {
+		if item := m.visibleItems[m.cursor]; item.kind == listItemRefactorHistory {
+			return item.parentID
+		}
+	}
+	return ""
+}
+
+// SelectedFeatureIsClosedChildOf reports whether the currently selected
+// feature row is a closed child inside the given parent's history group —
+// the case where collapsing the group must return selection to the parent.
+func (m DashboardModel) SelectedFeatureIsClosedChildOf(parentID string) bool {
+	if m.cursor >= 0 && m.cursor < len(m.visibleItems) {
+		item := m.visibleItems[m.cursor]
+		return item.kind == listItemClosedChildFeature && item.parentID == parentID
+	}
+	return false
+}
+
+// SelectRefactorHistoryGroup moves the cursor onto the parent's Refactor
+// History group row. Returns true if found. Used to restore a group-header
+// selection across list rebuilds.
+func (m *DashboardModel) SelectRefactorHistoryGroup(parentID string) bool {
+	if parentID == "" {
+		return false
+	}
+	return m.findAndSelect(func(item listItem) bool {
+		return item.kind == listItemRefactorHistory && item.parentID == parentID
+	})
 }
 
 // SelectedSection returns the section key if the cursor is on a section header, empty string otherwise.
@@ -1031,6 +1354,24 @@ func (m DashboardModel) SelectedSection() string {
 		}
 	}
 	return ""
+}
+
+// SelectFeatureByID moves the cursor to the feature or child feature matching
+// the given ID. Returns true if found. Unlike selectFeature (which only
+// matches top-level listItemFeature rows), this also matches child rows by
+// their child ID.
+func (m *DashboardModel) SelectFeatureByID(featureID string) bool {
+	if featureID == "" {
+		m.syncPreview()
+		return false
+	}
+	return m.findAndSelect(func(item listItem) bool {
+		switch item.kind {
+		case listItemFeature, listItemChildFeature, listItemClosedChildFeature:
+			return item.feature != nil && item.feature.ID == featureID
+		}
+		return false
+	})
 }
 
 // SetWelcomeSkipped marks that the user skipped the welcome flow, enabling
@@ -1070,10 +1411,18 @@ func (m DashboardModel) CollapsedSectionsList() []string {
 	return result
 }
 
+// countNeedAttention counts the relationships that need user attention. An
+// active refactor child that needs attention surfaces on its parent's row as
+// "Refactoring — Needs attention", so each parent/child relationship
+// contributes at most once to the warning total.
 func (m DashboardModel) countNeedAttention() int {
 	count := 0
 	for _, f := range m.features {
 		if featureNeedsUserAttention(f) {
+			count++
+			continue
+		}
+		if child := m.childForParent(f.ID); child != nil && featureNeedsUserAttention(child) {
 			count++
 		}
 	}
@@ -1283,8 +1632,6 @@ func repoCycleFinalReviewLabel(t feature.RepoCycleType) string {
 		return "Final Review (Review Comments)"
 	case feature.CycleRebase:
 		return "Final Review (Rebase)"
-	case feature.CycleRefactor:
-		return "Final Review (Refactor)"
 	default:
 		return "Final Review (Repo Cycle)"
 	}
@@ -1298,8 +1645,6 @@ func repoCycleRunningLabel(t feature.RepoCycleType) string {
 		return "Addressing Review Comments"
 	case feature.CycleRebase:
 		return "Rebasing"
-	case feature.CycleRefactor:
-		return "Refactoring"
 	default:
 		return "Repo Cycle Running"
 	}
@@ -1359,13 +1704,6 @@ func formatStatus(f *feature.Feature) string {
 			}
 			return base + elapsed
 		}
-		if f.IsRefactoring() && strings.Contains(normalizedPath, "/refactor-") && f.CurrentPhase == feature.PhaseImplement {
-			base := fmt.Sprintf("Refactoring: Implementing [%d]", f.CurrentIteration)
-			if needsInput {
-				return WarningStyle.Render(base+" | waiting input") + elapsed
-			}
-			return base + elapsed
-		}
 		if f.ReviewingGate {
 			return ReviewStyle.Render(fmt.Sprintf("Reviewing [%d]", f.CurrentIteration)) + elapsed
 		}
@@ -1389,44 +1727,31 @@ func formatStatus(f *feature.Feature) string {
 		return "Building KB" + elapsed
 	case feature.StatusResearching:
 		label := "Researching"
-		if f.IsRefactoring() {
-			label = "Refactoring: Researching"
-		}
 		if needsInput {
 			return WarningStyle.Render(label+" | waiting input") + elapsed
 		}
 		return label + elapsed
 	case feature.StatusInquiring:
 		label := "Inquiring"
-		if f.IsRefactoring() {
-			label = "Refactoring: Inquiring"
-		}
 		if needsInput {
 			return WarningStyle.Render(label+" | waiting input") + elapsed
 		}
 		return label + elapsed
 	case feature.StatusDesigning:
 		label := "Designing"
-		if f.IsRefactoring() {
-			label = "Refactoring: Designing"
-		}
 		if needsInput {
 			return WarningStyle.Render(label+" | waiting input") + elapsed
 		}
 		return label + elapsed
 	case feature.StatusPlanning:
-		refPrefix := ""
-		if f.IsRefactoring() {
-			refPrefix = "Refactoring: "
-		}
 		if f.CurrentRoadmapPhase > 0 {
 			// Per-phase planning
 			if f.ValidatingPlan {
-				return ReviewStyle.Render(fmt.Sprintf("%sValidating Phase %d plan", refPrefix, f.CurrentRoadmapPhase)) + elapsed
+				return ReviewStyle.Render(fmt.Sprintf("Validating Phase %d plan", f.CurrentRoadmapPhase)) + elapsed
 			}
-			base := fmt.Sprintf("%sPlanning Phase %d", refPrefix, f.CurrentRoadmapPhase)
+			base := fmt.Sprintf("Planning Phase %d", f.CurrentRoadmapPhase)
 			if f.PlanIteration > 1 {
-				base = fmt.Sprintf("%sPlanning Phase %d [%d]", refPrefix, f.CurrentRoadmapPhase, f.PlanIteration)
+				base = fmt.Sprintf("Planning Phase %d [%d]", f.CurrentRoadmapPhase, f.PlanIteration)
 			}
 			if needsInput {
 				return WarningStyle.Render(base+" | waiting input") + elapsed
@@ -1435,19 +1760,19 @@ func formatStatus(f *feature.Feature) string {
 		}
 		// Roadmap creation (phase 0)
 		if f.ValidatingPlan {
-			return ReviewStyle.Render(refPrefix+"Validating roadmap") + elapsed
+			return ReviewStyle.Render("Validating roadmap") + elapsed
 		}
 		if f.PlanIteration > 1 {
-			base := fmt.Sprintf("%sCreating Roadmap [%d]", refPrefix, f.PlanIteration)
+			base := fmt.Sprintf("Creating Roadmap [%d]", f.PlanIteration)
 			if needsInput {
 				return WarningStyle.Render(base+" | waiting input") + elapsed
 			}
 			return base + elapsed
 		}
 		if needsInput {
-			return WarningStyle.Render(refPrefix+"Creating Roadmap | waiting input") + elapsed
+			return WarningStyle.Render("Creating Roadmap | waiting input") + elapsed
 		}
-		return refPrefix + "Creating Roadmap" + elapsed
+		return "Creating Roadmap" + elapsed
 	case feature.StatusPlanNeedsReview:
 		return WarningStyle.Render("Plan needs review") + elapsed
 	case feature.StatusPromptNeedsReview:

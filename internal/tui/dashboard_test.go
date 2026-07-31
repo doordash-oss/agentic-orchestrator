@@ -105,7 +105,7 @@ func TestDashboardClipsLongFailureDetailLinesToTerminalWidth(t *testing.T) {
 		Status:       feature.StatusFailed,
 		CurrentPhase: feature.PhaseFinalReview,
 		FailureType:  feature.FailureProtocolViolation,
-		LastError:    "protocol violation: final_review_reviewer @ /Users/ivar.lazzaro/.agentic-workflow/worktrees/agentico-mcp-server/agentic-orchestrator/runs/run-001/final-review/iteration-02: dropped critical SDK message (type=result) after 5s on full attachCh",
+		LastError:    "protocol violation: final_review_reviewer @ /tmp/agentic-workflow/worktrees/example/agentic-orchestrator/runs/run-001/final-review/iteration-02: dropped critical SDK message (type=result) after 5s on full attachCh",
 		Repos:        []feature.FeatureRepo{{Name: testRepoNameOrchestrator}},
 		RepoStates: map[string]*feature.RepoState{
 			testRepoNameOrchestrator: {Touched: true, LastError: "dropped critical SDK message (type=result) after 5s on full attachCh"},
@@ -1416,81 +1416,6 @@ func TestBuildVisibleItems_ActivePublishedCycleInProgressSection(t *testing.T) {
 	}
 	if got := m.sectionFeatureCount("published"); got != 1 {
 		t.Fatalf("published count = %d, want 1", got)
-	}
-}
-
-func TestFormatStatusRefactoring(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name       string
-		feature    *feature.Feature
-		wantSubstr string
-		wantAbsent string // if non-empty, output must NOT contain this
-	}{
-		{
-			name: "inquiring + refactoring",
-			feature: &feature.Feature{
-				Status:         feature.StatusInquiring,
-				RefactorPrompt: "refactor the auth module",
-			},
-			wantSubstr: "Refactoring: Inquiring",
-		},
-		{
-			name: "researching + refactoring",
-			feature: &feature.Feature{
-				Status:         feature.StatusResearching,
-				RefactorPrompt: "refactor the auth module",
-			},
-			wantSubstr: "Refactoring: Researching",
-		},
-		{
-			name: "designing + refactoring",
-			feature: &feature.Feature{
-				Status:         feature.StatusDesigning,
-				RefactorPrompt: "refactor the auth module",
-			},
-			wantSubstr: "Refactoring: Designing",
-		},
-		{
-			name: "planning + refactoring + roadmap phase 0",
-			feature: &feature.Feature{
-				Status:              feature.StatusPlanning,
-				RefactorPrompt:      "refactor the auth module",
-				CurrentRoadmapPhase: 0,
-			},
-			wantSubstr: "Refactoring: Creating Roadmap",
-		},
-		{
-			name: "implementing + refactoring + refactor artifact path",
-			feature: &feature.Feature{
-				Status:         feature.StatusImplementing,
-				RefactorPrompt: "refactor the auth module",
-				CurrentPhase:   feature.PhaseImplement,
-				Artifacts:      map[string]string{"plan": "/some/path/refactor-1/implement/plan.md"},
-			},
-			wantSubstr: "Refactoring: Implementing",
-		},
-		{
-			name: "researching + NOT refactoring",
-			feature: &feature.Feature{
-				Status:         feature.StatusResearching,
-				RefactorPrompt: "",
-			},
-			wantSubstr: "Researching",
-			wantAbsent: "Refactoring",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatStatus(tt.feature)
-			if !strings.Contains(got, tt.wantSubstr) {
-				t.Errorf("formatStatus() = %q, want substring %q", got, tt.wantSubstr)
-			}
-			if tt.wantAbsent != "" && strings.Contains(got, tt.wantAbsent) {
-				t.Errorf("formatStatus() = %q, must NOT contain %q", got, tt.wantAbsent)
-			}
-		})
 	}
 }
 

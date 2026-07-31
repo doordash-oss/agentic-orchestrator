@@ -33,46 +33,10 @@ type DetailModel struct {
 	kbStaleWarning string // yellow warning text when KB is outdated or missing
 	width          int
 	height         int
-
-	// Refactor overlay — set by parent when refactor input is active.
-	// When refactorActive is true, View/ViewCompact render a refactor input panel
-	// instead of the normal detail content.
-	refactorActive      bool
-	refactorInputView   string // pre-rendered textarea.View() output
-	refactorFeatureName string
-
-	// Refactor pipeline selector — set by parent after refactor
-	// prompt is submitted. Shows pipeline selection overlay.
-	refactorPipelineActive bool
-	refactorPipelineView   string // pre-rendered pipeline selector output
 }
 
 func NewDetailModel(f *feature.Feature, stateDir string) DetailModel {
 	return DetailModel{feature: f, stateDir: stateDir, contextPct: -1}
-}
-
-// renderRefactorOverlay renders the refactor input panel that replaces normal
-// detail content when a refactor is being composed. width is the available
-// content width (outer panel width for compact, boxWidth for full-screen).
-func (m DetailModel) renderRefactorOverlay(width int) string {
-	var b strings.Builder
-
-	// Brief header: feature name
-	b.WriteString(TitleStyle.Render("Refactor"))
-	b.WriteString("  " + MutedStyle.Render(m.refactorFeatureName))
-	b.WriteString("\n\n")
-
-	// Textarea in a styled sub-panel (active border = brand color)
-	taBox := panelStyle(true).Width(width - 4).Render(m.refactorInputView)
-	taBox = renderBorderTitle(taBox, "What changes do you want to make?", lipgloss.NewStyle().Foreground(colorBrand))
-	b.WriteString(taBox)
-	b.WriteString("\n")
-
-	// Key hints
-	b.WriteString(KeyHelpStyle.Render(" [ctrl+s] Submit   [esc] Cancel"))
-	b.WriteString("\n")
-
-	return b.String()
 }
 
 // kbStatusIcon returns a styled icon for a per-repo KB build status string.
@@ -128,7 +92,7 @@ func phaseMatchesCurrentForDisplay(row, current feature.Phase) bool {
 }
 
 // cycleGroup is a display-aggregated view of one cycle type (rebase,
-// refactor, review-comments) under the Implement phase. It collapses all
+// review-comments) under the Implement phase. It collapses all
 // individual cycles of the same type into a single line showing the latest
 // index, total count, cumulative duration, and cumulative cost.
 type cycleGroup struct {
@@ -140,7 +104,7 @@ type cycleGroup struct {
 }
 
 // phaseTimingKeys returns grouped cycle entries for the implement phase. Each
-// group collapses multiple cycles of the same type (rebase/refactor)
+// group collapses multiple cycles of the same type (rebase)
 // into a single row so the panel doesn't grow unboundedly.
 func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 	if f.PhaseTimings == nil {
@@ -199,7 +163,6 @@ func phaseTimingKeys(f *feature.Feature) []cycleGroup {
 		groups = append(groups, g)
 	}
 	collect("rebase", "Rebase", f.RebaseCount())
-	collect("refactor", "Refactor", f.RefactorCount())
 	k := "review-comments"
 	rcInFlight := activeCycle != nil &&
 		activeCycle.Type == feature.CycleReviewComments &&
@@ -256,6 +219,18 @@ func setupState(f *feature.Feature) *feature.SetupState {
 		return nil
 	}
 	return f.Run().Setup
+}
+
+// setupReadyToStart reports a feature whose asynchronous setup completed and
+// whose lifecycle is still Created: execution has not been dispatched, so
+// every presentation must offer the ordinary Start action instead of
+// implying the pipeline is already starting.
+func setupReadyToStart(f *feature.Feature) bool {
+	if f == nil || f.Status != feature.StatusCreated {
+		return false
+	}
+	setup := setupState(f)
+	return setup != nil && setup.Status == feature.SetupStatusDone
 }
 
 func isSetupLifecycle(f *feature.Feature) bool {
@@ -396,23 +371,44 @@ func (m DetailModel) ViewCompact(width int) string {
 		width = 40
 	}
 
-	// When refactor input is active, show the refactor overlay instead of
-	// normal detail content.
-	if m.refactorActive {
-		return m.renderRefactorOverlay(width)
-	}
-
-	// When refactor pipeline selector is active, show the selector overlay.
-	if m.refactorPipelineActive {
-		return m.refactorPipelineView
-	}
-
 	var b strings.Builder
 
 	attention := computeFeatureAttention(f, nil)
 	if detailShowsInputAttention(attention) {
-		b.WriteString(WarningStyle.Render("\u26a0 waiting for input"))
+		b.WriteString(WarningStyle.Render("⚠ waiting for input"))
 		b.WriteString("\n")
+	}
+
+	// Closed-child banner — settled refactor children render their full
+	// detail data but are unmistakably read-only history. It leads the detail
+	// surface so it survives compact-height clipping of the lower boxes.
+	if label, outcome := closedChildBannerContent(f); label != "" {
+		closedStyle := SubtextStyle
+		borderColor := colorSubtext
+		if outcome == feature.ChildCloseOutcomeDiscarded {
+			closedStyle = WarningStyle
+			borderColor = colorWarning
+		}
+		banner := closedStyle.Render("  " + label + " — immutable refactor history, inspection only.")
+		closedBox := panelStyle(false).
+			BorderForeground(borderColor).
+			Width(width - 4).
+			Render(banner)
+		closedBox = renderBorderTitle(closedBox, "Read only", closedStyle)
+		b.WriteString(closedBox)
+		b.WriteString("\n")
+	}
+
+	// Cleanup warnings surfaced by closure (non-fatal worktree/branch
+	// cleanup failures) sit directly under the read-only banner; the section
+	// is omitted entirely when closure completed cleanly.
+	if warnings := closedChildCleanupWarnings(f); len(warnings) > 0 {
+		b.WriteString(SubtextStyle.Render("Cleanup warnings:"))
+		b.WriteString("\n")
+		for _, warning := range warnings {
+			b.WriteString(WarningStyle.Render("  " + warning))
+			b.WriteString("\n")
+		}
 	}
 
 	// Metadata
@@ -441,8 +437,13 @@ func (m DetailModel) ViewCompact(width int) string {
 		b.WriteString("\n")
 	}
 
-	if hint := renderLightbulbHint(f, width-4); hint != "" {
-		b.WriteString(hint + "\n")
+	// Rewind & Upgrade is a mutation: settled refactor children render their
+	// detail strictly for read-only inspection, so the pipeline-upgrade panel
+	// is suppressed even though its copy invites a rewind.
+	if _, outcome := closedChildBannerContent(f); outcome == "" {
+		if hint := renderLightbulbHint(f, width-4); hint != "" {
+			b.WriteString(hint + "\n")
+		}
 	}
 
 	// Needs-review banner — prominent call-to-action when an artifact awaits review.
@@ -660,7 +661,7 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 				if g.active {
 					cycleTiming += formatContextUsage(m.contextPct)
 				}
-				// Post-publish cycles (rebase/refactor/review-comments) keep
+				// Post-publish cycles (rebase/review-comments) keep
 				// the feature at StatusPublished/StatusCodeReady while the cycle
 				// loop is mid-flight, so isRunningStatus(f.Status) is false even
 				// when the cycle is actively running. Trust the cycle's own
@@ -740,7 +741,6 @@ func renderRoadmapPlanSubItemsCompact(b *strings.Builder, f *feature.Feature) {
 // (rebase, or review-comments) rather than a roadmap phase implementation.
 func isCycleKey(key string) bool {
 	return strings.HasPrefix(key, "rebase-") ||
-		strings.HasPrefix(key, "refactor-") ||
 		key == "review-comments"
 }
 
@@ -833,6 +833,44 @@ func renderDetailInputAttentionBox(att featureAttention, boxWidth int) string {
 	return livePreviewAttentionSectionBox(att, att.ActivityLine(), boxWidth, contentWidth)
 }
 
+// closedChildBannerContent returns the read-only banner label for a settled
+// refactor child ("Closed — Completed" or "Closed — Discarded", matching the
+// server's DisplayState vocabulary) and the raw outcome. Empty for anything
+// other than a closed child.
+func closedChildBannerContent(f *feature.Feature) (label, outcome string) {
+	if f == nil || f.Parent == nil || f.Parent.CloseOutcome == "" {
+		return "", ""
+	}
+	switch f.Parent.CloseOutcome {
+	case feature.ChildCloseOutcomeCompleted:
+		return "Closed — Completed", feature.ChildCloseOutcomeCompleted
+	case feature.ChildCloseOutcomeDiscarded:
+		return "Closed — Discarded", feature.ChildCloseOutcomeDiscarded
+	}
+	return "", ""
+}
+
+// closedChildCleanupWarnings extracts the non-fatal cleanup warnings a
+// settled child recorded in its transaction journal, formatted with the repo
+// name when known. Empty for anything other than a closed child.
+func closedChildCleanupWarnings(f *feature.Feature) []string {
+	if f == nil || f.Parent == nil || f.Parent.CloseOutcome == "" || f.Parent.Transaction == nil {
+		return nil
+	}
+	var warnings []string
+	for _, entry := range f.Parent.Transaction.Entries {
+		if entry.CleanupWarning == "" {
+			continue
+		}
+		if entry.Repo != "" {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", entry.Repo, entry.CleanupWarning))
+		} else {
+			warnings = append(warnings, entry.CleanupWarning)
+		}
+	}
+	return warnings
+}
+
 // needsReviewBanner returns a prominent banner describing the pending review
 // artifact and the key to open it. Returns empty string when no review is pending.
 func needsReviewBanner(f *feature.Feature) string {
@@ -913,8 +951,6 @@ func formatDetailStatus(f *feature.Feature) string {
 		switch f.ActiveCycleType() {
 		case feature.CycleRebase:
 			label = fmt.Sprintf("Rebasing (Iteration %d)", f.CurrentIteration)
-		case feature.CycleRefactor:
-			label = fmt.Sprintf("Refactoring (Iteration %d)", f.CurrentIteration)
 		case feature.CycleReviewComments:
 			label = fmt.Sprintf("Addressing Reviews (Iteration %d)", f.CurrentIteration)
 		default:
@@ -945,9 +981,9 @@ func formatDetailStatus(f *feature.Feature) string {
 			}
 			return lipgloss.NewStyle().Foreground(colorInfo).Render(label)
 		}
-		hint := "\u2713 Published \u2014 [Shift+F] refactor"
+		hint := "\u2713 Published"
 		if f.IsPublishable() {
-			hint += "  [b] rebase"
+			hint += " \u2014 [b] rebase"
 		}
 		if len(f.PRURLs()) > 0 && f.IsPublishable() {
 			hint += "  [g] reviews"
@@ -974,7 +1010,7 @@ func formatDetailStatus(f *feature.Feature) string {
 		if f.IsPublishable() {
 			hints += " [p] publish "
 		}
-		hints += " [Shift+F] refactor  [b] rebase"
+		hints += " [b] rebase"
 		if !f.IsPublishable() {
 			hints += "  [Shift+M] merge  [Shift+D] done"
 		}

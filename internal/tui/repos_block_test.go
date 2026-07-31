@@ -165,12 +165,6 @@ func TestRenderReposBlockCycleSuffix(t *testing.T) {
 			want:      []string{"⟳", "rebasing"},
 		},
 		{
-			name:      "refactor running",
-			cycleType: feature.CycleRefactor,
-			status:    feature.RepoCycleRunning,
-			want:      []string{"⟳", "refactoring"},
-		},
-		{
 			name:      "review-comments running",
 			cycleType: feature.CycleReviewComments,
 			status:    feature.RepoCycleRunning,
@@ -184,10 +178,10 @@ func TestRenderReposBlockCycleSuffix(t *testing.T) {
 			want:      []string{"✗", "rebase failed", "merge conflict"},
 		},
 		{
-			name:      "refactor needs input",
-			cycleType: feature.CycleRefactor,
+			name:      "review-comments needs input",
+			cycleType: feature.CycleReviewComments,
 			status:    feature.RepoCycleNeedUserInput,
-			want:      []string{"⚠", "refactor needs input"},
+			want:      []string{"⚠", "review-comments needs input"},
 		},
 	}
 

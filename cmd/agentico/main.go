@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -85,6 +86,7 @@ const (
 	resultUpdated  = "updated"
 	resultSent     = "sent"
 	resultRetried  = "retried"
+	resultCreated  = "created"
 
 	dispatchNone = "none"
 
@@ -864,6 +866,7 @@ type runtimeBootstrap struct {
 	phaseRunner     *agent.PhaseRunner
 	observer        *observe.Observer
 	permissionCache *permission.Cache
+	cleanliness     feature.CleanlinessOps
 	eventCh         chan interface{}
 	runtime         serverruntime.RuntimeIdentity
 	workspaceDir    string
@@ -892,6 +895,7 @@ type serverMutationTarget struct {
 	mu              sync.Mutex
 	orch            *orchestrator.Orchestrator
 	rebaseStarter   featureRebaseStarter
+	childCreator    featureRefactorChildCreator
 	cfg             *config.Config
 	configPath      string
 	store           *feature.Store
@@ -904,6 +908,12 @@ type serverMutationTarget struct {
 
 type featureRebaseStarter interface {
 	StartFeatureRebase(featureID string) error
+}
+
+// featureRefactorChildCreator is the narrow feature.Manager surface the
+// refactor action needs to atomically create and persist a refactor child.
+type featureRefactorChildCreator interface {
+	CreateRefactorChild(parentID string, spec feature.RefactorChildSpec) (*feature.Feature, error)
 }
 
 type gitFreshnessProvider struct{}
@@ -965,7 +975,12 @@ func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.Fea
 }
 
 func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
-	if err := t.orch.InterruptFeature(featureID); err != nil {
+	if err := t.orch.WithRelationshipReadLock(func() error {
+		if err := t.orch.RelationshipGuard(featureID, orchestrator.MutationStop); err != nil {
+			return err
+		}
+		return t.orch.InterruptFeature(featureID)
+	}); err != nil {
 		return serverruntime.FeatureStopResponse{}, err
 	}
 	return serverruntime.FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
@@ -1014,18 +1029,6 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 				return err
 			}
 		}
-		if outcome.RefactorRestart != nil {
-			resp.RefactorCount = 1
-			sessionID, err := t.orch.RestartRefactorCycle(featureID, outcome.RefactorRestart.RepoName, outcome.RefactorRestart.Prompt)
-			if sessionID != "" {
-				sessionIDs = append(sessionIDs, sessionID)
-			}
-			if err != nil {
-				return err
-			}
-		} else {
-			resp.RefactorCount = 0
-		}
 		if len(sessionIDs) > 0 {
 			resp.SessionIDs = sessionIDs
 		}
@@ -1065,28 +1068,77 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 			return serverruntime.FeatureConfigUpdateResponse{}, err
 		}
 	}
-	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
-		Models:              req.Models,
-		Effort:              req.Effort,
-		Inquireness:         feature.Inquireness(req.Inquireness),
-		Checkpoints:         req.Checkpoints,
-		InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
-		AutomaticReviewMode: automaticReviewMode,
-	}); err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
+	// Detect parent/child relationship and route to paired config update
+	// when the addressed feature is either a parent with an active child
+	// or the active child itself. The submitted pipeline must match the
+	// addressed record's pipeline. The detect + update window is wrapped
+	// in the relationship read lock so a concurrent child creation cannot
+	// interleave between detection and the write.
+	if t.orch != nil {
+		var configErr error
+		var configResp serverruntime.FeatureConfigUpdateResponse
+		configErr = t.orch.WithRelationshipReadLock(func() error {
+			parentID, _, paired, dErr := t.orch.DetectPairedConfigTarget(featureID)
+			if dErr != nil {
+				return fmt.Errorf("detecting paired config target: %w", dErr)
+			}
+			if paired {
+				if err := t.orch.UpdatePairedFeatureConfig(parentID, feature.PairedConfigInput{
+					Models:              req.Models,
+					Effort:              req.Effort,
+					Inquireness:         feature.Inquireness(req.Inquireness),
+					Checkpoints:         req.Checkpoints,
+					InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
+					AutomaticReviewMode: automaticReviewMode,
+				}, feature.PipelineProfile(req.Pipeline), featureID); err != nil {
+					return err
+				}
+				f, err := t.store.Load(featureID)
+				if err != nil {
+					return err
+				}
+				pipeline := req.Pipeline
+				if pipeline == "" {
+					pipeline = f.EffectivePipeline()
+				}
+				if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+					return err
+				}
+				configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
+				return nil
+			}
+			if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
+				Models:              req.Models,
+				Effort:              req.Effort,
+				Inquireness:         feature.Inquireness(req.Inquireness),
+				Checkpoints:         req.Checkpoints,
+				InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
+				AutomaticReviewMode: automaticReviewMode,
+			}); err != nil {
+				return err
+			}
+			f, err := t.store.Load(featureID)
+			if err != nil {
+				return err
+			}
+			pipeline := req.Pipeline
+			if pipeline == "" {
+				pipeline = f.EffectivePipeline()
+			}
+			if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+				return err
+			}
+			configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
+			return nil
+		})
+		if configErr != nil {
+			return serverruntime.FeatureConfigUpdateResponse{}, configErr
+		}
+		if configResp.Result != "" {
+			return configResp, nil
+		}
 	}
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
-	}
-	pipeline := req.Pipeline
-	if pipeline == "" {
-		pipeline = f.EffectivePipeline()
-	}
-	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
-	}
-	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
+	return serverruntime.FeatureConfigUpdateResponse{}, errors.New("orchestrator is not available")
 }
 
 func (t *serverMutationTarget) NeedUserInputDecision(featureID string, req serverruntime.NeedUserInputDecisionRequest) (serverruntime.NeedUserInputDecisionResponse, error) {
@@ -1511,17 +1563,10 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 		resp.Result = resultFailed
 		return resp, errors.New("orchestrator is not available")
 	}
-	if req.UpgradePipeline != "" {
-		if err := t.orch.UpgradePipeline(featureID, req.UpgradePipeline); err != nil {
-			resp.Result = resultFailed
-			return resp, err
-		}
-	}
-	t.orch.StopFeatureSessions(featureID)
-	warnings, effectiveTarget, err := t.orch.RewindWithRequest(featureID, feature.RewindRequest{
+	warnings, effectiveTarget, err := t.orch.RewindWithUpgrade(featureID, feature.RewindRequest{
 		TargetPhase:  targetPhase,
 		RoadmapPhase: req.RoadmapPhase,
-	})
+	}, feature.PipelineProfile(req.UpgradePipeline))
 	if effectiveTarget != 0 || strings.EqualFold(req.TargetPhase, phaseNameResearch) {
 		resp.EffectivePhase = effectiveTarget.DirName()
 	}
@@ -1581,6 +1626,46 @@ func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.R
 		return resp, err
 	}
 	resp.Result = resultStarted
+	return resp, nil
+}
+
+func (t *serverMutationTarget) RefactorFeature(featureID string, req serverruntime.RefactorFeatureRequest) (serverruntime.RefactorFeatureResponse, error) {
+	resp := serverruntime.RefactorFeatureResponse{ParentID: featureID, Result: resultFailed}
+	creator := t.childCreator
+	if creator == nil {
+		return resp, errors.New("feature manager is not available")
+	}
+	spec, err := serverruntime.RefactorChildSpecFromRequest(req)
+	if err != nil {
+		return resp, err
+	}
+	var child *feature.Feature
+	if t.orch != nil {
+		if wErr := t.orch.WithRelationshipWriteLock(func() error {
+			var cErr error
+			child, cErr = creator.CreateRefactorChild(featureID, spec)
+			return cErr
+		}); wErr != nil {
+			return resp, wErr
+		}
+	} else {
+		child, err = creator.CreateRefactorChild(featureID, spec)
+		if err != nil {
+			return resp, err
+		}
+	}
+	// Setup intent is queued durably on creation; run it asynchronously so the
+	// response returns with the child identifier immediately. RunSetupAsync
+	// keeps the goroutine orchestrator-owned: its terminal errors are recorded
+	// durably and signalled, and RunSetup serializes per feature with an
+	// in-process lock. The orchestrator parks setup-complete children at
+	// Created without starting the pipeline.
+	if t.orch != nil {
+		t.orch.RefactorChildCreated(child)
+		t.orch.RunSetupAsync(child.ID)
+	}
+	resp.FeatureID = child.ID
+	resp.Result = resultCreated
 	return resp, nil
 }
 
@@ -1647,59 +1732,53 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
-	comments := reviewCommentDTOsToPorts(req.Repo, req.Comments)
-	if len(comments) == 0 {
-		var err error
-		comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
-		if err != nil {
-			resp.Result = resultFailed
-			return resp, err
-		}
-	} else {
-		resp.Source = "provided"
-	}
-	comments = threadedReviewComments(comments)
-	if len(comments) == 0 {
-		resp.Result = "no_comments"
-		return resp, fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
-	}
-	git.SortReviewCommentsChronologically(comments)
-	resp.CommentCount = len(comments)
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	sessionID, err := t.orch.StartRepoCycleImplement(featureID, req.Repo, feature.CycleReviewComments, "")
+	sessionID, err := t.orch.StartRepoCycleImplementWithPreparation(
+		featureID,
+		req.Repo,
+		feature.CycleReviewComments,
+		"",
+		func() error {
+			comments := reviewCommentDTOsToPorts(req.Repo, req.Comments)
+			if len(comments) == 0 {
+				var err error
+				comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
+				if err != nil {
+					resp.Result = resultFailed
+					return err
+				}
+			} else {
+				resp.Source = "provided"
+			}
+			comments = threadedReviewComments(comments)
+			if len(comments) == 0 {
+				resp.Result = "no_comments"
+				return fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
+			}
+			git.SortReviewCommentsChronologically(comments)
+			resp.CommentCount = len(comments)
+			f, err := t.store.Load(featureID)
+			if err != nil {
+				resp.Result = resultFailed
+				return err
+			}
+			if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
+				resp.Result = resultFailed
+				return err
+			}
+			return nil
+		},
+	)
 	if sessionID != "" {
 		resp.SessionID = sessionID
 	}
 	if err != nil {
-		resp.Result = resultFailed
+		if resp.Result == "" {
+			resp.Result = resultFailed
+		}
 		return resp, err
 	}
 	resp.Result = resultStarted
 	return resp, nil
-}
-
-func (t *serverMutationTarget) StartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.RefactorStartResponse, error) {
-	return t.startRefactorAction(featureID, req, false)
-}
-
-func (t *serverMutationTarget) RestartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.RefactorRestartResponse, error) {
-	resp, err := t.startRefactorAction(featureID, req, true)
-	return serverruntime.RefactorRestartResponse{
-		FeatureID: resp.FeatureID,
-		Result:    resp.Result,
-		Repo:      resp.Repo,
-		CycleType: resp.CycleType,
-		Pipeline:  resp.Pipeline,
-		SessionID: resp.SessionID,
-	}, err
 }
 
 func (t *serverMutationTarget) MarkDone(featureID string) (serverruntime.MarkDoneResponse, error) {
@@ -1747,10 +1826,26 @@ func (t *serverMutationTarget) DeleteFeature(featureID string) (serverruntime.De
 	if t.orch == nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
-	if err := t.orch.Delete(featureID); err != nil {
-		return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+	result, err := t.orch.DeleteCascade(featureID)
+	if err != nil {
+		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
 	}
-	return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
+	return serverruntime.DeleteFeatureResponse{
+		FeatureID:   result.ParentID,
+		OperationID: result.OperationID,
+		Status:      result.Status,
+		Diagnostics: result.Diagnostics,
+	}, nil
+}
+
+func (t *serverMutationTarget) DiscardChild(featureID string) (serverruntime.DiscardChildResponse, error) {
+	if t.orch == nil {
+		return serverruntime.DiscardChildResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.DiscardChild(featureID); err != nil {
+		return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: resultFailed}, err
+	}
+	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: "discarded"}, nil
 }
 
 func actionConflictError(err error) error {
@@ -1772,48 +1867,6 @@ func actionConflictError(err error) error {
 		}
 	}
 	return nil
-}
-
-func (t *serverMutationTarget) startRefactorAction(featureID string, req serverruntime.RefactorActionRequest, restart bool) (serverruntime.RefactorStartResponse, error) {
-	resp := serverruntime.RefactorStartResponse{
-		FeatureID: featureID,
-		Repo:      req.Repo,
-		CycleType: string(feature.CycleRefactor),
-		Pipeline:  string(req.Pipeline),
-	}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
-	var (
-		sessionID string
-		err       error
-	)
-	if restart {
-		sessionID, err = t.orch.RestartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
-			Images:      append([]string(nil), req.Images...),
-			Attachments: append([]string(nil), req.Attachments...),
-			Pipeline:    req.Pipeline,
-		})
-	} else {
-		sessionID, err = t.orch.StartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
-			Images:      append([]string(nil), req.Images...),
-			Attachments: append([]string(nil), req.Attachments...),
-			Pipeline:    req.Pipeline,
-		})
-	}
-	if sessionID != "" {
-		resp.SessionID = sessionID
-	}
-	if err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	if restart {
-		resp.Result = "restarted"
-	} else {
-		resp.Result = resultStarted
-	}
-	return resp, nil
 }
 
 func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewCommentDTO {
@@ -2211,6 +2264,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	var phaseRunner *agent.PhaseRunner
 	var observer *observe.Observer
 	var permissionCache *permission.Cache
+	var cleanliness feature.CleanlinessOps
 	fxApp := fx.New(
 		fx.Supply(
 			fx.Annotate(configPath, fx.ResultTags(`name:"configPath"`)),
@@ -2234,7 +2288,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 				tui.SetTerminalBundleID(c.Notifications.TerminalBundleID)
 			}
 		}),
-		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache),
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &cleanliness),
 		fx.NopLogger,
 	)
 	boot.fxApp = fxApp
@@ -2322,6 +2376,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.phaseRunner = phaseRunner
 	boot.observer = observer
 	boot.permissionCache = permissionCache
+	boot.cleanliness = cleanliness
 	boot.eventCh = eventCh
 	boot.workspaceDir = workspaceDir
 	boot.recoveryItems = recoveryItems
@@ -2389,12 +2444,13 @@ type serverProcessPID interface {
 }
 
 type defaultClientLaunch struct {
-	BaseURL      string
-	AuthToken    string
-	Runtime      serverruntime.RuntimeIdentity
-	LaunchPolicy serverruntime.LaunchPolicy
-	OwnedServer  bool
-	Server       serverProcess
+	BaseURL            string
+	AuthToken          string
+	Runtime            serverruntime.RuntimeIdentity
+	LaunchPolicy       serverruntime.LaunchPolicy
+	OwnedServer        bool
+	Server             serverProcess
+	ReleaseOwnedServer func()
 }
 
 func runDefaultClientServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
@@ -2502,14 +2558,27 @@ func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, de
 		}
 		launchServer = nil
 	}
-	return deps.LaunchClient(ctx, defaultClientLaunch{
+	// The spawned server remains launcher-owned until the TUI either completes
+	// its graceful shutdown or explicitly chooses to keep the server running.
+	// Any other return path, including TUI initialization failure, cleans it up.
+	var serverReleased atomic.Bool
+	clientErr := deps.LaunchClient(ctx, defaultClientLaunch{
 		BaseURL:      record.BaseURL,
 		AuthToken:    record.AuthToken,
 		Runtime:      identity,
 		LaunchPolicy: policy,
 		OwnedServer:  owned,
 		Server:       launchServer,
+		ReleaseOwnedServer: func() {
+			serverReleased.Store(true)
+		},
 	})
+	if !owned || launchServer == nil || serverReleased.Load() {
+		return clientErr
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return errors.Join(clientErr, launchServer.Stop(stopCtx))
 }
 
 func isRuntimeLockBusy(err error) bool {
@@ -2548,9 +2617,10 @@ func launchAPIClientTUI(ctx context.Context, launch defaultClientLaunch) error {
 		return fmt.Errorf("create API client: %w", err)
 	}
 	opts := tui.APIAppOptions{
-		Runtime:      launch.Runtime,
-		LaunchPolicy: launch.LaunchPolicy,
-		OwnedServer:  launch.OwnedServer,
+		Runtime:            launch.Runtime,
+		LaunchPolicy:       launch.LaunchPolicy,
+		OwnedServer:        launch.OwnedServer,
+		ReleaseOwnedServer: launch.ReleaseOwnedServer,
 		EventOptions: serverruntime.EventSubscriptionOptions{
 			HeartbeatInterval: 30 * time.Second,
 			ReconnectDelay:    250 * time.Millisecond,
@@ -2910,6 +2980,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Mutations: &serverMutationTarget{
 			orch:            boot.orchestrator,
 			rebaseStarter:   boot.orchestrator,
+			childCreator:    boot.featureManager,
 			cfg:             boot.cfg,
 			configPath:      boot.runtime.Config,
 			store:           boot.featureManager.Store,
@@ -2920,6 +2991,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			reviewer:        &git.ReviewCommentAdapter{},
 		},
 		RequestShutdown: requestShutdown,
+		Cleanliness:     boot.cleanliness,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)

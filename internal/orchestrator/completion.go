@@ -31,9 +31,20 @@ import (
 // isTerminalForCompletion returns true when the feature is in a terminal
 // state that completion handlers must short-circuit on. Mirrors the stale
 // completion guard present in every TUI completion handler (app.go:2927,
-// 3560, 3688, 3806).
+// 3560, 3688, 3806). A child whose relationship is closed (discarded or
+// completed) or whose discard intent is in flight is also terminal so late
+// completion callbacks cannot overwrite discard or closure state.
 func isTerminalForCompletion(f *feature.Feature) bool {
-	return f != nil && (f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed)
+	if f == nil {
+		return false
+	}
+	if f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed {
+		return true
+	}
+	if f.IsChild() && f.Parent != nil && (f.Parent.CloseOutcome != "" || f.IsDiscarding()) {
+		return true
+	}
+	return false
 }
 
 // errFinalReviewInterrupted signals that the deferred Final Review pass
@@ -73,8 +84,6 @@ func resolveActiveCycleType(f *feature.Feature) feature.RepoCycleType {
 	switch {
 	case f.AddressingReviews():
 		return feature.CycleReviewComments
-	case f.IsRefactoring():
-		return feature.CycleRefactor
 	}
 	return ""
 }
@@ -205,7 +214,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		return nil
 	}
 
-	_, kbDir, violations, err := o.validateKBCompletionContract(repoName)
+	_, kbDir, violations, err := o.validateKBCompletionContract(f, repoName)
 	if err != nil {
 		return err
 	}
@@ -285,14 +294,22 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	}
 
 	// Mark KB fresh on disk — best-effort, failures don't block the phase.
-	// Skipped when stateDir is unresolved (tests without a PhaseRunner/Store):
-	// without a base dir, agent.KBStateDir would resolve relative to CWD and
-	// scribble a state.json into the test's working directory.
+	// For child features, mark the disposable workspace fresh instead of the
+	// canonical KB.
 	if repoName != "" {
 		if repo, ok := findRepo(f, repoName); ok {
 			if baseDir := o.stateDir(); baseDir != "" {
-				kbDir := agent.KBStateDir(baseDir, repo.Name)
-				_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+				repoPath := repo.Path
+				if repo.WorktreePath != "" {
+					repoPath = repo.WorktreePath
+				}
+				if f.IsChild() {
+					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, featureID, repo.Name)
+					_ = agent.MarkWorkspaceFresh(context.Background(), o.deps.CmdRunner, workspaceDir, repoPath)
+				} else {
+					kbDir := agent.KBStateDir(baseDir, repo.Name)
+					_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repoPath)
+				}
 			}
 		}
 		if err := o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repoName); err != nil {
@@ -325,7 +342,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	return o.advanceToNextPhase(featureID, feature.PhaseKnowledgeBase)
 }
 
-func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
+func (o *Orchestrator) validateKBCompletionContract(f *feature.Feature, repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
 	var violations []agent.ProtocolViolation
 	var outcome agent.Outcome
 	kbDir := ""
@@ -343,7 +360,11 @@ func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outc
 			Reason:   "state directory is empty",
 		})
 	default:
-		kbDir = agent.KBStateDir(baseDir, repoName)
+		if f.IsChild() {
+			kbDir = feature.ChildKBWorkspaceDir(baseDir, f.ID, repoName)
+		} else {
+			kbDir = agent.KBStateDir(baseDir, repoName)
+		}
 		if !agent.HasPhaseComplete(kbDir) {
 			violations = append(violations, agent.ProtocolViolation{
 				Artifact: agent.PhaseCompleteFile,
@@ -569,10 +590,9 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 	}
 
 	baseDir := o.stateDir()
-	refPrefix := f.RefactorPrefix()
 	phaseDir := ""
 	if baseDir != "" {
-		phaseDir = filepath.Join(agent.ActiveRunDir(baseDir, f), refPrefix, phaseKey)
+		phaseDir = filepath.Join(agent.ActiveRunDir(baseDir, f), phaseKey)
 	}
 	var violations []agent.ProtocolViolation
 	if baseDir == "" {
@@ -973,7 +993,7 @@ func (o *Orchestrator) writePlanRevisionFeedback(f *feature.Feature, feedback st
 	if roadmapPhase > 0 {
 		planDir = o.phasePlanDirForFeature(f, roadmapPhase)
 	} else {
-		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "plan")
+		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), "plan")
 	}
 	latestAttempt := agent.LatestCompletedPlanAttempt(planDir)
 	if latestAttempt <= 0 {
@@ -1126,6 +1146,13 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 			errMsg = "final review did not complete successfully"
 		}
 		return fmt.Errorf("final review did not complete successfully: %s", errMsg)
+	}
+
+	// Child features never deliver: a successful final review enters the
+	// explicit local-integration stage instead of CodeReady, publication, or
+	// any child delivery path.
+	if f.IsChild() {
+		return o.RunChildIntegration(featureID)
 	}
 
 	if !f.IsPublishable() || !f.Checkpoints.AutoPublish() {
@@ -1381,6 +1408,11 @@ func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.O
 	resultCh, err := runFn(f, o.computeKBInfos(f)...)
 	if err != nil {
 		errMsg := fmt.Sprintf("dispatch final review: %v", err)
+		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
+		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+	if resultCh == nil {
+		errMsg := "dispatch final review returned no result channel"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}

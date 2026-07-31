@@ -45,7 +45,7 @@ func (pr *PhaseRunner) finishOrViolateNudgeForModel(model string) bool {
 }
 
 // FinishOrViolateNudgeForModel exposes the per-model finish-or-violate
-// capability resolution to callers in other packages (e.g. the refactor-cycle
+// capability resolution to callers in other packages (e.g. the cycle
 // wiring in the orchestrator).
 func (pr *PhaseRunner) FinishOrViolateNudgeForModel(model string) bool {
 	return pr.finishOrViolateNudgeForModel(model)

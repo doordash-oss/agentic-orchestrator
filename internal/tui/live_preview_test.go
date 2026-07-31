@@ -343,6 +343,43 @@ func TestLivePreviewActivityLine(t *testing.T) {
 	}
 }
 
+// TestSetupCompleteCreatedPresentsReadyToStart pins the setup-done Created
+// presentation: asynchronous setup has finished and execution has not been
+// dispatched, so the panel must offer the ordinary Start action and never
+// imply the pipeline is already starting.
+func TestSetupCompleteCreatedPresentsReadyToStart(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		Status:       feature.StatusCreated,
+		CurrentPhase: feature.PhasePlan,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, time.Now())
+	setup.Status = feature.SetupStatusDone
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+
+	if got := livePreviewStatusText(f); got != "Ready to start" {
+		t.Errorf("livePreviewStatusText(setup-done Created) = %q, want %q", got, "Ready to start")
+	}
+	if got := livePreviewActivityLine(f, nil); got != "Setup complete — ready to start" {
+		t.Errorf("livePreviewActivityLine(setup-done Created) = %q, want setup-complete presentation", got)
+	}
+	hint, _ := contextualAActionHintFor(f, nil)
+	if hint != "[a] Start" {
+		t.Errorf("contextual A hint for setup-done Created = %q, want %q", hint, "[a] Start")
+	}
+
+	// Without a completed setup record, a plain Created feature keeps the
+	// legacy startup presentation.
+	plain := &feature.Feature{Status: feature.StatusCreated, CurrentPhase: feature.PhasePlan}
+	if got := livePreviewStatusText(plain); got != "Starting" {
+		t.Errorf("livePreviewStatusText(plain Created) = %q, want %q", got, "Starting")
+	}
+	if hint, _ := contextualAActionHintFor(plain, nil); hint != "[a] Watch" {
+		t.Errorf("contextual A hint for plain Created = %q, want %q", hint, "[a] Watch")
+	}
+}
+
 func TestLivePreviewTranscriptSummaries(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -1240,21 +1277,21 @@ func TestDashboardOverviewModeUsesCompactDetailForEligibleFeature(t *testing.T) 
 	}
 }
 
-func TestDashboardOverviewModeShowsRefactorCycleSubphase(t *testing.T) {
+func TestDashboardOverviewModeShowsRebaseCycleSubphase(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
-		ID:           "feat-refactor",
-		Name:         "Refactor Feature",
-		Slug:         "refactor-feature",
+		ID:           "feat-rebase",
+		Name:         "Rebase Feature",
+		Slug:         "rebase-feature",
 		Status:       feature.StatusCodeReady,
 		CurrentPhase: feature.PhasePublish,
 		Created:      time.Now(),
 		Repos:        []feature.FeatureRepo{{Name: "api"}},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"api": {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
+			"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 		},
 		ActiveCycle: &feature.CycleState{
-			Type:   feature.CycleRefactor,
+			Type:   feature.CycleRebase,
 			Status: feature.RepoCycleRunning,
 			Count:  1,
 		},
@@ -1262,21 +1299,21 @@ func TestDashboardOverviewModeShowsRefactorCycleSubphase(t *testing.T) {
 			"implement": 5 * time.Minute,
 		},
 	}
-	f.SetRefactorCount(1)
+	f.SetRebaseCount(1)
 	m := dashboardWithSelectedFeature(f)
 	m.focusPanel = 1
 	m.rightPanelMode = dashboardRightPanelOverview
 	m.spinnerView = "spin"
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Info", "Phase Progress", "Refactor #1", "in progress", "[l] Live Preview"} {
+	for _, want := range []string{"Info", "Phase Progress", "Rebase #1", "in progress", "[l] Live Preview"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("refactor cycle overview missing %q in:\n%s", want, view)
+			t.Fatalf("rebase cycle overview missing %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{labelFeatureID, "Current: Refactoring", "[o] Overview"} {
+	for _, notWant := range []string{labelFeatureID, "Current: Rebasing", "[o] Overview"} {
 		if strings.Contains(view, notWant) {
-			t.Fatalf("refactor cycle overview contained live-preview copy %q in:\n%s", notWant, view)
+			t.Fatalf("rebase cycle overview contained live-preview copy %q in:\n%s", notWant, view)
 		}
 	}
 }

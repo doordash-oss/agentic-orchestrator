@@ -1025,10 +1025,18 @@ func (m ConfigEditorModel) renderModelsWorkspaceWithFocus(focus configFocusZone)
 // four-pane threshold is the sum of these floors plus the three 2-space
 // gutters, so the layout is only chosen when every pane can honor its
 // minimum without overflow.
+//
+// The inspector panes (Agents/Models/Effort) are generous at their defaults
+// and retain large margins of unused space even on ~140-column terminals,
+// so their floors sit near their longest useful entry; the phase
+// list, which carries each row's complete model assignment (including an
+// "(unavailable)" suffix), is the pane that must absorb the remaining
+// budget last. At a 138-140 column terminal the Model and Effort panes
+// yield ~44 columns and the phase list keeps its full 56-column default.
 const (
 	modelPhasePanelMinWidth = 34
 	modelAgentPanelMinWidth = 16
-	modelListPanelMinWidth  = 44
+	modelListPanelMinWidth  = 34
 	// modelEffortPanelMinWidth is defined in editconfig.go (18).
 	modelWorkspaceGutter = 2
 )
@@ -1044,7 +1052,7 @@ func (m ConfigEditorModel) renderModelsWorkspaceWithFocusWidth(focus configFocus
 			m.renderModelsWorkspaceNarrow(focus, width),
 		}, "\n")
 	}
-	phaseWidth, agentWidth, modelWidth, effortWidth := modelWorkspacePanelWidths(width)
+	phaseWidth, agentWidth, modelWidth, effortWidth := m.modelWorkspacePanelWidths(width)
 	phasePane := m.renderModelPhaseList(focus, phaseWidth)
 	inspector := m.renderModelInspector(focus, agentWidth, modelWidth, effortWidth)
 	return strings.Join([]string{
@@ -1109,10 +1117,19 @@ func (m ConfigEditorModel) renderModelsWorkspaceNarrow(focus configFocusZone, wi
 	return lipgloss.JoinHorizontal(lipgloss.Top, phasePane, "  ", inspector)
 }
 
-func modelWorkspacePanelWidths(width int) (int, int, int, int) {
+// modelWorkspacePanelWidths allocates the four-pane Models workspace. The
+// phase list carries each row's complete model assignment (including a
+// "(unavailable)" suffix), so its pane is sized from the rows' real label
+// widths first; the inspector panes — whose defaults leave large unused
+// margins — yield their surplus down to content floors before the phase
+// list gives up a single column.
+func (m ConfigEditorModel) modelWorkspacePanelWidths(width int) (int, int, int, int) {
 	phaseWidth, agentWidth, modelWidth, effortWidth := modelPhasePanelWidth, modelAgentPanelWidth, modelListPanelWidth, modelEffortPanelWidth
 	if width <= 0 {
 		return phaseWidth, agentWidth, modelWidth, effortWidth
+	}
+	if need := m.phaseListPanelWidthNeed(); need > phaseWidth {
+		phaseWidth = need
 	}
 	available := width - modelWorkspaceGutter*3
 	if available <= 0 {
@@ -1137,9 +1154,9 @@ func modelWorkspacePanelWidths(width int) (int, int, int, int) {
 		return current - delta
 	}
 	modelWidth = shrink(modelWidth, modelListPanelMinWidth)
-	phaseWidth = shrink(phaseWidth, modelPhasePanelMinWidth)
 	effortWidth = shrink(effortWidth, modelEffortPanelMinWidth)
 	agentWidth = shrink(agentWidth, modelAgentPanelMinWidth)
+	phaseWidth = shrink(phaseWidth, modelPhasePanelMinWidth)
 	// Safety net: if overflow remains after all panels hit their floors,
 	// absorb it from the widest panel so the total never exceeds width.
 	if overflow > 0 {
@@ -1150,6 +1167,25 @@ func modelWorkspacePanelWidths(width int) (int, int, int, int) {
 		}
 	}
 	return phaseWidth, agentWidth, modelWidth, effortWidth
+}
+
+// phaseListPanelWidthNeed reports the pane width that renders every phase
+// row label in full (chrome + selection prefix + longest label), floored at
+// the phase list's minimum.
+func (m ConfigEditorModel) phaseListPanelWidthNeed() int {
+	fields := m.catalog.Fields
+	if len(fields) == 0 {
+		fields = phaseCatalogFields
+	}
+	need := modelPhasePanelMinWidth
+	for _, field := range fields {
+		// 6 columns of titled-box chrome + 2 columns of selection prefix
+		// mirror truncatePhaseLabelForWidth's panelWidth-8 budget.
+		if w := lipgloss.Width(m.phaseAssignmentLabel(field)) + 8; w > need {
+			need = w
+		}
+	}
+	return need
 }
 
 func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone, width int) string {

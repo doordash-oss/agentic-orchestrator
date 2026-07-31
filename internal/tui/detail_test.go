@@ -685,7 +685,7 @@ func TestDetailViewShowsCycleTiming(t *testing.T) {
 
 // TestDetailViewShowsInFlightRebase covers the case where a rebase is mid-flight
 // (ActiveCycle.Status == running) but PhaseTimings does not yet have a rebase-N
-// entry and ActiveTimingKey is stale (e.g. still pointing at the previous refactor).
+// entry and ActiveTimingKey is stale (e.g. still pointing at the previous rebase).
 // The right-panel Phase Progress must still surface the running rebase row so it
 // matches the left-panel "Rebasing" status.
 func TestDetailViewShowsInFlightRebase(t *testing.T) {
@@ -697,11 +697,11 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 		CurrentPhase: feature.PhasePublish,
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		PhaseTimings: map[string]time.Duration{
-			"implement":  45 * time.Minute,
-			"rebase-1":   15 * time.Minute,
-			"refactor-1": 10 * time.Second,
+			"implement":       45 * time.Minute,
+			"rebase-1":        15 * time.Minute,
+			"review-comments": 10 * time.Second,
 		},
-		ActiveTimingKey: "refactor-1",
+		ActiveTimingKey: "review-comments",
 		ActiveCycle: &feature.CycleState{
 			Type:   feature.CycleRebase,
 			Status: feature.RepoCycleRunning,
@@ -709,7 +709,6 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 		},
 	}
 	f.SetRebaseCount(3)
-	f.SetRefactorCount(1)
 	f.SetActiveCycleType(feature.CycleRebase)
 
 	m := NewDetailModel(f, "")
@@ -746,25 +745,26 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 	if !strings.Contains(rebaseLine, testContextPct42) {
 		t.Errorf("expected in-flight rebase row to render context percentage; got: %q", rebaseLine)
 	}
-	if !strings.Contains(view, "Refactor #1") {
-		t.Error("expected completed Refactor #1 sub-item in view")
+	if !strings.Contains(view, "Review Comments") {
+		t.Error("expected completed Review Comments sub-item in view")
 	}
 
 	// Regression: with a fresh rebase running, the stale ActiveTimingKey
-	// pointing at the previous refactor must not make the Refactor row render
-	// as "in progress". Strip the rebase line to isolate the refactor line.
-	refactorLine := ""
+	// pointing at the previous review-comments cycle must not make the
+	// Review Comments row render as "in progress". Strip the rebase line
+	// to isolate the review-comments line.
+	reviewCommentsLine := ""
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, "Refactor #1") {
-			refactorLine = line
+		if strings.Contains(line, "Review Comments") {
+			reviewCommentsLine = line
 			break
 		}
 	}
-	if refactorLine == "" {
-		t.Fatalf("could not locate Refactor #1 line in view:\n%s", view)
+	if reviewCommentsLine == "" {
+		t.Fatalf("could not locate Review Comments line in view:\n%s", view)
 	}
-	if strings.Contains(refactorLine, "in progress") {
-		t.Errorf("Refactor #1 row must NOT render as in progress while a rebase is running; got: %q", refactorLine)
+	if strings.Contains(reviewCommentsLine, "in progress") {
+		t.Errorf("Review Comments row must NOT render as in progress while a rebase is running; got: %q", reviewCommentsLine)
 	}
 }
 
@@ -1116,40 +1116,40 @@ func TestRepoDisplayOrder(t *testing.T) {
 	})
 }
 
-func TestDetailViewShowsRefactorTiming(t *testing.T) {
+func TestDetailViewShowsRebaseTiming(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
-		ID:           "feat-refactor",
-		Slug:         "refactor-test",
+		ID:           "feat-rebase-timing",
+		Slug:         "rebase-timing-test",
 		Status:       feature.StatusPublished,
 		CurrentPhase: feature.PhasePublish,
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		PhaseTimings: map[string]time.Duration{
-			"research":   3 * time.Minute,
-			"plan":       8 * time.Minute,
-			"implement":  45 * time.Minute,
-			"refactor-1": 5 * time.Minute,
-			"refactor-2": 3 * time.Minute,
+			"research":  3 * time.Minute,
+			"plan":      8 * time.Minute,
+			"implement": 45 * time.Minute,
+			"rebase-1":  5 * time.Minute,
+			"rebase-2":  3 * time.Minute,
 		},
 	}
-	f.SetRefactorCount(2)
+	f.SetRebaseCount(2)
 
 	m := NewDetailModel(f, "")
 	view := m.ViewCompact(80)
 
-	if !strings.Contains(view, "Refactor #2 (2 total)") {
-		t.Errorf("expected grouped Refactor #2 (2 total) sub-item in view, got:\n%s", view)
+	if !strings.Contains(view, "Rebase #2 (2 total)") {
+		t.Errorf("expected grouped Rebase #2 (2 total) sub-item in view, got:\n%s", view)
 	}
-	if strings.Contains(view, "Refactor #1 ") {
-		t.Error("expected only the latest refactor entry to be rendered, not each one")
+	if strings.Contains(view, "Rebase #1 ") {
+		t.Error("expected only the latest rebase entry to be rendered, not each one")
 	}
 }
 
-func TestDetailViewNoRefactorTimingWhenNone(t *testing.T) {
+func TestDetailViewNoRebaseTimingWhenNone(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
-		ID:           "feat-no-refactor",
-		Slug:         "no-refactor",
+		ID:           "feat-no-rebase",
+		Slug:         "no-rebase",
 		Status:       feature.StatusPublished,
 		CurrentPhase: feature.PhasePublish,
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
@@ -1162,8 +1162,8 @@ func TestDetailViewNoRefactorTimingWhenNone(t *testing.T) {
 	m := NewDetailModel(f, "")
 	view := m.ViewCompact(80)
 
-	if strings.Contains(view, "Refactor #") {
-		t.Error("should not show refactor sub-items when none exist")
+	if strings.Contains(view, "Rebase #") {
+		t.Error("should not show rebase sub-items when none exist")
 	}
 }
 
@@ -1184,9 +1184,9 @@ func TestDetailFormatStatusHidesPublishHintsForUnpublished(t *testing.T) {
 	if strings.Contains(result, "[m]") {
 		t.Error("expected [m] to be hidden in formatDetailStatus for unpublished feature")
 	}
-	// [Shift+F] should still be present
-	if !strings.Contains(result, "[Shift+F]") {
-		t.Error("expected [Shift+F] to still be present for unpublished feature")
+	// [b] rebase should still be present
+	if !strings.Contains(result, "[b]") {
+		t.Error("expected [b] to still be present for unpublished feature")
 	}
 
 	// Test StatusPublished
@@ -1258,6 +1258,23 @@ func TestDetailFormatStatus_ShowsWatchHintForActivePublishedCycle(t *testing.T) 
 	}
 	if !strings.Contains(got, "[a] Watch") {
 		t.Errorf("formatDetailStatus() = %q, want watch hint while cycle is active", got)
+	}
+}
+
+func TestDetailFormatStatusPublishedShowsSurvivingPostPublishCopy(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status: feature.StatusPublished,
+		Repos:  []feature.FeatureRepo{{Name: "repo"}},
+		RepoStates: map[string]*feature.RepoState{
+			"repo": {PRURL: "https://github.com/org/repo/pull/1"},
+		},
+	}
+
+	got := stripANSI(formatDetailStatus(f))
+	want := "✓ Published — [b] rebase  [g] reviews  [Shift+D] mark done"
+	if got != want {
+		t.Errorf("formatDetailStatus() = %q, want %q", got, want)
 	}
 }
 

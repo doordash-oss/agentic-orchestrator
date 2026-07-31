@@ -1329,8 +1329,8 @@ func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
 	if launched.BaseURL != baseURL || !launched.OwnedServer {
 		t.Fatalf("client launch = %+v; want owned child server at %s", launched, baseURL)
 	}
-	if process.stopCalls != 0 {
-		t.Fatalf("server stop calls = %d; want 0 when client exits normally", process.stopCalls)
+	if process.stopCalls != 1 {
+		t.Fatalf("server stop calls = %d; want unconfirmed client exit to clean up owned child", process.stopCalls)
 	}
 	if prepareCalls < 2 {
 		t.Fatalf("PrepareDiscovery calls = %d; want initial stale plus readiness", prepareCalls)
@@ -1456,6 +1456,7 @@ func TestDefaultLaunchRetainsOwnershipWhenReadyDiscoveryMatchesChildPID(t *testi
 		},
 		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
 			launched = launch
+			launch.ReleaseOwnedServer()
 			return nil
 		},
 	})
@@ -1466,7 +1467,7 @@ func TestDefaultLaunchRetainsOwnershipWhenReadyDiscoveryMatchesChildPID(t *testi
 		t.Fatalf("client launch = %+v; want owned child server pid %d", launched, process.pid)
 	}
 	if process.stopCalls != 0 {
-		t.Fatalf("server stop calls = %d; want owned child retained for TUI quit authority", process.stopCalls)
+		t.Fatalf("server stop calls = %d; want explicitly released child retained", process.stopCalls)
 	}
 }
 

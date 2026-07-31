@@ -39,6 +39,7 @@ type MockFeatureLifecycle struct {
 	RunSetupFn                 func(featureID string, opts ...feature.SetupRunnerOptions) error
 	RetrySetupFn               func(featureID string, opts ...feature.SetupRunnerOptions) error
 	ReconcileAbandonedSetupsFn func() ([]string, error)
+	FailActiveSetupFn          func(featureID, message string) (bool, error)
 
 	// Phase-start hooks — tests that need to mimic real lifecycle behavior
 	// (status transitions) can install these. Called after the mock records
@@ -185,6 +186,14 @@ func (m *MockFeatureLifecycle) RetrySetup(featureID string, opts ...feature.Setu
 		return m.RetrySetupFn(featureID, opts...)
 	}
 	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) FailActiveSetup(featureID, message string) (bool, error) {
+	m.record("FailActiveSetup", featureID, message)
+	if m.FailActiveSetupFn != nil {
+		return m.FailActiveSetupFn(featureID, message)
+	}
+	return false, m.DefaultError
 }
 
 func (m *MockFeatureLifecycle) ReconcileAbandonedSetups() ([]string, error) {
@@ -393,11 +402,6 @@ func (m *MockFeatureLifecycle) ReturnToPublished(featureID string) error {
 // ---------------------------------------------------------------------------
 // Post-publish cycles
 // ---------------------------------------------------------------------------
-
-func (m *MockFeatureLifecycle) CompleteRefactor(featureID string) error {
-	m.record("CompleteRefactor", featureID)
-	return m.DefaultError
-}
 
 func (m *MockFeatureLifecycle) StartAddressingReviews(featureID string) error {
 	m.record("StartAddressingReviews", featureID)

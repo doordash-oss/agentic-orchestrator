@@ -142,6 +142,18 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 			CycleType: cycle.CycleType,
 		}
 	}
+	if setupReadyToStart(f) {
+		// Setup finished and no execution has been dispatched yet: the
+		// contextual action is the server-authorized ordinary Start, matching
+		// openAPIContextualAction's dispatch preference for the created
+		// feature's enabled Start action.
+		return featureAttention{
+			Kind:      attentionWatch,
+			CTALabel:  "Start",
+			TypeLabel: "Live Preview",
+			Summary:   "Setup complete — ready to start",
+		}
+	}
 	if isWatchAttentionEligible(f) {
 		return featureAttention{
 			Kind:      attentionWatch,

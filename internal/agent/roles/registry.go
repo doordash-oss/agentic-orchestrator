@@ -27,7 +27,6 @@ var roleSpecs = append(
 		inquirerRoleSpec,
 		researcherRoleSpec,
 		designerRoleSpec,
-		refactorPlanRoleSpec,
 		finalReviewFixerRoleSpec,
 	}, planValidatorRoleSpecs...),
 	implementationReviewAxisRoleSpecs...,

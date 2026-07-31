@@ -2674,8 +2674,8 @@ func TestRoadmapPhaseTimingKeyTransitions(t *testing.T) {
 // roadmap-phase plan is interrupted and the user restarts it, the resumed
 // plan time accumulates into phase-N-plan rather than collapsing into the
 // strategic "plan" bucket. Regression for a stopwatch bug where
-// StartPlanning's guard only protected refactor-N keys, so phase-2-plan
-// was silently overwritten with "plan" on restart.
+// StartPlanning's timing-key guard failed to protect phase-2-plan keys, so
+// phase-2-plan was silently overwritten with "plan" on restart.
 func TestRoadmapPhasePlanTimingSurvivesInterruptRestart(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -4041,97 +4041,6 @@ func assertReviewCommentsCycleIntact(t *testing.T, store *feature.Store, feature
 	}
 }
 
-// advanceToPublished is a test helper that transitions a feature through the full
-// state machine from Created to Published using direct Transition calls via Store.Modify.
-func advanceToPublished(t *testing.T, store *feature.Store, featureID string) {
-	t.Helper()
-	transitions := []feature.Status{
-		feature.StatusInquiring,
-		feature.StatusInquireReady,
-		feature.StatusResearching,
-		feature.StatusDesignReady,
-		feature.StatusDesigning,
-		feature.StatusPlanReady,
-		feature.StatusPlanning,
-		feature.StatusImplementReady,
-		feature.StatusImplementing,
-		feature.StatusReviewPassed,
-		feature.StatusCodeReady,
-		feature.StatusPublished,
-	}
-	for _, next := range transitions {
-		if err := store.Modify(featureID, func(f *feature.Feature) error {
-			return f.Transition(next)
-		}); err != nil {
-			t.Fatalf("transition to %s: %v", next, err)
-		}
-	}
-}
-
-func TestManagerCompleteRefactor(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	dir := t.TempDir()
-	store := feature.NewStore(dir)
-	mgr := &feature.Manager{Store: store, Config: &config.Config{}}
-
-	f := &feature.Feature{
-		ID:            feature.GenerateIDForTest(),
-		Name:          "Complete Refactor Test",
-		Slug:          "complete-refactor",
-		Description:   "original description",
-		Status:        feature.StatusCreated,
-		CurrentPhase:  feature.PhaseKnowledgeBase,
-		SchemaVersion: feature.SchemaVersionCurrent,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	advanceToPublished(t, store, f.ID)
-
-	// Set up refactor state directly (Manager.StartRefactor is no longer available).
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		if err := ff.Transition(feature.StatusInquiring); err != nil {
-			return err
-		}
-		ff.SetRefactorCount(ff.RefactorCount() + 1)
-		ff.RefactorPrompt = "refactor the auth module"
-		ff.SetActiveCycleType(feature.CycleRefactor)
-		ff.CurrentPhase = feature.PhaseInquire
-		return nil
-	}); err != nil {
-		t.Fatalf("set refactor state: %v", err)
-	}
-
-	// Verify refactor prompt is set
-	got, _ := store.Load(f.ID)
-	if got.RefactorPrompt == "" {
-		t.Fatal("expected RefactorPrompt to be set after StartRefactor")
-	}
-
-	// Complete the refactor
-	if err := mgr.CompleteRefactor(f.ID); err != nil {
-		t.Fatalf("CompleteRefactor: %v", err)
-	}
-
-	got, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load after complete: %v", err)
-	}
-	if got.RefactorPrompt != "" {
-		t.Errorf("RefactorPrompt = %q, want empty after CompleteRefactor", got.RefactorPrompt)
-	}
-	// RefactorCount should remain (it tracks the total number of refactors)
-	if got.RefactorCount() != 1 {
-		t.Errorf("RefactorCount = %d, want 1 (should not be cleared)", got.RefactorCount())
-	}
-}
-
-// TestRefactorTimingAccumulatesAcrossPhases verifies that the "refactor-N"
-// timing key is preserved across all phase starters (Inquire → Research →
-// Design → Plan → Implement) and that elapsed time accumulates into
-// PhaseTimings["refactor-1"] rather than leaking into individual phase keys.
 // advanceToPRReady walks a feature through the full pipeline up to (and including) PRReady.
 func advanceToPRReady(t *testing.T, store *feature.Store, featureID string) {
 	t.Helper()
@@ -5522,11 +5431,11 @@ func TestHasActiveRepoCycles_TreatsNeedUserInputAsActive(t *testing.T) {
 	}
 }
 
-func TestFailRepoCycle_ClearsPausedGateAndRefactorPrompt(t *testing.T) {
+func TestFailRepoCycle_ClearsPausedGate(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	mgr := newTestManager(t)
-	f, err := mgr.Create("Refactor Cleanup", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
+	f, err := mgr.Create("Cycle Cleanup", "desc", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5536,17 +5445,16 @@ func TestFailRepoCycle_ClearsPausedGateAndRefactorPrompt(t *testing.T) {
 		}
 	}
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.RefactorPrompt = "extract validation"
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
 			"test-repo": {
-				Type:                     feature.CycleRefactor,
+				Type:                     feature.CycleReviewComments,
 				Status:                   feature.RepoCycleNeedUserInput,
-				PendingNeedUserInputPath: "/tmp/refactor.yaml",
+				PendingNeedUserInputPath: "/tmp/review-comments.yaml",
 			},
 		}
 		return nil
 	}); err != nil {
-		t.Fatalf("seed paused refactor: %v", err)
+		t.Fatalf("seed paused cycle: %v", err)
 	}
 
 	if err := mgr.FailRepoCycle(f.ID, "test-repo", "user aborted"); err != nil {
@@ -5568,9 +5476,6 @@ func TestFailRepoCycle_ClearsPausedGateAndRefactorPrompt(t *testing.T) {
 	}
 	if rc.PendingNeedUserInputPath != "" {
 		t.Errorf("PendingNeedUserInputPath = %q, want empty", rc.PendingNeedUserInputPath)
-	}
-	if got.RefactorPrompt != "" {
-		t.Errorf("RefactorPrompt = %q, want empty after refactor abort", got.RefactorPrompt)
 	}
 }
 

@@ -32,8 +32,6 @@ func resolveSingleRepoCycleType(f *feature.Feature) feature.RepoCycleType {
 	switch {
 	case f.AddressingReviews():
 		return feature.CycleReviewComments
-	case f.IsRefactoring():
-		return feature.CycleRefactor
 	default:
 		if p := f.Artifacts["plan"]; p != "" {
 			np := filepath.ToSlash(p)
@@ -84,10 +82,6 @@ func cycleArtifactDirName(f *feature.Feature, repoName string, cycleType feature
 		case feature.CycleReviewComments:
 			if f.ReviewCommentsCount() > 0 {
 				return feature.RepoCycleDirName(cycleType, f.ReviewCommentsCount())
-			}
-		case feature.CycleRefactor:
-			if f.RefactorCount() > 0 {
-				return feature.RepoCycleDirName(cycleType, f.RefactorCount())
 			}
 		}
 		return string(cycleType)

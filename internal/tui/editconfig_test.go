@@ -289,6 +289,40 @@ func TestEditConfig_WorkspaceRendersEffortPane(t *testing.T) {
 	}
 }
 
+// TestEditConfig_ModelsWorkspaceKeepsFullPhaseAssignments wide-viewport
+// regression pin: with a 140-column terminal (matching the packaged 1200x800
+// evidence captures) the phase list must show each row's complete
+// provider-qualified assignment instead of ellipsizing it while the modal
+// still has room. The unavailable-model variant pins the ("(unavailable)")
+// suffix: it must render in full alongside the phase assignment rather than
+// truncating into "Implementation (sonnet[2... (unavailable))" while the
+// adjacent Agents/Models inspector panes carry unused space.
+func TestEditConfig_ModelsWorkspaceKeepsFullPhaseAssignments(t *testing.T) {
+	m := NewEditConfigModel(&feature.Feature{
+		ID:       "f1",
+		Name:     "wide",
+		Pipeline: feature.PipelineLarge,
+		Models: config.ModelConfig{
+			Research:       "claude/sonnet-4-6",
+			Implementation: "codex/gpt-5-codex",
+			Utilities:      "sonnet[272K]", // absent from the catalog → unavailable
+		},
+	}, testWorkspaceCatalog(), true)
+	m.width = 140
+	m.editor.rowCursor = 3 // Implementation
+
+	view := ansi.Strip(m.renderModelsWorkspace())
+	for _, want := range []string{
+		"Research (claude/claude/sonnet-4-6)",
+		"Implementation (codex/codex/gpt-5-codex)",
+		"Utilities (claude/sonnet[272K] (unavailable))",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("workspace view at 140 cols missing full assignment %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestEditConfig_EffortPaneVisibleAtRepresentativeWidths(t *testing.T) {
 	for _, termWidth := range []int{120, 80} {
 		t.Run(fmt.Sprintf("terminal_%d", termWidth), func(t *testing.T) {

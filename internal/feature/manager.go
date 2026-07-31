@@ -61,11 +61,12 @@ type PRCloser interface {
 }
 
 type Manager struct {
-	Store     *Store
-	Config    *config.Config
-	Worktrees WorktreeOps // optional; nil skips worktree creation
-	Branches  BranchOps   // optional; nil skips branch lookups during Create/Rewind
-	PRs       PRCloser    // optional; nil skips PR close on rewind
+	Store       *Store
+	Config      *config.Config
+	Worktrees   WorktreeOps    // optional; nil skips worktree creation
+	Branches    BranchOps      // optional; nil skips branch lookups during Create/Rewind
+	PRs         PRCloser       // optional; nil skips PR close on rewind
+	Cleanliness CleanlinessOps // required for child launches; nil fails CreateRefactorChild explicitly
 
 	setupMu    sync.Mutex
 	setupLocks map[string]struct{}
@@ -434,9 +435,7 @@ func (m *Manager) StartInquire(featureID string) error {
 			return err
 		}
 		f.CurrentPhase = PhaseInquire
-		if !isCycleTimingKey(f.ActiveTimingKey) {
-			f.ActiveTimingKey = "inquire"
-		}
+		f.ActiveTimingKey = "inquire"
 		now := time.Now()
 		f.ActivePhaseStart = &now
 		if f.StartedAt == nil {
@@ -458,9 +457,7 @@ func (m *Manager) StartDesign(featureID string) error {
 			return err
 		}
 		f.CurrentPhase = PhaseDesign
-		if !isCycleTimingKey(f.ActiveTimingKey) {
-			f.ActiveTimingKey = "design"
-		}
+		f.ActiveTimingKey = "design"
 		now := time.Now()
 		f.ActivePhaseStart = &now
 		if f.StartedAt == nil {
@@ -482,9 +479,7 @@ func (m *Manager) StartResearch(featureID string) error {
 			return err
 		}
 		f.CurrentPhase = PhaseResearch
-		if !isCycleTimingKey(f.ActiveTimingKey) {
-			f.ActiveTimingKey = "research"
-		}
+		f.ActiveTimingKey = "research"
 		now := time.Now()
 		f.ActivePhaseStart = &now
 		if f.StartedAt == nil {
@@ -506,9 +501,7 @@ func (m *Manager) StartKnowledgeBase(featureID string) error {
 			return err
 		}
 		f.CurrentPhase = PhaseKnowledgeBase
-		if !isCycleTimingKey(f.ActiveTimingKey) {
-			f.ActiveTimingKey = "knowledgebase"
-		}
+		f.ActiveTimingKey = "knowledgebase"
 		now := time.Now()
 		f.ActivePhaseStart = &now
 		if f.StartedAt == nil {
@@ -590,12 +583,10 @@ func (m *Manager) StartPlanning(featureID string) error {
 		// accumulates when leaving a running state, and the FROM state on
 		// restart (Interrupted/Failed/PlanReady) is non-running.
 		f.accumulateActiveTime()
-		if !isCycleTimingKey(f.ActiveTimingKey) {
-			if f.CurrentRoadmapPhase > 0 {
-				f.ActiveTimingKey = fmt.Sprintf("phase-%d-plan", f.CurrentRoadmapPhase)
-			} else {
-				f.ActiveTimingKey = "plan"
-			}
+		if f.CurrentRoadmapPhase > 0 {
+			f.ActiveTimingKey = fmt.Sprintf("phase-%d-plan", f.CurrentRoadmapPhase)
+		} else {
+			f.ActiveTimingKey = "plan"
 		}
 		now := time.Now()
 		f.ActivePhaseStart = &now
@@ -734,15 +725,6 @@ func (m *Manager) MarkPublished(featureID, prURL string) error {
 func (m *Manager) MarkDone(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		return f.Transition(StatusDone)
-	})
-}
-
-// CompleteRefactor clears the refactor state after a successful refactor cycle.
-func (m *Manager) CompleteRefactor(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.RefactorPrompt = ""
-		f.SetActiveCycleType("")
-		return nil
 	})
 }
 
@@ -955,8 +937,6 @@ func (m *Manager) RemoveRepoCycle(featureID, repoName string) error {
 
 // FailRepoCycle marks a per-repo cycle as failed and clears any paused
 // gate state so post-publish abort cannot leave dangling gate pointers.
-// For refactor cycles, also clears the feature-level RefactorPrompt so the
-// next refactor attempt starts from a clean slate.
 func (m *Manager) FailRepoCycle(featureID, repoName, errMsg string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		if f.RepoCycles == nil {
@@ -969,9 +949,6 @@ func (m *Manager) FailRepoCycle(featureID, repoName, errMsg string) error {
 		rc.Status = RepoCycleFailed
 		rc.LastError = errMsg
 		rc.PendingNeedUserInputPath = ""
-		if rc.Type == CycleRefactor {
-			f.RefactorPrompt = ""
-		}
 		return nil
 	})
 }
@@ -1001,7 +978,7 @@ func (m *Manager) HasActiveRepoCycles(featureID string) (bool, error) {
 		return false, err
 	}
 	for _, rc := range f.RepoCycles {
-		if rc == nil {
+		if rc == nil || !rc.Type.IsValid() {
 			continue
 		}
 		switch rc.Status {
@@ -1069,9 +1046,7 @@ func (m *Manager) AdvanceRoadmapPhase(featureID string) error {
 		// without this call the strategic plan's elapsed time is silently
 		// overwritten when ActivePhaseStart is reset below.
 		f.accumulateActiveTime()
-		if !isCycleTimingKey(f.ActiveTimingKey) {
-			f.ActiveTimingKey = fmt.Sprintf("phase-%d-plan", f.CurrentRoadmapPhase)
-		}
+		f.ActiveTimingKey = fmt.Sprintf("phase-%d-plan", f.CurrentRoadmapPhase)
 		now := time.Now()
 		f.ActivePhaseStart = &now
 		return nil

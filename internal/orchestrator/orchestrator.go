@@ -187,6 +187,10 @@ type Deps struct {
 	CmdRunner   ports.CommandRunner
 	Recovery    ports.RecoveryOperator
 	PhaseRunner *agent.PhaseRunner // concrete — not behind a port interface
+	// Cleanliness inspects parent worktrees at child-integration preflight
+	// with the same staged/unstaged/untracked contract used at launch.
+	// Nil fails integration closed rather than silently skipping the check.
+	Cleanliness feature.CleanlinessOps
 }
 
 // PhaseStartOutcome enumerates the possible results of starting a phase.
@@ -224,6 +228,18 @@ type Orchestrator struct {
 	eventCh chan ports.Event
 	mu      sync.RWMutex
 
+	// relationshipMu serializes relationship-aware guard checks with
+	// child creation. Mutation guard callers acquire a read lock for the
+	// guard check and the entire operation; child creation acquires the
+	// write lock. This closes the time-of-check/time-of-use gap where a
+	// standalone RelationshipGuard read could pass, then CreateChildLocked
+	// creates a child, then the mutation lands on a parent that now has
+	// an active child. The guard check and child creation are mutually
+	// exclusive: either the mutation guard sees no child and completes
+	// before child creation starts, or child creation completes first and
+	// the guard sees the child and rejects.
+	relationshipMu sync.RWMutex
+
 	supervisor *phaseSupervisor
 
 	// doneCh is closed by Shutdown to signal all emitters and consumers to
@@ -237,11 +253,16 @@ type Orchestrator struct {
 
 	// cycleWG tracks background goroutines launched by per-repo cycle
 	// dispatch (StartRepoCycleImplement, StartCycleFinalReview,
-	// startFeatureRefactor). Tests that drive these methods against a
+	// startFeatureReviewComments). Tests that drive these methods against a
 	// t.TempDir() state directory must call WaitForCycles before the
 	// test returns so the goroutine's writes don't race with TempDir
 	// cleanup.
 	cycleWG sync.WaitGroup
+
+	// featureStartControls serialize phase admission per feature. This makes
+	// repeated API/TUI start requests idempotent even when they arrive before
+	// the first request's state transition is visible to the second.
+	featureStartControls sync.Map
 
 	// featureRebaseControls serialize feature-level rebase continuation checks
 	// with Stop/interrupt per feature. The git operations themselves are not
@@ -386,11 +407,11 @@ func (o *Orchestrator) featureRebaseControl(featureID string) *featureRebaseCont
 
 // WaitForCycles blocks until every background goroutine launched by the
 // per-repo cycle entry points (StartRepoCycleImplement,
-// StartCycleFinalReview, runRefactorLoop) has returned. Production
+// StartCycleFinalReview) and asynchronous phase continuations has returned. Production
 // callers do not need this — the orchestrator drives cycles to completion
 // via its event loop. It exists for tests whose state directory is a
 // t.TempDir(): without synchronizing on the goroutine, TempDir cleanup
-// can race with in-flight writes from the implementation/refactor loop.
+// can race with in-flight writes from the implementation loop.
 func (o *Orchestrator) WaitForCycles() { o.cycleWG.Wait() }
 
 // SetPublishFn installs a test hook that intercepts publish dispatch in place
@@ -428,7 +449,6 @@ func (o *Orchestrator) SetRunMultiRepoFinalReviewFn(fn func(
 }
 
 // CreateFeature delegates to FeatureLifecycle.Create, fires the
-// OnFeatureCreated hook, and emits a FeatureCreated event.
 func (o *Orchestrator) CreateFeature(
 	name, description string, repos []string,
 	models config.ModelConfig, exitCriteria, inquireness string,
@@ -448,6 +468,22 @@ func (o *Orchestrator) CreateFeature(
 		Type: ports.FeatureCreated, FeatureID: f.ID, Feature: f,
 	})
 	return f, nil
+}
+
+// RefactorChildCreated emits the relationship-created event for a durable refactor
+// child. Child creation goes through feature.Manager.CreateRefactorChild (not
+// Orchestrator.CreateFeature), so the mutation target reports the launch here.
+func (o *Orchestrator) RefactorChildCreated(child *feature.Feature) {
+	if child == nil || !child.IsChild() {
+		return
+	}
+	o.emitEvent(ports.Event{
+		Type:      ports.RelationshipChildCreated,
+		FeatureID: child.ID,
+		ParentID:  child.Parent.ParentID,
+		ChildID:   child.ID,
+		Feature:   child,
+	})
 }
 
 // emitEvent sends an event on the channel. Non-blocking for non-critical events.
@@ -499,7 +535,21 @@ func (o *Orchestrator) emitShutdownStarted() {
 // StatusCreated, CurrentPhase for resumed features), handles the
 // medium-pipeline Created → PlanReady pre-transition, fires
 // OnFeatureStarted, emits FeatureStarted, and delegates to startPhase.
+// Children hit the checkChildExecution capability gate first: only
+// setup-complete, active children (any pipeline profile) may execute.
 func (o *Orchestrator) StartFeature(featureID string) error {
+	startMu := o.featureStartControl(featureID)
+	startMu.Lock()
+	defer startMu.Unlock()
+
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationStart); err != nil {
+		return err
+	}
+	if err := o.checkChildExecution(featureID); err != nil {
+		return err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature: %w", err)
@@ -535,6 +585,13 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 		if firstPhase != feature.PhaseResearch && f.StartedAt == nil {
 			phase = firstPhase
 		}
+	}
+
+	// Final Review is intentionally dispatched in the background. Treat a
+	// repeated start while that pass is already running as success rather than
+	// attempting the invalid FinalReviewing → FinalReviewing transition.
+	if phase == feature.PhaseFinalReview && f.Status == feature.StatusFinalReviewing {
+		return nil
 	}
 
 	// Medium pipeline pre-transition: Created → PlanReady.
@@ -652,6 +709,11 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 		return PhaseStartResult{Outcome: PhaseSkipped, NextPhase: feature.PhaseInquire}, nil
 	}
 
+	// Child features use disposable KB workspaces; ordinary features use the
+	// canonical KB. The KB dispatch logic is shared but the directory and
+	// freshness checks target the appropriate path.
+	isChild := f.IsChild()
+
 	// Check freshness for all repos.
 	freshness := make(map[string]bool, len(f.Repos))
 	activeKBRepos := o.activeKBSessionRepos(featureID)
@@ -664,11 +726,22 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 			continue
 		}
 		isFresh := false
-		// Without a resolved base dir, agent.KBStateDir would read from CWD;
-		// treat that as "not fresh" rather than consulting stray files.
 		if baseDir != "" && !f.ForceKBRebuild {
-			kbDir := agent.KBStateDir(baseDir, repo.Name)
-			isFresh = agent.IsKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+			var kbDir string
+			if isChild {
+				kbDir = feature.ChildKBWorkspaceDir(baseDir, featureID, repo.Name)
+			} else {
+				kbDir = agent.KBStateDir(baseDir, repo.Name)
+			}
+			if isChild {
+				repoPath := repo.Path
+				if repo.WorktreePath != "" {
+					repoPath = repo.WorktreePath
+				}
+				isFresh = agent.IsWorkspaceFresh(context.Background(), o.deps.CmdRunner, kbDir, repoPath)
+			} else {
+				isFresh = agent.IsKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
+			}
 		}
 		freshness[repo.Name] = isFresh
 		if !isFresh {
@@ -713,13 +786,19 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 				_ = o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repo.Name)
 				continue
 			}
-			if baseDir != "" {
+			if baseDir != "" && !isChild {
 				kbDir := agent.KBStateDir(baseDir, repo.Name)
 				if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, kbDir, repo.Name); err != nil {
 					return PhaseStartResult{}, fmt.Errorf("record KB read-only repo baseline for %s: %w", repo.Name, err)
 				}
 			}
-			sessionID, err := o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo)
+			var sessionID string
+			var err error
+			if isChild {
+				sessionID, err = o.deps.PhaseRunner.RunChildKnowledgeBaseForRepo(f, repo)
+			} else {
+				sessionID, err = o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo)
+			}
 			if err != nil {
 				if errors.Is(err, agent.ErrKBLocked) {
 					o.markKBWaiting(featureID, baseDir, repo.Name)
@@ -1007,10 +1086,9 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 	var qaFilePaths []string
 	baseDir := o.stateDir()
 	if baseDir != "" {
-		refPrefix := f.RefactorPrefix()
 		runDir := agent.ActiveRunDir(baseDir, f)
 		for _, phase := range []string{"inquire", "research"} {
-			qaPath := filepath.Join(runDir, refPrefix, phase, "qa-answers.md")
+			qaPath := filepath.Join(runDir, phase, "qa-answers.md")
 			if _, statErr := os.Stat(qaPath); statErr == nil {
 				qaFilePaths = append(qaFilePaths, qaPath)
 			}
@@ -1055,7 +1133,7 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 		return PhaseStartResult{}, errors.New("no design doc or research artifact found; cannot proceed to planning")
 	}
 
-	qaFilePaths := o.collectQAFilePaths(f, f.RefactorPrefix())
+	qaFilePaths := o.collectQAFilePaths(f)
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
 		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
@@ -1111,7 +1189,7 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 		return PhaseStartResult{}, fmt.Errorf("phase %d not found in roadmap", f.CurrentRoadmapPhase)
 	}
 
-	qaFilePaths := o.collectQAFilePaths(f, f.RefactorPrefix())
+	qaFilePaths := o.collectQAFilePaths(f)
 
 	var priorPhasePlanPaths []string
 	for i := 1; i < currentPhase.Number; i++ {
@@ -1231,16 +1309,34 @@ func (o *Orchestrator) startPublish(featureID string) (PhaseStartResult, error) 
 // runs via advanceAfterFinalReview so the feature reaches the same terminal
 // state the original onMultiReposPassed path produces.
 func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, error) {
-	if err := o.runDeferredFinalReview(featureID); err != nil {
-		if errors.Is(err, errFinalReviewInterrupted) {
-			return PhaseStartResult{Outcome: PhaseStarted}, nil
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+	}
+	if f.Status == feature.StatusFinalReviewing {
+		return PhaseStartResult{Outcome: PhaseNoOp}, nil
+	}
+
+	resultCh, err := o.startDeferredFinalReview(featureID)
+	if err != nil {
+		return PhaseStartResult{}, err
+	}
+	o.cycleWG.Go(func() {
+		res, ok := <-resultCh
+		if err := o.finishDeferredFinalReviewResult(featureID, res, ok); err != nil {
+			o.surfaceDispatchCompletionError(featureID, err)
+			return
 		}
-		return PhaseStartResult{}, err
-	}
-	if err := o.advanceAfterFinalReview(featureID); err != nil {
-		return PhaseStartResult{}, err
-	}
+		if err := o.advanceAfterFinalReview(featureID); err != nil {
+			o.surfaceDispatchCompletionError(featureID, err)
+		}
+	})
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
+}
+
+func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
+	actual, _ := o.featureStartControls.LoadOrStore(featureID, &sync.Mutex{})
+	return actual.(*sync.Mutex)
 }
 
 // InterruptFeature stops all sessions for a feature and clears pending help
@@ -1319,7 +1415,7 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 // (stopping sessions, clearing pending flags, transitioning to interrupted)
 // AND additionally have KBStatus cleared to match the startup sweep.
 // Non-running features (Published, CodeReady) with active repo cycles
-// (rebase/review-comments/refactor) are interrupted at the feature level so
+// (rebase/review-comments) are interrupted at the feature level so
 // the dashboard keeps them in the active bucket. KBStatus is preserved for
 // every post-publish cycle shape. CodeReady is the manual_publish=true shape
 // where a rebase cycle can be in flight while the feature waits for the user
@@ -1383,8 +1479,8 @@ func (o *Orchestrator) InterruptAllRunning() error {
 }
 
 // hasActiveRepoCycles returns true if the feature has any running/reviewing
-// post-publish cycle. Legacy cycles live in RepoCycles; feature-level rebase,
-// review-comment, and refactor flows live only in ActiveCycle.
+// post-publish cycle. Legacy cycles live in RepoCycles; feature-level rebase
+// and review-comment flows live only in ActiveCycle.
 func hasActiveRepoCycles(f *feature.Feature) bool {
 	if hasActiveFeatureLevelInterruptibleCycle(f) {
 		return true
@@ -1406,7 +1502,7 @@ func hasInterruptibleRepoCycles(f *feature.Feature) bool {
 			continue
 		}
 		switch rc.Type {
-		case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
+		case feature.CycleRebase, feature.CycleReviewComments:
 		default:
 			continue
 		}
@@ -1429,7 +1525,7 @@ func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
 		cycleType = f.ActiveCycleType()
 	}
 	switch cycleType {
-	case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
+	case feature.CycleRebase, feature.CycleReviewComments:
 		return true
 	default:
 		return false
@@ -1480,6 +1576,12 @@ func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeat
 // take the cycle-active early-return path — minimum mutation, emit
 // PhaseCompleted, return. Cycle-specific handlers own cycle coordination.
 func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error {
+	// Fence late completion callbacks from mutating a child whose
+	// relationship is closed (discarded or completed) or whose discard
+	// intent is in flight. The discard flow owns the terminal transition.
+	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && isTerminalForCompletion(f) {
+		return nil
+	}
 	switch input.Phase {
 	case feature.PhaseKnowledgeBase:
 		return o.onKBCompleted(featureID, input)
@@ -1510,8 +1612,29 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
 	}
+	if f == nil {
+		return nil
+	}
 	if f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed {
 		return nil
+	}
+	// A child whose relationship is closed (discarded or completed) or
+	// has a discard intent in flight must not be mutated by late review
+	// callbacks. The discard flow owns the terminal transition.
+	if isTerminalForCompletion(f) {
+		return nil
+	}
+
+	// Enforce the relationship mutation lock before clearing gate fields
+	// or dispatching a new phase. A review-decision on a parent with an
+	// active child can restart the parent pipeline (e.g. CodeReady ->
+	// ImplementReady); it must be rejected with parent_mutation_locked
+	// just like start/restart/publish. A child resolving its own review
+	// gate is an ordinary execution control and is allowed.
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	if err := o.RelationshipGuard(featureID, MutationReviewDecision); err != nil {
+		return err
 	}
 
 	if d.IsRewind && d.Decision == "proceed" {
@@ -1548,9 +1671,8 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 		}
 		// Persist the resolved plan path so subsequent implementation reuses it.
 		// Mirrors startImplement's persistence (orchestrator.go:770-779). The
-		// fallback cascade in resolvePlanPath is refactor-aware
-		// (phasePlanDirForFeature), so refactor-scoped phase plans are picked
-		// over decoy non-refactor paths.
+		// fallback cascade in resolvePlanPath (phasePlanDirForFeature) locates
+		// the phase-plan dir the planner writes to.
 		if reloaded, err := o.deps.Lifecycle.Get(featureID); err == nil && reloaded != nil {
 			if planPath := o.resolvePlanPath(reloaded); planPath != "" {
 				_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
@@ -1825,27 +1947,19 @@ func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phas
 	}
 	var candidates []string
 	if phasePlan && f.CurrentRoadmapPhase > 0 {
-		// Refactor-aware: RunPhasePlanningLoop writes attempt-NN/meta.yaml under
-		// the refactor cycle's phase-plan dir when the feature has a refactor
-		// prefix (plan_validation.go:1441). Targeting the non-refactor dir here
+		// RunPhasePlanningLoop writes attempt-NN/meta.yaml under the
+		// phase-plan dir (plan_validation.go). Targeting any other dir here
 		// would leave the APPROVED attempt untouched in the real attempt tree,
-		// and the next plan run would short-circuit via plan_validation.go:1056.
+		// and the next plan run would short-circuit via the attempt cache.
 		candidates = append(candidates, o.phasePlanDirForFeature(f, f.CurrentRoadmapPhase))
 	} else {
-		// Refactor-aware roadmap dir: matches the path RunRoadmapPlanningLoop
-		// reads from during a refactor cycle (mirrors TUI at app.go:3279-3282).
+		// Roadmap dir: matches the path RunRoadmapPlanningLoop reads from.
 		roadmapDir := agent.RoadmapDir(baseDir, f)
-		if f.RefactorPrefix() != "" {
-			roadmapDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "roadmap")
-		}
 		// Legacy plan dir: features carried forward from a build that ran the
 		// (now-removed) RunPlanningLoop may have APPROVED metadata at
 		// runs/run-NNN/plan/attempt-NN/meta.yaml. Invalidate it defensively so
 		// LatestCompletedPlanAttempt won't return a stale match for those features.
 		legacyPlanDir := filepath.Join(agent.ActiveRunDir(baseDir, f), "plan")
-		if f.RefactorPrefix() != "" {
-			legacyPlanDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "plan")
-		}
 		candidates = append(candidates, roadmapDir, legacyPlanDir)
 	}
 	for _, planDir := range candidates {
@@ -1988,6 +2102,19 @@ type PublishOptions struct {
 // selected repos when Repos is non-empty. Title and Body override generated PR
 // metadata for interactive publish flows that already reviewed those fields.
 func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions) error {
+	o.relationshipMu.RLock()
+	defer o.relationshipMu.RUnlock()
+	return o.publishWithOptionsLocked(featureID, opts)
+}
+
+// publishWithOptionsLocked is the lock-held publish entry point. Callers
+// must hold the relationship read lock. This avoids a nested RLock deadlock
+// when auto-publish is invoked from settleChildClosureTail, which already
+// runs under the relationship read lock held by RunChildIntegration.
+func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOptions) error {
+	if err := o.RelationshipGuard(featureID, MutationPublish); err != nil {
+		return err
+	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
@@ -2140,13 +2267,9 @@ func (o *Orchestrator) StopFeatureSessions(featureID string) {
 	}
 }
 
-// Delete stops any active sessions for the feature and removes it via the
-// lifecycle. Synchronous (caller learns the outcome via the returned error);
-// no ports.Event is emitted, matching the TUI's legacy delete semantics.
+// Delete executes the durable relationship cascade. The error-only wrapper is
+// retained for callers that do not consume the typed convergent result.
 func (o *Orchestrator) Delete(featureID string) error {
-	o.StopFeatureSessions(featureID)
-	if err := o.deps.Lifecycle.Delete(featureID); err != nil {
-		return fmt.Errorf("deleting feature: %w", err)
-	}
-	return nil
+	_, err := o.DeleteCascade(featureID)
+	return err
 }

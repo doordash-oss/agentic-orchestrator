@@ -238,11 +238,11 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusCodeReady
 		ff.CurrentPhase = feature.PhasePublish
-		ff.SetRefactorCount(1)
+		ff.SetRebaseCount(1)
 		ff.ActiveCycle = nil
 		ff.SetActiveCycleType("")
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			repoNameSelf: {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
+			repoNameSelf: {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 		}
 		return nil
 	}); err != nil {
@@ -264,8 +264,8 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if !ok {
 		t.Fatalf("summary feature cycle missing in %+v", summaryDTO)
 	}
-	if summaryCycle["type"] != actionRefactor || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
-		t.Fatalf("summary feature cycle = %+v, want running refactor #1", summaryCycle)
+	if summaryCycle["type"] != actionRebase || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
+		t.Fatalf("summary feature cycle = %+v, want running rebase #1", summaryCycle)
 	}
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
@@ -274,8 +274,8 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if !ok {
 		t.Fatalf("detail feature cycle missing in %+v", featureDTO)
 	}
-	if cycle["type"] != actionRefactor || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
-		t.Fatalf("detail feature cycle = %+v, want running refactor #1", cycle)
+	if cycle["type"] != actionRebase || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
+		t.Fatalf("detail feature cycle = %+v, want running rebase #1", cycle)
 	}
 }
 
@@ -875,17 +875,16 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	assertActionInputNames(t, actionsByID[actionReviewComments], "repo", "mode")
 	assertActionInputRequired(t, actionsByID[actionReviewComments], "repo", true)
 	assertActionInputRequired(t, actionsByID[actionReviewComments], "mode", true)
-	assertActionScope(t, actionsByID[actionRefactor], "optional")
-	assertActionInputNames(t, actionsByID[actionRefactor], "repo", "prompt", "pipeline")
-	assertActionInputRequired(t, actionsByID[actionRefactor], "repo", false)
-	assertActionInputRequired(t, actionsByID[actionRefactor], "prompt", true)
 	assertActionScope(t, actionsByID[actionCleanup], "")
 	assertActionInputNames(t, actionsByID[actionCleanup], "target")
 	assertActionScope(t, actionsByID[actionDelete], "")
-	refactorPrompt := actionInputByName(t, actionsByID[actionRefactor], "prompt")
-	if got := int(refactorPrompt["max_length"].(float64)); got != MaxActionTextBytes {
-		t.Fatalf("refactor prompt max_length = %d; want %d", got, MaxActionTextBytes)
+	// The seeded parent is Published, so the refactor child-launch action is
+	// offered with feature scope and no required inputs.
+	if got := actionsByID[actionRefactor]["enabled"]; got != true {
+		t.Fatalf("refactor action enabled = %v; want true for a published parent", got)
 	}
+	assertActionScope(t, actionsByID[actionRefactor], "")
+	assertActionInputNames(t, actionsByID[actionRefactor])
 	raw := mustMarshalJSON(t, rawActions)
 	for _, forbidden := range []string{secretTokenLiteral, "raw prompt", testRepoPath, worktreePathLiteral} {
 		if strings.Contains(raw, forbidden) {
@@ -913,6 +912,188 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	}
 }
 
+// TestChildFeatureActionCatalogRestricted pins the execution gate at the API
+// boundary: a child feature's catalog carries only the capability-gated
+// execution entries (start/resume/restart), setup retry, cleanup, and
+// delete — every delivery and post-publish action is omitted — and the
+// disabled reasons distinguish setup state, closed relationship, and
+// unsupported repository count.
+func TestChildFeatureActionCatalogRestricted(t *testing.T) {
+	t.Parallel()
+	publishable := true
+
+	deliveryActions := []string{
+		actionPublish, actionMerge, actionRewind,
+		actionRebase, actionReviewComments, actionRefactor, actionMarkDone,
+	}
+
+	assertNoDeliveryActions := func(t *testing.T, actions []ActionDTO) {
+		t.Helper()
+		ids := make([]string, 0, len(actions))
+		for _, a := range actions {
+			ids = append(ids, a.ID)
+		}
+		for _, blocked := range deliveryActions {
+			for _, id := range ids {
+				if id == blocked {
+					t.Fatalf("child catalog offers blocked action %q in %v", blocked, ids)
+				}
+			}
+		}
+	}
+	assertDisabledCode := func(t *testing.T, a ActionDTO, wantCode string) {
+		t.Helper()
+		if a.Enabled {
+			t.Fatalf("action %q enabled; want disabled with code %q", a.ID, wantCode)
+		}
+		if len(a.DisabledReasons) == 0 || a.DisabledReasons[0].Code != wantCode {
+			t.Fatalf("action %q disabled reasons = %+v; want code %q", a.ID, a.DisabledReasons, wantCode)
+		}
+	}
+
+	t.Run("setup complete child", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+		f.Pipeline = feature.PipelineMedium
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		if start := actionDTOByID(t, actions, actionStart); !start.Enabled {
+			t.Fatalf("start disabled = %+v; want enabled for an eligible child", start.DisabledReasons)
+		}
+		if restart := actionDTOByID(t, actions, actionRestart); !restart.Enabled {
+			t.Fatalf("restart disabled = %+v; want enabled for an eligible child", restart.DisabledReasons)
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), "not_paused")
+		retry := actionDTOByID(t, actions, actionRetry)
+		if retry.Enabled {
+			t.Fatalf("retry enabled = true; want false until setup fails")
+		}
+	})
+
+	t.Run("queued child reports setup_incomplete", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable, nil)
+		f.Pipeline = feature.PipelineMedium
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), disabledChildSetupIncomplete)
+	})
+
+	t.Run("large child is eligible to execute", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+		f.Pipeline = feature.PipelineLarge
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		if start := actionDTOByID(t, actions, actionStart); !start.Enabled {
+			t.Fatalf("start disabled = %+v; want enabled for an eligible large child", start.DisabledReasons)
+		}
+		if restart := actionDTOByID(t, actions, actionRestart); !restart.Enabled {
+			t.Fatalf("restart disabled = %+v; want enabled for an eligible large child", restart.DisabledReasons)
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), "not_paused")
+	})
+
+	t.Run("multi-repo child no longer restricted by repo count", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+		f.Pipeline = feature.PipelineMedium
+		f.Repos = append(f.Repos, feature.FeatureRepo{Name: "repoB", Publishable: &publishable})
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		// Multi-repo children are now supported — start should not be
+		// disabled by repo count.
+		startAction := actionDTOByID(t, actions, actionStart)
+		if !startAction.Enabled {
+			t.Fatalf("start action disabled for multi-repo child; multi-repo restriction should be retired: %+v", startAction.DisabledReasons)
+		}
+	})
+
+	t.Run("settled closed child refuses execution", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable, nil)
+		f.Pipeline = feature.PipelineMedium
+		closed := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+		f.Parent = &feature.ChildRelationship{
+			ParentID:     "parent-1",
+			Kind:         feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted,
+			ClosedAt:     &closed,
+			Transaction: &feature.TransactionJournal{
+				Phase: feature.TransactionPhaseMerged,
+				Entries: []feature.RepoTransactionEntry{{
+					ParentBranch:    "main",
+					ParentAnchorSHA: "aaaa1111",
+					ChildHeadSHA:    "bbbb2222",
+					MergeHEAD:       "cccc3333",
+				}},
+			},
+		}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildRelationshipClosed)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), disabledChildRelationshipClosed)
+		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), disabledChildRelationshipClosed)
+	})
+
+	t.Run("closed child cleanup tail remains automatic", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusReviewPassed, feature.Checkpoints{}, &publishable, nil)
+		f.Pipeline = feature.PipelineMedium
+		closed := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+		f.Parent = &feature.ChildRelationship{
+			ParentID:     "parent-1",
+			Kind:         feature.ChildKindRefactor,
+			CloseOutcome: feature.ChildCloseOutcomeCompleted,
+			ClosedAt:     &closed,
+			Transaction: &feature.TransactionJournal{
+				Phase: feature.TransactionPhaseMerged,
+				Entries: []feature.RepoTransactionEntry{{
+					ParentBranch:    "main",
+					ParentAnchorSHA: "aaaa1111",
+					ChildHeadSHA:    "bbbb2222",
+					MergeHEAD:       "cccc3333",
+					CleanupWarning:  "worktree busy",
+				}},
+			},
+		}
+
+		actions := actionCatalogDTOs(f)
+		assertNoDeliveryActions(t, actions)
+		for _, action := range actions {
+			assertDisabledCode(t, action, disabledChildRelationshipClosed)
+		}
+	})
+
+	t.Run("failed setup child offers retry", func(t *testing.T) {
+		t.Parallel()
+		f := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable, nil)
+		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
+		// SetRun syncs run->shadows, so install the run before stamping
+		// shadow fields like FailureType.
+		f.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
+		f.FailureType = feature.FailureWorktreeSetup
+
+		actions := actionCatalogDTOs(f)
+		retry := actionDTOByID(t, actions, actionRetry)
+		if !retry.Enabled {
+			t.Fatalf("retry enabled = false; want true for a failed-setup child")
+		}
+		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
+	})
+}
+
 func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 	t.Parallel()
 	publishable := true
@@ -932,9 +1113,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish:  {enabled: true},
-				actionMerge:    {disabledCode: disabledNotLocalOnly},
-				actionRefactor: {disabledCode: disabledStatusNotAllowed},
+				actionPublish: {enabled: true},
+				actionMerge:   {disabledCode: disabledNotLocalOnly},
+				actionRebase:  {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
@@ -945,7 +1126,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				disabledCode string
 			}{
 				actionPublish:  {disabledCode: "manual_publish_required"},
-				actionRefactor: {enabled: true},
+				actionRebase:   {enabled: true},
 				actionMarkDone: {enabled: true},
 			},
 		},
@@ -991,10 +1172,10 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish:  {disabledCode: "already_published"},
-				actionMerge:    {disabledCode: disabledNotLocalOnly},
-				actionRefactor: {enabled: true},
-				actionCleanup:  {enabled: true},
+				actionPublish: {disabledCode: "already_published"},
+				actionMerge:   {disabledCode: disabledNotLocalOnly},
+				actionRebase:  {enabled: true},
+				actionCleanup: {enabled: true},
 			},
 		},
 		{
@@ -1008,7 +1189,6 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			}{
 				actionRebase:         {disabledCode: disabledCycleActive},
 				actionReviewComments: {disabledCode: disabledCycleActive},
-				actionRefactor:       {disabledCode: disabledCycleActive},
 			},
 		},
 		{
@@ -1019,7 +1199,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				disabledCode string
 			}{
 				actionCleanup: {disabledCode: feature.RepoCycleRunning},
-				actionDelete:  {disabledCode: feature.RepoCycleRunning},
+				actionDelete:  {enabled: true},
 			},
 		},
 		{

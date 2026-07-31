@@ -49,7 +49,7 @@ func TestCollectQAFilePaths_IncludesRoadmap(t *testing.T) {
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 	o := New(Deps{PhaseRunner: pr}, Hooks{})
 
-	got := o.collectQAFilePaths(f, "")
+	got := o.collectQAFilePaths(f)
 
 	want := []string{
 		filepath.Join(runDir, "inquire", "qa-answers.md"),
@@ -67,27 +67,22 @@ func TestCollectQAFilePaths_IncludesRoadmap(t *testing.T) {
 	}
 }
 
-// TestCollectQAFilePaths_RefactorPrefix asserts the new roadmap probe honors
-// a non-empty refactor prefix, mirroring the existing behavior for the
-// inquire/research/design probes.
-func TestCollectQAFilePaths_RefactorPrefix(t *testing.T) {
+// TestCollectQAFilePaths_SkipsLegacyCycleDirs asserts the probe no longer
+// discovers QA files under legacy "refactor-N" prefixed directories: the
+// refactor cycle was removed, so artifacts staged there must not leak into
+// planning prompts.
+func TestCollectQAFilePaths_SkipsLegacyCycleDirs(t *testing.T) {
 	tmpStateDir := t.TempDir()
 	featureID := "feat-collect-refprefix"
 	f := &feature.Feature{
-		ID:             featureID,
-		ActiveRun:      1,
-		RunCount:       1,
-		RefactorPrompt: "polish",
-	}
-	f.SetRefactorCount(1)
-	prefix := f.RefactorPrefix()
-	if prefix == "" {
-		t.Fatalf("expected non-empty RefactorPrefix() for refactor count = 1")
+		ID:        featureID,
+		ActiveRun: 1,
+		RunCount:  1,
 	}
 
 	runDir := agent.ActiveRunDir(tmpStateDir, f)
 	for _, phase := range []string{"inquire", "research", "design", "roadmap"} {
-		dir := filepath.Join(runDir, prefix, phase)
+		dir := filepath.Join(runDir, "refactor-1", phase)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -99,20 +94,7 @@ func TestCollectQAFilePaths_RefactorPrefix(t *testing.T) {
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 	o := New(Deps{PhaseRunner: pr}, Hooks{})
 
-	got := o.collectQAFilePaths(f, prefix)
-
-	want := []string{
-		filepath.Join(runDir, prefix, "inquire", "qa-answers.md"),
-		filepath.Join(runDir, prefix, "research", "qa-answers.md"),
-		filepath.Join(runDir, prefix, "design", "qa-answers.md"),
-		filepath.Join(runDir, prefix, "roadmap", "qa-answers.md"),
-	}
-	if len(got) != len(want) {
-		t.Fatalf("collectQAFilePaths returned %d paths, want %d; got=%v", len(got), len(want), got)
-	}
-	for i, w := range want {
-		if got[i] != w {
-			t.Errorf("collectQAFilePaths[%d] = %q, want %q", i, got[i], w)
-		}
+	if got := o.collectQAFilePaths(f); len(got) != 0 {
+		t.Errorf("collectQAFilePaths returned %d paths from a legacy refactor-N tree, want 0; got=%v", len(got), got)
 	}
 }

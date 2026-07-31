@@ -1363,6 +1363,199 @@ func TestClientFetchRefreshSnapshotIncludesRecoveryForRecoveryUpdates(t *testing
 	}
 }
 
+func TestClientFetchRefreshSnapshotRelationshipBundle(t *testing.T) {
+	var requests atomic.Int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/features/parent-1":
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{
+				APIVersion: APIVersion,
+				Feature:    testFeatureDetail(FeatureSummary{ID: "parent-1"}),
+			})
+		case "GET /api/v1/features/child-1":
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{
+				APIVersion: APIVersion,
+				Feature:    testFeatureDetail(FeatureSummary{ID: "child-1"}),
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	resource := ResourceDTO{
+		Type:     resourceTypeRelationship,
+		ID:       relationshipResourceID("parent-1", "child-1"),
+		ParentID: "parent-1",
+		ChildID:  "child-1",
+	}
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event: SSEEventDTO{
+			Kind:            sseEventLifecycleUpdated,
+			Resource:        resource,
+			ResourceVersion: 4,
+		},
+		Resource:         resource,
+		SnapshotRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if snapshot.Relationship == nil ||
+		snapshot.Relationship.Parent.Feature.ID != "parent-1" ||
+		snapshot.Relationship.Child == nil ||
+		snapshot.Relationship.Child.Feature.ID != "child-1" {
+		t.Fatalf("relationship bundle = %+v, want parent-1 and child-1", snapshot.Relationship)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("relationship requests = %d, want 2", got)
+	}
+
+	stale, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event: SSEEventDTO{
+			Kind:            sseEventLifecycleUpdated,
+			Resource:        resource,
+			ResourceVersion: 3,
+		},
+		Resource:         resource,
+		SnapshotRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("stale FetchRefreshSnapshot() error = %v", err)
+	}
+	if stale.Relationship != nil || requests.Load() != 2 {
+		t.Fatalf("stale relationship refresh = %+v requests=%d, want idempotent no-op", stale.Relationship, requests.Load())
+	}
+}
+
+func TestClientRelationshipRefreshDoesNotHoldVersionLockDuringFetch(t *testing.T) {
+	var parentRequests atomic.Int32
+	firstParentStarted := make(chan struct{})
+	releaseFirstParent := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/features/parent-1":
+			if parentRequests.Add(1) == 1 {
+				close(firstParentStarted)
+				<-releaseFirstParent
+			}
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{
+				APIVersion: APIVersion,
+				Feature:    testFeatureDetail(FeatureSummary{ID: "parent-1"}),
+			})
+		case "/api/v1/features/child-1":
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{
+				APIVersion: APIVersion,
+				Feature:    testFeatureDetail(FeatureSummary{ID: "child-1"}),
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	resource := ResourceDTO{
+		Type: resourceTypeRelationship, ID: relationshipResourceID("parent-1", "child-1"),
+		ParentID: "parent-1", ChildID: "child-1",
+	}
+	fetch := func(version uint64) (RefreshSnapshot, error) {
+		return client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+			Event: SSEEventDTO{
+				Kind: sseEventLifecycleUpdated, Resource: resource, ResourceVersion: version,
+			},
+			Resource: resource, SnapshotRequired: true,
+		})
+	}
+	type fetchResult struct {
+		snapshot RefreshSnapshot
+		err      error
+	}
+	olderResult := make(chan fetchResult, 1)
+	go func() {
+		snapshot, fetchErr := fetch(4)
+		olderResult <- fetchResult{snapshot: snapshot, err: fetchErr}
+	}()
+	<-firstParentStarted
+
+	newerResult := make(chan fetchResult, 1)
+	go func() {
+		snapshot, fetchErr := fetch(5)
+		newerResult <- fetchResult{snapshot: snapshot, err: fetchErr}
+	}()
+	var newer fetchResult
+	select {
+	case newer = <-newerResult:
+	case <-time.After(2 * time.Second):
+		close(releaseFirstParent)
+		t.Fatal("newer relationship refresh blocked behind an in-flight HTTP fetch")
+	}
+	if newer.err != nil || newer.snapshot.Relationship == nil {
+		t.Fatalf("newer refresh = %+v, error = %v", newer.snapshot, newer.err)
+	}
+	close(releaseFirstParent)
+
+	older := <-olderResult
+	if older.err != nil {
+		t.Fatalf("older refresh error = %v", older.err)
+	}
+	if older.snapshot.Relationship != nil {
+		t.Fatalf("older refresh = %+v, want stale fetched bundle discarded", older.snapshot)
+	}
+}
+
+func TestClientFetchRefreshSnapshotCascadeEvictsRelationship(t *testing.T) {
+	var detailRequests atomic.Int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case routeGetFeatures:
+			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion, Features: []FeatureSummary{}})
+		default:
+			detailRequests.Add(1)
+			writeAPIError(w, http.StatusNotFound, "not_found", "deleted", nil)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	resource := ResourceDTO{
+		Type:                resourceTypeRelationship,
+		ID:                  relationshipResourceID("parent-1", "child-1"),
+		ParentID:            "parent-1",
+		ChildID:             "child-1",
+		RelationshipDeleted: true,
+	}
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event:            SSEEventDTO{Kind: sseEventLifecycleUpdated, Resource: resource, ResourceVersion: 5},
+		Resource:         resource,
+		SnapshotRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if snapshot.Features == nil || snapshot.Relationship == nil ||
+		snapshot.Relationship.EvictParentID != "parent-1" ||
+		snapshot.Relationship.EvictChildID != "child-1" {
+		t.Fatalf("cascade refresh = %+v, want list plus explicit parent/child eviction", snapshot)
+	}
+	if got := detailRequests.Load(); got != 0 {
+		t.Fatalf("cascade detail requests = %d, want no expected not-found requests", got)
+	}
+}
+
 func waitRefreshSignal(t *testing.T, signals <-chan RefreshSignal) RefreshSignal {
 	t.Helper()
 	select {

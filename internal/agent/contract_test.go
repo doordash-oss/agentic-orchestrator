@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -465,101 +466,13 @@ func TestContractRegistryPlanPhasePlannerReportsMissingMeta(t *testing.T) {
 	}
 }
 
-func TestContractRegistryRefactorPlanStep(t *testing.T) {
-	refactorDir := t.TempDir()
-	planPath := filepath.Join(refactorDir, "refactor-plan.md")
-	if err := os.WriteFile(planPath, []byte(validRefactorPlanText()), 0o644); err != nil {
-		t.Fatalf("write refactor plan: %v", err)
-	}
-
-	contract, ok := Lookup(feature.PhasePlan, RoleRefactorPlanStep)
-	if !ok {
-		t.Fatal("Lookup(PhasePlan, RoleRefactorPlanStep) ok = false, want true")
-	}
-	if contract.Role != RoleRefactorPlanStep {
-		t.Fatalf("Lookup(PhasePlan, RoleRefactorPlanStep).Role = %q, want %q", contract.Role, RoleRefactorPlanStep)
-	}
-
-	out, violations, err := Validate(feature.PhasePlan, RoleRefactorPlanStep, refactorDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(violations) != 0 || !out.OK {
-		t.Fatalf("Validate() = (%+v, %v), want OK", out, violations)
-	}
-	if out.PlanMarkdownPath != planPath {
-		t.Fatalf("PlanMarkdownPath = %q, want %q", out.PlanMarkdownPath, planPath)
-	}
-}
-
-func TestContractRegistryRefactorPlanStepReportsMissingPlan(t *testing.T) {
-	out, violations, err := Validate(feature.PhasePlan, RoleRefactorPlanStep, t.TempDir())
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "refactor-plan.md") || !strings.Contains(got, "missing") {
-		t.Fatalf("Validate() = (%+v, %q), want missing refactor-plan.md", out, got)
-	}
-}
-
-func TestContractRegistryRefactorPlanStepReportsEmptyPlan(t *testing.T) {
-	refactorDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(refactorDir, "refactor-plan.md"), []byte(" \n\t\n"), 0o644); err != nil {
-		t.Fatalf("write empty refactor plan: %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhasePlan, RoleRefactorPlanStep, refactorDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "refactor-plan.md") || !strings.Contains(got, "empty") {
-		t.Fatalf("Validate() = (%+v, %q), want empty refactor-plan.md", out, got)
-	}
-}
-
-func TestContractRegistryRefactorPlanStepRejectsUnsupportedCrossRepoVerification(t *testing.T) {
-	refactorDir := t.TempDir()
-	plan := validRefactorPlanText() + "\n## Cross-Repo Verification\n\n- [ ] Smoke: `scripts/e2e.sh`\n"
-	if err := os.WriteFile(filepath.Join(refactorDir, "refactor-plan.md"), []byte(plan), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	out, violations, err := Validate(feature.PhasePlan, RoleRefactorPlanStep, refactorDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "unsupported Cross-Repo Verification") {
-		t.Fatalf("Validate() = (%+v, %q), want unsupported cross-repo verification rejected", out, got)
-	}
-}
-
-func TestContractRegistryRefactorPlanStepRequiresExactlyOneRepoPerTask(t *testing.T) {
-	refactorDir := t.TempDir()
-	tests := map[string]string{
-		"missing":  "# Refactor: test\n\n## Tasks\n\n### Task 1: unowned\n\nTouch files.\n",
-		"multiple": "# Refactor: test\n\n## Tasks\n\n### Task 1: ambiguous\n\n**Repo:** api\n**Repo:** web\n",
-	}
-	for name, plan := range tests {
-		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(refactorDir, name, "refactor-plan.md")
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			out, violations, err := Validate(feature.PhasePlan, RoleRefactorPlanStep, filepath.Dir(path))
-			if err != nil {
-				t.Fatalf("Validate() error = %v", err)
-			}
-			got := JoinProtocolViolations(violations)
-			if out.OK || !strings.Contains(got, "exactly one `**Repo:** <name>` tag") {
-				t.Fatalf("Validate() = (%+v, %q), want exactly-one-repo rejection", out, got)
-			}
-		})
+func TestContractRegistryHasNoLegacyRefactorPlanRole(t *testing.T) {
+	// The legacy refactor cycle and its refactor-plan role were removed; the
+	// role registry must not carry any refactor-scoped role anymore.
+	for _, spec := range roles.All() {
+		if spec.SkillName == "refactor" || strings.Contains(string(spec.Role), "refactor") {
+			t.Errorf("legacy refactor role still registered: %+v", spec)
+		}
 	}
 }
 
@@ -1231,10 +1144,6 @@ func validPhasePlanText() string {
 		"### Behavioral Evidence\n- [ ] None required: automated tests provide the artifact.\n"
 }
 
-func validRefactorPlanText() string {
-	return "# Refactor: test\n\n## Tasks\n\n### Task 1: touch api\n\n**Repo:** api\n\nTouch the api repo.\n"
-}
-
 func writeNeedUserInputProgress(t *testing.T, path string, reportPath string, note string, questions []string) {
 	t.Helper()
 	var q strings.Builder
@@ -1463,29 +1372,5 @@ func TestAgentEvidencePlanViolations(t *testing.T) {
 	clean := strings.Replace(plan, "- [ ] Home screen default state [size: 760x480]", "- [ ] None required: automated-only verification for this feature", 1)
 	if got := agentEvidencePlanViolations(clean); len(got) != 0 {
 		t.Fatalf("all-none plan should produce no violations, got %v", got)
-	}
-}
-
-func TestValidateRefactorPlanMarkdownScopesTopLevelCommands(t *testing.T) {
-	iterDir := t.TempDir()
-	planPath := filepath.Join(iterDir, "refactor-plan.md")
-	plan := "# Refactor\n\n### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
-		"## Tasks\n\n### Task 1: api work\n**Repo:** `api`\n\nBody.\n\n### Task 2: web work\n**Repo:** `web`\n\nBody.\n"
-	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var out Outcome
-	violations, err := validateRefactorPlanMarkdownArtifact(iterDir, planPath, &out)
-	if err != nil {
-		t.Fatalf("validateRefactorPlanMarkdownArtifact() error = %v", err)
-	}
-	found := false
-	for _, violation := range violations {
-		if strings.Contains(violation.Reason, "must scope every command") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("violations = %+v, want unscoped multi-repo top-level command rejected", violations)
 	}
 }

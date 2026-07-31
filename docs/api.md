@@ -4,8 +4,8 @@ The headless runtime exposes a loopback-only REST/SSE API under `/api/v1`.
 `api/openapi.yaml` is the machine-readable contract for routes, response
 shapes, auth, and stream envelopes.
 
-Generated Go contract code lives in `internal/server/serverapi`. Regenerate it
-with `make generate-openapi` or `go generate ./internal/server/serverapi`.
+Generated Go contract code lives in `internal/server/serverapi.gen.go`. Regenerate it
+with `make generate-openapi` or `go generate ./internal/server`.
 Tests fail if the committed generated code drifts from `api/openapi.yaml`.
 
 ## Discovery And Auth
@@ -38,6 +38,36 @@ Clients bootstrap from a snapshot and then consume ordered event deltas:
 Event envelopes include `seq`, `epoch`, `kind`, `resource`,
 `resource_version`, and `snapshot_required`. Snapshot responses include
 `meta.as_of_seq`, and revisioned resources also expose `ETag`.
+
+## Parent/Child Relationships
+
+Top-level feature lists omit direct child rows. Each parent summary and detail
+instead carries `active_child` plus the complete ordered `child_history`.
+Direct child detail carries the same `relationship` projection, including the
+stable display token, stored lifecycle status, explicit close outcome and
+timestamp, pipeline, cost, integration attention, and cleanup warnings. A
+closed child also carries `diff_summary`: the preserved read-only diff summary
+captured at close time (empty when no diff was preserved).
+
+Relationship lifecycle changes use one `lifecycle.updated` event whose resource
+type is `relationship` and includes `parent_id`, `child_id`, and a stable
+relationship resource ID. Clients fetch parent and child detail and apply them
+as one refresh bundle. A completed cascade sets `relationship_deleted`; clients
+refresh the top-level list and evict both detail records without issuing
+expected-to-fail detail reads. Parent Delete always uses the durable cascade and
+returns `completed`, `cleanup_pending`, or `attention_required`.
+
+Destructive relationship actions — child Discard and parent Delete with linked
+children — carry a server-authoritative `impact_preview` on their action
+catalog entry enumerating affected sessions, worktrees, branches, knowledge
+resources, child records, and retained outcomes; every category is present and
+absent impact is an explicitly empty list. Clients render that projection
+verbatim before confirmation instead of reconstructing mutable backend state,
+and resolve an unavailable action against `disabled_reasons` for the typed
+reason rather than substituting generic copy. In the TUI this surfaces as a
+per-parent "Refactor History" group beneath each parent (collapsed by default,
+expanded per session), read-only closed-child inspection, and focused action
+hints.
 
 ## Session Output
 

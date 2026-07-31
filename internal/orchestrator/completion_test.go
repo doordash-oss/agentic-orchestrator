@@ -15,6 +15,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -209,6 +210,73 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_NotAllDone(t *testing.T) 
 	// See completion.go — MarkKBFresh is skipped when baseDir == "".
 	if _, err := os.Stat("knowledge-base"); !os.IsNotExist(err) {
 		t.Errorf("onKBCompleted leaked ./knowledge-base into CWD (stat err=%v)", err)
+	}
+}
+
+// A canonical KB is generated from the feature worktree, so completion must
+// stamp that worktree's HEAD even when the original checkout is on a different
+// branch. Otherwise a later refactor child rejects the reusable KB baseline as
+// unrelated and falls back to a full build.
+func TestOrchestrator_HandlePhaseCompletion_KB_RecordsWorktreeCommit(t *testing.T) {
+	stateDir := t.TempDir()
+	kbDir := writeKBCompletionArtifacts(t, stateDir, repoName, true, true)
+	originalPath := filepath.Join(t.TempDir(), "original-checkout")
+	worktreePath := filepath.Join(t.TempDir(), "feature-worktree")
+
+	f := &feature.Feature{
+		ID:           "feat-worktree-head",
+		Status:       feature.StatusBuildingKB,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		Repos: []feature.FeatureRepo{{
+			Name:         repoName,
+			Path:         originalPath,
+			WorktreePath: worktreePath,
+		}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.AllKBsCompletedFn = func(id string) (bool, error) { return false, nil }
+	lc.MarkRepoKBCompletedFn = func(id, repoName string) error { return nil }
+	fs := newFeatureStore(f)
+	cmd := mocks.NewMockCommandRunner()
+	cmd.RunFn = func(_ context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
+		if name != "git" || strings.Join(args, " ") != "rev-parse HEAD" {
+			return nil, errors.New("unexpected command")
+		}
+		switch opts.Dir {
+		case originalPath:
+			return []byte("original-checkout-head\n"), nil
+		case worktreePath:
+			return []byte("feature-worktree-head\n"), nil
+		default:
+			return nil, errors.New("unexpected git directory")
+		}
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
+		CmdRunner:   cmd,
+	}, orchestrator.Hooks{})
+
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:     feature.PhaseKnowledgeBase,
+		SessionID: f.ID + "-kb-" + repoName,
+		Success:   true,
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	state, err := agent.LoadKBState(kbDir)
+	if err != nil {
+		t.Fatalf("LoadKBState: %v", err)
+	}
+	if state == nil {
+		t.Fatal("LoadKBState = nil, want persisted freshness state")
+	}
+	if state.HeadCommit != "feature-worktree-head" {
+		t.Fatalf("HeadCommit = %q, want feature-worktree-head", state.HeadCommit)
 	}
 }
 

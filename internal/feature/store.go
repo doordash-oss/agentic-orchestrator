@@ -80,6 +80,18 @@ type RelationshipChildren struct {
 	Closed []*Feature
 }
 
+// isLegacyProviderBookkeepingDir identifies provider-owned directories that
+// older Agentico versions wrote beneath the feature store. They are not
+// feature records and must not participate in feature or relationship scans.
+func isLegacyProviderBookkeepingDir(name string) bool {
+	switch name {
+	case "opencode", "codex-home":
+		return true
+	default:
+		return false
+	}
+}
+
 func NewStore(baseDir string) *Store {
 	return &Store{BaseDir: baseDir}
 }
@@ -263,7 +275,7 @@ func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*Relatio
 
 	result := &RelationshipChildren{}
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == parentID {
+		if !entry.IsDir() || entry.Name() == parentID || isLegacyProviderBookkeepingDir(entry.Name()) {
 			continue
 		}
 		child, err := s.loadUnlocked(entry.Name())
@@ -487,7 +499,7 @@ func (s *Store) List() ([]*Feature, error) {
 	var features []*Feature
 	var warnings []LoadWarning
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || isLegacyProviderBookkeepingDir(e.Name()) {
 			continue
 		}
 		f, err := s.loadUnlocked(e.Name())

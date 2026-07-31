@@ -1330,6 +1330,13 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	}); err != nil {
 		t.Fatalf("mark publishable: %v", err)
 	}
+	legacyProviderDir := filepath.Join(stateDir, "opencode", "managed-session")
+	if err := os.MkdirAll(legacyProviderDir, 0o755); err != nil {
+		t.Fatalf("create legacy provider state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyProviderDir, "opencode.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write legacy provider state: %v", err)
+	}
 	target := serverMutationTarget{
 		orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
 		cfg:        cfg,

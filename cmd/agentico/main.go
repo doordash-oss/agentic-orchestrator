@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -2443,12 +2444,13 @@ type serverProcessPID interface {
 }
 
 type defaultClientLaunch struct {
-	BaseURL      string
-	AuthToken    string
-	Runtime      serverruntime.RuntimeIdentity
-	LaunchPolicy serverruntime.LaunchPolicy
-	OwnedServer  bool
-	Server       serverProcess
+	BaseURL            string
+	AuthToken          string
+	Runtime            serverruntime.RuntimeIdentity
+	LaunchPolicy       serverruntime.LaunchPolicy
+	OwnedServer        bool
+	Server             serverProcess
+	ReleaseOwnedServer func()
 }
 
 func runDefaultClientServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
@@ -2556,14 +2558,27 @@ func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, de
 		}
 		launchServer = nil
 	}
-	return deps.LaunchClient(ctx, defaultClientLaunch{
+	// The spawned server remains launcher-owned until the TUI either completes
+	// its graceful shutdown or explicitly chooses to keep the server running.
+	// Any other return path, including TUI initialization failure, cleans it up.
+	var serverReleased atomic.Bool
+	clientErr := deps.LaunchClient(ctx, defaultClientLaunch{
 		BaseURL:      record.BaseURL,
 		AuthToken:    record.AuthToken,
 		Runtime:      identity,
 		LaunchPolicy: policy,
 		OwnedServer:  owned,
 		Server:       launchServer,
+		ReleaseOwnedServer: func() {
+			serverReleased.Store(true)
+		},
 	})
+	if !owned || launchServer == nil || serverReleased.Load() {
+		return clientErr
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return errors.Join(clientErr, launchServer.Stop(stopCtx))
 }
 
 func isRuntimeLockBusy(err error) bool {
@@ -2602,9 +2617,10 @@ func launchAPIClientTUI(ctx context.Context, launch defaultClientLaunch) error {
 		return fmt.Errorf("create API client: %w", err)
 	}
 	opts := tui.APIAppOptions{
-		Runtime:      launch.Runtime,
-		LaunchPolicy: launch.LaunchPolicy,
-		OwnedServer:  launch.OwnedServer,
+		Runtime:            launch.Runtime,
+		LaunchPolicy:       launch.LaunchPolicy,
+		OwnedServer:        launch.OwnedServer,
+		ReleaseOwnedServer: launch.ReleaseOwnedServer,
 		EventOptions: serverruntime.EventSubscriptionOptions{
 			HeartbeatInterval: 30 * time.Second,
 			ReconnectDelay:    250 * time.Millisecond,

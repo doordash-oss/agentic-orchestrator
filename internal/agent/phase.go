@@ -1568,7 +1568,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		DisallowedTools:      opts.DisallowedTools,
 		DangerouslySkipPerms: pr.DangerouslySkipPermissions,
 		AdditionalDirs:       opts.AdditionalDirs,
-		StateDir:             pr.StateDir,
+		StateDir:             providerStateDir(pr.StateDir),
 		AgentsJSON:           agentsJSON,
 		AgentNames:           opts.AgentNames,
 		EffortLevel:          opts.EffortLevel,
@@ -1646,6 +1646,16 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		sessOpts.SupportsSessionResume = c.SupportsSessionResume()
 	}
 	return cmd, env, sessOpts, nil
+}
+
+// providerStateDir keeps provider-owned configuration and session bookkeeping
+// outside the feature store, whose direct children are reserved for feature
+// records. The CLI runtime layout places both directories beneath one parent.
+func providerStateDir(featureStateDir string) string {
+	if featureStateDir == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(featureStateDir), "provider-state")
 }
 
 func appendAgenticoBinEnv(env []string) []string {

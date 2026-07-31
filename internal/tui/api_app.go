@@ -101,9 +101,12 @@ type APIClient interface {
 }
 
 type APIAppOptions struct {
-	Runtime                    server.RuntimeIdentity
-	LaunchPolicy               server.LaunchPolicy
-	OwnedServer                bool
+	Runtime      server.RuntimeIdentity
+	LaunchPolicy server.LaunchPolicy
+	OwnedServer  bool
+	// ReleaseOwnedServer transfers cleanup responsibility away from the
+	// launcher after an intentional detach or completed graceful shutdown.
+	ReleaseOwnedServer         func()
 	EventOptions               server.EventSubscriptionOptions
 	WaitForOwnedServerShutdown func(context.Context) error
 	StopOwnedServer            func(context.Context) error
@@ -468,6 +471,7 @@ type APIAppModel struct {
 	height                     int
 	spinner                    spinner.Model
 	ownedServer                bool
+	releaseOwnedServer         func()
 	waitForOwnedServerShutdown func(context.Context) error
 	quitOwnedServerPrompt      bool
 	ownedServerShutdownPending bool
@@ -772,6 +776,7 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 		height:                     30,
 		spinner:                    newAPIAppSpinner(),
 		ownedServer:                opts.OwnedServer,
+		releaseOwnedServer:         opts.ReleaseOwnedServer,
 		waitForOwnedServerShutdown: waitForOwnedServerShutdown,
 		launchPolicy:               opts.LaunchPolicy,
 		notifyUser:                 notifyUserCmd,
@@ -1330,6 +1335,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitOwnedServerPrompt = false
 			return m, nil
 		}
+		m.releaseOwnedServer = nil
 		return m, tea.Quit
 	case apiResumeAllResultMsg:
 		m.resumeAllConfirmActive = false
@@ -1377,6 +1383,10 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.stopOwnedServerCmd()
 		case "n":
+			if m.releaseOwnedServer != nil {
+				m.releaseOwnedServer()
+				m.releaseOwnedServer = nil
+			}
 			return m, tea.Quit
 		}
 		if msg.Code == tea.KeyEscape {
@@ -8677,6 +8687,9 @@ func (m APIAppModel) stopOwnedServerCmd() tea.Cmd {
 		_, err := m.client.Shutdown(ctx)
 		if err == nil && m.waitForOwnedServerShutdown != nil {
 			err = m.waitForOwnedServerShutdown(ctx)
+		}
+		if err == nil && m.releaseOwnedServer != nil {
+			m.releaseOwnedServer()
 		}
 		return apiOwnedServerStoppedMsg{err: err}
 	}

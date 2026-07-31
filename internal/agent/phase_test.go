@@ -1357,18 +1357,19 @@ func newRegistryWithCaptureProvider(p *captureProvider) *llm.Registry {
 
 func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 	dir := t.TempDir()
+	stateDir := filepath.Join(dir, "features")
 	workDir := filepath.Join(dir, "repo")
 	skillsDir := filepath.Join(dir, "skills")
 	guidelinesDir := filepath.Join(dir, "guidelines")
 	kbDir := filepath.Join(dir, "knowledge-base", "repo")
-	for _, d := range []string{workDir, skillsDir, guidelinesDir, kbDir} {
+	for _, d := range []string{stateDir, workDir, skillsDir, guidelinesDir, kbDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
 	}
 
 	provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, watchdog: true}
-	pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
+	pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(stateDir), stateDir)
 	pr.Registry = newRegistryWithCaptureProvider(provider)
 	pr.SkillsDir = skillsDir
 	pr.GuidelinesDir = guidelinesDir
@@ -1397,13 +1398,17 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 			t.Fatalf("WritableRoots = %v, missing %q", provider.buildOpts.WritableRoots, want)
 		}
 	}
-	if slices.Contains(provider.buildOpts.ReadRoots, dir) {
-		t.Fatalf("ReadRoots = %v, should omit global state directory %q", provider.buildOpts.ReadRoots, dir)
+	if slices.Contains(provider.buildOpts.ReadRoots, stateDir) {
+		t.Fatalf("ReadRoots = %v, should omit global state directory %q", provider.buildOpts.ReadRoots, stateDir)
 	}
-	for _, forbidden := range []string{dir, skillsDir, guidelinesDir} {
+	for _, forbidden := range []string{stateDir, skillsDir, guidelinesDir} {
 		if slices.Contains(provider.buildOpts.WritableRoots, forbidden) {
 			t.Fatalf("WritableRoots = %v, should omit read-only context dir %q", provider.buildOpts.WritableRoots, forbidden)
 		}
+	}
+	wantProviderStateDir := filepath.Join(dir, "provider-state")
+	if got := provider.buildOpts.StateDir; got != wantProviderStateDir {
+		t.Fatalf("CommandBuildOpts.StateDir = %q, want provider bookkeeping outside feature store at %q", got, wantProviderStateDir)
 	}
 
 	if got := provider.protocolOpts.InitialPrompt; got != "rendered prompt" {

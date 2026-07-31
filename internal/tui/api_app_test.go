@@ -8381,7 +8381,7 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 	client := &fakeTUIAPIClient{
 		shutdownAccepted: apiTestActionResponse{},
 	}
-	var fallbackCalls int
+	var fallbackCalls, releaseCalls int
 	attached, err := NewAPIAppModel(ctx, client, APIAppOptions{})
 	if err != nil {
 		t.Fatalf("NewAPIAppModel(attached) error = %v", err)
@@ -8402,6 +8402,9 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 		StopOwnedServer: func(context.Context) error {
 			fallbackCalls++
 			return nil
+		},
+		ReleaseOwnedServer: func() {
+			releaseCalls++
 		},
 	})
 	if err != nil {
@@ -8447,8 +8450,16 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("owned shutdown completion did not return quit command")
 	}
+	if releaseCalls != 1 {
+		t.Fatalf("owned TUI release calls = %d, want 1 after completed shutdown", releaseCalls)
+	}
 
-	ownedNo, err := NewAPIAppModel(ctx, client, APIAppOptions{OwnedServer: true})
+	ownedNo, err := NewAPIAppModel(ctx, client, APIAppOptions{
+		OwnedServer: true,
+		ReleaseOwnedServer: func() {
+			releaseCalls++
+		},
+	})
 	if err != nil {
 		t.Fatalf("NewAPIAppModel(owned no) error = %v", err)
 	}
@@ -8459,6 +8470,9 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 	}
 	if client.shutdownCalls != 1 {
 		t.Fatalf("owned TUI shutdown calls after n = %d, want 1", client.shutdownCalls)
+	}
+	if releaseCalls != 2 {
+		t.Fatalf("owned TUI release calls = %d, want 2 after keep-server exit", releaseCalls)
 	}
 }
 

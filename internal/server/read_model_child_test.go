@@ -15,6 +15,8 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +123,27 @@ func TestChildFeatureExcludedFromTopLevelListButDetailWorks(t *testing.T) {
 		if !ids[id] {
 			t.Fatalf("child detail actions = %v, missing %q", ids, id)
 		}
+	}
+}
+
+func TestParentDetailIgnoresLegacyProviderStateInFeatureStore(t *testing.T) {
+	t.Parallel()
+
+	store, parent := seedReadFeature(t)
+	for _, name := range []string{"opencode", "codex-home"} {
+		dir := filepath.Join(store.BaseDir, name, "managed-session")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "provider.json"), []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q): %v", dir, err)
+		}
+	}
+
+	handler := NewHandler(baseReadHandlerOptions(store))
+	detail := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)
+	if got := detail[entityFeature].(map[string]any)["id"]; got != parent.ID {
+		t.Fatalf("parent detail id = %v, want %s", got, parent.ID)
 	}
 }
 

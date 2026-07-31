@@ -259,6 +259,11 @@ type Orchestrator struct {
 	// cleanup.
 	cycleWG sync.WaitGroup
 
+	// featureStartControls serialize phase admission per feature. This makes
+	// repeated API/TUI start requests idempotent even when they arrive before
+	// the first request's state transition is visible to the second.
+	featureStartControls sync.Map
+
 	// featureRebaseControls serialize feature-level rebase continuation checks
 	// with Stop/interrupt per feature. The git operations themselves are not
 	// cancellable through the RebaseOperator port, so a stop request waits for
@@ -402,7 +407,7 @@ func (o *Orchestrator) featureRebaseControl(featureID string) *featureRebaseCont
 
 // WaitForCycles blocks until every background goroutine launched by the
 // per-repo cycle entry points (StartRepoCycleImplement,
-// StartCycleFinalReview) has returned. Production
+// StartCycleFinalReview) and asynchronous phase continuations has returned. Production
 // callers do not need this — the orchestrator drives cycles to completion
 // via its event loop. It exists for tests whose state directory is a
 // t.TempDir(): without synchronizing on the goroutine, TempDir cleanup
@@ -533,6 +538,10 @@ func (o *Orchestrator) emitShutdownStarted() {
 // Children hit the checkChildExecution capability gate first: only
 // setup-complete, active children (any pipeline profile) may execute.
 func (o *Orchestrator) StartFeature(featureID string) error {
+	startMu := o.featureStartControl(featureID)
+	startMu.Lock()
+	defer startMu.Unlock()
+
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	if err := o.RelationshipGuard(featureID, MutationStart); err != nil {
@@ -576,6 +585,13 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 		if firstPhase != feature.PhaseResearch && f.StartedAt == nil {
 			phase = firstPhase
 		}
+	}
+
+	// Final Review is intentionally dispatched in the background. Treat a
+	// repeated start while that pass is already running as success rather than
+	// attempting the invalid FinalReviewing → FinalReviewing transition.
+	if phase == feature.PhaseFinalReview && f.Status == feature.StatusFinalReviewing {
+		return nil
 	}
 
 	// Medium pipeline pre-transition: Created → PlanReady.
@@ -1293,16 +1309,34 @@ func (o *Orchestrator) startPublish(featureID string) (PhaseStartResult, error) 
 // runs via advanceAfterFinalReview so the feature reaches the same terminal
 // state the original onMultiReposPassed path produces.
 func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, error) {
-	if err := o.runDeferredFinalReview(featureID); err != nil {
-		if errors.Is(err, errFinalReviewInterrupted) {
-			return PhaseStartResult{Outcome: PhaseStarted}, nil
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+	}
+	if f.Status == feature.StatusFinalReviewing {
+		return PhaseStartResult{Outcome: PhaseNoOp}, nil
+	}
+
+	resultCh, err := o.startDeferredFinalReview(featureID)
+	if err != nil {
+		return PhaseStartResult{}, err
+	}
+	o.cycleWG.Go(func() {
+		res, ok := <-resultCh
+		if err := o.finishDeferredFinalReviewResult(featureID, res, ok); err != nil {
+			o.surfaceDispatchCompletionError(featureID, err)
+			return
 		}
-		return PhaseStartResult{}, err
-	}
-	if err := o.advanceAfterFinalReview(featureID); err != nil {
-		return PhaseStartResult{}, err
-	}
+		if err := o.advanceAfterFinalReview(featureID); err != nil {
+			o.surfaceDispatchCompletionError(featureID, err)
+		}
+	})
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
+}
+
+func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
+	actual, _ := o.featureStartControls.LoadOrStore(featureID, &sync.Mutex{})
+	return actual.(*sync.Mutex)
 }
 
 // InterruptFeature stops all sessions for a feature and clears pending help

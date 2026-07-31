@@ -1411,6 +1411,11 @@ func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.O
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
+	if resultCh == nil {
+		errMsg := "dispatch final review returned no result channel"
+		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
+		return nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
 	return resultCh, nil
 }
 

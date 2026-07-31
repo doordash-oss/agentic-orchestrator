@@ -102,9 +102,72 @@ func TestOrchestrator_StartFeature_InterruptedFinalReview_ReDispatchesFR(t *test
 	if err := o.StartFeature("feat-fr-resume"); err != nil {
 		t.Fatalf("StartFeature: %v", err)
 	}
+	o.WaitForCycles()
 
 	assertLifecycleCall(t, lc, "MarkFinalReviewReady")
 	assertLifecycleCall(t, lc, "MarkCodeReady")
+}
+
+func TestOrchestrator_StartFeature_FinalReviewDispatchIsAsyncAndIdempotent(t *testing.T) {
+	unpub := false
+	f := &feature.Feature{
+		ID:           "feat-fr-async",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseFinalReview,
+		Repos:        []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1", Publishable: &unpub}},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true},
+		},
+		Pipeline:  feature.PipelineLarge,
+		StartedAt: ptrTime(),
+	}
+	lc := lifecycleForFeature(f)
+	lc.MarkFinalReviewReadyFn = func(id string) error {
+		f.Status = feature.StatusFinalReviewing
+		return nil
+	}
+	lc.MarkCodeReadyFn = func(id string) error {
+		f.Status = feature.StatusCodeReady
+		return nil
+	}
+	fs := newFeatureStore(f)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+	resultCh := make(chan *agent.OrchestratorResult, 1)
+	dispatches := 0
+	o.SetRunMultiRepoFinalReviewFn(func(
+		ff *feature.Feature,
+		_ ...agent.KBInfo,
+	) (chan *agent.OrchestratorResult, error) {
+		dispatches++
+		return resultCh, nil
+	})
+
+	returned := make(chan error, 1)
+	go func() {
+		returned <- o.StartFeature(f.ID)
+	}()
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatalf("StartFeature() error = %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("StartFeature() blocked on the final-review result")
+	}
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("duplicate StartFeature() error = %v, want idempotent success", err)
+	}
+	if dispatches != 1 {
+		t.Fatalf("final-review dispatches = %d, want exactly 1", dispatches)
+	}
+
+	resultCh <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
+	o.WaitForCycles()
+	if f.Status != feature.StatusCodeReady {
+		t.Fatalf("feature status = %v, want CodeReady after background final review", f.Status)
+	}
 }
 
 // TestOrchestrator_OnMultiReposPassed_N1_NoLegacySingleRepoFRRouting verifies

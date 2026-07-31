@@ -712,7 +712,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Category B — Artifact phase completion (Inquire / Research / Design)
+// Category B — Single-shot artifact phase completion (Inquire / Research)
 // ---------------------------------------------------------------------------
 
 type artifactPhaseCase struct {
@@ -727,9 +727,6 @@ func artifactPhaseCases() []artifactPhaseCase {
 	return []artifactPhaseCase{
 		{"inquire", feature.PhaseInquire, "inquire", "inquire", feature.StatusInquiring},
 		{"research", feature.PhaseResearch, "research", "research", feature.StatusResearching},
-		// The Design phase keeps the legacy "design" on-disk subdir for
-		// compat but persists under the canonical Design artifact key.
-		{"design", feature.PhaseDesign, "design", feature.DesignArtifactKey, feature.StatusDesigning},
 	}
 }
 
@@ -1649,6 +1646,125 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Terminal(t *testing.T) {
 	}
 
 	refuteLifecycleCall(t, lc, "CompleteInquire")
+}
+
+func TestOrchestrator_HandlePhaseCompletion_DesignApprovedAdvancesToPlan(t *testing.T) {
+	o, store, lc := newDesignLoopCompletionFixture(t, feature.Checkpoints{})
+
+	if err := o.HandlePhaseCompletion("feat-design-loop", orchestrator.PhaseCompletionInput{
+		Phase:        feature.PhaseDesign,
+		DesignResult: &agent.DesignLoopResult{FinalStatus: "approved", Iterations: 2},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion(): %v", err)
+	}
+
+	assertLifecycleCall(t, lc, "CompleteDesign")
+	assertLifecycleCall(t, lc, "StartPlanning")
+	got := loadStoredFeature(t, store, "feat-design-loop")
+	if got.Status != feature.StatusPlanning {
+		t.Fatalf("Status = %s, want Planning", got.Status)
+	}
+	if got.ValidatingDesign || len(got.ValidatorStatuses) != 0 {
+		t.Fatalf("Design validation progress was not cleared: %+v", got)
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_DesignNeedsHumanReviewAlwaysGates(t *testing.T) {
+	o, store, lc := newDesignLoopCompletionFixture(t, feature.Checkpoints{})
+
+	if err := o.HandlePhaseCompletion("feat-design-loop", orchestrator.PhaseCompletionInput{
+		Phase: feature.PhaseDesign,
+		DesignResult: &agent.DesignLoopResult{
+			FinalStatus: "needs_human_review",
+			Iterations:  5,
+		},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion(): %v", err)
+	}
+
+	refuteLifecycleCall(t, lc, "CompleteDesign")
+	got := loadStoredFeature(t, store, "feat-design-loop")
+	if got.Status != feature.StatusDesignNeedsReview {
+		t.Fatalf("Status = %s, want DesignNeedsReview", got.Status)
+	}
+	if got.PendingReviewPhase == nil || *got.PendingReviewPhase != feature.PhasePlan {
+		t.Fatalf("PendingReviewPhase = %v, want Plan", got.PendingReviewPhase)
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_DesignFailureMarksFailed(t *testing.T) {
+	o, store, _ := newDesignLoopCompletionFixture(t, feature.Checkpoints{})
+
+	if err := o.HandlePhaseCompletion("feat-design-loop", orchestrator.PhaseCompletionInput{
+		Phase: feature.PhaseDesign,
+		DesignResult: &agent.DesignLoopResult{
+			FinalStatus: "failed",
+			LastError:   "critic infrastructure failed",
+		},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion(): %v", err)
+	}
+
+	got := loadStoredFeature(t, store, "feat-design-loop")
+	if got.Status != feature.StatusFailed || got.FailureType != feature.FailureInfrastructure {
+		t.Fatalf("failure state = (%s, %s), want Failed/infrastructure", got.Status, got.FailureType)
+	}
+}
+
+func newDesignLoopCompletionFixture(t *testing.T, checkpoints feature.Checkpoints) (*orchestrator.Orchestrator, *feature.Store, *mocks.MockFeatureLifecycle) {
+	t.Helper()
+	stateDir := t.TempDir()
+	designPath := filepath.Join(stateDir, "design.md")
+	if err := os.WriteFile(designPath, []byte("# Design\n"), 0o644); err != nil {
+		t.Fatalf("write design artifact: %v", err)
+	}
+	f := &feature.Feature{
+		ID:                "feat-design-loop",
+		Status:            feature.StatusDesigning,
+		CurrentPhase:      feature.PhaseDesign,
+		Pipeline:          feature.PipelineLarge,
+		ActiveRun:         1,
+		RunCount:          1,
+		SchemaVersion:     feature.SchemaVersionCurrent,
+		Checkpoints:       checkpoints,
+		ValidatingDesign:  true,
+		ValidatorStatuses: map[string]string{"Integrity": "running"},
+		Artifacts:         map[string]string{feature.DesignArtifactKey: designPath},
+	}
+	store := feature.NewStore(stateDir)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature): %v", err)
+	}
+	lc := lifecycleForFeature(f)
+	lc.GetFn = func(id string) (*feature.Feature, error) {
+		return store.Load(id)
+	}
+	lc.CompleteDesignFn = func(id string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusPlanReady
+			return nil
+		})
+	}
+	lc.StartPlanningFn = func(id string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusPlanning
+			ff.CurrentPhase = feature.PhasePlan
+			return nil
+		})
+	}
+	lc.MarkFailedFn = func(id, failureType, message string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusFailed
+			ff.FailureType = failureType
+			ff.LastError = message
+			return nil
+		})
+	}
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     store,
+	}, orchestrator.Hooks{})
+	return o, store, lc
 }
 
 // ---------------------------------------------------------------------------

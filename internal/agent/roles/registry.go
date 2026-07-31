@@ -17,19 +17,23 @@ package roles
 import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
 var roleSpecs = append(
-	append([]RoleSpec{
-		implementRoleSpec,
-		roadmapCreatorRoleSpec,
-		roadmapReviserRoleSpec,
-		phasePlanCreatorRoleSpec,
-		phasePlanReviserRoleSpec,
-		knowledgeBaseBuilderRoleSpec,
-		inquirerRoleSpec,
-		researcherRoleSpec,
-		designerRoleSpec,
-		refactorPlanRoleSpec,
-		finalReviewFixerRoleSpec,
-	}, planValidatorRoleSpecs...),
+	append(
+		append([]RoleSpec{
+			implementRoleSpec,
+			roadmapCreatorRoleSpec,
+			roadmapReviserRoleSpec,
+			phasePlanCreatorRoleSpec,
+			phasePlanReviserRoleSpec,
+			knowledgeBaseBuilderRoleSpec,
+			inquirerRoleSpec,
+			researcherRoleSpec,
+			designerRoleSpec,
+			designReviserRoleSpec,
+			refactorPlanRoleSpec,
+			finalReviewFixerRoleSpec,
+		}, planValidatorRoleSpecs...),
+		designValidatorRoleSpecs...,
+	),
 	implementationReviewAxisRoleSpecs...,
 )
 

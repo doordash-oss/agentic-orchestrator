@@ -2060,6 +2060,9 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntim
 	if patch.MaxConsecutiveNoProgress > 0 && setIfChanged(&dst.MaxConsecutiveNoProgress, patch.MaxConsecutiveNoProgress) {
 		changed = true
 	}
+	if patch.MaxDesignIterations > 0 && setIfChanged(&dst.MaxDesignIterations, patch.MaxDesignIterations) {
+		changed = true
+	}
 	if patch.MaxPhasePlanIterations > 0 && setIfChanged(&dst.MaxPhasePlanIterations, patch.MaxPhasePlanIterations) {
 		changed = true
 	}

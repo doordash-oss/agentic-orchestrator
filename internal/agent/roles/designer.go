@@ -31,11 +31,14 @@ var designerRoleSpec = RoleSpec{
 	UserTemplate: "design.user",
 	Required:     []feature.Phase{feature.PhaseResearch},
 	OutputRoots: []OutputRootSpec{
-		singleShotPhaseDirOutputRoot("Design phase artifact directory."),
+		artifactDirOutputRoot("Shared Design artifact root. The approved design and optional mockup bundle are updated here across attempts."),
+		attemptDirOutputRoot("Active Design attempt directory. Debug prompts, attempt metadata, validator output, and phase_complete are written here."),
 	},
-	MarkerRoot: "phase_dir",
+	MarkerRoot: "attempt_dir",
 	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("design markdown artifact"),
+		designMarkdownRoleArtifact(),
+		designMockupManifestRoleArtifact(),
+		planAttemptMetaRoleArtifact(),
 	},
 	ReadOnlyOutsideRoots: true,
 }
@@ -57,6 +60,7 @@ type DesignUserInput struct {
 
 	MultiRepo            bool
 	ResearchArtifactPath string
+	DecisionLedgerPath   string
 
 	QAFiles     prompts.QAFilesInput
 	Inquireness prompts.GrillMeInquirenessInput

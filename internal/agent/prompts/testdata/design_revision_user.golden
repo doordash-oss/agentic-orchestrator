@@ -1,0 +1,43 @@
+# Design Revision
+
+This is revision attempt 2.
+
+## Feature Authority
+
+**Name**: OAuth login
+
+**Description**:
+> Sign in with Google.
+
+**Exit Criteria**:
+> PKCE succeeds and errors are actionable.
+
+## Research Findings
+
+Read the research findings at: /state/feat-x/run-1/research/research.md
+
+## Authoritative Decision Ledger
+
+Read the harness-owned decision ledger at: /state/feat-x/run-1/design/decision-ledger.md
+
+Every `REQ-###` requirement and `DEC-###` human decision is binding and supersedes critic preferences.
+
+## Design to Revise
+
+Read and update the design at: /state/feat-x/run-1/design/design.md
+
+## Existing Mockup Bundle
+
+Read the mockup manifest at: /state/feat-x/run-1/design/mockups/manifest.yaml
+
+Update the manifest, prototype, and rendered states when the feedback changes a binding UI decision.
+
+## Critic Feedback
+
+Clarify callback errors and refresh the mobile error state.
+
+## Material Change Guard
+
+Apply only classified `CONTRACT_DEFECT` and `GROUNDING_ERROR` corrections that preserve the decision ledger. An explicit `## Human Direction` block is direct human authority and may be applied when that direction is also recorded in the decision ledger. Do not treat other critic feedback as product or architecture authority.
+
+If any requested correction would change binding product behavior, architecture, persistence, operational cost, rollout, or testing commitments; conflicts with a `REQ-###` or `DEC-###` entry; or exposes a consequential choice absent from the ledger, stop and use `AskUserQuestion`. Do not resolve such a material change autonomously.

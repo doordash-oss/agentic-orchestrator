@@ -407,6 +407,9 @@ func frozenSectionsDigest(planPath string, frozen []string) string {
 	any := false
 	for _, heading := range frozen {
 		section := extractPlanSection(planPath, heading)
+		if len(section) == 0 && !strings.HasPrefix(strings.TrimSpace(heading), "#") {
+			section = extractPlanSection(planPath, "## "+strings.TrimSpace(heading))
+		}
 		h.Write([]byte(heading))
 		h.Write([]byte{0})
 		h.Write(section)
@@ -619,6 +622,7 @@ type validationArtifactKind string
 const (
 	validationArtifactRoadmap   validationArtifactKind = "roadmap"
 	validationArtifactPhasePlan validationArtifactKind = "phase-plan"
+	validationArtifactDesign    validationArtifactKind = "design"
 )
 
 // phasePlanValidatorsForRisk returns the axis validator set for per-phase
@@ -680,6 +684,8 @@ func runSpecializedPlanValidation(cfg PlanLoopConfig, sm ports.SessionManager, a
 // worktree.
 type planValidationExtras struct {
 	PriorPhasePlanPaths []string
+	MockupManifestPath  string
+	DecisionLedgerPath  string
 }
 
 func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain validatorDomain, kind validationArtifactKind, extras planValidationExtras, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
@@ -707,7 +713,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	parentFeedbackPath := filepath.Join(attemptDir, fmt.Sprintf("validation-%s-feedback.md", domainLower))
 
 	validationPrompt := buildSpecializedValidationPromptForArtifact(cfg.Feature, planArtifactPath, cfg.ResearchArtifactPath, cfg.SkillsDir, feedbackPath, domain, kind, extras)
-	validatorSpec, ok := PlanValidatorRoleForSkill(domain.Template)
+	validatorSpec, ok := validatorRoleForArtifact(kind, domain.Template)
 	if !ok {
 		return ReviewFailed, "", ValidatorMarkers{}, fmt.Errorf("missing validator RoleSpec for skill %q", domain.Template)
 	}
@@ -719,7 +725,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	if len(addDirs) == 0 {
 		addDirs = []string{ActiveRunDir(cfg.StateDir, cfg.Feature)}
 	}
-	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domainLower, attempt)
+	reviewID := fmt.Sprintf("%s-%sreview-%s-%02d", cfg.Feature.ID, validationPhaseName(kind), domainLower, attempt)
 	helper := &PhaseRunner{
 		SessionManager: sm,
 		FeatureStore:   cfg.FeatureStore,
@@ -740,7 +746,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
 			SessionID:              retrySessionID(reviewID, sessionAttempt),
 			FeatureID:              cfg.Feature.ID,
-			Phase:                  feature.PhasePlan,
+			Phase:                  validationPhase(kind),
 			ParentSpanCtx:          parentCtx,
 			Model:                  validatorModel,
 			Prompt:                 validationPrompt,
@@ -788,7 +794,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		if strings.TrimSpace(feedback) != "" {
 			_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
 		}
-		if markers.AxisApproved != "" {
+		if kind != validationArtifactDesign && markers.AxisApproved != "" {
 			writeAxisApprovalArtifact(attemptDir, attempt, markers, planArtifactPath)
 		}
 		return ReviewFailed, feedback, markers, fmt.Errorf("running %s validation session: %w", domain.Name, err)
@@ -812,11 +818,29 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	// contract). Persisting that anyway would leave a stale approval for
 	// an axis that is actively rejecting — forcing the reviser to treat
 	// sections it needs to edit as no-touch — so we require IsApproved() here.
-	if status.IsApproved() && markers.AxisApproved != "" {
+	if kind != validationArtifactDesign && status.IsApproved() && markers.AxisApproved != "" {
 		writeAxisApprovalArtifact(attemptDir, attempt, markers, planArtifactPath)
 	}
 
 	return status, feedback, markers, nil
+}
+
+func validatorRoleForArtifact(kind validationArtifactKind, skillName string) (RoleSpec, bool) {
+	if kind == validationArtifactDesign {
+		return DesignValidatorRoleForSkill(skillName)
+	}
+	return PlanValidatorRoleForSkill(skillName)
+}
+
+func validationPhase(kind validationArtifactKind) feature.Phase {
+	if kind == validationArtifactDesign {
+		return feature.PhaseDesign
+	}
+	return feature.PhasePlan
+}
+
+func validationPhaseName(kind validationArtifactKind) string {
+	return validationPhase(kind).DirName()
 }
 
 // runGroundingPreCheck runs the deterministic Grounding-table check before the
@@ -917,7 +941,10 @@ func groundingRootsForFeature(f *feature.Feature) []GroundingRoot {
 var axisFrozenHeading = map[string]string{
 	"structural": "## Tasks",
 	"scope":      "## Tasks",
+	"integrity":  wholeArtifactDigestHeading,
 }
+
+const wholeArtifactDigestHeading = "<whole-artifact>"
 
 // axisStallLimit is the number of consecutive identical-section failures on
 // the same axis that cause the phase-planning loop to escalate to
@@ -1058,6 +1085,14 @@ func loadAxisStallState(artifactDir string) axisStallState {
 // the Markdown section whose heading exactly matches the given string.
 // Returns "" when the file cannot be read or the section is absent.
 func planSectionDigest(planPath, heading string) string {
+	if heading == wholeArtifactDigestHeading {
+		data, err := os.ReadFile(planPath)
+		if err != nil || len(data) == 0 {
+			return ""
+		}
+		sum := sha256.Sum256(data)
+		return hex.EncodeToString(sum[:])
+	}
 	section := extractPlanSection(planPath, heading)
 	if len(section) == 0 {
 		return ""
@@ -1114,7 +1149,8 @@ func writeAxisApprovalArtifact(attemptDir string, attempt int, markers Validator
 	var b strings.Builder
 	fmt.Fprintf(&b, "# AxisApproved: %s\n", markers.AxisApproved)
 	fmt.Fprintf(&b, "Attempt: %d\n", attempt)
-	if digest := frozenSectionsDigest(planPath, markers.FrozenSections); digest != "" {
+	digest := frozenSectionsDigest(planPath, markers.FrozenSections)
+	if digest != "" {
 		fmt.Fprintf(&b, "Approved-Digest: %s\n", digest)
 	}
 	b.WriteString("\n## Frozen Sections\n")
@@ -1149,10 +1185,13 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 		IncludePriorPhaseContext:  includePriorPhase,
 		PriorPhasePlanPaths:       append([]string(nil), extras.PriorPhasePlanPaths...),
 		IsRoadmapKind:             kind == validationArtifactRoadmap,
+		IsDesignKind:              kind == validationArtifactDesign,
 		ResearchPath:              researchPath,
+		MockupManifestPath:        extras.MockupManifestPath,
+		DecisionLedgerPath:        extras.DecisionLedgerPath,
 		FeedbackPath:              feedbackPath,
 		AxisLabel:                 strings.ToLower(domain.Name),
-		AutomatedVerificationOnly: kind != validationArtifactRoadmap && !f.EffectivePipeline().ShouldContractAgentEvidence(),
+		AutomatedVerificationOnly: kind == validationArtifactPhasePlan && !f.EffectivePipeline().ShouldContractAgentEvidence(),
 	})
 }
 
@@ -1204,26 +1243,30 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 	// Validation span — child of phase span
 	validationCtx := cfg.PhaseSpanCtx.Child()
 	validationStart := time.Now()
-	cfg.Observer.ValidationStarted(validationCtx, "plan", len(validators))
+	phaseName := validationPhaseName(kind)
+	cfg.Observer.ValidationStarted(validationCtx, phaseName, len(validators))
 
 	results := make([]ValidatorResult, len(validators))
 
 	// Initialize validator statuses for TUI display
 	setValidatorStatuses(cfg, validators, nil)
 
-	// Sticky-approval short-circuit: for each validator whose axis already
-	// approved on a prior attempt, compare the stored frozen-section digest
+	// Plan-only sticky-approval short-circuit: for each validator whose axis
+	// already approved on a prior attempt, compare the stored frozen-section digest
 	// against the current plan. When they match, the reviser cannot have
 	// changed anything this axis would re-reject, so re-launching the
 	// validator only exposes the approval to nondeterminism. Skip it and
 	// synthesize an APPROVED result. A missing digest (artifacts written by
 	// older binaries, or an empty FrozenSections list) returns "" from
 	// frozenSectionsDigest and disables short-circuiting for that axis —
-	// strictly safer.
+	// strictly safer. Design critics always re-run against the complete revised
+	// design and optional mockup bundle.
 	priorApprovals := make(map[string]AxisApproval, len(validators))
-	if parent := filepath.Dir(attemptDir); parent != "" && parent != "." {
-		for _, a := range LoadPriorAxisApprovals(parent) {
-			priorApprovals[strings.ToLower(a.Axis)] = a
+	if kind != validationArtifactDesign {
+		if parent := filepath.Dir(attemptDir); parent != "" && parent != "." {
+			for _, a := range LoadPriorAxisApprovals(parent) {
+				priorApprovals[strings.ToLower(a.Axis)] = a
+			}
 		}
 	}
 
@@ -1292,7 +1335,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 	clearValidatorStatuses(cfg)
 
 	if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
-		cfg.Observer.ValidationCompleted(validationCtx, "plan", "interrupted", time.Since(validationStart), len(validators))
+		cfg.Observer.ValidationCompleted(validationCtx, phaseName, "interrupted", time.Since(validationStart), len(validators))
 		return results, ReviewFailed, "", fmt.Errorf("feature interrupted during multi-validator validation")
 	}
 
@@ -1308,7 +1351,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 	if aggErr != nil {
 		aggVerdict = "error"
 	}
-	cfg.Observer.ValidationCompleted(validationCtx, "plan", aggVerdict, time.Since(validationStart), len(validators))
+	cfg.Observer.ValidationCompleted(validationCtx, phaseName, aggVerdict, time.Since(validationStart), len(validators))
 
 	return results, aggStatus, aggFeedback, aggErr
 }
@@ -2456,7 +2499,7 @@ func IsArtifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == ProtocolRetrySidecarFile:
+	case lower == "qa-answers.md" || lower == designDecisionLedgerFile || lower == ProtocolRetrySidecarFile:
 		return true
 	case strings.HasPrefix(lower, ".protocol-retry-") && strings.HasSuffix(lower, ".yaml"):
 		return true

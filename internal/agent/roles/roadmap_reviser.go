@@ -47,8 +47,9 @@ func RoadmapReviserRoleSpec() RoleSpec {
 
 // RoadmapRevisionUserInput is the data passed to roadmap_revision.user.tmpl.
 type RoadmapRevisionUserInput struct {
-	Attempt        int
-	CriticFeedback string
+	Attempt          int
+	VisualReferences prompts.VisualReferencesInput
+	CriticFeedback   string
 
 	PriorAxisApprovals  prompts.PriorAxisApprovalsInput
 	PreviousRoadmapPath string

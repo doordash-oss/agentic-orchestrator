@@ -12,7 +12,7 @@
   skills/plan-phase/SKILL.md, not the prompt.
 */ -}}
 {{- define "phase_plan.user" -}}
-# Phase {{ .Phase.Number }}: {{ .Phase.Name }}
+{{ template "visual_references" .VisualReferences }}# Phase {{ .Phase.Number }}: {{ .Phase.Name }}
 
 {{ if .RoadmapPath }}## Approved Roadmap
 

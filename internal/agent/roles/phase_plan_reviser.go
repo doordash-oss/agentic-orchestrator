@@ -49,7 +49,8 @@ type PhasePlanRevisionUserInput struct {
 	Attempt int
 	Phase   PhasePlanView
 
-	Feedback string
+	VisualReferences prompts.VisualReferencesInput
+	Feedback         string
 
 	PriorAxisApprovals prompts.PriorAxisApprovalsInput
 	PhasePlanPath      string

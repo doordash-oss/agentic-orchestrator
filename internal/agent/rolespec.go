@@ -51,6 +51,9 @@ const (
 	RoleInquirer                                  = roles.RoleInquirer
 	RoleResearcher                                = roles.RoleResearcher
 	RoleDesigner                                  = roles.RoleDesigner
+	RoleDesignReviser                             = roles.RoleDesignReviser
+	RoleValidateDesignIntegrity                   = roles.RoleValidateDesignIntegrity
+	RoleValidateDesignVisual                      = roles.RoleValidateDesignVisual
 )
 
 type ArtifactPresence = roles.ArtifactPresence
@@ -114,6 +117,22 @@ func ResearcherRoleSpec() RoleSpec {
 // DesignerRoleSpec returns the canonical Design RoleSpec wrapper.
 func DesignerRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.DesignerRoleSpec())
+}
+
+// DesignReviserRoleSpec returns the Design revision RoleSpec wrapper.
+func DesignReviserRoleSpec() RoleSpec {
+	return wrapRoleSpec(roles.DesignReviserRoleSpec())
+}
+
+// DesignValidatorRoleSpecs returns the Design critic RoleSpecs.
+func DesignValidatorRoleSpecs() []RoleSpec {
+	return wrapRoleSpecs(roles.DesignValidatorRoleSpecs())
+}
+
+// DesignValidatorRoleForSkill returns the Design critic RoleSpec for a skill.
+func DesignValidatorRoleForSkill(skillName string) (RoleSpec, bool) {
+	spec, ok := roles.DesignValidatorRoleForSkill(skillName)
+	return wrapRoleSpec(spec), ok
 }
 
 // RefactorPlanRoleSpec returns the RoleSpec-backed refactor-plan role.
@@ -264,6 +283,30 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 				return []ProtocolViolation{{Artifact: display, Reason: missingArtifactReason(display, dir)}}, nil
 			}
 			out.PhaseArtifactPath = path
+			return nil, nil
+		}
+	case roles.ValidatorDesignMarkdown:
+		display := artifact.DisplayPath
+		return func(_ string, path string, out *Outcome) ([]ProtocolViolation, error) {
+			info, err := os.Stat(path)
+			if err != nil {
+				return []ProtocolViolation{{Artifact: display, Reason: missingArtifactReason(display, path)}}, nil
+			}
+			if !info.Mode().IsRegular() {
+				return []ProtocolViolation{{Artifact: display, Reason: fmt.Sprintf("%s is not a regular file", path)}}, nil
+			}
+			out.PhaseArtifactPath = path
+			return nil, nil
+		}
+	case roles.ValidatorDesignMockupManifest:
+		display := artifact.DisplayPath
+		return func(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
+			if err := ValidateDesignMockupManifest(path); err != nil {
+				return []ProtocolViolation{{
+					Artifact: display,
+					Reason:   err.Error(),
+				}}, nil
+			}
 			return nil, nil
 		}
 	case roles.ValidatorRefactorPlanMarkdown:

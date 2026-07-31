@@ -258,6 +258,7 @@ In the TUI, Roadmap Review controls the planning review group and Phase Plan Rev
 | `max_iterations` | `10` | Maximum iterations per phase before failing |
 | `max_consecutive_failures` | `3` | Consecutive failures before aborting a phase |
 | `max_consecutive_no_progress` | `3` | Consecutive no-progress signals before aborting |
+| `max_design_iterations` | `5` | Maximum Design author/critic attempts before human review |
 | `max_phase_plan_iterations` | `10` | Maximum iterations for plan creation/validation |
 
 ## Inquireness

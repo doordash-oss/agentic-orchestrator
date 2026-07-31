@@ -1,0 +1,26 @@
+## Feature Under Review
+
+**Name**: OAuth login
+
+**Description**:
+> Sign in with Google.
+
+**Exit Criteria**:
+> PKCE succeeds and errors are actionable.
+
+## Research Findings
+
+Read the research findings at: /state/feat-x/run-1/research/research.md
+
+Use the research to verify that the plan respects discovered constraints, existing patterns, and integration requirements.
+
+## Authoritative Decision Ledger
+
+Read the harness-owned decision ledger at: /state/feat-x/run-1/design/decision-ledger.md
+
+This ledger is the binding source of product and architectural decisions. Every blocking Design finding must cite the relevant `REQ-###` or `DEC-###` ID. Do not replace a recorded decision with a critic preference.
+
+## Design to Evaluate
+
+
+Read the plan at: /state/feat-x/run-1/design/design.md

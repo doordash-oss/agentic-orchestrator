@@ -1127,7 +1127,9 @@ func livePreviewValidationTitle(f *feature.Feature, sess session.SessionView) st
 }
 
 func livePreviewHasValidationContext(f *feature.Feature, sess session.SessionView) bool {
-	if f != nil && (f.ValidatingPlan || f.ReviewingGate) && len(f.ValidatorStatuses) > 0 {
+	if f != nil &&
+		(f.ValidatingPlan || f.ReviewingGate || f.CurrentPhase == feature.PhaseDesign) &&
+		len(f.ValidatorStatuses) > 0 {
 		return true
 	}
 	if livePreviewIsVerifying(f) {
@@ -1181,6 +1183,9 @@ func livePreviewVerificationLogLines(f *feature.Feature, width int) []string {
 }
 
 func livePreviewValidationTarget(f *feature.Feature) string {
+	if f != nil && f.CurrentPhase == feature.PhaseDesign {
+		return "Validating Design"
+	}
 	if f != nil && f.CurrentPhase == feature.PhaseImplement && f.ReviewingGate {
 		return "Reviewing implementation"
 	}

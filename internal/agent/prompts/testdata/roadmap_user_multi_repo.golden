@@ -2,6 +2,12 @@
 
 Design Document: /state/feat-x/run-1/design/design.md
 
+## Visual References
+
+IMPORTANT: The user attached the image(s) below when creating this feature. They communicate intent that text alone cannot — mockups, desired-state screenshots, annotated whiteboards, bug repros, or reference designs. Before producing the roadmap, Read each image via tool-use and treat its visual information as a binding specification for what the output should look like. If an image shows a specific layout, palette, typography, or interaction, match it; do not substitute generic defaults.
+
+- [Image #1]: /tmp/login.png
+
 ## User Decisions
 
 The user answered clarifying questions during earlier phases. Read these Q&A files for important context about their intent and preferences — do not re-ask questions that have already been answered:

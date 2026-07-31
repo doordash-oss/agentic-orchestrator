@@ -46,6 +46,9 @@ const (
 // DesignArtifactKey is the artifact-map key for the Design phase output.
 const DesignArtifactKey = "design"
 
+// DesignMockupsArtifactKey is the artifact-map key for an approved mockup manifest.
+const DesignMockupsArtifactKey = "design-mockups"
+
 // ResearchArtifactKey is the artifact-map key for the Research phase output.
 const ResearchArtifactKey = "research"
 
@@ -55,6 +58,14 @@ func (f *Feature) DesignArtifactPath() string {
 		return ""
 	}
 	return f.Artifacts[DesignArtifactKey]
+}
+
+// DesignMockupsArtifactPath returns the approved mockup manifest path, when present.
+func (f *Feature) DesignMockupsArtifactPath() string {
+	if f == nil || f.Artifacts == nil {
+		return ""
+	}
+	return f.Artifacts[DesignMockupsArtifactKey]
 }
 
 // ResearchArtifactPath returns the recorded path of the Research artifact for a feature.
@@ -671,6 +682,7 @@ type Feature struct {
 	HelpQueue            []HelpRequest       `yaml:"help_queue"`
 	MaxIterations        int                 `yaml:"max_iterations,omitempty"`
 	MaxPlanIterations    int                 `yaml:"max_plan_iterations,omitempty"`
+	MaxDesignIterations  int                 `yaml:"max_design_iterations,omitempty"`
 	RiskLevel            RiskLevel           `yaml:"risk_level,omitempty"`
 	Pipeline             PipelineProfile     `yaml:"pipeline,omitempty"`
 	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to enforce KB restart on rewind
@@ -718,11 +730,13 @@ type Feature struct {
 	ReviewingGate     bool              `yaml:"-"`
 	ReviewFixing      bool              `yaml:"-"`
 	ValidatingPlan    bool              `yaml:"-"`
+	ValidatingDesign  bool              `yaml:"-"`
 	ValidatorStatuses map[string]string `yaml:"-"`
 	// VerificationItems is the ordered live progress of harness-executed
 	// testing-contract commands while CurrentPhaseStatus is "verifying".
 	VerificationItems []VerificationItemStatus `yaml:"-"`
 	PlanIteration     int                      `yaml:"-"`
+	DesignIteration   int                      `yaml:"-"`
 	ReviewIteration   int                      `yaml:"-"`
 	Artifacts         map[string]string        `yaml:"-"`
 	// RepoStates is the per-repo state map. agent.AtomicPhaseStamp writes it
@@ -840,9 +854,11 @@ func (f *Feature) syncShadowsToRun() {
 	r.ReviewingGate = f.ReviewingGate
 	r.ReviewFixing = f.ReviewFixing
 	r.ValidatingPlan = f.ValidatingPlan
+	r.ValidatingDesign = f.ValidatingDesign
 	r.ValidatorStatuses = f.ValidatorStatuses
 	r.VerificationItems = f.VerificationItems
 	r.PlanIteration = f.PlanIteration
+	r.DesignIteration = f.DesignIteration
 	r.ReviewIteration = f.ReviewIteration
 	r.Artifacts = f.Artifacts
 	if f.RoadmapPhaseFrontendByPhase != nil {
@@ -872,6 +888,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.TotalRoadmapPhases = f.TotalRoadmapPhases
 	r.RoadmapPhaseType = f.RoadmapPhaseType
 	r.MaxPlanIterations = f.MaxPlanIterations
+	r.MaxDesignIterations = f.MaxDesignIterations
 	r.PendingNeedUserInputPath = f.PendingNeedUserInputPath
 	r.CurrentPhaseStatus = f.CurrentPhaseStatus
 }
@@ -889,9 +906,11 @@ func (f *Feature) syncRunToShadows() {
 	f.ReviewingGate = r.ReviewingGate
 	f.ReviewFixing = r.ReviewFixing
 	f.ValidatingPlan = r.ValidatingPlan
+	f.ValidatingDesign = r.ValidatingDesign
 	f.ValidatorStatuses = r.ValidatorStatuses
 	f.VerificationItems = r.VerificationItems
 	f.PlanIteration = r.PlanIteration
+	f.DesignIteration = r.DesignIteration
 	f.ReviewIteration = r.ReviewIteration
 	f.Artifacts = r.Artifacts
 	f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
@@ -917,6 +936,7 @@ func (f *Feature) syncRunToShadows() {
 	f.TotalRoadmapPhases = r.TotalRoadmapPhases
 	f.RoadmapPhaseType = r.RoadmapPhaseType
 	f.MaxPlanIterations = r.MaxPlanIterations
+	f.MaxDesignIterations = r.MaxDesignIterations
 	f.PendingNeedUserInputPath = r.PendingNeedUserInputPath
 	f.CurrentPhaseStatus = r.CurrentPhaseStatus
 }

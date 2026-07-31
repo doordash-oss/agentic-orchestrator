@@ -3,10 +3,10 @@
   creation.
 
   When a design/design artifact is present, the design doc is the
-  authoritative spec — its contents already cover the feature
-  description and visual references, so we only point at the path and
-  suppress the redundant Feature / Visual References blocks. In Medium
-  mode (no design doc) those blocks ARE the spec, so they render.
+  authoritative text spec, so we point at the path and suppress the
+  redundant Feature block. Visual references still render because approved
+  mockups carry information that a text document cannot preserve. In Medium
+  mode (no design doc), the Feature block remains the text spec.
 
   Repo-task routing lives in the later phase plan, where `**Repo:** <name>`
   task tags are the source of truth. The roadmap prompt only signals the
@@ -27,7 +27,7 @@
 **Description**:
 > {{ blockquote .Description }}
 
-{{ template "visual_references" .VisualReferences }}{{ end }}{{ template "qa_files" .QAFiles }}{{ if .Repos }}## Target Repositories
+{{ end }}{{ template "visual_references" .VisualReferences }}{{ template "qa_files" .QAFiles }}{{ if .Repos }}## Target Repositories
 
 This feature targets the repositories below. Treat this list as authoritative; ignore sibling directories that are not listed here.
 {{ range .Repos }}- **{{ .Name }}** ({{ .Path }})

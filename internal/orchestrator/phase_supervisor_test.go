@@ -180,6 +180,21 @@ func TestPhaseSupervisorPlanLoopRoutesPlanResult(t *testing.T) {
 	}
 }
 
+func TestPhaseSupervisorDesignLoopRoutesDesignResult(t *testing.T) {
+	sink := newRecordingPhaseCompletionSink()
+	supervisor := newPhaseSupervisor(phaseSupervisorConfig{Completion: sink})
+	resultCh := make(chan *agent.DesignLoopResult, 1)
+	want := &agent.DesignLoopResult{FinalStatus: "approved", Iterations: 2}
+
+	supervisor.superviseDesignLoop("feat-design", resultCh)
+	resultCh <- want
+
+	call := sink.wait(t)
+	if call.featureID != "feat-design" || call.input.Phase != feature.PhaseDesign || call.input.DesignResult != want {
+		t.Fatalf("completion call = %+v, want Design result", call)
+	}
+}
+
 func TestPhaseSupervisorImplementationLoopRoutesFirstTerminalResult(t *testing.T) {
 	sink := newRecordingPhaseCompletionSink()
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{Completion: sink})

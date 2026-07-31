@@ -122,9 +122,22 @@ type DesignUserInput struct {
 
 	MultiRepo            bool
 	ResearchArtifactPath string
+	DecisionLedgerPath   string
 
 	QAFiles     QAFilesInput
 	Inquireness GrillMeInquirenessInput
+}
+
+type DesignRevisionUserInput struct {
+	Name               string
+	Description        string
+	ExitCriteria       string
+	Attempt            int
+	CriticFeedback     string
+	PreviousDesignPath string
+	MockupManifestPath string
+	ResearchPath       string
+	DecisionLedgerPath string
 }
 
 type RefactorPlanUserInput struct {
@@ -150,8 +163,9 @@ type RoadmapUserInput struct {
 }
 
 type RoadmapRevisionUserInput struct {
-	Attempt        int
-	CriticFeedback string
+	Attempt          int
+	VisualReferences VisualReferencesInput
+	CriticFeedback   string
 
 	PriorAxisApprovals  PriorAxisApprovalsInput
 	PreviousRoadmapPath string
@@ -174,7 +188,8 @@ type PhasePlanUserInput struct {
 	RoadmapPath          string
 	ResearchArtifactPath string
 
-	QAFiles QAFilesInput
+	VisualReferences VisualReferencesInput
+	QAFiles          QAFilesInput
 
 	Inquireness GrillMeInquirenessInput
 
@@ -185,7 +200,8 @@ type PhasePlanRevisionUserInput struct {
 	Attempt int
 	Phase   PhasePlanView
 
-	Feedback string
+	VisualReferences VisualReferencesInput
+	Feedback         string
 
 	PriorAxisApprovals PriorAxisApprovalsInput
 	PhasePlanPath      string
@@ -203,6 +219,7 @@ type VerificationItemView struct {
 }
 
 type ImplementUserInput struct {
+	VisualReferences      VisualReferencesInput
 	PlanPath              string
 	ExitCriteria          string
 	Feedback              string
@@ -213,6 +230,8 @@ type ImplementUserInput struct {
 }
 
 type ReviewUserInput struct {
+	VisualReferences VisualReferencesInput
+
 	Iteration int
 	IterDir   string
 	AxisLabel string
@@ -268,8 +287,11 @@ type ValidateSpecializedUserInput struct {
 	PriorPhasePlanPaths      []string
 
 	IsRoadmapKind bool
+	IsDesignKind  bool
 
-	ResearchPath string
+	ResearchPath       string
+	MockupManifestPath string
+	DecisionLedgerPath string
 
 	FeedbackPath string
 	AxisLabel    string
@@ -359,6 +381,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					MultiRepo:            true,
 					ResearchArtifactPath: "/state/feat-x/run-1/research/research.md",
+					DecisionLedgerPath:   "/state/feat-x/run-1/design/decision-ledger.md",
 					QAFiles: QAFilesInput{
 						Paths: []string{"/state/feat-x/run-1/inquire/qa.md"},
 						Lead:  "Read these Q&A files for important context about their intent and preferences:",
@@ -366,6 +389,51 @@ func TestGoldenSnapshots(t *testing.T) {
 					Inquireness: GrillMeInquirenessInput{Level: "medium"},
 				}
 				return DesignUserPrompt(in)
+			},
+		},
+		{
+			name: "design_revision_user",
+			render: func() string {
+				return DesignRevisionUserPrompt(DesignRevisionUserInput{
+					Name:               "OAuth login",
+					Description:        "Sign in with Google.",
+					ExitCriteria:       "PKCE succeeds and errors are actionable.",
+					Attempt:            2,
+					CriticFeedback:     "Clarify callback errors and refresh the mobile error state.",
+					PreviousDesignPath: "/state/feat-x/run-1/design/design.md",
+					MockupManifestPath: "/state/feat-x/run-1/design/mockups/manifest.yaml",
+					ResearchPath:       "/state/feat-x/run-1/research/research.md",
+					DecisionLedgerPath: "/state/feat-x/run-1/design/decision-ledger.md",
+				})
+			},
+		},
+		{
+			name: "validate_design_integrity_user",
+			render: func() string {
+				return ValidateSpecializedUserPrompt(ValidateSpecializedUserInput{
+					Name:               "OAuth login",
+					Description:        "Sign in with Google.",
+					ExitCriteria:       "PKCE succeeds and errors are actionable.",
+					DomainName:         "Integrity",
+					PlanPath:           "/state/feat-x/run-1/design/design.md",
+					IsDesignKind:       true,
+					ResearchPath:       "/state/feat-x/run-1/research/research.md",
+					DecisionLedgerPath: "/state/feat-x/run-1/design/decision-ledger.md",
+				})
+			},
+		},
+		{
+			name: "validate_design_visual_user",
+			render: func() string {
+				return ValidateSpecializedUserPrompt(ValidateSpecializedUserInput{
+					Name:               "OAuth login",
+					Description:        "Sign in with Google.",
+					DomainName:         "Visual",
+					PlanPath:           "/state/feat-x/run-1/design/design.md",
+					IsDesignKind:       true,
+					MockupManifestPath: "/state/feat-x/run-1/design/mockups/manifest.yaml",
+					DecisionLedgerPath: "/state/feat-x/run-1/design/decision-ledger.md",
+				})
 			},
 		},
 		{

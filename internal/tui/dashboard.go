@@ -1410,6 +1410,9 @@ func formatStatus(f *feature.Feature) string {
 		if f.IsRefactoring() {
 			label = "Refactoring: Designing"
 		}
+		if len(f.ValidatorStatuses) > 0 {
+			return ReviewStyle.Render("Validating Design") + elapsed
+		}
 		if needsInput {
 			return WarningStyle.Render(label+" | waiting input") + elapsed
 		}

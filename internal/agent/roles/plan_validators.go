@@ -109,8 +109,11 @@ type ValidateSpecializedUserInput struct {
 	PriorPhasePlanPaths      []string
 
 	IsRoadmapKind bool
+	IsDesignKind  bool
 
-	ResearchPath string
+	ResearchPath       string
+	MockupManifestPath string
+	DecisionLedgerPath string
 
 	FeedbackPath string
 	AxisLabel    string

@@ -498,6 +498,39 @@ func TestMaxPhasePlanIterationsDefault(t *testing.T) {
 	}
 }
 
+func TestMaxDesignIterationsDefault(t *testing.T) {
+	cfg := NewDefault()
+	applyDefaults(cfg)
+	if cfg.Defaults.MaxDesignIterations != 5 {
+		t.Fatalf("MaxDesignIterations = %d, want 5", cfg.Defaults.MaxDesignIterations)
+	}
+}
+
+func TestMaxDesignIterationsPreserved(t *testing.T) {
+	cfg := Config{Defaults: DefaultsConfig{MaxDesignIterations: 3}}
+	applyDefaults(&cfg)
+	if cfg.Defaults.MaxDesignIterations != 3 {
+		t.Fatalf("MaxDesignIterations = %d, want preserved value 3", cfg.Defaults.MaxDesignIterations)
+	}
+}
+
+func TestMaxDesignIterationsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := NewDefault()
+	original.Defaults.MaxDesignIterations = 4
+	if err := Save(path, original); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Defaults.MaxDesignIterations != 4 {
+		t.Fatalf("MaxDesignIterations = %d, want 4 after round trip", loaded.Defaults.MaxDesignIterations)
+	}
+}
+
 func TestMaxPhasePlanIterationsPreserved(t *testing.T) {
 	cfg := &Config{}
 	cfg.Defaults.MaxPhasePlanIterations = 5

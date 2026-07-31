@@ -26,7 +26,7 @@ import (
 //
 // skillsDir, guidelinesDir, and kbInfos are retained for caller compatibility.
 // The RoleSpec system prompt now owns primary skill discovery and Useful Resources.
-func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
+func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArtifactPath, decisionLedgerPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
 	_, _, _ = skillsDir, guidelinesDir, kbInfos
 	repos, images, attachments := researchFeatureViews(f)
 
@@ -38,10 +38,27 @@ func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArt
 		Repos:                repos,
 		MultiRepo:            len(repos) > 1,
 		ResearchArtifactPath: researchArtifactPath,
+		DecisionLedgerPath:   decisionLedgerPath,
 		QAFiles: prompts.QAFilesInput{
 			Paths: append([]string(nil), qaFilePaths...),
 			Lead:  "Read these Q&A files for important context about their intent and preferences:",
 		},
 		Inquireness: prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
+	})
+}
+
+// BuildDesignRevisionPrompt constructs the autonomous revision prompt used
+// after one or both Design critics request changes.
+func BuildDesignRevisionPrompt(f *feature.Feature, previousDesignPath, mockupManifestPath, researchPath, decisionLedgerPath, criticFeedback string, attempt int) string {
+	return roles.BuildDesignRevisionPrompt(roles.DesignRevisionUserInput{
+		Name:               f.Name,
+		Description:        f.EffectiveDescription(),
+		ExitCriteria:       f.ExitCriteria,
+		Attempt:            attempt,
+		CriticFeedback:     criticFeedback,
+		PreviousDesignPath: previousDesignPath,
+		MockupManifestPath: mockupManifestPath,
+		ResearchPath:       researchPath,
+		DecisionLedgerPath: decisionLedgerPath,
 	})
 }

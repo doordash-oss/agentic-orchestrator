@@ -143,13 +143,22 @@ type GrillMeInquirenessInput struct {
 // from grill-me at the type level.
 type AutonomousInquirenessInput struct{}
 
+// MockupReference is one approved generated mockup. HTMLPath is the
+// self-contained interactive rendering and PNGPath is its visual snapshot.
+type MockupReference struct {
+	ID       string
+	HTMLPath string
+	PNGPath  string
+}
+
 // VisualReferencesInput is the data passed to the visual_references partial.
 // Label is the phase-specific verb woven into the imperative (e.g.
 // "implementing this iteration", "producing the roadmap"). Returns "" when
-// Images is empty.
+// both Images and Mockups are empty.
 type VisualReferencesInput struct {
-	Images []string
-	Label  string
+	Images  []string
+	Mockups []MockupReference
+	Label   string
 }
 
 // QAFilesInput is the data passed to the qa_files partial. Lead is the

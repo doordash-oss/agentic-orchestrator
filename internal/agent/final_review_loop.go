@@ -620,7 +620,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		PriorImplementationEvidenceArtifacts: priorEvidence.EvidenceArtifactPaths,
 	})
 	if cfg.Feature != nil {
-		if block := visualReferencesSection(cfg.Feature.Images, "conducting this final review"); block != "" {
+		if block := visualReferencesSectionForFeature(cfg.Feature, cfg.Feature.DesignArtifactPath(), "conducting this final review"); block != "" {
 			prompt = block + prompt
 		}
 	}
@@ -720,6 +720,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		Publishable:        cfg.Feature.IsPublishable(),
 		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),
 		Images:             cfg.Feature.Images,
+		VisualReferences:   visualReferencesForFeature(cfg.Feature, cfg.Feature.DesignArtifactPath(), "applying this fix"),
 	})
 
 	_ = os.WriteFile(filepath.Join(iterDir, "fix-prompt.md"), []byte(prompt), 0o644)

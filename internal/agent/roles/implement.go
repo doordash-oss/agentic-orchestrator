@@ -78,6 +78,7 @@ func ImplementRoleSpec() RoleSpec {
 
 // ImplementUserInput is the data passed to implement.user.tmpl.
 type ImplementUserInput struct {
+	VisualReferences      prompts.VisualReferencesInput
 	PlanPath              string
 	ExitCriteria          string
 	Feedback              string

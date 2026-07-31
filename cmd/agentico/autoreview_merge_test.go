@@ -110,6 +110,21 @@ func TestMergeRuntimeDefaultsModelsOmittedDoesNotMerge(t *testing.T) {
 	}
 }
 
+func TestMergeRuntimeDefaultsMaxDesignIterations(t *testing.T) {
+	dst := config.DefaultsConfig{MaxDesignIterations: 5}
+	changed := mergeRuntimeDefaultsMutation(&dst, serverruntime.RuntimeDefaultsMutation{
+		MaxDesignIterations: 7,
+	})
+	if !changed || dst.MaxDesignIterations != 7 {
+		t.Fatalf("MaxDesignIterations merge = (%v, %d), want (true, 7)", changed, dst.MaxDesignIterations)
+	}
+
+	changed = mergeRuntimeDefaultsMutation(&dst, serverruntime.RuntimeDefaultsMutation{})
+	if changed || dst.MaxDesignIterations != 7 {
+		t.Fatalf("omitted MaxDesignIterations merge = (%v, %d), want (false, 7)", changed, dst.MaxDesignIterations)
+	}
+}
+
 func TestMergeRuntimeDefaultsAutomaticReviewModelUnsetWhenAllEmpty(t *testing.T) {
 	// A Models patch with all fields empty/nil and AutomaticReview explicitly
 	// set to empty should clear the model without touching phase-role models.

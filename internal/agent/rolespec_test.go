@@ -362,29 +362,6 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 			wantMarker: filepath.Join(base, "runs", "run-001", "research", "phase_complete"),
 		},
 		{
-			name:       "design",
-			spec:       DesignerRoleSpec(),
-			phaseDir:   filepath.Join(base, "runs", "run-001", "design"),
-			wantPhase:  feature.PhaseDesign,
-			wantRole:   RoleDesigner,
-			wantSkill:  "design",
-			wantPath:   filepath.Join(base, "runs", "run-001", "design"),
-			wantMarker: filepath.Join(base, "runs", "run-001", "design", "phase_complete"),
-		},
-		{
-			// Legacy alias: resumed/older runs that still resolve the role as
-			// RoleDesigner must validate the same markdown artifact in the
-			// same phase directory.
-			name:       "design",
-			spec:       DesignerRoleSpec(),
-			phaseDir:   filepath.Join(base, "runs", "run-001", "design"),
-			wantPhase:  feature.PhaseDesign,
-			wantRole:   RoleDesigner,
-			wantSkill:  "design",
-			wantPath:   filepath.Join(base, "runs", "run-001", "design"),
-			wantMarker: filepath.Join(base, "runs", "run-001", "design", "phase_complete"),
-		},
-		{
 			name:       "refactor plan",
 			spec:       RefactorPlanRoleSpec(),
 			phaseDir:   filepath.Join(base, "runs", "run-001", "refactor-1"),
@@ -437,7 +414,7 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 func TestBuildSingleShotSystemPromptFromRoleSpec(t *testing.T) {
 	got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          DesignerRoleSpec(),
-		IterationDir:  "/state/feat-x/runs/run-001/design",
+		IterationDir:  "/state/feat-x/runs/run-001/design/attempt-01",
 		SkillsDir:     "/skills",
 		GuidelinesDir: "/guidelines",
 		KBInfos: []KBInfo{
@@ -447,8 +424,9 @@ func TestBuildSingleShotSystemPromptFromRoleSpec(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"`phase_dir`: /state/feat-x/runs/run-001/design",
-		"/state/feat-x/runs/run-001/design/phase_complete",
+		"`artifact_dir`: /state/feat-x/runs/run-001/design",
+		"`attempt_dir`: /state/feat-x/runs/run-001/design/attempt-01",
+		"/state/feat-x/runs/run-001/design/attempt-01/phase_complete",
 		"/skills/design/SKILL.md",
 		"# Useful Resources",
 		"/kb/agentic/index.md",

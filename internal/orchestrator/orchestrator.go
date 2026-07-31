@@ -94,7 +94,7 @@ type Hooks struct {
 
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly
 // one of the pointer result fields is non-nil for loop-driven phases; for
-// session-parser-driven phases (KB/Inquire/Research/Design) all pointer
+// session-parser-driven phases (KB/Inquire/Research) all pointer
 // fields are nil and the handler uses Success + ErrorDetail + SessionID.
 type PhaseCompletionInput struct {
 	Phase       feature.Phase
@@ -102,6 +102,7 @@ type PhaseCompletionInput struct {
 	Success     bool
 	ErrorDetail string
 
+	DesignResult    *agent.DesignLoopResult
 	PlanResult      *agent.PlanLoopResult
 	ImplementResult *agent.LoopResult
 	MultiRepoResult *agent.OrchestratorResult
@@ -137,9 +138,9 @@ type ReviewDecision struct {
 	IsRewind    bool
 	PhasePlan   bool
 	Roadmap     bool
-	// Comment carries free-text rejection feedback from a roadmap review
-	// menu. Only meaningful when Roadmap == true && Decision == "iterate"
-	// (the roadmap reject path). Mirrors RoadmapReviewDecisionMsg.Comment.
+	// Comment carries free-text rejection feedback from roadmap and Design
+	// review menus when Decision == "iterate". Design feedback is persisted as
+	// a binding decision before the next revision attempt.
 	Comment string
 }
 
@@ -1017,13 +1018,18 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseDesign, "design", nil, func() (string, error) {
-		sessionID, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...)
-		if err != nil {
-			return "", fmt.Errorf("run design: %w", err)
-		}
-		return sessionID, nil
-	})
+	if o.deps.PhaseRunner == nil {
+		return PhaseStartResult{Outcome: PhaseStarted}, nil
+	}
+	if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, "design")); err != nil {
+		return PhaseStartResult{}, fmt.Errorf("record design read-only repo baseline: %w", err)
+	}
+	resultCh, err := o.deps.PhaseRunner.RunDesignWithValidation(f, researchPath, qaFilePaths, kbInfos...)
+	if err != nil {
+		return PhaseStartResult{}, fmt.Errorf("run design: %w", err)
+	}
+	o.phaseSupervisor().superviseDesignLoop(featureID, resultCh)
+	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
 
 // startPlan starts the Plan phase. Delegates to startRoadmapPhasePlan when
@@ -1488,10 +1494,7 @@ func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseComple
 	case feature.PhaseResearch:
 		return o.onArtifactPhaseCompleted(featureID, input, "research", o.deps.Lifecycle.CompleteResearch)
 	case feature.PhaseDesign:
-		// Validate against the legacy "design" on-disk subdirectory but
-		// persist the canonical Design artifact key so downstream consumers
-		// resolve it through feature.Feature.DesignArtifactPath().
-		return o.onArtifactPhaseCompletedWithKey(featureID, input, "design", feature.DesignArtifactKey, o.deps.Lifecycle.CompleteDesign)
+		return o.onDesignLoopDone(featureID, input.DesignResult)
 	case feature.PhasePlan:
 		return o.onPlanLoopDone(featureID, input.PlanResult)
 	case feature.PhaseImplement:
@@ -1535,6 +1538,14 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 // follow-up phase so the orchestrator owns the full unwind.
 func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d ReviewDecision) error {
 	if err := o.clearReviewGate(featureID); err != nil {
+		return err
+	}
+
+	if f.Status == feature.StatusDesignNeedsReview && f.CurrentPhase == feature.PhaseDesign {
+		if err := o.deps.Lifecycle.CompleteDesign(featureID); err != nil {
+			return fmt.Errorf("complete human-approved Design: %w", err)
+		}
+		_, _, err := o.startPhase(featureID, feature.PhasePlan)
 		return err
 	}
 
@@ -1632,6 +1643,40 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 // safe for every path.
 func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d ReviewDecision) error {
 	if err := o.clearReviewGate(featureID); err != nil {
+		return err
+	}
+	if f.Status == feature.StatusDesignNeedsReview && f.CurrentPhase == feature.PhaseDesign {
+		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+			if ff.MaxDesignIterations <= 0 {
+				ff.MaxDesignIterations = agent.DefaultMaxDesignAttempts
+			}
+			ff.MaxDesignIterations += 2
+			ff.Status = feature.StatusDesigning
+			ff.CurrentPhase = feature.PhaseDesign
+			return nil
+		}); err != nil {
+			return fmt.Errorf("extend Design iteration budget: %w", err)
+		}
+		designDir := o.artifactReadOnlyGuardDir(f, feature.PhaseDesign.DirName())
+		attempt := agent.LatestCompletedPlanAttempt(designDir)
+		if attempt > 0 {
+			feedback := strings.TrimSpace(d.Comment)
+			if feedback == "" {
+				feedback = "Human review requested another Design iteration."
+			}
+			attemptDir := filepath.Join(designDir, fmt.Sprintf("attempt-%02d", attempt))
+			if _, err := agent.RecordDesignHumanDirection(attemptDir, feedback); err != nil {
+				return fmt.Errorf("record Design human direction: %w", err)
+			}
+			humanFeedback := "## Human Direction\n\n" + feedback + "\n"
+			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(humanFeedback), 0o644)
+			_ = agent.WritePlanAttemptMeta(designDir, agent.PlanAttemptMeta{
+				Attempt:      attempt,
+				AgentStatus:  "SUCCESS",
+				ReviewStatus: "CHANGES_REQUESTED",
+			})
+		}
+		_, _, err := o.startPhase(featureID, feature.PhaseDesign)
 		return err
 	}
 	// Roadmap reject path: reset PlanStatus back to PlanReady, record rejection

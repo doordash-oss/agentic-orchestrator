@@ -20,10 +20,12 @@ import {
   RebasePreflightResponseSchema,
   ReviewCommentsFetchResponseSchema,
   ReviewCommentsStartResponseSchema,
-  RefactorStartResponseSchema,
-  RefactorPreflightResponseSchema,
+  RefactorFeatureResponseSchema,
+  DiscardChildResponseSchema,
+  DeleteFeatureResponseSchema,
   validateWithSchema,
   type ServerFeatureDetail,
+  type ServerRelationshipChild,
   type ServerSetup,
 } from '../shared/api/parse';
 import {
@@ -35,8 +37,9 @@ import {
   RebasePreflightRequestSchema,
   ReviewCommentsFetchRequestSchema,
   ReviewCommentsStartRequestSchema,
-  RefactorRequestSchema,
-  RefactorPreflightRequestSchema,
+  LaunchRefactorChildRequestSchema,
+  DiscardRefactorChildRequestSchema,
+  DeleteFeatureCascadeRequestSchema,
   type CreateFeatureInput,
   type CreateFeatureResult,
   type CreationDefaults,
@@ -53,10 +56,12 @@ import {
   type RebasePreflightRequest,
   type RebasePreflightResult,
   type RebaseResult,
-  type RefactorRequest,
-  type RefactorPreflightRequest,
-  type RefactorPreflightResult,
-  type RefactorResult,
+  type LaunchRefactorChildRequest,
+  type LaunchRefactorChildResult,
+  type DiscardRefactorChildRequest,
+  type DiscardRefactorChildResult,
+  type DeleteFeatureCascadeRequest,
+  type DeleteFeatureCascadeResult,
   type ReviewCommentsFetchRequest,
   type ReviewCommentsFetchResult,
   type ReviewCommentsStartRequest,
@@ -241,6 +246,12 @@ export class FeatureService {
         code: warning.code,
         message: redactText(warning.message),
       })),
+      ...(feature.active_child === undefined
+        ? {}
+        : { activeChild: toRelationshipChildView(feature.active_child) }),
+      ...(feature.child_history === undefined
+        ? {}
+        : { childHistory: feature.child_history.map(toRelationshipChildView) }),
     }));
   }
 
@@ -356,61 +367,92 @@ export class FeatureService {
     };
   }
 
-  async startRefactor(request: RefactorRequest): Promise<RefactorResult> {
-    const input = validateWithSchema(request, RefactorRequestSchema);
-    const body = await this.api(`/api/v1/features/${input.featureId}/actions/refactor`, {
+  async launchRefactorChild(
+    request: LaunchRefactorChildRequest,
+  ): Promise<LaunchRefactorChildResult> {
+    const input = validateWithSchema(request, LaunchRefactorChildRequestSchema);
+    // Referenced repository files travel as attachments, as in creation.
+    const repositoryAttachments = await this.deps.resolveRepositoryFiles(
+      input.repositoryFiles ?? [],
+    );
+    const attachments = [...(input.attachments ?? []), ...repositoryAttachments];
+    const body = await this.api(`/api/v1/features/${input.parentId}/actions/refactor`, {
       method: 'POST',
       body: {
-        prompt: input.prompt,
-        ...(input.repo === undefined || input.repo === '' ? {} : { repo: input.repo }),
-        ...(input.pipeline === undefined || input.pipeline === ''
+        name: input.name,
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(input.images === undefined ? {} : { images: input.images }),
+        ...(attachments.length === 0 ? {} : { attachments }),
+        ...(input.pipeline === undefined ? {} : { pipeline: input.pipeline }),
+        ...(input.checkpoints === undefined
           ? {}
-          : { pipeline: input.pipeline }),
-        ...(input.sourceRevision === undefined || input.sourceRevision === ''
-          ? {}
-          : { source_revision: input.sourceRevision }),
+          : {
+              checkpoints: {
+                inquiry_review: input.checkpoints.inquiryReview,
+                research_review: input.checkpoints.researchReview,
+                design_review: input.checkpoints.designReview,
+                roadmap_review: input.checkpoints.roadmapReview,
+                phase_plan_review: input.checkpoints.phasePlanReview,
+                manual_publish: input.checkpoints.manualPublish,
+                draft_publish: input.checkpoints.draftPublish,
+              },
+            }),
+        ...(input.effort === undefined ? {} : { effort: input.effort }),
+        ...(input.models === undefined ? {} : { models: input.models }),
+        ...(input.riskLevel === undefined ? {} : { risk_level: input.riskLevel }),
+        ...(input.exitCriteria === undefined ? {} : { exit_criteria: input.exitCriteria }),
+        ...(input.inquireness === undefined ? {} : { inquireness: input.inquireness }),
       },
     });
-    const response = validateWithSchema(body, RefactorStartResponseSchema);
+    const response = validateWithSchema(body, RefactorFeatureResponseSchema);
     return {
-      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      cycleType: response.cycle_type,
+      childId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      parentId: validateWithSchema(response.parent_id, FeatureIdSchema),
       result: response.result,
-      ...(response.repo === undefined || response.repo === '' ? {} : { repo: response.repo }),
-      ...(response.pipeline === undefined || response.pipeline === ''
-        ? {}
-        : { pipeline: response.pipeline }),
-      ...(response.session_id === undefined || response.session_id === ''
-        ? {}
-        : { sessionId: response.session_id }),
     };
   }
 
-  async preflightRefactor(request: RefactorPreflightRequest): Promise<RefactorPreflightResult> {
-    const input = validateWithSchema(request, RefactorPreflightRequestSchema);
-    const body = await this.api(`/api/v1/features/${input.featureId}/refactor/preflight`, {
+  async discardRefactorChild(
+    request: DiscardRefactorChildRequest,
+  ): Promise<DiscardRefactorChildResult> {
+    const input = validateWithSchema(request, DiscardRefactorChildRequestSchema);
+    const body = await this.api(`/api/v1/features/${input.childId}/actions/discard`, {
       method: 'POST',
-      body: {
-        prompt: input.prompt,
-        ...(input.repo === undefined || input.repo === '' ? {} : { repo: input.repo }),
-        ...(input.pipeline === undefined || input.pipeline === ''
-          ? {}
-          : { pipeline: input.pipeline }),
-      },
+      body: {},
     });
-    const response = validateWithSchema(body, RefactorPreflightResponseSchema);
+    const response = validateWithSchema(body, DiscardChildResponseSchema);
+    const normalized = response.result.toLowerCase();
+    const status = normalized.includes('drain')
+      ? 'draining'
+      : normalized.includes('attention')
+        ? 'attention'
+        : normalized.includes('retry')
+          ? 'retry'
+          : 'completed';
+    return {
+      childId: validateWithSchema(response.feature_id, FeatureIdSchema),
+      result: response.result,
+      status,
+    };
+  }
+
+  async deleteFeatureCascade(
+    request: DeleteFeatureCascadeRequest,
+  ): Promise<DeleteFeatureCascadeResult> {
+    const input = validateWithSchema(request, DeleteFeatureCascadeRequestSchema);
+    const body = await this.api(`/api/v1/features/${input.featureId}/actions/delete`, {
+      method: 'POST',
+      body: {},
+    });
+    const response = validateWithSchema(body, DeleteFeatureResponseSchema);
     return {
       featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      sourceRevision: response.source_revision,
-      scope: response.scope,
-      repos: response.repos ?? [],
-      prompt: response.prompt,
-      ...(response.pipeline === undefined || response.pipeline === ''
-        ? {}
-        : { pipeline: response.pipeline }),
-      ...(response.blockers === undefined || response.blockers.length === 0
-        ? {}
-        : { blockers: response.blockers }),
+      operationId: response.operation_id,
+      status: response.status,
+      diagnostics: (response.diagnostics ?? []).map((diagnostic) => ({
+        ...(diagnostic.code === undefined ? {} : { code: diagnostic.code }),
+        ...(diagnostic.message === undefined ? {} : { message: redactText(diagnostic.message) }),
+      })),
     };
   }
 
@@ -478,6 +520,12 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.description === undefined || feature.description === ''
       ? {}
       : { description: feature.description }),
+    ...(feature.risk_level === undefined || feature.risk_level === ''
+      ? {}
+      : { riskLevel: feature.risk_level }),
+    ...(feature.exit_criteria === undefined || feature.exit_criteria === ''
+      ? {}
+      : { exitCriteria: feature.exit_criteria }),
     ...(feature.wait_reason === undefined || feature.wait_reason === ''
       ? {}
       : { waitReason: redactText(feature.wait_reason) }),
@@ -521,7 +569,89 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
               ...(input.options === undefined ? {} : { options: input.options }),
             })),
           }),
+      ...(action.impact_preview === undefined
+        ? {}
+        : {
+            impactPreview: {
+              kind: action.impact_preview.kind,
+              subject: {
+                id: validateWithSchema(action.impact_preview.subject.id, FeatureIdSchema),
+                name: action.impact_preview.subject.name,
+              },
+              categories: action.impact_preview.categories.map((category) => ({
+                key: category.key,
+                label: category.label,
+                items: category.items,
+              })),
+              retained: action.impact_preview.retained,
+            },
+          }),
     })),
+    ...(feature.active_child === undefined
+      ? {}
+      : { activeChild: toRelationshipChildView(feature.active_child) }),
+    ...(feature.child_history === undefined
+      ? {}
+      : { childHistory: feature.child_history.map(toRelationshipChildView) }),
+    ...spreadDefined('parentId', feature.parent_id),
+    ...spreadDefined('parentKind', feature.parent_kind),
+    ...(feature.active === undefined ? {} : { active: feature.active }),
+    ...(feature.setup_complete === undefined ? {} : { setupComplete: feature.setup_complete }),
+    ...spreadDefined('closeOutcome', feature.close_outcome),
+    ...spreadDefined('closedAt', feature.closed_at),
+    ...(feature.relationship === undefined
+      ? {}
+      : { relationship: toRelationshipChildView(feature.relationship) }),
+    ...(feature.transaction === undefined
+      ? {}
+      : {
+          transaction: {
+            ...spreadDefined('phase', feature.transaction.phase),
+            ...(feature.transaction.attention === undefined || feature.transaction.attention === ''
+              ? {}
+              : { attention: redactText(feature.transaction.attention) }),
+            ...(feature.transaction.entries === undefined
+              ? {}
+              : {
+                  entries: feature.transaction.entries.map((entry) => ({
+                    ...spreadDefined('repo', entry.repo),
+                    ...spreadDefined('prepState', entry.prep_state),
+                    ...spreadDefined('applyState', entry.apply_state),
+                    ...(entry.conflict_files === undefined
+                      ? {}
+                      : { conflictFiles: entry.conflict_files }),
+                    ...(entry.dirty === undefined
+                      ? {}
+                      : {
+                          dirty: entry.dirty.map((dirty) => ({
+                            ...spreadDefined('repo', dirty.repo),
+                            ...spreadDefined('path', dirty.path),
+                            ...(dirty.staged === undefined ? {} : { staged: dirty.staged }),
+                            ...(dirty.unstaged === undefined ? {} : { unstaged: dirty.unstaged }),
+                            ...(dirty.untracked === undefined
+                              ? {}
+                              : { untracked: dirty.untracked }),
+                            ...(dirty.staged_total === undefined
+                              ? {}
+                              : { stagedTotal: dirty.staged_total }),
+                            ...(dirty.unstaged_total === undefined
+                              ? {}
+                              : { unstagedTotal: dirty.unstaged_total }),
+                            ...(dirty.untracked_total === undefined
+                              ? {}
+                              : { untrackedTotal: dirty.untracked_total }),
+                          })),
+                        }),
+                    ...(entry.cleanup_warning === undefined || entry.cleanup_warning === ''
+                      ? {}
+                      : { cleanupWarning: redactText(entry.cleanup_warning) }),
+                    ...(entry.diagnostics === undefined || entry.diagnostics === ''
+                      ? {}
+                      : { diagnostics: redactText(entry.diagnostics) }),
+                  })),
+                }),
+          },
+        }),
     ...(feature.repo_status === undefined || feature.repo_status.length === 0
       ? {}
       : {
@@ -599,6 +729,38 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
               : { message: redactText(feature.failure.message) }),
           },
         }),
+  };
+}
+
+function toRelationshipChildView(child: ServerRelationshipChild) {
+  return {
+    id: validateWithSchema(child.id, FeatureIdSchema),
+    name: child.name,
+    kind: child.kind,
+    displayToken: child.display_token,
+    displayState: child.display_state,
+    pipeline: child.pipeline,
+    status: child.status,
+    ...spreadDefined('setupStatus', child.setup_status),
+    ...spreadDefined('relationshipState', child.relationship_state),
+    ...(child.outcome === undefined ? {} : { outcome: child.outcome }),
+    startedAt: child.started_at,
+    ...spreadDefined('closedAt', child.closed_at),
+    cost: { totalUsd: child.cost.total_usd, byPhase: child.cost.by_phase },
+    integrationState: child.integration_state,
+    attention: child.attention.map((attention) => ({
+      code: attention.code,
+      message: redactText(attention.message),
+      ...spreadDefined('repo', attention.repo),
+    })),
+    cleanupWarnings: child.cleanup_warnings.map((warning) => ({
+      message: redactText(warning.message),
+      ...spreadDefined('repo', warning.repo),
+    })),
+    ...(child.last_error === undefined || child.last_error === ''
+      ? {}
+      : { lastError: redactText(child.last_error) }),
+    ...spreadDefined('diffSummary', child.diff_summary),
   };
 }
 

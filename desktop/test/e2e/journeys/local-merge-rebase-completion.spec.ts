@@ -2,10 +2,9 @@
  * Packaged local-merge-rebase completion journey: performs an actual
  * conflicted local merge in a fixture repository, hands the affected
  * repository to the existing in-app rebase journey, returns to a fresh
- * completion preflight, retries merge to authoritative success, marks Done
- * through the separate explicit action, cleans the completed worktrees, and
- * verifies deletion remains blocked until the exact feature display name is
- * entered.
+ * completion preflight, retries merge to authoritative atomic completion,
+ * cleans the completed worktrees, and verifies the ordinary-feature delete
+ * confirmation removes the durable record.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -73,10 +72,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
       description: 'local merge rebase completion fixture',
       repoPatterns: [/local-core/, /local-aux/],
     });
-    await expect(createdCockpit.getByRole('region', { name: 'Durable setup' })).toContainText(
-      '2 of 2 tasks complete',
-      { timeout: 60_000 },
-    );
+    await expect(createdCockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
     const featureId = await findFeatureId(handle, featureName);
     transcript.step(
       `created feature \`${featureName}\` (${featureId}) with durable setup complete`,
@@ -126,12 +122,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     );
     transcript.json('getRepositoryDiff(local-core) response', localCoreDiff);
 
-    await expect(changes.getByRole('button', { name: /README\.md/ })).toBeVisible();
-    await changes.getByRole('button', { name: /README\.md/ }).click();
-    await expect(changes.locator('.completion-workspace__file-diff')).toBeVisible({
-      timeout: 15_000,
-    });
-    transcript.step('local-core diff loaded lazily');
+    transcript.step('local-core repository status loaded lazily');
     await changesModal.getByRole('button', { name: 'Close' }).click();
     await expect(changesModal).toBeHidden();
 
@@ -165,10 +156,6 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     await expect(cycleWorkspace.locator('.cycle-workspace__spine')).toBeVisible();
     transcript.step('rebase cycle workspace and four-stage spine became active');
     await waitForRebaseCycleSuccess(handle, world, featureId, seeded!.worktrees['local-core']!);
-    const completedReceipt = handle.page.locator(
-      '.aftercare-workspace__receipt[data-outcome="completed"]',
-    );
-    await expect(completedReceipt).toContainText('Rebase cycle complete.', { timeout: 30_000 });
     const rebaseTerminalSnapshot = await handle.page.evaluate(
       (id) => window.agentico.getFeature(id),
       featureId,
@@ -177,8 +164,11 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     transcript.step('rebase reached authoritative success and returned to aftercare');
 
     transcript.section('Reopen merge modal and retry merge to success');
-    // onHandoffToRebase closed the merge modal, so reopen it via the bar verb before retrying.
-    await cockpit.getByRole('button', { name: 'Merge', exact: true }).click();
+    // Re-enter the feature after the cycle's persisted terminal state. This mirrors a user
+    // returning from the cycle workspace and ensures the retry is driven by a fresh snapshot.
+    await handle.page.getByRole('tab', { name: 'Home' }).click();
+    const refreshedCockpit = await openCompletion(handle, featureName);
+    await refreshedCockpit.getByRole('button', { name: 'Merge', exact: true }).click();
     const retryMerge = mergeModal.getByRole('button', { name: 'Merge', exact: true });
     await expect(retryMerge).toBeEnabled({ timeout: 15_000 });
     await retryMerge.click();
@@ -189,18 +179,15 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     await mergeModal.getByRole('button', { name: 'Close' }).click();
     await expect(mergeModal).toHaveCount(0);
 
-    transcript.section('Mark Done explicitly');
-    await cockpit.getByRole('button', { name: 'Mark done', exact: true }).click();
-    const markDoneModal = handle.page.getByRole('dialog', { name: 'Mark feature done' });
-    await expect(markDoneModal).toBeVisible({ timeout: 15_000 });
-    await markDoneModal.getByRole('button', { name: 'Mark Done' }).click();
-    // The cockpit closes the Mark done modal on authoritative success.
-    await expect(markDoneModal).toBeHidden({ timeout: 30_000 });
+    transcript.section('Observe atomic completion after local merge');
     await waitForFeatureStatus(handle.page, featureId, 'Done');
-    transcript.step('Mark Done was a separate explicit mutation and reached authoritative Done');
+    await expect(
+      refreshedCockpit.getByRole('button', { name: 'Mark done', exact: true }),
+    ).toBeDisabled();
+    transcript.step('successful local merge atomically reached authoritative Done');
 
     transcript.section('Clean completed worktrees');
-    await cockpit.getByRole('button', { name: 'Clean up', exact: true }).click();
+    await refreshedCockpit.getByRole('button', { name: 'Clean up', exact: true }).click();
     const cleanupDialog = handle.page.getByRole('dialog', { name: 'Clean worktrees?' });
     await expect(cleanupDialog.getByText(/Branches/i)).toBeVisible();
     await expect(cleanupDialog.getByText(/Feature\/run history/i)).toBeVisible();
@@ -218,7 +205,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     transcript.section('Delete feature through the cockpit overflow');
     // Deletion moved out of completion into the cockpit overflow menu; the confirm
     // dialog is named after the feature and gates only on the explicit confirm button.
-    await cockpit.getByLabel('More actions').click();
+    await refreshedCockpit.getByLabel('More actions').click();
     await handle.page.getByRole('menuitem', { name: 'Delete feature' }).click();
     const deleteDialog = handle.page.getByRole('dialog', { name: /Delete .+\?/ });
     await expect(deleteDialog).toBeVisible({ timeout: 15_000 });
@@ -283,6 +270,16 @@ async function waitForRebaseCycleSuccess(
         throw new Error(`rebase cycle failed:\n${state}`);
       }
       const repoStatus = feature.repoStatus ?? [];
+      const failedRepo = repoStatus.find(
+        (repo) =>
+          repo.rebaseStatus === 'failed' ||
+          repo.cycleStatus === 'failed' ||
+          Boolean(repo.lastError),
+      );
+      if (failedRepo) {
+        const state = fs.readFileSync(activeRunYamlPath(world, featureId), 'utf8');
+        throw new Error(`rebase repository ${failedRepo.name} failed:\n${state}`);
+      }
       const serverReportsNoRebaseFailure = repoStatus.every(
         (repo) =>
           repo.rebaseStatus !== 'conflict' &&

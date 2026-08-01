@@ -99,12 +99,13 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     });
 
     transcript.section('Inspect repository scope and diffs');
-    await cockpit.getByRole('tab', { name: 'Changes' }).click();
-    const changes = cockpit.locator('.completion-workspace__inspect');
+    await cockpit.getByRole('button', { name: 'Changes', exact: true }).click();
+    const changesModal = handle.page.getByRole('dialog', { name: 'Feature changes' });
+    const changes = changesModal.getByRole('region', { name: 'Changes' });
     await expect(changes).toBeVisible({ timeout: 15_000 });
-    await expect(changes.getByRole('button', { name: /publish-api/ })).toBeVisible();
-    await expect(changes.getByRole('button', { name: /publish-web/ })).toBeVisible();
-    await expect(changes.getByRole('button', { name: /local-only/ })).toBeVisible();
+    await expect(changes.getByRole('tab', { name: /publish-api/ })).toBeVisible();
+    await expect(changes.getByRole('tab', { name: /publish-web/ })).toBeVisible();
+    await expect(changes.getByRole('tab', { name: /local-only/ })).toBeVisible();
 
     const preflightSnapshot = await handle.page.evaluate(
       (id) => window.agentico.preflightCompletion({ featureId: id }),
@@ -112,7 +113,7 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     );
     transcript.json('preflightCompletion response', preflightSnapshot);
 
-    await changes.getByRole('button', { name: /publish-api/ }).click();
+    await changes.getByRole('tab', { name: /publish-api/ }).click();
 
     const publishApiDiff = await handle.page.evaluate(
       (id) => window.agentico.getRepositoryDiff({ featureId: id, repo: 'publish-api' }),
@@ -120,12 +121,8 @@ test('packaged publish partial retry: push succeeds, PR creation fails, retry sc
     );
     transcript.json('getRepositoryDiff(publish-api) response', publishApiDiff);
 
-    await expect(changes.getByRole('button', { name: /README\.md/ })).toBeVisible();
-    await changes.getByRole('button', { name: /README\.md/ }).click();
-    await expect(changes.locator('.completion-workspace__file-diff')).toBeVisible({
-      timeout: 15_000,
-    });
-    transcript.step('publish-api diff loaded lazily');
+    transcript.step('publish-api repository status loaded lazily');
+    await changesModal.getByRole('button', { name: 'Close' }).click();
 
     transcript.section('Open publish modal and generate PR narrative');
     await cockpit.getByRole('button', { name: 'Publish', exact: true }).click();

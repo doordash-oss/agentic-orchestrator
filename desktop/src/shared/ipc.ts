@@ -35,7 +35,8 @@ export const IPC_CHANNELS = {
   featuresReviewCommentsFetch: 'agentico:features:review-comments:fetch',
   featuresReviewCommentsStart: 'agentico:features:review-comments:start',
   featuresRefactor: 'agentico:features:refactor',
-  featuresRefactorPreflight: 'agentico:features:refactor:preflight',
+  featuresRefactorDiscard: 'agentico:features:refactor:discard',
+  featuresDeleteCascade: 'agentico:features:delete:cascade',
   recoveryScan: 'agentico:recovery:scan',
   recoveryExecute: 'agentico:recovery:execute',
   recoveryLogRead: 'agentico:recovery:log-read',
@@ -113,6 +114,25 @@ export const SafeErrorSchema = z.strictObject({
   code: z.string(),
   message: z.string(),
   remediation: z.string().optional(),
+  details: z
+    .strictObject({
+      dirtyWorktrees: z
+        .array(
+          z.strictObject({
+            repo: z.string().optional(),
+            path: z.string().optional(),
+            staged: z.array(z.string()).max(200).optional(),
+            unstaged: z.array(z.string()).max(200).optional(),
+            untracked: z.array(z.string()).max(200).optional(),
+            stagedTotal: z.number().int().nonnegative().optional(),
+            unstagedTotal: z.number().int().nonnegative().optional(),
+            untrackedTotal: z.number().int().nonnegative().optional(),
+          }),
+        )
+        .max(100)
+        .optional(),
+    })
+    .optional(),
 });
 
 /** Every invoke resolves to this envelope so failures stay typed. */
@@ -455,6 +475,9 @@ export const AppEventSchema = z.discriminatedUnion('type', [
     resourceType: z.string().max(64).optional(),
     resourceId: z.string().max(200).optional(),
     featureId: z.string().max(200).optional(),
+    parentId: z.string().max(200).optional(),
+    childId: z.string().max(200).optional(),
+    relationshipDeleted: z.boolean().optional(),
   }),
   z.strictObject({
     type: z.literal('status'),
@@ -675,9 +698,74 @@ export const FeatureActionViewSchema = z.strictObject({
     )
     .max(20)
     .optional(),
+  impactPreview: z
+    .strictObject({
+      kind: z.enum(['child_discard', 'parent_cascade_delete']),
+      subject: z.strictObject({ id: FeatureIdSchema, name: z.string() }),
+      categories: z.array(
+        z.strictObject({ key: z.string(), label: z.string(), items: z.array(z.string()) }),
+      ),
+      retained: z.array(z.string()),
+    })
+    .optional(),
 });
 
 export type FeatureActionView = z.output<typeof FeatureActionViewSchema>;
+
+export const RelationshipChildViewSchema = z.strictObject({
+  id: FeatureIdSchema,
+  name: z.string(),
+  kind: z.string(),
+  displayToken: z.string(),
+  displayState: z.string(),
+  pipeline: z.string(),
+  status: z.string(),
+  setupStatus: z.string().optional(),
+  relationshipState: z.string().optional(),
+  outcome: z.enum(['completed', 'discarded']).optional(),
+  startedAt: z.string(),
+  closedAt: z.string().optional(),
+  cost: z.strictObject({ totalUsd: z.number(), byPhase: z.record(z.string(), z.number()) }),
+  integrationState: z.string(),
+  attention: z.array(
+    z.strictObject({ code: z.string(), message: z.string(), repo: z.string().optional() }),
+  ),
+  cleanupWarnings: z.array(z.strictObject({ message: z.string(), repo: z.string().optional() })),
+  lastError: z.string().optional(),
+  diffSummary: z.string().optional(),
+});
+export type RelationshipChildView = z.output<typeof RelationshipChildViewSchema>;
+
+export const DirtyWorktreeViewSchema = z.strictObject({
+  repo: z.string().optional(),
+  path: z.string().optional(),
+  staged: z.array(z.string()).max(200).optional(),
+  unstaged: z.array(z.string()).max(200).optional(),
+  untracked: z.array(z.string()).max(200).optional(),
+  stagedTotal: z.number().int().nonnegative().optional(),
+  unstagedTotal: z.number().int().nonnegative().optional(),
+  untrackedTotal: z.number().int().nonnegative().optional(),
+});
+
+export const RelationshipTransactionViewSchema = z.strictObject({
+  phase: z.string().optional(),
+  attention: z.string().optional(),
+  entries: z
+    .array(
+      z.strictObject({
+        repo: z.string().optional(),
+        prepState: z.string().optional(),
+        applyState: z.string().optional(),
+        conflictFiles: z.array(z.string()).max(200).optional(),
+        dirty: z.array(DirtyWorktreeViewSchema).max(100).optional(),
+        cleanupWarning: z.string().optional(),
+        diagnostics: z.string().optional(),
+      }),
+    )
+    .max(100)
+    .optional(),
+});
+export type RelationshipTransactionView = z.output<typeof RelationshipTransactionViewSchema>;
 
 export const FeatureSummaryViewSchema = z.strictObject({
   id: FeatureIdSchema,
@@ -690,6 +778,8 @@ export const FeatureSummaryViewSchema = z.strictObject({
   runCount: z.number().int().nonnegative(),
   phaseStatus: z.string().optional(),
   warnings: z.array(z.strictObject({ code: z.string(), message: z.string() })).max(100),
+  activeChild: RelationshipChildViewSchema.optional(),
+  childHistory: z.array(RelationshipChildViewSchema).max(1000).optional(),
 });
 
 export type FeatureSummaryView = z.output<typeof FeatureSummaryViewSchema>;
@@ -756,6 +846,9 @@ export const FeatureSnapshotSchema = z.strictObject({
   currentPhase: z.string(),
   pipeline: z.string().optional(),
   description: z.string().optional(),
+  /** Run-contract axes surfaced so child launches can seed from the parent. */
+  riskLevel: z.string().max(100).optional(),
+  exitCriteria: z.string().max(4000).optional(),
   waitReason: z.string().optional(),
   repos: z.array(z.string()),
   createdAt: z.string(),
@@ -769,6 +862,16 @@ export const FeatureSnapshotSchema = z.strictObject({
   setup: FeatureSetupViewSchema.optional(),
   /** The authoritative server action catalogue (setup/start/…). */
   actions: z.array(FeatureActionViewSchema),
+  activeChild: RelationshipChildViewSchema.optional(),
+  childHistory: z.array(RelationshipChildViewSchema).max(1000).optional(),
+  parentId: FeatureIdSchema.optional(),
+  parentKind: z.string().optional(),
+  active: z.boolean().optional(),
+  setupComplete: z.boolean().optional(),
+  closeOutcome: z.string().optional(),
+  closedAt: z.string().optional(),
+  transaction: RelationshipTransactionViewSchema.optional(),
+  relationship: RelationshipChildViewSchema.optional(),
   /** Per-repository operational status from the server. */
   repoStatus: z.array(RepoStatusViewSchema).optional(),
   /** Active cycle summary from the server. */
@@ -1061,43 +1164,29 @@ export const ReviewCommentsStartResultSchema = z.strictObject({
 });
 export type ReviewCommentsStartResult = z.output<typeof ReviewCommentsStartResultSchema>;
 
-export const RefactorRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  repo: z.string().max(200).optional(),
-  prompt: z.string().min(1).max(4000),
-  pipeline: z.string().max(200).optional(),
-  sourceRevision: z.string().max(512).optional(),
-});
-export type RefactorRequest = z.output<typeof RefactorRequestSchema>;
+// LaunchRefactorChildRequestSchema lives in the feature-creation section
+// below: it shares the creation wizard's attachment limits and shapes.
 
-export const RefactorPreflightRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  repo: z.string().max(200).optional(),
-  prompt: z.string().min(1).max(4000),
-  pipeline: z.string().max(200).optional(),
-});
-export type RefactorPreflightRequest = z.output<typeof RefactorPreflightRequestSchema>;
-
-export const RefactorPreflightResultSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  sourceRevision: z.string(),
-  scope: z.string(),
-  repos: z.array(z.string()).max(200),
-  prompt: z.string(),
-  pipeline: z.string().optional(),
-  blockers: z.array(z.string()).optional(),
-});
-export type RefactorPreflightResult = z.output<typeof RefactorPreflightResultSchema>;
-
-export const RefactorResultSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  cycleType: z.string(),
+export const DiscardRefactorChildRequestSchema = z.strictObject({ childId: FeatureIdSchema });
+export type DiscardRefactorChildRequest = z.output<typeof DiscardRefactorChildRequestSchema>;
+export const DiscardRefactorChildResultSchema = z.strictObject({
+  childId: FeatureIdSchema,
   result: z.string().max(500),
-  repo: z.string().max(200).optional(),
-  pipeline: z.string().max(200).optional(),
-  sessionId: z.string().min(1).max(200).optional(),
+  status: z.enum(['draining', 'attention', 'retry', 'completed']),
 });
-export type RefactorResult = z.output<typeof RefactorResultSchema>;
+export type DiscardRefactorChildResult = z.output<typeof DiscardRefactorChildResultSchema>;
+
+export const DeleteFeatureCascadeRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
+export type DeleteFeatureCascadeRequest = z.output<typeof DeleteFeatureCascadeRequestSchema>;
+export const DeleteFeatureCascadeResultSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  operationId: z.string(),
+  status: z.enum(['completed', 'cleanup_pending', 'attention_required']),
+  diagnostics: z.array(
+    z.strictObject({ code: z.string().optional(), message: z.string().optional() }),
+  ),
+});
+export type DeleteFeatureCascadeResult = z.output<typeof DeleteFeatureCascadeResultSchema>;
 
 // --- Recovery ---------------------------------------------------------------
 
@@ -1405,7 +1494,7 @@ export const AttentionQuestionBundleSchema = z.strictObject({
 export const AttentionHelpSchema = z.strictObject({
   kind: z.literal('help'),
   id: AttentionIDSchema,
-  featureId: FeatureIdSchema,
+  featureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
   waitingSince: z.string().max(100),
   prompt: AttentionTextSchema,
@@ -1497,11 +1586,15 @@ export const AskUserAnswerRequestSchema = z.strictObject({
     .refine((answers) => Object.keys(answers).length > 0),
 });
 export type AskUserAnswerRequest = z.output<typeof AskUserAnswerRequestSchema>;
-export const HelpAnswerRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  sessionId: AttentionIDSchema.optional(),
-  message: AttentionTextSchema.refine((value) => value.trim() !== ''),
-});
+export const HelpAnswerRequestSchema = z
+  .strictObject({
+    featureId: FeatureIdSchema.optional(),
+    sessionId: AttentionIDSchema.optional(),
+    message: AttentionTextSchema.refine((value) => value.trim() !== ''),
+  })
+  .refine((request) => request.featureId !== undefined || request.sessionId !== undefined, {
+    message: 'A feature or session is required.',
+  });
 export type HelpAnswerRequest = z.output<typeof HelpAnswerRequestSchema>;
 export const GateTargetSchema = z.strictObject({
   featureId: FeatureIdSchema,
@@ -1844,6 +1937,45 @@ export const CreateFeatureResultSchema = z.strictObject({
 });
 
 export type CreateFeatureResult = z.output<typeof CreateFeatureResultSchema>;
+
+/**
+ * The refactor child launch contract: the creation contract minus "where"
+ * (repositories are inherited from the parent) with the same composer
+ * attachments and run-contract knobs.
+ */
+export const LaunchRefactorChildRequestSchema = z.strictObject({
+  parentId: FeatureIdSchema,
+  name: z.string().trim().min(1).max(200),
+  description: z.string().max(10_000).optional(),
+  images: z.array(AbsolutePathSchema).max(CREATION_IMAGE_LIMIT).optional(),
+  attachments: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT).optional(),
+  repositoryFiles: z.array(RepositoryFileRefSchema).max(CREATION_REPOSITORY_FILE_LIMIT).optional(),
+  pipeline: z.enum(['medium', 'large', 'moonshot']).optional(),
+  checkpoints: z
+    .strictObject({
+      inquiryReview: z.boolean(),
+      researchReview: z.boolean(),
+      designReview: z.boolean(),
+      roadmapReview: z.boolean(),
+      phasePlanReview: z.boolean(),
+      manualPublish: z.boolean(),
+      draftPublish: z.boolean(),
+    })
+    .optional(),
+  effort: z.record(z.string().min(1).max(64), EffortLevelSchema).optional(),
+  models: z.record(z.string().min(1).max(64), z.string().min(1).max(200)).optional(),
+  riskLevel: z.enum(['low', 'medium', 'high']).optional(),
+  exitCriteria: z.string().max(4000).optional(),
+  inquireness: z.enum(['none', 'medium', 'high']).optional(),
+});
+export type LaunchRefactorChildRequest = z.output<typeof LaunchRefactorChildRequestSchema>;
+
+export const LaunchRefactorChildResultSchema = z.strictObject({
+  childId: FeatureIdSchema,
+  parentId: FeatureIdSchema,
+  result: z.string().max(500),
+});
+export type LaunchRefactorChildResult = z.output<typeof LaunchRefactorChildResultSchema>;
 
 export const SetupDispatchResultSchema = z.strictObject({
   result: z.string(),
@@ -2578,12 +2710,16 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     response: ReviewCommentsStartResultSchema,
   },
   [IPC_CHANNELS.featuresRefactor]: {
-    request: z.tuple([RefactorRequestSchema]),
-    response: RefactorResultSchema,
+    request: z.tuple([LaunchRefactorChildRequestSchema]),
+    response: LaunchRefactorChildResultSchema,
   },
-  [IPC_CHANNELS.featuresRefactorPreflight]: {
-    request: z.tuple([RefactorPreflightRequestSchema]),
-    response: RefactorPreflightResultSchema,
+  [IPC_CHANNELS.featuresRefactorDiscard]: {
+    request: z.tuple([DiscardRefactorChildRequestSchema]),
+    response: DiscardRefactorChildResultSchema,
+  },
+  [IPC_CHANNELS.featuresDeleteCascade]: {
+    request: z.tuple([DeleteFeatureCascadeRequestSchema]),
+    response: DeleteFeatureCascadeResultSchema,
   },
   [IPC_CHANNELS.recoveryScan]: {
     request: z.tuple([]),
@@ -2713,8 +2849,9 @@ export interface AgenticoApi {
   preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
   fetchReviewComments(request: ReviewCommentsFetchRequest): Promise<ReviewCommentsFetchResult>;
   startReviewComments(request: ReviewCommentsStartRequest): Promise<ReviewCommentsStartResult>;
-  startRefactor(request: RefactorRequest): Promise<RefactorResult>;
-  preflightRefactor(request: RefactorPreflightRequest): Promise<RefactorPreflightResult>;
+  launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
+  discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
+  deleteFeatureCascade(request: DeleteFeatureCascadeRequest): Promise<DeleteFeatureCascadeResult>;
   scanRecovery(): Promise<RecoverySnapshot>;
   executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;
   readRecoveryLog(request: RecoveryLogReadRequest): Promise<RecoveryLogReadResult>;

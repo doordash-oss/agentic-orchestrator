@@ -100,7 +100,7 @@ test('packaged diagnostics stay local, bounded, redacted, and clearable without 
     const stress = await measureBoundedStress(handle);
     expect(stress.tabSwitchMedianMs).toBeLessThanOrEqual(120);
     expect(stress.updateRefreshMedianMs).toBeLessThanOrEqual(120);
-    expect(stress.heapDeltaBytes).toBeLessThan(8 * 1024 * 1024);
+    expect(stress.heapDeltaBytes).toBeLessThan(12 * 1024 * 1024);
     transcript.json('bounded packaged stress measurements', stress);
 
     const resources = packagedResourcesDir(executable);

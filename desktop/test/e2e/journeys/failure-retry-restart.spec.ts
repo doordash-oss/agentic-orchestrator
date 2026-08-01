@@ -74,12 +74,9 @@ test('partial setup failure, retry on the same feature, restart persistence', as
         transcript.step(`deleted \`${mainRef}\` (and packed-refs): beta now has an unborn HEAD`);
       },
     });
-    await expect(cockpit.getByText('setup failed')).toBeVisible({ timeout: 60_000 });
-    const alphaTask = cockpit.locator('.task-row', { hasText: 'Worktree: alpha' });
-    const betaTask = cockpit.locator('.task-row', { hasText: 'Worktree: beta' });
-    await expect(alphaTask).toContainText('Done');
-    await expect(betaTask).toContainText('Failed');
-    await expect(cockpit.getByText('1 of 2 tasks complete')).toBeVisible();
+    await expect(cockpit.getByRole('alert')).toContainText('repository "beta" has no commits yet', {
+      timeout: 60_000,
+    });
     const retryButton = cockpit.getByRole('button', { name: 'Retry setup' });
     await expect(retryButton).toBeEnabled();
     await evidenceShotBothThemes(handle, 'setup-failure-retry');
@@ -101,8 +98,6 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     transcript.command(`git -C ${beta} commit --allow-empty -m "Restore main"`, fixOut);
     await retryButton.click();
     await expect(cockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
-    await expect(cockpit.getByText('2 of 2 tasks complete')).toBeVisible();
-    await expect(cockpit.getByText('(attempt 2)')).toBeVisible();
     await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
     await expect(cockpit.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
     await expect(cockpit.getByText("Starting isn't available in this version yet.")).toHaveCount(0);
@@ -138,7 +133,6 @@ test('partial setup failure, retry on the same feature, restart persistence', as
     const restoredCockpit = handle.page.getByLabel('Feature Two Repo Feature');
     await expect(restoredCockpit).toBeVisible({ timeout: 60_000 });
     await expect(restoredCockpit.getByText('Ready to start')).toBeVisible({ timeout: 60_000 });
-    await expect(restoredCockpit.getByText('2 of 2 tasks complete')).toBeVisible();
     await expect(restoredCockpit.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
     await expect(restoredCockpit.getByRole('button', { name: 'Start', exact: true })).toBeEnabled();
     await expect(

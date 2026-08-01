@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FeatureSnapshotSchema, type ReadinessSnapshot } from '../../shared/ipc';
-import { FeatureService } from '../features';
+import { FeatureService, type FeatureServiceDeps } from '../features';
 import type { ApiRequestInit, HttpResult } from '../gateway/runtimeGateway';
 
 interface Call {
@@ -108,6 +108,7 @@ function detailBody(overrides: Record<string, unknown> = {}): Record<string, unk
 
 function makeService(
   respond: (path: string, init?: ApiRequestInit) => HttpResult | Promise<HttpResult>,
+  resolveRepositoryFiles: FeatureServiceDeps['resolveRepositoryFiles'] = () => Promise.resolve([]),
 ) {
   const calls: Call[] = [];
   const service = new FeatureService({
@@ -118,7 +119,7 @@ function makeService(
       },
     },
     readReadiness: () => Promise.resolve(readiness()),
-    resolveRepositoryFiles: () => Promise.resolve([]),
+    resolveRepositoryFiles,
   });
   return { service, calls };
 }
@@ -716,5 +717,218 @@ describe('FeatureService.fetchReviewComments', () => {
         },
       ],
     });
+  });
+});
+
+describe('FeatureService relationship operations', () => {
+  it('maps a child launch to the authoritative parent refactor action', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 202,
+      body: {
+        api_version: 'v1',
+        feature_id: 'child1234ef567890',
+        parent_id: 'abcd1234ef567890',
+        result: 'created',
+      },
+    }));
+    await expect(
+      service.launchRefactorChild({
+        parentId: 'abcd1234ef567890',
+        name: 'Extract search core',
+        description: 'Move shared query behavior.',
+        pipeline: 'large',
+        riskLevel: 'high',
+        inquireness: 'medium',
+      }),
+    ).resolves.toEqual({
+      childId: 'child1234ef567890',
+      parentId: 'abcd1234ef567890',
+      result: 'created',
+    });
+    expect(calls).toEqual([
+      {
+        path: '/api/v1/features/abcd1234ef567890/actions/refactor',
+        init: {
+          method: 'POST',
+          body: {
+            name: 'Extract search core',
+            description: 'Move shared query behavior.',
+            pipeline: 'large',
+            risk_level: 'high',
+            inquireness: 'medium',
+          },
+        },
+      },
+    ]);
+  });
+
+  it('maps the full child run contract to the wire format, folding file references into attachments', async () => {
+    const { service, calls } = makeService(
+      () => ({
+        status: 202,
+        body: {
+          api_version: 'v1',
+          feature_id: 'child1234ef567890',
+          parent_id: 'abcd1234ef567890',
+          result: 'created',
+        },
+      }),
+      (refs) => Promise.resolve(refs.map((ref) => `/resolved/${ref.repoKey}/${ref.path}`)),
+    );
+    await service.launchRefactorChild({
+      parentId: 'abcd1234ef567890',
+      name: 'Extract search core',
+      images: ['/safe/sketch.png'],
+      attachments: ['/safe/spec.pdf'],
+      repositoryFiles: [{ repoKey: 'repo-a', path: 'src/query.ts' }],
+      pipeline: 'moonshot',
+      models: { planning: 'model-plan' },
+      effort: { planning: 'high' },
+      checkpoints: {
+        inquiryReview: true,
+        researchReview: false,
+        designReview: true,
+        roadmapReview: true,
+        phasePlanReview: true,
+        manualPublish: true,
+        draftPublish: false,
+      },
+      riskLevel: 'low',
+      exitCriteria: 'No behavior change.',
+      inquireness: 'none',
+    });
+    expect(calls[0]?.init?.body).toEqual({
+      name: 'Extract search core',
+      images: ['/safe/sketch.png'],
+      attachments: ['/safe/spec.pdf', '/resolved/repo-a/src/query.ts'],
+      pipeline: 'moonshot',
+      models: { planning: 'model-plan' },
+      effort: { planning: 'high' },
+      checkpoints: {
+        inquiry_review: true,
+        research_review: false,
+        design_review: true,
+        roadmap_review: true,
+        phase_plan_review: true,
+        manual_publish: true,
+        draft_publish: false,
+      },
+      risk_level: 'low',
+      exit_criteria: 'No behavior change.',
+      inquireness: 'none',
+    });
+  });
+
+  it('maps discard draining and typed cascade outcomes without closing optimistically', async () => {
+    const { service } = makeService((path) =>
+      path.includes('/discard')
+        ? {
+            status: 202,
+            body: {
+              api_version: 'v1',
+              feature_id: 'child1234ef567890',
+              result: 'draining sessions',
+            },
+          }
+        : {
+            status: 202,
+            body: {
+              api_version: 'v1',
+              feature_id: 'abcd1234ef567890',
+              operation_id: 'delete-7',
+              status: 'cleanup_pending',
+              diagnostics: [{ code: 'branch_cleanup', message: 'retry cleanup' }],
+            },
+          },
+    );
+    await expect(
+      service.discardRefactorChild({ childId: 'child1234ef567890' }),
+    ).resolves.toMatchObject({ status: 'draining' });
+    await expect(service.deleteFeatureCascade({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
+      featureId: 'abcd1234ef567890',
+      operationId: 'delete-7',
+      status: 'cleanup_pending',
+      diagnostics: [{ code: 'branch_cleanup', message: 'retry cleanup' }],
+    });
+  });
+
+  it('projects active child, immutable history, impact preview, and transaction diagnostics', async () => {
+    const relationship = {
+      id: 'child1234ef567890',
+      name: 'Extract search core',
+      kind: 'refactor',
+      display_token: 'R1',
+      display_state: 'Review',
+      pipeline: 'large',
+      status: 'Running',
+      relationship_state: 'active',
+      started_at: '2026-07-30T10:00:00Z',
+      cost: { total_usd: 2.5, by_phase: { review: 2.5 } },
+      integration_state: 'attention',
+      attention: [{ code: 'conflict', message: 'Resolve conflict', repo: 'repo-a' }],
+      cleanup_warnings: [],
+    };
+    const { service } = makeService(() => ({
+      status: 200,
+      body: detailBody({
+        active_child: relationship,
+        child_history: [
+          {
+            ...relationship,
+            id: 'child0000ef567890',
+            display_state: 'Closed — Completed',
+            relationship_state: 'completed',
+            outcome: 'completed',
+            closed_at: '2026-07-29T10:00:00Z',
+            diff_summary: '3 files changed',
+          },
+        ],
+        actions: [
+          {
+            id: 'delete',
+            enabled: true,
+            required_inputs: [],
+            impact_preview: {
+              kind: 'parent_cascade_delete',
+              subject: { id: 'abcd1234ef567890', name: 'Search revamp' },
+              categories: [{ key: 'children', label: 'Children', items: ['Extract search core'] }],
+              retained: [],
+            },
+          },
+        ],
+        transaction: {
+          phase: 'attention',
+          attention: 'Integration needs recovery',
+          entries: [
+            {
+              repo: 'repo-a',
+              prep_state: 'prepared',
+              apply_state: 'conflict',
+              conflict_files: ['query.ts'],
+              dirty: [{ path: '/safe/repo-a', staged_total: 1 }],
+            },
+          ],
+        },
+      }),
+    }));
+    const snapshot = await service.getFeature('abcd1234ef567890');
+    expect(snapshot.activeChild).toMatchObject({
+      id: 'child1234ef567890',
+      displayToken: 'R1',
+      integrationState: 'attention',
+    });
+    expect(snapshot.childHistory?.[0]).toMatchObject({
+      outcome: 'completed',
+      diffSummary: '3 files changed',
+    });
+    expect(snapshot.actions[0]?.impactPreview?.categories[0]?.items).toEqual([
+      'Extract search core',
+    ]);
+    expect(snapshot.transaction?.entries?.[0]).toMatchObject({
+      applyState: 'conflict',
+      conflictFiles: ['query.ts'],
+      dirty: [{ path: '/safe/repo-a', stagedTotal: 1 }],
+    });
+    expect(() => FeatureSnapshotSchema.parse(snapshot)).not.toThrow();
   });
 });

@@ -261,6 +261,30 @@ describe('CreateFeatureForm repository-first contract', () => {
     expect(screen.getByRole('checkbox', { name: /Phase plan review/ })).toBeChecked();
   });
 
+  it('shows only the model rows the chosen pipeline runs', async () => {
+    const { user } = await renderForm();
+    await reachWhat(user);
+    await user.type(screen.getByLabelText('Name'), 'Scoped models');
+    await user.click(screen.getByRole('button', { name: 'Next: Pipeline' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+
+    // Medium runs planning, implementation, and review only.
+    expect(screen.getByLabelText('Planning model')).toBeVisible();
+    expect(screen.queryByLabelText('Clarify model')).toBeNull();
+    expect(screen.queryByLabelText('KB Build model')).toBeNull();
+    expect(screen.queryByLabelText('Utilities model')).toBeNull();
+    expect(screen.queryByLabelText('Automatic review model')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    await user.click(screen.getByRole('radio', { name: /Large/ }));
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    expect(screen.getByLabelText('Clarify model')).toBeVisible();
+    expect(screen.getByLabelText('KB Build model')).toBeVisible();
+    // Utilities and the automatic reviewer stay workspace-scoped.
+    expect(screen.queryByLabelText('Utilities model')).toBeNull();
+    expect(screen.queryByLabelText('Automatic review model')).toBeNull();
+  });
+
   it('submits the contract without untouched model defaults, auto-starts the feature, and keeps one idempotency identity', async () => {
     const mock = installAgenticoMock();
     mock.api.getCreationDefaults.mockResolvedValue(

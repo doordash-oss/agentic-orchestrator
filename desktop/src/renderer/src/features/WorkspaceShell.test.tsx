@@ -375,8 +375,26 @@ describe('WorkspaceShell tabs', () => {
         id: FEATURE_ID,
         name: 'Search revamp',
         status: 'Created',
-        actions: [{ id: 'delete', enabled: true, disabledReasons: [] }],
+        actions: [
+          {
+            id: 'delete',
+            enabled: true,
+            disabledReasons: [],
+            impactPreview: {
+              kind: 'parent_cascade_delete',
+              subject: { id: FEATURE_ID, name: 'Search revamp' },
+              categories: [{ key: 'children', label: 'Children', items: [] }],
+              retained: [],
+            },
+          },
+        ],
       }),
+    });
+    mock.api.deleteFeatureCascade.mockResolvedValue({
+      featureId: FEATURE_ID,
+      operationId: 'delete-1',
+      status: 'completed',
+      diagnostics: [],
     });
     render(<WorkspaceShell />);
     const user = userEvent.setup();
@@ -395,11 +413,7 @@ describe('WorkspaceShell tabs', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
 
     await waitFor(() =>
-      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
-        featureId: FEATURE_ID,
-        action: 'delete',
-        body: {},
-      }),
+      expect(mock.api.deleteFeatureCascade).toHaveBeenCalledWith({ featureId: FEATURE_ID }),
     );
     expect(await screen.findByRole('tab', { name: 'Home' })).toHaveAttribute(
       'aria-selected',

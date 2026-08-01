@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "baselineRevision": "b8c00aadfccc1b9946880cb27d539386547e2dcf",
+  "baselineRevision": "33cc0c73",
   "auditCoverage": {
     "navigation": [
       "cap-79a28d7969ea",
@@ -82,7 +82,7 @@
       "cap-d591ceaca887",
       "cap-62160b6c5454",
       "cap-c5c04ed5ecc6",
-      "cap-f59b6579c4a9",
+      "cap-8d9e0f8a00e0",
       "cap-a471409260c9",
       "cap-c3bffdfab85e",
       "cap-1217e07bc923",
@@ -382,9 +382,9 @@
       "frozenHash": "5ef34a68ce8927f32658d93d78f1b0d8ac7e141b4e6bc81910ea13e596525fae"
     },
     {
-      "id": "cap-f59b6579c4a9",
-      "capability": "Refactor implementation with a prompt",
-      "frozenHash": "b50aceeed31dadbc04e1f6bfed6ca1d62a8ae856ab3fb1374a9852fc8635ef4f"
+      "id": "cap-8d9e0f8a00e0",
+      "capability": "Parent/child refactor relationship workflow",
+      "frozenHash": "d74ce06ca4151a6fc09c95b79c5c49fa8d470f5e1d6dff3dde46277fe2c72221"
     },
     {
       "id": "cap-73c4b9524cbf",

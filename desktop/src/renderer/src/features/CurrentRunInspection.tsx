@@ -533,15 +533,19 @@ export function CurrentRunInspection({
     let disposed = false;
     let inFlight = false;
     const poll = async (): Promise<void> => {
-      if (inFlight) return;
+      if (inFlight || document.hidden) return;
       inFlight = true;
       try {
-        const nextRunDetail = await window.agentico.getRun({ featureId, runNumber });
+        const [nextRunDetail, nextPreview] = await Promise.all([
+          window.agentico.getRun({ featureId, runNumber }),
+          window.agentico.getLivePreview(featureId),
+        ]);
         if (disposed) return;
         setRunDetail(nextRunDetail);
+        setPreview(nextPreview);
         onRunMetrics?.({
-          totalSeconds: nextRunDetail.timing?.totalSeconds ?? preview?.totalSeconds ?? 0,
-          totalUsd: nextRunDetail.cost?.totalUsd ?? preview?.totalUsd ?? 0,
+          totalSeconds: nextRunDetail.timing?.totalSeconds ?? nextPreview.totalSeconds,
+          totalUsd: nextRunDetail.cost?.totalUsd ?? nextPreview.totalUsd,
         });
       } catch {
         // Keep the last good snapshot; the next tick or manual refresh can recover.
@@ -554,15 +558,7 @@ export function CurrentRunInspection({
       disposed = true;
       clearInterval(interval);
     };
-  }, [
-    featureId,
-    onRunMetrics,
-    presentation,
-    preview?.totalSeconds,
-    preview?.totalUsd,
-    runNumber,
-    shouldStream,
-  ]);
+  }, [featureId, onRunMetrics, presentation, runNumber, shouldStream]);
 
   // Switching runs must not leak the previous run's opened file into the new one.
   useEffect(() => {

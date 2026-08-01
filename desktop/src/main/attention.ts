@@ -13,6 +13,7 @@ import {
   PermissionDecisionRequestSchema,
   VerificationGateActionSchema,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
+  CHAT_SESSION_ID,
   isPendingReviewStatus,
   reviewKindLabel,
   type AttentionActionResult,
@@ -119,15 +120,26 @@ export class AttentionService {
           })),
         })),
       ...promptsRaw.help_queue
-        .filter((help) => help.pending && hasRequiredListedFeature(help.feature_id))
-        .map((help) => ({
-          kind: 'help' as const,
-          id: `${help.feature_id}:${help.session_id ?? ''}`,
-          featureId: help.feature_id,
-          ...(help.session_id === undefined ? {} : { sessionId: help.session_id }),
-          waitingSince: help.time ?? fallbackTime,
-          prompt: help.question,
-        })),
+        .filter(
+          (help) =>
+            help.pending &&
+            (help.feature_id === CHAT_SESSION_ID || hasRequiredListedFeature(help.feature_id)),
+        )
+        .map((help) => {
+          const chat = help.feature_id === CHAT_SESSION_ID;
+          return {
+            kind: 'help' as const,
+            id: `${help.feature_id}:${help.session_id ?? ''}`,
+            ...(chat ? {} : { featureId: help.feature_id }),
+            ...(chat
+              ? { sessionId: CHAT_SESSION_ID }
+              : help.session_id === undefined
+                ? {}
+                : { sessionId: help.session_id }),
+            waitingSince: help.time ?? fallbackTime,
+            prompt: help.question,
+          };
+        }),
       ...promptsRaw.need_user_inputs
         .filter((gate) => gate.open && hasRequiredListedFeature(gate.feature_id))
         .map((gate) => ({
@@ -218,7 +230,7 @@ export class AttentionService {
   async sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult> {
     const input = validateWithSchema(request, HelpAnswerRequestSchema);
     return this.mutate('/api/v1/prompts/help/send', {
-      feature_id: input.featureId,
+      ...(input.featureId === undefined ? {} : { feature_id: input.featureId }),
       ...(input.sessionId === undefined ? {} : { session_id: input.sessionId }),
       message: input.message,
     });
@@ -274,7 +286,10 @@ export class AttentionService {
     } catch (error) {
       if (
         error instanceof SafeErrorException &&
-        (error.safe.code === 'conflict' || error.safe.code === 'not_found')
+        (error.safe.code === 'conflict' ||
+          error.safe.code === 'not_found' ||
+          (error.safe.code === 'bad_request' &&
+            /^pending request \S+ not found$/i.test(error.safe.message)))
       )
         return {
           result: 'Already resolved.',

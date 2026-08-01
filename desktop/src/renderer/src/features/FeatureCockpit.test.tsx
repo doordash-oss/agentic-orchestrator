@@ -131,6 +131,8 @@ describe('FeatureCockpit snapshot rendering', () => {
     await userEvent.click(within(actions).getByLabelText('More actions'));
     expect(within(actions).getByRole('menuitem', { name: 'Rewind feature' })).toBeVisible();
     expect(within(actions).getByRole('menuitem', { name: 'View run history' })).toBeVisible();
+    await userEvent.click(within(actions).getByRole('menuitem', { name: 'Rewind feature' }));
+    expect(await screen.findByRole('dialog', { name: /Rewind/ })).toBeVisible();
     expect(mock.api.getFeature).toHaveBeenCalledWith(FEATURE_ID);
   });
 
@@ -297,6 +299,30 @@ describe('FeatureCockpit snapshot rendering', () => {
     await waitFor(() =>
       expect(mock.api.getRun).toHaveBeenCalledWith({ featureId: FEATURE_ID, runNumber: 8 }),
     );
+  });
+
+  it('keeps feature-scoped attention actionable from published aftercare', async () => {
+    installAgenticoMock({
+      feature: featureSnapshot({ status: 'Published', actions: [] }),
+    });
+    render(
+      <FeatureCockpit
+        featureId={FEATURE_ID}
+        titleHint="Search revamp"
+        onClose={vi.fn()}
+        onLoadedName={vi.fn()}
+        attentionItems={[helpAttention]}
+        refreshAttention={() => Promise.resolve([helpAttention])}
+        attentionDrafts={emptyAttentionDrafts()}
+        setAttentionDrafts={vi.fn()}
+      />,
+    );
+
+    const aftercare = await screen.findByRole('region', { name: 'Feature aftercare' });
+    expect(aftercare).toBeVisible();
+    const request = screen.getByRole('region', { name: 'Agent request' });
+    expect(within(request).getByText(helpAttention.prompt)).toBeVisible();
+    expect(within(request).getByLabelText('Help reply')).toBeVisible();
   });
 
   it('opens the dedicated Rebase dialog from the Aftercare runway', async () => {
@@ -650,6 +676,7 @@ describe('FeatureCockpit ready-to-start', () => {
           disabledReasons: [{ code: 'no_pending_setup', message: 'nothing to retry' }],
         },
         { id: 'start', enabled: true, disabledReasons: [] },
+        { id: 'cleanup', enabled: true, disabledReasons: [] },
       ],
     });
   }
@@ -657,6 +684,12 @@ describe('FeatureCockpit ready-to-start', () => {
   it('offers Start only from the authoritative action catalogue', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeature.mockResolvedValue(readySnapshotDetail());
+    mock.api.preflightCompletion.mockResolvedValue({
+      featureId: FEATURE_ID,
+      sourceRevision: 'ready-revision',
+      canMarkDone: false,
+      repos: [{ repo: 'repo-a', publishable: false, touched: false, status: 'eligible' }],
+    });
     (
       mock.api as unknown as { dispatchFeatureAction: ReturnType<typeof vi.fn> }
     ).dispatchFeatureAction = vi.fn(() => new Promise(() => {}));
@@ -664,7 +697,8 @@ describe('FeatureCockpit ready-to-start', () => {
     const user = userEvent.setup();
     await screen.findByRole('heading', { name: 'Search revamp' });
 
-    expect(screen.getByText('Ready to start')).toBeInTheDocument();
+    await waitFor(() => expect(mock.api.preflightCompletion).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText('Ready to start')).toBeInTheDocument());
     const start = screen.getByRole('button', { name: 'Start' });
     await user.click(start);
     await user.click(start);
@@ -1454,12 +1488,77 @@ describe('FeatureCockpit cycle gates', () => {
 });
 
 describe('FeatureCockpit delete', () => {
-  it('deletes the feature after confirmation and closes the tab', async () => {
+  it('allows ordinary feature deletion when no relationship projection applies', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Done',
         actions: [{ id: 'delete', enabled: true, disabledReasons: [] }],
       }),
+    });
+    mock.api.deleteFeatureCascade.mockResolvedValue({
+      featureId: FEATURE_ID,
+      operationId: 'delete-ordinary',
+      status: 'completed',
+      diagnostics: [],
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
+    const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
+    expect(dialog).toHaveTextContent(
+      'This removes the feature record and any remaining worktrees.',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
+
+    await waitFor(() =>
+      expect(mock.api.deleteFeatureCascade).toHaveBeenCalledWith({ featureId: FEATURE_ID }),
+    );
+  });
+
+  it('fails closed when a relationship delete projection is missing', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Done',
+        parentId: 'parent-feature',
+        actions: [{ id: 'delete', enabled: true, disabledReasons: [] }],
+      }),
+    });
+    renderCockpit(mock);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByLabelText('More actions'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete feature' }));
+    const dialog = await screen.findByRole('dialog', { name: /Delete Search revamp/ });
+    expect(dialog).toHaveTextContent('Impact projection is missing or stale');
+    expect(within(dialog).getByRole('button', { name: 'Delete feature' })).toBeDisabled();
+  });
+
+  it('deletes the feature after confirmation and closes the tab', async () => {
+    const mock = installAgenticoMock({
+      feature: featureSnapshot({
+        status: 'Done',
+        actions: [
+          {
+            id: 'delete',
+            enabled: true,
+            disabledReasons: [],
+            impactPreview: {
+              kind: 'parent_cascade_delete',
+              subject: { id: FEATURE_ID, name: 'Search revamp' },
+              categories: [{ key: 'children', label: 'Children', items: [] }],
+              retained: [],
+            },
+          },
+        ],
+      }),
+    });
+    mock.api.deleteFeatureCascade.mockResolvedValue({
+      featureId: FEATURE_ID,
+      operationId: 'delete-1',
+      status: 'completed',
+      diagnostics: [],
     });
     const { onClose } = renderCockpit(mock);
     const user = userEvent.setup();
@@ -1470,11 +1569,7 @@ describe('FeatureCockpit delete', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Delete feature' }));
 
     await waitFor(() =>
-      expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
-        featureId: FEATURE_ID,
-        action: 'delete',
-        body: {},
-      }),
+      expect(mock.api.deleteFeatureCascade).toHaveBeenCalledWith({ featureId: FEATURE_ID }),
     );
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });

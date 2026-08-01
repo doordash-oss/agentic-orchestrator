@@ -579,7 +579,7 @@ export function AttentionDetail({
             onClick={() =>
               submit(() =>
                 window.agentico.sendHelp({
-                  featureId: item.featureId,
+                  ...(item.featureId === undefined ? {} : { featureId: item.featureId }),
                   ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
                   message: helpText,
                 }),

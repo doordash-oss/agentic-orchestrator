@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AttentionService } from '../attention';
 import type { ServerTransport } from '../serverClient';
-import { ATTENTION_ALREADY_RESOLVED_NOTICE } from '../../shared/ipc';
+import { ATTENTION_ALREADY_RESOLVED_NOTICE, CHAT_SESSION_ID } from '../../shared/ipc';
 
 describe('AttentionService mutations', () => {
   it.each(['conflict', 'not_found'])(
@@ -163,6 +163,11 @@ describe('AttentionService review items', () => {
                     question: 'active help',
                     pending: true,
                   },
+                  {
+                    feature_id: CHAT_SESSION_ID,
+                    question: 'chat help',
+                    pending: true,
+                  },
                 ],
                 need_user_inputs: [
                   {
@@ -241,19 +246,25 @@ describe('AttentionService review items', () => {
     expect(ids).toEqual(
       expect.arrayContaining([
         'ask-runtime',
+        `${CHAT_SESSION_ID}:`,
         'feature-1::',
         'feature-1:session-2',
         'perm-active',
         'perm-runtime',
       ]),
     );
-    expect(ids).toHaveLength(5);
+    expect(ids).toHaveLength(6);
     expect(ids).not.toContain('ask-orphan');
     expect(ids).not.toContain('missing-feature::');
     expect(ids).not.toContain('missing-feature:session-1');
     expect(ids).not.toContain('perm-orphan');
     expect(snapshot.items).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'help',
+          id: `${CHAT_SESSION_ID}:`,
+          sessionId: CHAT_SESSION_ID,
+        }),
         expect.objectContaining({
           kind: 'gate',
           id: 'feature-1::',
@@ -275,6 +286,30 @@ describe('AttentionService review items', () => {
         }),
       ]),
     );
+    expect(snapshot.items.find((item) => item.id === `${CHAT_SESSION_ID}:`)).not.toHaveProperty(
+      'featureId',
+    );
+  });
+
+  it('returns the stale-resolution response for a missing pending request', async () => {
+    const service = new AttentionService({
+      apiRequest: () =>
+        Promise.resolve({
+          status: 400,
+          body: {
+            api_version: 'v1',
+            error: { code: 'bad_request', message: 'pending request perm-stale not found' },
+          },
+        }),
+    } satisfies ServerTransport);
+
+    await expect(
+      service.answerPermission({ requestId: 'perm-stale', decision: 'allow_once' }),
+    ).resolves.toEqual({
+      result: 'Already resolved.',
+      alreadyResolved: true,
+      notice: ATTENTION_ALREADY_RESOLVED_NOTICE,
+    });
   });
 
   it('derives one stable inbox item from each authoritative pending review', async () => {

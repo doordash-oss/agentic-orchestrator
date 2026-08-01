@@ -23,7 +23,7 @@ import { RepositoryInstrument } from '../../../src/renderer/src/features/Reposit
 import { CurrentRunInspection } from '../../../src/renderer/src/features/CurrentRunInspection';
 import { RebaseModal } from '../../../src/renderer/src/features/cycles/RebaseModal';
 import { ReviewCommentsModal } from '../../../src/renderer/src/features/cycles/ReviewCommentsModal';
-import { RefactorModal } from '../../../src/renderer/src/features/cycles/RefactorModal';
+import { RefactorLauncher } from '../../../src/renderer/src/features/refactor/RefactorLauncher';
 import { BulkPreviewPanel } from '../../../src/renderer/src/features/BulkPreviewPanel';
 import { RecoveryWorkspace } from '../../../src/renderer/src/features/RecoveryWorkspace';
 import { ChangesSurface } from '../../../src/renderer/src/features/completion/ChangesSurface';
@@ -412,7 +412,7 @@ function CycleModalScene({ scene }: { scene: string }) {
     scene === 'rebase-preflight'
       ? 'Rebase'
       : scene === 'review-refactor'
-        ? 'Refactor'
+        ? 'Start refactor'
         : 'Review comments';
   const gateItems =
     scene === 'cycle-gate'
@@ -465,7 +465,7 @@ function CycleModalScene({ scene }: { scene: string }) {
               onDispatched={() => {}}
             />
           ) : scene === 'review-refactor' ? (
-            <RefactorModal
+            <RefactorLauncher
               featureId="abcd1234ef567890"
               snapshot={snapshot}
               onCancel={() => {}}

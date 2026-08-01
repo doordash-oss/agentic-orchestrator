@@ -200,12 +200,12 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     await expect(
       questions.getByText('Which verification tracks should be included?'),
     ).toBeVisible();
-    await questions.getByRole('checkbox', { name: /Unit tests/ }).check();
-    await questions.getByRole('checkbox', { name: /Packaged smoke/ }).check();
+    await questions.getByText('Unit tests', { exact: true }).click();
+    await questions.getByText('Packaged smoke', { exact: true }).click();
     await questions
       .getByLabel(/Evidence note free text/)
       .fill('Keep the routed question on target.');
-    await questions.getByRole('button', { name: 'Submit answers' }).click();
+    await questions.getByRole('button', { name: /^Submit/ }).click();
     await waitForAttentionMissing(handle, 'ask-bundle');
 
     persistAppLogs(handle, 'background-notifications-app-server');

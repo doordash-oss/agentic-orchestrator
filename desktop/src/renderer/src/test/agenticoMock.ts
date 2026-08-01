@@ -7,6 +7,8 @@ import type {
   ConnectionState,
   CreationDefaults,
   DiagnosticsSnapshot,
+  FeatureConfig,
+  FeatureConfigSnapshot,
   FeatureSnapshot,
   FeatureActionRequest,
   FeatureSummaryView,
@@ -107,6 +109,40 @@ export function creationDefaults(overrides: Partial<CreationDefaults> = {}): Cre
       useCurrentBranch: false,
     },
     ...overrides,
+  };
+}
+
+/** A parent feature's structured configuration, as the refactor wizard seeds it. */
+export function featureConfigSnapshot(
+  overrides: {
+    featureId?: string;
+    current?: Partial<FeatureConfig>;
+    defaults?: Partial<FeatureConfig>;
+    manualPublishAvailable?: boolean;
+  } = {},
+): FeatureConfigSnapshot {
+  const base: FeatureConfig = {
+    models: {},
+    effort: {},
+    inquireness: 'medium',
+    checkpoints: {
+      inquiryReview: false,
+      researchReview: false,
+      designReview: false,
+      roadmapReview: true,
+      phasePlanReview: true,
+      manualPublish: false,
+      draftPublish: false,
+    },
+    pipeline: 'medium',
+    inputNotifications: 'default',
+    automaticReviewMode: 'default',
+  };
+  return {
+    featureId: overrides.featureId ?? 'abcd1234ef567890',
+    current: { ...base, ...overrides.current },
+    defaults: { ...base, ...overrides.defaults },
+    manualPublishAvailable: overrides.manualPublishAvailable ?? true,
   };
 }
 
@@ -239,8 +275,9 @@ export interface AgenticoMock {
     preflightRebase: ReturnType<typeof vi.fn>;
     fetchReviewComments: ReturnType<typeof vi.fn>;
     startReviewComments: ReturnType<typeof vi.fn>;
-    startRefactor: ReturnType<typeof vi.fn>;
-    preflightRefactor: ReturnType<typeof vi.fn>;
+    launchRefactorChild: ReturnType<typeof vi.fn>;
+    discardRefactorChild: ReturnType<typeof vi.fn>;
+    deleteFeatureCascade: ReturnType<typeof vi.fn>;
     scanRecovery: ReturnType<typeof vi.fn>;
     executeRecovery: ReturnType<typeof vi.fn>;
     readRecoveryLog: ReturnType<typeof vi.fn>;
@@ -456,8 +493,9 @@ export function installAgenticoMock(
     preflightRebase: vi.fn(() => Promise.reject(new Error('unused'))),
     fetchReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
     startReviewComments: vi.fn(() => Promise.reject(new Error('unused'))),
-    startRefactor: vi.fn(() => Promise.reject(new Error('unused'))),
-    preflightRefactor: vi.fn(() => Promise.reject(new Error('unused'))),
+    launchRefactorChild: vi.fn(() => Promise.reject(new Error('unused'))),
+    discardRefactorChild: vi.fn(() => Promise.reject(new Error('unused'))),
+    deleteFeatureCascade: vi.fn(() => Promise.reject(new Error('unused'))),
     scanRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
     executeRecovery: vi.fn(() => Promise.reject(new Error('unused'))),
     readRecoveryLog: vi.fn(() => Promise.reject(new Error('unused'))),

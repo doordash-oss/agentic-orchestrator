@@ -20,6 +20,8 @@ export interface RewindJourneyProps {
   /** Current roadmap phase (default selection for Implement). */
   currentRoadmapPhase?: number;
   totalRoadmapPhases?: number;
+  /** Run active when the dialog opened, retained across cockpit surface changes. */
+  reconcileSourceRunNumber?: number;
   onClose(): void;
   onRewindComplete(result: FeatureActionResult): void;
 }
@@ -63,6 +65,7 @@ export function RewindJourney(props: RewindJourneyProps) {
     validPhaseOptions,
     currentRoadmapPhase,
     totalRoadmapPhases,
+    reconcileSourceRunNumber,
     onClose,
     onRewindComplete,
   } = props;
@@ -82,6 +85,32 @@ export function RewindJourney(props: RewindJourneyProps) {
   const showRoadmapPicker =
     isImplement && totalRoadmapPhases !== undefined && totalRoadmapPhases > 1;
   const canConfirm = confirmText === 'REWIND' && preview?.eligible === true;
+
+  // A successful rewind can change the cockpit surface before the mutation
+  // response is rendered, remounting this dialog. Reconcile that remount from
+  // the source run captured by the parent instead of presenting a fresh form.
+  useEffect(() => {
+    if (reconcileSourceRunNumber === undefined) return;
+    let disposed = false;
+    void window.agentico
+      .getFeature(featureId)
+      .then((feature) => {
+        if (disposed || feature.activeRun <= reconcileSourceRunNumber) return;
+        setResult({
+          featureId,
+          action: 'rewind',
+          result: 'rewound',
+          sessionIds: [],
+          sourceRunNumber: reconcileSourceRunNumber,
+          newRunNumber: feature.activeRun,
+        });
+        setStep('success');
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [featureId, reconcileSourceRunNumber]);
 
   // Fetch fresh preview whenever inputs change
   const fetchPreview = useCallback(async () => {

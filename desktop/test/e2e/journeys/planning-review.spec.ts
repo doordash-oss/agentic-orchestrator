@@ -48,11 +48,10 @@ test('packaged planning review saves, reconciles, iterates, and approves deliber
     await handle.page.getByRole('button', { name: /Attention inbox, 1 pending/ }).click();
     const inbox = handle.page.getByRole('complementary', { name: 'Attention inbox' });
     await inbox.getByRole('button', { name: 'Review' }).click();
-    await expect(inbox.getByText(/Plan review is waiting/)).toBeVisible();
+    await expect(inbox).toHaveCount(0);
+    await expect(handle.page.getByLabel('Review editor')).toBeVisible();
     await setWindowSize(handle, 1440, 900);
     await captureBoth(handle, 'visual_a86879bee8f1', 'visual_64bb02b54688');
-    await inbox.getByRole('button', { name: 'Open review' }).click();
-    await expect(handle.page.getByLabel('Review editor')).toBeVisible();
 
     // Validation failure with findings and proceed disabled with reason.
     await editMonaco(handle, '# invalid');
@@ -146,7 +145,7 @@ test('packaged planning review saves, reconciles, iterates, and approves deliber
     });
     await followUpCockpit.getByRole('button', { name: 'Stop' }).click();
     const stopDialog = handle.page.getByRole('dialog', { name: 'Stop Follow-up planning review?' });
-    await expect(stopDialog).toContainText(/currently affects 1 live session/);
+    await expect(stopDialog).toContainText(/currently affects \d+ live sessions?/);
     await stopDialog.getByRole('button', { name: 'Confirm stop' }).click();
     await expect(stopDialog).toHaveCount(0);
     await waitForFeatureToLeaveStatus(handle.page, followUpFeatureId, 'Implementing');

@@ -174,14 +174,17 @@ export class DiagnosticsService {
   }
 
   private serverEntries(): DiagnosticEntry[] {
-    const lines = this.readServerLines().slice(-20);
+    const lines = this.readServerLines()
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+      .slice(-20);
     const now = this.now().toISOString();
     return lines.map((line, index) => ({
       id: `server-${index}`,
       time: now,
       source: 'server' as const,
       level: inferLevel(line),
-      message: truncate(redactText(line.trim()), MAX_MESSAGE_CHARS),
+      message: truncate(redactText(line), MAX_MESSAGE_CHARS),
     }));
   }
 

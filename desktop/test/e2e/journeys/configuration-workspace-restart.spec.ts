@@ -67,7 +67,8 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step('feature created and setup complete');
 
     transcript.section('Structured feature configuration in the cockpit');
-    const configToggle = cockpit.getByRole('button', { name: /Configuration/ }).first();
+    await cockpit.locator('summary[aria-label="More actions"]').click();
+    const configToggle = cockpit.getByRole('menuitem', { name: 'Edit configuration…' });
     await expect(configToggle).toBeVisible();
     await configToggle.click();
 
@@ -131,6 +132,8 @@ test('configuration, workspace, and restart journey against the packaged app', a
     transcript.step(
       `server persisted implementation=${persisted.models.implementation}, inquireness=high, researchReview=${String(!researchGateWasChecked)}`,
     );
+    const configDialog = handle.page.getByRole('dialog', { name: 'Feature configuration' });
+    await configDialog.getByRole('button', { name: 'Close' }).click();
 
     transcript.section('Workspace defaults in Settings');
     await handle.page.getByRole('tab', { name: 'Settings' }).click();

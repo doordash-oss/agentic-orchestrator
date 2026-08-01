@@ -1,6 +1,6 @@
 /**
  * Lifecycle cycles journey: resume, retry, restart, guarded rebase,
- * review-comments preview, explicit refactor scope, and repository
+ * review-comments preview, child refactor launch, and repository
  * NEED_USER_INPUT journey against the packaged app and real bundled server.
  *
  * The feature is seeded to Published status so the server enables cycle
@@ -20,7 +20,7 @@ import {
 } from '../helpers/world';
 import { setFeatureStatus } from '../helpers/seed';
 
-test('lifecycle cycles: resume, retry, restart, rebase, review-comments, refactor', async ({}, testInfo: TestInfo) => {
+test('lifecycle cycles: resume, retry, restart, rebase, review-comments, refactor child', async ({}, testInfo: TestInfo) => {
   const transcript = new Transcript('lifecycle-cycles', 'Lifecycle cycles journey');
   const world = createWorld('lifecycle-cycles', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
@@ -120,16 +120,26 @@ test('lifecycle cycles: resume, retry, restart, rebase, review-comments, refacto
     const planRefactor = aftercare.getByRole('button', { name: /Plan refactor/ });
     if (await planRefactor.isVisible({ timeout: 3_000 }).catch(() => false)) {
       await planRefactor.click();
-      const refactorModal = handle.page.getByRole('dialog', { name: 'Refactor' });
+      const refactorModal = handle.page.getByRole('dialog', { name: 'Start refactor' });
       await refactorModal
-        .getByRole('textbox', { name: 'Refactor prompt' })
+        .getByRole('textbox', { name: 'Brief' })
         .fill('Consolidate the lifecycle fixture.');
-      await refactorModal.getByRole('radio', { name: 'All repositories' }).check();
-      await expect(refactorModal.getByText(/^Applies to: .*alpha.*beta$/)).toBeVisible({
-        timeout: 15_000,
-      });
-      transcript.step('refactor all-repositories scope resolves to named repositories');
-      await refactorModal.getByRole('button', { name: 'Close' }).click();
+      await expect(refactorModal.getByText(/Inherited from/)).toBeVisible();
+      await refactorModal.getByRole('button', { name: /Next: Pipeline/ }).click();
+      await expect(refactorModal.getByRole('radio', { name: /Medium/ })).toBeVisible();
+      await refactorModal.getByRole('button', { name: /Next: Review/ }).click();
+      await expect(
+        refactorModal.getByRole('heading', { name: 'Review the run contract' }),
+      ).toBeVisible();
+      await expect(refactorModal.getByLabel('Risk')).toBeVisible();
+      await expect(refactorModal.getByRole('group', { name: 'Models' })).toBeVisible();
+      await refactorModal.getByRole('button', { name: 'Launch child' }).click();
+      const relationship = seededCockpit.getByRole('region', { name: 'Refactor relationship' });
+      await expect(relationship).toBeVisible({ timeout: 30_000 });
+      await expect(relationship.getByLabel('Relationship transfer track')).toContainText(
+        'Parent · Published/locked',
+      );
+      transcript.step('creation-parity wizard launched a separately controlled child relationship');
     } else {
       transcript.step('refactor action not visible — server does not enable it for this state');
     }
@@ -138,6 +148,7 @@ test('lifecycle cycles: resume, retry, restart, rebase, review-comments, refacto
     transcript.section('Restart confirmation');
     const restartButton = seededCockpit.getByRole('button', { name: 'Restart', exact: true });
     if (await restartButton.isVisible({ timeout: 5_000 }).catch(() => false)) {
+      await expect(restartButton).toBeEnabled({ timeout: 60_000 });
       await restartButton.click();
       const restartDialog = handle.page.locator('.impact-dialog', { hasText: 'Restart' });
       await expect(restartDialog).toBeVisible({ timeout: 10_000 });

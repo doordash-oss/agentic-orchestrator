@@ -211,6 +211,47 @@ describe('mapServerError (foldTargetIssues)', () => {
     expect(err.safe.remediation).toBe('Sign in.');
   });
 
+  it('carries bounded dirty-worktree diagnostics as typed safe details', () => {
+    const err = mapServerError(
+      {
+        status: 409,
+        body: {
+          error: {
+            code: 'parent_worktrees_dirty',
+            message: 'parent worktrees are dirty',
+            target: {
+              repos: [
+                {
+                  repo: 'repo-a',
+                  path: '/work/repo-a',
+                  staged: ['a.ts'],
+                  unstaged: ['b.ts'],
+                  untracked: ['c.ts'],
+                  staged_total: 1,
+                  unstaged_total: 1,
+                  untracked_total: 1,
+                },
+              ],
+            },
+          },
+        },
+      },
+      { remedyByCode: REMEDIES, foldTargetIssues: true },
+    );
+    expect(err.safe.details?.dirtyWorktrees).toEqual([
+      {
+        repo: 'repo-a',
+        path: '/work/repo-a',
+        staged: ['a.ts'],
+        unstaged: ['b.ts'],
+        untracked: ['c.ts'],
+        stagedTotal: 1,
+        unstagedTotal: 1,
+        untrackedTotal: 1,
+      },
+    ]);
+  });
+
   it('falls back to the plain remedy when the issue list is empty or absent', () => {
     for (const target of [{ issues: [] }, {}]) {
       const err = mapServerError(

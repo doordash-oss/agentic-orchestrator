@@ -26,7 +26,7 @@ import { evaluateCompatibility } from './compatibility';
 import { evaluateDiscoveryFile, type DiscoveryDeps, type DiscoveryRecord } from './discovery';
 import type { SseStream } from './events';
 import type { ResolveResult } from './resources';
-import type { ChildExit } from './serverProcess';
+import { DEFAULT_STOP_TIMEOUT_MS, type ChildExit } from './serverProcess';
 
 export interface SelectedRuntime {
   runtimeDir: string;
@@ -85,7 +85,7 @@ const DEFAULT_TIMEOUTS: GatewayTimeouts = {
   // retaining a finite bound that reaps a genuinely hung bundled child.
   launchReadyMs: 90000,
   pollIntervalMs: 250,
-  shutdownGraceMs: 5000,
+  shutdownGraceMs: DEFAULT_STOP_TIMEOUT_MS,
   apiRequestMs: 30000,
   crashRestartInitialMs: 250,
   crashWindowMs: 60000,

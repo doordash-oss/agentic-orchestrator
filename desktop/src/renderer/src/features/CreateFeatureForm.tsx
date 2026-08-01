@@ -3,22 +3,8 @@
  * Pipeline, Review. Initial defaults prefill the draft once; later repository
  * discovery must preserve every user-owned choice.
  */
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ClipboardEvent,
-  type DragEvent,
-  type FormEvent,
-  type KeyboardEvent,
-} from 'react';
-import {
-  CREATION_ATTACHMENT_LIMIT,
-  CREATION_IMAGE_LIMIT,
-  CREATION_REPOSITORY_FILE_LIMIT,
-  type Checkpoints,
   type CreationDefaults,
   type EffortLevel,
   type RepositoryFileRef,
@@ -27,12 +13,22 @@ import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import {
   GATE_FIELDS,
   ModelEffortRow,
-  PHASE_FIELDS,
   applicableGates,
+  applicablePhaseFields,
   useModelCatalogue,
   type PhaseKey,
 } from './ConfigEditor';
+import { DescriptionComposer } from './DescriptionComposer';
 import { fieldForCreationError } from './featureView';
+import {
+  PIPELINES,
+  checkpointSummary,
+  checkpointsForPipeline,
+  isPipeline,
+  modelConfigKey,
+  type CheckpointState,
+  type Pipeline,
+} from './runContract';
 
 type DefaultsState =
   | { phase: 'loading' }
@@ -41,69 +37,6 @@ type DefaultsState =
 
 const STEPS = ['Where', 'What', 'Pipeline', 'Review'] as const;
 type Step = (typeof STEPS)[number];
-type Pipeline = 'medium' | 'large' | 'moonshot';
-
-type CheckpointState = Checkpoints & { draftPublish: boolean };
-
-const PIPELINE_PROFILES: Record<
-  Pipeline,
-  { title: string; note: string; checkpoints: CheckpointState }
-> = {
-  medium: {
-    title: 'Medium',
-    note: 'Plan, implement, review',
-    checkpoints: {
-      inquiryReview: false,
-      researchReview: false,
-      designReview: false,
-      roadmapReview: false,
-      phasePlanReview: true,
-      manualPublish: false,
-      draftPublish: false,
-    },
-  },
-  large: {
-    title: 'Large',
-    note: 'Full discovery and delivery',
-    checkpoints: {
-      inquiryReview: true,
-      researchReview: false,
-      designReview: false,
-      roadmapReview: true,
-      phasePlanReview: true,
-      manualPublish: false,
-      draftPublish: false,
-    },
-  },
-  moonshot: {
-    title: 'Moonshot',
-    note: 'Full depth, maximum scrutiny',
-    checkpoints: {
-      inquiryReview: true,
-      researchReview: true,
-      designReview: true,
-      roadmapReview: true,
-      phasePlanReview: true,
-      manualPublish: true,
-      draftPublish: false,
-    },
-  },
-};
-const PIPELINES = (
-  Object.entries(PIPELINE_PROFILES) as Array<[Pipeline, (typeof PIPELINE_PROFILES)[Pipeline]]>
-).map(([id, profile]) => ({ id, ...profile }));
-
-function checkpointsForPipeline(pipeline: Pipeline): CheckpointState {
-  return { ...PIPELINE_PROFILES[pipeline].checkpoints };
-}
-
-function checkpointSummary(pipeline: Pipeline, checkpoints: CheckpointState): string {
-  const gates = applicableGates(pipeline);
-  const active = GATE_FIELDS.filter((gate) => gates.has(gate.key) && checkpoints[gate.key]).map(
-    (gate) => gate.label,
-  );
-  return active.length === 0 ? 'No review checkpoints' : active.join(', ');
-}
 
 /** CreationDefaults phase labels → catalogue phase keys. */
 const DEFAULT_MODEL_LABELS: ReadonlyArray<readonly [string, PhaseKey]> = [
@@ -115,11 +48,6 @@ const DEFAULT_MODEL_LABELS: ReadonlyArray<readonly [string, PhaseKey]> = [
   ['Utilities', 'utilities'],
   ['Knowledge base', 'kbBuild'],
 ];
-
-/** The authoritative server contract's ModelConfig JSON keys. */
-function modelConfigKey(key: PhaseKey): string {
-  return key === 'kbBuild' ? 'kb_build' : key;
-}
 
 function defaultModelsByKey(defaults: CreationDefaults): Partial<Record<PhaseKey, string>> {
   const byLabel = new Map(defaults.defaults.models.map(({ phase, model }) => [phase, model]));
@@ -139,20 +67,6 @@ function defaultEffortByKey(defaults: CreationDefaults): Partial<Record<PhaseKey
     if (effort !== undefined) result[key] = effort;
   }
   return result;
-}
-
-interface MentionToken {
-  /** Index of the "@" character in the description. */
-  start: number;
-  query: string;
-}
-
-/** An "@token" immediately before the caret, at start-of-text or after whitespace. */
-function detectMention(text: string, caret: number): MentionToken | null {
-  const match = /(^|[\s([{])@([^\s@]*)$/.exec(text.slice(0, caret));
-  if (match === null) return null;
-  const query = match[2] ?? '';
-  return { start: caret - query.length - 1, query };
 }
 
 export interface CreateFeatureFormProps {
@@ -178,11 +92,6 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const [images, setImages] = useState<readonly string[]>([]);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
   const [repositoryFiles, setRepositoryFiles] = useState<readonly RepositoryFileRef[]>([]);
-  const [mention, setMention] = useState<MentionToken | null>(null);
-  const [mentionResults, setMentionResults] = useState<readonly RepositoryFileRef[]>([]);
-  const [mentionIndex, setMentionIndex] = useState(0);
-  const [mentionStatus, setMentionStatus] = useState<'idle' | 'searching'>('idle');
-  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [autoStart, setAutoStart] = useState(true);
   const [directoryCandidate, setDirectoryCandidate] = useState<string | null>(null);
   const [initializeConsent, setInitializeConsent] = useState(false);
@@ -194,10 +103,8 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   const catalogue = useModelCatalogue();
   const creationKey = useRef(crypto.randomUUID());
   const nameRef = useRef<HTMLInputElement | null>(null);
-  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
   const repoGroupRef = useRef<HTMLFieldSetElement | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
-  const attachMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     onDirtyChange?.(
@@ -229,80 +136,6 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   useEffect(() => {
     if (formError !== null) formErrorRef.current?.focus();
   }, [formError]);
-
-  useEffect(() => {
-    if (!attachMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!attachMenuRef.current?.contains(event.target as Node)) setAttachMenuOpen(false);
-    };
-    window.addEventListener('pointerdown', onPointerDown);
-    return () => window.removeEventListener('pointerdown', onPointerDown);
-  }, [attachMenuOpen]);
-
-  useEffect(() => {
-    if (mention === null || mention.query === '' || repoKeys.length === 0) {
-      setMentionResults([]);
-      setMentionStatus('idle');
-      return;
-    }
-    const requestId = crypto.randomUUID();
-    let dispatched = false;
-    const timer = window.setTimeout(() => {
-      dispatched = true;
-      setMentionStatus('searching');
-      window.agentico
-        .searchCreationFiles({ requestId, repoKeys: [...repoKeys], query: mention.query })
-        .then((result) => {
-          if (!result.cancelled) {
-            setMentionResults(result.files);
-            setMentionIndex(0);
-            setMentionStatus('idle');
-          }
-        })
-        .catch((err: unknown) => setFormError(parseIpcError(err)));
-    }, 120);
-    return () => {
-      window.clearTimeout(timer);
-      if (dispatched) void window.agentico.cancelCreationFileSearch(requestId);
-    };
-  }, [mention, repoKeys]);
-
-  const importFiles = (files: FileList | readonly File[]): number => {
-    const list = Array.from(files);
-    let importedCount = 0;
-    const photos = list.filter((file) => file.type.startsWith('image/'));
-    const documents = list.filter((file) => !file.type.startsWith('image/'));
-    if (photos.length > 0) {
-      const imported = window.agentico.importDroppedCreationFiles('image', photos);
-      importedCount += imported.paths.length;
-      setImages((items) => unique([...items, ...imported.paths]).slice(0, CREATION_IMAGE_LIMIT));
-    }
-    if (documents.length > 0) {
-      const imported = window.agentico.importDroppedCreationFiles('attachment', documents);
-      importedCount += imported.paths.length;
-      setAttachments((items) =>
-        unique([...items, ...imported.paths]).slice(0, CREATION_ATTACHMENT_LIMIT),
-      );
-    }
-    return importedCount;
-  };
-
-  const pickFiles = async (kind: 'image' | 'attachment'): Promise<void> => {
-    setAttachMenuOpen(false);
-    try {
-      const result = await window.agentico.pickCreationFiles(kind);
-      if (kind === 'image')
-        setImages((current) =>
-          unique([...current, ...result.paths]).slice(0, CREATION_IMAGE_LIMIT),
-        );
-      else
-        setAttachments((current) =>
-          unique([...current, ...result.paths]).slice(0, CREATION_ATTACHMENT_LIMIT),
-        );
-    } catch (err) {
-      setFormError(parseIpcError(err));
-    }
-  };
 
   const browseDirectory = async (): Promise<void> => {
     try {
@@ -337,72 +170,6 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     } finally {
       setWorkspacePending(false);
     }
-  };
-
-  const syncMention = (element: HTMLTextAreaElement): void => {
-    setMention(detectMention(element.value, element.selectionStart));
-  };
-
-  const applyMention = (file: RepositoryFileRef): void => {
-    if (mention === null) return;
-    const reference = `@${file.repoKey}/${file.path}`;
-    const tokenEnd = mention.start + mention.query.length + 1;
-    setDescription((text) => `${text.slice(0, mention.start)}${reference} ${text.slice(tokenEnd)}`);
-    setRepositoryFiles((files) =>
-      files.some((item) => item.repoKey === file.repoKey && item.path === file.path)
-        ? files
-        : [...files, file].slice(0, CREATION_REPOSITORY_FILE_LIMIT),
-    );
-    const caret = mention.start + reference.length + 1;
-    setMention(null);
-    setMentionResults([]);
-    requestAnimationFrame(() => {
-      const element = descriptionRef.current;
-      if (element !== null) {
-        element.focus();
-        element.setSelectionRange(caret, caret);
-      }
-    });
-  };
-
-  const onDescriptionKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (mention === null || mentionResults.length === 0) return;
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setMentionIndex((index) => (index + 1) % mentionResults.length);
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setMentionIndex((index) => (index - 1 + mentionResults.length) % mentionResults.length);
-    } else if (event.key === 'Enter' || event.key === 'Tab') {
-      event.preventDefault();
-      const file = mentionResults[mentionIndex];
-      if (file !== undefined) applyMention(file);
-    } else if (event.key === 'Escape') {
-      setMention(null);
-      setMentionResults([]);
-    }
-  };
-
-  const onComposerPaste = (event: ClipboardEvent): void => {
-    const hasImage = Array.from(event.clipboardData.items ?? []).some((item) =>
-      item.type.startsWith('image/'),
-    );
-    if (!hasImage && event.clipboardData.files.length === 0) return;
-    event.preventDefault();
-    const importedCount = importFiles(event.clipboardData.files);
-    if (hasImage && importedCount === 0) {
-      void window.agentico
-        .readClipboardImage()
-        .then((result) =>
-          setImages((items) => unique([...items, ...result.paths]).slice(0, CREATION_IMAGE_LIMIT)),
-        )
-        .catch((err: unknown) => setFormError(parseIpcError(err)));
-    }
-  };
-
-  const onComposerDrop = (event: DragEvent): void => {
-    event.preventDefault();
-    importFiles(event.dataTransfer.files);
   };
 
   const validateStep = (index: number): boolean => {
@@ -440,7 +207,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
     setPending(true);
     const models: Record<string, string> = {};
     const effort: Record<string, EffortLevel> = {};
-    for (const field of PHASE_FIELDS) {
+    for (const field of applicablePhaseFields(pipeline, false)) {
       const chosen = modelChoices[field.key] ?? '';
       if (chosen !== '') models[modelConfigKey(field.key)] = chosen;
       const chosenEffort = effortChoices[field.key];
@@ -724,149 +491,21 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
               </span>
             ) : null}
           </label>
-          <div
-            className="composer"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={onComposerDrop}
-          >
-            <label className="form-field">
-              <span className="form-field__label">Description</span>
-              <textarea
-                ref={descriptionRef}
-                id="feature-description"
-                className="form-field__input form-field__input--multiline"
-                value={description}
-                maxLength={10000}
-                rows={6}
-                placeholder="Describe the work. Type @ to reference files in the selected repositories; paste or drop images and files to attach them."
-                onChange={(event) => {
-                  setDescription(event.target.value);
-                  syncMention(event.target);
-                }}
-                onSelect={(event) => syncMention(event.currentTarget)}
-                onKeyDown={onDescriptionKeyDown}
-                onPaste={onComposerPaste}
-              />
-            </label>
-            {mention !== null && repoKeys.length > 0 ? (
-              <div className="composer__mentions" role="listbox" aria-label="Repository files">
-                {mention.query === '' ? (
-                  <p className="composer__mentions-hint">Keep typing to search repository files…</p>
-                ) : mentionStatus === 'searching' && mentionResults.length === 0 ? (
-                  <p className="composer__mentions-hint" role="status">
-                    Searching {repoKeys.join(', ')}…
-                  </p>
-                ) : mentionResults.length === 0 ? (
-                  <p className="composer__mentions-hint">No files match “{mention.query}”.</p>
-                ) : (
-                  mentionResults.map((file, index) => (
-                    <button
-                      key={`${file.repoKey}:${file.path}`}
-                      type="button"
-                      role="option"
-                      aria-selected={index === mentionIndex}
-                      data-active={index === mentionIndex}
-                      className="composer__mention-option"
-                      onMouseEnter={() => setMentionIndex(index)}
-                      onClick={() => applyMention(file)}
-                    >
-                      <b>{file.repoKey}</b>
-                      <span>{file.path}</span>
-                    </button>
-                  ))
-                )}
-              </div>
-            ) : null}
-            <div className="composer__toolbar">
-              <div className="composer__attach" ref={attachMenuRef}>
-                <button
-                  type="button"
-                  className="composer__attach-button"
-                  aria-label="Attach files or photos"
-                  aria-haspopup="menu"
-                  aria-expanded={attachMenuOpen}
-                  onClick={() => setAttachMenuOpen((open) => !open)}
-                >
-                  +
-                </button>
-                {attachMenuOpen ? (
-                  <div className="composer__attach-menu" role="menu">
-                    <button type="button" role="menuitem" onClick={() => void pickFiles('image')}>
-                      Add photos
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => void pickFiles('attachment')}
-                    >
-                      Add files
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              <span className="composer__hint">
-                Paste or drop images and documents anywhere in the description.
-              </span>
-            </div>
-            {images.length > 0 || attachments.length > 0 ? (
-              <ol className="composer__chips" aria-label="Attached files">
-                {images.map((path) => (
-                  <li key={path} className="composer__chip" data-kind="image">
-                    <span>🖼 {basename(path)}</span>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${basename(path)}`}
-                      onClick={() => setImages((items) => items.filter((item) => item !== path))}
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-                {attachments.map((path) => (
-                  <li key={path} className="composer__chip" data-kind="attachment">
-                    <span>📎 {basename(path)}</span>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${basename(path)}`}
-                      onClick={() =>
-                        setAttachments((items) => items.filter((item) => item !== path))
-                      }
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            ) : null}
-            {repositoryFiles.length > 0 ? (
-              <ol className="composer__chips" aria-label="Referenced repository files">
-                {repositoryFiles.map((file) => (
-                  <li
-                    key={`${file.repoKey}:${file.path}`}
-                    className="composer__chip"
-                    data-kind="reference"
-                  >
-                    <span>
-                      @{file.repoKey}/{file.path}
-                    </span>
-                    <button
-                      type="button"
-                      aria-label={`Remove reference ${file.repoKey}/${file.path}`}
-                      onClick={() =>
-                        setRepositoryFiles((files) =>
-                          files.filter(
-                            (item) => item.repoKey !== file.repoKey || item.path !== file.path,
-                          ),
-                        )
-                      }
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            ) : null}
-          </div>
+          <DescriptionComposer
+            id="feature-description"
+            label="Description"
+            placeholder="Describe the work. Type @ to reference files in the selected repositories; paste or drop images and files to attach them."
+            value={description}
+            repoKeys={repoKeys}
+            images={images}
+            attachments={attachments}
+            repositoryFiles={repositoryFiles}
+            onValueChange={setDescription}
+            onImagesChange={setImages}
+            onAttachmentsChange={setAttachments}
+            onRepositoryFilesChange={setRepositoryFiles}
+            onError={setFormError}
+          />
         </section>
       ) : null}
 
@@ -946,7 +585,7 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
                 Only models available from provider discovery can be selected. Default uses the
                 workspace model for that phase.
               </p>
-              {PHASE_FIELDS.map((field) => (
+              {applicablePhaseFields(pipeline, false).map((field) => (
                 <ModelEffortRow
                   key={field.key}
                   field={field}
@@ -1072,15 +711,6 @@ export function CreateFeatureForm({ onCreated, onDirtyChange }: CreateFeatureFor
   );
 }
 
-function basename(path: string): string {
-  return path.split(/[\\/]/).pop() ?? 'Selected file';
-}
-function unique(items: readonly string[]): string[] {
-  return [...new Set(items)];
-}
-function isPipeline(value: string | undefined): value is Pipeline {
-  return value === 'medium' || value === 'large' || value === 'moonshot';
-}
 function normalizeInquireness(value: string | undefined): 'none' | 'medium' | 'high' {
   return value === 'none' || value === 'high' ? value : 'medium';
 }

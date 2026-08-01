@@ -56,7 +56,8 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     const cockpit = handle.page.getByLabel('Feature History Journey');
 
     transcript.section('Open run history via the History button');
-    const historyButton = handle.page.getByRole('button', { name: 'View run history' });
+    await cockpit.locator('summary[aria-label="More actions"]').click();
+    let historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
     await expect(historyButton).toBeVisible();
     const seededRuns = await handle.page.evaluate(
       (id) => window.agentico.listRuns({ featureId: id, page: 1, pageSize: 20 }),
@@ -83,6 +84,8 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Run 1');
     await expect(handle.page.getByLabel('Sealed run pages')).toContainText('Page 2 of 2');
     await handle.page.getByRole('button', { name: /Return to current/ }).click();
+    await cockpit.locator('summary[aria-label="More actions"]').click();
+    historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
     await historyButton.click();
     await expect(handle.page.locator('.archive-mode__band')).toContainText('Run 6');
 
@@ -143,9 +146,13 @@ test('history: paginated sealed runs, restored archive selection, immutable insp
 
     transcript.section('Return to current run');
     await handle.page.getByRole('button', { name: /Return to current/ }).click();
-    await expect(cockpit.getByText('CodeReady', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(cockpit.getByText('Code ready', { exact: true }).first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     transcript.section('Capture constrained-layout archive screenshots at 760x900');
+    await cockpit.locator('summary[aria-label="More actions"]').click();
+    historyButton = cockpit.getByRole('menuitem', { name: 'View run history' });
     await historyButton.click();
     await setWindowSize(handle, 760, 900);
     await setTheme(handle, 'light');

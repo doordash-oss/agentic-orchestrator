@@ -1605,19 +1605,24 @@ function makeMockApi(
         cycleType: 'review-comments',
         result: 'started',
       }),
-    startRefactor: () =>
+    launchRefactorChild: () =>
       Promise.resolve({
-        featureId: 'abcd1234ef567890',
-        cycleType: 'refactor',
-        result: 'started',
+        childId: 'child1234ef567890',
+        parentId: 'abcd1234ef567890',
+        result: 'created',
       }),
-    preflightRefactor: () =>
+    discardRefactorChild: () =>
+      Promise.resolve({
+        childId: 'child1234ef567890',
+        result: 'discarded',
+        status: 'completed' as const,
+      }),
+    deleteFeatureCascade: () =>
       Promise.resolve({
         featureId: 'abcd1234ef567890',
-        sourceRevision: 'refactor-rev-001',
-        scope: 'all',
-        repos: ['signal-lab', 'telemetry-sdk'],
-        prompt: 'Rename foo to bar across the codebase',
+        operationId: 'delete-1',
+        status: 'completed' as const,
+        diagnostics: [],
       }),
     scanRecovery: () =>
       Promise.resolve({

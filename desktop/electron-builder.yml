@@ -53,11 +53,10 @@ mac:
       arch: universal
   category: public.app-category.developer-tools
   hardenedRuntime: true
-  # Unsigned development build: never look up a signing identity and never
-  # notarize. macOS arm64 still requires a signature to execute, so
-  # electron-builder falls back to ad-hoc signing — which is not a
-  # distribution signature.
-  identity: null
+  # Development build: use an ad-hoc signature instead of looking up a
+  # distribution identity. macOS arm64 requires this signature to execute,
+  # and verify-package rejects DMGs that cannot launch after mounting.
+  identity: '-'
   notarize: false
 linux:
   # electron-builder would otherwise derive the executable from the npm

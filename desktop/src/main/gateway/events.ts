@@ -97,6 +97,9 @@ const SseEventEnvelopeSchema = z.object({
       type: z.string().max(200).optional(),
       id: z.string().max(500).optional(),
       feature_id: z.string().max(500).optional(),
+      parent_id: z.string().max(500).optional(),
+      child_id: z.string().max(500).optional(),
+      relationship_deleted: z.boolean().optional(),
     })
     .optional(),
   snapshot_required: z.boolean().optional(),
@@ -106,7 +109,14 @@ export interface SseEventEnvelope {
   seq: number;
   epoch: string;
   kind: string;
-  resource?: { type?: string; id?: string; feature_id?: string };
+  resource?: {
+    type?: string;
+    id?: string;
+    feature_id?: string;
+    parent_id?: string;
+    child_id?: string;
+    relationship_deleted?: boolean;
+  };
   snapshot_required: boolean;
 }
 
@@ -167,6 +177,9 @@ export type IngestDecision =
       resourceType?: string;
       resourceId?: string;
       featureId?: string;
+      parentId?: string;
+      childId?: string;
+      relationshipDeleted?: boolean;
     };
 
 const RESYNC_KINDS = new Set(['connected', 'stream.reset']);
@@ -218,6 +231,11 @@ export class EventCursorTracker {
       ...(resource.type === undefined ? {} : { resourceType: resource.type }),
       ...(resource.id === undefined ? {} : { resourceId: resource.id }),
       ...(resource.feature_id === undefined ? {} : { featureId: resource.feature_id }),
+      ...(resource.parent_id === undefined ? {} : { parentId: resource.parent_id }),
+      ...(resource.child_id === undefined ? {} : { childId: resource.child_id }),
+      ...(resource.relationship_deleted === undefined
+        ? {}
+        : { relationshipDeleted: resource.relationship_deleted }),
     };
   }
 
@@ -363,6 +381,11 @@ export class EventStreamSupervisor {
         ...(decision.resourceType === undefined ? {} : { resourceType: decision.resourceType }),
         ...(decision.resourceId === undefined ? {} : { resourceId: decision.resourceId }),
         ...(decision.featureId === undefined ? {} : { featureId: decision.featureId }),
+        ...(decision.parentId === undefined ? {} : { parentId: decision.parentId }),
+        ...(decision.childId === undefined ? {} : { childId: decision.childId }),
+        ...(decision.relationshipDeleted === undefined
+          ? {}
+          : { relationshipDeleted: decision.relationshipDeleted }),
       });
     }
   }

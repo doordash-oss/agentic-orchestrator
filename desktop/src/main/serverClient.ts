@@ -515,7 +515,24 @@ export function mapServerError(
         issueText !== ''
           ? `${issueText} ${mapping.remedyByCode[code] ?? ''}`.trim()
           : mapping.remedyByCode[code];
-      return new SafeErrorException(safeError(code, redactText(message), remedy));
+      const dirtyWorktrees = target?.repos?.map((repo) => ({
+        ...(repo.repo === undefined ? {} : { repo: repo.repo }),
+        ...(repo.path === undefined ? {} : { path: redactText(repo.path) }),
+        ...(repo.staged === undefined ? {} : { staged: repo.staged }),
+        ...(repo.unstaged === undefined ? {} : { unstaged: repo.unstaged }),
+        ...(repo.untracked === undefined ? {} : { untracked: repo.untracked }),
+        ...(repo.staged_total === undefined ? {} : { stagedTotal: repo.staged_total }),
+        ...(repo.unstaged_total === undefined ? {} : { unstagedTotal: repo.unstaged_total }),
+        ...(repo.untracked_total === undefined ? {} : { untrackedTotal: repo.untracked_total }),
+      }));
+      return new SafeErrorException(
+        safeError(
+          code,
+          redactText(message),
+          remedy,
+          dirtyWorktrees === undefined ? undefined : { dirtyWorktrees },
+        ),
+      );
     }
   } else {
     const parsed = ServerErrorResponseSchema.safeParse(result.body);

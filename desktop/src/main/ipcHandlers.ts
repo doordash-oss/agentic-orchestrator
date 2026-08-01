@@ -92,10 +92,12 @@ import {
   type ReviewCommentsFetchResult,
   type ReviewCommentsStartRequest,
   type ReviewCommentsStartResult,
-  type RefactorRequest,
-  type RefactorResult,
-  type RefactorPreflightRequest,
-  type RefactorPreflightResult,
+  type LaunchRefactorChildRequest,
+  type LaunchRefactorChildResult,
+  type DiscardRefactorChildRequest,
+  type DiscardRefactorChildResult,
+  type DeleteFeatureCascadeRequest,
+  type DeleteFeatureCascadeResult,
   type RecoverySnapshot,
   type RecoveryExecuteRequest,
   type RecoveryExecuteResult,
@@ -187,8 +189,9 @@ export interface IpcServices {
   preflightRebase(request: RebasePreflightRequest): Promise<RebasePreflightResult>;
   fetchReviewComments(request: ReviewCommentsFetchRequest): Promise<ReviewCommentsFetchResult>;
   startReviewComments(request: ReviewCommentsStartRequest): Promise<ReviewCommentsStartResult>;
-  startRefactor(request: RefactorRequest): Promise<RefactorResult>;
-  preflightRefactor(request: RefactorPreflightRequest): Promise<RefactorPreflightResult>;
+  launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
+  discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
+  deleteFeatureCascade(request: DeleteFeatureCascadeRequest): Promise<DeleteFeatureCascadeResult>;
   scanRecovery(): Promise<RecoverySnapshot>;
   executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;
   readRecoveryLog(request: RecoveryLogReadRequest): Promise<RecoveryLogReadResult>;
@@ -371,10 +374,12 @@ export function registerIpcHandlers(
       services.fetchReviewComments(request),
     [IPC_CHANNELS.featuresReviewCommentsStart]: (_event, request: ReviewCommentsStartRequest) =>
       services.startReviewComments(request),
-    [IPC_CHANNELS.featuresRefactor]: (_event, request: RefactorRequest) =>
-      services.startRefactor(request),
-    [IPC_CHANNELS.featuresRefactorPreflight]: (_event, request: RefactorPreflightRequest) =>
-      services.preflightRefactor(request),
+    [IPC_CHANNELS.featuresRefactor]: (_event, request: LaunchRefactorChildRequest) =>
+      services.launchRefactorChild(request),
+    [IPC_CHANNELS.featuresRefactorDiscard]: (_event, request: DiscardRefactorChildRequest) =>
+      services.discardRefactorChild(request),
+    [IPC_CHANNELS.featuresDeleteCascade]: (_event, request: DeleteFeatureCascadeRequest) =>
+      services.deleteFeatureCascade(request),
     [IPC_CHANNELS.recoveryScan]: () => services.scanRecovery(),
     [IPC_CHANNELS.recoveryExecute]: (_event, request: RecoveryExecuteRequest) =>
       services.executeRecovery(request),

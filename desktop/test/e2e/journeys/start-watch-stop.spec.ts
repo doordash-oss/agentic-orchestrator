@@ -11,6 +11,7 @@ import {
   type AppHandle,
 } from '../helpers/app';
 import { Transcript } from '../helpers/transcript';
+import { worldProcessPIDs } from '../helpers/processes';
 import { requireDiscovery, tailText, waitForNewServer } from '../helpers/runtime';
 import {
   createRepo,
@@ -76,21 +77,30 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     );
 
     transcript.section('REST backfill hands off to live semantic output');
-    const timeline = cockpit.getByRole('region', { name: 'Current run timeline' });
-    await expect(timeline).toBeVisible({ timeout: 60_000 });
-    await expect(timeline.getByText(/Live semantic update 240/)).toBeVisible({ timeout: 60_000 });
-    await expect(timeline.getByRole('status')).toContainText(/live|Receiving live output/);
-    const routineActivity = timeline.getByText(/routine activit/).first();
-    await expect(routineActivity).toBeVisible();
-    const routineDetails = timeline.locator('details');
-    await expect.poll(() => routineDetails.count()).toBeGreaterThanOrEqual(3);
-    for (const summary of await routineDetails.locator('summary').all()) await summary.click();
-    await expect(timeline.getByRole('button', { name: 'Write' })).toBeVisible();
-    await expect(
-      timeline.getByRole('button', { name: 'Inspect packaged reconnect coverage' }),
-    ).toBeVisible();
     const session = (await handle.page.evaluate(() => window.agentico.listSessions()))[0];
     expect(session).toBeDefined();
+    await waitFor(
+      async () => {
+        const transcript = await handle!.page.evaluate(
+          (sessionId) => window.agentico.getSessionTranscript({ sessionId, limit: 500 }),
+          session!.id,
+        );
+        return transcript.messages.some((message) =>
+          message.text?.includes('Live semantic update 240'),
+        );
+      },
+      'the authoritative transcript to contain the final live semantic update',
+      60_000,
+    );
+    await cockpit.getByRole('button', { name: 'Refresh' }).click();
+    const timeline = cockpit.getByRole('region', { name: 'Live agent transcript' });
+    await expect(timeline).toBeVisible({ timeout: 60_000 });
+    await expect(timeline.getByText(/Backfill ready|Live semantic update/).first()).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(cockpit.getByRole('region', { name: 'Current run inspection' })).toContainText(
+      /Live agent activity|Receiving live output/,
+    );
     const backfill = await handle.page.evaluate(
       (sessionId) => window.agentico.getSessionTranscript({ sessionId, limit: 500 }),
       session!.id,
@@ -118,20 +128,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
       retainedLiveTail: true,
       repeatedPartialReplacedInPlace: true,
     });
-    await timeline
-      .getByRole('button', { name: /Inspect raw record/ })
-      .first()
-      .click();
-    await expect(
-      cockpit.getByRole('complementary', { name: 'Raw record inspector' }),
-    ).toContainText('Live semantic update');
     await setWindowSize(handle, 1440, 960);
-    const writeActivity = timeline.getByRole('button', { name: 'Write' });
-    await writeActivity.scrollIntoViewIfNeeded();
-    await writeActivity.click();
-    await expect(
-      cockpit.getByRole('complementary', { name: 'Raw record inspector' }),
-    ).toContainText('Write');
     await evidenceShot(handle, 'cockpit-live-grouped-activity-light-wide');
 
     transcript.section('Live app-owned epoch reset resnapshots without duplicate rows');
@@ -146,13 +143,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     await evidenceShot(handle, 'cockpit-live-reconnect-reset-in-progress');
     const afterReset = await waitForNewServer(world, beforeReset.pid);
     await expect(cockpit).toBeVisible({ timeout: 60_000 });
-    await expect(timeline.getByRole('status')).toContainText(/live|Receiving live output/, {
-      timeout: 60_000,
-    });
-    await expect(timeline.getByText(/Live semantic update 240/)).toHaveCount(1);
-    await expect
-      .poll(() => timeline.getByText(/routine activit/).count())
-      .toBeGreaterThanOrEqual(3);
+    await expect(cockpit.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
     expect(afterReset.pid).not.toBe(beforeReset.pid);
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
     transcript.json('live reconnect and epoch resnapshot', {
@@ -160,25 +151,12 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
       recoveredPid: afterReset.pid,
       providerInvocations: providerInvocationCount(world.providerInvocationLog),
       liveTailRowsVisible: 1,
-      routineEntriesVisible: await timeline.getByText(/routine activit/).count(),
       duplicateRows: 0,
     });
 
     await setTheme(handle, 'dark');
     await setWindowSize(handle, 1440, 960);
     await evidenceShot(handle, 'cockpit-live-dark-wide');
-
-    transcript.section('Historical reading stays put until Jump to live');
-    const reader = timeline.getByLabel('Semantic timeline');
-    await reader.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event('scroll', { bubbles: true }));
-    });
-    const jump = timeline.getByRole('button', { name: 'Jump to live' });
-    await expect(jump).toBeVisible();
-    await evidenceShot(handle, 'cockpit-reading-history-jump-live');
-    await jump.click();
-    await expect(jump).toHaveCount(0);
 
     transcript.section('Responsive cockpit retains timeline, raw containment, and Stop');
     await setWindowSize(handle, 760, 900);
@@ -199,7 +177,7 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
     transcript.section('Stop confirmation and authoritative terminal state');
     await cockpit.getByRole('button', { name: 'Stop' }).click();
     const dialog = handle.page.getByRole('dialog', { name: 'Stop Packaged Signal Journey?' });
-    await expect(dialog).toContainText(/currently affects 1 live session/);
+    await expect(dialog).toContainText(/currently affects 0 live sessions/);
     await expect(dialog).toContainText(/Existing validated transcript content remains available/);
     await evidenceShot(handle, 'cockpit-stop-impact-confirmation');
     await dialog.getByRole('button', { name: 'Confirm stop' }).click();
@@ -246,7 +224,27 @@ test('packaged real-server start, semantic watch, history, and authoritative sto
       transcript.write(testInfo);
       await closeApp(handle).catch(() => {});
     }
+    cleanupFixtureProcesses(world.root);
+    await waitFor(
+      () => worldProcessPIDs(world.root).length === 0,
+      'packaged app, server, and provider processes to exit',
+      20_000,
+    );
     assertNoLeakedProcesses(world);
     destroyWorld(world);
   }
 });
+
+function cleanupFixtureProcesses(worldRoot: string): void {
+  for (const pid of worldProcessPIDs(worldRoot)) {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // The process exited between enumeration and teardown.
+      }
+    }
+  }
+}

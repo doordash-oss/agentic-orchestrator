@@ -25,11 +25,11 @@ async function capture(
   waitFor: string,
   preScreenshot?: (page: Page) => Promise<void>,
 ): Promise<void> {
+  await page.setViewportSize({ width, height });
   await page.goto(`http://localhost:9871/?scene=${scene}&theme=${theme}`);
   await page.evaluate((t) => {
     document.documentElement.dataset['theme'] = t;
   }, theme);
-  await page.setViewportSize({ width, height });
   await expect(page.locator(waitFor)).toBeVisible({ timeout: 15_000 });
   if (preScreenshot) {
     await preScreenshot(page);
@@ -105,7 +105,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
       await expect(p.getByRole('heading', { name: 'Activity and artifacts' })).toBeVisible({
         timeout: 15_000,
       });
-      await p.getByRole('button', { name: /Run artifacts/ }).click();
+      await p.getByRole('button', { name: 'Files' }).click();
       await p.getByRole('button', { name: 'Open artifact inquire/out.md' }).click();
       await expect(p.getByLabel('Current run artifact content')).toBeVisible({
         timeout: 15_000,
@@ -535,14 +535,12 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'light',
     1440,
     900,
-    'prompt-first-refactor-with-resolved-repository-scope-1440x900',
-    '.cycle-modal[data-phase]',
+    'refactor-wizard-what-step-with-inherited-where-and-brief-composer-1440x900',
+    '.refactor-wizard',
     async (p) => {
-      await p
-        .locator('.cycle-modal__prompt textarea')
-        .fill('Separate canonical effort values from provider aliases.');
-      await p.getByRole('radio', { name: 'All repositories' }).check();
-      await expect(p.locator('.cycle-journey__resolved-repos')).toBeVisible({ timeout: 10_000 });
+      await p.addStyleTag({ content: '* { animation: none !important; }' });
+      await expect(p.getByLabel('Child name')).toBeVisible({ timeout: 10_000 });
+      await p.getByLabel('Brief').fill('Separate canonical effort values from provider aliases.');
     },
   );
 
@@ -552,14 +550,16 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'dark',
     1440,
     900,
-    'prompt-first-refactor-with-resolved-repository-scope-1440x900-dark',
-    '.cycle-modal[data-phase]',
+    'refactor-wizard-run-contract-with-parent-seeded-models-and-checkpoints-1440x900-dark',
+    '.refactor-wizard',
     async (p) => {
-      await p
-        .locator('.cycle-modal__prompt textarea')
-        .fill('Separate canonical effort values from provider aliases.');
-      await p.getByRole('radio', { name: 'All repositories' }).check();
-      await expect(p.locator('.cycle-journey__resolved-repos')).toBeVisible({ timeout: 10_000 });
+      await expect(p.getByLabel('Child name')).toBeVisible({ timeout: 10_000 });
+      await p.getByLabel('Brief').fill('Separate canonical effort values from provider aliases.');
+      await p.getByRole('button', { name: 'Next: Pipeline' }).click();
+      await p.getByRole('button', { name: 'Next: Review' }).click();
+      await expect(p.getByRole('heading', { name: 'Review the run contract' })).toBeVisible({
+        timeout: 10_000,
+      });
     },
   );
 
@@ -673,13 +673,11 @@ test('completion workspace screenshots', async ({ page }) => {
     1440,
     900,
     'guided-completion-with-multi-repository-side-by-side-diff-and-publish-scope-ligh-1440x900',
-    '.completion-workspace__inspect',
+    '.changes-manifest',
     async (p) => {
-      await expect(p.locator('.completion-workspace__repos')).toBeVisible({ timeout: 15_000 });
-      await p.locator('.completion-workspace__repo-select').first().click();
-      await expect(p.locator('.completion-workspace__files')).toBeVisible({ timeout: 10_000 });
-      await p.locator('.completion-workspace__file').first().click();
-      await expect(p.locator('.completion-workspace__file-diff')).toBeVisible({ timeout: 10_000 });
+      await expect(p.locator('.changes-manifest__repositories')).toBeVisible({ timeout: 15_000 });
+      await expect(p.locator('.changes-manifest__files')).toBeVisible({ timeout: 10_000 });
+      await expect(p.locator('.changes-manifest__preview')).toBeVisible({ timeout: 10_000 });
     },
   );
 
@@ -702,25 +700,6 @@ test('completion workspace screenshots', async ({ page }) => {
       await expect(p.locator('.completion-workspace__ineligible-repos')).toBeVisible({
         timeout: 10_000,
       });
-      await p.getByRole('button', { name: 'Generate PR narrative' }).click();
-      await expect(p.getByPlaceholder('Enter PR title')).not.toHaveValue('');
-    },
-  );
-
-  await capture(
-    page,
-    'completion-constrained',
-    'dark',
-    760,
-    900,
-    'constrained-completion-workspace-with-unified-diff-and-reachable-primary-actions-760x900',
-    '.completion-workspace__inspect',
-    async (p) => {
-      await expect(p.locator('.completion-workspace__repos')).toBeVisible({ timeout: 15_000 });
-      await p.locator('.completion-workspace__repo-select').first().click();
-      await expect(p.locator('.completion-workspace__files')).toBeVisible({ timeout: 10_000 });
-      await p.locator('.completion-workspace__file').first().click();
-      await expect(p.locator('.completion-workspace__file-diff')).toBeVisible({ timeout: 10_000 });
     },
   );
 
@@ -741,6 +720,23 @@ test('completion workspace screenshots', async ({ page }) => {
       await expect(p.getByText('Completed feature worktrees')).toBeVisible();
       await expect(p.getByText('Branches')).toBeVisible();
       await expect(p.getByRole('button', { name: 'Clean worktrees' })).toBeVisible();
+    },
+  );
+});
+
+test('constrained completion workspace screenshot', async ({ page }) => {
+  await capture(
+    page,
+    'completion-constrained',
+    'dark',
+    760,
+    900,
+    'constrained-completion-workspace-with-unified-diff-and-reachable-primary-actions-760x900',
+    '.changes-manifest',
+    async (p) => {
+      await expect(p.locator('.changes-manifest__repositories')).toBeVisible({ timeout: 15_000 });
+      await expect(p.locator('.changes-manifest__files')).toBeVisible({ timeout: 10_000 });
+      await expect(p.locator('.changes-manifest__preview')).toBeVisible({ timeout: 10_000 });
     },
   );
 });

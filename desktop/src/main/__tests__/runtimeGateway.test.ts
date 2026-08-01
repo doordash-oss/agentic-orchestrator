@@ -5,7 +5,7 @@ import {
   type ConnectionState,
 } from '../../shared/ipc';
 import type { SafeError } from '../../shared/errors';
-import type { ChildExit } from '../gateway/serverProcess';
+import { DEFAULT_STOP_TIMEOUT_MS, type ChildExit } from '../gateway/serverProcess';
 import {
   RuntimeGateway,
   type GatewayDeps,
@@ -791,6 +791,15 @@ describe('RuntimeGateway supervision', () => {
     expect(env.gateway.hasOwnedChild()).toBe(false);
     // Expected exit: shutdown never produces a crashed state.
     expect(env.gateway.getState().status).not.toBe('crashed');
+  });
+
+  it('gives the server enough time to reap managed provider process groups by default', async () => {
+    const env = makeEnv({ useDefaultTimeouts: true });
+    await env.gateway.start();
+
+    await env.gateway.shutdown();
+
+    expect(env.spawned[0]!.stopCalls).toEqual([{ timeoutMs: DEFAULT_STOP_TIMEOUT_MS }]);
   });
 
   it('shutdown leaves externally owned servers untouched', async () => {

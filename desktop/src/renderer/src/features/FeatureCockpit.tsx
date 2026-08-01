@@ -21,6 +21,7 @@ import {
   type FeatureSnapshot,
   type RunDetailView,
   type FeatureActionRequest,
+  type FeatureActionView,
 } from '../../../shared/ipc';
 import { PhaseLadder } from '../components/PhaseLadder';
 import { useModalDismiss } from '../components/useModalDismiss';
@@ -46,7 +47,8 @@ import {
 } from './postImplementationModel';
 import { RebaseModal } from './cycles/RebaseModal';
 import { ReviewCommentsModal } from './cycles/ReviewCommentsModal';
-import { RefactorModal } from './cycles/RefactorModal';
+import { RefactorLauncher } from './refactor/RefactorLauncher';
+import { RelationshipWorkspace } from './refactor/RelationshipWorkspace';
 import { useCompletionPreflight } from './completion/useCompletionPreflight';
 import {
   completionBarModel,
@@ -679,11 +681,13 @@ function RestartConfirmDialog({
 
 function DeleteConfirmDialog({
   snapshot,
+  action,
   busy,
   onClose,
   onConfirm,
 }: {
   snapshot: FeatureSnapshot;
+  action: FeatureActionView | undefined;
   busy: boolean;
   onClose(): void;
   onConfirm(): void;
@@ -701,7 +705,12 @@ function DeleteConfirmDialog({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [busy, onClose]);
 
-  const repos = snapshot.repos.join(', ');
+  const preview = action?.impactPreview;
+  const relationshipDelete =
+    snapshot.parentId !== undefined ||
+    snapshot.activeChild !== undefined ||
+    (snapshot.childHistory?.length ?? 0) > 0;
+  const projectionMissing = relationshipDelete && preview === undefined;
 
   return (
     <div className="impact-dialog__backdrop">
@@ -715,12 +724,38 @@ function DeleteConfirmDialog({
       >
         <span className="impact-dialog__eyebrow">Operational impact</span>
         <h3 id="delete-dialog-title">Delete {snapshot.name}?</h3>
-        <p>
-          This permanently removes the feature, its runs, and its worktrees
-          {repos.length > 0 ? ` for ${repos}` : ''}. Published branches and merged work are not
-          touched.
-        </p>
-        <p className="impact-dialog__note">This cannot be undone.</p>
+        {projectionMissing ? (
+          <p role="alert">Impact projection is missing or stale. Close this dialog and refresh.</p>
+        ) : preview === undefined ? (
+          <p>This removes the feature record and any remaining worktrees.</p>
+        ) : (
+          <div className="relationship-impact">
+            {preview.categories.map((category) => (
+              <section key={category.key}>
+                <h4>{category.label}</h4>
+                {category.items.length === 0 ? (
+                  <p>None</p>
+                ) : (
+                  <ul>
+                    {category.items.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ))}
+            <h4>Retained</h4>
+            {preview.retained.length === 0 ? (
+              <p>None</p>
+            ) : (
+              <ul>
+                {preview.retained.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <div className="impact-dialog__actions">
           <button type="button" onClick={onClose} disabled={busy} autoFocus>
             Keep feature
@@ -729,7 +764,7 @@ function DeleteConfirmDialog({
             type="button"
             className="cockpit__delete-button"
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || projectionMissing}
           >
             {busy ? 'Deleting…' : 'Delete feature'}
           </button>
@@ -819,6 +854,7 @@ export function FeatureCockpit({
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [rewindDialog, setRewindDialog] = useState(false);
+  const [rewindSourceRunNumber, setRewindSourceRunNumber] = useState<number | undefined>();
   const [cycleModal, setCycleModal] = useState<AftercareCycleId | null>(null);
   const [completionModal, setCompletionModal] = useState<CompletionVerb | null>(null);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
@@ -843,6 +879,10 @@ export function FeatureCockpit({
   const inspectorButtonRef = useRef<HTMLButtonElement>(null);
   const onLoadedNameRef = useRef(onLoadedName);
   onLoadedNameRef.current = onLoadedName;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const onDeletedRef = useRef(onDeleted);
+  onDeletedRef.current = onDeleted;
 
   useEffect(() => {
     if (attentionPreviewRequest === null || attentionPreviewRequest.attentionId !== undefined) {
@@ -917,8 +957,16 @@ export function FeatureCockpit({
         setStale(event.stream !== 'live');
         return;
       }
+      if (event.relationshipDeleted === true && event.parentId === featureId) {
+        if (onDeletedRef.current !== undefined) onDeletedRef.current(featureId);
+        else onCloseRef.current();
+        return;
+      }
       const relevant =
-        event.kind === 'resync' || event.featureId === featureId || event.resourceId === featureId;
+        event.kind === 'resync' ||
+        event.featureId === featureId ||
+        event.resourceId === featureId ||
+        event.parentId === featureId;
       if (relevant) {
         if (
           selectedRunNumber !== undefined &&
@@ -1117,17 +1165,22 @@ export function FeatureCockpit({
     setActionError(null);
     setAnnouncement('Deleting the feature and its worktrees…');
     window.agentico
-      .dispatchFeatureAction({ featureId, action: 'delete', body: {} })
-      .then(() => {
-        setDeleteDialog(false);
-        if (onDeleted !== undefined) {
-          onDeleted(featureId);
-        } else {
-          onClose();
+      .deleteFeatureCascade({ featureId })
+      .then((result) => {
+        if (result.status === 'completed') {
+          setDeleteDialog(false);
+          if (onDeleted !== undefined) onDeleted(featureId);
+          else onClose();
+          return;
         }
+        setAnnouncement(
+          result.status === 'cleanup_pending'
+            ? 'Deletion is draining cleanup; this workspace remains open.'
+            : 'Deletion requires attention; review the server diagnostics and retry.',
+        );
+        return load({ silent: true });
       })
       .catch((err: unknown) => {
-        setDeleteDialog(false);
         setActionError({ action: 'Delete', error: parseIpcError(err) });
         setAnnouncement('');
         return load({ silent: true });
@@ -1352,9 +1405,11 @@ export function FeatureCockpit({
     liveAvailable;
   const resolvedSurface: 'document' | 'live' | 'changes' | null = forcedLive
     ? 'live'
-    : surfaceIds.includes(activeSurface)
-      ? activeSurface
-      : (surfaceIds[0] ?? null);
+    : ready
+      ? null
+      : surfaceIds.includes(activeSurface)
+        ? activeSurface
+        : (surfaceIds[0] ?? null);
 
   const reasonsOf = (action: ReturnType<typeof actionById>): string[] =>
     action?.disabledReasons.map((reason) => displayFeatureMessage(reason.message)) ?? [];
@@ -1480,7 +1535,10 @@ export function FeatureCockpit({
       label: 'Rewind',
       ariaLabel: 'Rewind feature',
       enabled: true,
-      onClick: () => setRewindDialog(true),
+      onClick: () => {
+        setRewindSourceRunNumber(snapshot.activeRun);
+        setRewindDialog(true);
+      },
     });
   }
   if (onSelectRun !== undefined) {
@@ -1565,6 +1623,22 @@ export function FeatureCockpit({
     }
     setCycleModal(action.id);
   };
+  const standaloneAttention =
+    activeAttentionItem === undefined ? null : (
+      <section className="live-preview__attention" aria-label="Agent request">
+        <AttentionDetail
+          key={`${activeAttentionItem.kind}:${activeAttentionItem.id}`}
+          item={activeAttentionItem}
+          busy={attentionBusy === activeAttentionItem.id}
+          drafts={attentionDrafts}
+          setDrafts={setAttentionDrafts}
+          saveDraft={(action, options) =>
+            saveAttentionDraft(activeAttentionItem.id, action, options)
+          }
+          submit={(action, options) => void submitAttention(activeAttentionItem, action, options)}
+        />
+      </section>
+    );
 
   if (!isArchiveMode && postImplementationMode.kind !== 'regular') {
     return (
@@ -1583,6 +1657,11 @@ export function FeatureCockpit({
               inspectorButtonRef={inspectorButtonRef}
               onOpenInspector={() => setInspectorOpen(true)}
             />
+            <RelationshipWorkspace
+              parent={snapshot}
+              onChanged={() => void load({ silent: true })}
+            />
+            {standaloneAttention}
             <AftercareWorkspace
               snapshot={snapshot}
               run={aftercareRun}
@@ -1598,24 +1677,27 @@ export function FeatureCockpit({
             />
           </>
         ) : (
-          <CycleWorkspace
-            snapshot={snapshot}
-            run={aftercareRun}
-            presentation={postImplementationMode.cycle}
-            onRunMetrics={setRunMetrics}
-            onStop={() => void openStopDialog()}
-            onResume={resume}
-            onRetry={retry}
-            onReturnToAftercare={() => {
-              setCycleReceipt(receiptForCycleEnd(snapshot.cycle, snapshot));
-              setDismissedCycleId(cycleIdentity(snapshot) ?? undefined);
-            }}
-            onOpenConfig={() => setConfigOpen(true)}
-            onOpenRunRecord={() => setRunRecordOpen(true)}
-            onOpenPullRequest={(url) => {
-              void window.agentico.openExternal({ url });
-            }}
-          />
+          <>
+            {standaloneAttention}
+            <CycleWorkspace
+              snapshot={snapshot}
+              run={aftercareRun}
+              presentation={postImplementationMode.cycle}
+              onRunMetrics={setRunMetrics}
+              onStop={() => void openStopDialog()}
+              onResume={resume}
+              onRetry={retry}
+              onReturnToAftercare={() => {
+                setCycleReceipt(receiptForCycleEnd(snapshot.cycle, snapshot));
+                setDismissedCycleId(cycleIdentity(snapshot) ?? undefined);
+              }}
+              onOpenConfig={() => setConfigOpen(true)}
+              onOpenRunRecord={() => setRunRecordOpen(true)}
+              onOpenPullRequest={(url) => {
+                void window.agentico.openExternal({ url });
+              }}
+            />
+          </>
         )}
 
         {actionError === null ? null : (
@@ -1720,6 +1802,42 @@ export function FeatureCockpit({
           />
         ) : null}
 
+        {rewindDialog ? (
+          <RewindJourney
+            featureId={featureId}
+            featureName={snapshot.name}
+            validPhaseOptions={
+              rewindAction?.inputs?.find((input) => input.name === 'target_phase')?.options ?? []
+            }
+            currentRoadmapPhase={snapshot.currentRoadmapPhase}
+            totalRoadmapPhases={snapshot.totalRoadmapPhases}
+            reconcileSourceRunNumber={rewindSourceRunNumber}
+            onClose={() => {
+              setRewindDialog(false);
+              setRewindSourceRunNumber(undefined);
+            }}
+            onRewindComplete={(result: FeatureActionResult) => {
+              setRewindDialog(false);
+              setRewindSourceRunNumber(undefined);
+              onSelectRun?.(null);
+              setAnnouncement(
+                result.newRunNumber !== undefined
+                  ? `Rewind complete. Run ${result.sourceRunNumber ?? ''} sealed, Run ${result.newRunNumber} is now active.`
+                  : 'Rewind complete.',
+              );
+              if (result.newRunNumber !== undefined) {
+                void window.agentico
+                  .getRun({ featureId, runNumber: result.newRunNumber })
+                  .then((run) => setRewindLanding({ outcome: result, run }))
+                  .catch(() => setRewindLanding({ outcome: result, run: null }));
+              } else {
+                setRewindLanding({ outcome: result, run: null });
+              }
+              void load({ silent: true });
+            }}
+          />
+        ) : null}
+
         {cycleModal === 'rebase' ? (
           <CockpitModal title="Rebase" ariaLabel="Rebase" onClose={() => setCycleModal(null)}>
             <RebaseModal
@@ -1751,8 +1869,12 @@ export function FeatureCockpit({
         ) : null}
 
         {cycleModal === 'refactor' ? (
-          <CockpitModal title="Refactor" ariaLabel="Refactor" onClose={() => setCycleModal(null)}>
-            <RefactorModal
+          <CockpitModal
+            title="Start refactor"
+            ariaLabel="Start refactor"
+            onClose={() => setCycleModal(null)}
+          >
+            <RefactorLauncher
               featureId={featureId}
               snapshot={snapshot}
               onDispatched={() => load({ silent: true })}
@@ -1832,6 +1954,7 @@ export function FeatureCockpit({
         {deleteDialog ? (
           <DeleteConfirmDialog
             snapshot={snapshot}
+            action={deleteAction}
             busy={busy}
             onClose={() => setDeleteDialog(false)}
             onConfirm={confirmDelete}
@@ -1873,6 +1996,8 @@ export function FeatureCockpit({
             onOpenInspector={() => setInspectorOpen(true)}
           />
 
+          <RelationshipWorkspace parent={snapshot} onChanged={() => void load({ silent: true })} />
+
           {rewindLanding !== null ? (
             <RewindLanding
               outcome={rewindLanding.outcome}
@@ -1898,6 +2023,8 @@ export function FeatureCockpit({
           <div className="cockpit__content">
             <main className="cockpit__stage">
               <>
+                {resolvedSurface !== 'live' ? standaloneAttention : null}
+
                 {stageSurfaces.length > 1 ? (
                   <div className="cockpit__stage-tabs" role="tablist" aria-label="Stage view">
                     {stageSurfaces.map((surface) => (
@@ -2097,6 +2224,7 @@ export function FeatureCockpit({
           {deleteDialog ? (
             <DeleteConfirmDialog
               snapshot={snapshot}
+              action={deleteAction}
               busy={busy}
               onClose={() => setDeleteDialog(false)}
               onConfirm={confirmDelete}
@@ -2112,9 +2240,14 @@ export function FeatureCockpit({
               }
               currentRoadmapPhase={snapshot.currentRoadmapPhase}
               totalRoadmapPhases={snapshot.totalRoadmapPhases}
-              onClose={() => setRewindDialog(false)}
+              reconcileSourceRunNumber={rewindSourceRunNumber}
+              onClose={() => {
+                setRewindDialog(false);
+                setRewindSourceRunNumber(undefined);
+              }}
               onRewindComplete={(result: FeatureActionResult) => {
                 setRewindDialog(false);
+                setRewindSourceRunNumber(undefined);
                 onSelectRun?.(null);
                 setAnnouncement(
                   result.newRunNumber !== undefined
@@ -2166,7 +2299,7 @@ export function FeatureCockpit({
 
           {cycleModal === 'refactor' ? (
             <CockpitModal title="Refactor" ariaLabel="Refactor" onClose={() => setCycleModal(null)}>
-              <RefactorModal
+              <RefactorLauncher
                 featureId={featureId}
                 snapshot={snapshot}
                 onDispatched={() => load({ silent: true })}

@@ -358,6 +358,13 @@ export const ServerSetupSchema = z.object({
 
 export type ServerSetup = z.output<typeof ServerSetupSchema>;
 
+export const ServerActionImpactSchema = z.object({
+  kind: z.enum(['child_discard', 'parent_cascade_delete']),
+  subject: z.object({ id: z.string(), name: z.string() }),
+  categories: z.array(z.object({ key: z.string(), label: z.string(), items: z.array(z.string()) })),
+  retained: z.array(z.string()),
+});
+
 export const ServerActionSchema = z.object({
   id: z.string(),
   enabled: z.boolean(),
@@ -370,7 +377,32 @@ export const ServerActionSchema = z.object({
     )
     .optional(),
   disabled_reasons: z.array(z.object({ code: z.string(), message: z.string() })).optional(),
+  impact_preview: ServerActionImpactSchema.optional(),
 });
+
+export const ServerRelationshipChildSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: z.string(),
+  display_token: z.string(),
+  display_state: z.string(),
+  pipeline: z.string(),
+  status: z.string(),
+  setup_status: z.string().optional(),
+  relationship_state: z.string().optional(),
+  outcome: z.enum(['completed', 'discarded']).optional(),
+  started_at: z.string(),
+  closed_at: z.string().optional(),
+  cost: z.object({ total_usd: z.number(), by_phase: z.record(z.string(), z.number()) }),
+  integration_state: z.string(),
+  attention: z.array(
+    z.object({ code: z.string(), message: z.string(), repo: z.string().optional() }),
+  ),
+  cleanup_warnings: z.array(z.object({ repo: z.string().optional(), message: z.string() })),
+  last_error: z.string().optional(),
+  diff_summary: z.string().optional(),
+});
+export type ServerRelationshipChild = z.output<typeof ServerRelationshipChildSchema>;
 
 export const ServerFeatureSummarySchema = z.object({
   id: z.string(),
@@ -392,6 +424,8 @@ export const ServerFeatureSummarySchema = z.object({
     .array(z.object({ code: z.string(), message: z.string() }))
     .max(100)
     .optional(),
+  active_child: ServerRelationshipChildSchema.optional(),
+  child_history: z.array(ServerRelationshipChildSchema).optional(),
 });
 
 export type ServerFeatureSummary = z.output<typeof ServerFeatureSummarySchema>;
@@ -447,6 +481,8 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   description: z.string().optional(),
   wait_reason: z.string().optional(),
   pipeline: z.string().optional(),
+  risk_level: z.string().optional(),
+  exit_criteria: z.string().optional(),
   active_run_detail: z
     .object({
       setup: ServerSetupSchema.optional(),
@@ -474,6 +510,45 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   failure: z.object({ type: z.string().optional(), message: z.string().optional() }).optional(),
   verification_items: z.array(z.object({ name: z.string(), state: z.string() })).optional(),
   timing: z.object({ total_seconds: z.number().int().nonnegative() }).optional(),
+  parent_id: z.string().optional(),
+  parent_kind: z.string().optional(),
+  active: z.boolean().optional(),
+  setup_complete: z.boolean().optional(),
+  close_outcome: z.string().optional(),
+  closed_at: z.string().optional(),
+  transaction: z
+    .object({
+      phase: z.string().optional(),
+      attention: z.string().optional(),
+      entries: z
+        .array(
+          z.object({
+            repo: z.string().optional(),
+            prep_state: z.string().optional(),
+            apply_state: z.string().optional(),
+            conflict_files: z.array(z.string()).optional(),
+            dirty: z
+              .array(
+                z.object({
+                  repo: z.string().optional(),
+                  path: z.string().optional(),
+                  staged: z.array(z.string()).optional(),
+                  unstaged: z.array(z.string()).optional(),
+                  untracked: z.array(z.string()).optional(),
+                  staged_total: z.number().int().nonnegative().optional(),
+                  unstaged_total: z.number().int().nonnegative().optional(),
+                  untracked_total: z.number().int().nonnegative().optional(),
+                }),
+              )
+              .optional(),
+            cleanup_warning: z.string().optional(),
+            diagnostics: z.string().optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+  relationship: ServerRelationshipChildSchema.optional(),
 });
 
 export type ServerFeatureDetail = z.output<typeof ServerFeatureDetailSchema>;
@@ -882,6 +957,20 @@ export const ServerErrorWithIssuesSchema = z.object({
         issues: z
           .array(z.object({ code: z.string(), message: z.string(), remedy: z.string().optional() }))
           .optional(),
+        repos: z
+          .array(
+            z.object({
+              repo: z.string().optional(),
+              path: z.string().optional(),
+              staged: z.array(z.string()).optional(),
+              unstaged: z.array(z.string()).optional(),
+              untracked: z.array(z.string()).optional(),
+              staged_total: z.number().int().nonnegative().optional(),
+              unstaged_total: z.number().int().nonnegative().optional(),
+              untracked_total: z.number().int().nonnegative().optional(),
+            }),
+          )
+          .optional(),
       })
       .optional(),
   }),
@@ -957,16 +1046,13 @@ export const ReviewCommentsStartResponseSchema = z.object({
 });
 export type ReviewCommentsStartResponse = z.output<typeof ReviewCommentsStartResponseSchema>;
 
-export const RefactorStartResponseSchema = z.object({
+export const RefactorFeatureResponseSchema = z.object({
   api_version: z.string(),
   feature_id: z.string(),
-  cycle_type: z.string(),
+  parent_id: z.string(),
   result: z.string(),
-  repo: z.string().optional(),
-  pipeline: z.string().optional(),
-  session_id: z.string().optional(),
 });
-export type RefactorStartResponse = z.output<typeof RefactorStartResponseSchema>;
+export type RefactorFeatureResponse = z.output<typeof RefactorFeatureResponseSchema>;
 
 export const RebasePreflightRepoSchema = z.object({
   repo: z.string(),
@@ -987,17 +1073,20 @@ export const RebasePreflightResponseSchema = z.object({
 });
 export type RebasePreflightResponse = z.output<typeof RebasePreflightResponseSchema>;
 
-export const RefactorPreflightResponseSchema = z.object({
+export const DiscardChildResponseSchema = z.object({
   api_version: z.string(),
   feature_id: z.string(),
-  source_revision: z.string(),
-  scope: z.string(),
-  repos: z.array(z.string()),
-  prompt: z.string(),
-  pipeline: z.string().optional(),
-  blockers: z.array(z.string()).optional(),
+  result: z.string(),
 });
-export type RefactorPreflightResponse = z.output<typeof RefactorPreflightResponseSchema>;
+export const DeleteFeatureResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  operation_id: z.string(),
+  status: z.enum(['completed', 'cleanup_pending', 'attention_required']),
+  diagnostics: z
+    .array(z.object({ code: z.string().optional(), message: z.string().optional() }))
+    .optional(),
+});
 
 export const CompletionPreflightRepoSchema = z.object({
   repo: z.string(),
@@ -1162,15 +1251,12 @@ type ReviewCommentsStartDTO = components['schemas']['ReviewCommentsStartResponse
 const _reviewCommentsStartSubset = (value: ReviewCommentsStartDTO): ReviewCommentsStartResponse =>
   value;
 void _reviewCommentsStartSubset;
-type RefactorStartDTO = components['schemas']['RefactorStartResponse'];
-const _refactorStartSubset = (value: RefactorStartDTO): RefactorStartResponse => value;
-void _refactorStartSubset;
+type RefactorFeatureDTO = components['schemas']['RefactorFeatureResponse'];
+const _refactorFeatureSubset = (value: RefactorFeatureDTO): RefactorFeatureResponse => value;
+void _refactorFeatureSubset;
 type RebasePreflightDTO = components['schemas']['RebasePreflightResponse'];
 const _rebasePreflightSubset = (value: RebasePreflightDTO): RebasePreflightResponse => value;
 void _rebasePreflightSubset;
-type RefactorPreflightDTO = components['schemas']['RefactorPreflightResponse'];
-const _refactorPreflightSubset = (value: RefactorPreflightDTO): RefactorPreflightResponse => value;
-void _refactorPreflightSubset;
 type RepoStatusDTO = components['schemas']['RepoStatus'];
 const _repoStatusSubset = (value: RepoStatusDTO): ServerRepoStatus => value;
 void _repoStatusSubset;

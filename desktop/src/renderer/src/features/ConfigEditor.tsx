@@ -107,6 +107,24 @@ export const GATE_FIELDS: ReadonlyArray<GateField> = [
   },
 ];
 
+/**
+ * Phase rows that apply to a pipeline. Workspace scope adds Utilities and the
+ * workspace-only rows; feature scope (config editor, creation wizard) shows
+ * only the phases the chosen pipeline runs.
+ */
+export function applicablePhaseFields(
+  pipeline: string,
+  workspaceScope: boolean,
+): ReadonlyArray<PhaseField> {
+  return PHASE_FIELDS.filter((field) => {
+    if (field.workspaceOnly === true) return workspaceScope;
+    if (pipeline === 'medium') {
+      return field.key === 'planning' || field.key === 'implementation' || field.key === 'review';
+    }
+    return workspaceScope || field.key !== 'utilities';
+  });
+}
+
 /** Gates that apply per pipeline profile (mirrors the server's rules). */
 export function applicableGates(pipeline: string): ReadonlySet<keyof Checkpoints> {
   if (pipeline === 'medium') {
@@ -404,13 +422,7 @@ function ConfigForm({
   onAutomaticReviewChange,
 }: ConfigFormProps) {
   const inquirenessName = useId();
-  const phaseFields = PHASE_FIELDS.filter((field) => {
-    if (field.workspaceOnly === true) return showUtilities;
-    if (pipeline === 'medium') {
-      return field.key === 'planning' || field.key === 'implementation' || field.key === 'review';
-    }
-    return showUtilities || field.key !== 'utilities';
-  });
+  const phaseFields = applicablePhaseFields(pipeline, showUtilities);
   const gates = applicableGates(pipeline);
   const visibleGates = GATE_FIELDS.filter(
     (g) => gates.has(g.key) && (g.key !== 'manualPublish' || manualPublishAvailable),

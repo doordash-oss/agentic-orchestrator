@@ -146,6 +146,7 @@ export function WorkspaceShell({
         event.kind === 'resync' ||
         event.kind.startsWith('feature') ||
         event.kind.startsWith('lifecycle') ||
+        event.kind.startsWith('relationship') ||
         event.kind.startsWith('config')
       ) {
         loadList();

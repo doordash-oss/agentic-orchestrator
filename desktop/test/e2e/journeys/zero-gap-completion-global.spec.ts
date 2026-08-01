@@ -80,15 +80,14 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await publishModal.getByRole('button', { name: 'Close' }).click();
     await expect(publishModal).toHaveCount(0);
 
-    // The Changes stage tab hosts the read-only repository + diff inspection.
-    await cockpit.getByRole('tab', { name: 'Changes' }).click();
-    const changes = cockpit.locator('.completion-workspace__inspect');
+    // Aftercare opens read-only repository + diff inspection in a workspace dialog.
+    await cockpit.getByRole('button', { name: 'Changes', exact: true }).click();
+    const changesModal = handle.page.getByRole('dialog', { name: 'Feature changes' });
+    const changes = changesModal.getByRole('region', { name: 'Changes' });
     await expect(changes).toBeVisible({ timeout: 15_000 });
-    await changes.getByRole('button', { name: /completion-lab/ }).click();
-    await changes.getByRole('button', { name: /README\.md/ }).click();
-    await expect(changes.locator('.completion-workspace__file-diff')).toBeVisible({
-      timeout: 30_000,
-    });
+    await changes.getByRole('tab', { name: /completion-lab/ }).click();
+    await expect(changes.getByText('Inspecting')).toBeVisible();
+    await changesModal.getByRole('button', { name: 'Close' }).click();
 
     // Merge and Clean up each open their own floating modal from the bar; the
     // Mark done verb is reachable as a bar control alongside them.

@@ -280,8 +280,31 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run a named feature action. */
+        /**
+         * Run a named feature action.
+         * @description Executes the named action. Child-feature execution actions (start, resume, retry, restart) enforce the child capability gate: 409 `relationship_closed` for a child whose relationship has settled; automatic reconciliation owns any remaining cleanup tail. A 409 `child_execution_blocked` while setup is queued, running, or failed. Capability rejections never invalidate or close the child record.
+         */
         post: operations["runFeatureAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/features/{feature_id}/actions/refactor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Launch a refactor child feature from the typed wizard brief.
+         * @description Served at the same URL as `runFeatureAction` with action `refactor`. Failure machine codes: 404 `parent_not_found`; 409 `parent_is_child`, `parent_status_ineligible`, `active_child_exists`, and `parent_worktrees_dirty` (which also carries per-repository diagnostics under `error.target.repos`).
+         */
+        post: operations["refactorFeature"];
         delete?: never;
         options?: never;
         head?: never;
@@ -854,6 +877,12 @@ export interface components {
             type: string;
             id?: string;
             feature_id?: string;
+            /** @description Parent feature id for a relationship lifecycle event. */
+            parent_id?: string;
+            /** @description Direct child feature id for a relationship lifecycle event. */
+            child_id?: string;
+            /** @description True only when a completed cascade removed both relationship records. Clients refresh the top-level list and evict both detail snapshots instead of treating their absence as a stream failure. */
+            relationship_deleted?: boolean;
             phase?: string;
         };
         SSEEvent: {
@@ -1159,11 +1188,10 @@ export interface components {
             rebase_start_response?: components["schemas"]["RebaseStartResponse"];
             review_comments_fetch_response?: components["schemas"]["ReviewCommentsFetchResponse"];
             review_comments_start_response?: components["schemas"]["ReviewCommentsStartResponse"];
-            refactor_start_response?: components["schemas"]["RefactorStartResponse"];
-            refactor_restart_response?: components["schemas"]["RefactorRestartResponse"];
             mark_done_response?: components["schemas"]["MarkDoneResponse"];
             cleanup_feature_response?: components["schemas"]["CleanupFeatureResponse"];
             delete_feature_response?: components["schemas"]["DeleteFeatureResponse"];
+            discard_child_response?: components["schemas"]["DiscardChildResponse"];
             recovery_action_response?: components["schemas"]["RecoveryActionResponse"];
             shutdown_response?: components["schemas"]["ShutdownResponse"];
         };
@@ -1198,7 +1226,6 @@ export interface components {
             phase?: string;
             dispatch?: string;
             repo_cycle_count?: number;
-            refactor_count?: number;
             session_ids?: string[];
         };
         ReviewDecisionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
@@ -1291,6 +1318,23 @@ export interface components {
         RebaseStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             cycle_type: string;
         };
+        RefactorFeatureRequest: {
+            name: string;
+            description?: string;
+            images?: string[];
+            attachments?: string[];
+            pipeline?: string;
+            checkpoints?: unknown;
+            effort?: components["schemas"]["EffortConfig"];
+            models?: components["schemas"]["ModelDefaults"];
+            risk_level?: string;
+            exit_criteria?: string;
+            /** @enum {string} */
+            inquireness?: "none" | "medium" | "high";
+        };
+        RefactorFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
+            parent_id: string;
+        };
         ReviewComment: {
             id: number;
             type?: string;
@@ -1317,13 +1361,6 @@ export interface components {
             session_id?: string;
             source?: string;
         };
-        RefactorStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            repo?: string;
-            cycle_type: string;
-            pipeline?: string;
-            session_id?: string;
-        };
-        RefactorRestartResponse: components["schemas"]["RefactorStartResponse"];
         RebasePreflightRepo: {
             repo: string;
             /** @description Base ref a rebase will target for this repository. */
@@ -1434,7 +1471,23 @@ export interface components {
         CleanupFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             target?: string;
         };
-        DeleteFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        DeleteFeatureResponse: components["schemas"]["ActionBaseResponse"] & {
+            feature_id: string;
+            operation_id: string;
+            /** @enum {string} */
+            status: "completed" | "cleanup_pending" | "attention_required";
+            diagnostics?: components["schemas"]["CascadeDiagnostic"][];
+        };
+        CascadeDiagnostic: {
+            code: string;
+            message: string;
+            repo?: string;
+            ref?: string;
+            anchor_sha?: string;
+            candidate_sha?: string;
+            observed_sha?: string;
+        };
+        DiscardChildResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RecoveryActionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["ActionResult"];
         ShutdownResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["ActionResult"];
         ActionResult: {
@@ -1670,6 +1723,50 @@ export interface components {
             total_roadmap_phases?: number;
             current_phase_status?: string;
         };
+        ChildRepoBase: {
+            repo: string;
+            sha: string;
+            parent_branch?: string;
+        };
+        RelationshipAttention: {
+            code: string;
+            message: string;
+            repo?: string;
+        };
+        RelationshipCleanupWarning: {
+            message: string;
+            repo?: string;
+        };
+        RelationshipChild: {
+            id: string;
+            name: string;
+            kind: string;
+            pipeline: string;
+            /** @description Stable, non-positional token suitable for compact UI labels. */
+            display_token: string;
+            /** @description Human-readable relationship state. Closed children use exactly "Closed — Completed" or "Closed — Discarded". */
+            display_state: string;
+            /** @description Stored child lifecycle status; closure never rewrites it. */
+            status: string;
+            /** @description Setup status of the child's active run (queued/running/done/failed). */
+            setup_status?: string;
+            /** @description Stable machine state: setting_up, active, completed, or discarded. */
+            relationship_state?: string;
+            /** @enum {string} */
+            outcome?: "completed" | "discarded";
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            closed_at?: string;
+            cost: components["schemas"]["Cost"];
+            integration_state: string;
+            attention: components["schemas"]["RelationshipAttention"][];
+            cleanup_warnings: components["schemas"]["RelationshipCleanupWarning"][];
+            /** @description Setup failure message when the child's setup failed. */
+            last_error?: string;
+            /** @description Preserved read-only diff summary captured at close time, before the child's disposable worktrees and ephemeral branches were removed. Empty when no diff was preserved. */
+            diff_summary?: string;
+        };
         FeatureSummary: {
             id: string;
             name: string;
@@ -1685,6 +1782,9 @@ export interface components {
             checkpoints: components["schemas"]["Checkpoints"];
             progress: components["schemas"]["FeatureProgress"];
             warnings?: components["schemas"]["Warning"][];
+            active_child?: components["schemas"]["RelationshipChild"];
+            /** @description Complete closed-child history in authoritative store order. */
+            child_history?: components["schemas"]["RelationshipChild"][];
         };
         ModelDefaults: {
             inquiry?: string;
@@ -1832,6 +1932,29 @@ export interface components {
         ActionDisabledReason: {
             code: string;
             message: string;
+            /** @description Optional machine-readable context for the disable reason. The `dirty_parent` reason on the Refactor action carries per-repository dirty-worktree diagnostics under `target.repos` using the same shape as the `parent_worktrees_dirty` mutation error target. */
+            target?: {
+                [key: string]: unknown;
+            };
+        };
+        ActionImpactSubject: {
+            id: string;
+            name: string;
+        };
+        ActionImpactCategory: {
+            key: string;
+            label: string;
+            /** @description Human-readable entries in this impact category; empty when the category has no projected impact (clients render None). Absent impact is an explicitly empty items array rather than an omitted category. */
+            items: string[];
+        };
+        ActionImpactPreview: {
+            /** @enum {string} */
+            kind: "child_discard" | "parent_cascade_delete";
+            subject: components["schemas"]["ActionImpactSubject"];
+            /** @description Fixed, always-complete impact breakdown for the kind. Absent categories are explicitly empty entries (an entry with an empty items array) rather than omitted, so the confirmation never implies hidden impact. child_discard uses sessions, worktrees, branches, knowledge; parent_cascade_delete uses children, sessions, worktrees, branches, history, knowledge. */
+            categories: components["schemas"]["ActionImpactCategory"][];
+            /** @description Statements of what the action deliberately keeps (the paired Review configuration and the immutable closed-child history record for child_discard). Empty for parent_cascade_delete. */
+            retained: string[];
         };
         Action: {
             id: string;
@@ -1839,6 +1962,7 @@ export interface components {
             scope: components["schemas"]["ActionScope"];
             required_inputs: components["schemas"]["ActionInput"][];
             disabled_reasons?: components["schemas"]["ActionDisabledReason"][];
+            impact_preview?: components["schemas"]["ActionImpactPreview"];
         };
         FeatureDetail: components["schemas"]["FeatureSummary"] & {
             description?: string;
@@ -1846,6 +1970,11 @@ export interface components {
             wait_reason?: string;
             pipeline?: string;
             models: components["schemas"]["ModelDefaults"];
+            effort?: components["schemas"]["EffortConfig"];
+            /** @enum {string} */
+            inquireness?: "none" | "medium" | "high";
+            risk_level?: string;
+            exit_criteria?: string;
             automatic_review: components["schemas"]["AutomaticReviewState"];
             active_run_detail?: components["schemas"]["RunSummary"];
             historical_runs: components["schemas"]["RunSummary"][];
@@ -1860,6 +1989,59 @@ export interface components {
             actions: components["schemas"]["Action"][];
             revision: string;
             cache_revalidate: string;
+            /** @description Launch parent id; only set on child features. */
+            parent_id?: string;
+            /** @description Child relationship kind (e.g. refactor); only set on child features. */
+            parent_kind?: string;
+            /** @description True while a child feature's relationship is open (no close outcome recorded). Only set on child features. */
+            active?: boolean;
+            /** @description Exact per-repository parent tips captured at child launch. */
+            bases?: components["schemas"]["ChildRepoBase"][];
+            /** @description True when the child's active run setup finished; only set on child features. */
+            setup_complete?: boolean;
+            /** @description Recorded relationship close outcome (e.g. completed); only set on closed child features. */
+            close_outcome?: string;
+            /**
+             * Format: date-time
+             * @description Relationship close timestamp; only set on closed child features.
+             */
+            closed_at?: string;
+            transaction?: components["schemas"]["TransactionJournal"];
+            relationship?: components["schemas"]["RelationshipChild"];
+        };
+        ChildDirtyDiagnostics: {
+            repo?: string;
+            path?: string;
+            staged?: string[];
+            unstaged?: string[];
+            untracked?: string[];
+            staged_total?: number;
+            unstaged_total?: number;
+            untracked_total?: number;
+        };
+        /** @description Ordered per-repository transaction journal for multi-repository child-to-parent integration. */
+        TransactionJournal: {
+            /** @description Aggregate transaction phase: preparing, prepared, applying, applied, rolling_back, rolled_back, attention, or merged. */
+            phase?: string;
+            attention?: string;
+            entries?: components["schemas"]["RepoTransactionEntry"][];
+        };
+        RepoTransactionEntry: {
+            repo?: string;
+            parent_branch?: string;
+            parent_anchor_sha?: string;
+            expected_ref_sha?: string;
+            child_head_sha?: string;
+            candidate_sha?: string;
+            merge_head?: string;
+            prep_state?: string;
+            apply_state?: string;
+            observed_sha?: string;
+            conflict_files?: string[];
+            /** @description Categorized parent-worktree diagnostics recorded when a dirty preflight blocked preparation for this repository. */
+            dirty?: components["schemas"]["ChildDirtyDiagnostics"][];
+            cleanup_warning?: string;
+            diagnostics?: string;
         };
         Usage: {
             input_tokens?: number;
@@ -2325,7 +2507,7 @@ export interface components {
         ReviewID: string;
         LogID: string;
         SessionID: string;
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "review-comments" | "review-decision" | "refactor" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "review-comments" | "review-decision" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "discard";
         FeatureSubaction: "description" | "fetch" | "finish" | "restart";
         Offset: number;
         Limit: number;
@@ -2709,7 +2891,49 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
+            /** @description Refactor child launched. Only the refactor action returns 201; its typed contract is documented as the refactorFeature operation at /api/v1/features/{feature_id}/actions/refactor. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefactorFeatureResponse"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    refactorFeature: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefactorFeatureRequest"];
+            };
+        };
+        responses: {
+            /** @description Refactor child launched. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefactorFeatureResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
         };
     };
     runFeatureSubaction: {

@@ -23,6 +23,10 @@ function membershipKey(sessionIds: readonly string[]): string {
   return sessionIds.join(',');
 }
 
+// The server only pushes session.updated when a session finishes, so a live
+// run polls to pick up new sessions and late-bound fields (model, status).
+const SESSION_DISCOVERY_REFRESH_MS = 3000;
+
 export function useCohortTranscripts(
   featureId: string,
   runNumber: number,
@@ -39,19 +43,29 @@ export function useCohortTranscripts(
 
   const refresh = useCallback(() => setGeneration((value) => value + 1), []);
 
-  // Discover the run's sessions, then re-discover on relevant invalidations.
+  // Discover the run's sessions, then re-discover on relevant invalidations
+  // and, while streaming, on a foreground polling interval.
   useEffect(() => {
     let disposed = false;
-    void window.agentico
-      .listRunSessions({ featureId, runNumber })
-      .then((result) => {
-        if (!disposed) setRunSessions(result.sessions);
-      })
-      .catch(() => undefined);
+    const discover = (): void => {
+      void window.agentico
+        .listRunSessions({ featureId, runNumber })
+        .then((result) => {
+          if (!disposed) setRunSessions(result.sessions);
+        })
+        .catch(() => undefined);
+    };
+    discover();
+    const interval = shouldStream
+      ? setInterval(() => {
+          if (!document.hidden) discover();
+        }, SESSION_DISCOVERY_REFRESH_MS)
+      : undefined;
     return () => {
       disposed = true;
+      if (interval !== undefined) clearInterval(interval);
     };
-  }, [featureId, runNumber, generation]);
+  }, [featureId, runNumber, generation, shouldStream]);
 
   useEffect(() => {
     return window.agentico.onAppEvent((event) => {

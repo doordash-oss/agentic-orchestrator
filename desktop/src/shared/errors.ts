@@ -11,6 +11,18 @@ export interface SafeError {
   message: string;
   /** Optional actionable next step for the user. */
   remediation?: string;
+  details?: {
+    dirtyWorktrees?: Array<{
+      repo?: string;
+      path?: string;
+      staged?: string[];
+      unstaged?: string[];
+      untracked?: string[];
+      stagedTotal?: number;
+      unstagedTotal?: number;
+      untrackedTotal?: number;
+    }>;
+  };
 }
 
 export class SafeErrorException extends Error {
@@ -23,8 +35,18 @@ export class SafeErrorException extends Error {
   }
 }
 
-export function safeError(code: string, message: string, remediation?: string): SafeError {
-  return remediation === undefined ? { code, message } : { code, message, remediation };
+export function safeError(
+  code: string,
+  message: string,
+  remediation?: string,
+  details?: SafeError['details'],
+): SafeError {
+  return {
+    code,
+    message,
+    ...(remediation === undefined ? {} : { remediation }),
+    ...(details === undefined ? {} : { details }),
+  };
 }
 
 const BEARER_RE = /bearer\s+[a-z0-9._~+/=-]+/gi;

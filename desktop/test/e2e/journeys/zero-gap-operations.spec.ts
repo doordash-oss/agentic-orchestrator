@@ -70,6 +70,25 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
       path.join(runPath, 'logs', 'phase.log'),
       'bounded packaged phase log for current-run inspection\n',
     );
+    let phaseLogId = '';
+    await waitFor(
+      async () => {
+        const result = await handle!.page.evaluate(
+          ({ featureId, runNumber }) => window.agentico.listRunLogs({ featureId, runNumber }),
+          { featureId: feature.id, runNumber: detail.activeRun },
+        );
+        phaseLogId = result.logs.find((log) => log.path === 'logs/phase.log')?.id ?? '';
+        return phaseLogId !== '';
+      },
+      'the authoritative run-log catalogue to include phase.log',
+      30_000,
+    );
+    const phaseLogText = await handle.page.evaluate(
+      ({ featureId, runNumber, logId }) =>
+        window.agentico.getRunLogContent({ featureId, runNumber, logId }),
+      { featureId: feature.id, runNumber: detail.activeRun, logId: phaseLogId },
+    );
+    expect(phaseLogText.text).toContain('bounded packaged phase log');
 
     const inspection = cockpit.getByRole('region', { name: 'Current run inspection' });
     await expect(inspection).toBeVisible({ timeout: 60_000 });
@@ -80,10 +99,9 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     await expect(inspection.getByText(/Context/)).toBeVisible({ timeout: 60_000 });
     // The phase log exists for the whole active run. A provider session log is
     // phase-dependent and may not exist yet while the first phase is starting.
-    await inspection.getByRole('button', { name: 'Open log logs/phase.log' }).click();
-    await expect(inspection.getByLabel('Current run log content')).toBeVisible({
-      timeout: 30_000,
-    });
+    await inspection.getByRole('button', { name: 'Files' }).click();
+    await expect(inspection.getByRole('region', { name: 'Run artifacts' })).toBeVisible();
+    await expect(inspection.getByRole('region', { name: 'Bounded logs' })).toBeVisible();
 
     await contractEvidenceShot(
       handle,
@@ -93,25 +111,40 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
       'light',
     );
 
-    const timeline = cockpit.getByRole('region', { name: 'Current run timeline' });
-    await expect(timeline.getByText(/Live semantic update 240/)).toBeVisible({ timeout: 60_000 });
+    await inspection.getByRole('button', { name: 'Conversation' }).click();
+    const timeline = cockpit.getByRole('region', { name: 'Live agent transcript' });
+    await expect(timeline.getByText(/Backfill ready|Live semantic update/).first()).toBeVisible({
+      timeout: 60_000,
+    });
+    const session = (await handle.page.evaluate(() => window.agentico.listSessions()))[0];
+    if (!session) throw new Error('workflow session was not listed');
+    await waitFor(
+      async () => {
+        const transcript = await handle!.page.evaluate(
+          (sessionId) => window.agentico.getSessionTranscript({ sessionId, limit: 500 }),
+          session.id,
+        );
+        return transcript.messages.some((message) =>
+          message.text?.includes('Live semantic update 240'),
+        );
+      },
+      'the authoritative transcript to contain the final live semantic update',
+      60_000,
+    );
 
     await handle.page.getByRole('button', { name: `Close ${featureName} tab` }).click();
     await expect(handle.page.getByRole('tab', { name: featureName })).toHaveCount(0);
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
 
+    await handle.page.getByRole('tab', { name: 'Home' }).click();
     const list = handle.page.getByRole('region', { name: 'Existing features' });
-    const row = list.locator('.feature-list__item').filter({ hasText: featureName });
+    const row = list.locator('li').filter({ hasText: featureName });
     await row.getByRole('button', { name: 'Open' }).click();
     const reopened = handle.page.getByLabel(`Feature ${featureName}`);
-    await expect(reopened.getByRole('region', { name: 'Current run timeline' })).toBeVisible({
+    await expect(reopened.getByRole('region', { name: 'Current run inspection' })).toBeVisible({
       timeout: 60_000,
     });
-    await expect(
-      reopened
-        .getByRole('region', { name: 'Current run timeline' })
-        .getByText(/Live semantic update 240/),
-    ).toHaveCount(1);
+    await expect(reopened.getByRole('region', { name: 'Live agent transcript' })).toBeVisible();
 
     await handle.page.getByRole('tab', { name: 'Home' }).click();
     const bulk = handle.page.getByRole('region', { name: 'Bulk resume and retry' });

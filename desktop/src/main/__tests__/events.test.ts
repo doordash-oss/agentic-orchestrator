@@ -115,6 +115,43 @@ describe('EventCursorTracker', () => {
     expect(tracker.getCursor()).toEqual({ seq: 7, epoch: 'epoch-a' });
   });
 
+  it('carries relationship identifiers and completed deletion state atomically', () => {
+    const tracker = new EventCursorTracker();
+    const decision = tracker.ingest(
+      parsed({
+        kind: 'relationship.deleted',
+        resource: {
+          type: 'relationship',
+          id: 'parent1234:child1234',
+          feature_id: 'parent1234',
+          parent_id: 'parent1234',
+          child_id: 'child1234',
+          relationship_deleted: true,
+        },
+      }),
+    );
+    expect(decision).toEqual({
+      action: 'invalidate',
+      kind: 'relationship.deleted',
+      resourceType: 'relationship',
+      resourceId: 'parent1234:child1234',
+      featureId: 'parent1234',
+      parentId: 'parent1234',
+      childId: 'child1234',
+      relationshipDeleted: true,
+    });
+    if (decision.action !== 'invalidate') throw new Error('expected invalidation');
+    expect(
+      AppEventSchema.parse({
+        type: 'invalidated',
+        kind: decision.kind,
+        parentId: decision.parentId,
+        childId: decision.childId,
+        relationshipDeleted: decision.relationshipDeleted,
+      }),
+    ).toMatchObject({ relationshipDeleted: true });
+  });
+
   it('ignores duplicate events by sequence', () => {
     const tracker = new EventCursorTracker();
     tracker.ingest(parsed({ seq: 7 }));

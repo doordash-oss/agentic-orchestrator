@@ -82,6 +82,7 @@ const EXPECTED_API_SURFACE = [
   'listFeatures',
   'listRepositories',
   'listRunArtifacts',
+  'listRunLogs',
   'listRunSessions',
   'listRuns',
   'listSessions',
@@ -97,9 +98,12 @@ const EXPECTED_API_SURFACE = [
   'pickWorkspaceDirectory',
   'preflightCompletion',
   'preflightRebase',
-  'preflightRefactor',
+  'discardRefactorChild',
+  'deleteFeatureCascade',
+  'readClipboardImage',
   'readRecoveryLog',
   'readReview',
+  'refreshProviderModels',
   'refreshReadiness',
   'removeWorkspaceRoot',
   'reorderWorkspaceRoots',
@@ -118,13 +122,13 @@ const EXPECTED_API_SURFACE = [
   'setThemePreference',
   'startChat',
   'startRebase',
-  'startRefactor',
+  'launchRefactorChild',
   'startReviewComments',
   'updateFeatureConfig',
   'updateSettings',
   'updateWorkspaceDefaults',
   'validateReview',
-];
+].sort();
 
 test('packaged security posture: no token in the renderer, locked-down window, clean local state, read-only install root', async ({}, testInfo) => {
   const transcript = new Transcript(

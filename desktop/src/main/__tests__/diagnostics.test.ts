@@ -40,6 +40,23 @@ describe('DiagnosticsService', () => {
     expect(fs.statSync(path.join(dir, 'diagnostics')).mode & 0o777).toBe(0o700);
   });
 
+  it('drops blank server log lines before applying the renderer schema', () => {
+    const service = new DiagnosticsService({
+      userDataDir: dir,
+      version: '0.1.0',
+      now: () => new Date('2026-07-20T10:00:00.000Z'),
+      readServerLines: () => ['', '   ', 'server ready', '\t', 'retrying connection'],
+    });
+
+    const snapshot = service.snapshot();
+
+    expect(snapshot.entries.map((entry) => entry.message)).toEqual([
+      'server ready',
+      'retrying connection',
+    ]);
+    expect(snapshot.entries.every((entry) => entry.message.length > 0)).toBe(true);
+  });
+
   it('stores only metadata for crashes and clears only the diagnostics root', () => {
     const service = new DiagnosticsService({
       userDataDir: dir,

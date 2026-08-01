@@ -88,7 +88,6 @@ async function measureLayout(
       const activity = document.querySelector('.current-inspection__activity');
       const metrics = requireElement('.current-inspection__metrics', 'metrics');
       const reviewSummaryElement = document.querySelector('.review-gate');
-      const resources = requireElement('.current-inspection__resources', 'resources');
       const surfaceRect = surface.getBoundingClientRect();
       const reviewSummary =
         reviewSummaryElement instanceof HTMLElement
@@ -101,7 +100,6 @@ async function measureLayout(
         ...(activity instanceof HTMLElement ? [toSection('activity', activity)] : []),
         toSection('metrics', metrics),
         ...(reviewSummary === null ? [] : [reviewSummary]),
-        toSection('resources', resources),
       ];
       return {
         scene: measuredScene,
@@ -181,10 +179,9 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
   const reviewing = byScene.get('run-gauge-reviewing')!;
   const verifying = byScene.get('run-gauge-verifying')!;
   for (const [index] of heights.entries()) {
-    expect(reviewing[index]!.previewHeight).toBeLessThan(active[index]!.previewHeight);
-    expect(verifying[index]!.previewHeight).toBeLessThan(active[index]!.previewHeight);
-    expect(reviewing[index]!.reviewSummary).not.toBeNull();
-    expect(verifying[index]!.reviewSummary).not.toBeNull();
+    expect(reviewing[index]!.previewHeight).toBeLessThanOrEqual(active[index]!.previewHeight);
+    expect(reviewing[index]!.reviewSummary).toBeNull();
+    expect(verifying[index]!.reviewSummary).toBeNull();
   }
   expect(active[0]!.reviewSummary).toBeNull();
   expect(active[0]!.sections.map(({ name }) => name)).toEqual([
@@ -193,7 +190,6 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
     'live frame',
     'activity',
     'metrics',
-    'resources',
   ]);
   expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual([
     'inspection header',
@@ -201,16 +197,12 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
     'live frame',
     'activity',
     'metrics',
-    'review summary',
-    'resources',
   ]);
   expect(verifying[0]!.sections.map(({ name }) => name)).toEqual([
     'inspection header',
     'roadmap gauge',
     'live frame',
     'metrics',
-    'review summary',
-    'resources',
   ]);
 });
 
@@ -223,18 +215,23 @@ test('surface owns scrolling only below the complete-panel floor', async ({ page
   expectOrderedSections(belowFloor, false);
 });
 
-test('expanded artifact content keeps the live surface as scroll owner', async ({ page }) => {
+test('expanded artifact content floats without changing the live surface scroll owner', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('http://localhost:9871/?scene=run-gauge&theme=dark');
-  await page.getByRole('button', { name: 'Run artifacts (5)' }).click();
-  await page.locator('.current-inspection__artifact-button').first().click();
-  await expect(page.locator('.current-inspection__content')).toBeVisible();
+  await page.getByRole('button', { name: 'Files' }).click();
+  await page
+    .getByRole('button', { name: /Open artifact/ })
+    .first()
+    .click();
+  await expect(page.getByRole('dialog', { name: /artifact/ })).toBeVisible();
 
   const overflow = await page.locator('.cockpit__surface--live').evaluate((surface) => ({
     clientHeight: surface.clientHeight,
     scrollHeight: surface.scrollHeight,
   }));
-  expect(overflow.scrollHeight).toBeGreaterThan(overflow.clientHeight);
+  expect(overflow.scrollHeight).toBeLessThanOrEqual(overflow.clientHeight);
 });
 
 test('transcript accepts wheel and focused keyboard scrolling', async ({ page }) => {

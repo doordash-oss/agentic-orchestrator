@@ -51,8 +51,9 @@ import {
   type RebasePreflightRequest,
   type ReviewCommentsFetchRequest,
   type ReviewCommentsStartRequest,
-  type RefactorRequest,
-  type RefactorPreflightRequest,
+  type LaunchRefactorChildRequest,
+  type DiscardRefactorChildRequest,
+  type DeleteFeatureCascadeRequest,
   type RecoveryExecuteRequest,
   type RecoveryLogReadRequest,
   type UpdateInstallNowRequest,
@@ -72,8 +73,10 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
     throw new Error('E_IPC_PROTOCOL: The main process returned an unrecognized response.');
   }
   if (!parsed.data.ok) {
-    const { code, message, remediation } = parsed.data.error;
-    throw new Error(`${code}: ${message}${remediation ? ` ${remediation}` : ''}`);
+    const { code, message, remediation, details } = parsed.data.error;
+    const error = new Error(`${code}: ${message}${remediation ? ` ${remediation}` : ''}`);
+    Object.assign(error, { code, remediation, details });
+    throw error;
   }
   return parsed.data.value as T;
 }
@@ -238,9 +241,12 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.featuresReviewCommentsFetch, request),
   startReviewComments: (request: ReviewCommentsStartRequest) =>
     call(IPC_CHANNELS.featuresReviewCommentsStart, request),
-  startRefactor: (request: RefactorRequest) => call(IPC_CHANNELS.featuresRefactor, request),
-  preflightRefactor: (request: RefactorPreflightRequest) =>
-    call(IPC_CHANNELS.featuresRefactorPreflight, request),
+  launchRefactorChild: (request: LaunchRefactorChildRequest) =>
+    call(IPC_CHANNELS.featuresRefactor, request),
+  discardRefactorChild: (request: DiscardRefactorChildRequest) =>
+    call(IPC_CHANNELS.featuresRefactorDiscard, request),
+  deleteFeatureCascade: (request: DeleteFeatureCascadeRequest) =>
+    call(IPC_CHANNELS.featuresDeleteCascade, request),
   scanRecovery: () => call(IPC_CHANNELS.recoveryScan),
   executeRecovery: (request: RecoveryExecuteRequest) => call(IPC_CHANNELS.recoveryExecute, request),
   readRecoveryLog: (request: RecoveryLogReadRequest) => call(IPC_CHANNELS.recoveryLogRead, request),

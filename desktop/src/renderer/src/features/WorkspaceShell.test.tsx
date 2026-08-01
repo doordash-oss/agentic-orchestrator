@@ -744,6 +744,67 @@ describe('WorkspaceShell tabs', () => {
     ).toHaveLength(2);
   });
 
+  it("routes a refactor pass's question into the parent tab's pass workspace", async () => {
+    const childId = 'child1234ef567890';
+    const parent = featureSnapshot({
+      name: 'Electron app',
+      status: 'Published',
+      currentPhase: 'Publish',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+      activeChild: {
+        id: childId,
+        name: 'Slop removal pass',
+        kind: 'refactor',
+        displayToken: `refactor:${childId}`,
+        displayState: 'Active — Designing',
+        pipeline: 'large',
+        status: 'Designing',
+        relationshipState: 'active',
+        startedAt: '2026-07-30T10:00:00Z',
+        cost: { totalUsd: 4.2, byPhase: {} },
+        integrationState: 'pending',
+        attention: [],
+        cleanupWarnings: [],
+      },
+    });
+    const child = featureSnapshot({
+      id: childId,
+      name: 'Slop removal pass',
+      status: 'Designing',
+      currentPhase: 'Design',
+      setup: { status: 'done', attempt: 1, tasks: [] },
+      actions: [],
+    });
+    const mock = installAgenticoMock({ settings: settingsWithTab(), feature: parent });
+    mock.api.getFeature.mockImplementation((id: string) =>
+      Promise.resolve(id === childId ? child : parent),
+    );
+    // The pass session owns the question, so it carries the child's feature id;
+    // only parentFeatureId points at the open tab.
+    const passQuestion: AttentionItem = {
+      kind: 'questions',
+      id: 'ask-pass',
+      featureId: childId,
+      parentFeatureId: FEATURE_ID,
+      sessionId: `${childId}-design`,
+      waitingSince: '2026-08-01T10:00:00.000Z',
+      questions: [
+        {
+          key: 'Keep the legacy state-dir fallback?',
+          header: 'Legacy dir',
+          multiSelect: false,
+          options: [{ label: 'Remove fallback' }, { label: 'Keep fallback' }],
+        },
+      ],
+    };
+    render(<WorkspaceShell attentionItems={[passQuestion]} />);
+
+    const request = await screen.findByRole('region', { name: 'Agent request' });
+    expect(within(request).getByText('Keep the legacy state-dir fallback?')).toBeVisible();
+    expect(within(request).getByText('Remove fallback')).toBeVisible();
+  });
+
   it('opens routed attention in the expanded conversation and refreshes after resolution', async () => {
     const mock = installAgenticoMock({
       settings: settingsWithTab(),

@@ -576,7 +576,7 @@ export function WorkspaceShell({
             onDeleted={handleFeatureDeleted}
             onLoadedName={(name) => renameTab(active, name)}
             attentionItems={attentionItems.filter(
-              (item) => item.kind !== 'recovery' && item.featureId === active,
+              (item) => item.kind !== 'recovery' && attentionOwnerFeatureId(item) === active,
             )}
             refreshAttention={refreshAttention}
             attentionDrafts={activeAttentionDrafts}

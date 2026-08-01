@@ -1,6 +1,7 @@
 import { Notification } from 'electron';
 import { redactText } from '../shared/errors';
 import type { AttentionItem, AttentionSnapshot } from '../shared/ipc';
+import { attentionOwnerFeatureId } from '../shared/ipc';
 
 type ActionableAttentionItem = Exclude<AttentionItem, { kind: 'recovery' }>;
 
@@ -79,7 +80,8 @@ function previewBody(
   item: ActionableAttentionItem,
   featureLabel: (featureId: string) => string,
 ): string {
-  const location = item.featureId === undefined ? 'Runtime' : featureLabel(item.featureId);
+  const owner = attentionOwnerFeatureId(item);
+  const location = owner === undefined ? 'Runtime' : featureLabel(owner);
   const summary = previewSummary(item);
   return redactText(`${attentionTypeLabel(item)} · ${location}${summary}`).slice(0, 180);
 }

@@ -9,6 +9,7 @@ import {
 import {
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   ATTENTION_SUBMITTED_NOTICE,
+  attentionOwnerFeatureId,
   type AttentionActionResult,
   type AttentionItem,
   type VerificationGateAction,
@@ -283,9 +284,10 @@ export function AttentionInbox({
                         onJump('__recovery__');
                         return;
                       }
-                      if (item.featureId !== undefined) {
+                      const ownerFeatureId = attentionOwnerFeatureId(item);
+                      if (ownerFeatureId !== undefined) {
                         setOpen(false);
-                        onJump(item.featureId, item.kind === 'review' ? undefined : item.id);
+                        onJump(ownerFeatureId, item.kind === 'review' ? undefined : item.id);
                         return;
                       }
                       setExpanded(expanded === item.id ? null : item.id);
@@ -297,7 +299,7 @@ export function AttentionInbox({
                       <span className="attention-inbox__feature">
                         {item.kind === 'recovery'
                           ? 'Recovery workspace'
-                          : featureLabel(item.featureId)}
+                          : featureLabel(attentionOwnerFeatureId(item))}
                       </span>
                     </span>
                     <span className="attention-inbox__waiting">

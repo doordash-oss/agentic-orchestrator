@@ -291,6 +291,85 @@ describe('AttentionService review items', () => {
     );
   });
 
+  it("routes a refactor pass's prompts to the parent instead of dropping them", async () => {
+    const service = new AttentionService({
+      apiRequest: (path) => {
+        const body =
+          path === '/api/v1/prompts'
+            ? {
+                api_version: 'v1',
+                ask_user_questions: [
+                  {
+                    request_id: 'ask-pass',
+                    feature_id: 'child-1',
+                    session_id: 'child-1-fix-01',
+                    tool_name: 'ask-user',
+                    status: 'pending',
+                    questions: [{ question: 'Which language should the body keep?' }],
+                  },
+                ],
+                help_queue: [
+                  {
+                    feature_id: 'child-1',
+                    session_id: 'child-1-fix-01',
+                    question: 'pass help',
+                    pending: true,
+                  },
+                ],
+                need_user_inputs: [
+                  { feature_id: 'child-1', open: true, questions: [{ prompt: 'pass gate' }] },
+                ],
+              }
+            : path === '/api/v1/permissions'
+              ? { api_version: 'v1', requests: [] }
+              : {
+                  api_version: 'v1',
+                  features: [
+                    {
+                      id: 'parent-1',
+                      name: 'Parent feature',
+                      slug: 'parent-feature',
+                      status: 'Published',
+                      current_phase: 'Publish',
+                      repos: ['repo-a'],
+                      created_at: '2026-07-16T10:00:00Z',
+                      active_run: 1,
+                      run_count: 1,
+                      progress: {},
+                      active_child: {
+                        id: 'child-1',
+                        name: 'Fix pass',
+                        kind: 'refactor',
+                        display_token: 'refactor:child-1',
+                        display_state: 'Active — FinalReviewing',
+                        pipeline: 'medium',
+                        status: 'FinalReviewing',
+                        started_at: '2026-07-16T11:00:00Z',
+                        cost: { total_usd: 1.2, by_phase: {} },
+                        integration_state: 'pending',
+                        attention: [],
+                        cleanup_warnings: [],
+                      },
+                    },
+                  ],
+                };
+        return Promise.resolve({ status: 200, body });
+      },
+    } satisfies ServerTransport);
+
+    const snapshot = await service.getSnapshot();
+    expect(snapshot.items.map((item) => item.id).sort()).toEqual([
+      'ask-pass',
+      'child-1::',
+      'child-1:child-1-fix-01',
+    ]);
+    // Prompts keep the child's featureId (the session owner) and carry the
+    // parent so tabs, badges, and jumps route to the tab that exists.
+    for (const item of snapshot.items) {
+      expect(item).toMatchObject({ featureId: 'child-1', parentFeatureId: 'parent-1' });
+    }
+  });
+
   it('returns the stale-resolution response for a missing pending request', async () => {
     const service = new AttentionService({
       apiRequest: () =>

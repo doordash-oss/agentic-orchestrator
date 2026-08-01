@@ -1,7 +1,7 @@
 import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
+import type { AttentionItem, FeatureSnapshot, RelationshipChildView } from '../../../../shared/ipc';
 import { featureSnapshot, installAgenticoMock } from '../../test/agenticoMock';
 import { emptyAttentionDrafts } from '../AttentionInbox';
 import {
@@ -102,12 +102,16 @@ function controllerFor(
   };
 }
 
-function renderWorkspace(parent: FeatureSnapshot, pass: RefactorPassController) {
+function renderWorkspace(
+  parent: FeatureSnapshot,
+  pass: RefactorPassController,
+  attentionItems: AttentionItem[] = [],
+) {
   render(
     <RefactorPassWorkspace
       parent={parent}
       pass={pass}
-      attentionItems={[]}
+      attentionItems={attentionItems}
       refreshAttention={() => Promise.resolve([])}
       attentionDrafts={emptyAttentionDrafts()}
       setAttentionDrafts={vi.fn()}
@@ -284,6 +288,35 @@ describe('RefactorPassWorkspace', () => {
     act(() => result.current.armAutoStart(CHILD_ID));
     await waitFor(() => expect(result.current.child).not.toBeNull());
     expect(mock.api.dispatchFeatureAction).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the pass session's pending question inline and answerable", () => {
+    installAgenticoMock({ feature: readyChild() });
+    const parent = parentWith({
+      status: 'FinalReviewing',
+      displayState: 'Active — FinalReviewing',
+    });
+    const question: AttentionItem = {
+      kind: 'questions',
+      id: 'ask-pass',
+      featureId: CHILD_ID,
+      parentFeatureId: parent.id,
+      sessionId: `${CHILD_ID}-fix-01`,
+      waitingSince: '2026-08-01T10:00:00.000Z',
+      questions: [
+        {
+          key: 'Which language should the body keep?',
+          header: 'Body language',
+          multiSelect: false,
+          options: [{ label: 'Italian (fork point)' }, { label: 'English (main)' }],
+        },
+      ],
+    };
+    renderWorkspace(parent, controllerFor(parent, readyChild()), [question]);
+
+    const request = screen.getByRole('region', { name: 'Agent request' });
+    expect(within(request).getByText('Which language should the body keep?')).toBeVisible();
+    expect(within(request).getByText('Italian (fork point)')).toBeVisible();
   });
 
   it('reports loading until the child snapshot arrives', () => {

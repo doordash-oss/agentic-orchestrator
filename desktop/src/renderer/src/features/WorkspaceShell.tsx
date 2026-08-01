@@ -20,7 +20,7 @@ import {
   type SetStateAction,
 } from 'react';
 import type { AttentionItem, FeatureSnapshot, RoutedRequest, TabsPrefs } from '../../../shared/ipc';
-import { defaultTabsPrefs } from '../../../shared/ipc';
+import { attentionOwnerFeatureId, defaultTabsPrefs } from '../../../shared/ipc';
 import { parseIpcError, type WizardError } from '../wizard/ipcError';
 import { CreateFeatureForm } from './CreateFeatureForm';
 import { FeatureCockpit } from './FeatureCockpit';
@@ -239,9 +239,10 @@ export function WorkspaceShell({
   const attentionByFeature = useMemo(() => {
     const counts = new Map<string, number>();
     for (const item of attentionItems) {
-      if (item.kind === 'recovery') continue;
-      if (item.featureId === undefined) continue;
-      counts.set(item.featureId, (counts.get(item.featureId) ?? 0) + 1);
+      // A refactor pass's prompts count against the parent tab that owns them.
+      const owner = attentionOwnerFeatureId(item);
+      if (owner === undefined) continue;
+      counts.set(owner, (counts.get(owner) ?? 0) + 1);
     }
     return counts;
   }, [attentionItems]);
@@ -1035,7 +1036,9 @@ function PassLane({
       <div className="run-card__pass-body">
         <p className="run-card__pass-line">
           <b>{child.name}</b>
-          <span>{child.status === 'Created' ? 'Not started' : displayStatusLabel(child.status)}</span>
+          <span>
+            {child.status === 'Created' ? 'Not started' : displayStatusLabel(child.status)}
+          </span>
         </p>
         {index === null ? null : (
           <FlightRail

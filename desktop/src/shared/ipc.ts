@@ -1468,6 +1468,8 @@ export const AttentionPermissionSchema = z.strictObject({
   kind: z.literal('permission'),
   id: AttentionIDSchema,
   featureId: FeatureIdSchema.optional(),
+  /** Set when the prompt belongs to a refactor pass: the parent tab owns it. */
+  parentFeatureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
   phase: z.string().max(200).optional(),
   toolName: z.string().max(500),
@@ -1486,6 +1488,8 @@ export const AttentionQuestionBundleSchema = z.strictObject({
   kind: z.literal('questions'),
   id: AttentionIDSchema,
   featureId: FeatureIdSchema.optional(),
+  /** Set when the prompt belongs to a refactor pass: the parent tab owns it. */
+  parentFeatureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
   phase: z.string().max(200).optional(),
   waitingSince: z.string().max(100),
@@ -1495,6 +1499,8 @@ export const AttentionHelpSchema = z.strictObject({
   kind: z.literal('help'),
   id: AttentionIDSchema,
   featureId: FeatureIdSchema.optional(),
+  /** Set when the prompt belongs to a refactor pass: the parent tab owns it. */
+  parentFeatureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
   waitingSince: z.string().max(100),
   prompt: AttentionTextSchema,
@@ -1505,6 +1511,8 @@ export const AttentionGateSchema = z.strictObject({
   kind: z.literal('gate'),
   id: z.string().min(1).max(1000),
   featureId: FeatureIdSchema,
+  /** Set when the gate belongs to a refactor pass: the parent tab owns it. */
+  parentFeatureId: FeatureIdSchema.optional(),
   waitingSince: z.string().max(100),
   scope: z.string().max(100).optional(),
   repoName: z.string().max(500).optional(),
@@ -1566,6 +1574,17 @@ export const AttentionItemSchema = z.discriminatedUnion('kind', [
   AttentionRecoverySchema,
 ]);
 export type AttentionItem = z.output<typeof AttentionItemSchema>;
+
+/**
+ * The feature whose tab owns an attention item. Prompts raised by a refactor
+ * pass carry the child's featureId plus the parent's id — children never
+ * become tabs, so navigation and badges belong to the parent.
+ */
+export function attentionOwnerFeatureId(item: AttentionItem): string | undefined {
+  if (item.kind === 'recovery') return undefined;
+  if ('parentFeatureId' in item && item.parentFeatureId !== undefined) return item.parentFeatureId;
+  return item.featureId;
+}
 export const AttentionSnapshotSchema = z.strictObject({
   items: z.array(AttentionItemSchema).max(4000),
 });

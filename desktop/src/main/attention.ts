@@ -59,10 +59,22 @@ export class AttentionService {
       this.get('/api/v1/features', FeatureListResponseSchema),
     ]);
     const featureIDs = new Set(featuresRaw.features.map((feature) => feature.id));
+    // Refactor passes never appear as top-level features, but their sessions
+    // raise prompts under the child's feature id. Route them to the parent
+    // tab instead of dropping them as orphans.
+    const parentByChild = new Map(
+      featuresRaw.features.flatMap((feature) =>
+        feature.active_child === undefined ? [] : [[feature.active_child.id, feature.id] as const],
+      ),
+    );
     const hasListedFeature = (featureID: string | undefined): boolean =>
-      featureID === undefined || featureIDs.has(featureID);
+      featureID === undefined || featureIDs.has(featureID) || parentByChild.has(featureID);
     const hasRequiredListedFeature = (featureID: string | undefined): featureID is string =>
-      featureID !== undefined && featureIDs.has(featureID);
+      featureID !== undefined && (featureIDs.has(featureID) || parentByChild.has(featureID));
+    const parentOf = (featureID: string | undefined): { parentFeatureId: string } | object => {
+      const parent = featureID === undefined ? undefined : parentByChild.get(featureID);
+      return parent === undefined ? {} : { parentFeatureId: parent };
+    };
     const items: AttentionItem[] = [
       ...permissionsRaw.requests
         .filter((request) => request.status === 'pending' && hasListedFeature(request.feature_id))
@@ -70,6 +82,7 @@ export class AttentionService {
           kind: 'permission' as const,
           id: request.request_id,
           ...(request.feature_id === undefined ? {} : { featureId: request.feature_id }),
+          ...parentOf(request.feature_id),
           ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
           ...(request.phase === undefined ? {} : { phase: request.phase }),
           toolName: request.tool_name,
@@ -97,6 +110,7 @@ export class AttentionService {
           kind: 'questions' as const,
           id: request.request_id,
           ...(request.feature_id === undefined ? {} : { featureId: request.feature_id }),
+          ...parentOf(request.feature_id),
           ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
           ...(request.phase === undefined ? {} : { phase: request.phase }),
           waitingSince: request.waiting_since ?? fallbackTime,
@@ -131,6 +145,7 @@ export class AttentionService {
             kind: 'help' as const,
             id: `${help.feature_id}:${help.session_id ?? ''}`,
             ...(chat ? {} : { featureId: help.feature_id }),
+            ...(chat ? {} : parentOf(help.feature_id)),
             ...(chat
               ? { sessionId: CHAT_SESSION_ID }
               : help.session_id === undefined
@@ -146,6 +161,7 @@ export class AttentionService {
           kind: 'gate' as const,
           id: `${gate.feature_id}:${gate.repo_name ?? ''}:${gate.cycle_type ?? ''}`,
           featureId: gate.feature_id!,
+          ...parentOf(gate.feature_id),
           waitingSince: gate.waiting_since ?? fallbackTime,
           ...(gate.scope === undefined ? {} : { scope: gate.scope }),
           ...(gate.repo_name === undefined ? {} : { repoName: gate.repo_name }),
